@@ -468,14 +468,13 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
 def _build_outfit_block(character_name: str, label: str) -> str:
     """Equipped outfit fragment for any character. Returns ``label: ...`` or ''."""
     try:
-        from app.models.character import build_equipped_outfit_prompt
-        raw = (build_equipped_outfit_prompt(character_name) or "").strip()
+        from app.core.outfit_renderer import render_outfit
+        out = render_outfit(character_name=character_name)
+        # Wir nehmen nur den pieces-Teil (kein Fallback wie "topless") fuer
+        # diesen Block — Fallback gehoert in den Appearance-Pfad.
+        raw = (out.get("pieces") or "").strip()
         if not raw:
             return ""
-        # build_equipped_outfit_prompt returns "wearing: <fragments>". Strip
-        # the prefix so we can apply our own label.
-        if raw.lower().startswith("wearing:"):
-            raw = raw[len("wearing:"):].strip()
         return f"{label}: {raw}"
     except Exception as e:
         logger.debug("outfit block failed for %s: %s", character_name, e)

@@ -207,12 +207,14 @@ _STATE_COLS = ("current_location", "current_room", "current_activity",
 
 # Weitere Runtime-Keys — landen in character_state.meta (JSON-Blob) statt
 # in profile_json. Inject/Extract analog zu _STATE_COLS.
-_STATE_META_KEYS = ("equipped_pieces", "equipped_items", "equipped_pieces_meta",
+_STATE_META_KEYS = ("equipped_pieces", "equipped_items",
                     "active_conditions", "status_effects", "activity_cooldowns",
                     "runtime_outfit_skip",  # legacy — wird in Schritt 8 entfernt
                     "outfit_intent",        # neuer Intent-Container (May 2026)
                     "current_activity_detail",
                     "movement_target")
+# equipped_pieces_meta (Pro-Slot Farb-Override) raus mit Schritt 3 —
+# Items sind eindeutig, Farbe steckt im prompt_fragment.
 
 # Per-Character User-Config (nicht Stamm) — wandern in config_json, nicht profile_json.
 # Beim Laden aus config_json in Profile injiziert (fuer Abwaerts-Kompatibilitaet der
@@ -933,11 +935,9 @@ def _schedule_background_variant(character_name: str) -> None:
         activity = profile.get("current_activity", "") or ""
         eq_p = get_equipped_pieces(character_name)
         eq_i = get_equipped_items(character_name)
-        eq_meta = profile.get("equipped_pieces_meta") or {}
         trigger_expression_generation(
             character_name, mood, activity,
             equipped_pieces=eq_p, equipped_items=eq_i,
-            equipped_pieces_meta=eq_meta,
             ignore_cooldown=False)  # Cooldown respektieren
     except Exception as _e:
         logger.debug("Background-Variant-Trigger fuer %s fehlgeschlagen: %s",
@@ -2287,290 +2287,6 @@ def resolve_outfit_placeholders(outfit_text: str, character_name: str) -> str:
         return match.group(0)
     return re.sub(r'\{([\w-]+)\}', _replace, outfit_text)
 
-
-def _collect_covered_slots(equipped_pieces: Dict[str, str]) -> set:
-    """Sammelt alle Slots, die durch ein anderes angezogenes Piece verdeckt
-    werden (covers-Feld). Verdeckte Slots fallen aus dem Prompt raus."""
-    from app.models.inventory import get_item as _gi
-    covered = set()
-    for _slot, _iid in (equipped_pieces or {}).items():
-        if not _iid:
-            continue
-        it = _gi(_iid)
-        if not it:
-            continue
-        op = it.get("outfit_piece") or {}
-        for c in (op.get("covers") or []):
-            cs = str(c).strip().lower()
-            if cs:
-                covered.add(cs)
-    return covered
-
-
-def build_unworn_slot_fragments(character_name: str,
-                                 profile: Optional[Dict[str, Any]] = None) -> str:
-    """Sammelt prompt-Fragmente fuer alle leeren UND nicht-verdeckten Slots.
-
-    Iteriert ``VALID_PIECE_SLOTS`` und nimmt fuer jeden Slot, der
-      a) NICHT in ``equipped_pieces`` belegt ist, UND
-      b) NICHT durch ein anderes Piece via ``covers`` verdeckt ist,
-    den Eintrag aus ``profile.slot_overrides[slot].prompt`` (Game Admin →
-    Character → Bild-Darstellung). Fallback fuer Underwear-Slots:
-    ``no_outfit_prompt_top`` / ``no_outfit_prompt_bottom``.
-
-    Token-Platzhalter werden via ``resolve_profile_tokens`` ausgewertet
-    (gleiche Logik wie der Variant-Bild-Aufbau in expression_regen).
-    Returns: kommaseparierte Fragment-Liste oder leerer String.
-    """
-    from app.models.inventory import VALID_PIECE_SLOTS
-    from app.models.character_template import get_template, resolve_profile_tokens
-    if profile is None:
-        profile = get_character_profile(character_name)
-    pieces = profile.get("equipped_pieces") or {}
-    covered = _collect_covered_slots(pieces)
-    slot_overrides = profile.get("slot_overrides") or {}
-    if not isinstance(slot_overrides, dict):
-        slot_overrides = {}
-
-    # Template fuer Token-Resolution laden — identisch zur expression_regen.
-    try:
-        tmpl = get_template(profile.get("template", "human-default"))
-    except Exception:
-        tmpl = None
-
-    def _resolve(raw: str) -> str:
-        s = (raw or "").strip()
-        if not s or "{" not in s:
-            return s
-        try:
-            return resolve_profile_tokens(s, profile, template=tmpl,
-                                           target_key="character_appearance")
-        except Exception:
-            return s
-
-    parts: List[str] = []
-    for slot in VALID_PIECE_SLOTS:
-        if pieces.get(slot):
-            continue
-        if slot in covered:
-            continue
-        ov = slot_overrides.get(slot) or {}
-        ov_prompt = ""
-        if isinstance(ov, dict):
-            ov_prompt = (ov.get("prompt") or "").strip()
-        if ov_prompt:
-            resolved = _resolve(ov_prompt)
-            if resolved:
-                parts.append(resolved)
-            continue
-        # Legacy-Fallback fuer Underwear-Slots
-        if slot == "underwear_top":
-            fb = _resolve((profile.get("no_outfit_prompt_top") or "").strip())
-            if fb:
-                parts.append(fb)
-        elif slot == "underwear_bottom":
-            fb = _resolve((profile.get("no_outfit_prompt_bottom") or "").strip())
-            if fb:
-                parts.append(fb)
-    return ", ".join(parts)
-
-
-def build_equipped_outfit_prompt(character_name: str,
-                                 profile: Optional[Dict[str, Any]] = None) -> str:
-    """Baut den Outfit-Prompt aus equipped_pieces + equipped_items zusammen.
-
-    Liefert leeren String wenn weder Pieces noch Items angelegt sind —
-    Aufrufer sollen dann auf den Freitext-Fallback zurueckgreifen.
-    """
-    if profile is None:
-        profile = get_character_profile(character_name)
-    pieces = profile.get("equipped_pieces") or {}
-    pieces_meta = profile.get("equipped_pieces_meta") or {}
-    items = profile.get("equipped_items") or []
-    if not pieces and not items:
-        return ""
-
-    from app.models.inventory import VALID_PIECE_SLOTS, get_item
-
-    def _slot_color(slot_name: str) -> str:
-        # Direkt gesetzte Color am gegebenen Slot
-        entry = pieces_meta.get(slot_name) or {}
-        if isinstance(entry, dict):
-            c = (entry.get("color") or "").strip()
-            if c:
-                return c
-        # Multi-Slot-Pieces: dasselbe Item ist in mehreren Slots eingehaengt
-        # (z.B. Bikini-Bra in top + underwear_top). Color wird typischerweise
-        # nur am Primary-Slot vom User gesetzt — beim Mirror-Slot fehlt sie.
-        # Daher Fallback: alle anderen Slots mit derselben item_id pruefen.
-        iid = pieces.get(slot_name)
-        if iid:
-            for other_slot, other_iid in pieces.items():
-                if other_iid == iid and other_slot != slot_name:
-                    _other = pieces_meta.get(other_slot) or {}
-                    if isinstance(_other, dict):
-                        c = (_other.get("color") or "").strip()
-                        if c:
-                            return c
-        return ""
-
-    covered_slots = _collect_covered_slots(pieces)
-
-    # Teilverdeckte Slots: {slot → (covering_fragment, covering_slot)}
-    # Multi-Slot-Pieces nur einmal verarbeiten — der Render-Slot (erster Slot
-    # in VALID_PIECE_SLOTS-Reihenfolge) traegt die partially_covers-Beziehung.
-    partially_covered: Dict[str, tuple] = {}
-    seen_items: set = set()
-    for _slot in VALID_PIECE_SLOTS:
-        _iid = pieces.get(_slot)
-        if not _iid or _iid in seen_items:
-            continue
-        seen_items.add(_iid)
-        _it = get_item(_iid)
-        if not _it:
-            continue
-        _op = _it.get("outfit_piece") or {}
-        _covering_frag = (_it.get("prompt_fragment") or "").strip()
-        _covering_color = _slot_color(_slot)
-        if _covering_color and _covering_frag:
-            _covering_frag = f"{_covering_color} {_covering_frag}"
-        for _c in (_op.get("partially_covers") or []):
-            _cs = str(_c).strip().lower()
-            if _cs and _covering_frag:
-                partially_covered[_cs] = (_covering_frag, _slot)
-
-    # Slots deren Fragment bereits im "underneath"-Teil steckt → nicht doppelt.
-    # NUR unterdruecken wenn der Ziel-Slot auch belegt ist — sonst
-    # verschwindet das Covering-Piece komplett.
-    suppressed_slots = set()
-    for _target, (_cfrag, _cslot) in partially_covered.items():
-        if pieces.get(_target):
-            suppressed_slots.add(_cslot)
-
-    # Pieces in fester Slot-Reihenfolge sammeln (abgedeckte + unterdrueckte Slots ueberspringen).
-    # Multi-Slot-Pieces werden nur EINMAL gerendert — im ersten ihrer slots, der in
-    # VALID_PIECE_SLOTS-Reihenfolge auftaucht (Render-Slot).
-    piece_fragments: List[str] = []
-    rendered_items: set = set()
-    for slot in VALID_PIECE_SLOTS:
-        if slot in covered_slots:
-            continue
-        if slot in suppressed_slots:
-            continue
-        iid = pieces.get(slot)
-        if not iid:
-            continue
-        if iid in rendered_items:
-            continue  # Mirror-Slot eines bereits gerenderten Multi-Slot-Pieces
-        it = get_item(iid)
-        if not it:
-            continue
-        rendered_items.add(iid)
-        frag = (it.get("prompt_fragment") or "").strip()
-        if frag:
-            _color = _slot_color(slot)
-            if _color:
-                frag = f"{_color} {frag}"
-            if slot in partially_covered:
-                frag = f"{frag} underneath {partially_covered[slot][0]}"
-            piece_fragments.append(frag)
-
-    # Equipped Items: Reihenfolge der Liste, dedup
-    item_fragments: List[str] = []
-    seen = set()
-    for iid in items:
-        if iid in seen:
-            continue
-        seen.add(iid)
-        it = get_item(iid)
-        if not it:
-            continue
-        frag = (it.get("prompt_fragment") or "").strip()
-        if frag:
-            item_fragments.append(frag)
-
-    # Fallback-Prompts fuer unbekleidete Bereiche (per-Character aus Profil).
-    def _resolve_fb(key: str) -> str:
-        _raw = (profile.get(key) or "").strip()
-        if not _raw:
-            return ""
-        try:
-            from app.models.character_template import resolve_profile_tokens, get_template
-            _tmpl = get_template(profile.get("template", ""))
-            return resolve_profile_tokens(_raw, profile, template=_tmpl,
-                                           target_key="character_appearance")
-        except Exception:
-            return _raw
-
-    # Slot-Overrides (per-Character im Profil): fuer jeden Slot der leer und
-    # nicht gecovert ist, wird ein Prompt-Override hinzugefuegt. Legacy-Felder
-    # no_outfit_prompt_top/bottom greifen auf die Unterwaesche-Slots.
-    _slot_overrides = profile.get("slot_overrides") or {}
-
-    def _override_prompt(slot: str) -> str:
-        entry = _slot_overrides.get(slot) or {}
-        if isinstance(entry, dict):
-            val = (entry.get("prompt") or "").strip()
-            if val:
-                return _resolve_tokens(val) if False else val
-        return ""
-
-    # Templated-Resolve fuer den Override-Prompt (optional Token-Resolution)
-    def _resolve_tokens(raw: str) -> str:
-        if not raw:
-            return ""
-        try:
-            from app.models.character_template import resolve_profile_tokens, get_template
-            _tmpl = get_template(profile.get("template", ""))
-            return resolve_profile_tokens(raw, profile, template=_tmpl,
-                                           target_key="character_appearance")
-        except Exception:
-            return raw
-
-    # Layer-Check: missing underwear is not visible when the outer layer
-    # covers it (sweater hides missing bra, jeans hide missing briefs).
-    # Without this, the image prompt would falsely describe missing
-    # pieces as exposed body parts even though the outfit is complete.
-    def _outer_layer_covers(slot: str) -> bool:
-        if slot == "underwear_top":
-            return bool(pieces.get("top")) or "underwear_top" in covered_slots
-        if slot == "underwear_bottom":
-            return bool(pieces.get("bottom")) or "underwear_bottom" in covered_slots
-        return False
-
-    _fallback_parts: List[str] = []
-    for _slot in VALID_PIECE_SLOTS:
-        if pieces.get(_slot):
-            continue
-        if _slot in covered_slots:
-            continue
-        if _outer_layer_covers(_slot):
-            continue
-        # Slot-Override aus Profil
-        _ov = _slot_overrides.get(_slot) or {}
-        _ov_prompt = (_ov.get("prompt") or "").strip() if isinstance(_ov, dict) else ""
-        if _ov_prompt:
-            _fallback_parts.append(_resolve_tokens(_ov_prompt))
-            continue
-        # Legacy-Felder nur fuer Unterwaesche-Slots
-        if _slot == "underwear_top":
-            _fb = _resolve_fb("no_outfit_prompt_top")
-            if _fb:
-                _fallback_parts.append(_fb)
-        elif _slot == "underwear_bottom":
-            _fb = _resolve_fb("no_outfit_prompt_bottom")
-            if _fb:
-                _fallback_parts.append(_fb)
-
-    parts: List[str] = []
-    _fallback_text = ", ".join(_fallback_parts)
-    if _fallback_text:
-        parts.append(_fallback_text)
-    if piece_fragments:
-        parts.append("wearing: " + ", ".join(piece_fragments))
-    if item_fragments:
-        parts.append(", ".join(item_fragments))
-    return ". ".join(parts)
 
 
 def save_character_default_outfit(character_name: str, outfit: str):

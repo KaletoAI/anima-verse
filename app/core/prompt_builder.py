@@ -28,8 +28,8 @@ from app.models.character import (
     get_character_personality,
     get_character_profile,
     get_character_profile_image,
-    build_equipped_outfit_prompt,
     list_available_characters)
+from app.core.outfit_renderer import render_outfit
 from app.models.character_template import resolve_profile_tokens, get_template
 from app.models.account import (
     get_active_character,
@@ -636,7 +636,7 @@ class PromptBuilder:
                 # User-Avatar: gleiche Outfit-Kette wie Character.
                 active_char = get_active_character() or person.name
                 if active_char:
-                    outfit_text = build_equipped_outfit_prompt(active_char) or ""
+                    outfit_text = render_outfit(character_name=active_char).get("full", "")
                     ref_path = self._resolve_person_ref_image(
                         Person(name=active_char, appearance=person.appearance,
                                gender=person.gender, is_agent=False)
@@ -649,11 +649,11 @@ class PromptBuilder:
                         if candidate.exists():
                             ref_path = str(candidate)
             else:
-                outfit_text = build_equipped_outfit_prompt(person.name) or ""
+                outfit_text = render_outfit(character_name=person.name).get("full", "")
                 ref_path = self._resolve_person_ref_image(person)
 
             if outfit_text:
-                # build_equipped_outfit_prompt liefert "wearing: <fragments>"
+                # render_outfit().full liefert ggf. "wearing: <fragments>"
                 # — den Prefix strippen damit nicht "is wearing wearing: ..."
                 # entsteht.
                 _ot = outfit_text.lstrip()

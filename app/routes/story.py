@@ -22,8 +22,8 @@ from app.models.character import (
     get_character_profile,
     get_character_appearance,
     get_character_language_instruction,
-    build_equipped_outfit_prompt,
     get_character_images_dir)
+from app.core.outfit_renderer import render_outfit
 from app.models.character_template import (
     resolve_profile_tokens, get_template, build_prompt_section)
 from app.models.story import (
@@ -449,7 +449,7 @@ def _build_story_system_prompt(character_name: str,
             char_profile["character_appearance"] = resolve_profile_tokens(
                 appearance, char_profile, template=char_template,
                 target_key="character_appearance")
-        current_outfit = (build_equipped_outfit_prompt(character_name) or "").removeprefix("wearing: ")
+        current_outfit = (render_outfit(character_name=character_name).get("full", "") or "").removeprefix("wearing: ")
         if current_outfit:
             char_profile["default_outfit"] = current_outfit
 

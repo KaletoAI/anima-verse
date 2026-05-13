@@ -76,11 +76,11 @@ from app.models.character import (
     get_character_config,
     get_character_skill_config,
     save_character_skill_config,
-    build_equipped_outfit_prompt,
     get_character_current_location,
     get_character_current_activity,
     get_character_current_feeling,
     get_character_current_room)
+from app.core.outfit_renderer import render_outfit, collect_covered_slots
 from app.models.account import (
     get_user_profile,
     get_user_gender,
@@ -2061,8 +2061,7 @@ class ImageGenerationSkill(BaseSkill):
         # Profil-Slot-Overrides: fuer leere UND nicht-gecoverte Slots
         # ein LoRA aus profile.slot_overrides[slot].lora anziehen.
         try:
-            from app.models.character import _collect_covered_slots
-            covered = _collect_covered_slots(equipped)
+            covered = collect_covered_slots(equipped)
         except Exception:
             covered = set()
         slot_overrides = profile.get("slot_overrides") or {}
@@ -2744,8 +2743,7 @@ class ImageGenerationSkill(BaseSkill):
                 try:
                     from app.models.character import (
                         get_character_current_feeling,
-                        get_character_current_activity,
-                        build_equipped_outfit_prompt)
+                        get_character_current_activity)
                     if character_name:
                         _mood = get_character_current_feeling(character_name) or ""
                         if _mood:
@@ -2753,7 +2751,7 @@ class ImageGenerationSkill(BaseSkill):
                         _act = get_character_current_activity(character_name) or ""
                         if _act:
                             pv.prompt_activity = _act
-                        _outfit = build_equipped_outfit_prompt(character_name) or ""
+                        _outfit = render_outfit(character_name=character_name).get("full", "") or ""
                         if _outfit and persons:
                             pv.prompt_outfits[1] = f"{persons[0].actor_label or persons[0].name} is wearing {_outfit}"
                 except Exception:

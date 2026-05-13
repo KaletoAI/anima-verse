@@ -107,23 +107,18 @@ def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
     """Stable signature der getragenen Items (Pieces + sonstige Ausruestung).
 
     Slot-Reihenfolge fix sortiert, damit gleiche Equip-Sets immer den
-    gleichen Hash erzeugen. Items alphabetisch. Farb-Overrides (meta)
-    fliessen pro Slot als color=... mit in die Signatur ein.
+    gleichen Hash erzeugen. Items alphabetisch.
+
+    equipped_pieces_meta-Parameter bleibt aus Kompatibilitaet bestehender
+    Aufrufer in der Signatur, wird aber ignoriert — Farb-Overrides wurden
+    in Schritt 3 (May 2026) abgeschafft (Plan §5).
     """
     parts = []
     if equipped_pieces:
         for slot in sorted(equipped_pieces.keys()):
             iid = (equipped_pieces[slot] or "").strip()
             if iid:
-                color = ""
-                if equipped_pieces_meta:
-                    _m = equipped_pieces_meta.get(slot) or {}
-                    if isinstance(_m, dict):
-                        color = (_m.get("color") or "").strip()
-                if color:
-                    parts.append(f"{slot}={iid}#{color}")
-                else:
-                    parts.append(f"{slot}={iid}")
+                parts.append(f"{slot}={iid}")
     if equipped_items:
         cleaned = sorted({(i or "").strip() for i in equipped_items if i})
         if cleaned:
@@ -660,7 +655,6 @@ def generate_expression_image(character_name: str,
                               mood: str, activity: str,
                               equipped_pieces: Optional[Dict[str, str]] = None,
                               equipped_items: Optional[list] = None,
-                              equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
                               prompt_prefix: str = "") -> Optional[Path]:
     """Generate an expression/pose variant.
 
@@ -675,119 +669,36 @@ def generate_expression_image(character_name: str,
         get_character_appearance,
         get_character_images_dir,
         postprocess_outfit_image)
+    from app.core.outfit_renderer import render_outfit
 
     # Equipped-State auflaufen lassen falls nicht mitgegeben
-    if equipped_pieces is None or equipped_items is None or equipped_pieces_meta is None:
+    if equipped_pieces is None or equipped_items is None:
         try:
             from app.models.inventory import get_equipped_pieces, get_equipped_items
-            from app.models.character import get_character_profile as _gcp
             if equipped_pieces is None:
                 equipped_pieces = get_equipped_pieces(character_name)
             if equipped_items is None:
                 equipped_items = get_equipped_items(character_name)
-            if equipped_pieces_meta is None:
-                _profile = _gcp(character_name) or {}
-                equipped_pieces_meta = _profile.get("equipped_pieces_meta") or {}
         except Exception:
             equipped_pieces = equipped_pieces or {}
             equipped_items = equipped_items or []
-            equipped_pieces_meta = equipped_pieces_meta or {}
 
-    def _slot_color(s: str) -> str:
-        if not equipped_pieces_meta:
-            return ""
-        _m = equipped_pieces_meta.get(s) or {}
-        if isinstance(_m, dict):
-            return (_m.get("color") or "").strip()
-        return ""
+    # Outfit-Text via zentralem Renderer (Plan §4). Inputs:
+    # equipped_pieces/items mitgeben damit Set-Vorschauen funktionieren
+    # (Override gegen Status-Quo im Profil).
+    from app.models.character import get_character_profile as _gcp_render
+    _render_profile = _gcp_render(character_name) or {}
+    _rendered = render_outfit(
+        profile=_render_profile,
+        equipped_pieces=equipped_pieces,
+        equipped_items=equipped_items,
+    )
+    outfit_desc = _rendered.get("pieces", "")
+    items_desc = _rendered.get("items", "")
+    _fallback_text = _rendered.get("fallback", "")
 
-    # Outfit-Text aus den uebergebenen Pieces/Items (nicht aus dem Profil,
-    # damit Overrides wie die Set-Vorschau korrekt funktionieren).
-    from app.models.inventory import VALID_PIECE_SLOTS, get_item as _get_item
-    # 1) Welche Slots werden verdeckt (covers) bzw. teilverdeckt
-    #    (partially_covers)? covers → Slot faellt komplett raus.
-    #    partially_covers → Fragment wird "{fragment} unter {covering_fragment}".
-    _covered_slots = set()
-    _partially_covered = {}  # slot → (covering_frag, covering_slot)
-    # Multi-Slot-Pieces nur einmal verarbeiten — vom ersten ihrer Slots
-    # in VALID_PIECE_SLOTS-Reihenfolge.
-    _seen_items_for_covers = set()
-    for _slot in VALID_PIECE_SLOTS:
-        _iid = (equipped_pieces or {}).get(_slot)
-        if not _iid or _iid in _seen_items_for_covers:
-            continue
-        _seen_items_for_covers.add(_iid)
-        _it = _get_item(_iid)
-        if not _it:
-            continue
-        _op = _it.get("outfit_piece") or {}
-        _covering_frag = (_it.get("prompt_fragment") or "").strip()
-        _covering_color = _slot_color(_slot)
-        if _covering_color and _covering_frag:
-            _covering_frag = f"{_covering_color} {_covering_frag}"
-        for _c in (_op.get("covers") or []):
-            _cs = str(_c).strip().lower()
-            if _cs:
-                _covered_slots.add(_cs)
-        for _c in (_op.get("partially_covers") or []):
-            _cs = str(_c).strip().lower()
-            if _cs and _covering_frag:
-                _partially_covered[_cs] = (_covering_frag, _slot)
-
-    # Slots deren Fragment bereits im "underneath"-Teil eines anderen Slots
-    # enthalten ist — muessen nicht nochmal separat aufgefuehrt werden.
-    # NUR unterdruecken wenn der Ziel-Slot auch tatsaechlich belegt ist,
-    # sonst verschwindet das Covering-Piece komplett.
-    _suppressed_slots = set()
-    for _target_slot, (_cfrag, _covering_slot) in _partially_covered.items():
-        if (equipped_pieces or {}).get(_target_slot):
-            _suppressed_slots.add(_covering_slot)
-
-    _piece_fragments = []
-    _rendered_items = set()  # Dedup: Multi-Slot-Pieces nur einmal rendern
-    for _slot in VALID_PIECE_SLOTS:
-        if _slot in _covered_slots:
-            continue
-        if _slot in _suppressed_slots:
-            continue
-        _iid = (equipped_pieces or {}).get(_slot)
-        if not _iid:
-            continue
-        if _iid in _rendered_items:
-            continue
-        _it = _get_item(_iid)
-        if not _it:
-            continue
-        _rendered_items.add(_iid)
-        _frag = (_it.get("prompt_fragment") or "").strip()
-        if _frag:
-            _c_color = _slot_color(_slot)
-            if _c_color:
-                _frag = f"{_c_color} {_frag}"
-            if _slot in _partially_covered:
-                _frag = f"{_frag} underneath {_partially_covered[_slot][0]}"
-            _piece_fragments.append(_frag)
-
-    _item_fragments = []
-    _seen = set()
-    for _iid in (equipped_items or []):
-        if not _iid or _iid in _seen:
-            continue
-        _seen.add(_iid)
-        _it = _get_item(_iid)
-        if not _it:
-            continue
-        _frag = (_it.get("prompt_fragment") or "").strip()
-        if _frag:
-            _item_fragments.append(_frag)
-    # Pieces gehen unter "is wearing ..." (siehe outfit_prompt unten).
-    # Equipped-Items (Spells/Tools/...) NICHT — sonst wird "holding a stone"
-    # zu "is wearing holding a stone". Sie werden als eigene Phrase mit
-    # `{actor_label} ...` an den outfit_prompt gehaengt.
-    outfit_desc = ", ".join(_piece_fragments)
-    items_desc = ", ".join(_item_fragments)
-
-    cache_key = _cache_key(mood, activity, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)
+    cache_key = _cache_key(mood, activity, character_name,
+                            equipped_pieces, equipped_items)
 
     logger.info("Expression-Generierung: %s mood='%s' activity='%s' equipped=%d/%d",
                 character_name, mood, activity,
@@ -820,48 +731,8 @@ def generate_expression_image(character_name: str,
 
     # Separate Prompts: prefix, character (Appearance), outfit, pose, expression
     character_prompt = f"{actor_label}, {appearance}"
-    # Fallback-Prompts fuer unbekleidete Bereiche (per-Character aus Profil).
-    # Pruefen: Slot leer UND nicht von einem anderen Piece verdeckt.
-    from app.models.character import get_character_profile as _gcp2
-    from app.models.character_template import resolve_profile_tokens, get_template
-    _prof_full = _gcp2(character_name) or {}
-    _tmpl_obj = get_template(_prof_full.get("template", ""))
-
-    def _resolve_tokens(raw: str) -> str:
-        if not raw:
-            return ""
-        try:
-            return resolve_profile_tokens(raw, _prof_full, template=_tmpl_obj,
-                                           target_key="character_appearance")
-        except Exception:
-            return raw
-
-    def _resolve_fallback(profile_key: str) -> str:
-        return _resolve_tokens((_prof_full.get(profile_key) or "").strip())
-
-    _slot_overrides = _prof_full.get("slot_overrides") or {}
-    _fallback_parts = []
-    for _slot in VALID_PIECE_SLOTS:
-        if (equipped_pieces or {}).get(_slot):
-            continue
-        if _slot in _covered_slots:
-            continue
-        _ov = _slot_overrides.get(_slot) or {}
-        _ov_prompt = (_ov.get("prompt") or "").strip() if isinstance(_ov, dict) else ""
-        if _ov_prompt:
-            _fallback_parts.append(_resolve_tokens(_ov_prompt))
-            continue
-        # Legacy-Felder nur fuer Unterwaesche-Slots
-        if _slot == "underwear_top":
-            _fb = _resolve_fallback("no_outfit_prompt_top")
-            if _fb:
-                _fallback_parts.append(_fb)
-        elif _slot == "underwear_bottom":
-            _fb = _resolve_fallback("no_outfit_prompt_bottom")
-            if _fb:
-                _fallback_parts.append(_fb)
-
-    _fallback_text = ", ".join(_fallback_parts)
+    # outfit_desc / items_desc / _fallback_text kommen aus render_outfit()
+    # weiter oben — Single-Source aus app.core.outfit_renderer (Plan §4).
 
     # "is wearing" nur wenn mindestens ein Piece-Slot belegt ist.
     if outfit_desc:

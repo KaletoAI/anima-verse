@@ -19,9 +19,9 @@ from app.core.streaming import StreamingAgent, ContentEvent
 from app.models.account import (
     get_user_profile,
     get_user_appearance)
+from app.core.outfit_renderer import render_outfit, render_unworn_slots
 from app.models.character import (
     get_character_address_form,
-    build_equipped_outfit_prompt,
     get_character_config,
     get_character_profile,
     get_character_appearance,
@@ -1538,13 +1538,12 @@ async def chat(request: Request) -> StreamingResponse:
             if _tl_acts:
                 _tool_act_list = ", ".join(_tl_acts)
         # Aktuelles Outfit beider Gespraechspartner fuer ChangeOutfit-Kontext
-        from app.models.character import build_equipped_outfit_prompt
         from app.models.account import get_active_character
-        _tool_agent_outfit = build_equipped_outfit_prompt(current_agent) or "(nothing equipped)"
+        _tool_agent_outfit = render_outfit(character_name=current_agent).get("full", "") or "(nothing equipped)"
         _tool_avatar_name = get_active_character() or ""
         _tool_avatar_outfit = ""
         if _tool_avatar_name:
-            _tool_avatar_outfit = build_equipped_outfit_prompt(_tool_avatar_name) or "(nothing equipped)"
+            _tool_avatar_outfit = render_outfit(character_name=_tool_avatar_name).get("full", "") or "(nothing equipped)"
         _outfit_block = f"\n{current_agent} currently wears: {_tool_agent_outfit}"
         if _tool_avatar_outfit and _tool_avatar_name:
             _outfit_block += f"\n{_tool_avatar_name} currently wears: {_tool_avatar_outfit}"
@@ -2607,9 +2606,7 @@ def _build_full_system_prompt(character_name: str,
                 # (gleiche Logik wie beim Variant-Bild). So weiss der LLM
                 # was unter dem Outfit zu sehen waere.
                 try:
-                    from app.models.character import build_unworn_slot_fragments
-                    _slot_extras = build_unworn_slot_fragments(
-                        _partner_name, profile=partner_profile)
+                    _slot_extras = render_unworn_slots(profile=partner_profile)
                     if _slot_extras:
                         p_app = (p_app + ", " + _slot_extras).strip(", ").strip()
                 except Exception:
@@ -2654,10 +2651,10 @@ def _build_full_system_prompt(character_name: str,
     def _build_wearing_block(_cname: str, _label: str,
                              include_inventory: bool) -> str:
         try:
-            from app.models.character import build_equipped_outfit_prompt
             from app.models.inventory import (
                 get_character_inventory, get_equipped_item_ids)
-            wearing = _strip_wearing_prefix(build_equipped_outfit_prompt(_cname))
+            wearing = _strip_wearing_prefix(
+                render_outfit(character_name=_cname).get("full", ""))
             lines: list = []
             _is_self = (_label == "You")
             _v_wear = "are" if _is_self else "is"
@@ -2712,15 +2709,13 @@ def _build_full_system_prompt(character_name: str,
         # Slot-Fragmente unbedeckter, ungetragener Slots anhaengen — selbe
         # Logik wie im Partner-Block + Variant-Bild.
         try:
-            from app.models.character import build_unworn_slot_fragments
-            _slot_extras = build_unworn_slot_fragments(
-                character_name, profile=char_profile)
+            _slot_extras = render_unworn_slots(profile=char_profile)
             if _slot_extras:
                 appearance = (appearance + ", " + _slot_extras).strip(", ").strip()
         except Exception:
             pass
         char_profile["character_appearance"] = appearance
-        current_outfit = (build_equipped_outfit_prompt(character_name) or "").removeprefix("wearing: ")
+        current_outfit = (render_outfit(character_name=character_name).get("full", "") or "").removeprefix("wearing: ")
         if current_outfit:
             char_profile["default_outfit"] = current_outfit
         loc_id = char_profile.get("current_location", "")

@@ -1225,8 +1225,8 @@ def get_outfit_compliance(character_name: str) -> Dict[str, Any]:
     required = sorted(resolve_required_slots(outfit_type, character_name))
     equipped_slots = sorted(s for s, iid in equipped.items() if iid)
     # Gecoverte Slots (z.B. bottom via Kleid) zaehlen als belegt
-    from app.models.character import _collect_covered_slots
-    covered_slots = _collect_covered_slots(equipped)
+    from app.core.outfit_renderer import collect_covered_slots
+    covered_slots = collect_covered_slots(equipped)
     covered_or_equipped = set(equipped_slots) | covered_slots
     missing = sorted(set(required) - covered_or_equipped)
     # Case-insensitive Lookup fuer Display
@@ -1740,8 +1740,8 @@ def get_current_outfit_route(character_name: str) -> Dict[str, Any]:
     """Gibt das aktuelle Outfit basierend auf Location und Activity zurueck"""
     from app.models.world import get_location_name as _get_loc_name
     from app.models.character import get_character_current_room
-    from app.models.character import build_equipped_outfit_prompt
-    outfit = (build_equipped_outfit_prompt(character_name) or "").removeprefix("wearing: ")
+    from app.core.outfit_renderer import render_outfit
+    outfit = (render_outfit(character_name=character_name).get("full", "") or "").removeprefix("wearing: ")
     current_location_id = get_character_current_location(character_name)
     current_activity = get_character_current_activity(character_name)
     current_room = get_character_current_room(character_name)
@@ -1759,9 +1759,9 @@ def get_current_outfit_route(character_name: str) -> Dict[str, Any]:
 async def refresh_current_outfit(character_name: str, request: Request) -> Dict[str, Any]:
     """Decency-Compliance auf den Char anwenden und Outfit-Beschreibung zurueckliefern."""
     from app.core.outfit_compliance import apply_outfit_compliance
-    from app.models.character import build_equipped_outfit_prompt
+    from app.core.outfit_renderer import render_outfit
     result = apply_outfit_compliance(character_name)
-    outfit_text = build_equipped_outfit_prompt(character_name)
+    outfit_text = render_outfit(character_name=character_name).get("full", "")
     return {"character": character_name,
             "current_outfit_description": outfit_text,
             "compliance": result}
@@ -1896,11 +1896,10 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
     else:
         try:
             from app.models.inventory import get_equipped_pieces, get_equipped_items
-            from app.models.character import get_character_profile
             _eq_pieces = get_equipped_pieces(character_name)
             _eq_items = get_equipped_items(character_name)
-            _profile = get_character_profile(character_name) or {}
-            _eq_meta = _profile.get("equipped_pieces_meta") or {}
+            # equipped_pieces_meta (Farb-Override) wurde in Schritt 3 abgeschafft.
+            _eq_meta = None
         except Exception:
             _eq_pieces, _eq_items, _eq_meta = None, None, None
 
