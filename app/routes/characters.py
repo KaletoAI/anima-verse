@@ -1757,30 +1757,14 @@ def get_current_outfit_route(character_name: str) -> Dict[str, Any]:
 
 @router.post("/{character_name}/current-outfit/refresh")
 async def refresh_current_outfit(character_name: str, request: Request) -> Dict[str, Any]:
-    """Outfit-Compliance pruefen und Pieces nach Dress-Code tauschen."""
-    from app.models.inventory import apply_outfit_type_compliance
-    from app.models.character import get_character_profile, build_equipped_outfit_prompt
-    from app.models.world import get_location
-    data = await request.json()
-    user_id = data.get("user_id", "").strip()
-    profile = get_character_profile(character_name) or {}
-    loc_id = profile.get("current_location", "")
-    room_id = profile.get("current_room", "")
-    target_type = ""
-    if loc_id:
-        loc = get_location(loc_id) or {}
-        if room_id:
-            for r in (loc.get("rooms") or []):
-                if r.get("id") == room_id:
-                    target_type = (r.get("outfit_type") or "").strip()
-                    break
-        if not target_type:
-            target_type = (loc.get("outfit_type") or "").strip()
-    result = {}
-    if target_type:
-        result = apply_outfit_type_compliance(character_name, target_type)
+    """Decency-Compliance auf den Char anwenden und Outfit-Beschreibung zurueckliefern."""
+    from app.core.outfit_compliance import apply_outfit_compliance
+    from app.models.character import build_equipped_outfit_prompt
+    result = apply_outfit_compliance(character_name)
     outfit_text = build_equipped_outfit_prompt(character_name)
-    return {"character": character_name, "current_outfit_description": outfit_text, "compliance": result}
+    return {"character": character_name,
+            "current_outfit_description": outfit_text,
+            "compliance": result}
 
 
 

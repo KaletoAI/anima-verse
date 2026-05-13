@@ -2228,18 +2228,12 @@ def _extract_activity(agent_name: str, response: str) -> Optional[str]:
         matched_room = find_room_by_activity(loc_data, activity_name)
         if matched_room:
             save_character_current_room(agent_name, matched_room.get("id", ""))
-        # Outfit-Compliance nach Room/Location Dress-Code
-        from app.models.inventory import apply_outfit_type_compliance
-        from app.core.outfit_rules import default_outfit_type
-        _ot = ""
-        if matched_room:
-            _ot = (matched_room.get("outfit_type") or "").strip()
-        if not _ot and loc_data:
-            _ot = (loc_data.get("outfit_type") or "").strip()
-        if not _ot:
-            _ot = default_outfit_type()
-        if _ot:
-            apply_outfit_type_compliance(agent_name, _ot)
+        # Decency-Compliance nach dem (ggf. veraenderten) Raum/Location
+        try:
+            from app.core.outfit_compliance import apply_outfit_compliance
+            apply_outfit_compliance(agent_name)
+        except Exception as _ce:
+            logger.debug("outfit_compliance bei Activity-Aktion fehlgeschlagen: %s", _ce)
 
     # Effects werden zeitproportional via save_character_current_activity
     # und hourly_status_tick angewendet (nicht mehr sofort).
@@ -2314,25 +2308,20 @@ def _apply_removed_pieces(character_name: str,
         if unequipped:
             logger.info("Chat-Extraktion [%s]: %d Piece(s) abgelegt: %s",
                          character_name, len(unequipped), ", ".join(unequipped))
-            # Runtime-Force-Skip: die abgelegten Slots bleiben "absichtlich leer"
-            # bis zum naechsten Location-Wechsel. Verhindert dass Auto-Fill sie
-            # bei naechstem Activity-Tick sofort wieder anzieht.
+            # Intent.forbidden_slots: die abgelegten Slots bleiben "absichtlich
+            # leer" bis zum naechsten Location-Wechsel. Verhindert dass die
+            # Compliance/Auto-Fill sie sofort wieder anzieht.
             try:
-                from app.models.character import (
-                    get_character_profile, save_character_profile)
-                _prof = get_character_profile(character_name) or {}
-                _skip = set(_prof.get("runtime_outfit_skip") or [])
+                from app.models.character import add_forbidden_slot
                 for _u in unequipped:
                     # _u ist "Name (slot)" — Slot extrahieren
                     _m = _u.rsplit("(", 1)
                     if len(_m) == 2:
                         _slot = _m[1].rstrip(")").strip()
                         if _slot:
-                            _skip.add(_slot)
-                _prof["runtime_outfit_skip"] = sorted(_skip)
-                save_character_profile(character_name, _prof)
+                            add_forbidden_slot(character_name, _slot)
             except Exception as _fse:
-                logger.debug("runtime_outfit_skip konnte nicht gesetzt werden: %s", _fse)
+                logger.debug("forbidden_slots konnte nicht gesetzt werden: %s", _fse)
 
         # Expression-Variant neu generieren wenn sich was geaendert hat
         if unequipped:

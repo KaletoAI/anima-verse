@@ -341,14 +341,11 @@ class SetActivitySkill(BaseSkill):
         else:
             room_name = ""
 
-        # Outfit-Compliance pruefen — zentraler Helper waehlt
-        # Activity > Raum > Location (Activity gewinnt, z.B. "sunbathing"
-        # triggert swimwear auch wenn der Raum nur "Outdoor" ist).
-        from app.models.inventory import apply_outfit_type_compliance
-        from app.core.outfit_rules import resolve_target_outfit_type
-        _target_type = resolve_target_outfit_type(character_name)
-        if _target_type:
-            apply_outfit_type_compliance(character_name, _target_type)
+        # Decency-Compliance pruefen — Decency kommt aus Raum/Location.
+        # Activity selbst hat keinen Decency-Effekt mehr; State-Flags
+        # (is_wet, is_intimate) kommen in Schritt 6.
+        from app.core.outfit_compliance import apply_outfit_compliance
+        apply_outfit_compliance(character_name)
 
         # --- Spezial-Aktivitaet: Cooldown, Effects, Triggers ---
         if act_def:

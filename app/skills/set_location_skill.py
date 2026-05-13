@@ -402,17 +402,16 @@ class SetLocationSkill(BaseSkill):
         except Exception as _e:
             logger.warning("Avatar-Room-Follow fehlgeschlagen: %s", _e)
 
-        # Outfit-Compliance nach Dress-Code der neuen Location/Room —
-        # zentraler Helper waehlt Activity > Raum > Location.
-        from app.models.inventory import apply_outfit_type_compliance
-        from app.core.outfit_rules import resolve_target_outfit_type
-        _target_type = resolve_target_outfit_type(character_name)
-        if _target_type:
-            _comp = apply_outfit_type_compliance(character_name, _target_type)
-            if _comp.get("swapped") or _comp.get("removed"):
-                logger.info("Outfit-Compliance [%s]: %d getauscht, %d entfernt (Typ: %s)",
-                             character_name, len(_comp.get("swapped", [])),
-                             len(_comp.get("removed", [])), _target_type)
+        # Decency-Compliance nach dem neuen Raum/Location.
+        from app.core.outfit_compliance import apply_outfit_compliance
+        _comp = apply_outfit_compliance(character_name)
+        if _comp.get("auto_filled") or _comp.get("forbidden_cleared"):
+            logger.info(
+                "Outfit-Compliance [%s] decency=%s: filled=%d, cleared=%d",
+                character_name, _comp.get("decency"),
+                len(_comp.get("auto_filled", [])),
+                len(_comp.get("forbidden_cleared", [])),
+            )
 
         logger.info(f"Gesetzt: Location='{location_name}' (ID: {location_id}), "
               f"Room='{room_name}' (ID: {room_id}), Activity='{activity}'")

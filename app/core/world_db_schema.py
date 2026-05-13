@@ -12,7 +12,7 @@ Konventionen:
 - Foreign Keys: AN, ON DELETE CASCADE wo sinnvoll
 """
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 SCHEMA_STATEMENTS = [
@@ -28,6 +28,10 @@ SCHEMA_STATEMENTS = [
         grid_x           INTEGER,
         grid_y           INTEGER,
         outfit_type      TEXT DEFAULT '',
+        decency          TEXT DEFAULT '',
+        style_hint       TEXT DEFAULT '',
+        swim_allowed     INTEGER NOT NULL DEFAULT 0,
+        activity_hint    TEXT DEFAULT '',
         image_prompt_day TEXT DEFAULT '',
         image_prompt_night TEXT DEFAULT '',
         image_prompt_map TEXT DEFAULT '',
@@ -39,11 +43,15 @@ SCHEMA_STATEMENTS = [
         updated_at       TEXT NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS rooms (
-        id           TEXT PRIMARY KEY,
-        location_id  TEXT NOT NULL,
-        name         TEXT NOT NULL,
-        outfit_type  TEXT DEFAULT '',
-        meta         TEXT DEFAULT '{}',
+        id            TEXT PRIMARY KEY,
+        location_id   TEXT NOT NULL,
+        name          TEXT NOT NULL,
+        outfit_type   TEXT DEFAULT '',
+        decency       TEXT DEFAULT '',
+        style_hint    TEXT DEFAULT '',
+        swim_allowed  INTEGER NOT NULL DEFAULT 0,
+        activity_hint TEXT DEFAULT '',
+        meta          TEXT DEFAULT '{}',
         FOREIGN KEY(location_id) REFERENCES locations(id) ON DELETE CASCADE
     )""",
     """CREATE TABLE IF NOT EXISTS rules (
@@ -467,6 +475,22 @@ ALTER_MIGRATIONS = [
     # (eine Summary pro (character, partner) pro Tag statt eine pro Tag).
     # UNIQUE-Constraint-Wechsel laeuft separat in db.py (Table-Rebuild).
     ("summaries", "partner", "TEXT NOT NULL DEFAULT ''"),
+    # Outfit + Pose Rethink (May 2026, plan-outfit-system-rethink.md):
+    # Räume/Locations bekommen Decency-Modell statt outfit_type-Container.
+    # decency: public | private | nude_ok (hart, Compliance-relevant)
+    # style_hint: free-text Empfehlung, nur LLM-Hinweis
+    # swim_allowed: 0/1, Decency-Modifikator wenn char.is_wet
+    # activity_hint: free-text, "was macht man hier normalerweise" (Soul-Style)
+    # outfit_type bleibt vorerst lesbar parallel — wird in Schritt 8 (Cleanup)
+    # entfernt nachdem Compliance vollstaendig auf decency umgezogen ist.
+    ("locations", "decency",       "TEXT DEFAULT ''"),
+    ("locations", "style_hint",    "TEXT DEFAULT ''"),
+    ("locations", "swim_allowed",  "INTEGER NOT NULL DEFAULT 0"),
+    ("locations", "activity_hint", "TEXT DEFAULT ''"),
+    ("rooms",     "decency",       "TEXT DEFAULT ''"),
+    ("rooms",     "style_hint",    "TEXT DEFAULT ''"),
+    ("rooms",     "swim_allowed",  "INTEGER NOT NULL DEFAULT 0"),
+    ("rooms",     "activity_hint", "TEXT DEFAULT ''"),
 ]
 
 

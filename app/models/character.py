@@ -209,7 +209,8 @@ _STATE_COLS = ("current_location", "current_room", "current_activity",
 # in profile_json. Inject/Extract analog zu _STATE_COLS.
 _STATE_META_KEYS = ("equipped_pieces", "equipped_items", "equipped_pieces_meta",
                     "active_conditions", "status_effects", "activity_cooldowns",
-                    "runtime_outfit_skip",
+                    "runtime_outfit_skip",  # legacy — wird in Schritt 8 entfernt
+                    "outfit_intent",        # neuer Intent-Container (May 2026)
                     "current_activity_detail",
                     "movement_target")
 
@@ -1005,12 +1006,24 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # einen passenden Raum am neuen Ort explizit setzen.
     if location and location != old_location and profile.get("current_room"):
         profile["current_room"] = ""
-    # runtime_outfit_skip zuruecksetzen bei echtem Location-Wechsel: die
+    # Intent.forbidden_slots zuruecksetzen bei echtem Location-Wechsel: die
     # absichtlich-leeren Slots aus dem Chat ("zieht sich aus") galten fuer
-    # die alte Location. Am neuen Ort greift wieder die normale outfit-Regel.
-    if location and location != old_location and profile.get("runtime_outfit_skip"):
-        profile["runtime_outfit_skip"] = []
+    # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
+    # (Lebenszyklus gemaess plan-outfit-system-rethink.md §3)
+    # runtime_outfit_skip-Legacy-Feld bleibt erstmal sichtbar, wird aber
+    # nicht mehr gelesen — Cleanup in Schritt 8.
+    if location and location != old_location:
+        if profile.get("runtime_outfit_skip"):
+            profile["runtime_outfit_skip"] = []
     save_character_profile(character_name, profile)
+    if location and location != old_location:
+        try:
+            clear_forbidden_slots(character_name)
+        except Exception as _e:
+            from app.core.log import get_logger
+            get_logger("character_model").debug(
+                "clear_forbidden_slots bei Location-Wechsel fehlgeschlagen: %s",
+                _e)
     # Location-History aufzeichnen (nur bei echtem Wechsel)
     if location and location != old_location:
         _record_state_change(character_name, "location", location)
@@ -1022,35 +1035,13 @@ def save_character_current_location(character_name: str = "", location: str = ""
             add_known_location(character_name, location)
         except Exception:
             pass
-    # Outfit-Type-Compliance: tausche nicht-passende equipped Pieces gegen
-    # Inventar-Pieces mit passendem Typ. Nur wenn nicht _skip_compliance
-    # und tatsaechlich Location gewechselt wurde.
-    # WICHTIG: hier Location/Raum-Type direkt verwenden (NICHT resolve_helper),
-    # weil die Activity beim Location-Wechsel noch die alte ist — sonst zieht
-    # z.B. der Sunbathing-Type der Pool-Activity beim Umzug ins Buero durch
-    # und Kira kommt halbnackt am Schreibtisch an. Activity-Type wird spaeter
-    # in save_character_current_activity nachgezogen wenn Scheduler activity updated.
+    # Decency-Compliance: liest decency/style_hint des aktuellen Raums
+    # (oder Location als Fallback) und gleicht equipped_pieces ab.
+    # Nur bei echtem Location-Wechsel und nicht _skip_compliance.
     if not _skip_compliance and location and location != old_location:
         try:
-            from app.models.world import get_location_by_id
-            from app.models.inventory import apply_outfit_type_compliance
-            from app.core.outfit_rules import default_outfit_type
-            loc_data = get_location_by_id(location)
-            target_type = ""
-            if loc_data:
-                room_id = profile.get("current_room", "")
-                if room_id:
-                    for r in (loc_data.get("rooms") or []):
-                        if r.get("id") == room_id:
-                            target_type = (r.get("outfit_type") or "").strip()
-                            break
-                if not target_type:
-                    target_type = (loc_data.get("outfit_type") or "").strip()
-            # Fallback auf den als default markierten outfit_type aus den Regeln
-            if not target_type:
-                target_type = default_outfit_type()
-            if target_type:
-                apply_outfit_type_compliance(character_name, target_type)
+            from app.core.outfit_compliance import apply_outfit_compliance
+            apply_outfit_compliance(character_name)
         except Exception as _e:
             from app.core.log import get_logger
             get_logger("character_model").debug(
@@ -1337,28 +1328,20 @@ def save_character_current_activity(character_name: str, activity: str, detail: 
             _record_state_change(character_name, "activity", activity, metadata=detail_meta)
 
         # Outfit-Compliance bei Activity-Wechsel.
-        # Nutzt resolve_target_outfit_type (Activity > Raum > Location):
-        # - Activity mit explizitem outfit_type (z.B. sunbathing → pool)
-        #   uebersteuert Raum-Type — korrekt, die Taetigkeit diktiert Kleidung.
-        # - Activity ohne Typ → faellt auf Raum/Location zurueck — greift
-        #   den Sekundaer-Fix fuer Scheduler-Reihenfolge ein: Location wurde
-        #   zuerst gesetzt mit Location-Type, dann die Activity — hier wird
-        #   ein evtl. fehlendes Piece (z.B. Kira kam aus Pool ins Buero mit
-        #   nur Bikini) nochmal via Auto-Fill auf den richtigen Type gebracht.
-        # Bei Reklassifizierung (_is_reclassify) nicht, da nur Namens-Normalisierung.
+        # Im neuen Decency-Modell triggert Activity selbst keine eigene
+        # Compliance mehr — die Decency kommt aus Raum/Location, Activity
+        # liefert nur einen optionalen decency_override-Flag (kommt in
+        # Schritt 6 mit den State-Flags). Hier ruft apply_outfit_compliance
+        # nochmal, falls die Activity das Outfit beeinflussen sollte
+        # (z.B. Variant-Trigger).
         if not _is_reclassify and not _skip_partner_transfer:
             try:
                 from app.models.account import is_player_controlled
                 if not is_player_controlled(character_name) and not is_outfit_locked(character_name):
-                    from app.core.outfit_rules import resolve_target_outfit_type
-                    from app.models.inventory import apply_outfit_type_compliance
-                    _tt = resolve_target_outfit_type(character_name)
-                    if _tt:
-                        apply_outfit_type_compliance(character_name, _tt)
+                    from app.core.outfit_compliance import apply_outfit_compliance
+                    apply_outfit_compliance(character_name)
                     # Variant-Trigger neu anstossen — coalesce merged mit
-                    # dem evtl. schon pending Mood-Trigger, so dass der
-                    # finale Fire den NEUEN Activity-Namen/Equipped-State
-                    # verwendet.
+                    # dem evtl. schon pending Mood-Trigger.
                     _schedule_background_variant(character_name)
             except Exception as _e:
                 from app.core.log import get_logger
@@ -1500,18 +1483,15 @@ def save_character_current_room(character_name: str, room_id: str):
         _record_state_change(character_name, "room", room_id,
                               metadata={"name": room_name, "old": old_room})
 
-    # Outfit-Type-Compliance nur bei echtem Raumwechsel + Avatar ausnehmen
+    # Decency-Compliance nur bei echtem Raumwechsel + Avatar ausnehmen
     if not room_id or room_id == old_room:
         return
     try:
         from app.models.account import is_player_controlled
         if is_player_controlled(character_name):
             return
-        from app.core.outfit_rules import resolve_target_outfit_type
-        from app.models.inventory import apply_outfit_type_compliance
-        target_type = resolve_target_outfit_type(character_name)
-        if target_type:
-            apply_outfit_type_compliance(character_name, target_type)
+        from app.core.outfit_compliance import apply_outfit_compliance
+        apply_outfit_compliance(character_name)
     except Exception as _e:
         from app.core.log import get_logger
         get_logger("character_model").debug(
@@ -1572,27 +1552,124 @@ def force_set_status(character_name: str,
     return written
 
 
+# === Outfit-Intent (Runtime, in character_state.meta) ====================
+# Plan: development_instructions/plan-outfit-system-rethink.md §3
+# Ersetzt runtime_outfit_skip + outfit_locked + (teilweise) outfit_exceptions.
+# Lebenszyklus von forbidden_slots: verfaellt bei Location-Wechsel und
+# beim Schlafen (siehe save_character_current_location).
+
+OUTFIT_INTENT_DEFAULT = {
+    "forced_pieces": {},        # {slot: item_id} — explizit gesetzt
+    "forbidden_slots": [],      # Slots die explizit leer bleiben sollen
+    "target_outfit_type": None, # optionaler Stil-Hint fuer Auto-Fill
+    "locked": False,            # globaler "Haende weg"-Switch
+}
+
+
+def get_outfit_intent(character_name: str) -> Dict[str, Any]:
+    """Liefert das Outfit-Intent-Dict mit Default-Feldern.
+
+    Liest aus character_state.meta. Fehlende Felder werden mit Defaults
+    aufgefuellt — das Resultat ist immer ein vollstaendiges Dict.
+    """
+    if not character_name:
+        return dict(OUTFIT_INTENT_DEFAULT, forced_pieces={}, forbidden_slots=[])
+    profile = get_character_profile(character_name)
+    raw = profile.get("outfit_intent") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "forced_pieces": dict(raw.get("forced_pieces") or {}),
+        "forbidden_slots": list(raw.get("forbidden_slots") or []),
+        "target_outfit_type": raw.get("target_outfit_type") or None,
+        "locked": bool(raw.get("locked", False)),
+    }
+
+
+def set_outfit_intent(character_name: str, intent: Dict[str, Any]) -> None:
+    """Schreibt das vollstaendige Intent-Dict in character_state.meta."""
+    if not character_name:
+        return
+    profile = get_character_profile(character_name)
+    profile["outfit_intent"] = {
+        "forced_pieces": dict(intent.get("forced_pieces") or {}),
+        "forbidden_slots": list(intent.get("forbidden_slots") or []),
+        "target_outfit_type": intent.get("target_outfit_type") or None,
+        "locked": bool(intent.get("locked", False)),
+    }
+    save_character_profile(character_name, profile)
+
+
+def _update_outfit_intent(character_name: str, **changes) -> Dict[str, Any]:
+    """Helper: Intent lesen, Felder mergen, schreiben. Returns das neue Intent."""
+    intent = get_outfit_intent(character_name)
+    intent.update(changes)
+    set_outfit_intent(character_name, intent)
+    return intent
+
+
+def add_forbidden_slot(character_name: str, slot: str) -> None:
+    """Markiert einen Slot als "absichtlich leer"."""
+    if not (character_name and slot):
+        return
+    intent = get_outfit_intent(character_name)
+    if slot not in intent["forbidden_slots"]:
+        intent["forbidden_slots"].append(slot)
+        intent["forbidden_slots"].sort()
+        set_outfit_intent(character_name, intent)
+
+
+def remove_forbidden_slot(character_name: str, slot: str) -> None:
+    if not (character_name and slot):
+        return
+    intent = get_outfit_intent(character_name)
+    if slot in intent["forbidden_slots"]:
+        intent["forbidden_slots"].remove(slot)
+        set_outfit_intent(character_name, intent)
+
+
+def clear_forbidden_slots(character_name: str) -> None:
+    """Leert die Liste vollstaendig — z.B. bei Location-Wechsel."""
+    if not character_name:
+        return
+    intent = get_outfit_intent(character_name)
+    if intent["forbidden_slots"]:
+        intent["forbidden_slots"] = []
+        set_outfit_intent(character_name, intent)
+
+
+def add_forced_piece(character_name: str, slot: str, item_id: str) -> None:
+    if not (character_name and slot and item_id):
+        return
+    intent = get_outfit_intent(character_name)
+    intent["forced_pieces"][slot] = item_id
+    set_outfit_intent(character_name, intent)
+
+
+def clear_forced_piece(character_name: str, slot: str) -> None:
+    if not (character_name and slot):
+        return
+    intent = get_outfit_intent(character_name)
+    if slot in intent["forced_pieces"]:
+        del intent["forced_pieces"][slot]
+        set_outfit_intent(character_name, intent)
+
+
 def is_outfit_locked(character_name: str) -> bool:
     """True wenn das Outfit des Characters gegen Auto-Aenderung gesperrt ist.
 
-    Gesperrte Characters ueberspringen Chat-/RP-Scene-Outfit-Extraktion +
-    zugehoerige Expression-Regeneration → spart LLM-Calls und GPU-Zeit.
-    Funktioniert fuer Agent- und Avatar-Character gleich.
+    Liest jetzt aus `outfit_intent.locked` (statt frueherem profile.outfit_locked).
     """
     if not character_name:
         return False
-    profile = get_character_profile(character_name)
-    return bool(profile.get("outfit_locked", False))
+    return get_outfit_intent(character_name)["locked"]
 
 
-def set_outfit_locked(character_name: str, locked: bool):
-    """Setzt/entfernt die Outfit-Sperre."""
-    profile = get_character_profile(character_name)
-    if locked:
-        profile["outfit_locked"] = True
-    else:
-        profile.pop("outfit_locked", None)
-    save_character_profile(character_name, profile)
+def set_outfit_locked(character_name: str, locked: bool) -> None:
+    """Setzt/entfernt die Outfit-Sperre via intent.locked."""
+    if not character_name:
+        return
+    _update_outfit_intent(character_name, locked=bool(locked))
 
 
 # === Spezial-Aktivitaeten (pro Character, in character_config.json) ===

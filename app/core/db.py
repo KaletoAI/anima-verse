@@ -266,6 +266,77 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("known_locations Backfill fehlgeschlagen: %s", e)
 
+    # One-shot Migration: outfit_locked + runtime_outfit_skip → outfit_intent.
+    # Plan: development_instructions/plan-outfit-system-rethink.md §3
+    # Vereint die beiden alten Felder in einen Intent-Container in
+    # character_state.meta. Alte Felder bleiben fuers Erste stehen (werden
+    # in Schritt 8 Cleanup entfernt) — die Reader/Writer ignorieren sie
+    # bereits. Idempotent via schema_meta-Flag.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='outfit_intent_migrated_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            import json as _json
+            char_rows = conn.execute(
+                "SELECT name, profile_json FROM characters"
+            ).fetchall()
+            state_rows = {
+                r[0]: r[1] for r in conn.execute(
+                    "SELECT character_name, meta FROM character_state"
+                ).fetchall()
+            }
+            migrated = 0
+            for char_name, prof_raw in char_rows:
+                try:
+                    prof = _json.loads(prof_raw or "{}")
+                except Exception:
+                    prof = {}
+                old_locked = bool(prof.get("outfit_locked", False))
+                state_meta_raw = state_rows.get(char_name) or "{}"
+                try:
+                    state_meta = _json.loads(state_meta_raw or "{}")
+                except Exception:
+                    state_meta = {}
+                old_forbidden = list(state_meta.get("runtime_outfit_skip") or [])
+                existing_intent = state_meta.get("outfit_intent")
+                if isinstance(existing_intent, dict) and (
+                    existing_intent.get("locked") or
+                    existing_intent.get("forbidden_slots") or
+                    existing_intent.get("forced_pieces")
+                ):
+                    # Schon migriert oder bereits aktiv genutzt — nicht ueberschreiben
+                    continue
+                if not old_locked and not old_forbidden:
+                    continue
+                intent = {
+                    "forced_pieces": {},
+                    "forbidden_slots": sorted(set(old_forbidden)),
+                    "target_outfit_type": None,
+                    "locked": old_locked,
+                }
+                state_meta["outfit_intent"] = intent
+                # state-Row muss existieren — UPSERT
+                conn.execute(
+                    "INSERT INTO character_state (character_name, meta) "
+                    "VALUES (?, ?) "
+                    "ON CONFLICT(character_name) DO UPDATE SET meta=excluded.meta",
+                    (char_name, _json.dumps(state_meta, ensure_ascii=False)),
+                )
+                migrated += 1
+            if migrated:
+                logger.info(
+                    "outfit_intent-Migration: %d Characters migriert "
+                    "(outfit_locked/runtime_outfit_skip → outfit_intent)",
+                    migrated,
+                )
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('outfit_intent_migrated_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("outfit_intent-Migration fehlgeschlagen: %s", e)
+
     conn.execute(
         "INSERT INTO schema_meta (key, value) VALUES ('version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",

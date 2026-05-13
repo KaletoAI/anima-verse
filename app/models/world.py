@@ -62,7 +62,8 @@ def _load_world_data() -> Dict[str, Any]:
         rows = conn.execute(
             "SELECT id, name, description, grid_x, grid_y, outfit_type, "
             "image_prompt_day, image_prompt_night, image_prompt_map, "
-            "visible_when, accessible_when, background_images, meta "
+            "visible_when, accessible_when, background_images, meta, "
+            "decency, style_hint, swim_allowed, activity_hint "
             "FROM locations ORDER BY name ASC"
         ).fetchall()
         if rows:
@@ -88,6 +89,10 @@ def _load_world_data() -> Dict[str, Any]:
                         "image_prompt_day": r[6] or "",
                         "image_prompt_night": r[7] or "",
                         "image_prompt_map": r[8] or "",
+                        "decency": r[13] or "",
+                        "style_hint": r[14] or "",
+                        "swim_allowed": bool(r[15]),
+                        "activity_hint": r[16] or "",
                         "rooms": [],
                     }
                     try:
@@ -106,7 +111,9 @@ def _load_world_data() -> Dict[str, Any]:
 
                     # Load rooms from rooms table
                     room_rows = conn.execute(
-                        "SELECT id, name, outfit_type, meta FROM rooms "
+                        "SELECT id, name, outfit_type, meta, "
+                        "decency, style_hint, swim_allowed, activity_hint "
+                        "FROM rooms "
                         "WHERE location_id=? ORDER BY rowid ASC",
                         (r[0],),
                     ).fetchall()
@@ -118,17 +125,49 @@ def _load_world_data() -> Dict[str, Any]:
                         except Exception:
                             pass
                         if rmeta and "id" in rmeta:
-                            rooms.append(rmeta)
+                            room_dict = rmeta
                         else:
-                            rooms.append({
+                            room_dict = {
                                 "id": rr[0],
                                 "name": rr[1] or "",
                                 "outfit_type": rr[2] or "",
+                                "decency": rr[4] or "",
+                                "style_hint": rr[5] or "",
+                                "swim_allowed": bool(rr[6]),
+                                "activity_hint": rr[7] or "",
                                 "description": "",
                                 "activities": [],
                                 **rmeta,
-                            })
+                            }
+                        # Column-Fallback: Decency-Felder die im meta-Blob
+                        # fehlen aus den Spalten nachziehen (auch wenn Spalte
+                        # default-leer ist, damit Default-Werte konsistent
+                        # sind: '' statt None, False statt None).
+                        for key, col_idx, cast in (
+                            ("decency",       4, str),
+                            ("style_hint",    5, str),
+                            ("swim_allowed",  6, bool),
+                            ("activity_hint", 7, str),
+                        ):
+                            if key not in room_dict:
+                                val = rr[col_idx]
+                                room_dict[key] = (bool(val) if cast is bool
+                                                  else (val or ""))
+                        rooms.append(room_dict)
                     loc["rooms"] = rooms
+                # Column-Fallback: Decency-Felder die im meta-Blob fehlen
+                # aus den Spalten nachziehen (auch wenn Spalte default-leer
+                # ist, damit Default-Werte konsistent sind: '' statt None,
+                # False statt None).
+                for key, col_idx, cast in (
+                    ("decency",       13, str),
+                    ("style_hint",    14, str),
+                    ("swim_allowed",  15, bool),
+                    ("activity_hint", 16, str),
+                ):
+                    if key not in loc:
+                        val = r[col_idx]
+                        loc[key] = (bool(val) if cast is bool else (val or ""))
                 locations.append(loc)
             data = {"locations": locations}
             _migrate_room_image_prompts(data)
@@ -190,8 +229,9 @@ def _save_world_data(data: Dict[str, Any]):
                         (id, name, description, grid_x, grid_y, outfit_type,
                          image_prompt_day, image_prompt_night, image_prompt_map,
                          visible_when, accessible_when, background_images, meta,
+                         decency, style_hint, swim_allowed, activity_hint,
                          created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         name=excluded.name,
                         description=excluded.description,
@@ -205,6 +245,10 @@ def _save_world_data(data: Dict[str, Any]):
                         accessible_when=excluded.accessible_when,
                         background_images=excluded.background_images,
                         meta=excluded.meta,
+                        decency=excluded.decency,
+                        style_hint=excluded.style_hint,
+                        swim_allowed=excluded.swim_allowed,
+                        activity_hint=excluded.activity_hint,
                         updated_at=excluded.updated_at
                 """, (
                     lid,
@@ -220,6 +264,10 @@ def _save_world_data(data: Dict[str, Any]):
                     json.dumps(loc.get("accessible_when", []), ensure_ascii=False),
                     json.dumps(loc.get("background_images", []), ensure_ascii=False),
                     json.dumps(loc, ensure_ascii=False),
+                    loc.get("decency", "") or "",
+                    loc.get("style_hint", "") or "",
+                    1 if loc.get("swim_allowed") else 0,
+                    loc.get("activity_hint", "") or "",
                     now,
                     now,
                 ))
@@ -238,22 +286,87 @@ def _save_world_data(data: Dict[str, Any]):
                     if not rid:
                         continue
                     conn.execute("""
-                        INSERT INTO rooms (id, location_id, name, outfit_type, meta)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO rooms (id, location_id, name, outfit_type, meta,
+                                           decency, style_hint, swim_allowed,
+                                           activity_hint)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(id) DO UPDATE SET
                             location_id=excluded.location_id,
                             name=excluded.name,
                             outfit_type=excluded.outfit_type,
-                            meta=excluded.meta
+                            meta=excluded.meta,
+                            decency=excluded.decency,
+                            style_hint=excluded.style_hint,
+                            swim_allowed=excluded.swim_allowed,
+                            activity_hint=excluded.activity_hint
                     """, (
                         rid,
                         lid,
                         room.get("name", ""),
                         room.get("outfit_type", ""),
                         json.dumps(room, ensure_ascii=False),
+                        room.get("decency", "") or "",
+                        room.get("style_hint", "") or "",
+                        1 if room.get("swim_allowed") else 0,
+                        room.get("activity_hint", "") or "",
                     ))
     except Exception as e:
         logger.error("_save_world_data DB-Fehler: %s", e)
+
+
+# === Welt-Settings (world_kv) ===
+
+def get_world_setting(key: str, default: str = "") -> str:
+    """Liest einen Welt-Setting-Wert aus world_kv.
+
+    Konvention: Keys sind ``world.<feld>``, z.B. ``world.temperature``,
+    ``world.weather``. Werte sind Strings — komplexere Strukturen sind
+    selbst zu serialisieren.
+    """
+    try:
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM world_kv WHERE key=?", (key,),
+        ).fetchone()
+        return (row[0] or default) if row else default
+    except Exception as e:
+        logger.debug("get_world_setting(%s) Fehler: %s", key, e)
+        return default
+
+
+def set_world_setting(key: str, value: str) -> None:
+    """Schreibt einen Welt-Setting-Wert in world_kv."""
+    try:
+        with transaction() as conn:
+            conn.execute(
+                "INSERT INTO world_kv (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value or ""),
+            )
+    except Exception as e:
+        logger.warning("set_world_setting(%s) Fehler: %s", key, e)
+
+
+# Erlaubte Werte fuer Welt-Wetter / Temperatur — reine LLM-Hinweise,
+# keine Compliance-Logik. Siehe plan-outfit-system-rethink.md §1.2.
+WORLD_TEMPERATURE_VALUES = ("freezing", "cold", "mild", "hot")
+WORLD_WEATHER_VALUES     = ("dry", "rain", "snow")
+
+
+def get_world_temperature() -> str:
+    return get_world_setting("world.temperature", "mild")
+
+
+def set_world_temperature(value: str) -> None:
+    set_world_setting("world.temperature", value)
+
+
+def get_world_weather() -> str:
+    return get_world_setting("world.weather", "dry")
+
+
+def set_world_weather(value: str) -> None:
+    set_world_setting("world.weather", value)
 
 
 # === Orte ===
