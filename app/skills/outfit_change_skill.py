@@ -53,74 +53,87 @@ class OutfitChangeSkill(BaseSkill):
             return f"Fehler beim Outfit-Wechsel: {e}"
 
     def _execute_inner(self, raw_input: str) -> str:
+        """Setzt Outfit-Intent (forced_pieces / forbidden_slots) + ruft
+        Decency-Compliance fuer den Char auf. Auto-Fill und
+        OutfitCreation-Fallback wurden in Schritt 4 entfernt (Plan §4) —
+        Compliance ist allein zustaendig fuer Slot-Korrektheit.
+        """
+        from app.models.character import (
+            get_outfit_intent, set_outfit_intent,
+        )
+
         ctx = self._parse_base_input(raw_input)
-        user_id = ctx.get("user_id", "").strip()
         character_name = ctx.get("agent_name", "").strip()
         if not character_name:
             return "Fehler: user_id/character_name fehlt."
 
-        # Input parsen — JSON oder Freitext
         spec = self._parse_input_spec(ctx)
 
         results: List[str] = []
         errors: List[str] = []
 
-        # 1) outfit_type: Komplett-Umkleide auf den Dress-Code wechseln.
-        # Sucht pro Slot ein passendes Piece im Inventar (target-type oder neutral).
+        # Intent laden + modifizieren (Single-Save am Ende).
+        intent = get_outfit_intent(character_name)
+        forced: Dict[str, str] = dict(intent.get("forced_pieces") or {})
+        forbidden: set = set(intent.get("forbidden_slots") or [])
+
+        # 1) outfit_type: Komplett-Umkleide auf den genannten Stil.
+        # Sucht pro Slot ein passendes Piece im Inventar und equipped es.
+        # Alle gewaehlten Pieces werden zu forced_pieces (so dass Compliance
+        # sie nicht ueberschreibt).
         if spec.get("outfit_type"):
             ttype = spec["outfit_type"].strip()
-            # Dress-Code-Sanity-Check: wenn der Character an einem Ort ist
-            # dessen outfit_type vom LLM-Vorschlag abweicht, Location gewinnt.
-            # Verhindert "Sport-Outfit im Nachtclub"-Halluzinationen.
-            try:
-                from app.core.outfit_rules import known_outfit_types
-                known = {t.strip().lower() for t in known_outfit_types()}
-                loc_type = self._resolve_location_outfit_type(character_name)
-                if loc_type and loc_type.lower() != ttype.lower() and ttype.lower() in known:
-                    logger.info(
-                        "ChangeOutfit [%s]: outfit_type '%s' ueberstimmt durch "
-                        "Location-Dress-Code '%s'",
-                        character_name, ttype, loc_type)
-                    ttype = loc_type
-            except Exception as _err:
-                logger.debug("Dress-Code-Override pruefen fehlgeschlagen: %s", _err)
-
             picks = self._pick_pieces_by_type(character_name, ttype)
-            # Multi-Slot-Pieces tauchen in picks unter mehreren Slots auf —
-            # pro item_id nur einmal equip_piece aufrufen (das raeumt die
-            # Mirror-Slots eigenstaendig).
             for iid in dict.fromkeys(picks.values()):
                 r = equip_piece(character_name, iid)
                 if r.get("status") == "ok":
                     nm = self._item_label(iid)
                     slots_str = "+".join(r.get("slots") or [])
                     results.append(f"'{nm}' angelegt (Slot {slots_str})")
+                    # forced_pieces fuer alle Slots des Pieces, forbidden weg
+                    for s in (r.get("slots") or []):
+                        forced[s] = iid
+                        forbidden.discard(s)
                 else:
                     errors.append(f"'{self._item_label(iid)}': {r.get('reason', 'equip fehlgeschlagen')}")
             if not picks:
-                errors.append(f"Keine passenden Pieces fuer Typ '{ttype}' im Inventar.")
+                errors.append(f"Keine passenden Pieces fuer Stil '{ttype}' im Inventar.")
+            # Stil-Hint als target_outfit_type merken — Compliance kann den
+            # als Auto-Fill-Praeferenz nutzen, falls noch Slots offen sind.
+            intent["target_outfit_type"] = ttype
 
-        # 2) Unequip Slots (z.B. "outer" -> Jacke ablegen)
+        # 2) Unequip Slots — Slot leeren + forbidden markieren.
+        # Compliance/AutoFill respektiert forbidden_slots und fuellt nicht.
         for slot in spec.get("unequip_slots", []):
             res = unequip_piece(character_name, slot=slot)
             if res.get("status") == "ok":
                 results.append(f"Slot '{slot}' geleert")
+                # Multi-Slot-Pieces: ALLE cleared_slots forbidden machen
+                for s in (res.get("cleared_slots") or [slot]):
+                    forbidden.add(s)
+                    forced.pop(s, None)
             else:
                 errors.append(f"Slot '{slot}': {res.get('reason', 'unbekannt')}")
 
-        # 3) Unequip einzelne Items
+        # 3) Unequip einzelne Items — fuer Pieces gleiches Forbidden-Update,
+        # fuer Hand-Items (equipped_items) kein Intent-Begriff noetig.
         for token in spec.get("unequip_items", []):
             iid = resolve_item_id(token) or token
             # erst als Piece versuchen, dann als Item
             r = unequip_piece(character_name, item_id=iid)
-            if r.get("status") != "ok":
+            piece_unequipped = r.get("status") == "ok"
+            if not piece_unequipped:
                 r = unequip_item(character_name, iid)
             if r.get("status") == "ok":
                 results.append(f"'{self._item_label(iid)}' abgelegt")
+                if piece_unequipped:
+                    for s in (r.get("cleared_slots") or []):
+                        forbidden.add(s)
+                        forced.pop(s, None)
             else:
                 errors.append(f"'{token}': {r.get('reason', 'nicht equipped')}")
 
-        # 4) Equip Tokens (Piece → equip_piece, sonst → equip_item)
+        # 4) Equip Tokens — Piece-Equip + forced_pieces setzen.
         inv_items = self._inventory_item_index(character_name)
         for token in spec.get("equip", []):
             iid = self._match_inventory(token, inv_items)
@@ -143,6 +156,9 @@ class OutfitChangeSkill(BaseSkill):
                         labels = ", ".join(self._item_label(d) for d in r["displaced"])
                         msg += f", ersetzt '{labels}'"
                     results.append(msg)
+                    for s in (r.get("slots") or []):
+                        forced[s] = iid
+                        forbidden.discard(s)
                 else:
                     errors.append(f"'{token}': {r.get('reason', 'equip fehlgeschlagen')}")
             else:
@@ -152,55 +168,26 @@ class OutfitChangeSkill(BaseSkill):
                 else:
                     errors.append(f"'{token}': {r.get('reason', 'equip fehlgeschlagen')}")
 
-        # 5) Location/Activity-basierte Slot-Auffuellung.
-        # Schliesst die Halluzinations-Luecke wenn das LLM Items nennt die
-        # nicht im Inventar sind (oder gar nichts nennt). Equipped-State nach
-        # Schritt 1-4 nehmen, dann fuer noch leere Slots ein passendes Piece
-        # aus der Location-Type-Auswahl ergaenzen.
-        #
-        # ABER: wenn der Aufrufer explizit ``unequip_slots``/``unequip_items``
-        # gesetzt hat, ist die Intent "ablegen" — die Auto-Auffuellung wuerde
-        # den geleerten Slot direkt mit dem naechstbesten Piece (oft sogar
-        # demselben) wieder fuellen und die Aktion verschlucken. Daher: bei
-        # explizitem Unequip Auto-Auffuellung ueberspringen.
-        explicit_unequip = bool(spec.get("unequip_slots")
-                                 or spec.get("unequip_items"))
-        loc_type = self._resolve_location_outfit_type(character_name)
-        if loc_type and not spec.get("outfit_type") and not explicit_unequip:
-            try:
-                from app.models.inventory import get_equipped_pieces
-                already_equipped = get_equipped_pieces(character_name) or {}
-                loc_picks = self._pick_pieces_by_type(character_name, loc_type)
-                # Pro distinct item_id einmal equip_piece — und nur wenn KEINER
-                # der Slots, die das Piece belegen wuerde, schon besetzt ist.
-                # Sonst wuerde ein Multi-Slot-Kleid einen bereits angezogenen
-                # Top/Skirt verdraengen, was im Auto-Fill nicht gewollt ist.
-                seen_iids: set = set()
-                for slot, iid in loc_picks.items():
-                    if iid in seen_iids:
-                        continue
-                    seen_iids.add(iid)
-                    item_def = get_item(iid) or {}
-                    item_slots = (item_def.get("outfit_piece") or {}).get("slots") or []
-                    if any(already_equipped.get(s) for s in item_slots):
-                        continue
-                    r = equip_piece(character_name, iid)
-                    if r.get("status") == "ok":
-                        nm = self._item_label(iid)
-                        slots_str = "+".join(r.get("slots") or [])
-                        results.append(f"'{nm}' angelegt (Slot {slots_str}, Location-Match {loc_type})")
-            except Exception as _e:
-                logger.debug("Location-Auffuellung fehlgeschlagen: %s", _e)
+        # 5) Intent persistieren
+        intent["forced_pieces"] = forced
+        intent["forbidden_slots"] = sorted(forbidden)
+        set_outfit_intent(character_name, intent)
 
-        # 6) Pflicht-Slot-Check: ohne top ist das Outfit unvollstaendig.
-        # (Multi-Slot-Pieces wie Kleid/Jumpsuit setzen top mit, also reicht
-        # die Pruefung auf top.) Triggert OutfitCreation als Fallback.
+        # 6) Compliance laufen lassen — Decency-Check + Notification.
+        # Auto-Fill schliesst Decency-Verletzungen (falls passende Pieces
+        # im Inventar), sonst geht eine Notification raus. Compliance
+        # respektiert forced_pieces und forbidden_slots — kein "Top
+        # zieht sich sofort wieder an"-Bug mehr.
         try:
-            from app.models.inventory import get_equipped_pieces
-            final_eq = get_equipped_pieces(character_name) or {}
-        except Exception:
-            final_eq = {}
-        missing_essential = not final_eq.get("top")
+            from app.core.outfit_compliance import apply_outfit_compliance
+            comp = apply_outfit_compliance(character_name)
+            if comp.get("auto_filled"):
+                names = ", ".join(
+                    self._item_label(f["item_id"]) for f in comp["auto_filled"]
+                )
+                results.append(f"Compliance ergaenzte {names}")
+        except Exception as _ce:
+            logger.debug("Compliance-Aufruf in ChangeOutfit fehlgeschlagen: %s", _ce)
 
         # Ergebnis zusammenfassen
         out_parts: List[str] = []
@@ -210,28 +197,6 @@ class OutfitChangeSkill(BaseSkill):
             out_parts.append("FEHLER: " + "; ".join(errors))
         if not out_parts:
             out_parts.append("Nichts geaendert — kein passendes Piece im Inventar.")
-
-        # Fallback auf OutfitCreation. Triggert wenn:
-        #   - Pflicht-Slots (top/full_body) bleiben leer (Inventar reicht nicht)
-        #   - explizite equip-Tokens kamen, aber kein einziger Treffer
-        #   - outfit_type gesetzt, aber kein Match
-        #   - gar nichts spezifiziert UND nichts geaendert
-        # Aber NICHT bei explizitem Unequip — sonst wird beim "Top
-        # ausziehen" ein neues Top halluziniert.
-        equip_tokens = spec.get("equip", [])
-        type_no_match = bool(spec.get("outfit_type")) and not results
-        empty_call = (
-            not results and not spec.get("unequip_slots")
-            and not spec.get("unequip_items")
-            and not spec.get("outfit_type")
-        )
-        if not explicit_unequip and (
-            missing_essential or (equip_tokens and not results)
-            or type_no_match or empty_call):
-            fallback_result = self._fallback_to_creation(
-                character_name, ctx, location_type=loc_type)
-            if fallback_result:
-                return fallback_result
 
         return ". ".join(out_parts)
 
@@ -306,89 +271,14 @@ class OutfitChangeSkill(BaseSkill):
             if e.get("item_category") in ("outfit_piece", "tool", "decoration", "gift", "consumable")
         ][:20]
 
-    def _fallback_to_creation(self, character_name: str,
-                              ctx: Dict[str, Any],
-                              location_type: str = "") -> str:
-        """Wenn ChangeOutfit nichts Passendes findet, OutfitCreation als
-        Fallback ausfuehren — erzeugt neue Pieces via LLM.
-
-        location_type wird (falls nicht im Input) als Kontext mitgegeben,
-        damit OutfitCreation wenigstens den Dress-Code trifft.
-        """
-        try:
-            from app.core.dependencies import get_skill_manager
-            sm = get_skill_manager()
-            creation_skill = sm.get_skill("outfit_creation")
-            if not creation_skill:
-                return ""
-            # Pruefen ob der Skill fuer diesen Character aktiviert + nicht am Limit
-            from app.models.character import get_character_skill_config
-            cfg = get_character_skill_config(character_name, "outfit_creation")
-            if cfg and not cfg.get("enabled", True):
-                return ""
-            if hasattr(creation_skill, 'is_limit_reached') and creation_skill.is_limit_reached(character_name):
-                return ""
-            # Hint aufbauen: Original-Input + Location-Type + Activity.
-            hint = (ctx.get("input") or "").strip()
-            extras: List[str] = []
-            if location_type:
-                extras.append(f"appropriate for {location_type}")
-            try:
-                from app.models.character import get_character_current_activity
-                act = (get_character_current_activity(character_name) or "").strip()
-                if act:
-                    extras.append(f"while {act}")
-            except Exception:
-                pass
-            if extras:
-                ctx_str = ", ".join(extras)
-                hint = f"{hint} ({ctx_str})" if hint else ctx_str
-            import json as _json
-            raw = _json.dumps({
-                "user_id": "",
-                "agent_name": character_name,
-                "input": hint,
-                "skip_daily_limit": False,
-            })
-            logger.info("ChangeOutfit Fallback -> OutfitCreation fuer %s (hint: %s)",
-                         character_name, hint[:80])
-            return creation_skill.execute(raw)
-        except Exception as e:
-            logger.warning("ChangeOutfit Fallback fehlgeschlagen: %s", e)
-            return ""
-
     @staticmethod
     def _item_label(item_id: str) -> str:
         it = get_item(item_id)
         return it.get("name") if it else item_id
 
     # ------------------------------------------------------------------
-    # outfit_type → vollstaendiges Piece-Set aus dem Inventar
+    # outfit_type → Pieces aus dem Inventar nach Style-Tag
     # ------------------------------------------------------------------
-
-    def _resolve_location_outfit_type(self, character_name: str) -> str:
-        """Liefert den outfit_type des aktuellen Raums, sonst der Location.
-        Leer wenn der Character keinen Aufenthaltsort hat oder kein Dress-Code
-        gesetzt ist.
-        """
-        try:
-            from app.models.character import (
-                get_character_current_location, get_character_profile)
-            from app.models.world import get_location_by_id, get_room_by_id
-            loc_id = get_character_current_location(character_name) or ""
-            if not loc_id:
-                return ""
-            loc = get_location_by_id(loc_id) or {}
-            room_id = (get_character_profile(character_name) or {}).get("current_room", "")
-            if room_id:
-                room = get_room_by_id(loc, room_id)
-                if room:
-                    rt = (room.get("outfit_type") or "").strip()
-                    if rt:
-                        return rt
-            return (loc.get("outfit_type") or "").strip()
-        except Exception:
-            return ""
 
     def _pick_pieces_by_type(self, character_name: str,
                               target_type: str) -> Dict[str, str]:
