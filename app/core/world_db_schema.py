@@ -12,7 +12,7 @@ Konventionen:
 - Foreign Keys: AN, ON DELETE CASCADE wo sinnvoll
 """
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 SCHEMA_STATEMENTS = [
@@ -96,6 +96,8 @@ SCHEMA_STATEMENTS = [
         current_room      TEXT DEFAULT '',
         current_activity  TEXT DEFAULT '',
         current_feeling   TEXT DEFAULT '',
+        pose_intent       TEXT DEFAULT '',
+        pose_variant_id   INTEGER,
         location_changed_at TEXT DEFAULT '',
         activity_changed_at TEXT DEFAULT '',
         last_thought_at   TEXT DEFAULT '',
@@ -438,6 +440,25 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )""",
 
+    # ── Pose-Variants (Schritt 5, May 2026) ──────────────────────────────
+    # Konsolidierte Pose-Varianten pro Character — Expression-Bilder werden
+    # gegen diese Tabelle gecached statt gegen freie pose_intent-Strings.
+    # canonical_pose ist die normalisierte Beschreibung (vom Tool-LLM
+    # gemacht oder spaeter durch Visual-LLM verbessert).
+    """CREATE TABLE IF NOT EXISTS character_pose_variants (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_name  TEXT NOT NULL,
+        canonical_pose  TEXT NOT NULL,
+        embedding       BLOB,
+        example_image   TEXT DEFAULT '',
+        use_count       INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        last_used_at    TEXT NOT NULL,
+        FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_cpv_char ON character_pose_variants (character_name)",
+    "CREATE INDEX IF NOT EXISTS idx_cpv_lru ON character_pose_variants (character_name, last_used_at)",
+
     # ── LLM Call Statistik (fuer Dauer-Schaetzung + Admin-Auswertung) ──
     """CREATE TABLE IF NOT EXISTS llm_call_stats (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -491,6 +512,12 @@ ALTER_MIGRATIONS = [
     ("rooms",     "style_hint",    "TEXT DEFAULT ''"),
     ("rooms",     "swim_allowed",  "INTEGER NOT NULL DEFAULT 0"),
     ("rooms",     "activity_hint", "TEXT DEFAULT ''"),
+    # Schritt 5 (May 2026): Pose-Konzept ersetzt Activity-Library.
+    # pose_intent ist der vom LLM gewaehlte free-text "was tut der Char";
+    # pose_variant_id verweist auf character_pose_variants und wird Teil
+    # des Expression-Bild-Cache-Keys.
+    ("character_state", "pose_intent",     "TEXT DEFAULT ''"),
+    ("character_state", "pose_variant_id", "INTEGER"),
 ]
 
 

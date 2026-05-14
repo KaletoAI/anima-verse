@@ -130,25 +130,30 @@ def _cache_key(mood: str, activity: str,
                character_name: str = "",
                equipped_pieces: Optional[Dict[str, str]] = None,
                equipped_items: Optional[list] = None,
-               equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+               equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
+               pose_variant_id: Optional[int] = None) -> str:
     """Build a deterministic cache key.
 
-    Garbage-Activities (Mood-Leakage, "none", "No clothing changes", etc.)
-    werden hier zentralisiert auf "" gemappt. Damit verwenden Lookup und
-    Store IMMER denselben Key — sonst wuerde die Trigger-Filterung
-    (die activity '' speichert) am Lookup vorbeilaufen, wenn der Frontend
-    die Roh-Activity '...feels suspicious...' aus dem Character-State pollt.
+    Schritt 5 (May 2026): wenn pose_variant_id gegeben ist, ersetzt sie
+    den Activity-Normalisierungs-Pfad — Bilder werden gegen konsolidierte
+    Pose-Variants pro Character gecached statt gegen freien Activity-Text.
+    Faellt automatisch zurueck auf den alten Pose-Preset-Pfad wenn kein
+    variant_id vorhanden ist (Migration laeuft inkrementell).
 
-    Activity wird vor dem Hash auf den kanonischen Pose-Preset-Key reduziert
-    (so kollabieren z.B. 'serving beer' und 'bartending' auf denselben Cache-
-    Slot). Mood wird auf einen groben Body-Language-Bucket reduziert — feinere
-    Mood-Unterschiede gehen beim FaceSwap sowieso verloren, deshalb lohnt sich
-    ein eigener Cache-Slot pro Mood-Synonym nicht. Beides senkt die Anzahl
-    generierter Variants pro Character drastisch.
+    Mood wird auf einen groben Body-Language-Bucket reduziert — feinere
+    Mood-Unterschiede gehen beim FaceSwap sowieso verloren.
     """
-    act_filtered = _normalize_activity_for_trigger(activity, mood)
-    act_canonical = resolve_pose_key(act_filtered) if act_filtered else ""
-    act = act_canonical or _normalize_activity(act_filtered)
+    # Wenn der Aufrufer keinen variant_id liefert aber einen character_name:
+    # versuch ihn aus state zu lesen / Lazy-Migration.
+    if pose_variant_id is None and character_name:
+        pose_variant_id = _resolve_variant_for_cache(character_name, activity)
+    if pose_variant_id is not None and pose_variant_id > 0:
+        act = f"v{pose_variant_id}"
+    else:
+        # Legacy-Pfad: Activity-Text → Pose-Preset-Key
+        act_filtered = _normalize_activity_for_trigger(activity, mood)
+        act_canonical = resolve_pose_key(act_filtered) if act_filtered else ""
+        act = act_canonical or _normalize_activity(act_filtered)
     bucket = mood_bucket(mood) if mood else ""
     eq = _equipped_signature(equipped_pieces, equipped_items, equipped_pieces_meta)
     raw = f"{bucket}:{act}:{eq}"
@@ -156,6 +161,48 @@ def _cache_key(mood: str, activity: str,
     if character_name:
         return f"{_safe_name(character_name)}_{h}"
     return h
+
+
+def _resolve_variant_for_cache(character_name: str,
+                                activity: str) -> Optional[int]:
+    """Liefert die pose_variant_id fuer den aktuellen Char.
+
+    Reihenfolge:
+      1. character_state.pose_variant_id (vom Chat-Pfad gesetzt)
+      2. Wenn nur ein Activity-String existiert: pose_engine.resolve_pose_variant
+         (normalisiert + matched + speichert Variant) — lazy migration
+      3. None → _cache_key faellt auf Legacy-Pfad zurueck
+
+    Returns variant_id (int) oder None.
+    """
+    if not character_name:
+        return None
+    try:
+        from app.models.character import get_character_profile
+        prof = get_character_profile(character_name) or {}
+        vid = prof.get("pose_variant_id")
+        if vid and int(vid) > 0:
+            return int(vid)
+        # Lazy: wenn ein Activity-String existiert aber noch keine Variant —
+        # einen neuen anlegen / matchen. Nicht in den heissen Pfad einbauen,
+        # nur wenn der Caller einen Wert mitgibt.
+        if activity:
+            from app.core.pose_engine import resolve_pose_variant
+            variant = resolve_pose_variant(character_name, activity)
+            if variant:
+                # pose_variant_id im State persistieren — naechster Lookup
+                # springt direkt in Schritt 1.
+                try:
+                    from app.models.character import save_character_profile
+                    prof["pose_variant_id"] = variant["id"]
+                    prof["pose_intent"] = activity
+                    save_character_profile(character_name, prof)
+                except Exception as _e:
+                    logger.debug("pose_variant_id persistieren: %s", _e)
+                return int(variant["id"])
+    except Exception as e:
+        logger.debug("_resolve_variant_for_cache(%s): %s", character_name, e)
+    return None
 
 
 def get_cached_expression(character_name: str,
@@ -1018,6 +1065,25 @@ def generate_expression_image(character_name: str,
             logger.warning("Expression-Meta schreiben fehlgeschlagen: %s", _me)
 
         logger.info("Expression-Bild generiert: %s", final_path.name)
+
+        # Visual-Analyse fuer frische Pose-Variants triggern (Schritt 5e).
+        # Idempotent ueber example_image: nur wenn leer (= noch nie analysiert)
+        # → Worker schreibt es spaeter mit dem Pfad.
+        try:
+            variant_id = _resolve_variant_for_cache(character_name, activity)
+            if variant_id:
+                from app.core.pose_variants import (
+                    get_variant, set_example_image,
+                )
+                from app.core.pose_engine import enqueue_visual_analysis
+                v = get_variant(variant_id)
+                if v and not (v.get("example_image") or "").strip():
+                    # Sofort markieren damit parallele Saves nicht doppelt analysieren
+                    set_example_image(variant_id, str(final_path))
+                    enqueue_visual_analysis(variant_id, str(final_path))
+        except Exception as _va_err:
+            logger.debug("Visual-Analyse-Trigger fehlgeschlagen: %s", _va_err)
+
         return final_path
 
     except Exception as e:

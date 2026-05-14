@@ -369,6 +369,21 @@ def set_world_weather(value: str) -> None:
     set_world_setting("world.weather", value)
 
 
+# Schritt 5 (May 2026): wenn aktiv, ersetzt das Pose-Variant-System die
+# Activity-Library als Quelle fuer Expression-Bild-Cache + classify-Pfad.
+# Default true — neue Welten und Migrationen sollen das neue System nutzen.
+
+def is_pose_system_active() -> bool:
+    raw = get_world_setting("pose.system_active", "")
+    if not raw:
+        return True
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def set_pose_system_active(active: bool) -> None:
+    set_world_setting("pose.system_active", "true" if active else "false")
+
+
 # === Orte ===
 
 def _generate_location_id() -> str:

@@ -2,7 +2,10 @@ import type { ComponentType } from 'react'
 import { SetupTab } from './setup/SetupTab'
 import { CharactersTab } from './characters/CharactersTab'
 import { StorytellerTab } from './storyteller/StorytellerTab'
-import { ActivitiesTab } from './activities/ActivitiesTab'
+// ActivitiesTab versteckt seit Schritt 5 (May 2026, plan-outfit-system-rethink.md):
+// Activity-Library wird durch das Pose-Variant-System ersetzt. Source bleibt
+// im Tree fuer Schritt 6 (current_activity → pose_intent Migration) und
+// finalen Cleanup in Schritt 8.
 import { RulesTab } from './rules/RulesTab'
 import { StatesTab } from './states/StatesTab'
 import { ItemsTab } from './items/ItemsTab'
@@ -16,7 +19,6 @@ export type TabId =
   | 'setup'
   | 'characters'
   | 'storyteller'
-  | 'activities'
   | 'rules'
   | 'states'
   | 'items'
@@ -36,7 +38,6 @@ export const TABS: TabSpec[] = [
   { id: 'setup', label: 'Setup', Component: SetupTab },
   { id: 'characters', label: 'Characters', Component: CharactersTab },
   { id: 'storyteller', label: 'Storyteller', Component: StorytellerTab },
-  { id: 'activities', label: 'Activities', Component: ActivitiesTab },
   { id: 'rules', label: 'Rules', Component: RulesTab },
   { id: 'states', label: 'States', Component: StatesTab },
   { id: 'items', label: 'Items', Component: ItemsTab },

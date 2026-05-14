@@ -42,6 +42,11 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "intent":             {"label": "Intent (Fallback)",        "priority": Priority.NORMAL, "category": "tool"},
     "classify_activity":  {"label": "Classify Activity",            "priority": Priority.NORMAL, "category": "tool"},
     "spell_detect":       {"label": "Spell Cast Detection",      "priority": Priority.NORMAL, "category": "tool"},
+    # Pose-Konsolidierung (Schritt 5, May 2026, plan-outfit-system-rethink.md §6.3)
+    # pose_normalize:  free-text "sitzt am Tisch und blaettert" → "sitting at table, reading"
+    # pose_embedding:  Vektor zum Similarity-Match gegen bestehende Variants
+    "pose_normalize":     {"label": "Pose Normalize",            "priority": Priority.NORMAL, "category": "helper"},
+    "pose_embedding":     {"label": "Pose Embedding",            "priority": Priority.LOW,    "category": "helper"},
     # `world_dev_validate` removed: validator model is now picked
     # dynamically in the World Dev UI right next to the chat model — no
     # separate task entry to maintain in /admin/settings → LLM Routing.

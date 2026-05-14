@@ -1156,6 +1156,12 @@ def classify_activity_background(character_name: str, raw_activity: str):
     Called automatically when a long activity text is saved. Matches against
     known activities at the character's current location, or generates a
     generic 1-2 word label.
+
+    Schritt 5 (May 2026): wenn das Pose-System aktiv ist, wird die
+    Activity-Library-Klassifikation uebersprungen — stattdessen resolved
+    pose_engine den Free-Text in einen Pose-Variant und speichert ihn
+    in pose_intent + pose_variant_id. Expression-Regen triggert wie
+    gewohnt; der neue Cache-Key nutzt variant_id automatisch.
     """
     import threading
 
@@ -1176,6 +1182,31 @@ def classify_activity_background(character_name: str, raw_activity: str):
             logger.info("Expression regen triggered: %s activity='%s'", character_name, activity_for_pose)
         except Exception as e:
             logger.debug("Expression regen failed: %s", e)
+
+    # Pose-System-Pfad: direkt in pose_intent + variant umlenken, kein
+    # classify_activity-LLM-Call mehr.
+    try:
+        from app.models.world import is_pose_system_active
+        if is_pose_system_active():
+            def _do_pose():
+                try:
+                    from app.core.pose_engine import resolve_pose_variant
+                    from app.models.character import (
+                        get_character_profile, save_character_profile)
+                    variant = resolve_pose_variant(character_name, raw_activity)
+                    if variant:
+                        prof = get_character_profile(character_name) or {}
+                        prof["pose_intent"] = raw_activity
+                        prof["pose_variant_id"] = variant["id"]
+                        save_character_profile(character_name, prof)
+                    _trigger_expression(raw_activity)
+                except Exception as e:
+                    logger.debug("pose_system path failed: %s", e)
+            threading.Thread(target=_do_pose, daemon=True,
+                             name=f"pose-resolve-{character_name}").start()
+            return
+    except Exception:
+        pass  # Fallback auf Legacy-classify
 
     def _do_classify():
         try:

@@ -5,7 +5,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 
 function readHashTab(): TabId {
   const raw = window.location.hash.replace(/^#\/?/, '').toLowerCase()
-  return isTabId(raw) ? raw : 'activities'
+  return isTabId(raw) ? raw : 'characters'
 }
 
 export default function App() {
