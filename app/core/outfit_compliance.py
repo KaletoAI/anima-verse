@@ -213,19 +213,24 @@ def _find_inventory_piece_for_slot(
 def apply_outfit_compliance(
     character_name: str,
     *,
-    is_intimate: bool = False,
-    is_wet: bool = False,
-    is_sleeping: bool = False,
+    is_intimate: Optional[bool] = None,
+    is_wet: Optional[bool] = None,
+    is_sleeping: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Zentrale Compliance-Funktion (Plan §2).
 
+    State-Flags (is_intimate, is_wet, is_sleeping) werden — wenn nicht
+    explizit uebergeben — aus character_state gelesen. Schritt 6 (May 2026):
+    Activity-Skills setzen die Flags, Compliance liest sie automatisch.
+
     Algorithmus:
-        1. intent.locked → no-op
-        2. intent.forced_pieces respektieren (Slot belegt = bleibt)
-        3. intent.forbidden_slots → diese Slots werden geleert
-        4. Decency-Check gegen das resultierende equipped_pieces
-        5. Verletzte Slots: Auto-Fill aus Inventar (style_hint priorisiert)
-        6. Auch nach Auto-Fill verletzt: Notification
+        1. is_sleeping=True → no-op (off-map)
+        2. intent.locked → no-op
+        3. intent.forced_pieces respektieren (Slot belegt = bleibt)
+        4. intent.forbidden_slots → diese Slots werden geleert
+        5. Decency-Check gegen das resultierende equipped_pieces
+        6. Verletzte Slots: Auto-Fill aus Inventar (style_hint priorisiert)
+        7. Auch nach Auto-Fill verletzt: Notification
 
     Returns:
         {
@@ -240,7 +245,18 @@ def apply_outfit_compliance(
     """
     from app.models.character import (
         get_character_profile, save_character_profile, get_outfit_intent,
+        get_state_flags,
     )
+
+    # State-Flags aus dem Profil ziehen wenn nicht ueberschrieben
+    if is_intimate is None or is_wet is None or is_sleeping is None:
+        flags = get_state_flags(character_name)
+        if is_intimate is None:
+            is_intimate = flags["is_intimate"]
+        if is_wet is None:
+            is_wet = flags["is_wet"]
+        if is_sleeping is None:
+            is_sleeping = flags["is_sleeping"]
 
     result: Dict[str, Any] = {
         "status": "ok",

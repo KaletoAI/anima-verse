@@ -23,6 +23,10 @@ from .set_activity_skill import SetActivitySkill
 from .video_generation_skill import VideoGenerationSkill
 from .markdown_writer_skill import MarkdownWriterSkill
 from .retrospect_skill import RetrospectSkill
+from .state_flag_skills import (
+    SleepSkill, WakeUpSkill, EnterWaterSkill, DryOffSkill,
+    StartIntimateSkill, EndIntimateSkill, SetPoseSkill,
+)
 
 
 class SkillManager:
@@ -53,6 +57,14 @@ class SkillManager:
         'videogen': VideoGenerationSkill,
         'markdown_writer': MarkdownWriterSkill,
         'retrospect': RetrospectSkill,
+        # State-Flag-Skills (Schritt 6, May 2026)
+        'sleep': SleepSkill,
+        'wakeup': WakeUpSkill,
+        'enter_water': EnterWaterSkill,
+        'dry_off': DryOffSkill,
+        'start_intimate': StartIntimateSkill,
+        'end_intimate': EndIntimateSkill,
+        'set_pose': SetPoseSkill,
     }
 
     def __init__(self):

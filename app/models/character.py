@@ -205,6 +205,18 @@ def _replace_last_state_entry(character_name: str, change_type: str, value: str,
 _STATE_COLS = ("current_location", "current_room", "current_activity",
                "current_feeling", "location_changed_at", "activity_changed_at")
 
+# Typisierte State-Spalten — werden separat persistiert (eigene Casts).
+# (name, sql_type, cast_for_read, cast_for_write)
+# Schritt 5/6 (May 2026): pose_intent + pose_variant_id + drei boolean-Flags
+_STATE_TYPED_COLS = (
+    ("pose_intent",     "TEXT",    lambda v: v or "",             lambda v: (v or "") if isinstance(v, str) else ""),
+    ("pose_variant_id", "INTEGER", lambda v: int(v) if v is not None else None,
+                                    lambda v: int(v) if v not in (None, "") else None),
+    ("is_sleeping",     "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
+    ("is_wet",          "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
+    ("is_intimate",     "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
+)
+
 # Weitere Runtime-Keys — landen in character_state.meta (JSON-Blob) statt
 # in profile_json. Inject/Extract analog zu _STATE_COLS.
 _STATE_META_KEYS = ("equipped_pieces", "equipped_items",
@@ -225,7 +237,8 @@ _CONFIG_KEYS_IN_PROFILE = ("outfit_exceptions", "outfit_imagegen", "slot_overrid
 
 
 def _load_character_state(character_name: str) -> Dict[str, Any]:
-    """Laedt character_state: Spalten (current_*, *_changed_at) + meta-Keys."""
+    """Laedt character_state: Spalten (current_*, *_changed_at, pose_*,
+    is_*) + meta-Keys."""
     result: Dict[str, Any] = {k: "" for k in _STATE_COLS}
     for k in _STATE_META_KEYS:
         result[k] = None
@@ -233,7 +246,9 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
         conn = get_connection()
         row = conn.execute(
             "SELECT current_location, current_room, current_activity, "
-            "current_feeling, location_changed_at, activity_changed_at, meta "
+            "current_feeling, location_changed_at, activity_changed_at, meta, "
+            "pose_intent, pose_variant_id, "
+            "is_sleeping, is_wet, is_intimate "
             "FROM character_state WHERE character_name=?",
             (character_name,),
         ).fetchone()
@@ -245,6 +260,11 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
                 "current_feeling": row[3] or "",
                 "location_changed_at": row[4] or "",
                 "activity_changed_at": row[5] or "",
+                "pose_intent": row[7] or "",
+                "pose_variant_id": int(row[8]) if row[8] is not None else None,
+                "is_sleeping": bool(row[9]),
+                "is_wet": bool(row[10]),
+                "is_intimate": bool(row[11]),
             })
             try:
                 meta = json.loads(row[6] or "{}")
@@ -478,6 +498,11 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     for k in _STATE_COLS:
         if k in profile:
             state_values[k] = profile.pop(k) or ""
+    # Typisierte State-Spalten (pose_*, is_*) — separat damit Typ-Casts klappen.
+    state_typed: Dict[str, Any] = {}
+    for name, _sql_type, _read_cast, write_cast in _STATE_TYPED_COLS:
+        if name in profile:
+            state_typed[name] = write_cast(profile.pop(name))
     state_meta: Dict[str, Any] = {}
     for k in _STATE_META_KEYS:
         if k in profile:
@@ -552,6 +577,9 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
             merged_state.update(state_values)
             existing_meta.update(state_meta)
             meta_json = json.dumps(existing_meta, ensure_ascii=False)
+            # INSERT der Kern-Spalten — separates UPDATE fuer typisierte
+            # Spalten weil deren Werte optional sind (Caller liefert sie
+            # nur wenn explizit gesetzt).
             conn.execute("""
                 INSERT INTO character_state
                 (character_name, current_location, current_room,
@@ -576,6 +604,19 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                 merged_state["activity_changed_at"],
                 meta_json,
             ))
+            # Typisierte Felder nur updaten wenn vom Caller mitgegeben.
+            if state_typed:
+                set_parts = []
+                values: List[Any] = []
+                for name, value in state_typed.items():
+                    set_parts.append(f"{name}=?")
+                    values.append(value)
+                values.append(character_name)
+                conn.execute(
+                    f"UPDATE character_state SET {', '.join(set_parts)} "
+                    f"WHERE character_name=?",
+                    values,
+                )
     except Exception as e:
         logger.error("save_character_profile DB-Fehler fuer %s: %s", character_name, e)
 
@@ -583,6 +624,11 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     profile.update(state_values)
     for k, v in state_meta.items():
         profile[k] = v
+    for name, value in state_typed.items():
+        # Read-Cast: bool/int wie er sich beim Reload anfuehlt
+        read_cast = next((rc for n, _t, rc, _wc in _STATE_TYPED_COLS if n == name),
+                         lambda v: v)
+        profile[name] = read_cast(value)
 
     # Soul-Files anlegen falls noetig (Template-getrieben).
     # Falls World Dev / Neu-Anlage Werte fuer source_file-Felder mitliefert,
@@ -1154,6 +1200,14 @@ def save_character_current_activity(character_name: str, activity: str, detail: 
     if detail:
         import re as _re
         detail = _re.sub(r'<SPECIAL_\d+>|<\|[A-Z_][A-Z_0-9]*\|>', '', detail).strip()
+    # Schritt 6 (May 2026): Activity-Sentinel "Sleeping" spiegeln auf is_sleeping-Flag
+    # damit Compliance/AgentLoop konsistent reagieren waehrend die Activity-Library
+    # noch parallel laeuft. is_sleeping wird in Schritt 8 die einzige Quelle.
+    if (activity or "").strip().lower() == "sleeping":
+        try:
+            set_is_sleeping(character_name, True)
+        except Exception:
+            pass
 
     # Normalisierung: Freitext gegen Bibliothek matchen
     if activity and not _is_reclassify:
@@ -3007,20 +3061,64 @@ def wake_from_offmap(character_name: str) -> bool:
 def is_character_sleeping(character_name: str) -> bool:
     """Prueft ob der Character gerade wirklich schlaeft.
 
-    STRIKT: nur ``current_activity == "sleeping"`` zaehlt. Der Daily-Schedule
-    ist NUR ein Hinweis fuer den LLM im Prompt (``daily_schedule_block``) —
-    er nimmt dem Char nicht den AgentLoop-Tick weg und markiert ihn auch
-    nicht in Chats als "schlafend". Der LLM entscheidet selbst, ob er der
-    Schlaf-Empfehlung folgt und ``set_activity:sleeping`` aufruft; erst
-    DANN gilt der Char als wirklich schlafend (und der ``on_start``-Trigger
-    der Sleeping-Activity verschickt ihn ggf. off-map).
+    Schritt 6 (May 2026): liest den is_sleeping-Flag aus character_state.
+    Legacy-Fallback: wenn der Flag noch nicht migriert ist (alte Saves),
+    zaehlt auch ``current_activity == "sleeping"``.
     """
     try:
         profile = get_character_profile(character_name) or {}
+        if profile.get("is_sleeping"):
+            return True
         cur_act = (profile.get("current_activity") or "").strip().lower()
         return cur_act == "sleeping"
     except Exception:
         return False
+
+
+# === State-Flag-Setter (Schritt 6, May 2026) =============================
+# Plan: development_instructions/plan-outfit-system-rethink.md §1.4
+# Drei orthogonale Flags ersetzen Activity-Effekte:
+#   is_sleeping  → Compliance skip + AgentLoop-Skip + off-map
+#   is_wet       → swim-Exemption bei swim_allowed Raum
+#   is_intimate  → Decency-Override auf nude_ok
+
+def set_is_sleeping(character_name: str, value: bool) -> None:
+    """Setzt den is_sleeping-Flag. Bei True wird der Char ggf. off-map
+    geschickt (Caller-Verantwortung, e.g. Sleep-Skill ruft go_offmap).
+    """
+    if not character_name:
+        return
+    profile = get_character_profile(character_name) or {}
+    profile["is_sleeping"] = bool(value)
+    save_character_profile(character_name, profile)
+
+
+def set_is_wet(character_name: str, value: bool) -> None:
+    if not character_name:
+        return
+    profile = get_character_profile(character_name) or {}
+    profile["is_wet"] = bool(value)
+    save_character_profile(character_name, profile)
+
+
+def set_is_intimate(character_name: str, value: bool) -> None:
+    if not character_name:
+        return
+    profile = get_character_profile(character_name) or {}
+    profile["is_intimate"] = bool(value)
+    save_character_profile(character_name, profile)
+
+
+def get_state_flags(character_name: str) -> Dict[str, bool]:
+    """Liefert alle drei State-Flags als Dict. Praktisch fuer Compliance-
+    Aufrufe und Prompt-Builder.
+    """
+    profile = get_character_profile(character_name) or {}
+    return {
+        "is_sleeping": bool(profile.get("is_sleeping")),
+        "is_wet":      bool(profile.get("is_wet")),
+        "is_intimate": bool(profile.get("is_intimate")),
+    }
 
 
 def delete_character_daily_schedule(character_name: str) -> bool:

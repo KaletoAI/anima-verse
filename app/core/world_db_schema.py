@@ -12,7 +12,7 @@ Konventionen:
 - Foreign Keys: AN, ON DELETE CASCADE wo sinnvoll
 """
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 SCHEMA_STATEMENTS = [
@@ -518,6 +518,14 @@ ALTER_MIGRATIONS = [
     # des Expression-Bild-Cache-Keys.
     ("character_state", "pose_intent",     "TEXT DEFAULT ''"),
     ("character_state", "pose_variant_id", "INTEGER"),
+    # Schritt 6 (May 2026): drei orthogonale State-Flags ersetzen die
+    # Activity-Effekte. Compliance liest sie:
+    #   is_sleeping  → off-map, keine Compliance
+    #   is_wet       → mit swim_allowed: swim-exemption fuer top/bottom
+    #   is_intimate  → decency-override auf nude_ok
+    ("character_state", "is_sleeping",  "INTEGER NOT NULL DEFAULT 0"),
+    ("character_state", "is_wet",       "INTEGER NOT NULL DEFAULT 0"),
+    ("character_state", "is_intimate",  "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
