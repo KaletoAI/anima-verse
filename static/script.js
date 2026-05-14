@@ -11371,22 +11371,22 @@ async function loadDailySchedule() {
     }
 }
 
-// --- Tagesablauf: Drag-to-Paint Grid ---
-// Pro Stunde EIN Eintrag: entweder sleep ODER (Ort + optional Rolle).
-// Locations werden per Name dedupliziert (gleicher Name -> erste ID gewinnt).
-// Rollen sind unter jeder Location verschachtelt — eine Zelle setzt
-// Ort + Rolle gleichzeitig. Leere Stunden = KI waehlt selbst.
+// --- Tagesablauf: Drag-to-Paint Grid (Schritt 7, May 2026) ---
+// Pro Stunde max. ein {location, role, sleep}. Location und Rolle sind
+// UNABHAENGIG setzbar — eine Stunde kann Location ODER Rolle ODER beides
+// oder nichts haben. Sleep ist exklusiv (schliesst Location+Rolle aus).
+// Slot-Map ist die Quelle der Wahrheit; das Grid wird daraus gerendert.
+// Leere Stunden = LLM waehlt selbst.
 const _taDrag = { active: false, key: '', startH: -1, curH: -1 };
-
-// Map: existierende Location-IDs -> kanonische ID (erste mit gleichem Namen).
-let _taIdToCanonical = {};
+let _taSlots = {};                // Hour -> {location, role, sleep}
+let _taIdToCanonical = {};        // Location-ID -> kanonische ID (Name-Dedup)
+let _taRoles = [];                // Char-Rollen-Liste
 
 async function renderDailyScheduleGrid(slots, roles) {
     const grid = document.getElementById('tagesablauf-grid');
     if (!grid) return;
 
     let locations = _cachedWorldLocations || await _fetchWorldLocations();
-    // Dedup per Name: erster Treffer ist kanonisch.
     const byName = new Map();
     _taIdToCanonical = {};
     for (const loc of locations || []) {
@@ -11397,51 +11397,22 @@ async function renderDailyScheduleGrid(slots, roles) {
         _taIdToCanonical[id] = byName.get(name).id;
     }
     const uniqueLocs = Array.from(byName.values());
+    _taRoles = (roles || []).filter(Boolean);
 
-    // Slot-Map: Stunde -> {location:canonicalId, role, sleep}
-    const slotMap = {};
+    // Slot-Map aufbauen
+    _taSlots = {};
     for (const s of slots || []) {
         const sleep = !!s.sleep;
         const rawLoc = (s.location || '').trim();
         const canonical = sleep ? '' : (_taIdToCanonical[rawLoc] || rawLoc);
-        slotMap[s.hour] = {
-            location: canonical,
-            role: (s.role || '').trim(),
+        _taSlots[s.hour] = {
+            location: sleep ? '' : canonical,
+            role: sleep ? '' : (s.role || '').trim(),
             sleep,
         };
     }
 
-    let html = '<table class="tagesablauf-table"><thead><tr><th class="tagesablauf-corner"></th>';
-    for (let h = 0; h < 24; h++) html += `<th>${String(h).padStart(2, '0')}</th>`;
-    html += '</tr></thead><tbody>';
-
-    // --- Sleep ---
-    html += `<tr class="tagesablauf-loc-header tagesablauf-sleep-header"><td colspan="25">Schlafen <span class="tagesablauf-section-hint">(Hint — eigentlich entscheidet die Energie)</span></td></tr>`;
-    html += _taBuildRow('sleep||', 'Schlafen', slotMap, '', false);
-
-    // --- Orte (jede Location mit verschachtelten Rollen) ---
-    if (uniqueLocs.length === 0) {
-        html += `<tr class="tagesablauf-loc-header"><td colspan="25">Orte</td></tr>`;
-        html += `<tr><td colspan="25" class="scheduler-empty">Keine Orte in der Welt definiert.</td></tr>`;
-    } else {
-        for (const loc of uniqueLocs) {
-            const expanded = Object.values(slotMap).some(s => !s.sleep && s.location === loc.id);
-            html += `<tr class="tagesablauf-loc-header" data-ta-loc="${escapeHtml(loc.id)}" onclick="toggleTagesablaufLocation(this)" style="cursor:pointer">
-                <td colspan="25"><span class="tagesablauf-toggle">${expanded ? '▼' : '▶'}</span> ${escapeHtml(loc.name)}</td></tr>`;
-            // Ort ohne Rolle
-            html += _taBuildRow(`lr|${loc.id}|`, '(ohne Rolle)', slotMap, loc.id, !expanded);
-            // Rolle pro Ort — Auswahl setzt Ort UND Rolle.
-            for (const role of roles || []) {
-                html += _taBuildRow(`lr|${loc.id}|${role}`, role, slotMap, loc.id, !expanded);
-            }
-        }
-        if (!roles || roles.length === 0) {
-            html += `<tr><td colspan="25" class="scheduler-empty" style="padding:6px 8px;">Keine Rollen im Charakter-Profil — pro Ort gibt es nur die Zeile "(ohne Rolle)".</td></tr>`;
-        }
-    }
-
-    html += '</tbody></table>';
-    grid.innerHTML = html;
+    _taRenderTable(grid, uniqueLocs);
 
     grid.addEventListener('mousedown', _taOnMouseDown);
     grid.addEventListener('mouseover', _taOnMouseOver);
@@ -11451,19 +11422,41 @@ async function renderDailyScheduleGrid(slots, roles) {
     document.addEventListener('touchend', _taOnMouseUp);
 }
 
-function toggleTagesablaufLocation(headerRow) {
-    const locId = headerRow.dataset.taLoc;
-    const grid = headerRow.closest('table');
-    if (!grid) return;
-    const rows = grid.querySelectorAll(`tr[data-ta-loc-row="${CSS.escape(locId)}"]`);
-    const isHidden = rows.length > 0 && rows[0].style.display === 'none';
-    rows.forEach(r => r.style.display = isHidden ? '' : 'none');
-    const toggle = headerRow.querySelector('.tagesablauf-toggle');
-    if (toggle) toggle.textContent = isHidden ? '▼' : '▶';
+function _taRenderTable(grid, uniqueLocs) {
+    let html = '<table class="tagesablauf-table"><thead><tr><th class="tagesablauf-corner"></th>';
+    for (let h = 0; h < 24; h++) html += `<th>${String(h).padStart(2, '0')}</th>`;
+    html += '</tr></thead><tbody>';
+
+    // --- Sleep ---
+    html += `<tr class="tagesablauf-loc-header tagesablauf-sleep-header"><td colspan="25">Schlafen <span class="tagesablauf-section-hint">(Hint — eigentlich entscheidet die Energie)</span></td></tr>`;
+    html += _taBuildRow('sleep||', 'Schlafen', '');
+
+    // --- Orte (jede Location eigene Zeile, unabhaengig setzbar) ---
+    html += `<tr class="tagesablauf-loc-header"><td colspan="25">Orte <span class="tagesablauf-section-hint">(unabhaengig von der Rolle)</span></td></tr>`;
+    if (uniqueLocs.length === 0) {
+        html += `<tr><td colspan="25" class="scheduler-empty">Keine Orte in der Welt definiert.</td></tr>`;
+    } else {
+        for (const loc of uniqueLocs) {
+            html += _taBuildRow(`loc|${loc.id}|`, loc.name, '');
+        }
+    }
+
+    // --- Rollen (jede Rolle eigene Zeile, unabhaengig setzbar) ---
+    html += `<tr class="tagesablauf-loc-header"><td colspan="25">Rollen <span class="tagesablauf-section-hint">(unabhaengig vom Ort)</span></td></tr>`;
+    if (!_taRoles || _taRoles.length === 0) {
+        html += `<tr><td colspan="25" class="scheduler-empty" style="padding:6px 8px;">Keine Rollen im Charakter-Profil definiert.</td></tr>`;
+    } else {
+        for (const role of _taRoles) {
+            html += _taBuildRow(`role||${role}`, role, '');
+        }
+    }
+
+    html += '</tbody></table>';
+    grid.innerHTML = html;
 }
 
 function _taParseKey(key) {
-    // Format: "sleep||" oder "lr|<locId>|<role>"
+    // Formate: "sleep||"  /  "loc|<id>|"  /  "role||<name>"
     const parts = key.split('|');
     return { kind: parts[0], loc: parts[1] || '', role: parts[2] || '' };
 }
@@ -11472,21 +11465,72 @@ function _taSlotMatchesKey(slot, key) {
     if (!slot) return false;
     const k = _taParseKey(key);
     if (k.kind === 'sleep') return !!slot.sleep;
-    if (slot.sleep) return false;
-    return slot.location === k.loc && (slot.role || '') === k.role;
+    if (slot.sleep) return false;  // sleep schliesst Location/Rolle aus
+    if (k.kind === 'loc')  return slot.location === k.loc;
+    if (k.kind === 'role') return (slot.role || '') === k.role;
+    return false;
 }
 
-function _taBuildRow(key, label, slotMap, locGroup, hidden) {
+function _taBuildRow(key, label, locGroup) {
     const isSleep = key.startsWith('sleep');
     const groupAttr = locGroup ? ` data-ta-loc-row="${escapeHtml(locGroup)}"` : '';
-    let row = `<tr${groupAttr}${hidden ? ' style="display:none"' : ''}>`;
+    let row = `<tr${groupAttr}>`;
     row += `<td class="tagesablauf-row-label">${escapeHtml(label)}</td>`;
     for (let h = 0; h < 24; h++) {
-        const filled = _taSlotMatchesKey(slotMap[h], key);
+        const filled = _taSlotMatchesKey(_taSlots[h], key);
         const sleepCls = isSleep && filled ? ' tagesablauf-sleep' : '';
         row += `<td class="tagesablauf-cell${filled ? ' tagesablauf-filled' + sleepCls : ''}" data-key="${escapeHtml(key)}" data-hour="${h}"></td>`;
     }
     return row + '</tr>';
+}
+
+function _taApplyKeyToHour(key, hour, clear) {
+    // Wendet einen Key auf Stunde an. Wenn clear=true → loescht die Achse
+    // des Keys, ohne andere Achsen anzufassen.
+    const k = _taParseKey(key);
+    const slot = _taSlots[hour] || { location: '', role: '', sleep: false };
+    if (k.kind === 'sleep') {
+        if (clear) {
+            slot.sleep = false;
+        } else {
+            slot.sleep = true;
+            slot.location = '';
+            slot.role = '';
+        }
+    } else if (k.kind === 'loc') {
+        if (clear) {
+            slot.location = '';
+        } else {
+            slot.location = k.loc;
+            slot.sleep = false;  // Location aktiviert → kein Sleep
+        }
+    } else if (k.kind === 'role') {
+        if (clear) {
+            slot.role = '';
+        } else {
+            slot.role = k.role;
+            slot.sleep = false;
+        }
+    }
+    // Stunde-Eintrag rausnehmen wenn komplett leer
+    if (!slot.sleep && !slot.location && !slot.role) {
+        delete _taSlots[hour];
+    } else {
+        _taSlots[hour] = slot;
+    }
+}
+
+function _taRefreshCells() {
+    const grid = document.getElementById('tagesablauf-grid');
+    if (!grid) return;
+    grid.querySelectorAll('.tagesablauf-cell').forEach(cell => {
+        const h = parseInt(cell.dataset.hour);
+        const k = cell.dataset.key;
+        const filled = _taSlotMatchesKey(_taSlots[h], k);
+        const isSleep = k.startsWith('sleep');
+        cell.classList.toggle('tagesablauf-filled', filled);
+        cell.classList.toggle('tagesablauf-sleep', isSleep && filled);
+    });
 }
 
 function _taOnMouseDown(e) {
@@ -11540,30 +11584,22 @@ function _taOnMouseUp() {
     const minH = Math.min(_taDrag.startH, _taDrag.curH);
     const maxH = Math.max(_taDrag.startH, _taDrag.curH);
     const key = _taDrag.key;
-    const isSleep = key.startsWith('sleep');
 
-    // Toggle: Einzelklick auf bereits gefuellte Zelle -> entfernen.
+    // Toggle bei Einzelklick: wenn die Zelle bereits "matched" → diese Achse leeren.
     if (minH === maxH) {
-        const cell = grid.querySelector(`.tagesablauf-cell[data-key="${CSS.escape(key)}"][data-hour="${minH}"]`);
-        if (cell && cell.classList.contains('tagesablauf-filled')) {
-            cell.classList.remove('tagesablauf-filled', 'tagesablauf-sleep');
+        const slot = _taSlots[minH];
+        if (slot && _taSlotMatchesKey(slot, key)) {
+            _taApplyKeyToHour(key, minH, true);
+            _taRefreshCells();
             _taClearPreview(grid);
             return;
         }
     }
 
     for (let h = minH; h <= maxH; h++) {
-        // Pro Stunde nur ein Eintrag — alle anderen Zellen leeren.
-        grid.querySelectorAll(`.tagesablauf-cell[data-hour="${h}"]`).forEach(c => {
-            c.classList.remove('tagesablauf-filled', 'tagesablauf-sleep');
-        });
-        const target = grid.querySelector(`.tagesablauf-cell[data-key="${CSS.escape(key)}"][data-hour="${h}"]`);
-        if (target) {
-            target.classList.add('tagesablauf-filled');
-            if (isSleep) target.classList.add('tagesablauf-sleep');
-        }
+        _taApplyKeyToHour(key, h, false);
     }
-
+    _taRefreshCells();
     _taClearPreview(grid);
 }
 
@@ -11588,17 +11624,19 @@ async function saveDailySchedule() {
     if (!grid) return;
 
     const enabled = document.getElementById('tagesablauf-enabled').checked;
-    // Pro Stunde max. eine gefuellte Zelle (per Drag-Logik garantiert).
+    // Slot-Map ist die Quelle — alle Eintraege mit mind. einem Feld werden gespeichert.
     const slots = [];
-    grid.querySelectorAll('.tagesablauf-cell.tagesablauf-filled').forEach(cell => {
-        const h = parseInt(cell.dataset.hour);
-        const k = _taParseKey(cell.dataset.key);
-        if (k.kind === 'sleep') {
+    for (const [hourStr, slot] of Object.entries(_taSlots)) {
+        const h = parseInt(hourStr, 10);
+        if (slot.sleep) {
             slots.push({ hour: h, location: '', role: '', sleep: true });
-        } else {
-            slots.push({ hour: h, location: k.loc, role: k.role, sleep: false });
+        } else if (slot.location || slot.role) {
+            slots.push({ hour: h, location: slot.location || '',
+                                  role: slot.role || '',
+                                  sleep: false });
         }
-    });
+    }
+    slots.sort((a, b) => a.hour - b.hour);
 
     try {
         const resp = await fetch('/scheduler/daily-schedule', {

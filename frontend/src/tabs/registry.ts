@@ -2,17 +2,16 @@ import type { ComponentType } from 'react'
 import { SetupTab } from './setup/SetupTab'
 import { CharactersTab } from './characters/CharactersTab'
 import { StorytellerTab } from './storyteller/StorytellerTab'
-// ActivitiesTab versteckt seit Schritt 5 (May 2026, plan-outfit-system-rethink.md):
-// Activity-Library wird durch das Pose-Variant-System ersetzt. Source bleibt
-// im Tree fuer Schritt 6 (current_activity → pose_intent Migration) und
-// finalen Cleanup in Schritt 8.
+// ActivitiesTab + OutfitRulesTab versteckt seit Schritt 5/7 (May 2026,
+// plan-outfit-system-rethink.md): Activity-Library und outfit_types werden
+// durch Pose-Variants + Decency ersetzt. Source bleibt im Tree fuer finalen
+// Cleanup in Schritt 8.
 import { RulesTab } from './rules/RulesTab'
 import { StatesTab } from './states/StatesTab'
 import { ItemsTab } from './items/ItemsTab'
 import { WorldTab } from './world/WorldTab'
 import { MapTab } from './map/MapTab'
 import { WorldDevTab } from './world-dev/WorldDevTab'
-import { OutfitRulesTab } from './outfit-rules/OutfitRulesTab'
 import { SchedulerTab } from './scheduler/SchedulerTab'
 
 export type TabId =
@@ -25,7 +24,6 @@ export type TabId =
   | 'world'
   | 'map'
   | 'world-dev'
-  | 'outfit-rules'
   | 'scheduler'
 
 export interface TabSpec {
@@ -44,7 +42,6 @@ export const TABS: TabSpec[] = [
   { id: 'world', label: 'World', Component: WorldTab },
   { id: 'map', label: 'Map', Component: MapTab },
   { id: 'world-dev', label: 'World Dev', Component: WorldDevTab },
-  { id: 'outfit-rules', label: 'Outfit Rules', Component: OutfitRulesTab },
   { id: 'scheduler', label: 'Scheduler', Component: SchedulerTab },
 ]
 

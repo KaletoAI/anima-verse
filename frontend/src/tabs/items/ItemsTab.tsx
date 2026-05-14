@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { loadCharacters, type CharacterRef } from '../../lib/refs'
+import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
@@ -314,9 +315,10 @@ export function ItemsTab() {
   useEffect(() => {
     reload()
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
-    apiGet<{ outfit_types?: Record<string, unknown> }>('/admin/outfit-rules/data')
-      .then((d) => setOutfitTypeOptions(Object.keys(d.outfit_types || {}).sort()))
-      .catch(() => setOutfitTypeOptions([]))
+    // Schritt 7 (May 2026, plan-outfit-system-rethink.md §1): Outfit-Typen
+    // auf das kurze style_hint-Vokabular reduziert. Items behalten die Tags
+    // damit ChangeOutfit-Skill weiter "show me a business piece" matchen kann.
+    setOutfitTypeOptions([...STYLE_HINT_OPTIONS])
     apiGet<{ conditions?: ConditionOption[] }>('/world/conditions/list')
       .then((d) => setConditionOptions(d.conditions || []))
       .catch(() => setConditionOptions([]))

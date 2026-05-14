@@ -678,7 +678,6 @@ def _do_trigger_expression_generation(character_name: str,
                     _pending_track_id = None
                 result = generate_expression_image(character_name, mood, activity,
                                                     equipped_pieces, equipped_items,
-                                                    equipped_pieces_meta=equipped_pieces_meta,
                                                     prompt_prefix=prompt_prefix)
             if result is None:
                 with _generating_lock:

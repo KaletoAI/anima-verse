@@ -264,6 +264,10 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
         danger_level = data.get("danger_level")
         event_settings = data.get("event_settings")
         outfit_type = data.get("outfit_type")
+        decency = data.get("decency")
+        style_hint = data.get("style_hint")
+        swim_allowed = data.get("swim_allowed")
+        activity_hint = data.get("activity_hint")
         knowledge_item_id = data.get("knowledge_item_id")
         passable = data.get("passable")
         map_z_offset = data.get("map_z_offset")
@@ -283,7 +287,9 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
         _has_extra = (danger_level is not None or event_settings is not None
                       or outfit_type is not None or knowledge_item_id is not None
                       or passable is not None or map_z_offset is not None
-                      or entry_room is not None or indoor is not None)
+                      or entry_room is not None or indoor is not None
+                      or decency is not None or style_hint is not None
+                      or swim_allowed is not None or activity_hint is not None)
         if _has_extra and location:
             from app.models.world import _load_world_data, _save_world_data
             wdata = _load_world_data()
@@ -298,6 +304,15 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
                         _l["event_settings"] = event_settings
                     if outfit_type is not None:
                         _l["outfit_type"] = (outfit_type or "").strip()
+                    if decency is not None:
+                        _v = (decency or "").strip().lower()
+                        _l["decency"] = _v if _v in ("public", "private", "nude_ok") else ""
+                    if style_hint is not None:
+                        _l["style_hint"] = (style_hint or "").strip()
+                    if swim_allowed is not None:
+                        _l["swim_allowed"] = bool(swim_allowed)
+                    if activity_hint is not None:
+                        _l["activity_hint"] = (activity_hint or "").strip()
                     if knowledge_item_id is not None:
                         _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
                     if passable is not None:
@@ -367,7 +382,9 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
         _has_extra = (danger_level is not None or event_settings is not None
                       or outfit_type is not None or knowledge_item_id is not None
                       or passable is not None or map_z_offset is not None
-                      or entry_room is not None or indoor is not None)
+                      or entry_room is not None or indoor is not None
+                      or decency is not None or style_hint is not None
+                      or swim_allowed is not None or activity_hint is not None)
         if _has_extra:
             from app.models.world import _load_world_data, _save_world_data
             wdata = _load_world_data()
@@ -382,6 +399,15 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
                         _l["event_settings"] = event_settings
                     if outfit_type is not None:
                         _l["outfit_type"] = (outfit_type or "").strip()
+                    if decency is not None:
+                        _v = (decency or "").strip().lower()
+                        _l["decency"] = _v if _v in ("public", "private", "nude_ok") else ""
+                    if style_hint is not None:
+                        _l["style_hint"] = (style_hint or "").strip()
+                    if swim_allowed is not None:
+                        _l["swim_allowed"] = bool(swim_allowed)
+                    if activity_hint is not None:
+                        _l["activity_hint"] = (activity_hint or "").strip()
                     if knowledge_item_id is not None:
                         _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
                     if passable is not None:
@@ -430,6 +456,79 @@ async def clone_location_route(template_id: str, request: Request) -> Dict[str, 
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- World-Level Settings (Schritt 7, May 2026) ---------------------------
+# Temperature/Weather/Pose-Variant-Settings leben in world_kv. Eigener
+# Endpunkt damit der Setup-Tab eine kompakte Form rendern kann ohne ueber
+# die generische admin-config-Maschinerie zu gehen.
+
+@router.get("/settings")
+async def get_world_settings() -> Dict[str, Any]:
+    """Gibt Welt-Settings + Pose-Settings zurueck."""
+    from app.models.world import (
+        get_world_temperature, get_world_weather,
+        get_world_setting, is_pose_system_active,
+        WORLD_TEMPERATURE_VALUES, WORLD_WEATHER_VALUES,
+    )
+    return {
+        "world": {
+            "temperature": get_world_temperature(),
+            "weather": get_world_weather(),
+        },
+        "pose": {
+            "system_active": is_pose_system_active(),
+            "variant_match_threshold": float(
+                get_world_setting("pose.variant_match_threshold", "0.75")
+                or "0.75"
+            ),
+            "max_variants_per_char": int(
+                get_world_setting("pose.max_variants_per_char", "20")
+                or "20"
+            ),
+        },
+        "choices": {
+            "temperature": list(WORLD_TEMPERATURE_VALUES),
+            "weather":     list(WORLD_WEATHER_VALUES),
+        },
+    }
+
+
+@router.put("/settings")
+async def put_world_settings(request: Request) -> Dict[str, Any]:
+    """Setzt Welt-Settings + Pose-Settings."""
+    from app.models.world import (
+        set_world_temperature, set_world_weather, set_pose_system_active,
+        set_world_setting, WORLD_TEMPERATURE_VALUES, WORLD_WEATHER_VALUES,
+    )
+    data = await request.json()
+    world = data.get("world") or {}
+    pose = data.get("pose") or {}
+    if "temperature" in world:
+        v = (world.get("temperature") or "").strip().lower()
+        if v in WORLD_TEMPERATURE_VALUES:
+            set_world_temperature(v)
+    if "weather" in world:
+        v = (world.get("weather") or "").strip().lower()
+        if v in WORLD_WEATHER_VALUES:
+            set_world_weather(v)
+    if "system_active" in pose:
+        set_pose_system_active(bool(pose.get("system_active")))
+    if "variant_match_threshold" in pose:
+        try:
+            t = float(pose.get("variant_match_threshold"))
+            t = max(0.0, min(1.0, t))
+            set_world_setting("pose.variant_match_threshold", str(t))
+        except (TypeError, ValueError):
+            pass
+    if "max_variants_per_char" in pose:
+        try:
+            n = int(pose.get("max_variants_per_char"))
+            n = max(1, min(200, n))
+            set_world_setting("pose.max_variants_per_char", str(n))
+        except (TypeError, ValueError):
+            pass
+    return {"status": "ok"}
 
 
 @router.patch("/locations/{location_id}/position")

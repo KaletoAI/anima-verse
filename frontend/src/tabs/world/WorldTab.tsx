@@ -6,13 +6,20 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { loadItems, type ItemRef } from '../../lib/refs'
+import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 
 interface Room {
   id?: string
   name?: string
   description?: string
+  // Legacy — wird in Schritt 8 entfernt, parallel zur neuen Decency-Achse
   outfit_type?: string
+  // Schritt 1 (May 2026, plan-outfit-system-rethink.md §1.1)
+  decency?: '' | 'public' | 'private' | 'nude_ok'
+  style_hint?: string
+  swim_allowed?: boolean
+  activity_hint?: string
   image_prompt_day?: string
   image_prompt_night?: string
 }
@@ -33,7 +40,12 @@ interface Location {
   entry_room?: string
   danger_level?: number
   indoor?: string
+  // Legacy — siehe Room
   outfit_type?: string
+  decency?: '' | 'public' | 'private' | 'nude_ok'
+  style_hint?: string
+  swim_allowed?: boolean
+  activity_hint?: string
   knowledge_item_id?: string
   passable?: boolean
   map_z_offset?: number
@@ -67,7 +79,6 @@ export function WorldTab() {
   const { toast } = useToast()
   const [locations, setLocations] = useState<Location[] | null>(null)
   const [selection, setSelection] = useState<Selection>(null)
-  const [outfitTypeOptions, setOutfitTypeOptions] = useState<string[]>([])
   const [items, setItems] = useState<ItemRef[]>([])
 
   const reload = useCallback(async () => {
@@ -96,9 +107,6 @@ export function WorldTab() {
 
   useEffect(() => {
     reload()
-    apiGet<{ outfit_types?: Record<string, unknown> }>('/admin/outfit-rules/data')
-      .then((d) => setOutfitTypeOptions(['', ...Object.keys(d.outfit_types || {}).sort()]))
-      .catch(() => setOutfitTypeOptions(['']))
     loadItems().then(setItems).catch(() => setItems([]))
   }, [reload])
 
@@ -131,6 +139,10 @@ export function WorldTab() {
         danger_level: src.danger_level,
         indoor: src.indoor || '',
         outfit_type: src.outfit_type,
+        decency: src.decency,
+        style_hint: src.style_hint,
+        swim_allowed: src.swim_allowed,
+        activity_hint: src.activity_hint,
         knowledge_item_id: src.knowledge_item_id,
         passable: src.passable,
         map_z_offset: src.map_z_offset,
@@ -156,6 +168,12 @@ export function WorldTab() {
 
   return (
     <div className="ga-world-grid">
+      {/* Datalist fuer Style-Hint-Vorschlaege (Schritt 7, May 2026) */}
+      <datalist id="style-hint-options">
+        {STYLE_HINT_OPTIONS.map((v) => (
+          <option key={v} value={v} />
+        ))}
+      </datalist>
       <aside className="ga-world-list-col">
         <ListHeader
           title={t('Places')}
@@ -182,7 +200,6 @@ export function WorldTab() {
         {selection?.kind === 'location' && selectedLocation ? (
           <LocationEditor
             location={selectedLocation}
-            outfitTypeOptions={outfitTypeOptions}
             items={items}
             onChanged={reload}
             onDeleted={() => {
@@ -194,7 +211,6 @@ export function WorldTab() {
           <RoomEditor
             location={selectedLocation}
             room={selectedRoom}
-            outfitTypeOptions={outfitTypeOptions}
             items={items}
             onChanged={reload}
             onDeleted={() => {
@@ -259,7 +275,7 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
                   onClick={() => onSelect({ kind: 'room', locationId: location.id, roomId: r.id || '' })}
                 >
                   <span className="ga-list-row-main">↳ {r.name || r.id}</span>
-                  {r.outfit_type ? <span className="ga-source ga-source-world">{r.outfit_type}</span> : null}
+                  {r.decency ? <span className="ga-source ga-source-world">{r.decency}</span> : null}
                 </button>
               </li>
             )
@@ -274,13 +290,12 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
 
 interface LocationEditorProps {
   location: Location
-  outfitTypeOptions: string[]
   items: ItemRef[]
   onChanged: () => void
   onDeleted: () => void
 }
 
-function LocationEditor({ location, outfitTypeOptions, items, onChanged, onDeleted }: LocationEditorProps) {
+function LocationEditor({ location, items, onChanged, onDeleted }: LocationEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Location>(() => ({ ...location }))
@@ -303,6 +318,10 @@ function LocationEditor({ location, outfitTypeOptions, items, onChanged, onDelet
         danger_level: draft.danger_level,
         indoor: draft.indoor || '',
         outfit_type: draft.outfit_type,
+        decency: draft.decency,
+        style_hint: draft.style_hint,
+        swim_allowed: draft.swim_allowed,
+        activity_hint: draft.activity_hint,
         knowledge_item_id: draft.knowledge_item_id,
         passable: draft.passable,
         map_z_offset: draft.map_z_offset,
@@ -384,24 +403,14 @@ function LocationEditor({ location, outfitTypeOptions, items, onChanged, onDelet
           </Field>
         </div>
 
-        <Field label={t('Passable')} inline>
-          <input
-            type="checkbox"
-            checked={draft.passable !== false}
-            onChange={(e) => upd('passable', e.target.checked)}
-          />
-        </Field>
-
-        <Field label={t('Description')}>
-          <textarea
-            className="ga-textarea"
-            rows={2}
-            value={draft.description || ''}
-            onChange={(e) => upd('description', e.target.value)}
-          />
-        </Field>
-
         <div className="ga-form-row">
+          <Field label={t('Passable')} inline>
+            <input
+              type="checkbox"
+              checked={draft.passable !== false}
+              onChange={(e) => upd('passable', e.target.checked)}
+            />
+          </Field>
           <Field label={t('Danger level')}>
             <input
               type="number"
@@ -413,6 +422,18 @@ function LocationEditor({ location, outfitTypeOptions, items, onChanged, onDelet
               onChange={(e) => upd('danger_level', parseInt(e.target.value, 10) || 0)}
             />
           </Field>
+        </div>
+
+        <Field label={t('Description')}>
+          <textarea
+            className="ga-textarea"
+            rows={2}
+            value={draft.description || ''}
+            onChange={(e) => upd('description', e.target.value)}
+          />
+        </Field>
+
+        <div className="ga-form-row">
           <Field label={t('Indoor/Outdoor')} hint={t('Used as a coherence hint for event generation and storyteller narration.')}>
             <select
               className="ga-input"
@@ -424,17 +445,16 @@ function LocationEditor({ location, outfitTypeOptions, items, onChanged, onDelet
               <option value="outdoor">{t('Outdoor')}</option>
             </select>
           </Field>
-          <Field label={t('Outfit type')}>
+          <Field label={t('Decency')} hint={t('Hard rule: public requires top+bottom covered. private allows nudity when alone/intimate. nude_ok always allows.')}>
             <select
               className="ga-input"
-              value={draft.outfit_type || ''}
-              onChange={(e) => upd('outfit_type', e.target.value)}
+              value={draft.decency || ''}
+              onChange={(e) => upd('decency', (e.target.value || '') as Location['decency'])}
             >
-              {outfitTypeOptions.map((o) => (
-                <option key={o} value={o}>
-                  {o || t('— none —')}
-                </option>
-              ))}
+              <option value="">{t('— inherit / default public —')}</option>
+              <option value="public">public</option>
+              <option value="private">private</option>
+              <option value="nude_ok">nude_ok</option>
             </select>
           </Field>
           <Field label={t('Knowledge item')} hint={t('Item that grants knowledge of this location.')}>
@@ -450,6 +470,34 @@ function LocationEditor({ location, outfitTypeOptions, items, onChanged, onDelet
                 </option>
               ))}
             </select>
+          </Field>
+        </div>
+        <div className="ga-form-row">
+          <Field label={t('Style hint')} hint={t('Soft suggestion for the LLM (e.g. business, elegant, casual). No code effect.')}>
+            <input
+              className="ga-input"
+              list="style-hint-options"
+              value={draft.style_hint || ''}
+              onChange={(e) => upd('style_hint', e.target.value)}
+            />
+          </Field>
+          <Field label={t('Swim allowed')} hint={t('If true, top/bottom can be replaced by swimwear when the character is wet.')}>
+            <label className="ga-form-check">
+              <input
+                type="checkbox"
+                checked={!!draft.swim_allowed}
+                onChange={(e) => upd('swim_allowed', e.target.checked)}
+              />
+              <span>{t('Allow swimwear when wet')}</span>
+            </label>
+          </Field>
+          <Field label={t('Activity hint')} hint={t('Free-text: what people usually do here. Goes to the LLM as inspiration.')}>
+            <textarea
+              className="ga-textarea"
+              rows={2}
+              value={draft.activity_hint || ''}
+              onChange={(e) => upd('activity_hint', e.target.value)}
+            />
           </Field>
         </div>
 
@@ -615,13 +663,12 @@ function RandomEventsEditor({ value, onChange }: RandomEventsEditorProps) {
 interface RoomEditorProps {
   location: Location
   room: Room
-  outfitTypeOptions: string[]
   items: ItemRef[]
   onChanged: () => void
   onDeleted: () => void
 }
 
-function RoomEditor({ location, room, outfitTypeOptions, items, onChanged, onDeleted }: RoomEditorProps) {
+function RoomEditor({ location, room, items, onChanged, onDeleted }: RoomEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Room>(() => ({ ...room }))
@@ -666,22 +713,24 @@ function RoomEditor({ location, room, outfitTypeOptions, items, onChanged, onDel
         deleteLabel={t('Remove room')}
       />
       <div className="ga-form">
-        <Field label={t('Room ID (read-only)')} hint={t('Permanent identifier — set when the room was created.')}>
-          <input
-            className="ga-input"
-            value={draft.id || ''}
-            readOnly
-            disabled
-            style={{ fontFamily: 'monospace', opacity: 0.7 }}
-          />
-        </Field>
-        <Field label={t('Name')}>
-          <input
-            className="ga-input"
-            value={draft.name || ''}
-            onChange={(e) => upd('name', e.target.value)}
-          />
-        </Field>
+        <div className="ga-form-row">
+          <Field label={t('Room ID (read-only)')} hint={t('Permanent identifier — set when the room was created.')}>
+            <input
+              className="ga-input"
+              value={draft.id || ''}
+              readOnly
+              disabled
+              style={{ fontFamily: 'monospace', opacity: 0.7 }}
+            />
+          </Field>
+          <Field label={t('Name')}>
+            <input
+              className="ga-input"
+              value={draft.name || ''}
+              onChange={(e) => upd('name', e.target.value)}
+            />
+          </Field>
+        </div>
         <Field label={t('Description')}>
           <textarea
             className="ga-textarea"
@@ -690,19 +739,48 @@ function RoomEditor({ location, room, outfitTypeOptions, items, onChanged, onDel
             onChange={(e) => upd('description', e.target.value)}
           />
         </Field>
-        <Field label={t('Outfit type')}>
-          <select
-            className="ga-input"
-            value={draft.outfit_type || ''}
-            onChange={(e) => upd('outfit_type', e.target.value)}
-          >
-            {outfitTypeOptions.map((o) => (
-              <option key={o} value={o}>
-                {o || t('— inherit from location —')}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div className="ga-form-row">
+          <Field label={t('Decency')} hint={t('Overrides the location decency for this room. Empty = inherit.')}>
+            <select
+              className="ga-input"
+              value={draft.decency || ''}
+              onChange={(e) => upd('decency', (e.target.value || '') as Room['decency'])}
+            >
+              <option value="">{t('— inherit from location —')}</option>
+              <option value="public">public</option>
+              <option value="private">private</option>
+              <option value="nude_ok">nude_ok</option>
+            </select>
+          </Field>
+          <Field label={t('Style hint')} hint={t('Soft suggestion for the LLM (no code effect).')}>
+            <input
+              className="ga-input"
+              list="style-hint-options"
+              value={draft.style_hint || ''}
+              onChange={(e) => upd('style_hint', e.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="ga-form-row">
+          <Field label={t('Swim allowed')}>
+            <label className="ga-form-check">
+              <input
+                type="checkbox"
+                checked={!!draft.swim_allowed}
+                onChange={(e) => upd('swim_allowed', e.target.checked)}
+              />
+              <span>{t('Allow swimwear when wet')}</span>
+            </label>
+          </Field>
+          <Field label={t('Activity hint')} hint={t('Free-text: what people usually do in this room.')}>
+            <textarea
+              className="ga-textarea"
+              rows={2}
+              value={draft.activity_hint || ''}
+              onChange={(e) => upd('activity_hint', e.target.value)}
+            />
+          </Field>
+        </div>
 
         <div>
           <div className="ga-form-section-label">{t('Image prompts')}</div>
