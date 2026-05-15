@@ -221,12 +221,12 @@ _STATE_TYPED_COLS = (
 # in profile_json. Inject/Extract analog zu _STATE_COLS.
 _STATE_META_KEYS = ("equipped_pieces", "equipped_items",
                     "active_conditions", "status_effects", "activity_cooldowns",
-                    "runtime_outfit_skip",  # legacy — wird in Schritt 8 entfernt
                     "outfit_intent",        # neuer Intent-Container (May 2026)
                     "current_activity_detail",
                     "movement_target")
-# equipped_pieces_meta (Pro-Slot Farb-Override) raus mit Schritt 3 —
-# Items sind eindeutig, Farbe steckt im prompt_fragment.
+# Entfernt in Schritt 8 (Cleanup, May 2026):
+# - runtime_outfit_skip → outfit_intent.forbidden_slots
+# - equipped_pieces_meta → Items eindeutig, Farbe im prompt_fragment
 
 # Per-Character User-Config (nicht Stamm) — wandern in config_json, nicht profile_json.
 # Beim Laden aus config_json in Profile injiziert (fuer Abwaerts-Kompatibilitaet der
@@ -1056,11 +1056,6 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # absichtlich-leeren Slots aus dem Chat ("zieht sich aus") galten fuer
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
     # (Lebenszyklus gemaess plan-outfit-system-rethink.md §3)
-    # runtime_outfit_skip-Legacy-Feld bleibt erstmal sichtbar, wird aber
-    # nicht mehr gelesen — Cleanup in Schritt 8.
-    if location and location != old_location:
-        if profile.get("runtime_outfit_skip"):
-            profile["runtime_outfit_skip"] = []
     save_character_profile(character_name, profile)
     if location and location != old_location:
         try:

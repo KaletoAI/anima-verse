@@ -713,40 +713,15 @@ def get_equipped_route(
     und sonstige Ausruestung (Liste).
     """
     from app.models.inventory import get_equipped_pieces, get_equipped_items
-    from app.models.character import get_character_profile
-    _profile = get_character_profile(character_name) or {}
     return {
         "equipped_pieces": get_equipped_pieces(character_name),
         "equipped_items": get_equipped_items(character_name),
-        "equipped_pieces_meta": _profile.get("equipped_pieces_meta") or {},
     }
 
 
-@router.post("/characters/{character_name}/pieces/{slot}/color")
-async def set_piece_color_route(character_name: str, slot: str, request: Request) -> Dict[str, Any]:
-    """Setzt/loescht die Farbe eines aktuell equippten Pieces.
-
-    Body: {"user_id": "...", "color": "red"}  (leerer color loescht den Eintrag)
-    Die Farbe wird pro Character + Slot gespeichert (equipped_pieces_meta).
-    """
-    from app.models.inventory import set_equipped_piece_color
-    body = await request.json()
-    user_id = (body.get("user_id") or "").strip()
-    color = (body.get("color") or "").strip()
-
-    result = set_equipped_piece_color(character_name, slot, color)
-    if result.get("status") != "ok":
-        raise HTTPException(status_code=400, detail=result.get("reason", "color update failed"))
-
-    # Variant-Cache invalidieren: Prompt aendert sich durch neue Farbe
-    item_id = result.get("item_id") or ""
-    if item_id:
-        try:
-            from app.core.expression_regen import invalidate_variants_for_item
-            invalidate_variants_for_item(item_id)
-        except Exception as e:
-            logger.debug("Variant-Invalidierung (color change) fehlgeschlagen: %s", e)
-    return result
+# POST /pieces/{slot}/color + set_equipped_piece_color wurden in Schritt 8
+# (May 2026, plan-outfit-system-rethink.md §5) entfernt — Items sind eindeutig,
+# Farbe steckt im prompt_fragment.
 
 
 @router.post("/characters/{character_name}/equip")

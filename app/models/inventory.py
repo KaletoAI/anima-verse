@@ -1706,47 +1706,6 @@ def equip_piece(character_name: str, item_id: str) -> Dict[str, Any]:
     return {"status": "ok", "slots": slots, "displaced": displaced}
 
 
-def set_equipped_piece_color(character_name: str, slot: str, color: str) -> Dict[str, Any]:
-    """Setzt/loescht die Farbe des aktuell equippten Pieces im Slot.
-
-    Farb-Picker ist ein Roleplay-Element: nur common Rarity kann gefaerbt
-    werden. Hoehere Seltenheit hat eine feste, kanonische Farbe.
-    Leerer color-String loescht den Meta-Eintrag fuer diesen Slot.
-    """
-    from app.models.character import get_character_profile, save_character_profile
-
-    if slot not in VALID_PIECE_SLOTS:
-        return {"status": "error", "reason": "invalid_slot"}
-
-    profile = get_character_profile(character_name)
-    pieces = profile.get("equipped_pieces") or {}
-    if not pieces.get(slot):
-        return {"status": "error", "reason": "slot_not_equipped"}
-
-    # Rarity-Gate: nur "generic" Outfits sind einfaerbbar — alle anderen
-    # haben ihre Farbe fest im Prompt verankert.
-    _it = get_item(pieces.get(slot)) or {}
-    _rarity = (_it.get("rarity") or "common").lower()
-    if _rarity != "generic" and color:
-        return {"status": "error", "reason": "rarity_not_colorable"}
-
-    meta = profile.get("equipped_pieces_meta") or {}
-    color = (color or "").strip()
-    if color:
-        slot_meta = meta.get(slot) or {}
-        if not isinstance(slot_meta, dict):
-            slot_meta = {}
-        slot_meta["color"] = color
-        meta[slot] = slot_meta
-    else:
-        meta.pop(slot, None)
-    profile["equipped_pieces_meta"] = meta
-    save_character_profile(character_name, profile)
-    logger.info("set_equipped_piece_color [%s]: slot=%s color=%r",
-                character_name, slot, color or "(clear)")
-    return {"status": "ok", "slot": slot, "color": color, "item_id": pieces.get(slot)}
-
-
 def unequip_piece(character_name: str,
                    slot: str = "", item_id: str = "") -> Dict[str, Any]:
     """Entfernt ein Piece — entweder per slot oder per item_id.

@@ -337,6 +337,96 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("outfit_intent-Migration fehlgeschlagen: %s", e)
 
+    # One-shot Migration: current_activity → pose_intent (Schritt 8, Plan §9).
+    # Nur fuer Chars mit aktivem Activity-Text aber noch leerem pose_intent.
+    # Erzeugt parallel einen pose_variant (String-Match-Fallback) damit das
+    # Expression-Cache-Key-System sofort den Variant nutzen kann.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='activity_to_pose_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            rows = conn.execute(
+                "SELECT character_name, current_activity, pose_intent "
+                "FROM character_state"
+            ).fetchall()
+            migrated = 0
+            for char_name, cur_act, pose_int in rows:
+                cur_act = (cur_act or "").strip()
+                if not cur_act:
+                    continue
+                if (pose_int or "").strip():
+                    continue  # pose_intent schon gesetzt — nicht ueberschreiben
+                # In-process resolve_pose_variant: legt ggf. variant an
+                variant_id = None
+                try:
+                    from app.core.pose_engine import resolve_pose_variant
+                    variant = resolve_pose_variant(char_name, cur_act)
+                    if variant:
+                        variant_id = variant["id"]
+                except Exception:
+                    pass
+                conn.execute(
+                    "UPDATE character_state SET pose_intent=?, pose_variant_id=? "
+                    "WHERE character_name=?",
+                    (cur_act, variant_id, char_name),
+                )
+                migrated += 1
+            if migrated:
+                logger.info("current_activity → pose_intent: %d Chars migriert",
+                            migrated)
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('activity_to_pose_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("current_activity → pose_intent fehlgeschlagen: %s", e)
+
+    # One-shot Migration: Legacy-Keys aus character_state.meta entfernen.
+    # Plan §8 (Schritt 8 Cleanup, May 2026):
+    #   - runtime_outfit_skip → outfit_intent.forbidden_slots (Schritt 2)
+    #   - equipped_pieces_meta → Items sind eindeutig (Schritt 3)
+    # Beide Keys waren parallel zur neuen Welt noch im Profile-Lesen drin —
+    # jetzt aktiv aus state.meta entfernen.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='state_meta_legacy_purged_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            import json as _json
+            rows = conn.execute(
+                "SELECT character_name, meta FROM character_state"
+            ).fetchall()
+            purged = 0
+            for char_name, meta_raw in rows:
+                try:
+                    meta = _json.loads(meta_raw or "{}")
+                except Exception:
+                    continue
+                if not isinstance(meta, dict):
+                    continue
+                changed = False
+                for key in ("runtime_outfit_skip", "equipped_pieces_meta"):
+                    if key in meta:
+                        meta.pop(key, None)
+                        changed = True
+                if changed:
+                    conn.execute(
+                        "UPDATE character_state SET meta=? WHERE character_name=?",
+                        (_json.dumps(meta, ensure_ascii=False), char_name),
+                    )
+                    purged += 1
+            if purged:
+                logger.info("state.meta Legacy-Purge: %d Characters bereinigt "
+                            "(runtime_outfit_skip + equipped_pieces_meta)",
+                            purged)
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('state_meta_legacy_purged_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("state.meta Legacy-Purge fehlgeschlagen: %s", e)
+
     conn.execute(
         "INSERT INTO schema_meta (key, value) VALUES ('version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
