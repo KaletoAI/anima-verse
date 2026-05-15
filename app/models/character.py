@@ -1197,12 +1197,30 @@ def save_character_current_activity(character_name: str, activity: str, detail: 
         detail = _re.sub(r'<SPECIAL_\d+>|<\|[A-Z_][A-Z_0-9]*\|>', '', detail).strip()
     # Schritt 6 (May 2026): Activity-Sentinel "Sleeping" spiegeln auf is_sleeping-Flag
     # damit Compliance/AgentLoop konsistent reagieren waehrend die Activity-Library
-    # noch parallel laeuft. is_sleeping wird in Schritt 8 die einzige Quelle.
+    # noch parallel laeuft.
     if (activity or "").strip().lower() == "sleeping":
         try:
             set_is_sleeping(character_name, True)
         except Exception:
             pass
+
+    # Pose-Bridge (Schritt 8 Cleanup, May 2026): jede gesetzte Activity
+    # spiegelt parallel auf pose_intent + pose_variant_id, damit Expression-
+    # Cache + Prompt-Builder im pose_system_active-Modus den variant nutzen.
+    # resolve_pose_variant macht bei kurzen Strings keinen LLM-Call.
+    if activity and not (activity or "").strip().lower() == "sleeping":
+        try:
+            from app.models.world import is_pose_system_active
+            if is_pose_system_active():
+                from app.core.pose_engine import resolve_pose_variant
+                variant = resolve_pose_variant(character_name, activity)
+                if variant:
+                    _prof_pose = get_character_profile(character_name) or {}
+                    _prof_pose["pose_intent"] = activity
+                    _prof_pose["pose_variant_id"] = variant["id"]
+                    save_character_profile(character_name, _prof_pose)
+        except Exception as _pe:
+            logger.debug("pose-bridge bei save_activity: %s", _pe)
 
     # Normalisierung: Freitext gegen Bibliothek matchen
     if activity and not _is_reclassify:

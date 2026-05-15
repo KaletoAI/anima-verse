@@ -57,7 +57,10 @@ Decide based on this and other relevant factors — your rhythm is a guideline, 
 
 === Activities possible here ===
 {{ available_activities_block }}
-Use SetActivity if you want to switch to one of these.
+Use SetActivity to switch to one of these listed activities (they may have
+mechanics like cooldowns, effects, or required partners). For free-text
+poses that aren't in the list, use SetPose instead — e.g. "leaning against
+the windowsill" or "sketching in a notebook".
 {% endif %}
 {% if room_items_block %}
 
