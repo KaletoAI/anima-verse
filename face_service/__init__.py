@@ -1,1 +1,0 @@
-"""Face Processing Microservice Package"""

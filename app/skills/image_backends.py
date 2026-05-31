@@ -105,11 +105,6 @@ class ImageBackend(ABC):
         self.prompt_prefix = os.environ.get(f"{env_prefix}PROMPT_PREFIX", "").strip()
         self.negative_prompt = os.environ.get(f"{env_prefix}NEGATIVE_PROMPT", "").strip()
 
-        # FaceSwap: Gibt an ob generierte Bilder FaceSwap benoetigen (Post-Processing)
-        self.faceswap_needed = os.environ.get(f"{env_prefix}FACESWAP_NEEDED",
-            os.environ.get(f"{env_prefix}FACESWAP", "false")  # Backward-Compat
-        ).strip().lower() in ("true", "1", "yes")
-
         # Fallback-Strategie: was tun wenn dieses Backend nicht verfuegbar ist?
         #   none           → Fehler an Caller, kein Versuch eines anderen Backends
         #   next_cheaper   → naechst-billigeres Backend mit dessen Default-Workflow
@@ -200,8 +195,8 @@ class ImageBackend(ABC):
         self.available = True
         # Recovery: channel_health sofort neu pollen, damit GPU-Task-Routing
         # (find_channel/is_healthy) den frischen Status sieht und nicht erst
-        # bis zum naechsten 30s-Poll wartet. Sonst schlaegt MultiSwap/Faceswap
-        # direkt nach Recovery noch fehl, obwohl das Backend wieder online ist.
+        # bis zum naechsten 30s-Poll wartet. Sonst schlagen GPU-Tasks direkt
+        # nach Recovery noch fehl, obwohl das Backend wieder online ist.
         if _was_recovery:
             try:
                 from app.core.channel_health import get_monitor as _ch_monitor
@@ -784,8 +779,8 @@ class ComfyUIBackend(ImageBackend):
         wird /free ausgefuehrt und die neue Signature gemerkt.
 
         Damit teilen sich aufeinanderfolgende Generierungen auf demselben
-        ComfyUI-Server nicht den VRAM-Cache (Flux + Z-Image + MultiSwap-Stack
-        passt sonst nicht in 24GB).
+        ComfyUI-Server nicht den VRAM-Cache (mehrere grosse Modell-Stacks
+        passen sonst nicht in 24GB).
 
         Per Env abschaltbar (`COMFY_FREE_MEMORY_BEFORE_RUN=false`), falls
         die wiederholten Modell-Loads zu viel I/O kosten.
@@ -1457,7 +1452,6 @@ class ComfyUIBackend(ImageBackend):
         # gehaltenem _slot_lock. Sonst kann ein paralleler Task die Slot-
         # Dateien (_slot_ref_N.png) ueberschreiben, bevor ComfyUI sie bei
         # der Execution liest — ComfyUI liest sie NICHT beim /prompt-Submit.
-        # Gleiche Logik wie run_faceswap_workflow (siehe dort den Comment).
         payload = {"prompt": workflow}
         try:
             try:
@@ -1566,249 +1560,6 @@ class ComfyUIBackend(ImageBackend):
 
             return images
         finally:
-            self._slot_lock.release()
-
-
-    def run_faceswap_workflow(
-        self,
-        workflow_file: str,
-        target_image_path: str,
-        reference_image_path: str,
-        gender: str = "no",
-        node_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
-        reference_image_paths: Optional[Dict[str, str]] = None) -> Optional[bytes]:
-        """Fuehrt einen separaten ComfyUI FaceSwap/MultiSwap-Workflow aus.
-
-        Der Workflow wird pro Pass einmal aufgerufen. Bei klassischem ReActor-
-        FaceSwap wird ein einzelnes Referenzbild verwendet. MultiSwap kann mit
-        `reference_image_paths` mehrere Slots in einem Pass befuellen.
-
-        Args:
-            workflow_file: Pfad zur FaceSwap-Workflow-JSON.
-            target_image_path: Pfad zum Bild, in das geswapt wird.
-            reference_image_path: Single-Slot Referenz-Gesicht (ReActor-Default).
-                                  Bei reference_image_paths != None ignoriert.
-            gender: Gender fuer detect_gender_input/source ("male", "female", "no").
-            node_overrides: Dict von node_id -> {input_key: value} zum Ueberschreiben
-                           von Workflow-Inputs (z.B. MultiSwap Mask-Flags).
-            reference_image_paths: Dict node_title -> file_path fuer Multi-Slot-
-                                   Workflows (z.B. {"input_reference_image_1": p1,
-                                   "input_reference_image_2": p2}). Slots ohne
-                                   Eintrag werden ueber den zugehoerigen
-                                   <title>_use Switch-Node deaktiviert.
-
-        Returns:
-            Bild-Bytes des FaceSwap-Ergebnisses oder None bei Fehler.
-        """
-        import copy
-
-        # Workflow laden
-        try:
-            with open(workflow_file, "r") as f:
-                workflow = json.load(f)
-        except Exception as e:
-            logger.error(f"FaceSwap-Workflow laden fehlgeschlagen: {e}")
-            return None
-
-        workflow = copy.deepcopy(workflow)
-
-        # Referenz-Slots zuruecksetzen (Placeholder), damit keine alten Bilder bleiben
-        self._slot_lock.acquire()
-        # VRAM des ComfyUI-Servers freigeben — aber nur wenn das MultiSwap/
-        # FaceSwap-Modell-Setup sich vom letzten Run auf diesem Backend
-        # unterscheidet. Bei aufeinanderfolgenden MultiSwaps mit gleichem UNet
-        # (z.B. Yuki-Variant dann Kira-Variant) bleibt das Modell im VRAM.
-        _fs_unet = os.environ.get("COMFY_MULTISWAP_UNET", "").strip() or os.environ.get("COMFY_FACESWAP_BACKEND", "").strip()
-        _fs_sig = f"{workflow_file}|{_fs_unet}"
-        self._free_comfyui_memory(signature=_fs_sig)
-        self._reset_reference_slots()
-
-        # Target-Bild hochladen und in input_target_image setzen
-        target_node = self._find_node_by_title(workflow, "input_target_image")
-        if not target_node:
-            logger.error("FaceSwap-Workflow: Node 'input_target_image' nicht gefunden")
-            return None
-
-        uploaded_target = self._upload_image(target_image_path, slot_name=self._REF_SLOT_NAMES[4])
-        if not uploaded_target:
-            logger.error("FaceSwap: Target-Bild Upload fehlgeschlagen")
-            return None
-        workflow[target_node]["inputs"]["image"] = uploaded_target
-
-        # Referenzbild(er) hochladen
-        if reference_image_paths:
-            # Multi-Slot Modus (z.B. MultiSwap-Workflow mit input_reference_image_1/_2)
-            # Reihenfolge der Eintraege bestimmt Slot-Datei (slot_ref_1, slot_ref_2, ...)
-            for slot_idx, (node_title, ref_path) in enumerate(reference_image_paths.items()):
-                ref_node = self._find_node_by_title(workflow, node_title)
-                if not ref_node:
-                    logger.warning("FaceSwap: Node '%s' nicht im Workflow gefunden", node_title)
-                    continue
-                slot_name = self._REF_SLOT_NAMES[slot_idx] if slot_idx < len(self._REF_SLOT_NAMES) - 1 else self._REF_SLOT_NAMES[0]
-                uploaded_ref = self._upload_image(ref_path, slot_name=slot_name)
-                if not uploaded_ref:
-                    logger.error("FaceSwap: Referenzbild '%s' Upload fehlgeschlagen", ref_path)
-                    return None
-                workflow[ref_node]["inputs"]["image"] = uploaded_ref
-                # Use-Switch fuer diesen Slot aktivieren (sofern vorhanden)
-                use_node = self._find_node_by_title(workflow, f"{node_title}_use")
-                if use_node:
-                    workflow[use_node]["inputs"]["boolean"] = True
-                logger.debug("FaceSwap Slot[%s]: %s", node_title, uploaded_ref)
-            # Inaktive Switch-Nodes (z.B. input_reference_image_2_use bei nur 1 Ref)
-            # auf False setzen — gleiche Logik wie in _generate.
-            _active_titles = set(reference_image_paths.keys())
-            for node_id, node in workflow.items():
-                if node.get("class_type") != "Switch any [Crystools]":
-                    continue
-                title = (node.get("_meta") or {}).get("title", "")
-                if not title.endswith("_use"):
-                    continue
-                base = title[:-len("_use")]
-                if base in _active_titles:
-                    continue
-                inputs = node.get("inputs", {})
-                if "boolean" in inputs:
-                    inputs["boolean"] = False
-                logger.debug("FaceSwap Switch '%s': inaktiv", title)
-        else:
-            # Single-Slot Modus (ReActor): input_reference_image_1
-            ref_node = self._find_node_by_title(workflow, "input_reference_image_1")
-            if ref_node:
-                uploaded_ref = self._upload_image(reference_image_path, slot_name=self._REF_SLOT_NAMES[0])
-                if uploaded_ref:
-                    workflow[ref_node]["inputs"]["image"] = uploaded_ref
-                    logger.debug(f"FaceSwap Ref: {uploaded_ref}")
-                else:
-                    logger.error("FaceSwap: Referenzbild Upload fehlgeschlagen")
-                    return None
-
-        # Gender auf allen ReActor-Nodes setzen
-        for node_id, node in workflow.items():
-            if node.get("class_type") == "ReActorFaceSwap":
-                node["inputs"]["detect_gender_input"] = gender
-                node["inputs"]["detect_gender_source"] = gender
-                logger.debug(f"FaceSwap ReActor {node_id}: gender={gender}")
-
-        # Node-Overrides anwenden (z.B. MultiSwap Mask-Flags)
-        if node_overrides:
-            for node_id, overrides in node_overrides.items():
-                if node_id in workflow:
-                    for key, value in overrides.items():
-                        workflow[node_id]["inputs"][key] = value
-                        logger.debug("Node-Override: %s.inputs.%s = %s", node_id, key, value)
-                else:
-                    logger.warning("Node-Override: Node '%s' nicht im Workflow", node_id)
-
-        _wf_label = "MultiSwap" if "multiswap" in workflow_file.lower() else "FaceSwap"
-        logger.info(f"{_wf_label}-Workflow starten: {workflow_file}")
-
-        # WICHTIG: Das _slot_lock bleibt bis Polling+Download fertig gehalten.
-        # Die Slot-Dateinamen (_slot_target.png, _slot_ref_N.png) sind fix —
-        # wenn zwischen Submit und Node-Execution ein parallel laufender Task
-        # die gleichen Files ueberschreibt, liest ComfyUI kaputte/halbe Dateien
-        # (haeufig: "height and width must be > 0" an LoadAndResizeImage).
-        # Submit + Poll (gleiche Logik wie _generate)
-        payload = {"prompt": workflow}
-        try:
-            try:
-                resp = requests.post(f"{self.api_url}/prompt", json=payload, timeout=30)
-            except Exception as e:
-                logger.error(f"{_wf_label} Submit-Fehler: {e}")
-                return None
-
-            if resp.status_code != 200:
-                logger.error(f"{_wf_label} HTTP {resp.status_code}: {resp.text[:500]}")
-                return None
-
-            prompt_id = resp.json().get("prompt_id", "")
-            if not prompt_id:
-                logger.error(f"{_wf_label}: Keine prompt_id in Response")
-                return None
-
-            logger.info(f"{_wf_label} queued: {prompt_id}")
-
-            start_time = time.time()
-            outputs = {}
-            while time.time() - start_time < self.max_wait:
-                time.sleep(self.poll_interval)
-                try:
-                    hist_resp = requests.get(f"{self.api_url}/history/{prompt_id}", timeout=10)
-                    if hist_resp.status_code != 200:
-                        continue
-                    history = hist_resp.json()
-                    if prompt_id not in history:
-                        continue
-
-                    status = history[prompt_id].get("status", {})
-                    if status.get("status_str") == "error":
-                        msgs = status.get("messages", [])
-                        # ComfyUI status.messages ist eine Liste [(event, data), ...].
-                        # Den relevanten 'execution_error' Eintrag herausfischen und
-                        # konkret loggen — sonst frisst das 500-Char-Truncate die
-                        # eigentliche Exception (node_type/exception_message/traceback).
-                        err_data = {}
-                        for entry in msgs:
-                            if isinstance(entry, (list, tuple)) and len(entry) == 2 and entry[0] == "execution_error":
-                                err_data = entry[1] if isinstance(entry[1], dict) else {}
-                                break
-                        if err_data:
-                            _node_id = err_data.get("node_id", "?")
-                            _node_type = err_data.get("node_type", "?")
-                            _exc_type = err_data.get("exception_type", "?")
-                            _exc_msg = err_data.get("exception_message", "")
-                            _tb = err_data.get("traceback", [])
-                            _tb_tail = ""
-                            if isinstance(_tb, list) and _tb:
-                                _tb_tail = "\n".join(_tb[-3:])[:600]
-                            logger.error(
-                                "FaceSwap Fehler in Node %s (%s): %s: %s%s",
-                                _node_id, _node_type, _exc_type, _exc_msg,
-                                f"\n  Traceback (Tail):\n{_tb_tail}" if _tb_tail else "")
-                        else:
-                            logger.error(f"FaceSwap Fehler: {str(msgs)[:1500]}")
-                        return None
-
-                    outputs = history[prompt_id].get("outputs", {})
-                    elapsed = round(time.time() - start_time, 1)
-                    logger.info(f"{_wf_label} fertig nach {elapsed}s")
-                    break
-                except Exception as e:
-                    logger.warning(f"{_wf_label} Poll-Fehler: {e}")
-                    continue
-            else:
-                logger.error(f"{_wf_label} Timeout nach {self.max_wait}s")
-                return None
-
-            # Ergebnis aus output_final extrahieren
-            output_final_id = self._find_node_by_title(workflow, "output_final")
-            if output_final_id and output_final_id in outputs:
-                target_outputs = {output_final_id: outputs[output_final_id]}
-            else:
-                target_outputs = outputs
-
-            for node_id, node_output in target_outputs.items():
-                for img_info in node_output.get("images", []):
-                    filename = img_info.get("filename", "")
-                    if not filename:
-                        continue
-                    view_params = {"filename": filename, "type": img_info.get("type", "output")}
-                    subfolder = img_info.get("subfolder", "")
-                    if subfolder:
-                        view_params["subfolder"] = subfolder
-                    try:
-                        img_resp = requests.get(f"{self.api_url}/view", params=view_params, timeout=30)
-                        if img_resp.status_code == 200:
-                            logger.info(f"{_wf_label} Ergebnis: {filename} ({len(img_resp.content)} bytes)")
-                            return img_resp.content
-                    except Exception as e:
-                        logger.error(f"{_wf_label} Download-Fehler: {e}")
-
-            logger.warning(f"{_wf_label}: Kein Ergebnis-Bild gefunden")
-            return None
-        finally:
-            # Slot-Lock erst jetzt freigeben — ab hier duerfen andere Tasks
-            # die Slot-Files neu befuellen.
             self._slot_lock.release()
 
 

@@ -1368,7 +1368,6 @@ async def generate_profile_image_route(character_name: str, request: Request) ->
         "agent_name": character_name,
         "user_id": "",
         "auto_enhance": False,
-        "force_faceswap": False,
         "set_profile": True,
         "workflow": workflow_name,
         "backend": backend_name,
@@ -1504,7 +1503,6 @@ async def generate_outfit_image_route(character_name: str, outfit_id: str, reque
         "agent_name": character_name,
         "user_id": "",
         "auto_enhance": False,
-        "force_faceswap": True,
         "skip_gallery": True,
         "workflow": workflow_name,
         "backend": backend_name,
@@ -1576,7 +1574,6 @@ async def generate_outfit_image_route(character_name: str, outfit_id: str, reque
         "reference_images": _gen_meta.get("reference_images", {}),
         "workflow": _gen_meta.get("workflow", workflow_name),
         "model_override": model_override,
-        "faceswap": _gen_meta.get("faceswap", False),
     }
     # Bild verknuepfen (loescht automatisch alte Variants).
     # update_outfit_image schreibt die Sidecar-JSON neben dem PNG (Spec 1.2).
@@ -1666,7 +1663,6 @@ async def generate_all_outfit_images_route(character_name: str, request: Request
                 "agent_name": character_name,
                 "user_id": "",
                 "auto_enhance": False,
-                "force_faceswap": True,
                 "skip_gallery": True,
                 "appearances": [{"name": character_name, "appearance": appearance or ""}],
                 "profile_only": True,
@@ -1717,7 +1713,6 @@ async def generate_all_outfit_images_route(character_name: str, request: Request
                     "seed": _gen_meta.get("seed", 0),
                     "workflow": _gen_meta.get("workflow", workflow_name),
                     "model_override": model_override,
-                    "faceswap": _gen_meta.get("faceswap", False),
                 }
                 # update_outfit_image schreibt PNG-Verknuepfung + Sidecar-JSON
                 update_outfit_image(character_name, outfit_id, final_filename, image_meta=_image_meta)
@@ -2997,115 +2992,6 @@ async def update_character_skill_config_route(character_name: str, skill_name: s
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# --- FaceSwap / Enhancement ---
-
-@router.post("/{character_name}/faceswap")
-async def manual_face_swap(character_name: str, request: Request) -> Dict[str, Any]:
-    """Manueller FaceSwap"""
-    from app.skills.face_client import apply_face_swap_files
-    import asyncio
-
-    body = await request.json()
-    user_id = body.get("user_id", "")
-    target_image = body.get("target_image", "")
-    source_image = body.get("source_image", "")
-    if not target_image:
-        raise HTTPException(status_code=400, detail="target_image fehlt")
-
-    for fname in [target_image, source_image]:
-        if fname and (".." in fname or "/" in fname):
-            raise HTTPException(status_code=400, detail=f"Ungueltiger Dateiname: {fname}")
-
-    images_dir = get_character_images_dir(character_name)
-    target_path = images_dir / target_image
-
-    if not target_path.exists():
-        raise HTTPException(status_code=404, detail=f"Target-Bild nicht gefunden: {target_image}")
-
-    if source_image:
-        source_path = images_dir / source_image
-        if not source_path.exists():
-            raise HTTPException(status_code=404, detail=f"Source-Bild nicht gefunden: {source_image}")
-    else:
-        profile_img = get_character_profile_image(character_name)
-        if not profile_img:
-            raise HTTPException(
-                status_code=400,
-                detail="Kein source_image angegeben und kein Profilbild gesetzt"
-            )
-        source_path = images_dir / profile_img
-        if not source_path.exists():
-            raise HTTPException(status_code=404, detail=f"Profilbild nicht gefunden: {profile_img}")
-
-    logger.info("Manueller FaceSwap: target=%s, source=%s, character=%s", target_image, source_path.name, character_name)
-
-    result = await asyncio.to_thread(apply_face_swap_files, str(target_path), str(source_path))
-    if result is None:
-        raise HTTPException(
-            status_code=422,
-            detail="FaceSwap fehlgeschlagen - kein Gesicht erkannt oder Model nicht geladen"
-        )
-
-    return {
-        "status": "success",
-        "target_image": target_image,
-        "source_image": source_path.name,
-        "message": f"FaceSwap erfolgreich auf {target_image} angewendet"
-    }
-
-
-@router.post("/faceswap/reset")
-def reset_faceswap() -> Dict[str, str]:
-    """Setzt FaceSwap-Models zurueck."""
-    from app.skills.face_client import reset
-    reset()
-    return {"status": "success", "message": "FaceSwap Models werden beim naechsten Aufruf neu geladen"}
-
-
-@router.post("/{character_name}/enhance")
-async def manual_face_enhance(character_name: str, request: Request) -> Dict[str, Any]:
-    """Manuelles Face Enhancement"""
-    from app.skills.face_client import apply_face_enhance_files
-    import asyncio
-
-    body = await request.json()
-    user_id = body.get("user_id", "")
-    image_name = body.get("image", "")
-    if not image_name:
-        raise HTTPException(status_code=400, detail="image fehlt")
-
-    if ".." in image_name or "/" in image_name:
-        raise HTTPException(status_code=400, detail=f"Ungueltiger Dateiname: {image_name}")
-
-    images_dir = get_character_images_dir(character_name)
-    image_path = images_dir / image_name
-
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail=f"Bild nicht gefunden: {image_name}")
-
-    logger.info("Manuelles Enhancement: image=%s, character=%s", image_name, character_name)
-
-    result = await asyncio.to_thread(apply_face_enhance_files, str(image_path))
-    if result is None:
-        raise HTTPException(
-            status_code=422,
-            detail="Face Enhancement fehlgeschlagen - kein Gesicht erkannt oder Model nicht geladen"
-        )
-
-    return {
-        "status": "success",
-        "image": image_name,
-        "message": f"Face Enhancement erfolgreich auf {image_name} angewendet"
-    }
-
-
-@router.post("/enhance/reset")
-def reset_face_enhance() -> Dict[str, str]:
-    """Setzt Face Enhancement Model zurueck."""
-    from app.skills.face_client import reset
-    reset()
-    return {"status": "success", "message": "Face Enhancement Model wird beim naechsten Aufruf neu geladen"}
 
 
 @router.post("/{character_name}/images/{image_name}/detect-characters")

@@ -279,9 +279,9 @@ def mood_bucket(mood: str) -> str:
     """Map a mood string to a coarse body-language bucket.
 
     The returned bucket — not the raw mood — is what goes into the variant
-    cache key. FaceSwap removes most fine mood detail anyway, so generating a
-    separate image per mood synonym is wasted GPU time. Unknown moods fall
-    back to ``DEFAULT_MOOD_BUCKET``.
+    cache key. Fine mood differences barely affect the rendered body language,
+    so generating a separate image per mood synonym is wasted GPU time. Unknown
+    moods fall back to ``DEFAULT_MOOD_BUCKET``.
     """
     if not mood:
         return DEFAULT_MOOD_BUCKET

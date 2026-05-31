@@ -158,7 +158,6 @@ async def get_readiness(character_name: str) -> Dict[str, Any]:
       - autonomy: Char kann selbststaendig handeln (Thoughts + LLM + Task)
       - instagram_autopost: Auto-Posten moeglich (Skills + Appearance)
       - cross_char: Kann andere Chars erreichen (talk_to/send_message + 2+ Chars)
-      - faceswap: Bilder mit Face-Referenz (Flag + Profilbild + image-Skill)
     """
 
     profile = get_character_profile(character_name)
@@ -238,19 +237,6 @@ def _check_combination_features(character_name: str,
         cross_missing.append({"key": "min_chars",
                               "label": "Mindestens 2 Charaktere im System noetig"})
 
-    # 5. Faceswap
-    fs_missing = []
-    img_cfg = get_character_skill_config(character_name, "image_generation") or {}
-    if not img_cfg.get("faceswap_enabled"):
-        fs_missing.append({"key": "faceswap_enabled",
-                           "label": "Faceswap in Image-Generation-Skill aktivieren"})
-    if not _skill_enabled("image_generation"):
-        fs_missing.append({"key": "image_generation",
-                           "label": "Image-Generation-Skill aktivieren"})
-    if not (profile.get("profile_image") or "").strip():
-        fs_missing.append({"key": "profile_image",
-                           "label": "Profilbild als Face-Referenz setzen"})
-
     return {
         "autonomy":             {"ready": not autonomy_missing, "missing": autonomy_missing,
                                   "label": "Autonomy"},
@@ -258,6 +244,4 @@ def _check_combination_features(character_name: str,
                                   "label": "Instagram"},
         "cross_char":           {"ready": not cross_missing, "missing": cross_missing,
                                   "label": "Cross-Char"},
-        "faceswap":             {"ready": not fs_missing, "missing": fs_missing,
-                                  "label": "Faceswap"},
     }

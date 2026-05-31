@@ -73,7 +73,7 @@ def initialize_channels() -> None:
 
 
 def reload_skill_manager() -> Dict[str, Any]:
-    """Reloads .env, then LLM Service, Skills, Face Service and Channels.
+    """Reloads .env, then LLM Service, Skills and Channels.
 
     Prints a consolidated availability summary to the console.
     """
@@ -104,12 +104,6 @@ def reload_skill_manager() -> Dict[str, Any]:
     if _skill_manager is None:
         _skill_manager = SkillManager()
     result = _skill_manager.reload_skills()
-
-    # ── Face Service ──
-    from app.skills.face_client import invalidate_cache, is_available
-
-    invalidate_cache()
-    face_available = is_available()
 
     # ── TTS Service ──
     tts_result = {}
@@ -190,11 +184,6 @@ def reload_skill_manager() -> Dict[str, Any]:
     if not _skill_manager.skills:
         logger.info("  Skill --    No skills loaded")
 
-    # Face Service
-    face_url = os.environ.get("FACE_SERVICE_URL", "http://localhost:8005")
-    face_status = "OK" if face_available else "FAIL"
-    logger.info("  Face  %s  Face Service (%s)", face_status, face_url)
-
     # TTS Service
     try:
         from .tts_service import get_tts_service
@@ -226,7 +215,6 @@ def reload_skill_manager() -> Dict[str, Any]:
 
     result["providers"] = provider_result
     result["llm"] = llm_result
-    result["face_service"] = face_available
     result["tts"] = tts_result
     result["telegram"] = telegram_result
     return result

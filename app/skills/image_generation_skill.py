@@ -20,10 +20,10 @@ class WorkflowKind(str, enum.Enum):
     """Workflow-Familie. Bestimmt Ref-Slot-Layout, Exclusion-Regeln und Post-Processing.
 
     QWEN_STYLE: Style-Conditioning ueber input_reference_image_1..4
-                (Slots 1-3 = Personen, Slot 4 = Location). Kein FaceSwap noetig.
+                (Slots 1-3 = Personen, Slot 4 = Location).
     FLUX_BG:    input_reference_image_background + input_reference_image_use.
-                Background-only. Charaktere kommen ueber Post-Processing.
-    Z_IMAGE:    Keine Ref-Slots. Charaktere kommen ueber Post-Processing.
+                Background-only. Charaktere kommen ueber externes Post-Processing.
+    Z_IMAGE:    Keine Ref-Slots. Charaktere kommen ueber externes Post-Processing.
     """
     QWEN_STYLE = "qwen_style"
     FLUX_BG = "flux_bg"
@@ -35,7 +35,6 @@ class ComfyWorkflow:
     """Definition eines ComfyUI-Workflows (entkoppelt von Backends)."""
     name: str
     workflow_file: str
-    faceswap_needed: bool
     model: str
     kind: WorkflowKind = WorkflowKind.Z_IMAGE  # erkannt aus Workflow-JSON-Nodes
     compatible_backends: list = field(default_factory=list)  # Backend-Namen, leer = alle ComfyUI
@@ -176,24 +175,9 @@ class ImageGenerationSkill(BaseSkill):
     def get_config_fields(self) -> Dict[str, Dict[str, Any]]:
         """Top-level Config-Felder fuer den Character-Editor.
 
-        ``faceswap_enabled`` lebt jetzt im Character-Profil (Bild-Tab),
-        nicht mehr hier — Single Source of Truth. Migration erfolgt
-        lazy beim ersten Read in ``_character_swap_disabled``.
+        Post-Processing laeuft extern (Pull-Modell), daher hier keine Felder.
         """
-        return {
-            "swap_mode": {
-                "type": "select",
-                "default": "default",
-                "label": "Swap-Modus",
-                "options": [
-                    {"value": "default", "label": "Server-Einstellung"},
-                    {"value": "internal", "label": "Internal (Face Service)"},
-                    {"value": "comfyui", "label": "ComfyUI (ReActor)"},
-                    {"value": "multiswap", "label": "MultiSwap (Flux.2)"},
-                ],
-                "help": "Methode fuer den Gesichts-Swap nach der Bildgenerierung",
-            },
-        }
+        return {}
 
     def _load_instances(self) -> List[ImageBackend]:
         """Scannt .env nach SKILL_IMAGEGEN_{N}_* Bloecken und erstellt Backends."""
@@ -260,9 +244,6 @@ class ImageGenerationSkill(BaseSkill):
             if not wf_file:
                 logger.warning("ComfyWorkflow %s (%s): Kein WORKFLOW_FILE, ueberspringe", wf_id, wf_name)
                 continue
-            wf_faceswap = os.environ.get(
-                f"{prefix}FACESWAP_NEEDED", "false"
-            ).strip().lower() in ("true", "1", "yes")
             wf_model = os.environ.get(f"{prefix}MODEL", "").strip()
             wf_prompt_style = os.environ.get(f"{prefix}PROMPT_STYLE", "").strip() or "photorealistic"
             wf_negative_prompt = os.environ.get(f"{prefix}PROMPT_NEGATIVE", "").strip()
@@ -358,7 +339,6 @@ class ImageGenerationSkill(BaseSkill):
             wf = ComfyWorkflow(
                 name=wf_name,
                 workflow_file=wf_file,
-                faceswap_needed=wf_faceswap,
                 model=wf_model,
                 kind=kind,
                 has_input_unet=has_input_unet,
@@ -382,7 +362,7 @@ class ImageGenerationSkill(BaseSkill):
             workflows.append(wf)
             _size_info = f", size={wf_width}x{wf_height}" if wf_width or wf_height else ""
             _filter_info = f", filter={wf_filter}" if wf_filter else ""
-            logger.info("ComfyWorkflow geladen: '%s' (file=%s, kind=%s, faceswap=%s, model=%s%s%s, backends=%s)", wf_name, wf_file, kind.value, wf_faceswap, wf_model, _size_info, _filter_info, compatible or "alle")
+            logger.info("ComfyWorkflow geladen: '%s' (file=%s, kind=%s, model=%s%s%s, backends=%s)", wf_name, wf_file, kind.value, wf_model, _size_info, _filter_info, compatible or "alle")
         if workflows:
             logger.info("%d ComfyUI-Workflow(s) geladen", len(workflows))
         return workflows
@@ -942,8 +922,8 @@ class ImageGenerationSkill(BaseSkill):
                 # 4xx-Fehler (HTTP 400/422 wie Workflow-Validation) bedeuten der
                 # Service ist erreichbar — nur das gesendete JSON ist kaputt.
                 # In dem Fall NICHT als unavailable markieren, sonst wird das
-                # Backend vom Pool entfernt und nachgelagerte Steps (z.B.
-                # MultiSwap) finden faelschlich kein ComfyUI mehr.
+                # Backend vom Pool entfernt und nachgelagerte Steps finden
+                # faelschlich kein ComfyUI mehr.
                 _err_str = str(e)
                 _is_payload_err = bool(_re_4xx.search(_err_str))
                 if _is_payload_err:
@@ -1076,7 +1056,6 @@ class ImageGenerationSkill(BaseSkill):
             result.append({
                 "name": wf.name,
                 "workflow_file": wf.workflow_file,
-                "faceswap_needed": wf.faceswap_needed,
                 "model": wf.model,
                 "compatible_backends": wf.compatible_backends,
                 "prompt_style": wf.prompt_style,
@@ -1156,22 +1135,10 @@ class ImageGenerationSkill(BaseSkill):
             logger.info("Migration abgeschlossen")
 
         if agent_config and "instances" in agent_config:
-            # Migration: Alte ReActor-Keys entfernen + faceswap_enabled
-            # raus aus der Skill-Config (lebt jetzt im Char-Profil/Bild-Tab,
-            # _migrate_faceswap_flag uebernimmt den Wert beim ersten Read).
             migrated = False
-            if "faceswap_enabled" in agent_config:
-                # Falls noch nicht migriert: lazy-Migration im Caller-Pfad
-                # zieht den Wert ins Profil. Hier nur lokal entfernen.
-                del agent_config["faceswap_enabled"]
-                migrated = True
             # Backend-Defaults fuer Vergleich laden (Name → Defaults)
             backend_defaults_map = {b.name: self._get_backend_defaults(b) for b in self.backends}
             for inst_name, inst_cfg in agent_config["instances"].items():
-                reactor_keys = [k for k in inst_cfg if k.startswith("reactor_")]
-                for k in reactor_keys:
-                    del inst_cfg[k]
-                    migrated = True
                 # workflow_file ist technischer Backend-Param, gehoert nicht in per-Agent Config
                 if "workflow_file" in inst_cfg:
                     del inst_cfg["workflow_file"]
@@ -1216,9 +1183,6 @@ class ImageGenerationSkill(BaseSkill):
 
         Speichert nur leere Dicts pro Instanz — Defaults kommen aus .env/Backend.
         Nur echte Overrides (die vom Default abweichen) sollen hier gespeichert werden.
-
-        ``faceswap_enabled`` lebt nicht mehr in der Skill-Config sondern im
-        Character-Profil (Bild-Tab). Default dort: deaktiviert.
         """
         instances = {}
         for backend in self.backends:
@@ -1243,338 +1207,6 @@ class ImageGenerationSkill(BaseSkill):
             instances[backend.name] = instance_cfg
         return {"instances": instances}
 
-    def _migrate_faceswap_flag(self, character_name: str) -> None:
-        """One-shot: alte Skill-Config-Variante von ``faceswap_enabled``
-        in den Character-Profil (Bild-Tab) heben und aus der Skill-Config
-        entfernen. Idempotent — ein No-Op nach der ersten Migration.
-        """
-        agent_config = get_character_skill_config(character_name, self.SKILL_ID)
-        if not agent_config or "faceswap_enabled" not in agent_config:
-            return
-        legacy = bool(agent_config.pop("faceswap_enabled"))
-        try:
-            from app.models.character import get_character_config, save_character_config
-            char_config = get_character_config(character_name) or {}
-            # Nur uebernehmen wenn das Char-Profil noch keinen expliziten Wert hat
-            if char_config.get("faceswap_enabled", "") in ("", None):
-                char_config["faceswap_enabled"] = "true" if legacy else "false"
-                save_character_config(character_name, char_config)
-            save_character_skill_config(character_name, self.SKILL_ID, agent_config)
-            logger.info("FaceSwap-Migration: %s -> faceswap_enabled=%s ins Char-Profil verschoben",
-                        character_name, legacy)
-        except Exception as e:
-            logger.warning("FaceSwap-Migration fuer %s fehlgeschlagen: %s", character_name, e)
-
-    def _character_swap_disabled(self, character_name: str) -> bool:
-        """True wenn FaceSwap fuer den Character deaktiviert ist.
-
-        Single Source of Truth: ``character_config.faceswap_enabled``
-        (Bild-Tab im Character-Editor). Default = deaktiviert wenn nicht
-        explizit auf "true" gesetzt.
-        """
-        # Lazy-Migration: alten Skill-Config-Wert ins Char-Profil heben
-        self._migrate_faceswap_flag(character_name)
-        from app.models.character import get_character_config
-        char_config = get_character_config(character_name) or {}
-        char_val = char_config.get("faceswap_enabled", "")
-        if char_val != "" and char_val is not None:
-            return str(char_val).lower() not in ("true", "1", "yes")
-        # Kein expliziter Wert -> deaktiviert (Schema-Default)
-        return True
-
-    def _should_faceswap(self, character_name: str) -> bool:
-        """Prueft ob standalone FaceSwap fuer diesen Agent aktiv ist.
-
-        Single Source of Truth: ``character_config.faceswap_enabled``
-        (Bild-Tab). Wenn aktiviert aber Face-Service nicht erreichbar →
-        False. Wenn nicht explizit gesetzt → Auto-Modus (Face-Service-
-        Verfuegbarkeit entscheidet).
-        """
-        from .face_client import is_available
-
-        # Lazy-Migration: alten Skill-Config-Wert ins Char-Profil heben
-        self._migrate_faceswap_flag(character_name)
-
-        from app.models.character import get_character_config
-        char_config = get_character_config(character_name) or {}
-        char_val = char_config.get("faceswap_enabled", "")
-        if char_val != "" and char_val is not None:
-            enabled = str(char_val).lower() in ("true", "1", "yes")
-            if enabled and not is_available():
-                logger.info("FaceSwap: char config=enabled, but face service not reachable -> DEAKTIVIERT")
-                return False
-            logger.info("FaceSwap Config: char_config=%s -> %s", enabled, "AKTIV" if enabled else "DEAKTIVIERT")
-            return enabled
-
-        # Kein expliziter Wert -> Auto (Face Service Verfuegbarkeit)
-        available = is_available()
-        logger.info("FaceSwap Config: auto mode, face service %s -> %s",
-                     "verfuegbar" if available else "nicht erreichbar",
-                     "AKTIV" if available else "DEAKTIVIERT")
-        return available
-
-    def _apply_faceswap(self, images: List[bytes], character_name: str) -> List[bytes]:
-        """Wendet standalone FaceSwap auf generierte Bilder an.
-
-        Nutzt das Agent-Profilbild als Source Face.
-        Originalbild bleibt erhalten falls Swap fuer ein einzelnes Bild fehlschlaegt.
-        """
-        from .face_client import apply_face_swap
-
-        profile_img = get_character_profile_image(character_name)
-        logger.info("FaceSwap: Profilbild-Lookup fuer %s -> '%s'", character_name, profile_img or "KEINS")
-        if not profile_img:
-            logger.warning("FaceSwap: ABBRUCH - Kein Profilbild gesetzt")
-            return images
-
-        images_dir = get_character_images_dir(character_name)
-        profile_path = images_dir / profile_img
-        logger.debug("FaceSwap: Source-Pfad: %s (exists=%s)", profile_path, profile_path.exists())
-        if not profile_path.exists():
-            logger.warning("FaceSwap: ABBRUCH - Datei nicht gefunden")
-            return images
-
-        source_bytes = profile_path.read_bytes()
-        logger.debug("FaceSwap: Source Face geladen (%d bytes)", len(source_bytes))
-        logger.info("FaceSwap: %d Bild(er) zu verarbeiten", len(images))
-
-        result_images = []
-        for i, img_bytes in enumerate(images):
-            logger.debug("FaceSwap: Verarbeite Bild %d/%d (%d bytes)...", i + 1, len(images), len(img_bytes))
-            swapped = apply_face_swap(img_bytes, source_bytes)
-            if swapped is not None:
-                result_images.append(swapped)
-                logger.debug("FaceSwap: Bild %d geswapt (%d bytes)", i + 1, len(swapped))
-            else:
-                result_images.append(img_bytes)
-                logger.warning("FaceSwap: Bild %d Original beibehalten", i + 1)
-
-        return result_images
-
-    def _detect_recipient_from_prompt(
-        self, prompt: str, sender: str, all_chars: List[str]) -> Optional[str]:
-        """Extrahiert den intendierten Empfaenger aus dem Prompt-Text.
-
-        Erkennt Muster wie "Fuer Diego", "Für Enzo", "An Yuki", "For Bianca"
-        und matched gegen bekannte Character-Namen (case-insensitive).
-
-        Returns:
-            Character-Name wenn EXAKT EIN Empfaenger eindeutig erkannt wird
-            (und ungleich Sender). Sonst None.
-        """
-        if not prompt or not all_chars:
-            return None
-        import re as _re
-        # Praepositionen die einen Empfaenger einleiten — Reihenfolge nach
-        # Spezifitaet/Stoerungspotential (kuerzere zuerst koennen False-
-        # Positives produzieren, deshalb mit Wortgrenzen).
-        patterns = [
-            r'\b(?:f[uü]er|f[oö]r)\s+([A-Z][a-zA-ZäöüÄÖÜß]+(?:\s+[A-Z][a-zA-ZäöüÄÖÜß]+)?)',
-            r'\b(?:an|to|fuer|für)\s+([A-Z][a-zA-ZäöüÄÖÜß]+(?:\s+[A-Z][a-zA-ZäöüÄÖÜß]+)?)',
-            r'\bvorstellung\s+f[uü]r\s+([A-Z][a-zA-ZäöüÄÖÜß]+)',
-            r'\bsending\s+to\s+([A-Z][a-zA-ZäöüÄÖÜß]+)',
-            r'\bschicke\s+(?:dies\s+)?(?:an\s+)?([A-Z][a-zA-ZäöüÄÖÜß]+)',
-        ]
-        candidates = set()
-        sender_low = sender.lower()
-        for pat in patterns:
-            for m in _re.finditer(pat, prompt, _re.IGNORECASE):
-                token = m.group(1).strip()
-                token_low = token.lower()
-                # Token gegen Character-Namen matchen — exakt oder Vorname-Match
-                for c in all_chars:
-                    if c == sender:
-                        continue  # Selbstreferenz ignorieren
-                    c_low = c.lower()
-                    if token_low == c_low:
-                        candidates.add(c)
-                    elif " " in c and token_low == c_low.split()[0]:
-                        # Vorname-Match (z.B. "Diego" -> "Diego Hidalgo")
-                        candidates.add(c)
-        # Auch Token-Match nur dann wenn der Sender NICHT identisch ist —
-        # bereits oben gefiltert.
-        if len(candidates) == 1:
-            return candidates.pop()
-        # Mehrdeutig oder nichts gefunden -> kein eindeutiger Empfaenger
-        return None
-
-    def _get_enhance_method(self, character_name: str) -> str:
-        """Ermittelt ob Face Enhancement fuer diesen Agent aktiv ist.
-
-        Prueft: 1) Globale Server-Einstellung, 2) per-Agent Config, 3) Face Service erreichbar.
-
-        Returns:
-            "face_service" oder "" (deaktiviert)
-        """
-        # Global deaktiviert?
-        _global_enabled = os.environ.get("FACE_ENHANCE_ENABLED", "true")
-        if isinstance(_global_enabled, str) and _global_enabled.lower() in ("false", "0", "no"):
-            logger.info("FaceEnhance: Global deaktiviert (Server-Einstellung)")
-            return ""
-
-        # Per-Agent deaktiviert?
-        agent_config = get_character_skill_config(character_name, self.SKILL_ID)
-        if agent_config and "face_enhance_enabled" in agent_config:
-            if not bool(agent_config["face_enhance_enabled"]):
-                logger.info("FaceEnhance: per-Agent deaktiviert")
-                return ""
-
-        from .face_client import is_available as face_service_available
-
-        if face_service_available():
-            logger.info("FaceEnhance: Face Service (GFPGAN) -> AKTIV")
-            return "face_service"
-
-        logger.info("FaceEnhance: Face Service nicht verfuegbar -> DEAKTIVIERT")
-        return ""
-
-    # Gender-Werte die als "female" gelten
-    _FEMALE_GENDERS = {"female", "woman", "girl", "weiblich", "futanari"}
-    # Gender-Werte die als "male" gelten
-    _MALE_GENDERS = {"male", "man", "maennlich", "männlich"}
-
-    @staticmethod
-    def _normalize_gender(gender: str) -> str:
-        """Normalisiert Gender-String zu 'female' oder 'male'."""
-        g = gender.strip().lower()
-        if g in ImageGenerationSkill._FEMALE_GENDERS:
-            return "female"
-        if g in ImageGenerationSkill._MALE_GENDERS:
-            return "male"
-        return g
-
-    @staticmethod
-    def _get_current_expression_path(character_name: str) -> Optional[str]:
-        """Gibt den Pfad der aktuellen Expression-Variante zurueck.
-
-        Cache-Key = Character + angelegte Items + Mood + Activity.
-        Returns None wenn keine Variante gecacht ist.
-        """
-        from app.core.expression_regen import get_cached_expression
-        from app.models.character import (
-            get_character_current_feeling, get_character_current_activity)
-        from app.models.inventory import get_equipped_pieces, get_equipped_items
-
-        mood = get_character_current_feeling(character_name) or ""
-        activity = get_character_current_activity(character_name) or ""
-        try:
-            eq_p = get_equipped_pieces(character_name)
-            eq_i = get_equipped_items(character_name)
-        except Exception:
-            eq_p, eq_i = None, None
-
-        cached = get_cached_expression(character_name, mood, activity,
-                                        equipped_pieces=eq_p, equipped_items=eq_i)
-        if cached and cached.exists():
-            return str(cached)
-        return None
-
-    def _resolve_face_references(
-        self, appearances: list, character_name: str,
-        max_slots: int = 4, profile_only: bool = False) -> dict:
-        """Loest nummerierte Referenzbilder fuer ComfyUI-Workflows auf.
-
-        Prioritaet:
-        1. Character-/User-Profilbilder (mit Gender fuer FaceSwap)
-        2. Freie Slots werden mit Location-Bildern gefuellt (type="location")
-
-        Returns:
-            dict mit keys:
-                reference_images: {node_title: file_path}  — nummerierte Keys
-                boolean_inputs: {node_title: bool}
-                string_inputs: {node_title: str}  — _type Nodes (female/male/location/no)
-                workflow_has_faceswap: bool (True wenn mindestens ein FaceSwap aktiv)
-        """
-        reference_images = {}
-        boolean_inputs = {}
-        string_inputs = {}
-
-        user_profile = get_user_profile()
-        user_name = user_profile.get("user_name", "")
-
-        # Alle Faces mit Gender sammeln
-        faces: list[tuple[str, str, str]] = []  # (path, normalized_gender, name)
-        for person in appearances:
-            name = person.get("name", "")
-            if not name:
-                continue
-
-            # Gender und Referenzbild ermitteln
-            # Prio 1: Expression-Variante (Equipped + Mood + Activity), Prio 2: Profilbild
-            if name == user_name:
-                gender = get_user_gender().strip().lower()
-                profile_img = get_user_profile_image()
-                if profile_img:
-                    images_dir = get_user_images_dir()
-                    candidate = images_dir / profile_img
-                    ref_img_path = str(candidate) if candidate.exists() else None
-                else:
-                    ref_img_path = None
-            else:
-                profile = get_character_profile(name)
-                gender = profile.get("gender", "").strip().lower()
-                ref_img_path = None
-                if not profile_only:
-                    ref_img_path = self._get_current_expression_path(name)
-                    if ref_img_path:
-                        logger.debug("FaceRef: %s -> Expression-Variante: %s", name, ref_img_path)
-                if not ref_img_path:
-                    # Fallback (oder profile_only): Profilbild
-                    profile_img = get_character_profile_image(name)
-                    if profile_img:
-                        images_dir = get_character_images_dir(name)
-                        candidate = images_dir / profile_img
-                        ref_img_path = str(candidate) if candidate.exists() else None
-
-            if not ref_img_path:
-                logger.debug("FaceRef: %s -> kein Referenzbild, ueberspringe", name)
-                continue
-
-            norm_gender = self._normalize_gender(gender)
-            faces.append((ref_img_path, norm_gender, name))
-
-        # Nummerierte Slots zuweisen: 1..max_slots-1 fuer Personen, letzter Slot fuer Location
-        max_person_slots = max_slots - 1  # Slot 4 (letzter) fuer Location reserviert
-        slot_idx = 1
-        for path, norm_gender, name in faces:
-            if slot_idx > max_person_slots:
-                logger.debug("FaceRef: %s uebersprungen (max %d Personen-Slots)", name, max_person_slots)
-                break
-            reference_images[f"input_reference_image_{slot_idx}"] = path
-            boolean_inputs[f"input_faceswap_{slot_idx}"] = True
-            string_inputs[f"input_reference_image_{slot_idx}_type"] = norm_gender or "no"
-            logger.debug("FaceRef: %s (gender=%s) -> Slot %d", name, norm_gender or "no", slot_idx)
-            slot_idx += 1
-
-        workflow_has_faceswap = len(reference_images) > 0
-
-        # Letzter Slot (max_slots) fuer Location-Hintergrundbild
-        location_id = get_character_current_location(character_name)
-        if location_id:
-            bg_path = get_background_path(location_id)
-            if bg_path and bg_path.exists():
-                reference_images[f"input_reference_image_{max_slots}"] = str(bg_path)
-                boolean_inputs[f"input_faceswap_{max_slots}"] = False
-                string_inputs[f"input_reference_image_{max_slots}_type"] = "location"
-                logger.debug("FaceRef: Location-Bild -> Slot %d (%s)", max_slots, bg_path.name)
-            else:
-                logger.debug("FaceRef: Kein Location-Bild verfuegbar fuer '%s'", location_id)
-        else:
-            logger.debug("FaceRef: Kein Ort gesetzt fuer %s", character_name)
-
-        if workflow_has_faceswap:
-            logger.info("FaceRef: Workflow-FaceSwap aktiv (%d Face-Slots)", len([k for k, v in boolean_inputs.items() if v]))
-        else:
-            logger.debug("FaceRef: Keine Face-Referenzbilder gefunden")
-        logger.debug("FaceRef: %d Slots insgesamt belegt", len(reference_images))
-
-        return {
-            "reference_images": reference_images,
-            "boolean_inputs": boolean_inputs,
-            "string_inputs": string_inputs,
-            "workflow_has_faceswap": workflow_has_faceswap,
-        }
-
     @staticmethod
     def _detect_media_extension(data: bytes) -> str:
         """Erkennt den Medien-Typ anhand der Magic Bytes."""
@@ -1590,416 +1222,6 @@ class ImageGenerationSkill(BaseSkill):
             if data[4:8] == b'ftyp':
                 return '.mp4'
         return '.png'
-
-    def _apply_enhance_on_files(
-        self,
-        saved_files: list,
-        images_dir) -> list:
-        """Wendet GFPGAN Face Enhancement auf gespeicherte Bilddateien an.
-
-        Returns:
-            Liste der erfolgreich enhanced Dateinamen.
-        """
-        from .face_client import apply_face_enhance_files
-
-        enhanced = []
-        for i, file_name in enumerate(saved_files, 1):
-            image_path = images_dir / file_name
-            logger.debug("FaceEnhance: Verarbeite %d/%d: %s", i, len(saved_files), file_name)
-            result = apply_face_enhance_files(str(image_path))
-            if result:
-                enhanced.append(file_name)
-                logger.info("FaceEnhance: %s enhanced", file_name)
-            else:
-                logger.warning("FaceEnhance: %s Original beibehalten", file_name)
-
-        return enhanced
-
-    def _apply_faceswap_on_files(
-        self,
-        saved_files: List[str],
-        images_dir, character_name: str,
-        appearances: Optional[List[Dict[str, str]]] = None) -> List[str]:
-        """Wendet FaceSwap auf bereits gespeicherte Bilddateien an.
-
-        Verwendet das Profilbild der dargestellten Person als Source Face:
-        - 1 Person im Bild → deren Profilbild
-        - Mehrere Personen oder keine → Profilbild des initiierenden Agents
-
-        Returns:
-            Liste der erfolgreich geswapten Dateinamen.
-        """
-        from .face_client import apply_face_swap_files
-
-        # Bestimme wessen Gesicht verwendet wird
-        swap_character = character_name
-        if appearances:
-            if len(appearances) == 1:
-                depicted = appearances[0].get("name", character_name)
-                if depicted != character_name:
-                    logger.info("FaceSwap: Person im Bild ist %s (nicht %s)", depicted, character_name)
-                    swap_character = depicted
-            elif not any(p.get("name") == character_name for p in appearances):
-                # Agent nicht im Bild (Photographer mode): erstes Subject verwenden
-                swap_character = appearances[0].get("name", character_name)
-                logger.info("FaceSwap (Photographer): Agent nicht in Appearances, verwende %s", swap_character)
-
-        profile_img = get_character_profile_image(swap_character)
-        logger.info("FaceSwap: Profilbild-Lookup fuer %s -> '%s'", swap_character, profile_img or "KEINS")
-        if not profile_img:
-            logger.warning("FaceSwap: ABBRUCH - Kein Profilbild gesetzt")
-            return []
-
-        # Source-Face aus dem images-Dir des dargestellten Characters
-        swap_images_dir = get_character_images_dir(swap_character)
-        source_path = swap_images_dir / profile_img
-        logger.debug("FaceSwap: Source-Pfad: %s (exists=%s)", source_path, source_path.exists())
-        if not source_path.exists():
-            logger.warning("FaceSwap: ABBRUCH - Source-Datei nicht gefunden")
-            return []
-
-        swapped = []
-        for i, file_name in enumerate(saved_files, 1):
-            target_path = images_dir / file_name
-            logger.debug("FaceSwap: Verarbeite %d/%d: %s", i, len(saved_files), file_name)
-            result = apply_face_swap_files(str(target_path), str(source_path))
-            if result:
-                swapped.append(file_name)
-                logger.info("FaceSwap: %s geswapt", file_name)
-            else:
-                logger.warning("FaceSwap: %s Original beibehalten", file_name)
-
-        return swapped
-
-    def _apply_comfyui_faceswap(
-        self,
-        saved_files: List[str],
-        images_dir,
-        face_refs: Dict[str, Any],
-        generation_backend: Optional[ImageBackend] = None) -> List[str]:
-        """Wendet ComfyUI FaceSwap-Workflow auf gespeicherte Bilder an.
-
-        Pro Character (Face-Referenz) wird der Workflow einmal aufgerufen.
-        Das Ergebnis des vorherigen Laufs wird als Target fuer den naechsten verwendet,
-        sodass bei mehreren Characters alle Gesichter nacheinander geswapt werden.
-
-        Args:
-            saved_files: Dateinamen der generierten Bilder.
-            images_dir: Verzeichnis der Bilder.
-            face_refs: Ergebnis von _resolve_face_references() mit reference_images, boolean_inputs, string_inputs.
-            generation_backend: Backend das die Bilder generiert hat (Fallback fuer FaceSwap-Backend).
-
-        Returns:
-            Liste der erfolgreich geswapten Dateinamen.
-        """
-        workflow_file = os.environ.get("COMFY_FACESWAP_WORKFLOW_FILE", "").strip()
-        if not workflow_file or not os.path.exists(workflow_file):
-            logger.warning("ComfyUI FaceSwap: Workflow-Datei nicht konfiguriert oder nicht gefunden: %s", workflow_file)
-            return []
-
-        # Backend fuer FaceSwap bestimmen — immer verfuegbare Backends bevorzugen
-        backend_name = os.environ.get("COMFY_FACESWAP_BACKEND", "").strip()
-        faceswap_backend = None
-        if backend_name:
-            for b in self.backends:
-                if b.name == backend_name and b.api_type == "comfyui" and b.available:
-                    faceswap_backend = b
-                    break
-            if not faceswap_backend:
-                logger.info("ComfyUI FaceSwap: konfiguriertes Backend '%s' nicht verfuegbar, suche Fallback",
-                            backend_name)
-        if not faceswap_backend and generation_backend and \
-                generation_backend.api_type == "comfyui" and generation_backend.available:
-            faceswap_backend = generation_backend
-        if not faceswap_backend:
-            # Letzter Fallback: erstes verfuegbares ComfyUI-Backend
-            for b in self.backends:
-                if b.api_type == "comfyui" and b.available and b.instance_enabled:
-                    faceswap_backend = b
-                    logger.info("ComfyUI FaceSwap: Fallback auf verfuegbares Backend '%s'", b.name)
-                    break
-        if not faceswap_backend:
-            logger.warning("ComfyUI FaceSwap: Kein ComfyUI-Backend verfuegbar")
-            return []
-
-        reference_images = face_refs.get("reference_images", {})
-        boolean_inputs = face_refs.get("boolean_inputs", {})
-        string_inputs = face_refs.get("string_inputs", {})
-
-        # Face-Slots extrahieren: nur Slots mit aktivem FaceSwap (keine Location-Bilder)
-        face_slots = []
-        for slot_key, ref_path in sorted(reference_images.items()):
-            # input_reference_image_1 -> input_faceswap_1
-            slot_num = slot_key.split("_")[-1]
-            faceswap_key = f"input_faceswap_{slot_num}"
-            type_key = f"{slot_key}_type"
-            if not boolean_inputs.get(faceswap_key, False):
-                continue  # Location-Bild oder deaktiviert
-            gender = string_inputs.get(type_key, "no")
-            face_slots.append((ref_path, gender))
-
-        if not face_slots:
-            logger.warning("ComfyUI FaceSwap: Keine aktiven Face-Referenzen")
-            return []
-
-        logger.info("ComfyUI FaceSwap: %d Character(s) zu swappen", len(face_slots))
-
-        swapped = []
-        for i, file_name in enumerate(saved_files, 1):
-            target_path = str(images_dir / file_name)
-            logger.info("ComfyUI FaceSwap: Bild %d/%d %s (%d Durchlaeufe)",
-                        i, len(saved_files), file_name, len(face_slots))
-
-            success = True
-            for pass_idx, (ref_path, gender) in enumerate(face_slots, 1):
-                logger.info("ComfyUI FaceSwap: Pass %d/%d (gender=%s, ref=%s)",
-                            pass_idx, len(face_slots), gender, os.path.basename(ref_path))
-                result_bytes = faceswap_backend.run_faceswap_workflow(
-                    workflow_file=workflow_file,
-                    target_image_path=target_path,
-                    reference_image_path=ref_path,
-                    gender=gender)
-                if result_bytes:
-                    # Ergebnis speichern — wird zum Target fuer den naechsten Pass
-                    with open(target_path, "wb") as f:
-                        f.write(result_bytes)
-                    logger.info("ComfyUI FaceSwap: Pass %d/%d erfolgreich (%d bytes)",
-                                pass_idx, len(face_slots), len(result_bytes))
-                else:
-                    logger.warning("ComfyUI FaceSwap: Pass %d/%d fehlgeschlagen, breche ab",
-                                   pass_idx, len(face_slots))
-                    success = False
-                    break
-
-            if success:
-                swapped.append(file_name)
-                logger.info("ComfyUI FaceSwap: %s komplett (%d Passes)", file_name, len(face_slots))
-            else:
-                logger.warning("ComfyUI FaceSwap: %s fehlgeschlagen", file_name)
-
-        return swapped
-
-    # --- MultiSwap ---
-    # Region-Selektion (face/hair/body/clothes/...) lebt jetzt komplett im
-    # ComfyUI-Workflow (hartcodierter input_prompt_positive). Code patcht hier
-    # nur noch Refs/Switches/UNet/CLIP, keine Mask- oder Prompt-Hints mehr.
-    MULTISWAP_UNET_TITLES = ("input_safetensors", "input_unet", "input_model", "input_gguf")
-
-    # Maximale Anzahl Character-Slots, die der MultiSwap-Workflow in einem
-    # Pass entgegennimmt (heute: input_reference_image_1/_2). Bei mehr Characters
-    # wird in 2er-Bloecken iteriert. Erweiterung auf 3 sobald der Workflow
-    # input_reference_image_3 bekommt: Konstante hochsetzen, sonst keine Aenderung.
-    MULTISWAP_MAX_REFS_PER_PASS = 2
-
-    def _apply_multiswap(
-        self,
-        saved_files: List[str],
-        images_dir,
-        face_refs: Dict[str, Any],
-        generation_backend: Optional[ImageBackend] = None) -> List[str]:
-        """Wendet MultiSwap-Workflow auf gespeicherte Bilder an.
-
-        Pro Pass werden bis zu MULTISWAP_MAX_REFS_PER_PASS Character-Refs
-        gleichzeitig geswapt (Slots input_reference_image_1/_2). Bei mehr
-        Characters wird in 2er-Bloecken iteriert (Ergebnis -> Target naechster
-        Block). Standardfall (1-2 Characters) braucht damit nur 1 Pass.
-
-        Welche Bildbereiche getauscht werden (face/hair/clothes/...) entscheidet
-        ausschliesslich der ComfyUI-Workflow ueber seinen hartcodierten
-        input_prompt_positive. Der Code patcht nur die Referenzbilder.
-
-        Args:
-            saved_files: Dateinamen der generierten Bilder.
-            images_dir: Verzeichnis der Bilder.
-            face_refs: Ergebnis von _resolve_face_references() (profile_only=True).
-            generation_backend: Backend das die Bilder generiert hat.
-
-        Returns:
-            Liste der erfolgreich geswapten Dateinamen.
-        """
-        configured_path = os.environ.get("COMFY_MULTISWAP_WORKFLOW_FILE", "").strip()
-        workflow_file = configured_path
-        if not workflow_file or not os.path.exists(workflow_file):
-            # Fallback: Repo-Root/workflows/multiswap_flux2_api.json suchen.
-            # __file__ = app/skills/image_generation_skill.py, daher 3x dirname()
-            # bis zum Repo-Root, NICHT 2x (das ergibt sonst app/workflows/...).
-            _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            for candidate_name in ("multiswap_flux2_api.json", "multiswap_flux2_gguf_api.json"):
-                _candidate = os.path.join(_repo_root, "workflows", candidate_name)
-                if os.path.exists(_candidate):
-                    workflow_file = _candidate
-                    if configured_path:
-                        logger.warning(
-                            "MultiSwap: konfigurierte Datei '%s' nicht gefunden, "
-                            "Fallback auf '%s'", configured_path, _candidate)
-                    break
-            else:
-                logger.warning(
-                    "MultiSwap: Workflow-Datei nicht gefunden (konfiguriert='%s', "
-                    "Fallback in %s/workflows/ ebenfalls leer)",
-                    configured_path, _repo_root)
-                return []
-
-        # Backend bestimmen
-        backend_name = os.environ.get("COMFY_MULTISWAP_BACKEND",
-                                      os.environ.get("COMFY_FACESWAP_BACKEND", "")).strip()
-        multiswap_backend = None
-        if backend_name:
-            for b in self.backends:
-                if b.name == backend_name and b.api_type == "comfyui" and b.available:
-                    multiswap_backend = b
-                    break
-            if not multiswap_backend:
-                logger.info("MultiSwap: konfiguriertes Backend '%s' nicht verfuegbar, suche Fallback",
-                            backend_name)
-        if not multiswap_backend and generation_backend and \
-                generation_backend.api_type == "comfyui" and generation_backend.available:
-            multiswap_backend = generation_backend
-        if not multiswap_backend:
-            for b in self.backends:
-                if b.api_type == "comfyui" and b.available and b.instance_enabled:
-                    multiswap_backend = b
-                    logger.info("MultiSwap: Fallback auf verfuegbares Backend '%s'", b.name)
-                    break
-        if not multiswap_backend:
-            logger.warning("MultiSwap: Kein ComfyUI-Backend verfuegbar")
-            return []
-
-        # Face-Slots extrahieren (gleiche Logik wie _apply_comfyui_faceswap)
-        reference_images = face_refs.get("reference_images", {})
-        boolean_inputs = face_refs.get("boolean_inputs", {})
-        face_slots = []
-        for slot_key, ref_path in sorted(reference_images.items()):
-            slot_num = slot_key.split("_")[-1]
-            faceswap_key = f"input_faceswap_{slot_num}"
-            if not boolean_inputs.get(faceswap_key, False):
-                continue  # Location-Bild oder deaktiviert
-            if ref_path and os.path.exists(ref_path):
-                face_slots.append(ref_path)
-
-        if not face_slots:
-            logger.warning("MultiSwap: Keine aktiven Face-Referenzen")
-            return []
-
-        # Workflow einmal laden, Node-IDs per Titel aufloesen — so ist die
-        # JSON-Datei austauschbar (safetensors- vs. GGUF-Variante z.B.).
-        node_overrides: Dict[str, Dict[str, Any]] = {}
-        try:
-            import json as _json
-            with open(workflow_file) as _wf:
-                _wf_data = _json.load(_wf)
-        except Exception as _e:
-            logger.warning("MultiSwap: Workflow-JSON laden fehlgeschlagen: %s", _e)
-            return []
-
-        def _find_by_title(title: str) -> Optional[str]:
-            for _nid, _node in _wf_data.items():
-                if isinstance(_node, dict) and (_node.get("_meta") or {}).get("title") == title:
-                    return _nid
-            return None
-
-        # UNet + CLIP per Titel injizieren (zentral konfigurierbar via faceswap.multiswap_unet/clip)
-        unet_name = os.environ.get("COMFY_MULTISWAP_UNET", "").strip()
-        clip_name = os.environ.get("COMFY_MULTISWAP_CLIP", "").strip()
-        unet_node_id = ""
-        unet_default = ""
-        for _nid, _node in _wf_data.items():
-            if not isinstance(_node, dict):
-                continue
-            title = (_node.get("_meta") or {}).get("title", "")
-            _ct = _node.get("class_type", "")
-            # UNet-Loader per Titel ODER per Class-Type (auch ohne Titel-Treffer)
-            is_unet_loader = (
-                title in self.MULTISWAP_UNET_TITLES
-                or _ct in ("UNETLoader", "LoaderGGUF", "UnetLoaderGGUF", "CheckpointLoaderSimple")
-            )
-            if is_unet_loader:
-                # Class-aware: LoaderGGUF -> gguf_name, UNETLoader -> unet_name, Checkpoint -> ckpt_name
-                if "GGUF" in _ct:
-                    _key = "gguf_name"
-                elif _ct == "CheckpointLoaderSimple":
-                    _key = "ckpt_name"
-                else:
-                    _key = "unet_name"
-                if _key not in (_node.get("inputs") or {}):
-                    for k, v in (_node.get("inputs") or {}).items():
-                        if isinstance(v, str):
-                            _key = k
-                            break
-                unet_node_id = _nid
-                unet_default = (_node.get("inputs") or {}).get(_key, "") or ""
-                if unet_name:
-                    node_overrides[_nid] = {_key: unet_name}
-                    logger.info("MultiSwap: UNet-Loader '%s'/%s (%s.%s) ueberschrieben mit '%s'",
-                                title, _ct, _nid, _key, unet_name)
-            elif title == "input_clip" and clip_name:
-                for k, v in (_node.get("inputs") or {}).items():
-                    if isinstance(v, str):
-                        node_overrides[_nid] = {k: clip_name}
-                        logger.info("MultiSwap: input_clip (%s.%s) ueberschrieben mit '%s'", _nid, k, clip_name)
-                        break
-
-        # Hard-Check: Loader-Node existiert und hat einen nicht-leeren Modellnamen
-        # (entweder per Admin-Override oder Workflow-Default). Sonst frueh
-        # abbrechen statt ComfyUI eine kaputte Validation-400 zurueckspielen lassen.
-        if unet_node_id and not (unet_name or unet_default):
-            logger.error(
-                "MultiSwap: input_safetensors/input_unet (Node %s) hat keinen Modellnamen — "
-                "im Admin unter FaceSwap/MultiSwap → 'MultiSwap UNet (Model)' setzen "
-                "oder im Workflow einen Default eintragen.",
-                unet_node_id)
-            return []
-
-        # In Bloecke aufteilen (Standardfall 1-2 Chars -> 1 Pass).
-        # Slot-Titel im MultiSwap-Workflow folgen der `input_reference_image_N`
-        # Konvention (mit Underscore vor der Nummer) — analog zu den uebrigen
-        # input_*-Slots im System.
-        chunks = [
-            face_slots[i:i + self.MULTISWAP_MAX_REFS_PER_PASS]
-            for i in range(0, len(face_slots), self.MULTISWAP_MAX_REFS_PER_PASS)
-        ]
-        logger.info("MultiSwap: %d Character(s) in %d Pass(es)",
-                     len(face_slots), len(chunks))
-
-        swapped = []
-        for i, file_name in enumerate(saved_files, 1):
-            target_path = str(images_dir / file_name)
-            logger.info("MultiSwap: Bild %d/%d %s", i, len(saved_files), file_name)
-
-            success = True
-            for pass_idx, chunk in enumerate(chunks, 1):
-                ref_paths = {
-                    f"input_reference_image_{slot_no}": ref
-                    for slot_no, ref in enumerate(chunk, 1)
-                }
-                logger.info("MultiSwap: Pass %d/%d (refs=%s)",
-                            pass_idx, len(chunks),
-                            [os.path.basename(p) for p in chunk])
-                result_bytes = multiswap_backend.run_faceswap_workflow(
-                    workflow_file=workflow_file,
-                    target_image_path=target_path,
-                    reference_image_path="",  # nicht genutzt im Multi-Slot-Modus
-                    gender="no",
-                    node_overrides=node_overrides,
-                    reference_image_paths=ref_paths)
-                if result_bytes:
-                    with open(target_path, "wb") as f:
-                        f.write(result_bytes)
-                    logger.info("MultiSwap: Pass %d/%d erfolgreich (%d bytes)",
-                                pass_idx, len(chunks), len(result_bytes))
-                else:
-                    logger.warning("MultiSwap: Pass %d/%d fehlgeschlagen, breche ab",
-                                   pass_idx, len(chunks))
-                    success = False
-                    break
-
-            if success:
-                swapped.append(file_name)
-                logger.info("MultiSwap: %s komplett (%d Pass(es))", file_name, len(chunks))
-            else:
-                logger.warning("MultiSwap: %s fehlgeschlagen", file_name)
-
-        return swapped
 
     def _merge_piece_loras(self, current_loras: List[Dict[str, Any]],
                            character_name: str, workflow_name: str,
@@ -2398,7 +1620,6 @@ class ImageGenerationSkill(BaseSkill):
             "skip_gallery": ctx.get("skip_gallery", False),
             "appearances": ctx.get("appearances", None),
             "auto_enhance": ctx.get("auto_enhance", True),
-            "force_faceswap": ctx.get("force_faceswap", False),
             "workflow": ctx.get("workflow", ""),
             "backend": ctx.get("backend", ""),
             "override_width": ctx.get("override_width"),
@@ -2440,10 +1661,6 @@ class ImageGenerationSkill(BaseSkill):
         character_name = input_data.get("agent_name", "").strip()
         set_profile = bool(input_data.get("set_profile"))
         skip_gallery = bool(input_data.get("skip_gallery"))
-        # skip_post_processing: alle Face-Post-Schritte (Swap + Enhance)
-        # ueberspringen. Genutzt fuer technische Bilder ohne Personen
-        # (z.B. Messaging-Frame, UI-Assets).
-        skip_post_processing = bool(input_data.get("skip_post_processing"))
 
         if not prompt_text or len(prompt_text.strip()) == 0:
             return "Fehler: Bitte gib eine Bildbeschreibung ein."
@@ -2704,10 +1921,10 @@ class ImageGenerationSkill(BaseSkill):
                 pv.persons = persons
                 pv.negative_prompt = negative_prompt
 
-                # Reference-Bilder trotzdem aufloesen (fuer FaceSwap + Style-Conditioning)
+                # Reference-Bilder aufloesen (fuer Style-Conditioning der Generierung).
                 # profile_only: Profilbild statt Outfit-Bild (z.B. Outfit-Erstellung).
                 # Bei set_profile=True (Profilbild-Erstellung) keine Refs —
-                # sonst Self-Reference-Loop und kein FaceSwap (siehe Skip-Block weiter unten).
+                # sonst Self-Reference-Loop.
                 if not set_profile:
                     _profile_only = bool(input_data.get("profile_only", False))
                     for idx, p in enumerate(persons, 1):
@@ -2777,12 +1994,10 @@ class ImageGenerationSkill(BaseSkill):
             if active_workflow:
                 workflow_file = active_workflow.workflow_file
                 workflow_model = active_workflow.model
-                faceswap_needed = active_workflow.faceswap_needed
-                logger.info("Workflow: '%s' (faceswap=%s, model=%s)", active_workflow.name, faceswap_needed, workflow_model)
+                logger.info("Workflow: '%s' (model=%s)", active_workflow.name, workflow_model)
             else:
                 workflow_file = getattr(backend, 'workflow_file', "")
                 workflow_model = getattr(backend, 'model', "")
-                faceswap_needed = getattr(backend, 'faceswap_needed', False)
             uses_custom_workflow = bool(workflow_file and os.path.exists(workflow_file))
 
             _ow = input_data.get("override_width")
@@ -2962,85 +2177,23 @@ class ImageGenerationSkill(BaseSkill):
                                 _validated.append({"name": "None", "strength": 1.0})
                         params["lora_inputs"] = _validated
 
-            # Face References via PromptBuilder aufloesen
-            force_faceswap = input_data.get("force_faceswap", False)
+            # Referenz-Slots fuer die Generierung (Conditioning) aufloesen.
+            # Workflows mit Referenz-Slots (z.B. QWEN_STYLE) bekommen die
+            # aufgeloesten Referenzbilder direkt in die Generierung injiziert.
             if not no_person_detected and pv:
                 _wf_kind = active_workflow.kind.value if active_workflow else None
                 face_refs = builder.resolve_reference_slots(pv, kind=_wf_kind)
-                if faceswap_needed:
-                    if face_refs.get("reference_images"):
-                        params["reference_images"] = face_refs["reference_images"]
-                        params["boolean_inputs"] = face_refs.get("boolean_inputs", {})
-                        params["string_inputs"] = face_refs.get("string_inputs", {})
-                        logger.info("FaceSwap: Referenzen fuer Generierung UND Post-Processing aufgeloest")
-                    else:
-                        logger.info("FaceSwap: Keine Referenzbilder vorhanden")
-                else:
-                    params["reference_images"] = face_refs["reference_images"]
-                    params["boolean_inputs"] = face_refs["boolean_inputs"]
-                    params["string_inputs"] = face_refs["string_inputs"]
+                params["reference_images"] = face_refs["reference_images"]
+                params["boolean_inputs"] = face_refs["boolean_inputs"]
+                params["string_inputs"] = face_refs["string_inputs"]
             else:
                 logger.info("Keine Person erkannt -> keine Referenzbilder")
-                face_refs = {"reference_images": {}, "boolean_inputs": {}, "string_inputs": {}, "workflow_has_faceswap": False}
+                face_refs = {"reference_images": {}, "boolean_inputs": {}, "string_inputs": {}, "has_reference_slots": False}
 
-            # FaceSwap Post-Processing bestimmen — gesteuert ueber WorkflowKind:
-            #   QWEN_STYLE -> SKIP (Style-Conditioning macht Gesichter visuell)
-            #   FLUX_BG / Z_IMAGE -> Post-Processing erlaubt, gesteuert durch
-            #                       Character-Config (faceswap_enabled, swap_mode)
-            # Die konkrete Methode (internal/comfyui/multiswap) wird unten am
-            # Post-Processing-Step entschieden — hier nur "do swap?".
+            # Post-Processing passiert extern (Pull-Modell, siehe
+            # postprocess_trigger.py + /api/images). Die Generierung selbst
+            # (inkl. reference_images fuers Conditioning oben) ist davon unberuehrt.
             _kind = active_workflow.kind if active_workflow else None
-            _kind_skips_post = (_kind == WorkflowKind.QWEN_STYLE)
-            if not faceswap_needed and not _kind_skips_post:
-                faceswap_needed = getattr(backend, "faceswap_needed", False)
-            needs_comfyui_faceswap = False
-            use_standalone_faceswap = False
-            # Harter Per-Character-Opt-Out: wenn faceswap_enabled=False in der
-            # Skill- oder Character-Config steht, werden alle Swap-Pfade
-            # uebersprungen (z.B. Spoty). Ausnahme: force_faceswap.
-            _character_opt_out = (
-                character_name
-                and not force_faceswap
-                and not set_profile
-                and self._character_swap_disabled(character_name)
-            )
-            if skip_post_processing:
-                logger.info("Face-Post: skip_post_processing=True -> alle Face-Schritte uebersprungen")
-                needs_comfyui_faceswap = False
-                use_standalone_faceswap = False
-                enhance_method = ""
-            elif _character_opt_out:
-                logger.info("Face-Post: per-Character disabled fuer %s -> alle Swap-Pfade uebersprungen",
-                            character_name)
-            elif _kind_skips_post:
-                logger.info("Face-Post: WorkflowKind=%s -> uebersprungen (Style-Conditioning)", _kind.value)
-            elif no_person_detected or set_profile:
-                if set_profile:
-                    logger.info("Face-Post: set_profile=True -> uebersprungen")
-                else:
-                    logger.info("Face-Post: Keine Person erkannt -> uebersprungen")
-            elif not auto_enhance and not force_faceswap and not faceswap_needed:
-                logger.info("Face-Post: auto_enhance=False, kein force/faceswap_needed -> uebersprungen")
-            elif (faceswap_needed or force_faceswap) and face_refs.get("workflow_has_faceswap", False):
-                # In-Workflow-FaceSwap-Nodes (Legacy Flux2 mit ReActor im Generation-Workflow)
-                needs_comfyui_faceswap = True
-                logger.info("Face-Post: In-Workflow-Nodes aktiviert (Swap-Methode wird unten per character.swap_mode bestimmt)")
-            elif faceswap_needed or force_faceswap:
-                # FLUX_BG / Z_IMAGE: Post-Processing-Pass — actual mode (multiswap /
-                # comfyui-faceswap / internal) wird unten am Post-Step entschieden.
-                use_standalone_faceswap = True
-                logger.info("Face-Post: aktiviert (kind=%s, faceswap_needed=%s, force=%s) -- Swap-Methode wird unten gewaehlt",
-                            _kind.value if _kind else "n/a", faceswap_needed, force_faceswap)
-            else:
-                # Weder faceswap_needed noch force, pruefe per-Agent Config
-                faceswap_config_enabled = self._should_faceswap(character_name)
-                use_standalone_faceswap = faceswap_config_enabled
-
-            # Face Enhancement zusammen mit FaceSwap (ComfyUI oder Standalone)
-            if needs_comfyui_faceswap or use_standalone_faceswap:
-                enhance_method = self._get_enhance_method(character_name)
-            else:
-                enhance_method = ""
 
             _display_model = params.get("model") or getattr(backend, 'model', 'N/A')
             logger.info("Starte Bildgenerierung mit %s (%s)", backend.name, backend.api_url)
@@ -3118,30 +2271,6 @@ class ImageGenerationSkill(BaseSkill):
                 _tq.track_finish(_track_id, error="Duplikat")
                 return ("Das Bild wurde bereits mit diesem Seed und Model generiert. "
                         "Aendere den Seed oder den Prompt, um ein neues Bild zu erzeugen.")
-
-            # Post-Processing-Entscheidung neu treffen, falls Fallback ein
-            # anderes Backend gewaehlt hat (faceswap_needed kann differieren).
-            if images and backend is not _primary_backend:
-                logger.info("Fallback-Backend aktiv: %s -> Post-Processing-Entscheidung neu",
-                            backend.name)
-                fb_faceswap = (getattr(backend, "faceswap_needed", False)
-                               or (active_workflow and active_workflow.faceswap_needed))
-                if _kind_skips_post:
-                    needs_comfyui_faceswap = False
-                    use_standalone_faceswap = False
-                elif fb_faceswap and face_refs.get("workflow_has_faceswap", False):
-                    needs_comfyui_faceswap = True
-                    use_standalone_faceswap = False
-                elif fb_faceswap:
-                    needs_comfyui_faceswap = False
-                    use_standalone_faceswap = True
-                else:
-                    needs_comfyui_faceswap = False
-                    use_standalone_faceswap = self._should_faceswap(character_name) and not set_profile
-                if needs_comfyui_faceswap or use_standalone_faceswap:
-                    enhance_method = self._get_enhance_method(character_name)
-                else:
-                    enhance_method = ""
 
             if not images:
                 _tq.track_finish(_track_id, error="Keine Bilder generiert")
@@ -3278,128 +2407,12 @@ class ImageGenerationSkill(BaseSkill):
                 set_character_profile_image(character_name, saved_files[0])
                 logger.info("Als Profilbild gesetzt: %s", saved_files[0])
 
-            # 2. FaceSwap / MultiSwap Post-Processing
-            #    swap_mode bestimmt die Methode: "internal", "comfyui", "multiswap"
-            #    FaceSwap braucht nur Profilbilder (nicht Outfit/Expression)
-            faceswap_applied = False
-            faceswap_method = ""   # "multiswap" | "comfyui" | "internal"
-            faceswap_fallback = False  # True wenn primaere Methode fehlschlug
-            _do_swap = needs_comfyui_faceswap or use_standalone_faceswap
-            if _do_swap:
-                _skill_cfg = get_character_skill_config(character_name, "image_generation") if character_name else {}
-                _swap_mode = _skill_cfg.get("swap_mode", "default")
-                if _swap_mode == "default":
-                    _swap_mode = os.environ.get("DEFAULT_SWAP_MODE", "comfyui")
-                logger.info("Swap-Modus: %s", _swap_mode)
+            # Post-Processing geschieht extern (Pull-Modell): nach dem Speichern
+            # wird ein Trigger an den externen Dienst gesendet (s.u.
+            # postprocess_trigger), der das fertige Bild zieht, bearbeitet und
+            # ueber /api/images zurueckschreibt.
 
-                # FaceSwap: Referenzbilder nur aus Profilbildern (nicht Outfit/Expression)
-                face_refs = self._resolve_face_references(
-                    appearances, character_name, profile_only=True)
-                logger.info("FaceSwap Referenzen (profile_only): %s",
-                            {k: os.path.basename(v) for k, v in face_refs.get("reference_images", {}).items()})
-
-                _fs_vram = int(float(os.environ.get("COMFY_FACESWAP_VRAM_REQUIRED", "0")) * 1024) or (backend.vram_required_mb if backend else 0)
-
-                if _swap_mode == "multiswap":
-                    # --- MultiSwap (Flux.2) ---
-                    # Bildbereich-Auswahl (face/hair/clothes/...) lebt im
-                    # ComfyUI-Workflow selbst, nicht mehr im Code.
-                    _tq.track_update_label(_track_id, "MultiSwap")
-                    logger.info("MULTISWAP POST-PROCESSING START")
-                    from app.core.llm_queue import get_llm_queue, Priority as _P
-                    try:
-                        swapped = get_llm_queue().submit_gpu_task(
-                            provider_name=backend.name,
-                            task_type="multiswap",
-                            priority=_P.IMAGE_GEN,
-                            callable_fn=lambda: self._apply_multiswap(
-                                saved_files, images_dir, face_refs, backend),
-                            agent_name=character_name, label="MultiSwap",
-                            vram_required_mb=_fs_vram,
-                            gpu_type="comfyui")
-                    except Exception as ms_err:
-                        logger.error("MultiSwap GPU-Task fehlgeschlagen: %s", ms_err)
-                        swapped = []
-                    faceswap_applied = len(swapped) > 0
-                    faceswap_method = "multiswap"
-                    if faceswap_applied:
-                        logger.info("MULTISWAP POST-PROCESSING ENDE (%d Bilder)", len(swapped))
-                    else:
-                        # ComfyUI nicht erreichbar / Workflow gescheitert —
-                        # auf internen Face-Service ausweichen.
-                        logger.warning("MultiSwap fehlgeschlagen, Fallback auf Face Service")
-                        _tq.track_update_label(_track_id, "Face Swap (Fallback)")
-                        swapped = self._apply_faceswap_on_files(saved_files, images_dir, character_name, appearances)
-                        faceswap_applied = len(swapped) > 0
-                        faceswap_method = "internal"
-                        faceswap_fallback = True
-
-                elif _swap_mode == "comfyui":
-                    # --- ComfyUI FaceSwap (ReActor) ---
-                    _tq.track_update_label(_track_id, "Face Swap (ComfyUI)")
-                    logger.info("COMFYUI FACESWAP POST-PROCESSING START")
-                    from app.core.llm_queue import get_llm_queue, Priority as _P
-                    try:
-                        swapped = get_llm_queue().submit_gpu_task(
-                            provider_name=backend.name,
-                            task_type="faceswap",
-                            priority=_P.IMAGE_GEN,
-                            callable_fn=lambda: self._apply_comfyui_faceswap(saved_files, images_dir, face_refs, backend),
-                            agent_name=character_name, label="FaceSwap",
-                            vram_required_mb=_fs_vram,
-                            gpu_type="comfyui")
-                    except Exception as fs_err:
-                        logger.error("FaceSwap GPU-Task fehlgeschlagen: %s", fs_err)
-                        swapped = []
-                    faceswap_applied = len(swapped) > 0
-                    faceswap_method = "comfyui"
-                    if faceswap_applied:
-                        logger.info("COMFYUI FACESWAP POST-PROCESSING ENDE (%d Bilder)", len(swapped))
-                    else:
-                        # ComfyUI nicht erreichbar / ReActor-Workflow gescheitert —
-                        # auf internen Face-Service ausweichen.
-                        logger.warning("ComfyUI FaceSwap fehlgeschlagen, Fallback auf Face Service")
-                        _tq.track_update_label(_track_id, "Face Swap (Fallback)")
-                        swapped = self._apply_faceswap_on_files(saved_files, images_dir, character_name, appearances)
-                        faceswap_applied = len(swapped) > 0
-                        faceswap_method = "internal"
-                        faceswap_fallback = True
-
-                else:
-                    # --- Internal / Standalone Face Service (default) ---
-                    _tq.track_update_label(_track_id, "Face Swap")
-                    logger.info("FACESWAP POST-PROCESSING START (internal)")
-                    swapped = self._apply_faceswap_on_files(saved_files, images_dir, character_name, appearances)
-                    faceswap_applied = len(swapped) > 0
-                    faceswap_method = "internal"
-                    logger.info("FACESWAP POST-PROCESSING ENDE")
-            else:
-                logger.debug("FaceSwap: Nicht aktiv")
-
-            # 3. Face Enhancement auf gespeicherte Dateien anwenden
-            #    NUR nach internem FaceSwap (face_service). MultiSwap und
-            #    ComfyUI ReActor haben eigene Qualitaets-Pipelines —
-            #    zusaetzlicher GFPGAN-Pass waere doppelt und verschlechtert
-            #    oft das Resultat.
-            face_enhance_applied = False
-            if (enhance_method == "face_service"
-                    and faceswap_method == "internal"
-                    and faceswap_applied):
-                _tq.track_update_label(_track_id, "Face Enhancement")
-                logger.info("FACE ENHANCEMENT (GFPGAN) POST-PROCESSING START")
-                try:
-                    self._apply_enhance_on_files(saved_files, images_dir)
-                    face_enhance_applied = True
-                except Exception as _enh_err:
-                    logger.warning("Face Enhancement Fehler: %s", _enh_err)
-                logger.info("FACE ENHANCEMENT (GFPGAN) POST-PROCESSING ENDE")
-            elif enhance_method == "face_service":
-                logger.info("FaceEnhance: uebersprungen (Swap-Methode=%s, nur 'internal' bekommt GFPGAN-Pass)",
-                            faceswap_method or "none")
-            else:
-                logger.debug("FaceEnhance: Nicht aktiv")
-
-            # Bild-Metadaten speichern (Skill, Backend, Faceswap, Dauer)
+            # Bild-Metadaten speichern (Skill, Backend, Dauer)
             _wf_name = active_workflow.name if active_workflow else ""
             _location = get_character_current_location(character_name) or ""
             _room_id = get_character_current_room(character_name) or ""
@@ -3409,7 +2422,7 @@ class ImageGenerationSkill(BaseSkill):
                 if l.get("name") and l["name"] != "None"
             ]
             # Referenzbilder-Namen fuer Metadaten
-            # Bei FaceSwap-Workflows liegen Referenzen in face_refs statt params
+            # Referenzen liegen je nach Workflow in face_refs statt params
             _ref_source = params.get("reference_images") or face_refs.get("reference_images") or {}
             _ref_meta = {}
             for _rk, _rv in _ref_source.items():
@@ -3425,10 +2438,6 @@ class ImageGenerationSkill(BaseSkill):
                 "workflow": _wf_name,
                 "negative_prompt": negative_prompt,
                 "from_character": _from_character,
-                "faceswap": faceswap_applied,
-                "faceswap_method": faceswap_method,  # "multiswap" | "comfyui" | "internal" | ""
-                "faceswap_fallback": faceswap_fallback,  # True wenn primaere Methode fehlschlug
-                "face_enhance": face_enhance_applied,  # GFPGAN/Codeformer-Pass erfolgreich
                 "guidance_scale": params.get("guidance_scale"),
                 "num_inference_steps": params.get("num_inference_steps") or params.get("steps"),
                 "duration_s": round(_gen_duration, 1),

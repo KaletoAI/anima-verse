@@ -516,10 +516,10 @@ class PromptBuilder:
                     # Der Prompt beschreibt eine Person (Person-Keyword
                     # erkannt), aber kein bekannter Character ist namentlich
                     # genannt — also FIKTIVE Person (Stranger-Photo).
-                    # persons leer lassen, kein User-Avatar zwingen, kein
-                    # FaceSwap. Renderer generiert die Person aus dem Prompt.
+                    # persons leer lassen, kein User-Avatar zwingen — der
+                    # Renderer generiert die Person aus dem Prompt.
                     logger.info("Photographer-Stranger: keine bekannte Person — "
-                                "fiktives Motiv, kein FaceSwap")
+                                "fiktives Motiv")
             else:
                 variables.no_person_detected = True
                 logger.debug("Keine Person erkannt -> reines Ort-/Raum-Bild")
@@ -865,9 +865,9 @@ class PromptBuilder:
         Aussehen, Outfit und Location via Style-Conditioning, Doppel-Beschreibung
         im Text waere kontraproduktiv.
 
-        Bei FLUX_BG/Z_IMAGE bleibt alles im Text, weil Charaktere ueber Post-
-        Processing (FaceSwap/MultiSwap) reinkommen und das Outfit ohne Style-
-        Conditioning sonst fehlen wuerde.
+        Bei FLUX_BG/Z_IMAGE bleibt alles im Text, weil Charaktere ueber externes
+        Post-Processing reinkommen und das Outfit ohne Style-Conditioning sonst
+        fehlen wuerde.
 
         Args:
             variables: Gesammelte Prompt-Variablen.
@@ -1148,7 +1148,7 @@ class PromptBuilder:
                 reference_images: {node_title: file_path}
                 boolean_inputs:   {node_title: bool}
                 string_inputs:    {node_title: str}
-                workflow_has_faceswap: bool   (True wenn Personen-Slots belegt)
+                has_reference_slots: bool   (True wenn Personen-Slots belegt)
         """
         # WorkflowKind-Werte werden als String uebergeben (vermeidet Import-Zyklus
         # zu image_generation_skill.WorkflowKind). Default: Qwen-Style.
@@ -1159,7 +1159,7 @@ class PromptBuilder:
         if kind_value == "z_image":
             return {
                 "reference_images": {}, "boolean_inputs": {},
-                "string_inputs": {}, "workflow_has_faceswap": False}
+                "string_inputs": {}, "has_reference_slots": False}
 
         return self._resolve_qwen_slots(variables, max_slots)
 
@@ -1189,12 +1189,12 @@ class PromptBuilder:
 
             norm_gender = self._normalize_gender(person.gender)
             reference_images[f"input_reference_image_{idx}"] = ref_path
-            boolean_inputs[f"input_faceswap_{idx}"] = True
+            boolean_inputs[f"input_person_ref_{idx}"] = True
             string_inputs[f"input_reference_image_{idx}_type"] = norm_gender or "no"
             logger.debug("RefSlot %d: %s (gender=%s)", idx, person.name, norm_gender or "no")
             next_free_slot = idx + 1
 
-        workflow_has_faceswap = len(reference_images) > 0
+        has_reference_slots = len(reference_images) > 0
 
         for it in (variables.items or []):
             if next_free_slot > max_person_slots:
@@ -1204,18 +1204,18 @@ class PromptBuilder:
             if not img_path or not Path(img_path).exists():
                 continue
             reference_images[f"input_reference_image_{next_free_slot}"] = img_path
-            boolean_inputs[f"input_faceswap_{next_free_slot}"] = False
+            boolean_inputs[f"input_person_ref_{next_free_slot}"] = False
             string_inputs[f"input_reference_image_{next_free_slot}_type"] = "item"
             logger.info("RefSlot %d: Item '%s'", next_free_slot, it.get("name", "?"))
             next_free_slot += 1
 
         if variables.ref_image_room and Path(variables.ref_image_room).exists():
             reference_images[f"input_reference_image_{max_slots}"] = variables.ref_image_room
-            boolean_inputs[f"input_faceswap_{max_slots}"] = False
+            boolean_inputs[f"input_person_ref_{max_slots}"] = False
             string_inputs[f"input_reference_image_{max_slots}_type"] = "location"
             logger.debug("RefSlot %d: Room/Location", max_slots)
 
-        if workflow_has_faceswap:
+        if has_reference_slots:
             logger.info("RefSlots: %d Face-Slots belegt", len(
                 [k for k, v in boolean_inputs.items() if v]))
         logger.debug("RefSlots: %d Slots insgesamt", len(reference_images))
@@ -1224,7 +1224,7 @@ class PromptBuilder:
             "reference_images": reference_images,
             "boolean_inputs": boolean_inputs,
             "string_inputs": string_inputs,
-            "workflow_has_faceswap": workflow_has_faceswap,
+            "has_reference_slots": has_reference_slots,
         }
 
     def _resolve_flux_bg_slots(self, variables: PromptVariables) -> Dict[str, Any]:
@@ -1249,14 +1249,13 @@ class PromptBuilder:
             boolean_inputs["input_reference_image_use"] = False
             logger.debug("FLUX_BG: kein Background, use=False")
 
-        # Charaktere kommen via Post-Processing (FaceSwap/MultiSwap).
-        # workflow_has_faceswap=False signalisiert: kein Style-Conditioning,
-        # Post-Processing ist noetig (entscheidet die execute()-Weiche).
+        # Charaktere kommen via externes Post-Processing.
+        # has_reference_slots=False signalisiert: kein Style-Conditioning.
         return {
             "reference_images": reference_images,
             "boolean_inputs": boolean_inputs,
             "string_inputs": {},
-            "workflow_has_faceswap": False,
+            "has_reference_slots": False,
         }
 
     @staticmethod

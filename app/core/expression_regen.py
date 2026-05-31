@@ -141,7 +141,7 @@ def _cache_key(mood: str, activity: str,
     variant_id vorhanden ist (Migration laeuft inkrementell).
 
     Mood wird auf einen groben Body-Language-Bucket reduziert — feinere
-    Mood-Unterschiede gehen beim FaceSwap sowieso verloren.
+    Mood-Unterschiede sind fuer die Variant-Wiederverwendung nicht relevant.
     """
     # Wenn der Aufrufer keinen variant_id liefert aber einen character_name:
     # versuch ihn aus state zu lesen / Lazy-Migration.
@@ -533,7 +533,7 @@ def trigger_expression_generation(character_name: str,
 
     # Garbage-Activities (Mood-Leakage, "none", "No clothing changes", ...)
     # auf "" normalisieren — sonst landet jeder Quatsch-String als eigener
-    # Cache-Key und triggert einen vollen Image-Gen+MultiSwap-Cycle.
+    # Cache-Key und triggert einen vollen Image-Gen-Cycle.
     _normalized = _normalize_activity_for_trigger(activity, mood)
     if _normalized != activity:
         logger.info(
@@ -705,7 +705,7 @@ def generate_expression_image(character_name: str,
     """Generate an expression/pose variant.
 
     Character + Equipped-Items + Pose + Expression -> Text-Prompt-basierte
-    Bildgenerierung + Faceswap. Kein Outfit-Referenzbild noetig.
+    Bildgenerierung. Kein Outfit-Referenzbild noetig.
 
     Returns the path to the generated image, or None on failure.
     """
@@ -921,10 +921,6 @@ def generate_expression_image(character_name: str,
         parts.append(pose_prompt)
         parts.append(expression_prompt)
         full_prompt = ", ".join(p for p in parts if p)
-        # force_faceswap respektiert per-Character-Opt-Out: wenn der User in
-        # Image-Skill-Config oder Character-Profil "faceswap_enabled=False"
-        # gesetzt hat, soll auch bei Variants kein MultiSwap/FaceSwap laufen.
-        _force_swap = not image_skill._character_swap_disabled(character_name)
         payload = {
             "prompt": full_prompt,
             "input": full_prompt,
@@ -933,12 +929,11 @@ def generate_expression_image(character_name: str,
             "set_profile": False,
             "skip_gallery": True,
             "auto_enhance": False,
-            "force_faceswap": _force_swap,
             "workflow": workflow_name,
             "backend": backend_name,
             "equipped_pieces_override": equipped_pieces or {},
         }
-        logger.info("Expression-Regen: Single-Prompt Modus (force_faceswap=%s)", _force_swap)
+        logger.info("Expression-Regen: Single-Prompt Modus")
 
     if outfit_w:
         payload["override_width"] = outfit_w
@@ -1051,7 +1046,6 @@ def generate_expression_image(character_name: str,
             "created_at": _gen_meta.get("created_at", ""),
             "duration_s": _gen_meta.get("duration_s", 0),
             "workflow": _gen_meta.get("workflow", workflow_name),
-            "faceswap": _gen_meta.get("faceswap", False),
             "mood": mood,
             "activity": activity,
             "equipped_pieces": equipped_pieces or {},

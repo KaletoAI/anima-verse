@@ -791,11 +791,6 @@ def _apply_section_reloads(changed_keys: list) -> list:
         if _skill_manager is not None:
             _run("skills", _skill_manager.reload_skills)
 
-    # Face-Service: faceswap-Sektion (URL/Endpoint-Cache invalidieren).
-    if "faceswap" in changed_keys:
-        from app.skills.face_client import invalidate_cache
-        _run("faceswap", invalidate_cache)
-
     # TTS-Service.
     if "tts" in changed_keys:
         from app.core.tts_service import reload_tts_service
@@ -852,7 +847,7 @@ async def settings_save(request: Request, user=Depends(require_admin)):
 
     config.save(merged)
     # Env sofort aktualisieren — vermeidet Server-Restart-Pflicht fuer Felder
-    # die ueber os.environ.get() gelesen werden (z.B. COMFY_MULTISWAP_UNET).
+    # die ueber os.environ.get() gelesen werden.
     try:
         config._flatten_to_env(merged)
     except Exception as _ee:

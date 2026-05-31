@@ -3,15 +3,11 @@
 # Start/stop script for Agent System services
 #
 # Usage:
-#   ./start.sh                       Start both services (default storage: ./storage)
+#   ./start.sh                       Start the main app (default storage: ./storage)
 #   ./start.sh --world demo          Start with storage: ./worlds/demo
 #   ./start.sh --storage /path/to/x  Start with custom storage directory
-#   ./start.sh --main                Start only main app
-#   ./start.sh --face-service        Start only face service
-#   ./start.sh --stop                Stop all services
-#   ./start.sh --stop --main         Stop only main app
-#   ./start.sh --stop --face-service Stop only face service
-#   ./start.sh --restart             Restart all services
+#   ./start.sh --stop                Stop the main app
+#   ./start.sh --restart             Restart the main app
 #   ./start.sh --status              Show running services
 
 set -euo pipefail
@@ -23,19 +19,15 @@ ARCHIVE_DIR="$SCRIPT_DIR/logs/archive"
 LOCK_DIR="$PID_DIR/start.lock"  # Atomares Lock via mkdir
 
 MAIN_PID="$PID_DIR/main.pid"
-FACE_PID="$PID_DIR/face.pid"
 
 MAIN_LOG="$LOG_DIR/main.log"
-FACE_LOG="$LOG_DIR/face.log"
 
 MAIN_PORT=8000
-FACE_PORT="${FACE_SERVICE_PORT:-8005}"
 
-# pgrep -f patterns — unique enough to distinguish main vs. face server,
-# and stable across restarts. Used to recover orphan PIDs when the PID
-# file is missing and to kill stragglers when starting fresh.
+# pgrep -f pattern — unique enough to identify the main server, stable across
+# restarts. Used to recover orphan PIDs when the PID file is missing and to
+# kill stragglers when starting fresh.
 MAIN_PATTERN="uvicorn app.server:app"
-FACE_PATTERN="uvicorn face_service.server:app"
 
 mkdir -p "$PID_DIR" "$LOG_DIR" "$ARCHIVE_DIR"
 
@@ -191,23 +183,6 @@ start_main() {
     echo "[main] Started (PID $pid, log: $MAIN_LOG)"
 }
 
-start_face() {
-    if is_running "$FACE_PID"; then
-        echo "[face-service] Already running (PID $(cat "$FACE_PID"))"
-        return
-    fi
-    local port="$FACE_PORT"
-    kill_port "$port" "face-service" "$FACE_PATTERN"
-    rotate_log "$FACE_LOG"
-    echo "[face-service] Starting face service on port $port..."
-    cd "$SCRIPT_DIR"
-    nohup "$SCRIPT_DIR/.venv/bin/python" -m uvicorn face_service.server:app --host 0.0.0.0 --port "$port" \
-        >> "$FACE_LOG" 2>&1 &
-    local pid=$!
-    echo "$pid" > "$FACE_PID"
-    echo "[face-service] Started (PID $pid, log: $FACE_LOG)"
-}
-
 stop_service() {
     local name="$1"
     local pid_file="$2"
@@ -241,17 +216,11 @@ show_status() {
     else
         echo "[main]         Stopped"
     fi
-    if is_running_or_orphan "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN"; then
-        echo "[face-service] Running (PID $(cat "$FACE_PID"))"
-    else
-        echo "[face-service] Stopped"
-    fi
 }
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 
 ACTION="start"
-TARGET="all"
 STORAGE_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -259,8 +228,6 @@ while [[ $# -gt 0 ]]; do
         --stop)          ACTION="stop"; shift ;;
         --restart)       ACTION="restart"; shift ;;
         --status)        ACTION="status"; shift ;;
-        --main)          TARGET="main"; shift ;;
-        --face-service)  TARGET="face"; shift ;;
         --world)
             STORAGE_ARG="$SCRIPT_DIR/worlds/$2"
             shift 2 ;;
@@ -268,15 +235,13 @@ while [[ $# -gt 0 ]]; do
             STORAGE_ARG="$2"
             shift 2 ;;
         --help|-h)
-            echo "Usage: $0 [--stop|--restart|--status] [--main|--face-service] [--world NAME|--storage PATH]"
+            echo "Usage: $0 [--stop|--restart|--status] [--world NAME|--storage PATH]"
             echo ""
-            echo "  (no flags)       Start both services (storage: ./storage)"
+            echo "  (no flags)       Start the main app (storage: ./storage)"
             echo "  --world NAME     Use ./worlds/NAME as storage directory"
             echo "  --storage PATH   Use custom storage directory"
-            echo "  --main           Target only main app"
-            echo "  --face-service   Target only face service"
-            echo "  --stop           Stop services"
-            echo "  --restart        Restart services"
+            echo "  --stop           Stop the main app"
+            echo "  --restart        Restart the main app"
             echo "  --status         Show service status"
             exit 0
             ;;
@@ -296,125 +261,28 @@ fi
 # ── Load specific config from .env ────────────────────────────────────────────
 # Only extract specific keys we need (source would fail on unquoted values with spaces)
 
-if [[ -f "$SCRIPT_DIR/.env" ]]; then
-    while IFS='=' read -r key value; do
-        [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$key" ]] && continue
-        key=$(echo "$key" | xargs)
-        case "$key" in
-            FACE_SERVICE_PORT) export FACE_SERVICE_PORT="$value" ;;
-        esac
-    done < "$SCRIPT_DIR/.env"
-fi
-
-# ── Face-Service Settings aus storage/<world>/config.json laden ───────────────
-# Der Face-Service ist ein eigenstaendiger Prozess und sieht den os.environ der
-# Main-App nicht. Damit er das konfigurierte Swap-Modell findet, muessen die
-# FACE_SERVICE_*-Variablen vor dem Start exportiert werden.
-_face_config_json=""
-if [[ -n "$STORAGE_ARG" && -f "$STORAGE_ARG/config.json" ]]; then
-    _face_config_json="$STORAGE_ARG/config.json"
-elif [[ -f "$SCRIPT_DIR/storage/config.json" ]]; then
-    _face_config_json="$SCRIPT_DIR/storage/config.json"
-fi
-if [[ -n "$_face_config_json" ]] && command -v python3 >/dev/null 2>&1; then
-    while IFS='=' read -r k v; do
-        [[ -z "$k" ]] && continue
-        export "$k=$v"
-    done < <(python3 - "$_face_config_json" <<'PY'
-import json, os, sys
-try:
-    with open(sys.argv[1], "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-except Exception:
-    sys.exit(0)
-fs = cfg.get("faceswap") or {}
-mapping = {
-    "service_url": "FACE_SERVICE_URL",
-    "service_port": "FACE_SERVICE_PORT",
-    "service_model_path": "FACE_SERVICE_MODEL_PATH",
-    "service_det_size": "FACE_SERVICE_DET_SIZE",
-    "service_omp_num_threads": "FACE_SERVICE_OMP_NUM_THREADS",
-    "service_enabled": "FACE_SERVICE_ENABLED",
-    "service_debug": "FACE_SERVICE_DEBUG",
-}
-for src, env in mapping.items():
-    if src in fs and fs[src] not in (None, ""):
-        print(f"{env}={fs[src]}")
-fe = cfg.get("face_enhance") or {}
-if fe.get("model_path"):
-    print(f"FACE_ENHANCE_MODEL_PATH={fe['model_path']}")
-PY
-)
-    if [[ -n "${FACE_SERVICE_MODEL_PATH:-}" ]]; then
-        echo "[config] Face-Service Modell: $FACE_SERVICE_MODEL_PATH"
-    fi
-fi
-
 # ── Execute ───────────────────────────────────────────────────────────────────
 
 case "$ACTION" in
     start)
         acquire_lock
-        case "$TARGET" in
-            all)
-                start_face   # Face service first (so it's ready when main needs it)
-                sleep 1
-                start_main
-                echo ""
-                echo "==> Browser: http://localhost:8000"
-                echo "==> Admin:   http://localhost:8000/admin"
-                ;;
-            main)
-                start_main
-                echo ""
-                echo "==> Browser: http://localhost:8000"
-                echo "==> Admin:   http://localhost:8000/admin"
-                ;;
-            face)  start_face ;;
-        esac
+        start_main
+        echo ""
+        echo "==> Browser: http://localhost:8000"
+        echo "==> Admin:   http://localhost:8000/admin"
         ;;
     stop)
-        case "$TARGET" in
-            all)
-                stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
-                stop_service "face-service" "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN"
-                ;;
-            main)  stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN" ;;
-            face)  stop_service "face-service" "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN" ;;
-        esac
+        stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
         ;;
     restart)
         acquire_lock
-        case "$TARGET" in
-            all)
-                echo "[restart] Restarting all services..."
-                stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
-                stop_service "face-service" "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN"
-                sleep 1
-                start_face
-                sleep 1
-                start_main
-                echo ""
-                echo "==> Browser: http://localhost:8000"
-                echo "==> Admin:   http://localhost:8000/admin"
-                ;;
-            main)
-                echo "[restart] Restarting main app..."
-                stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
-                sleep 1
-                start_main
-                echo ""
-                echo "==> Browser: http://localhost:8000"
-                echo "==> Admin:   http://localhost:8000/admin"
-                ;;
-            face)
-                echo "[restart] Restarting face service..."
-                stop_service "face-service" "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN"
-                sleep 1
-                start_face
-                ;;
-        esac
+        echo "[restart] Restarting main app..."
+        stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
+        sleep 1
+        start_main
+        echo ""
+        echo "==> Browser: http://localhost:8000"
+        echo "==> Admin:   http://localhost:8000/admin"
         ;;
     status)
         show_status

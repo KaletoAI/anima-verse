@@ -179,10 +179,6 @@ async def lifespan(app: FastAPI):
         logger.info("Lade ComfyUI Model-/LoRA-Cache...")
         imagegen.load_comfyui_model_cache()
 
-    logger.info("Checking Face Service...")
-    from app.skills.face_client import is_available as face_is_available
-    face_available = face_is_available()
-
     # rembg/u2net im Hintergrund vorladen — verhindert ~5s Event-Loop-Block
     # beim ersten Outfit-Postprocessing-Request.
     try:
@@ -214,9 +210,6 @@ async def lifespan(app: FastAPI):
         _summary_lines.append("  Skill --    No skills loaded")
     from app.skills.image_backends import get_active_comfyui_url as _get_comfyui_url
     active_comfyui_url = _get_comfyui_url()
-    face_url = _os.environ.get("FACE_SERVICE_URL", "http://localhost:8005")
-    face_status = "OK" if face_available else "FAIL"
-    _summary_lines.append(f"  Enhnc {face_status:4s}  GFPGAN Face Service ({face_url})")
     tts_info = tts_service.status_info()
     if tts_info["enabled"]:
         tts_status = "OK" if tts_info["available"] else "FAIL"

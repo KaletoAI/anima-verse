@@ -19,7 +19,6 @@ def validate_config(config: dict) -> List[Dict[str, Any]]:
     issues.extend(_check_comfyui_workflows(config))
     issues.extend(_check_animation(config))
     issues.extend(_check_tts(config))
-    issues.extend(_check_faceswap(config))
     issues.extend(_check_skills(config))
     issues.extend(_check_server(config))
     return issues
@@ -320,23 +319,6 @@ def _check_tts(config: dict) -> list:
                     issues.append(_err("tts", f"ComfyUI TTS: Backend '{sn}' existiert nicht"))
                 elif be.get("api_type") != "comfyui":
                     issues.append(_err("tts", f"ComfyUI TTS: Backend '{sn}' ist kein ComfyUI-Backend (Typ: {be.get('api_type', '?')})"))
-
-    return issues
-
-
-# ── FaceSwap Checks ──
-
-def _check_faceswap(config: dict) -> list:
-    issues = []
-    fs = config.get("faceswap", {})
-
-    wf = fs.get("comfy_workflow_file", "")
-    if wf and not Path(wf).exists():
-        issues.append(_warn("faceswap", f"ComfyUI FaceSwap: Workflow '{wf}' nicht gefunden"))
-
-    model = fs.get("service_model_path", "")
-    if model and not Path(model).exists():
-        issues.append(_warn("faceswap", f"Face Service: Model '{model}' nicht gefunden"))
 
     return issues
 

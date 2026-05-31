@@ -47,7 +47,6 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
     "Qwen": {
         "name": "Qwen",
         "image_model": "qwen",
-        "faceswap_needed": False,
         "filter": "Qwen*",
         "width": 1024,
         "height": 1024,
@@ -61,7 +60,6 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
     "Z-Image": {
         "name": "Z-Image",
         "image_model": "z_image",
-        "faceswap_needed": True,
         "filter": "Z-Image*",
         "width": 1024,
         "height": 1024,
@@ -75,7 +73,6 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
     "Flux": {
         "name": "Flux",
         "image_model": "flux",
-        "faceswap_needed": True,
         "filter": "Flux.2-9B*",
         "width": 1024,
         "height": 1024,
@@ -490,7 +487,7 @@ def _flatten_to_env(config: dict) -> None:
     for i, be in enumerate(ig.get("backends", []), start=1):
         p = f"SKILL_IMAGEGEN_{i}_"
         for key in ["name", "enabled", "api_type", "api_url", "api_key", "model",
-                     "cost", "width", "height", "faceswap_needed", "prompt_prefix",
+                     "cost", "width", "height", "prompt_prefix",
                      "negative_prompt", "guidance_scale", "num_inference_steps",
                      "sampling_method", "schedule_type", "vram_required",
                      "checkpoint", "poll_interval", "max_wait", "disable_safety",
@@ -509,7 +506,7 @@ def _flatten_to_env(config: dict) -> None:
     # ComfyUI Workflows
     for wid, wf in ig.get("comfyui_workflows", {}).items():
         p = f"COMFY_IMAGEGEN_{wid}_"
-        for key in ["name", "filter", "skill", "workflow_file", "faceswap_needed",
+        for key in ["name", "filter", "skill", "workflow_file",
                      "model", "prompt_style", "prompt_negative", "image_model",
                      "prompt_instruction", "vram_required", "width", "height",
                      "clip", "fallback_specific"]:
@@ -519,34 +516,6 @@ def _flatten_to_env(config: dict) -> None:
         for idx, lora in enumerate(wf.get("loras", []), start=1):
             _set(env, f"{p}LORA_{idx:02d}", lora.get("file", ""))
             _set(env, f"{p}LORA_{idx:02d}_STRENGTH", lora.get("strength", 1))
-
-    # FaceSwap / MultiSwap
-    fs = config.get("faceswap", {})
-    _set(env, "DEFAULT_SWAP_MODE", fs.get("default_swap_mode", "comfyui"))
-    _set(env, "COMFY_FACESWAP_WORKFLOW_FILE", fs.get("comfy_workflow_file", ""))
-    _set(env, "COMFY_FACESWAP_BACKEND", fs.get("comfy_backend", ""))
-    _set(env, "COMFY_FACESWAP_VRAM_REQUIRED", fs.get("comfy_vram_required", 8))
-    _set(env, "COMFY_MULTISWAP_WORKFLOW_FILE", fs.get("multiswap_workflow_file", "./workflows/multiswap_flux2_api.json"))
-    _set(env, "COMFY_MULTISWAP_BACKEND", fs.get("multiswap_backend", ""))
-    _set(env, "COMFY_MULTISWAP_UNET", fs.get("multiswap_unet", ""))
-    _set(env, "COMFY_MULTISWAP_CLIP", fs.get("multiswap_clip", ""))
-    _set(env, "FACE_SERVICE_URL", fs.get("service_url", "http://localhost:8005"))
-    _set(env, "FACE_SERVICE_PORT", fs.get("service_port", 8005))
-    _set(env, "FACE_SERVICE_MODEL_PATH", fs.get("service_model_path", ""))
-    _set(env, "FACE_SERVICE_DET_SIZE", fs.get("service_det_size", 640))
-    _set(env, "FACE_SERVICE_OMP_NUM_THREADS", fs.get("service_omp_num_threads", 4))
-    _set(env, "FACE_SERVICE_ENABLED", fs.get("service_enabled", True))
-    _set(env, "FACE_SERVICE_DEBUG", fs.get("service_debug", False))
-
-    # Face Enhance
-    fe = config.get("face_enhance", {})
-    _set(env, "FACE_ENHANCE_ENABLED", fe.get("enabled", True))
-    _set(env, "FACE_ENHANCE_MODEL_PATH", fe.get("model_path", ""))
-    _set(env, "FACE_ENHANCE_BLEND", fe.get("blend", 1.0))
-    _set(env, "FACE_ENHANCE_CODEFORMER_WEIGHT", fe.get("codeformer_weight", 0.7))
-    _set(env, "FACE_ENHANCE_COLOR_CORRECTION", fe.get("color_correction", True))
-    _set(env, "FACE_ENHANCE_SHARPEN", fe.get("sharpen", True))
-    _set(env, "FACE_ENHANCE_SHARPEN_STRENGTH", fe.get("sharpen_strength", 0.5))
 
     # Animation
     anim = config.get("animation", {})
@@ -714,7 +683,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "STORY_ENGINE_MAX_BEATS", se.get("max_beats", 5))
     _set(env, "STORY_ENGINE_BEAT_IMAGES", se.get("beat_images", True))
     _set(env, "STORY_ENGINE_IMAGEGEN_DEFAULT", se.get("imagegen_default", ""))
-    _set(env, "STORY_ENGINE_BEAT_FACESWAP", se.get("beat_faceswap", False))
 
     # Telegram
     tg = config.get("telegram", {})

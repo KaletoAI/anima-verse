@@ -180,7 +180,6 @@ def create_post(character_name: str,
         "backend": "",
         "backend_type": "",
         "workflow": "",
-        "faceswap": False,
         "duration_s": 0.0,
         "image_analysis": "",
     }

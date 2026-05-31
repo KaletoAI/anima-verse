@@ -53,10 +53,6 @@ def beat_image_default() -> str:
     return os.environ.get("STORY_ENGINE_IMAGEGEN_DEFAULT", "").strip()
 
 
-def beat_image_faceswap() -> bool:
-    return os.environ.get("STORY_ENGINE_BEAT_FACESWAP", "false").lower() in ("true", "1", "yes")
-
-
 # ---------------------------------------------------------------------------
 # StoryArcEngine
 # ---------------------------------------------------------------------------
@@ -405,7 +401,6 @@ class StoryArcEngine:
                 "set_profile": False,
                 "skip_gallery": True,
                 "auto_enhance": False,
-                "force_faceswap": beat_image_faceswap(),
             }
             # Default-Backend/Workflow aus .env
             _beat_img_default = beat_image_default()

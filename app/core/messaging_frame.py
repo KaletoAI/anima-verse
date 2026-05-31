@@ -208,9 +208,7 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
             "user_id": "",
             "set_profile": False,
             "skip_gallery": True,
-            "skip_post_processing": True,  # kein FaceSwap/Enhance fuer UI-Asset
             "auto_enhance": False,
-            "force_faceswap": False,
             "negative_prompt": "person, people, face, reflection, text, watermark, blurry, lowres",
         }
         if workflow_name:

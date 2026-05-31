@@ -490,7 +490,6 @@ class InstagramSkill(BaseSkill):
             "set_profile": False,
             "skip_gallery": True,
             "auto_enhance": True,           # Standard-Pipeline: Adapter + optional LLM-Enhancement
-            "force_faceswap": True,
             "appearances": _appearances,    # Instagram-Spezifik: Pre-detected Personen aus Prompt
         }
         if _insta_workflow:
@@ -611,7 +610,6 @@ class InstagramSkill(BaseSkill):
             "backend": gen_meta.get("backend", ""),
             "backend_type": gen_meta.get("backend_type", ""),
             "workflow": gen_meta.get("workflow", ""),
-            "faceswap": gen_meta.get("faceswap", False),
             "duration_s": gen_meta.get("duration_s", 0.0),
             "image_analysis": image_analysis or "",
         }
@@ -625,7 +623,6 @@ class InstagramSkill(BaseSkill):
                    "template_prompt", "prompt_method",
                    "character_names", "from_character",
                    "model", "loras", "seed", "negative_prompt",
-                   "faceswap_method", "faceswap_fallback", "face_enhance",
                    "guidance_scale", "num_inference_steps",
                    "items_used", "location", "room_id"):
             _v = gen_meta.get(_k)

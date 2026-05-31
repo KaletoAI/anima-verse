@@ -88,51 +88,6 @@ def _save_analysis(output_path: str, analysis: str, character_name: str) -> None
             logger.warning("Character-Image-Meta Speichern fehlgeschlagen: %s", e)
 
 
-def _do_standalone_faceswap(output_path: str, character_name: str) -> bool:
-    """Standalone FaceSwap via Face Service (Fallback).
-
-    Wird im Task-Queue-Panel als eigener Track-Eintrag (provider=FaceService)
-    sichtbar gemacht — analog zu ComfyUI-Tasks. Serialisierung haendelt der
-    face_client (siehe _swap_lock) damit parallele Calls den Service nicht
-    in Read-Timeouts treiben.
-
-    Returns True bei Erfolg, False sonst — Caller kann den Status fuer Meta
-    persistieren.
-    """
-    from app.core.task_queue import get_task_queue
-    _tq = get_task_queue()
-    _track_id = _tq.track_start(
-        "faceswap", "Face Swap (intern)",
-        agent_name=character_name, provider="FaceService")
-    try:
-        from app.skills.face_client import apply_face_swap_files, is_available as face_available
-        if not face_available():
-            logger.warning("FaceSwap: Face Service nicht erreichbar")
-            _tq.track_finish(_track_id, error="Face Service nicht erreichbar")
-            return False
-        from app.models.character import get_character_profile_image, get_character_images_dir
-        profile_img = get_character_profile_image(character_name)
-        if not profile_img:
-            logger.warning(f"FaceSwap: Kein Profilbild fuer {character_name}")
-            _tq.track_finish(_track_id, error="Kein Profilbild")
-            return False
-        images_dir = get_character_images_dir(character_name)
-        source_path = str(images_dir / profile_img)
-        result = apply_face_swap_files(output_path, source_path, output_path)
-        if result:
-            logger.info("Standalone FaceSwap erfolgreich")
-            _tq.track_finish(_track_id)
-            return True
-        else:
-            logger.warning("Standalone FaceSwap fehlgeschlagen")
-            _tq.track_finish(_track_id, error="Swap fehlgeschlagen")
-            return False
-    except Exception as e:
-        logger.error(f"Standalone FaceSwap Fehler: {e}")
-        _tq.track_finish(_track_id, error=str(e)[:200])
-        return False
-
-
 def regenerate_image(character_name: str,
     output_path: str,
     original_prompt: str,
@@ -296,16 +251,13 @@ def regenerate_image(character_name: str,
             params["model"] = model_override
             logger.info("Model-Override (Cloud-Backend): %s", model_override)
 
-    # 6. Referenzbilder aufloesen
-    needs_comfyui_faceswap = False
-    use_standalone_faceswap = False
-    face_refs = {"reference_images": {}, "boolean_inputs": {}, "string_inputs": {}, "workflow_has_faceswap": False}
+    # 6. Referenzbilder aufloesen (fuer die Generierung; kein Post-Processing mehr)
+    face_refs = {"reference_images": {}, "boolean_inputs": {}, "string_inputs": {}, "has_reference_slots": False}
     appearances: list = []
 
     # Personen-Detection laeuft IMMER wenn character_name vorhanden — auch
-    # ohne ComfyUI-Workflow (z.B. CivitAI/Together direkt). Das Post-
-    # Processing (FaceSwap/MultiSwap) braucht appearances, sonst hat es
-    # keine Refs zum Swappen.
+    # ohne ComfyUI-Workflow (z.B. CivitAI/Together direkt). Das externe
+    # Post-Processing braucht appearances, um die Personen aufzuloesen.
     if character_name:
         try:
             from app.core.prompt_builder import PromptBuilder
@@ -385,20 +337,10 @@ def regenerate_image(character_name: str,
                 if active_workflow.kind == WorkflowKind.FLUX_BG:
                     params["reference_images"] = face_refs["reference_images"]
                     params["boolean_inputs"] = face_refs["boolean_inputs"]
-                # Post-Processing aktivieren — die konkrete Methode (multiswap /
-                # comfyui-faceswap / internal) wird unten anhand character.swap_mode
-                # gewaehlt. Ohne dieses Flag wuerde der Swap-Block komplett
-                # uebersprungen werden (gleiche Logik wie in execute()).
-                needs_comfyui_faceswap = bool(face_refs.get("workflow_has_faceswap", False))
-                if not needs_comfyui_faceswap:
-                    use_standalone_faceswap = True
-                logger.info("Post-Processing: kind=%s, in_workflow_swap=%s, standalone=%s",
-                            active_workflow.kind.value, needs_comfyui_faceswap, use_standalone_faceswap)
+                # Post-Processing laeuft extern (Pull-Modell). Hier werden nur
+                # die Referenzen fuer die Generierung gesetzt.
         except Exception as e:
-            logger.warning(f"Face-Referenzen Fehler: {e}")
-    elif getattr(backend, "faceswap_needed", False) and character_name:
-        use_standalone_faceswap = True
-        logger.info(f"Standalone-FaceSwap aktiviert (Backend {backend.name})")
+            logger.warning(f"Referenz-Aufloesung Fehler: {e}")
 
     # 6b. Prompt Prefix/Suffix vom Workflow anwenden (Prompt wird ohne Affixe gespeichert)
     generation_prompt = final_prompt
@@ -508,127 +450,14 @@ def regenerate_image(character_name: str,
         Path(actual_output_path).write_bytes(images[0])
         logger.info(f"Bild erfolgreich geschrieben ({len(images[0])} bytes, {_gen_duration:.1f}s)")
 
-        # FaceSwap / MultiSwap Post-Processing (swap_mode aus Character-Config)
-        _do_swap = needs_comfyui_faceswap or use_standalone_faceswap
-        _faceswap_method = ""    # "multiswap" | "comfyui" | "internal"
-        _faceswap_success = False
-        _faceswap_fallback = False
-        if _do_swap:
-            from app.models.character import get_character_skill_config as _get_skill_cfg
-            _regen_skill_cfg = _get_skill_cfg(character_name, "image_generation") if character_name else {}
-            _swap_mode = _regen_skill_cfg.get("swap_mode", "default")
-            if _swap_mode == "default":
-                _swap_mode = os.environ.get("DEFAULT_SWAP_MODE", "comfyui")
-            logger.info("Regen Swap-Modus: %s", _swap_mode)
+        # Post-Processing laeuft extern (Pull-Modell). Die Regenerierung
+        # schreibt nur das Bild; ein externer Dienst uebernimmt die Nachbearbeitung.
 
-            # FaceSwap: Referenzbilder nur aus Profilbildern
-            face_refs = skill._resolve_face_references(
-                appearances, character_name, profile_only=True)
-
-            output_file = Path(actual_output_path)
-            fs_vram = int(float(os.environ.get("COMFY_FACESWAP_VRAM_REQUIRED", "0")) * 1024) or vram_needed
-
-            if _swap_mode == "multiswap":
-                # Bildbereich-Auswahl (face/hair/clothes/...) lebt im
-                # ComfyUI-Workflow, nicht mehr im Code.
-                _ms_fn = lambda: skill._apply_multiswap(
-                    [output_file.name], output_file.parent, face_refs, backend
-                )
-                swapped = None
-                _faceswap_method = "multiswap"
-                try:
-                    from app.core.llm_queue import get_llm_queue, Priority
-                    swapped = get_llm_queue().submit_gpu_task(
-                        provider_name=backend.name,
-                        task_type="multiswap_regen",
-                        priority=Priority.NORMAL,
-                        callable_fn=_ms_fn,
-                        agent_name=character_name,
-                        vram_required_mb=fs_vram,
-                        gpu_type="comfyui")
-                    if swapped:
-                        logger.info("MultiSwap erfolgreich")
-                        _faceswap_success = True
-                    else:
-                        logger.warning("MultiSwap fehlgeschlagen, Fallback auf Face Service")
-                except Exception as ms_err:
-                    logger.error("MultiSwap Fehler: %s — Fallback auf Face Service", ms_err)
-                if not swapped:
-                    # MultiSwap braucht ComfyUI; bei nicht-erreichbarem Backend
-                    # auf internen Face-Service ausweichen (nur Gesicht, keine
-                    # Haare — besser als gar kein Swap).
-                    _faceswap_success = _do_standalone_faceswap(actual_output_path, character_name)
-                    _faceswap_method = "internal"
-                    _faceswap_fallback = True
-
-            elif _swap_mode == "comfyui":
-                # ComfyUI FaceSwap-Workflow (ReActor) — wird unabhaengig
-                # davon gefahren, ob die Generation-Pipeline schon Refs hatte.
-                # face_refs kommt frisch aus _resolve_face_references(profile_only=True).
-                _faceswap_method = "comfyui"
-                try:
-                    _fs_fn = lambda: skill._apply_comfyui_faceswap(
-                        [output_file.name], output_file.parent, face_refs, backend
-                    )
-                    from app.core.llm_queue import get_llm_queue, Priority
-                    swapped = get_llm_queue().submit_gpu_task(
-                        provider_name=backend.name,
-                        task_type="faceswap_regen",
-                        priority=Priority.NORMAL,
-                        callable_fn=_fs_fn,
-                        agent_name=character_name,
-                        vram_required_mb=fs_vram,
-                        gpu_type="comfyui")
-                    if swapped:
-                        logger.info("ComfyUI FaceSwap erfolgreich")
-                        _faceswap_success = True
-                    else:
-                        logger.warning("ComfyUI FaceSwap fehlgeschlagen, Fallback auf Face Service")
-                        _faceswap_success = _do_standalone_faceswap(actual_output_path, character_name)
-                        _faceswap_method = "internal"
-                        _faceswap_fallback = True
-                except Exception as fs_err:
-                    logger.error("ComfyUI FaceSwap Fehler: %s", fs_err)
-
-            else:
-                # internal / standalone
-                _faceswap_method = "internal"
-                _faceswap_success = _do_standalone_faceswap(actual_output_path, character_name)
-
-        # Face Enhancement (GFPGAN/Codeformer) — laeuft NUR nach dem
-        # internen FaceSwap. MultiSwap und ComfyUI ReActor bringen ihre
-        # eigene Qualitaets-Pipeline mit — ein zusaetzlicher GFPGAN-Pass
-        # waere doppelte Arbeit und kann das Ergebnis sogar verschlechtern.
-        _enhance_applied = False
-        try:
-            _enh_method = skill._get_enhance_method(character_name) if character_name else ""
-        except Exception:
-            _enh_method = ""
-        if _faceswap_method == "internal" and _faceswap_success and _enh_method == "face_service":
-            from app.core.task_queue import get_task_queue as _get_tq
-            _enh_tq = _get_tq()
-            _enh_track = _enh_tq.track_start(
-                "face_enhance", "Face Enhancement (GFPGAN)",
-                agent_name=character_name, provider="FaceService")
-            try:
-                logger.info("FACE ENHANCEMENT (GFPGAN) START")
-                skill._apply_enhance_on_files(
-                    [Path(actual_output_path).name], Path(actual_output_path).parent)
-                _enhance_applied = True
-                logger.info("FACE ENHANCEMENT (GFPGAN) ENDE")
-                _enh_tq.track_finish(_enh_track)
-            except Exception as _enh_err:
-                logger.warning("Face Enhancement Fehler: %s", _enh_err)
-                _enh_tq.track_finish(_enh_track, error=str(_enh_err)[:200])
-
-        # Metadaten aktualisieren (Backend, Workflow, Duration, FaceSwap)
+        # Metadaten aktualisieren (Backend, Workflow, Duration)
         _wf_name = active_workflow.name if active_workflow else ""
-        # faceswap-Bool reflektiert jetzt den TATSAECHLICHEN Erfolg, nicht nur
-        # die Absicht (vorher: needs_comfyui_faceswap or use_standalone_faceswap)
-        _faceswap_applied = _faceswap_success
         import os as _os
         from app.models.character import get_character_current_location
-        # Bei FaceSwap-Workflows liegen Referenzen in face_refs statt params
+        # Referenzen liegen je nach Workflow in face_refs statt params
         _ref_source = params.get("reference_images") or face_refs.get("reference_images") or {}
         _ref_meta = {}
         for _rk, _rv in _ref_source.items():
@@ -663,10 +492,6 @@ def regenerate_image(character_name: str,
             "backend": backend.name,
             "backend_type": backend.api_type,
             "workflow": _wf_name,
-            "faceswap": _faceswap_applied,
-            "faceswap_method": _faceswap_method,
-            "faceswap_fallback": _faceswap_fallback,
-            "face_enhance": _enhance_applied,
             "guidance_scale": params.get("guidance_scale"),
             "num_inference_steps": params.get("num_inference_steps") or params.get("steps"),
             "duration_s": round(_gen_duration, 1),

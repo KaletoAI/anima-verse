@@ -2616,7 +2616,7 @@ def get_character_image_prompts(character_name: str) -> Dict[str, str]:
 
 def add_character_image_metadata(character_name: str, image_filename: str, metadata: Dict[str, Any]
 ) -> None:
-    """Speichert Generierungs-Metadaten zu einem Bild (Backend, Faceswap, Dauer etc.)."""
+    """Speichert Generierungs-Metadaten zu einem Bild (Backend, Modell, Dauer etc.)."""
     meta = _load_single_image_meta(character_name, image_filename)
     meta["image_filename"] = image_filename
     meta.update(metadata)
@@ -2637,7 +2637,7 @@ def get_character_image_metadata(character_name: str) -> Dict[str, Any]:
     all_meta = _load_all_image_meta(character_name)
     result = {}
     meta_keys = {
-        "backend", "backend_type", "workflow", "faceswap", "duration_s",
+        "backend", "backend_type", "workflow", "duration_s",
         "created_at", "model", "loras", "seed", "image_analysis", "location",
         "animate_prompt", "prompt", "character_names", "room_id",
         "reference_images", "negative_prompt",
@@ -2649,15 +2649,13 @@ def get_character_image_metadata(character_name: str) -> Dict[str, Any]:
         # Herkunft: wer hat das Bild erzeugt wenn es in einer fremden Galerie
         # liegt (z.B. NPC schickt Foto an Avatar -> from_character=NPC)
         "from_character",
-        # FaceSwap-Detail (Methode + Fallback-Status + Enhance-Pass)
-        "faceswap_method", "faceswap_fallback", "face_enhance",
         # Generation-Parameter fuer Bild-Info-Panel
         "guidance_scale", "num_inference_steps",
         # Regen-Zeitstempel: nutzt das Frontend als Cache-Bust-Key (?v=...)
         # damit ein regeneriertes Bild ohne Browser-Refresh sichtbar wird.
         "regenerated_at",
         # Post-Processing: extern nachbearbeitet (vom PP-Service zurueckgeschrieben).
-        # Neutral, FaceSwap-unabhaengig — UI zeigt "extern bearbeitet".
+        # UI zeigt "extern bearbeitet".
         "postprocessed", "postprocessed_at",
     }
     images_dir = get_character_images_dir(character_name)
