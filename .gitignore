@@ -28,6 +28,9 @@ storage/
 # Legacy JSON-Backups, nach DB-Migration aus den Welten verschoben
 migrated_backups/
 
+# Migrations-/Cleanup-Backups (z.B. faceswap_cleanup) — Wiederherstellungspunkte, nicht committen
+migration_backup/
+
 # Internal helper / migration scripts — not part of the public release
 scripts/
 tools/
@@ -98,8 +101,13 @@ logs/
 telegram_chats.json
 Aufgaben.md
 
-# Model Files (Large Binary Files)
-/models/
+# Model Files (Large Binary Files) — ignore the model binaries themselves,
+# but keep models/ tracked so per-model LICENSE/NOTICE stay in the repo.
+# Fetch the binaries with ./fetch_models.sh
+/models/**/*.onnx
+/models/**/*.pth
+/models/**/*.safetensors
+/models/**/*.gguf
 voices/*.wav
 
 # SQLite databases

@@ -9431,6 +9431,10 @@ function _buildMetaTableHtml(meta, truncateAnalysis) {
     if (meta.character_names && meta.character_names.length) rows.push(`<tr><td class="git-label">Personen</td><td class="git-value">${escapeHtml(meta.character_names.join(', '))}</td></tr>`);
     if (meta.sent_by) rows.push(`<tr><td class="git-label">Von</td><td class="git-value">${escapeHtml(meta.sent_by)}</td></tr>`);
     if (meta.from_character) rows.push(`<tr><td class="git-label">Erstellt von</td><td class="git-value">${escapeHtml(meta.from_character)}</td></tr>`);
+    if (meta.postprocessed) {
+        const _ppWhen = meta.postprocessed_at ? ' (' + escapeHtml(meta.postprocessed_at.replace('T', ' ')) + ')' : '';
+        rows.push(`<tr><td class="git-label">Post-Processing</td><td class="git-value">Extern bearbeitet${_ppWhen}</td></tr>`);
+    }
     if (meta.image_analysis) {
         let txt = meta.image_analysis;
         if (truncateAnalysis && txt.length > 200) txt = txt.substring(0, 200) + '\u2026';
@@ -9571,6 +9575,11 @@ function _renderGalleryEntries(entries, container) {
                     item.classList.add('gallery-grid-from-other');
                     item.title = `Erstellt von ${entry.meta.from_character}`;
                     item.innerHTML += `<span class="gallery-grid-from-character">${escapeHtml(entry.meta.from_character)}</span>`;
+                }
+                // Extern nachbearbeitet (Post-Processing-Service)
+                if (entry.meta?.postprocessed) {
+                    item.classList.add('gallery-grid-postprocessed');
+                    item.innerHTML += `<span class="gallery-grid-pp-badge" title="Extern nachbearbeitet">PP</span>`;
                 }
 
                 item.addEventListener('click', () => _openGalleryDetail(idx));

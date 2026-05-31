@@ -172,7 +172,6 @@
       "Qwen": {
         "name": "Qwen",
         "image_model": "qwen",
-        "faceswap_needed": false,
         "filter": "Qwen*",
         "width": 1024,
         "height": 1024,
@@ -203,7 +202,6 @@
       "Z-Image": {
         "name": "Z-Image",
         "image_model": "z_image",
-        "faceswap_needed": true,
         "filter": "Z-Image*",
         "width": 1024,
         "height": 1024,
@@ -234,7 +232,6 @@
       "Flux": {
         "name": "Flux",
         "image_model": "flux",
-        "faceswap_needed": true,
         "filter": "Flux.2-9B*",
         "width": 1024,
         "height": 1024,

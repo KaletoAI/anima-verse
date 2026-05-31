@@ -42,12 +42,12 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # App-Code
 COPY app/ ./app/
-COPY face_service/ ./face_service/
 COPY static/ ./static/
 COPY templates/ ./templates/
 COPY start.sh ./start.sh
+COPY fetch_models.sh ./fetch_models.sh
 COPY docker/docker-entrypoint.sh ./docker-entrypoint.sh
-RUN chmod +x ./start.sh ./docker-entrypoint.sh
+RUN chmod +x ./start.sh ./fetch_models.sh ./docker-entrypoint.sh
 
 EXPOSE 8000
 

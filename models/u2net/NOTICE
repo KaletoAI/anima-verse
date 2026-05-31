@@ -1,0 +1,23 @@
+u2net.onnx — background-removal model
+=====================================
+
+This directory holds the u2net ONNX model used for background removal (rembg)
+in image post-processing (outfit previews, world/map images). It is NOT used
+for face swapping.
+
+The model file (u2net.onnx, ~168 MB) is NOT committed to this repository — see
+.gitignore (/models/). Download it with:
+
+    ./scripts/fetch_models.sh
+
+Source & license
+----------------
+- Model: U^2-Net (U-square Net), Salient Object Detection.
+- Original work: Qin et al., "U^2-Net: Going Deeper with Nested U-Structure for
+  Salient Object Detection" — https://github.com/xuebinqin/U-2-Net
+- License: Apache License 2.0 (see ./LICENSE).
+- ONNX distribution: packaged by the rembg project,
+  https://github.com/danielgatis/rembg
+
+Per Apache-2.0 §4, this NOTICE and the accompanying LICENSE are retained when
+redistributing the model.

@@ -1,12 +1,10 @@
 # Anima Verse
 
-A full-stack web application for creating, configuring and interacting with AI-powered virtual characters ("agents"). It combines a Python/FastAPI backend, a vanilla JavaScript frontend and a dedicated face processing microservice.
+A full-stack web application for creating, configuring and interacting with AI-powered virtual characters ("agents"). It combines a Python/FastAPI backend and a vanilla JavaScript frontend.
 
 > **⚠ Alpha — vibe-coded experiment.** This project is an experiment in how far one can push a small LLM-driven game / character simulator built with massive AI assistance ("vibe coding") rather than a traditional engineering process. Most of the code was written interactively with an LLM in the loop. **It has so far only been tested by a single person on a single setup.** Expect rough edges, inconsistent error handling, undocumented assumptions about your hardware/providers, and breaking changes between commits. Bug reports and patches are welcome — production use is not.
 
-> **What sets it apart.** Unlike chat-centric frontends (e.g. SillyTavern) where image generation is an optional add-on, Anima Verse leans on **both LLM chat and LLM-driven image generation as first-class, deeply integrated mechanics** — characters update their location, activity and outfit through tool calls, every scene can be rendered, mood drives expression and animation, the world map shows what each character is currently doing. The experiment is to see what kind of "living world" emerges when both modalities are pushed that hard at the same time. The author hasn't seen another open-source project doing this in this combination yet.
-
-> **⚠ FaceSwap — legal responsibility.** The project includes an optional face-swap feature (InsightFace inswapper / GFPGAN, or a ComfyUI workflow). It can paste a real person's face onto a generated image. **In many jurisdictions (incl. Germany / EU) doing this with someone's face without their explicit consent violates personality / image rights and may be a criminal offence.** Use FaceSwap only with images of yourself, fictional characters, or with the documented consent of the depicted person. The author of Anima Verse is not responsible for misuse.
+> **What sets it apart.** Unlike chat-centric frontends (e.g. SillyTavern) where image generation is an optional add-on, Anima Verse leans on **both LLM chat and LLM-driven image generation as first-class, deeply integrated mechanics** — characters update their location, activity and outfit through tool calls, every scene can be rendered, mood drives expression, the world map shows what each character is currently doing. The experiment is to see what kind of "living world" emerges when both modalities are pushed that hard at the same time. The author hasn't seen another open-source project doing this in this combination yet.
 
 > **⚠ Adult / NSFW content.** Anima Verse is a generic creative-writing and character-simulation framework. The bundled demo world, character templates and image-analysis prompt are SFW. **However, the system was designed flexibly: a user can author their own NSFW character templates, prompt the LLM into adult content, point the image-generation backends at adult-tuned models, etc.** Whether the framework is used for entirely innocuous storytelling or for explicit content is a choice made by each user when configuring their own setup. The author does not provide adult content with this project, and is not responsible for content users produce while running it. Users are responsible for complying with local laws and with the acceptable-use policies of any third-party services (LLM providers, image-generation APIs) they configure.
 
@@ -48,22 +46,17 @@ A full-stack web application for creating, configuring and interacting with AI-p
 - Multi-backend support: **Stable Diffusion WebUI (A1111/Forge)**, **ComfyUI**, **Mammouth AI**, **CivitAI**
 - Cost-based automatic backend selection with failover
 - Context-aware prompts (appearance, outfit, mood, activity, location automatically included)
-- Optional post-processing: face swap and face enhancement
+- Optional external post-processing hand-off (a separate service pulls finished
+  images and writes results back via the API; this project does no image manipulation itself)
 - Vision LLM auto-commenting on generated images
 - ImageRegenerate skill for re-generating images with adjusted parameters
 - NotifyUser skill for sending notifications to the user
 
-### Face Processing Microservice
-- Standalone FastAPI service (default port 8005)
-- **Face Swap** using InsightFace inswapper (ONNX)
-- **Face Enhancement** using GFPGAN (ONNX)
-- Hot-reloadable models
-
-### Mood Animation
-- Generates short video animations from character profile picture based on current mood
-- Uses ComfyUI Wan2.2 img2video workflow
-- Per-mood caching with automatic invalidation on profile image change
-- Runs asynchronously in background
+### Image Animation
+- Turn a gallery image into a short video animation on demand
+- Uses a ComfyUI img2video workflow (e.g. Wan2.2)
+- LLM can suggest an animation prompt from the image analysis
+- Runs asynchronously in the background
 
 ### Text-to-Speech (TTS)
 - Three backends: **XTTS v2** (voice cloning), **F5-TTS** (high-quality cloning) and **Magpie** (multilingual)
@@ -154,7 +147,7 @@ A full-stack web application for creating, configuring and interacting with AI-p
 ### Frontend
 - Single-page application with tab-based UI (Chat, Story)
 - Real-time streaming message display with markdown rendering
-- Character profile image with mood animation overlay
+- Character profile image with mood-driven expression
 - Location/activity selector in header
 - Per-message actions: Visualize, Instagram Post, Retry, Speak (TTS)
 - Skill activity indicators during processing
@@ -192,7 +185,7 @@ A full-stack web application for creating, configuring and interacting with AI-p
    - Mammouth AI (or similar cloud service)
 3. **(Optional) SearX** (e.g. SearXNG) for web search
 4. **(Optional) TTS Service** - XTTS v2, F5-TTS or Magpie
-5. **(Optional) ComfyUI** for mood animations (Wan2.2 img2video workflow)
+5. **(Optional) ComfyUI** for image animation (Wan2.2 img2video workflow)
 
 6. Install system dependencies:
 ```bash
@@ -223,6 +216,15 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+#### Download models
+The large model binaries are not committed to the repo. Fetch them with:
+```bash
+./fetch_models.sh
+```
+This downloads `u2net.onnx` (background removal for outfit previews and world/map
+images). The script is idempotent (skips files that already exist) and verifies
+checksums.
+
 #### Configuration
 
 There is no `.env` file. Configuration is per-world (under `worlds/<world>/config.json`) and is filled in **after** the first start through the admin UI at `/admin/settings`. The full step-by-step setup is covered in [Getting Started with a New World](#getting-started-with-a-new-world) below.
@@ -251,17 +253,11 @@ pip install -e .
 # Only first time - execution rights
 chmod 755 start.sh
 
-# Start both main app (port 8000) and face service (port 8005)
+# Start the main app (port 8000)
 ./start.sh
 
-# Start individual services
-./start.sh --main             # Main app only
-./start.sh --face-service     # Face service only
-
 # Stop
-./start.sh --stop             # Stop all
-./start.sh --stop --main      # Stop main only
-./start.sh --stop --face-service  # Stop face service only
+./start.sh --stop
 
 # Restart
 ./start.sh --restart
@@ -269,16 +265,6 @@ chmod 755 start.sh
 # Status
 ./start.sh --status
 ```
----
-
-## Additional Files
-
-```bash
-cd models
-wget https://huggingface.co/Meeperomi/GFPGANv1.4-onnx/resolve/main/GFPGANv1.4.onnx?download=true -O ./GFPGANv1.4.onnx
-wget https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/reswapper_256.onnx
-```
-
 ---
 
 ## Storage
@@ -296,7 +282,7 @@ Everything else on disk is either configuration or binary content (images, audio
 worlds/{world-name}/
   world.db                    # Primary data store (see above)
   task_queue.db               # Persistent task queue
-  config.json                 # Per-world config: LLM providers, image backends, faceswap, ...
+  config.json                 # Per-world config: LLM providers, image backends, ...
   secrets.json                # API keys / passwords (gitignored, overlaid on config.json at load)
   characters/{Name}/
     gallery/                  # Curated profile and variant images
@@ -367,7 +353,7 @@ Walk-through for setting up a fresh world from zero.
    - **Server** — set a real `JWT Secret`
    - **LLM Providers** — at least one provider (Ollama, OpenAI, llama-swap, ...) with `name`, `type`, `api_base`, GPU/VRAM info
    - **LLM Routing** — map the built-in tasks (`chat`, `tools`, `summarize`, `vision`, ...) to a provider + model
-   - *(optional but recommended)* **Image Backends**, **TTS**, **Faceswap**, **Beszel** — only required for the corresponding features
+   - *(optional but recommended)* **Image Backends**, **TTS**, **Beszel** — only required for the corresponding features
 
    API keys, the JWT secret, passwords and similar fields are written to a separate **`secrets.json`** next to `config.json`. That file is gitignored, so the bundled demo world can ship with an empty `config.json` and each user fills in their own keys after cloning.
 
@@ -393,7 +379,9 @@ Walk-through for setting up a fresh world from zero.
    - **Generate one:** with at least one Image Generation backend configured (and `face_appearance` filled), click the camera icon (📷) in the header — the system uses the Face Prompt to generate a fresh portrait. Re-clicking generates a new one.
    - **Upload one:** open the character's gallery, upload an image, then mark it as the profile image. Useful when you have a reference photo or a curated render you want to reuse — it skips the generation step entirely.
 
-   The face is then optionally swapped onto every later generation if **FaceSwap** is enabled in `/admin/settings → Faceswap` and the character's image-gen config has `faceswap_enabled: true`.
+   The profile image is used as the reference for later generations so the
+   character keeps a consistent face. Any face matching / post-processing beyond
+   that is handled by a separate external service (see Image Generation above).
 
 7. **Take over the character as your avatar.** Once a character has a profile image and a filled-in profile, you can step into them as the player. In the header you'll see an `active-character` dropdown — pick the character. From this point on, that character is *you*: their location, mood and outfit follow your decisions, and they no longer act autonomously.
 

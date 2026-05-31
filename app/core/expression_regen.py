@@ -911,6 +911,12 @@ def generate_expression_image(character_name: str,
             "auto_enhance": False,
             "workflow": workflow_name,
             "equipped_pieces_override": equipped_pieces or {},
+            # Profilbild als input_reference_image_1 (Qwen/Flux: Identitaets-
+            # Konsistenz). profile_only verhindert den Self-Reference-Loop ueber
+            # eine bereits existierende Variante. Z-Image hat keine Ref-Slots
+            # und ignoriert das.
+            "profile_only": True,
+            "appearances": [{"name": character_name, "appearance": appearance or ""}],
         }
     else:
         # Single-Prompt Workflow (Z-Image/Flux.2/SDXL):
@@ -932,6 +938,11 @@ def generate_expression_image(character_name: str,
             "workflow": workflow_name,
             "backend": backend_name,
             "equipped_pieces_override": equipped_pieces or {},
+            # Profilbild als input_reference_image_1 (Qwen/Flux). profile_only
+            # verhindert den Self-Reference-Loop ueber eine bereits existierende
+            # Variante. Z-Image hat keine Ref-Slots und ignoriert das.
+            "profile_only": True,
+            "appearances": [{"name": character_name, "appearance": appearance or ""}],
         }
         logger.info("Expression-Regen: Single-Prompt Modus")
 

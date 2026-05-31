@@ -4,7 +4,6 @@
   "backend": "Together-Fast",
   "backend_type": "together",
   "workflow": "",
-  "faceswap": false,
   "duration_s": 6.1,
   "image_analysis": "",
   "reference_images": {

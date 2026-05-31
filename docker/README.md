@@ -39,7 +39,7 @@ docker compose up -d --build
 |---|---|
 | `/storage` | User data, character profiles, templates, stories |
 | `/workflows` | comfyUI workflows |
-| `/models` | models for face service |
+| `/models` | model binaries (e.g. u2net for background removal) |
 | `/.env` | Configuration file |
 | `/voices` | TTS voice reference files (for F5-TTS voice cloning) |
 | `/logs` | Application log files |
@@ -52,7 +52,6 @@ The URLs in `.env` must point to the external hosts (not `localhost`!).
 | Service | Default Port | .env Variable |
 |---|---|---|
 | Ollama | 11434 | `PROVIDER_1_API_BASE` |
-| Face Service | 8005 | `FACE_SERVICE_URL` |
 | F5-TTS | 7860 | `TTS_F5_URL` |
 | XTTS | 8020 | `TTS_XTTS_URL` |
 | ComfyUI | 8188 | `SKILL_IMAGEGEN_3_API_URL` |
