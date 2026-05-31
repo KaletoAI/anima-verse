@@ -62,6 +62,7 @@ from app.routes import state as state_route
 from app.routes import game_admin as game_admin_route
 from app.routes import world_setup as world_setup_route
 from app.routes import storyteller as storyteller_route
+from app.routes import api_images as api_images_route
 from app.scheduler.scheduler_manager import SchedulerManager
 from app.core.dependencies import initialize_channels, get_skill_manager
 from app.core.provider_manager import initialize_provider_manager
@@ -403,6 +404,8 @@ app.include_router(notifications.router, tags=["notifications"])
 app.include_router(events.router, tags=["events"])
 from app.routes import rules
 app.include_router(rules.router, tags=["rules"])
+from app.routes import content_packs
+app.include_router(content_packs.router)
 app.include_router(relationships.router, tags=["relationships"])
 app.include_router(assignments.router, tags=["assignments"])
 app.include_router(diary.router, tags=["diary"])
@@ -416,6 +419,7 @@ app.include_router(state_route.router)
 app.include_router(game_admin_route.router)
 app.include_router(world_setup_route.router)
 app.include_router(storyteller_route.router)
+app.include_router(api_images_route.router)
 
 # Static files & templates
 app.mount("/static", StaticFiles(directory="static"), name="static")

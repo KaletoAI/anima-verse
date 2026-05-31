@@ -1,19 +1,23 @@
+import type { ReactNode } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 
 /**
- * Standard list header for list-detail tabs: title + "+ New" + "⧉ Copy".
- * Copy is enabled only when something is selected (caller decides).
+ * Standard list header for list-detail tabs: title + "+ New" + "⧉ Copy"
+ * plus an optional `extra` slot at the right for tab-specific buttons
+ * (Import, Export-bundle, etc).
  */
 export function ListHeader({
   title,
   onNew,
   onCopy,
   copyDisabled,
+  extra,
 }: {
   title: string
   onNew: () => void
   onCopy?: () => void
   copyDisabled?: boolean
+  extra?: ReactNode
 }) {
   const { t } = useI18n()
   return (
@@ -33,6 +37,7 @@ export function ListHeader({
             ⧉ {t('Copy')}
           </button>
         ) : null}
+        {extra}
       </div>
     </div>
   )

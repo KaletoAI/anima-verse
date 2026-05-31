@@ -27,10 +27,22 @@ from app.core.log import get_logger
 
 logger = get_logger("random_events")
 
-ENABLED = os.environ.get("EVENT_GENERATION_ENABLED", "true").lower() in ("true", "1", "yes")
-BASE_PROBABILITY = float(os.environ.get("EVENT_BASE_PROBABILITY", "0.10"))
-RESOLUTION_COOLDOWN_MIN = int(os.environ.get("EVENT_RESOLUTION_COOLDOWN_MINUTES", "15"))
-RESOLUTION_PROACTIVE_ENABLED = os.environ.get("EVENT_RESOLUTION_PROACTIVE", "true").lower() in ("true", "1", "yes")
+# Live-Getter — bei jedem Aufruf wird os.environ neu gelesen, damit Admin-UI-
+# Aenderungen ohne Server-Restart greifen.
+def is_enabled() -> bool:
+    return os.environ.get("EVENT_GENERATION_ENABLED", "true").lower() in ("true", "1", "yes")
+
+
+def base_probability() -> float:
+    return float(os.environ.get("EVENT_BASE_PROBABILITY", "0.10"))
+
+
+def resolution_cooldown_min() -> int:
+    return int(os.environ.get("EVENT_RESOLUTION_COOLDOWN_MINUTES", "15"))
+
+
+def resolution_proactive_enabled() -> bool:
+    return os.environ.get("EVENT_RESOLUTION_PROACTIVE", "true").lower() in ("true", "1", "yes")
 
 # Kategorie-Definitionen mit Basis-Gewichten und TTL
 CATEGORIES = {
@@ -56,13 +68,16 @@ CATEGORIES = {
     },
 }
 
-DEFAULT_EVENT_SETTINGS = {
-    "event_probability": BASE_PROBABILITY,
-    "allowed_categories": list(CATEGORIES.keys()),
-    "event_blacklist": [],
-    "max_concurrent_events": 1,
-    "event_cooldown_hours": 2,
-}
+def default_event_settings() -> Dict[str, Any]:
+    """Default-Settings fuer Locations ohne eigene event_settings. event_probability
+    spiegelt den aktuellen EVENT_BASE_PROBABILITY-Wert wider (live-getter)."""
+    return {
+        "event_probability": base_probability(),
+        "allowed_categories": list(CATEGORIES.keys()),
+        "event_blacklist": [],
+        "max_concurrent_events": 1,
+        "event_cooldown_hours": 2,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +89,7 @@ def check_and_generate():
 
     Aufgerufen aus ThoughtLoop._tick() alle 60 Sekunden.
     """
-    if not ENABLED:
+    if not is_enabled():
         return
 
     try:
@@ -118,7 +133,7 @@ def check_escalation():
 
     Aufgerufen alle 5 Minuten aus ThoughtLoop._tick().
     """
-    if not ENABLED:
+    if not is_enabled():
         return
 
     try:
@@ -178,7 +193,7 @@ def check_escalation():
 def _get_event_settings(location: Dict[str, Any]) -> Dict[str, Any]:
     """Liest event_settings aus Location, mit Defaults."""
     settings = location.get("event_settings", {})
-    result = dict(DEFAULT_EVENT_SETTINGS)
+    result = default_event_settings()
     result.update({k: v for k, v in settings.items() if v is not None})
     return result
 
@@ -261,7 +276,7 @@ def try_roll_on_entry(character_name: str, loc_id: str, location: Dict[str, Any]
         logger.debug("entry-roll skip-check fehlgeschlagen: %s", _e)
 
     settings = _get_event_settings(location)
-    prob = settings.get("event_probability", BASE_PROBABILITY)
+    prob = settings.get("event_probability", base_probability())
     if random.random() > prob:
         return
 
@@ -295,7 +310,7 @@ def _try_generate_for_location(loc_id: str, location: Dict[str, Any], char_names
     settings = _get_event_settings(location)
 
     # 1. Wahrscheinlichkeits-Check
-    prob = settings.get("event_probability", BASE_PROBABILITY)
+    prob = settings.get("event_probability", base_probability())
     if random.random() > prob:
         return
 
@@ -702,8 +717,10 @@ def _had_chat_since(location_id: str, since: datetime) -> bool:
 # Event Resolution (validation, proactive solving, attempts)
 # ---------------------------------------------------------------------------
 
-def _on_resolution_cooldown(event: Dict[str, Any], cooldown_min: int = RESOLUTION_COOLDOWN_MIN) -> bool:
+def _on_resolution_cooldown(event: Dict[str, Any], cooldown_min: Optional[int] = None) -> bool:
     """True wenn das Event noch im Resolution-Cooldown ist (letzter Versuch zu jung)."""
+    if cooldown_min is None:
+        cooldown_min = resolution_cooldown_min()
     try:
         last = (event.get("resolution") or {}).get("last_attempt_at")
         if not last:
@@ -769,7 +786,7 @@ def try_resolve_events():
     Aufgerufen alle 5 Minuten aus ThoughtLoop._tick(). Wahlt pro Call
     hoechstens 1 Event (globale Rate-Limitierung).
     """
-    if not RESOLUTION_PROACTIVE_ENABLED:
+    if not resolution_proactive_enabled():
         return
 
     try:

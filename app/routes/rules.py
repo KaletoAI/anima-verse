@@ -1,6 +1,8 @@
 """API-Routes fuer das Rules-System (Blockade + Zwangs-Regeln)."""
+import io
 from typing import Any, Dict
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query
+from fastapi.responses import StreamingResponse
 
 from app.models.rules import load_rules, add_rule, update_rule, delete_rule, get_rule
 
@@ -81,3 +83,39 @@ def delete_rule_route(rule_id: str, target: str = "") -> Dict[str, Any]:
     if delete_rule(rule_id, target_dir=target_norm):
         return {"ok": True, "target": target_norm or "auto"}
     raise HTTPException(status_code=404, detail="Regel nicht gefunden")
+
+
+# ── Rule Import / Export ──
+
+@router.get("/{rule_id}/export")
+def export_rule_route(rule_id: str) -> StreamingResponse:
+    """Streams a single-rule ZIP."""
+    from app.core.content_io import export_rule_to_zip
+    try:
+        zip_bytes = export_rule_to_zip(rule_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{rule_id}.zip"'},
+    )
+
+
+@router.post("/import")
+async def import_rule_route(
+    file: UploadFile = File(...),
+    overwrite: bool = Query(False),
+    target: str = Query("auto"),
+) -> Dict[str, Any]:
+    """Import a single-rule ZIP."""
+    from app.core.content_io import import_rule_from_zip
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+    try:
+        return import_rule_from_zip(content, target=target, overwrite=overwrite)
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

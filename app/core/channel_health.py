@@ -53,13 +53,14 @@ class ChannelHealthMonitor:
     def is_healthy(self, channel_key: str, gpu_type: str = "") -> bool:
         """Liefert True wenn der Channel nutzbar ist.
 
-        Nicht-comfyui-Channels (ollama/openai): immer True — Provider-Level-Check
-        reicht.
-        Channels ohne zugeordnetes Backend (z.B. Cloud): immer True.
+        ``backend:<name>``-Channels werden immer ueber den Backend-Ping
+        geprueft (URL erreichbar?). LLM-Channels (ollama/openai/anthropic):
+        immer True — Provider-Level-Check reicht.
         Channels mit nur unreachable Backends: False.
         """
-        if gpu_type and gpu_type != "comfyui":
-            return True
+        if not channel_key.startswith("backend:"):
+            if gpu_type and gpu_type != "comfyui":
+                return True
         with self._lock:
             entry = self._status.get(channel_key)
         if entry is None:
@@ -77,9 +78,31 @@ class ChannelHealthMonitor:
     # ------------------------------------------------------------------
 
     def _iter_comfyui_backends_for_channel(self, channel_key: str) -> Iterable[dict]:
-        """Listet enabled comfyui-Backends die diesem Channel zugeordnet sind."""
+        """Listet enabled comfyui-Backends die diesem Channel zugeordnet sind.
+
+        Neue Architektur: ``backend:<name>``-Channels haben genau ein
+        Backend (1:1-Mapping ueber den Namen). Legacy: alte Configs ohne
+        eigenen Backend-Channel mit ``gpu_provider``-Feld auf eine
+        LLM-Provider-GPU werden weiterhin akzeptiert.
+        """
         img_gen = config.get("image_generation", {}) or {}
         backends = img_gen.get("backends", []) or []
+
+        # Neuer Pfad: backend:<name>-Channels direkt ueber den Namen finden
+        if channel_key.startswith("backend:"):
+            target = channel_key.split(":", 1)[1]
+            for b in backends:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("api_type") != "comfyui":
+                    continue
+                if not b.get("enabled"):
+                    continue
+                if (b.get("name") or "").strip() == target:
+                    yield b
+            return
+
+        # Legacy-Pfad: gpu_provider auf einer LLM-Provider-GPU
         for b in backends:
             if not isinstance(b, dict):
                 continue
@@ -90,7 +113,6 @@ class ChannelHealthMonitor:
             gpu_provider = (b.get("gpu_provider") or "").strip()
             if not gpu_provider:
                 continue
-            # "Evo-X2:2" -> "Evo-X2:gpu2"
             parts = gpu_provider.split(":", 1)
             if len(parts) != 2:
                 continue

@@ -152,7 +152,6 @@ def _check_image_backends(config: dict) -> list:
     backends = ig.get("backends", [])
     providers = config.get("providers", [])
 
-    active_comfyui_backends = []
     for be in backends:
         name = be.get("name", "?")
         enabled = be.get("enabled", True)
@@ -170,25 +169,20 @@ def _check_image_backends(config: dict) -> list:
         if api_type in ("mammouth", "civitai", "together") and not api_key:
             issues.append(_err("image_generation", f"Backend '{name}': API Key fehlt (Cloud-Backend '{api_type}')"))
 
-        if api_type == "comfyui":
-            active_comfyui_backends.append(name)
-
-    # Aktive ComfyUI-Backends brauchen mindestens einen Provider mit einer GPU
-    # vom Typ 'comfyui' — sonst wirft submit_gpu_task zur Laufzeit
-    # "No channel for gpu_type='comfyui'".
-    if active_comfyui_backends:
-        has_comfyui_channel = any(
-            any("comfyui" in (g.get("types") or []) for g in (p.get("gpus") or []))
-            for p in providers
-        )
-        if not has_comfyui_channel:
-            be_list = ", ".join(active_comfyui_backends)
-            issues.append(_err(
-                "providers",
-                f"Aktive ComfyUI-Backends ({be_list}), aber kein Provider hat eine GPU "
-                "mit types=['comfyui']. Bildgenerierung schlaegt mit "
-                "\"No channel for gpu_type='comfyui'\" fehl. "
-                "Bei einem Provider unter 'GPUs' den types-Eintrag um 'comfyui' erweitern."))
+    # Hinweis: LLM-Provider-GPUs vom Typ 'comfyui' sind veraltet — die Queue
+    # lebt jetzt pro ImageGen-Backend. Ein Warnhinweis hilft beim Aufraeumen.
+    legacy_comfy_gpus = []
+    for p in providers:
+        for g in (p.get("gpus") or []):
+            if "comfyui" in (g.get("types") or []):
+                legacy_comfy_gpus.append(p.get("name", "?"))
+                break
+    if legacy_comfy_gpus:
+        issues.append(_warn(
+            "providers",
+            f"Provider mit GPU-Typ 'comfyui' gefunden ({', '.join(legacy_comfy_gpus)}): "
+            "wird nicht mehr fuer Routing genutzt. Typ aus den GPU-Eintraegen entfernen — "
+            "jedes ComfyUI-Backend hat jetzt seinen eigenen Channel."))
 
     return issues
 

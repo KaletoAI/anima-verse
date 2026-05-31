@@ -3091,6 +3091,7 @@ class ImageGenerationSkill(BaseSkill):
                              if active_workflow and active_workflow.vram_required_mb
                              else b.vram_required_mb)
                     return get_llm_queue().submit_gpu_task(
+                        provider_name=b.name,
                         task_type="image_generation",
                         priority=_P.IMAGE_GEN,
                         callable_fn=lambda: b.generate(_p, _n, params),
@@ -3150,9 +3151,18 @@ class ImageGenerationSkill(BaseSkill):
             logger.info("ERFOLG - %d Bild(er) generiert via %s (%.1fs)", len(images), backend.name, _gen_duration)
 
             # Image-Prompt in JSONL loggen (nach Generierung fuer korrekte Dauer)
-            # Model-Name je nach Backend-Typ ermitteln
-            # Bei ComfyUI: last_used_checkpoint hat den tatsaechlichen Wert aus dem Workflow
-            _model_name = getattr(backend, 'last_used_checkpoint', '') or getattr(backend, 'model', '') or getattr(backend, 'checkpoint', '') or ''
+            # Model-Name ermitteln — gleiche Prioritaet wie die Bild-Metadaten
+            # (s.u. ~3435): params["model"]/["unet"] = tatsaechlich in den Workflow
+            # gesetztes Modell (Flux/GGUF nutzen "unet", nicht "model"), danach
+            # Backend-Felder. Ohne params-Lookup blieb "model": "N/A" bei
+            # UNET/Safetensors-Workflows wie Flux auf ComfyUI.
+            _model_name = (
+                params.get("model")
+                or params.get("unet")
+                or getattr(backend, 'last_used_checkpoint', '')
+                or getattr(backend, 'model', '')
+                or getattr(backend, 'checkpoint', '')
+                or '')
             # For separated-prompt workflows, log what actually gets sent to ComfyUI
             _is_separated = active_workflow and active_workflow.has_separated_prompt
             _logged_prompt = params.get("character_prompt", enhanced_prompt) if _is_separated else enhanced_prompt
@@ -3299,6 +3309,7 @@ class ImageGenerationSkill(BaseSkill):
                     from app.core.llm_queue import get_llm_queue, Priority as _P
                     try:
                         swapped = get_llm_queue().submit_gpu_task(
+                            provider_name=backend.name,
                             task_type="multiswap",
                             priority=_P.IMAGE_GEN,
                             callable_fn=lambda: self._apply_multiswap(
@@ -3330,6 +3341,7 @@ class ImageGenerationSkill(BaseSkill):
                     from app.core.llm_queue import get_llm_queue, Priority as _P
                     try:
                         swapped = get_llm_queue().submit_gpu_task(
+                            provider_name=backend.name,
                             task_type="faceswap",
                             priority=_P.IMAGE_GEN,
                             callable_fn=lambda: self._apply_comfyui_faceswap(saved_files, images_dir, face_refs, backend),
@@ -3452,6 +3464,18 @@ class ImageGenerationSkill(BaseSkill):
                 from app.models.character import add_character_image_metadata
                 for fn in saved_files:
                     add_character_image_metadata(gallery_character, fn, _meta)
+
+            # Post-processing hand-off (pull model): notify an external service
+            # about scene/chat images. Avatar/profile images are excluded
+            # (set_profile) — they are the reference sources, not PP targets.
+            # Fire-and-forget; no image bytes are sent.
+            if not skip_gallery and not set_profile:
+                try:
+                    from app.core import postprocess_trigger
+                    for fn in saved_files:
+                        postprocess_trigger.trigger(images_dir / fn, "scene")
+                except Exception as _pp_err:  # noqa: BLE001
+                    logger.debug("postprocess trigger skipped: %s", _pp_err)
 
             # Situations-Kommentar + Bildanalyse generieren
             comment = None

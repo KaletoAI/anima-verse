@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { ExportButton, ImportButton } from '../../components/ImportExport'
 
 /**
  * Map tab — replaces the placement UI that used to live on the main
@@ -190,6 +191,26 @@ export function MapTab() {
           onDropOnTray()
         }}
       >
+        <div className="ga-map-tray-section">
+          <div
+            className="ga-map-tray-title"
+            style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' }}
+          >
+            <span>{t('Layout')}</span>
+            <span style={{ display: 'flex', gap: 4 }}>
+              <ExportButton
+                endpoint="/world/map/export"
+                filename="map_layout.zip"
+                title={t('Download grid positions as a ZIP')}
+              />
+              <ImportButton
+                endpoint="/world/map/import"
+                onImported={() => reload()}
+                title={t('Apply a saved layout to the current world')}
+              />
+            </span>
+          </div>
+        </div>
         <div className="ga-map-tray-section">
           <div className="ga-map-tray-title">{t('Unplaced')}</div>
           {unplaced.length === 0 ? (

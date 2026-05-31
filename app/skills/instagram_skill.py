@@ -642,6 +642,13 @@ class InstagramSkill(BaseSkill):
         logger.info(f"Post erstellt: {post['id']}")
         logger.info(f"Caption: {caption}")
 
+        # Post-processing hand-off (pull model), fire-and-forget. No bytes sent.
+        try:
+            from app.core import postprocess_trigger
+            postprocess_trigger.trigger(dst_path, "instagram")
+        except Exception as _pp_err:
+            logger.debug("Instagram postprocess trigger skipped: %s", _pp_err)
+
         # Cooldown-Timestamp persistieren
         try:
             from datetime import datetime

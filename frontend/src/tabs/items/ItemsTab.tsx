@@ -7,6 +7,7 @@ import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
+import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { EffectsEditor } from '../../components/EffectsEditor'
 import { Silhouette } from '../../components/Silhouette'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
@@ -297,6 +298,7 @@ export function ItemsTab() {
   const [search, setSearch] = useState('')
   const [filterCategory, setFilterCategory] = useState<Category | ''>('')
   const [filterRarity, setFilterRarity] = useState<Rarity | ''>('')
+  const [filterScope, setFilterScope] = useState<'' | 'world' | 'shared'>('')
   const [characters, setCharacters] = useState<CharacterRef[]>([])
   const [owners, setOwners] = useState<Owner[]>([])
   const [outfitTypeOptions, setOutfitTypeOptions] = useState<string[]>([])
@@ -344,13 +346,15 @@ export function ItemsTab() {
       .filter((it) => {
         if (filterCategory && it.category !== filterCategory) return false
         if (filterRarity && it.rarity !== filterRarity) return false
+        if (filterScope === 'shared' && !it._shared) return false
+        if (filterScope === 'world' && it._shared) return false
         if (q && !((it.name || '').toLowerCase().includes(q) || (it.description || '').toLowerCase().includes(q))) {
           return false
         }
         return true
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  }, [items, search, filterCategory, filterRarity])
+  }, [items, search, filterCategory, filterRarity, filterScope])
 
   const newItem = useCallback(() => {
     setDraft({ ...EMPTY_DRAFT })
@@ -576,6 +580,13 @@ export function ItemsTab() {
           onNew={newItem}
           onCopy={copyItem}
           copyDisabled={!draft || draft.isNew}
+          extra={
+            <ImportButton
+              endpoint="/inventory/items/import"
+              overwriteSupported
+              onImported={() => reload()}
+            />
+          }
         />
         <input
           className="ga-input"
@@ -597,6 +608,17 @@ export function ItemsTab() {
                 {c}
               </option>
             ))}
+          </select>
+          <select
+            className="ga-input"
+            style={{ flex: 1 }}
+            value={filterScope}
+            onChange={(e) => setFilterScope(e.target.value as '' | 'world' | 'shared')}
+            title={t('Filter by source')}
+          >
+            <option value="">{t('All sources')}</option>
+            <option value="world">{t('World only')}</option>
+            <option value="shared">{t('Shared only')}</option>
           </select>
           <select
             className="ga-input"
@@ -652,6 +674,21 @@ export function ItemsTab() {
             onDelete={draft.isNew ? undefined : remove}
             onMove={draft.isNew ? undefined : move}
             storage={draft.shared ? 'shared' : 'world'}
+            extra={
+              draft.isNew || !draft.id || draft.shared ? null : (
+                <>
+                  <ExportButton
+                    endpoint={`/inventory/items/${encodeURIComponent(draft.id)}/export`}
+                    filename={`${draft.id}.zip`}
+                  />
+                  <PublishButton
+                    packType="item"
+                    entityId={draft.id}
+                    defaultName={draft.name || draft.id}
+                  />
+                </>
+              )
+            }
           />
         </div>
       ) : null}

@@ -488,6 +488,7 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
 
             # Ueber Provider-Queue ausfuehren (GPU-Serialisierung + Queue-Panel)
             success = get_llm_queue().submit_gpu_task(
+                provider_name=service,
                 task_type="image_animate",
                 priority=_P.IMAGE_GEN,
                 callable_fn=lambda: animate_image(

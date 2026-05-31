@@ -130,6 +130,38 @@ class ImageBackend(ABC):
             f"{env_prefix}NVFP4", "false"
         ).strip().lower() in ("true", "1", "yes")
 
+        # Per-Backend Queue/Channel Settings (verdraengt den alten
+        # gpu_provider-Mechanismus: jedes Backend bekommt seinen eigenen
+        # Channel ueber den ProviderManager).
+        mc_str = os.environ.get(f"{env_prefix}MAX_CONCURRENT", "1").strip()
+        try:
+            self.max_concurrent = max(1, int(mc_str))
+        except ValueError:
+            self.max_concurrent = 1
+        self.beszel_system_id = os.environ.get(f"{env_prefix}BESZEL_SYSTEM_ID", "").strip()
+
+        # Optionale GPU-Metadaten (VRAM/Label/Beszel-Mapping).
+        # Diese sind reine Anzeige/Monitoring-Daten — die Channel-Zahl bleibt
+        # immer 1 pro Backend (Queue-Serialisierung). Pflicht ist nichts.
+        self.gpu_configs: List[dict] = []
+        gi = 0
+        while True:
+            gvram = os.environ.get(f"{env_prefix}GPU{gi}_VRAM", "").strip()
+            if not gvram:
+                break
+            try:
+                vram_mb = int(float(gvram) * 1024)
+            except ValueError:
+                break
+            self.gpu_configs.append({
+                "index": gi,
+                "vram_mb": vram_mb,
+                "device": os.environ.get(f"{env_prefix}GPU{gi}_DEVICE", "").strip(),
+                "label": os.environ.get(f"{env_prefix}GPU{gi}_LABEL", "").strip(),
+                "match_name": os.environ.get(f"{env_prefix}GPU{gi}_MATCH_NAME", "").strip(),
+            })
+            gi += 1
+
     @property
     def effective_cost(self) -> float:
         """Semantische Kosten des Backends. Wird vom Selektor zur

@@ -1,40 +1,6 @@
 {
   "items": [
     {
-      "id": "item_daffe7ca",
-      "name": "Beige chinos",
-      "category": "outfit_piece",
-      "prompt_fragment": "beige chinos",
-      "created_at": "2026-04-16T23:39:01.461082",
-      "description": "",
-      "image": "1776375553.png",
-      "rarity": "common",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "image_prompt": "",
-      "effects": null,
-      "outfit_piece": {
-        "covers": [
-          "underwear_bottom"
-        ],
-        "partially_covers": [],
-        "outfit_types": [],
-        "lora": {},
-        "slots": [
-          "bottom"
-        ]
-      }
-    },
-    {
       "id": "item_5bfe0cbc",
       "name": "Black Blazer",
       "category": "outfit_piece",
@@ -1138,7 +1104,75 @@
           "feet"
         ]
       }
+    },
+    {
+      "id": "item_daffe7ca",
+      "name": "Beige chinos",
+      "category": "outfit_piece",
+      "prompt_fragment": "beige chinos",
+      "created_at": "2026-04-16T23:39:01.461082",
+      "description": "",
+      "image": "1776375553.png",
+      "rarity": "common",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "image_prompt": "",
+      "effects": null,
+      "outfit_piece": {
+        "covers": [
+          "underwear_bottom"
+        ],
+        "partially_covers": [],
+        "outfit_types": [],
+        "lora": {},
+        "slots": [
+          "bottom"
+        ]
+      }
+    },
+    {
+      "id": "item_fede24fa",
+      "name": "Work Shoes",
+      "category": "outfit_piece",
+      "prompt_fragment": "brown work shoes, sturdy leather, laced up, practical design",
+      "created_at": "2026-05-06T20:52:10.173280",
+      "description": "",
+      "image": "1778093632.png",
+      "image_prompt": "",
+      "rarity": "common",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "effects": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "outfit_piece": {
+        "slots": [
+          "feet"
+        ],
+        "covers": [],
+        "partially_covers": [],
+        "outfit_types": [
+          "casual"
+        ],
+        "lora": {}
+      }
     }
   ],
-  "last_updated": "2026-05-09T00:09:10.903611"
+  "last_updated": "2026-05-29T00:21:55.381978"
 }

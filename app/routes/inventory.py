@@ -1,8 +1,9 @@
 """Inventory routes - Items, Raum-Items und Character-Inventar verwalten."""
+import io
 import time
 from pathlib import Path
-from fastapi import APIRouter, Request, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File
+from fastapi.responses import FileResponse, StreamingResponse
 from typing import Dict, Any, List
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
@@ -38,6 +39,74 @@ def list_shared_items_route() -> Dict[str, Any]:
     """Listet alle Shared-Library-Items (welt-uebergreifend)."""
     from app.models.inventory import list_shared_items
     return {"items": list_shared_items()}
+
+
+# ── Item Import / Export ──
+
+@router.get("/items/{item_id}/export")
+def export_item_route(item_id: str) -> StreamingResponse:
+    """Streams a single-item ZIP (DB row + image files)."""
+    from app.core.content_io import export_item_to_zip
+    try:
+        zip_bytes = export_item_to_zip(item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{item_id}.zip"'},
+    )
+
+
+@router.post("/items/export-bundle")
+async def export_items_bundle_route(request: Request) -> StreamingResponse:
+    """Bundle multiple items into one ZIP. Body: {"item_ids": [...]}"""
+    from app.core.content_io import export_items_to_bundle_zip
+    body = await request.json()
+    ids = body.get("item_ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="item_ids must be a non-empty list")
+    try:
+        zip_bytes = export_items_to_bundle_zip(ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    filename = f"items_bundle_{int(time.time())}.zip"
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/items/import")
+async def import_item_route(
+    file: UploadFile = File(...),
+    overwrite: bool = Query(False, description="Replace items with the same id"),
+    target: str = Query("auto", description="Target store: auto / world / shared"),
+) -> Dict[str, Any]:
+    """Import a single-item or bundle ZIP. Accepts both formats."""
+    from app.core.content_io import import_item_from_zip, import_bundle_from_zip
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+    # Sniff manifest to decide single vs bundle.
+    import zipfile, json as _json
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            manifest = _json.loads(zf.read("manifest.json"))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"invalid pack: {e}")
+    pack_type = manifest.get("type")
+    try:
+        if pack_type == "item_bundle":
+            return import_bundle_from_zip(content, target=target, overwrite=overwrite)
+        if pack_type == "item":
+            return import_item_from_zip(content, target=target, overwrite=overwrite)
+        raise HTTPException(status_code=400, detail=f"unexpected pack type: {pack_type!r}")
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/items/{item_id}/move-to-shared")
@@ -343,6 +412,7 @@ def generate_item_image_sync(
         _vram = (active_wf.vram_required_mb if active_wf and active_wf.vram_required_mb else backend.vram_required_mb) if _is_local else 0
         if _is_local:
             images = get_llm_queue().submit_gpu_task(
+                provider_name=backend.name,
                 task_type="item_image",
                 priority=_P.IMAGE_GEN,
                 callable_fn=lambda: backend.generate(prompt_text, negative, params),

@@ -325,6 +325,7 @@ def _do_generate(event_id: str,
                     if active_workflow and active_workflow.vram_required_mb
                     else getattr(backend, "vram_required_mb", 0))
             images = get_llm_queue().submit_gpu_task(
+                provider_name=backend.name,
                 task_type="event_image",
                 priority=_P.IMAGE_GEN,
                 callable_fn=lambda: backend.generate(full_prompt, negative, params),
@@ -357,6 +358,12 @@ def _do_generate(event_id: str,
     publish_image_ready(event_id, location_id, "resolved" if resolved else "event")
     logger.info("Event-Bild [%s] %s generiert: %s (%dx%d)",
                 event_id, "resolved" if resolved else "active", out_path.name, w, h)
+    # Post-processing hand-off (pull model), fire-and-forget. No bytes sent.
+    try:
+        from app.core import postprocess_trigger
+        postprocess_trigger.trigger(out_path, "event")
+    except Exception as _pp_err:
+        logger.debug("[EventImage] postprocess trigger skipped: %s", _pp_err)
     return out_path
 
 

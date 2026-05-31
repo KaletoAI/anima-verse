@@ -328,5 +328,15 @@
   "thoughts": {
     "min_turn_gap_seconds": 30,
     "min_per_char_cooldown_minutes": 5
+  },
+  "content_marketplace": {
+    "catalogs": [
+      {
+        "name": "Anima-Verse Public",
+        "url": "https://github.com/KaletoAI/anima-verse-content",
+        "auth_token": "",
+        "enabled": true
+      }
+    ]
   }
 }

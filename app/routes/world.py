@@ -1,8 +1,9 @@
 """World routes - Orte und Aktivitaeten verwalten (User-Level)"""
 import asyncio
+import io
 import os
-from fastapi import APIRouter, Request, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File
+from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from typing import Any, Dict, Optional
 from app.core.log import get_logger
@@ -353,6 +354,10 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
         danger_level = data.get("danger_level")
         event_settings = data.get("event_settings")
         outfit_type = data.get("outfit_type")
+        decency = data.get("decency")
+        style_hint = data.get("style_hint")
+        swim_allowed = data.get("swim_allowed")
+        activity_hint = data.get("activity_hint")
         knowledge_item_id = data.get("knowledge_item_id")
         passable = data.get("passable")
         map_z_offset = data.get("map_z_offset")
@@ -561,6 +566,68 @@ def delete_location_route(
     if delete_location(location_name):
         return {"status": "success", "deleted": location_name}
     raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+
+
+# ── Map Layout Import / Export ──
+
+@router.get("/map/export")
+def export_map_layout_route() -> StreamingResponse:
+    """Stream a map-layout ZIP (positions only, no locations themselves)."""
+    from app.core.content_io import export_map_layout_to_zip
+    zip_bytes = export_map_layout_to_zip()
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="map_layout.zip"'},
+    )
+
+
+@router.post("/map/import")
+async def import_map_layout_route(
+    file: UploadFile = File(...),
+    match_by: str = Query("auto", description="auto / id / name"),
+) -> Dict[str, Any]:
+    """Apply a saved map layout. Locations not present locally are skipped."""
+    from app.core.content_io import import_map_layout_from_zip
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+    try:
+        return import_map_layout_from_zip(content, match_by=match_by)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── Location Import / Export ──
+
+@router.get("/locations/{location_id}/export")
+def export_location_route(location_id: str) -> StreamingResponse:
+    """Streams a single-location ZIP (DB row + rooms + gallery files)."""
+    from app.core.content_io import export_location_to_zip
+    try:
+        zip_bytes = export_location_to_zip(location_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="location_{location_id}.zip"'},
+    )
+
+
+@router.post("/locations/import")
+async def import_location_route(
+    file: UploadFile = File(...),
+) -> Dict[str, Any]:
+    """Import a location ZIP. Always creates a new location (new UUID)."""
+    from app.core.content_io import import_location_from_zip
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+    try:
+        return import_location_from_zip(content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # === Aktivitaeten (flache Compat-Liste) ===

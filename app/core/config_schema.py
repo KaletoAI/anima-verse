@@ -24,12 +24,14 @@ SECTIONS = {
                 "label": "JWT Secret",
                 "description": "Secret key for JWT token signing. Change in production!",
                 "sensitive": True,
+                "requires_restart": True,
             },
             "storage_dir": {
                 "type": "str",
                 "label": "Storage Directory",
                 "default": "./storage",
                 "description": "Basisverzeichnis fuer Datenbanken, Configs und Uploads",
+                "requires_restart": True,
             },
             "log_retention_days": {
                 "type": "int",
@@ -53,6 +55,14 @@ SECTIONS = {
                                "Sub-Frequenzen — Status-Decay laeuft z.B. nur stuendlich, "
                                "Force-Rules jeden Tick. Niedrigere Werte = schnellere Reaktion "
                                "auf Stat-Schwellen, hoehere Werte = weniger CPU-Last.",
+            },
+            "api_key": {
+                "type": "password",
+                "label": "API Key",
+                "description": "Shared secret for external services that write data back via the "
+                               "API (sent as X-API-Key header) — e.g. the post-processing service "
+                               "writing a processed image. Stored in secrets.json, never committed.",
+                "sensitive": True,
             },
         },
     },
@@ -93,7 +103,7 @@ SECTIONS = {
                     "types": {
                         "type": "str",
                         "label": "Nutzung",
-                        "description": "Kommasepariert: ollama, openai, comfyui",
+                        "description": "Comma-separated: ollama, openai. ComfyUI/A1111 runs are routed through the per-backend channel under Image Generation → Backends.",
                         "default": "openai",
                     },
                     "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Max gleichzeitige Aufgaben auf dieser GPU"},
@@ -105,8 +115,13 @@ SECTIONS = {
         "label": "LLM Routing",
         "icon": "🧭",
         "is_array": True,
-        "item_label_field": "model",
+        "item_label_field": ["name", "model"],
         "fields": {
+            "name": {
+                "type": "str",
+                "label": "Name",
+                "description": "Optional display name for this routing entry. Falls back to the model name when empty.",
+            },
             "enabled": {
                 "type": "bool",
                 "label": "Enabled",
@@ -172,6 +187,10 @@ SECTIONS = {
         "icon": "🎨",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
+
+            # --- Post-Processing Hand-off ---
+            "postprocess_enabled": {"type": "bool", "label": "Post-Processing aktiviert", "default": False, "description": "Nach dem Erzeugen eines geeigneten Bildes einen externen Post-Processing-Dienst benachrichtigen. Der Dienst liest das Bild selbst (Galerie-API / Dateisystem) und schreibt das Ergebnis ueber den API-Endpoint zurueck. Dieses Programm bearbeitet keine Bilder selbst und sendet keine Bild-Bytes."},
+            "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Basis-URL, die nach der Erzeugung benachrichtigt wird. Das Programm haengt Parameter an (welt-relativer Bildpfad). Es werden KEINE Bild-Bytes gesendet. Beispiel: http://127.0.0.1:8005/trigger"},
 
             # --- Default-Backends ---
             "comfy_default_workflow": {"type": "workflow_select", "label": "Default ComfyUI Workflow", "description": "Standard-Workflow fuer normale Bildgenerierung"},
@@ -284,10 +303,11 @@ SECTIONS = {
                         "type": "select",
                         "label": "API Typ",
                         "choices": ["a1111", "comfyui", "mammouth", "civitai", "together"],
+                        "triggers_rerender": True,
                     },
                     "api_url": {"type": "str", "label": "API URL"},
-                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Erforderlich fuer Cloud-Backends (mammouth, civitai, together)"},
-                    "model": {"type": "str", "label": "Model", "description": "Modell-ID oder URN (civitai: urn:air:sdxl:checkpoint:...)"},
+                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Erforderlich fuer Cloud-Backends (mammouth, civitai, together)", "applicable_for": ["mammouth", "civitai", "together"]},
+                    "model": {"type": "str", "label": "Model", "description": "Modell-ID oder URN (civitai: urn:air:sdxl:checkpoint:...)", "applicable_for": ["mammouth", "civitai", "together"]},
                     "cost": {"type": "int", "label": "Kosten", "default": 0, "min": 0, "description": "Relative Kosten (0 = lokal/kostenlos, hoeher = teurer)"},
                     "fallback_mode": {
                         "type": "select",
@@ -332,12 +352,25 @@ SECTIONS = {
                     "faceswap_needed": {"type": "bool", "label": "FaceSwap nötig", "default": False, "description": "Generierte Bilder benoetigen FaceSwap als Post-Processing"},
                     "prompt_prefix": {"type": "str", "label": "Prompt Prefix"},
                     "negative_prompt": {"type": "str", "label": "Negative Prompt"},
-                    "guidance_scale": {"type": "float", "label": "Guidance Scale", "min": 0, "max": 50, "step": 0.5},
-                    "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200},
-                    "vram_required": {"type": "int", "label": "VRAM Required (GB)", "min": 0, "max": 512, "description": "GB VRAM die dieses Backend braucht"},
-                    "disable_safety": {"type": "bool", "label": "Safety deaktivieren", "default": False},
-                    "poll_interval": {"type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Nur fuer async Cloud-Backends (CivitAI, Together): Wartezeit zwischen Status-Polls. Niedriger = schnelleres Erkennen wenn Bild fertig (aber mehr API-Calls)."},
-                    "max_wait": {"type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Nur fuer async Cloud-Backends: Maximale Wartezeit bis Generation als fehlgeschlagen gilt."},
+                    "guidance_scale": {"type": "float", "label": "Guidance Scale", "min": 0, "max": 50, "step": 0.5, "applicable_for": ["a1111", "comfyui"]},
+                    "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200, "applicable_for": ["a1111", "comfyui", "together"]},
+                    "vram_required": {"type": "int", "label": "VRAM Required (GB)", "min": 0, "max": 512, "description": "GB VRAM die dieses Backend braucht", "applicable_for": ["comfyui", "a1111"]},
+                    "disable_safety": {"type": "bool", "label": "Safety deaktivieren", "default": False, "description": "Schickt disable_safety_checker=true mit (Together.ai-spezifisch).", "applicable_for": ["together"]},
+                    "poll_interval": {"type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wartezeit zwischen Status-Polls. Bei ComfyUI: wie oft das Backend nach dem Job-Status gefragt wird. Bei async Cloud-Backends (CivitAI, Together): niedriger = schnelleres Erkennen, aber mehr API-Calls.", "applicable_for": ["comfyui", "civitai", "together"]},
+                    "max_wait": {"type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximale Wartezeit bis die Generation als fehlgeschlagen gilt.", "applicable_for": ["comfyui", "civitai", "together"]},
+                    "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallele Jobs auf dieser Backend-Queue.", "applicable_for": ["comfyui", "a1111"]},
+                    "beszel_system_id": {"type": "str", "label": "Beszel System-ID", "description": "Optional: Beszel-System fuer VRAM-Anzeige im Queue-Panel.", "applicable_for": ["comfyui", "a1111"]},
+                    "gpus": {
+                        "type": "array",
+                        "label": "GPUs (optional)",
+                        "applicable_for": ["comfyui", "a1111"],
+                        "item_fields": {
+                            "label": {"type": "str", "label": "Label", "description": "Anzeigename, z.B. 'RTX 3090'"},
+                            "vram_gb": {"type": "int", "label": "VRAM (GB)", "min": 0, "max": 512},
+                            "device": {"type": "str", "label": "Device", "default": "0", "description": "Beszel GPU-Key (Fallback wenn match_name nicht greift)"},
+                            "match_name": {"type": "str", "label": "Match Name", "description": "Substring im Beszel-GPU-Namen — stabil ueber Reboots"},
+                        },
+                    },
                 },
             },
             "comfyui_workflows": {
@@ -779,6 +812,58 @@ SECTIONS = {
             },
         },
     },
+    "content_marketplace": {
+        "label": "Content Marketplace",
+        "icon": "📦",
+        "fields": {
+            "cache_ttl_minutes": {
+                "type": "int",
+                "label": "Cache TTL (minutes)",
+                "default": 60,
+                "min": 0,
+                "max": 1440,
+                "description": "How long each catalog response is cached locally. 0 = always re-fetch.",
+            },
+            "allow_install_url": {
+                "type": "bool",
+                "label": "Allow ad-hoc URL install",
+                "default": False,
+                "description": "Permit installing a pack from any URL (not just catalog entries). Off by default.",
+            },
+        },
+        "sub_arrays": {
+            "catalogs": {
+                "label": "Catalogs",
+                "item_label_field": ["name", "url"],
+                "fields": {
+                    "name": {
+                        "type": "str",
+                        "label": "Display name",
+                        "default": "",
+                        "description": "Shown in the marketplace dropdown.",
+                    },
+                    "url": {
+                        "type": "str",
+                        "label": "Catalog URL",
+                        "default": "",
+                        "description": "Catalog repo URL — pack list is discovered via the hosting API. Examples: https://github.com/<org>/<repo> — or Forgejo: http(s)://<host>/<owner>/<repo>. Legacy raw …/index.json URLs are still accepted for backwards compatibility.",
+                    },
+                    "auth_token": {
+                        "type": "password",
+                        "label": "Auth token",
+                        "sensitive": True,
+                        "default": "",
+                        "description": "Optional. PAT for private repos. Bare token gets prepended with 'token '; an already-prefixed value (e.g. 'Bearer xyz') is used as-is. Sent to both catalog and download URLs of this entry.",
+                    },
+                    "enabled": {
+                        "type": "bool",
+                        "label": "Enabled",
+                        "default": True,
+                    },
+                },
+            },
+        },
+    },
     "messaging_frame": {
         "label": "Messaging-Frame (Phone-Chat-Layout)",
         "icon": "📱",
@@ -826,3 +911,33 @@ SECTIONS = {
 def get_schema() -> dict:
     """Return the full schema for the admin API."""
     return SECTIONS
+
+
+def iter_restart_required_paths() -> list:
+    """Sammelt alle Schema-Pfade mit `requires_restart: true`.
+
+    Liefert eine Liste von dot-notation Pfaden, die einem geladenen Config-Dict
+    entsprechen — z.B. ``server.jwt_secret`` oder
+    ``providers[*].api_url`` (Wildcard fuer alle Array-Items).
+    """
+    paths = []
+
+    def _walk_fields(fields: dict, prefix: str) -> None:
+        for fkey, fdef in (fields or {}).items():
+            if not isinstance(fdef, dict):
+                continue
+            if fdef.get("requires_restart") is True:
+                paths.append(f"{prefix}.{fkey}" if prefix else fkey)
+
+    for skey, sdef in SECTIONS.items():
+        if not isinstance(sdef, dict):
+            continue
+        if sdef.get("is_array") or sdef.get("is_dict"):
+            _walk_fields(sdef.get("fields"), f"{skey}[*]")
+            for arrkey, arrdef in (sdef.get("sub_arrays") or {}).items():
+                _walk_fields(arrdef.get("fields"), f"{skey}[*].{arrkey}[*]")
+        else:
+            _walk_fields(sdef.get("fields"), skey)
+            for arrkey, arrdef in (sdef.get("sub_arrays") or {}).items():
+                _walk_fields(arrdef.get("fields"), f"{skey}.{arrkey}[*]")
+    return paths

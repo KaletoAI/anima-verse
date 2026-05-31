@@ -25,13 +25,36 @@ logger = get_logger("story_engine")
 # ---------------------------------------------------------------------------
 # Konfiguration
 # ---------------------------------------------------------------------------
-ENABLED = os.environ.get("STORY_ENGINE_ENABLED", "true").lower() in ("true", "1", "yes")
-MAX_ACTIVE_ARCS = int(os.environ.get("STORY_ENGINE_MAX_ACTIVE_ARCS", "2"))
-COOLDOWN_HOURS = float(os.environ.get("STORY_ENGINE_COOLDOWN_HOURS", "6"))
-MAX_BEATS = int(os.environ.get("STORY_ENGINE_MAX_BEATS", "5"))
-BEAT_IMAGES = os.environ.get("STORY_ENGINE_BEAT_IMAGES", "true").lower() in ("true", "1", "yes")
-BEAT_IMAGE_DEFAULT = os.environ.get("STORY_ENGINE_IMAGEGEN_DEFAULT", "").strip()  # "workflow:Name" or "backend:Name"
-BEAT_IMAGE_FACESWAP = os.environ.get("STORY_ENGINE_BEAT_FACESWAP", "false").lower() in ("true", "1", "yes")
+# Konfigurationszugriffe als Funktionen — bei jedem Aufruf wird os.environ neu
+# gelesen, damit Aenderungen aus der Admin-UI sofort wirken (keine Modul-Konstanten
+# die nur beim Import gesetzt werden).
+def is_enabled() -> bool:
+    return os.environ.get("STORY_ENGINE_ENABLED", "true").lower() in ("true", "1", "yes")
+
+
+def max_active_arcs() -> int:
+    return int(os.environ.get("STORY_ENGINE_MAX_ACTIVE_ARCS", "2"))
+
+
+def cooldown_hours() -> float:
+    return float(os.environ.get("STORY_ENGINE_COOLDOWN_HOURS", "6"))
+
+
+def max_beats() -> int:
+    return int(os.environ.get("STORY_ENGINE_MAX_BEATS", "5"))
+
+
+def beat_images_enabled() -> bool:
+    return os.environ.get("STORY_ENGINE_BEAT_IMAGES", "true").lower() in ("true", "1", "yes")
+
+
+def beat_image_default() -> str:
+    # "workflow:Name" or "backend:Name"
+    return os.environ.get("STORY_ENGINE_IMAGEGEN_DEFAULT", "").strip()
+
+
+def beat_image_faceswap() -> bool:
+    return os.environ.get("STORY_ENGINE_BEAT_FACESWAP", "false").lower() in ("true", "1", "yes")
 
 
 # ---------------------------------------------------------------------------
@@ -41,8 +64,12 @@ class StoryArcEngine:
     """Singleton fuer die Story Arc Verwaltung."""
 
     def __init__(self):
-        self.enabled = ENABLED
-        logger.info("StoryArcEngine initialisiert (enabled=%s)", self.enabled)
+        logger.info("StoryArcEngine initialisiert (enabled=%s)", is_enabled())
+
+    @property
+    def enabled(self) -> bool:
+        """Liest live aus der Config (STORY_ENGINE_ENABLED)."""
+        return is_enabled()
 
     # ------------------------------------------------------------------
     # Arc Generation — LLM analysiert Characters und erzeugt neuen Arc
@@ -58,7 +85,7 @@ class StoryArcEngine:
 
         from app.models.story_arcs import can_generate, create_arc
 
-        if not can_generate(MAX_ACTIVE_ARCS, COOLDOWN_HOURS):
+        if not can_generate(max_active_arcs(), cooldown_hours()):
             logger.debug("Generation nicht erlaubt (Cooldown/max aktive Arcs)")
             return None
 
@@ -90,7 +117,7 @@ class StoryArcEngine:
         sys_prompt, user_prompt = render_task(
             "story_arc_generation",
             characters_text=characters_text,
-            max_beats=MAX_BEATS)
+            max_beats=max_beats())
 
         # LLM-Call via Queue
         llm_result = self._llm_call(characters[0], sys_prompt, user_prompt)
@@ -116,7 +143,7 @@ class StoryArcEngine:
             seed=arc_data.get("seed", ""),
             tension=arc_data.get("tension", 1),
             first_beat_hint=arc_data.get("first_beat_hint", ""),
-            max_beats=arc_data.get("max_beats", MAX_BEATS))
+            max_beats=arc_data.get("max_beats", max_beats()))
         logger.info("Neuer Arc generiert: '%s' mit %s", arc["title"], participants)
         return arc
 
@@ -137,7 +164,7 @@ class StoryArcEngine:
             return None
 
         beat_count = len(arc.get("beats", []))
-        max_beats = arc.get("max_beats", MAX_BEATS)
+        arc_max_beats = arc.get("max_beats", max_beats())
 
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
@@ -148,7 +175,7 @@ class StoryArcEngine:
             current_state=arc.get("current_state", ""),
             interaction_summary=interaction_summary,
             beat_count=beat_count,
-            max_beats=max_beats,
+            max_beats=arc_max_beats,
             tension=arc.get("tension", 1))
 
         participants = arc.get("participants", [])
@@ -180,7 +207,7 @@ class StoryArcEngine:
                 result.get("beat_summary", interaction_summary[:200]))
 
         # Beat-Bild generieren (best-effort, kein Fehler bei Ausfall)
-        if updated and BEAT_IMAGES:
+        if updated and beat_images_enabled():
             beat_num = len(updated.get("beats", []))
             beat_summary = result.get("beat_summary", interaction_summary[:200])
             image_info = self._generate_beat_image(updated, beat_summary)
@@ -268,7 +295,7 @@ class StoryArcEngine:
             hint = arc.get("next_beat_hint", "")
             parts.append(
                 f'- "{arc["title"]}" (Spannung: {arc.get("tension", 1)}/5, '
-                f'Beat {len(beats)}/{arc.get("max_beats", MAX_BEATS)})\n'
+                f'Beat {len(beats)}/{arc.get("max_beats", max_beats())})\n'
                 f'  Teilnehmer: {", ".join(arc.get("participants", []))}\n'
                 f'  Stand: {arc.get("current_state", last_beat)}'
                 + (f"\n  Hinweis: {hint}" if hint else "")
@@ -378,11 +405,12 @@ class StoryArcEngine:
                 "set_profile": False,
                 "skip_gallery": True,
                 "auto_enhance": False,
-                "force_faceswap": BEAT_IMAGE_FACESWAP,
+                "force_faceswap": beat_image_faceswap(),
             }
             # Default-Backend/Workflow aus .env
-            if BEAT_IMAGE_DEFAULT:
-                _type, _, _name = BEAT_IMAGE_DEFAULT.partition(":")
+            _beat_img_default = beat_image_default()
+            if _beat_img_default:
+                _type, _, _name = _beat_img_default.partition(":")
                 if _type == "workflow" and _name:
                     input_data["workflow"] = _name
                 elif _type == "backend" and _name:

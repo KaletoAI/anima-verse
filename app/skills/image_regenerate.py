@@ -461,6 +461,7 @@ def regenerate_image(character_name: str,
                 _vram = getattr(b, "vram_required_mb", 0) or 0
                 logger.info("GPU-Task (Backend=%s, VRAM %dMB)", b.name, _vram)
                 return get_llm_queue().submit_gpu_task(
+                    provider_name=b.name,
                     task_type="image_regen",
                     priority=Priority.NORMAL,
                     callable_fn=lambda: b.generate(_gen_prompt, _gen_neg, _bp),
@@ -538,6 +539,7 @@ def regenerate_image(character_name: str,
                 try:
                     from app.core.llm_queue import get_llm_queue, Priority
                     swapped = get_llm_queue().submit_gpu_task(
+                        provider_name=backend.name,
                         task_type="multiswap_regen",
                         priority=Priority.NORMAL,
                         callable_fn=_ms_fn,
@@ -570,6 +572,7 @@ def regenerate_image(character_name: str,
                     )
                     from app.core.llm_queue import get_llm_queue, Priority
                     swapped = get_llm_queue().submit_gpu_task(
+                        provider_name=backend.name,
                         task_type="faceswap_regen",
                         priority=Priority.NORMAL,
                         callable_fn=_fs_fn,

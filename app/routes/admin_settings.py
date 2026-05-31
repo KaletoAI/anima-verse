@@ -1,5 +1,7 @@
 """Admin Settings Routes — JSON-based configuration management."""
-from fastapi import APIRouter, Depends, HTTPException, Request
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import HTMLResponse
 from typing import Any, Dict
 import httpx
@@ -681,6 +683,39 @@ async def prompt_filters_move(filter_id: str, request: Request, user=Depends(req
     return {"status": "ok", "id": filter_id, "target": "world"}
 
 
+# ── States (prompt-filters block) Import / Export ──
+
+@router.get("/prompt-filters/export")
+async def prompt_filters_export(user=Depends(require_admin)):
+    """Stream the world-level prompt-filters block as a ZIP."""
+    import io as _io
+    from fastapi.responses import StreamingResponse
+    from app.core.content_io import export_states_to_zip
+    zip_bytes = export_states_to_zip()
+    return StreamingResponse(
+        _io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="states.zip"'},
+    )
+
+
+@router.post("/prompt-filters/import")
+async def prompt_filters_import(
+    file: UploadFile = File(...),
+    replace_all: bool = Query(False, description="Wipe existing world filters first"),
+    user=Depends(require_admin),
+):
+    """Import a states ZIP. Default merges; replace_all=true wipes first."""
+    from app.core.content_io import import_states_from_zip
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+    try:
+        return import_states_from_zip(content, replace_all=replace_all)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/settings/data")
 async def settings_data(user=Depends(require_admin)):
     """Return full config with sensitive fields masked.
@@ -705,6 +740,73 @@ async def settings_raw(user=Depends(require_admin)):
     data = copy.deepcopy(config.get_all())
     _apply_schema_defaults(data)
     return data
+
+
+def _diff_top_level_sections(current: dict, merged: dict) -> list:
+    """Liefert die Top-Level-Schluessel, deren Inhalt sich zwischen
+    current und merged geaendert hat. JSON-Vergleich, weil sub-arrays/dicts
+    beliebig verschachtelt sein koennen.
+    """
+    import json
+    keys = set(current.keys()) | set(merged.keys())
+    changed = []
+    for k in keys:
+        if json.dumps(current.get(k), sort_keys=True, default=str) != \
+           json.dumps(merged.get(k), sort_keys=True, default=str):
+            changed.append(k)
+    return sorted(changed)
+
+
+def _apply_section_reloads(changed_keys: list) -> list:
+    """Ruft punktuell die zur jeweiligen Sektion passenden Reload-Funktionen
+    auf. Errors werden geloggt, aber nie geworfen — Save selbst bleibt erfolgreich.
+
+    Returns: Liste der tatsaechlich getriggerten Reload-Labels fuer das UI.
+    """
+    if not changed_keys:
+        return []
+
+    from app.core.log import get_logger as _gl
+    _log = _gl("admin_settings")
+    triggered = []
+
+    def _run(label: str, fn):
+        try:
+            fn()
+            triggered.append(label)
+            _log.info("settings_save: reloaded '%s' (trigger: %s)", label, changed_keys)
+        except Exception as e:
+            _log.warning("settings_save: reload '%s' failed: %s", label, e)
+
+    # Provider-Manager: providers + image_generation (Backends sind ueber
+    # SKILL_IMAGEGEN_N_GPU_PROVIDER an Provider-GPUs gebunden).
+    if "providers" in changed_keys or "image_generation" in changed_keys:
+        from app.core.provider_manager import reload_provider_manager
+        _run("providers", reload_provider_manager)
+
+    # Skill-Manager: skills + image_generation (Image-Skill liest Backends
+    # aus os.environ-Bloecken, die nur beim Skill-Init gelesen werden).
+    if "skills" in changed_keys or "image_generation" in changed_keys:
+        from app.core.dependencies import _skill_manager
+        if _skill_manager is not None:
+            _run("skills", _skill_manager.reload_skills)
+
+    # Face-Service: faceswap-Sektion (URL/Endpoint-Cache invalidieren).
+    if "faceswap" in changed_keys:
+        from app.skills.face_client import invalidate_cache
+        _run("faceswap", invalidate_cache)
+
+    # TTS-Service.
+    if "tts" in changed_keys:
+        from app.core.tts_service import reload_tts_service
+        _run("tts", reload_tts_service)
+
+    # Animation-Backends (comfy + together).
+    if "animation" in changed_keys:
+        from app.skills.animate import reload_animate_services
+        _run("animation", reload_animate_services)
+
+    return triggered
 
 
 @router.post("/settings/save")
@@ -745,6 +847,9 @@ async def settings_save(request: Request, user=Depends(require_admin)):
 
     _autofill_imagegen_defaults(merged)
 
+    # Diff VOR config.save berechnen — current spiegelt noch den Pre-Save-State.
+    changed_sections = _diff_top_level_sections(current, merged)
+
     config.save(merged)
     # Env sofort aktualisieren — vermeidet Server-Restart-Pflicht fuer Felder
     # die ueber os.environ.get() gelesen werden (z.B. COMFY_MULTISWAP_UNET).
@@ -754,7 +859,22 @@ async def settings_save(request: Request, user=Depends(require_admin)):
         # Nicht hart fehlschlagen — Save selbst war erfolgreich.
         from app.core.log import get_logger as _gl
         _gl("admin_settings").warning("env-flatten after save failed: %s", _ee)
-    return {"status": "success", "message": "Configuration saved (env updated)."}
+
+    # Punktuelle Service-Reloads basierend auf geaenderten Sektionen.
+    # In Thread auslagern: einige Reloads pingen Provider/Backends synchron
+    # (z.B. ImageBackend.check_availability) und wuerden sonst den Event-Loop
+    # mehrere Sekunden blockieren.
+    reloaded = await asyncio.to_thread(_apply_section_reloads, changed_sections)
+
+    msg = "Configuration saved (env updated)."
+    if reloaded:
+        msg += " Reloaded: " + ", ".join(reloaded) + "."
+    return {
+        "status": "success",
+        "message": msg,
+        "changed_sections": changed_sections,
+        "reloaded": reloaded,
+    }
 
 
 @router.get("/settings/llm-tasks")
@@ -915,6 +1035,33 @@ async def imagegen_targets(user=Depends(require_admin)):
     return {"targets": out}
 
 
+@router.get("/settings/comfyui-models")
+async def comfyui_models_all(user=Depends(require_admin)):
+    """Aggregierte Liste aller gecachten ComfyUI-Modelle (alle Backends gemerged).
+
+    Wird vom Admin-Settings-Frontend (loadComfyModels) als globaler Cache fuer
+    Workflow- / LoRA- / CLIP-Selects genutzt.
+
+    ``checkpoints`` enthaelt absichtlich Checkpoints + UNet/Diffusion-Modelle
+    zusammen — der ``model``-Selector im Workflow akzeptiert beides (z.B.
+    Z-Image als UNet/GGUF, klassische SDXL als Checkpoint).
+    """
+    out = {"checkpoints": [], "loras": [], "clip_models": []}
+    try:
+        from app.core.dependencies import get_skill_manager
+        sm = get_skill_manager()
+        img = sm.get_skill("image_generation")
+        if img and getattr(img, "_model_cache_loaded", False):
+            # leerer model_type => Checkpoints + UNets gemerged
+            out["checkpoints"] = img.get_cached_checkpoints()
+            out["loras"] = img.get_cached_loras()
+            out["clip_models"] = img.get_cached_clip_models()
+    except Exception as e:
+        logger.warning("ComfyUI-Model-Cache nicht lesbar: %s", e)
+        return {**out, "error": str(e)}
+    return out
+
+
 @router.get("/settings/imagegen-backends/{backend_name}/models")
 async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)):
     """Liefert Modellliste fuer ein Image-Generation-Backend (Cloud).
@@ -1042,12 +1189,12 @@ async def settings_validate(request: Request, user=Depends(require_admin)):
     return {"issues": issues, "errors": sum(1 for i in issues if i["level"] == "error"), "warnings": sum(1 for i in issues if i["level"] == "warning")}
 
 
-@router.post("/settings/restart")
-async def settings_restart(user=Depends(require_admin)):
-    """Trigger a skill/service reload (same as existing reload endpoint)."""
-    from app.core.dependencies import reload_skill_manager
-    result = reload_skill_manager()
-    return {"status": "success", "result": result}
+@router.get("/settings/restart-pending")
+async def settings_restart_pending(user=Depends(require_admin)):
+    """Liste der Felder, die seit dem letzten Server-Start veraendert wurden
+    und nur durch einen Restart wirksam werden.
+    """
+    return {"pending": config.restart_pending_fields()}
 
 
 @router.post("/settings/memory-consolidate")
@@ -1604,6 +1751,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .toolbar .spacer { flex: 1; }
 .content { flex: 1; overflow-y: auto; padding: 20px; }
 
+/* ── Restart Banner & Pill ── */
+.restart-banner {
+    background: #d2992222; border-bottom: 1px solid #d29922;
+    color: #f0d97c; padding: 10px 20px; font-size: 13px; line-height: 1.5;
+}
+.restart-banner strong { color: #d29922; }
+.restart-banner code {
+    background: #0d1117; padding: 1px 6px; border-radius: 4px;
+    font-size: 12px; color: #e6edf3; margin: 0 2px;
+}
+.restart-pill {
+    display: inline-block; margin-left: 8px; padding: 1px 7px;
+    border-radius: 10px; font-size: 10px; font-weight: 600;
+    background: #d2992222; color: #d29922; border: 1px solid #d2992255;
+    vertical-align: middle; text-transform: uppercase; letter-spacing: 0.4px;
+}
+
 /* ── Buttons ── */
 .btn {
     background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
@@ -1732,10 +1896,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 </nav>
 
 <div class="main">
+    <div id="restart-banner" class="restart-banner" style="display:none;">
+        <strong>Server restart required</strong> — the following settings changed since the server started and only take effect after a restart:
+        <span id="restart-banner-fields"></span>
+    </div>
     <div class="toolbar" id="settings-toolbar">
         <button class="btn btn-primary" onclick="saveConfig()" id="btn-save">Save</button>
         <button class="btn" onclick="validateConfig()" id="btn-validate" style="border-color:#d29922; color:#d29922;">Validate</button>
-        <button class="btn" onclick="reloadServices()">Reload Services</button>
         <span class="spacer"></span>
         <span id="status-msg" style="font-size: 12px; color: #8b949e;"></span>
     </div>
@@ -1751,6 +1918,15 @@ let CONFIG = {};
 let SCHEMA = {};
 let PROVIDERS_CACHE = {};
 let ACTIVE_SECTION = null;
+// Wenn ein Array-Item per User-Klick aufgeklappt wurde, halten wir den
+// Pfad hier fest. So bleibt der Zustand ueber renderSection()-Rerenders
+// (z.B. nach api_type-Wechsel via triggers_rerender) erhalten.
+const OPEN_ITEMS = new Set();
+function toggleArrayItem(el, path) {
+    const isOpen = el.parentElement.classList.toggle('open');
+    if (isOpen) OPEN_ITEMS.add(path);
+    else OPEN_ITEMS.delete(path);
+}
 
 // ── Init ──
 async function init() {
@@ -1770,6 +1946,9 @@ async function init() {
         // Activate first section
         const first = Object.keys(SCHEMA)[0];
         if (first) activateSection(first);
+        // Restart-Banner: nach Init pruefen, ob etwas pending ist (z.B. wenn
+        // ein anderer Tab kuerzlich gespeichert hat).
+        loadRestartPending();
     } catch (e) {
         document.getElementById('content').innerHTML = '<div class="loading" style="color:#f85149;">Error loading config: ' + e.message + '</div>';
     }
@@ -2099,6 +2278,17 @@ async function applyTaskPreset(preset) {
 function renderFields(fields, data, path) {
     let html = '';
     for (const [fKey, f] of Object.entries(fields)) {
+        // Schema-level Sichtbarkeit: ein Feld mit `applicable_for` wird nur
+        // angezeigt, wenn `data.api_type` (oder ein anderes Geschwister-Feld,
+        // falls spaeter erweitert) in der Liste enthalten ist. Solange kein
+        // api_type gesetzt ist, blenden wir spezifische Felder aus — der
+        // Nutzer waehlt erst den Typ, dann tauchen die passenden Felder auf.
+        if (Array.isArray(f.applicable_for) && f.applicable_for.length) {
+            const cur = (data && data.api_type) || '';
+            if (!cur || !f.applicable_for.includes(cur)) {
+                continue;
+            }
+        }
         if (f.type === 'group_header') {
             // Visueller Trenner ohne Daten-Binding (gruppiert nachfolgende Felder)
             html += '<div class="subsection-title" style="margin-top:18px;">' + f.label + '</div>';
@@ -2163,8 +2353,11 @@ function renderFields(fields, data, path) {
         }
         const val = data[fKey] !== undefined ? data[fKey] : (f.default !== undefined ? f.default : '');
         const fullPath = path + '.' + fKey;
+        const pill = f.requires_restart
+            ? ' <span class="restart-pill" title="Changing this value requires a server restart">restart</span>'
+            : '';
         html += '<div class="field">';
-        html += '<label for="f-' + fullPath + '">' + f.label + '</label>';
+        html += '<label for="f-' + fullPath + '">' + f.label + pill + '</label>';
         html += '<div class="input-wrap">';
         html += renderInput(f, val, fullPath);
         if (f.description) html += '<div class="desc">' + f.description + '</div>';
@@ -2190,7 +2383,10 @@ function renderInput(f, val, path) {
                 + 'step="' + (f.step || 0.1) + '" onchange="setVal(\\'' + path + '\\', parseFloat(this.value) || 0)">';
         case 'select':
             let opts = (f.choices || []).map(c => '<option value="' + esc(c) + '"' + (c == val ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
-            return '<select id="' + id + '" onchange="setVal(\\'' + path + '\\', this.value)">' + opts + '</select>';
+            const onChg = f.triggers_rerender
+                ? "setVal('" + path + "', this.value); renderSection(ACTIVE_SECTION)"
+                : "setVal('" + path + "', this.value)";
+            return '<select id="' + id + '" onchange="' + onChg + '">' + opts + '</select>';
         case 'password':
             return '<div class="pw-wrap"><input type="password" id="' + id + '" value="' + esc(val) + '" onchange="setVal(\\'' + path + '\\', this.value)">'
                 + '<button class="pw-toggle" type="button" onclick="togglePw(this)">👁</button></div>';
@@ -2253,16 +2449,13 @@ function renderGpuSelect(val, path) {
 }
 
 function renderModelSelect(val, path) {
-    // Try to find provider from sibling "provider" field
-    const parts = path.split('.');
-    parts[parts.length - 1] = 'provider';
-    const provPath = parts.join('.');
-    const provName = getVal(provPath) || '';
-
+    // Provider wird zur Klick-Zeit aus dem Geschwister-Feld gelesen (nicht zur
+    // Render-Zeit eingebrannt), sonst zeigt der Button nach einem Provider-
+    // Wechsel weiter auf den alten Provider und holt die falsche Modell-Liste.
     let select = '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">';
     select += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
     select += '</select>';
-    select += ' <button class="btn btn-sm" onclick="loadModels(\\'' + path + '\\', \\'' + esc(provName) + '\\')">Load Models</button>';
+    select += ' <button class="btn btn-sm" onclick="loadModels(\\'' + path + '\\')">Load Models</button>';
     return select;
 }
 
@@ -2494,9 +2687,17 @@ function renderComfyClipSelect(val, path) {
 }
 
 // ── Array/Dict Items ──
-// _itemLabel: gleiche Logik wie in renderArrayItem — fuer Sortierung
+// _itemLabel: gleiche Logik wie in renderArrayItem — fuer Sortierung.
+// labelField darf ein String ODER ein Array sein. Bei Array gewinnt der erste
+// nicht-leere Wert (z.B. ["name", "model"] -> name wenn gesetzt, sonst model).
 function _itemLabel(item, labelField, fallback) {
-    return String((item && item[labelField]) || fallback || '');
+    if (!item) return String(fallback || '');
+    const fields = Array.isArray(labelField) ? labelField : [labelField];
+    for (const f of fields) {
+        const v = item[f];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v);
+    }
+    return String(fallback || '');
 }
 
 function renderArrayItems(def, items, path) {
@@ -2528,9 +2729,10 @@ function renderDictItems(def, items, path) {
 }
 
 function renderArrayItem(def, item, path, index, labelField) {
-    const label = item[labelField] || ('Item ' + index);
-    let html = '<div class="array-item" id="item-' + path + '">';
-    html += '<div class="array-item-header" onclick="this.parentElement.classList.toggle(\\'open\\')">';
+    const label = _itemLabel(item, labelField, 'Item ' + index);
+    const openClass = OPEN_ITEMS.has(path) ? ' open' : '';
+    let html = '<div class="array-item' + openClass + '" id="item-' + path + '">';
+    html += '<div class="array-item-header" onclick="toggleArrayItem(this, \\'' + path + '\\')">';
     html += '<span class="chevron">▶</span> ';
     html += '<span class="title" style="margin-left:6px;">' + esc(label) + '</span>';
     if (item.enabled === false) html += '<span class="badge">deaktiviert</span>';
@@ -2707,7 +2909,12 @@ function rerenderTaskOrderList(path) {
 
 // ── GPU Field ──
 function renderGpuField(gpus, path) {
-    let html = '<div class="field"><label>GPUs</label><div class="input-wrap">';
+    // Backend-Kontext: image_generation.backends[N].gpus — die GPU dort ist nur
+    // Anzeige/Beszel-Mapping (kein types-Feld, max_concurrent lebt auf dem
+    // Backend selbst), deshalb die Spalten weglassen.
+    const isBackend = path.indexOf('image_generation.backends') !== -1;
+    const label = isBackend ? 'GPUs (optional — Anzeige/Beszel)' : 'GPUs';
+    let html = '<div class="field"><label>' + label + '</label><div class="input-wrap">';
     html += '<div id="gpu-' + path + '">';
     for (let i = 0; i < gpus.length; i++) {
         const g = gpus[i];
@@ -2716,9 +2923,11 @@ function renderGpuField(gpus, path) {
         html += '<input type="number" value="' + (g.vram_gb || 0) + '" placeholder="VRAM GB" style="max-width:80px;" onchange="setVal(\\'' + path + '[' + i + '].vram_gb\\', parseInt(this.value))">';
         html += '<input type="text" value="' + esc(g.match_name || '') + '" placeholder="Match-Name (z.B. 4070)" title="Case-insensitive Substring im Beszel-GPU-Namen — wird zuerst probiert (stabil ueber Reboots)" style="max-width:140px;" onchange="setVal(\\'' + path + '[' + i + '].match_name\\', this.value)">';
         html += '<input type="text" value="' + esc(g.device || '') + '" placeholder="Device (Fallback)" title="Beszel device-id — nur noetig wenn Match-Name nicht eindeutig greift (z.B. zwei gleiche Modelle, oder Beszel meldet falschen Namen)" style="max-width:100px;opacity:0.7;" onchange="setVal(\\'' + path + '[' + i + '].device\\', this.value)">';
-        const typesStr = Array.isArray(g.types) ? g.types.join(',') : (g.types || '');
-        html += '<input type="text" value="' + esc(typesStr) + '" placeholder="ollama,openai,comfyui" onchange="setVal(\\'' + path + '[' + i + '].types\\', this.value.split(\\',\\').map(s=>s.trim()))">';
-        html += '<input type="number" value="' + (g.max_concurrent || 1) + '" placeholder="MC" title="Max Concurrent" min="1" max="50" style="max-width:55px;" onchange="setVal(\\'' + path + '[' + i + '].max_concurrent\\', parseInt(this.value) || 1)">';
+        if (!isBackend) {
+            const typesStr = Array.isArray(g.types) ? g.types.join(',') : (g.types || '');
+            html += '<input type="text" value="' + esc(typesStr) + '" placeholder="ollama,openai" onchange="setVal(\\'' + path + '[' + i + '].types\\', this.value.split(\\',\\').map(s=>s.trim()))">';
+            html += '<input type="number" value="' + (g.max_concurrent || 1) + '" placeholder="MC" title="Max Concurrent" min="1" max="50" style="max-width:55px;" onchange="setVal(\\'' + path + '[' + i + '].max_concurrent\\', parseInt(this.value) || 1)">';
+        }
         html += '<button class="btn btn-sm btn-danger" onclick="removeSubItem(\\'' + path + '\\', ' + i + ')">✕</button>';
         html += '</div>';
     }
@@ -2881,7 +3090,9 @@ function addArrayItem(path, type) {
         };
     } else {
         if (path === 'llm_routing') {
-            obj.push({ enabled: true, preload_on_startup: false, provider: '', model: '', temperature: 0.7, tasks: [] });
+            obj.push({ name: '', enabled: true, preload_on_startup: false, provider: '', model: '', temperature: 0.7, tasks: [] });
+        } else if (path === 'content_marketplace.catalogs') {
+            obj.push({ name: '', url: '', auth_token: '', enabled: true });
         } else {
             obj.push({ name: 'New', enabled: true, gpus: [] });
         }
@@ -2951,7 +3162,11 @@ function addGpu(path) {
         if (obj[p] === undefined) obj[p] = [];
         obj = obj[p];
     }
-    obj.push({ vram_gb: 0, types: ['openai'], match_name: '', device: '' });
+    const isBackend = path.indexOf('image_generation.backends') !== -1;
+    const item = isBackend
+        ? { vram_gb: 0, label: '', match_name: '', device: '' }
+        : { vram_gb: 0, types: ['openai'], match_name: '', device: '' };
+    obj.push(item);
     renderSection(ACTIVE_SECTION);
 }
 
@@ -3127,6 +3342,8 @@ async function saveConfig() {
             for (const k of Object.keys(PROVIDERS_CACHE)) delete PROVIDERS_CACHE[k];
             COMFY_CACHE = null;
             toast(result.message || 'Saved!', 'success');
+            // Nach Save pruefen, ob restart-pflichtige Felder veraendert wurden.
+            loadRestartPending();
         } else {
             toast('Error: ' + (result.detail || result.message), 'error');
         }
@@ -3137,18 +3354,28 @@ async function saveConfig() {
     btn.textContent = 'Save';
 }
 
-async function reloadServices() {
-    if (!confirm('Reload all services? Active requests may be interrupted.')) return;
+async function loadRestartPending() {
     try {
-        const resp = await fetch('/admin/settings/restart', {
-            method: 'POST',
-            headers: authHeaders()
-        });
-        const result = await resp.json();
-        toast('Services reloaded', 'success');
+        const resp = await fetch('/admin/settings/restart-pending', { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        renderRestartBanner(data.pending || []);
     } catch (e) {
-        toast('Reload failed: ' + e.message, 'error');
+        // Banner-Anzeige ist nicht kritisch — bei Fehler nicht stoeren.
     }
+}
+
+function renderRestartBanner(pending) {
+    const banner = document.getElementById('restart-banner');
+    const slot = document.getElementById('restart-banner-fields');
+    if (!banner || !slot) return;
+    if (!pending || pending.length === 0) {
+        banner.style.display = 'none';
+        slot.innerHTML = '';
+        return;
+    }
+    slot.innerHTML = pending.map(p => '<code>' + esc(p) + '</code>').join(' ');
+    banner.style.display = 'block';
 }
 
 function togglePw(btn) {

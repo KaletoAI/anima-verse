@@ -5,6 +5,7 @@ import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
+import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { loadItems, type ItemRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
@@ -180,6 +181,12 @@ export function WorldTab() {
           onNew={newLocation}
           onCopy={copyLocation}
           copyDisabled={selection?.kind !== 'location'}
+          extra={
+            <ImportButton
+              endpoint="/world/locations/import"
+              onImported={() => reload()}
+            />
+          }
         />
         <ul className="ga-list">
           {locations.length === 0 ? (
@@ -360,7 +367,24 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
 
   return (
     <>
-      <DetailToolbar title={location.name} onSave={save} onDelete={remove} />
+      <DetailToolbar
+        title={location.name}
+        onSave={save}
+        onDelete={remove}
+        extra={
+          <>
+            <ExportButton
+              endpoint={`/world/locations/${encodeURIComponent(location.id)}/export`}
+              filename={`location_${location.id}.zip`}
+            />
+            <PublishButton
+              packType="location"
+              entityId={location.id}
+              defaultName={location.name || location.id}
+            />
+          </>
+        }
+      />
       <div className="ga-form">
         <div className="ga-form-row">
           <Field label={t('Name')}>

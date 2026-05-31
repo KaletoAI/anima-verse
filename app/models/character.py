@@ -2656,6 +2656,9 @@ def get_character_image_metadata(character_name: str) -> Dict[str, Any]:
         # Regen-Zeitstempel: nutzt das Frontend als Cache-Bust-Key (?v=...)
         # damit ein regeneriertes Bild ohne Browser-Refresh sichtbar wird.
         "regenerated_at",
+        # Post-Processing: extern nachbearbeitet (vom PP-Service zurueckgeschrieben).
+        # Neutral, FaceSwap-unabhaengig — UI zeigt "extern bearbeitet".
+        "postprocessed", "postprocessed_at",
     }
     images_dir = get_character_images_dir(character_name)
     for fn, m in all_meta.items():

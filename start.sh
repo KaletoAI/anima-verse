@@ -28,6 +28,15 @@ FACE_PID="$PID_DIR/face.pid"
 MAIN_LOG="$LOG_DIR/main.log"
 FACE_LOG="$LOG_DIR/face.log"
 
+MAIN_PORT=8000
+FACE_PORT="${FACE_SERVICE_PORT:-8005}"
+
+# pgrep -f patterns — unique enough to distinguish main vs. face server,
+# and stable across restarts. Used to recover orphan PIDs when the PID
+# file is missing and to kill stragglers when starting fresh.
+MAIN_PATTERN="uvicorn app.server:app"
+FACE_PATTERN="uvicorn face_service.server:app"
+
 mkdir -p "$PID_DIR" "$LOG_DIR" "$ARCHIVE_DIR"
 
 # ── Virtualenv aktivieren (falls vorhanden) ───────────────────────────────────
@@ -80,6 +89,41 @@ is_running() {
     return 1
 }
 
+# Finds the PID of a running service by its uvicorn command-line pattern.
+# Echoes a single PID or nothing. Tries lsof first (more precise — port
+# binding), then falls back to pgrep -f (works without lsof installed).
+discover_pid() {
+    local port="$1"
+    local pattern="$2"
+    local pid=""
+    if command -v lsof >/dev/null 2>&1; then
+        pid=$(lsof -ti :"$port" 2>/dev/null | head -1 || true)
+    fi
+    if [[ -z "$pid" ]] && command -v pgrep >/dev/null 2>&1; then
+        pid=$(pgrep -f "$pattern" 2>/dev/null | head -1 || true)
+    fi
+    echo "$pid"
+}
+
+# Like is_running, but also recovers from a missing PID file by locating
+# the orphan process. When found, the PID file is restored so subsequent
+# calls behave normally. Returns 0 if alive, 1 otherwise.
+is_running_or_orphan() {
+    local pid_file="$1"
+    local port="$2"
+    local pattern="$3"
+    if is_running "$pid_file"; then
+        return 0
+    fi
+    local pid
+    pid=$(discover_pid "$port" "$pattern")
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        echo "$pid" > "$pid_file"
+        return 0
+    fi
+    return 1
+}
+
 # Wartet bis ein Prozess wirklich beendet ist (nicht nur Port freigegeben hat).
 # Gibt 0 zurueck wenn tot, 1 wenn Timeout.
 wait_for_death() {
@@ -96,13 +140,20 @@ wait_for_death() {
     return 0
 }
 
-# Beendet alle Prozesse auf einem Port und wartet bis sie WIRKLICH tot sind.
-# Erst danach ist es sicher, rotate_log aufzurufen.
+# Beendet alle Prozesse, die das Pattern matchen ODER auf dem Port lauschen,
+# und wartet bis sie WIRKLICH tot sind. Erst danach ist es sicher,
+# rotate_log aufzurufen.
 kill_port() {
     local port="$1"
     local name="$2"
-    local pids
-    pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    local pattern="${3:-}"
+    local pids=""
+    if command -v lsof >/dev/null 2>&1; then
+        pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    fi
+    if [[ -z "$pids" && -n "$pattern" ]] && command -v pgrep >/dev/null 2>&1; then
+        pids=$(pgrep -f "$pattern" 2>/dev/null || true)
+    fi
     [[ -z "$pids" ]] && return
 
     for pid in $pids; do
@@ -129,9 +180,9 @@ start_main() {
         return
     fi
     # Erst alten Prozess vollstaendig beenden, DANN Log rotieren
-    kill_port 8000 "main"
+    kill_port "$MAIN_PORT" "main" "$MAIN_PATTERN"
     rotate_log "$MAIN_LOG"
-    echo "[main] Starting main app on port 8000..."
+    echo "[main] Starting main app on port $MAIN_PORT..."
     cd "$SCRIPT_DIR"
     nohup "$SCRIPT_DIR/.venv/bin/python" -m uvicorn app.server:app --host 0.0.0.0 --port 8000 \
         >> "$MAIN_LOG" 2>&1 &
@@ -145,8 +196,8 @@ start_face() {
         echo "[face-service] Already running (PID $(cat "$FACE_PID"))"
         return
     fi
-    local port="${FACE_SERVICE_PORT:-8005}"
-    kill_port "$port" "face-service"
+    local port="$FACE_PORT"
+    kill_port "$port" "face-service" "$FACE_PATTERN"
     rotate_log "$FACE_LOG"
     echo "[face-service] Starting face service on port $port..."
     cd "$SCRIPT_DIR"
@@ -160,10 +211,17 @@ start_face() {
 stop_service() {
     local name="$1"
     local pid_file="$2"
-    if is_running "$pid_file"; then
+    local port="$3"
+    local pattern="$4"
+    if is_running_or_orphan "$pid_file" "$port" "$pattern"; then
         local pid
         pid=$(cat "$pid_file")
-        echo "[$name] Stopping (PID $pid)..."
+        local note=""
+        # Detect orphan (pid file freshly recovered from port lookup).
+        if [[ "$(stat -c %Y "$pid_file" 2>/dev/null || stat -f %m "$pid_file" 2>/dev/null)" -ge "$(($(date +%s) - 2))" ]]; then
+            note=" (orphan, recovered via port $port)"
+        fi
+        echo "[$name] Stopping (PID $pid)$note..."
         kill "$pid" 2>/dev/null || true
         if ! wait_for_death "$pid" 8; then
             echo "[$name] Force killing..."
@@ -178,12 +236,12 @@ stop_service() {
 
 show_status() {
     echo "=== Service Status ==="
-    if is_running "$MAIN_PID"; then
+    if is_running_or_orphan "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"; then
         echo "[main]         Running (PID $(cat "$MAIN_PID"))"
     else
         echo "[main]         Stopped"
     fi
-    if is_running "$FACE_PID"; then
+    if is_running_or_orphan "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN"; then
         echo "[face-service] Running (PID $(cat "$FACE_PID"))"
     else
         echo "[face-service] Stopped"
@@ -319,11 +377,11 @@ case "$ACTION" in
     stop)
         case "$TARGET" in
             all)
-                stop_service "main" "$MAIN_PID"
-                stop_service "face-service" "$FACE_PID"
+                stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
+                stop_service "face-service" "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN"
                 ;;
-            main)  stop_service "main" "$MAIN_PID" ;;
-            face)  stop_service "face-service" "$FACE_PID" ;;
+            main)  stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN" ;;
+            face)  stop_service "face-service" "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN" ;;
         esac
         ;;
     restart)
@@ -331,8 +389,8 @@ case "$ACTION" in
         case "$TARGET" in
             all)
                 echo "[restart] Restarting all services..."
-                stop_service "main" "$MAIN_PID"
-                stop_service "face-service" "$FACE_PID"
+                stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
+                stop_service "face-service" "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN"
                 sleep 1
                 start_face
                 sleep 1
@@ -343,7 +401,7 @@ case "$ACTION" in
                 ;;
             main)
                 echo "[restart] Restarting main app..."
-                stop_service "main" "$MAIN_PID"
+                stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
                 sleep 1
                 start_main
                 echo ""
@@ -352,7 +410,7 @@ case "$ACTION" in
                 ;;
             face)
                 echo "[restart] Restarting face service..."
-                stop_service "face-service" "$FACE_PID"
+                stop_service "face-service" "$FACE_PID" "$FACE_PORT" "$FACE_PATTERN"
                 sleep 1
                 start_face
                 ;;

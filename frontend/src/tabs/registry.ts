@@ -13,6 +13,7 @@ import { WorldTab } from './world/WorldTab'
 import { MapTab } from './map/MapTab'
 import { WorldDevTab } from './world-dev/WorldDevTab'
 import { SchedulerTab } from './scheduler/SchedulerTab'
+import { MarketplaceTab } from './marketplace/MarketplaceTab'
 
 export type TabId =
   | 'setup'
@@ -25,6 +26,7 @@ export type TabId =
   | 'map'
   | 'world-dev'
   | 'scheduler'
+  | 'marketplace'
 
 export interface TabSpec {
   id: TabId
@@ -43,6 +45,7 @@ export const TABS: TabSpec[] = [
   { id: 'map', label: 'Map', Component: MapTab },
   { id: 'world-dev', label: 'World Dev', Component: WorldDevTab },
   { id: 'scheduler', label: 'Scheduler', Component: SchedulerTab },
+  { id: 'marketplace', label: 'Marketplace', Component: MarketplaceTab },
 ]
 
 const TAB_IDS: ReadonlySet<string> = new Set(TABS.map((t) => t.id))

@@ -18,14 +18,23 @@ from app.core.log import get_logger
 
 logger = get_logger("relationship_summary")
 
-ENABLED = os.environ.get("RELATIONSHIP_SUMMARY_ENABLED", "true").lower() in ("true", "1", "yes")
-INTERVAL_MINUTES = int(os.environ.get("RELATIONSHIP_SUMMARY_INTERVAL_MINUTES", "30"))
-MAX_SUMMARIES_PER_RUN = int(os.environ.get("RELATIONSHIP_SUMMARY_MAX_PER_RUN", "5"))
+# Live-Getter — bei jedem Aufruf wird os.environ neu gelesen, damit
+# Admin-UI-Aenderungen ohne Server-Restart greifen.
+def is_enabled() -> bool:
+    return os.environ.get("RELATIONSHIP_SUMMARY_ENABLED", "true").lower() in ("true", "1", "yes")
+
+
+def interval_minutes() -> int:
+    return int(os.environ.get("RELATIONSHIP_SUMMARY_INTERVAL_MINUTES", "30"))
+
+
+def max_summaries_per_run() -> int:
+    return int(os.environ.get("RELATIONSHIP_SUMMARY_MAX_PER_RUN", "5"))
 
 
 def handle_relationship_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Background-Queue Handler: Generiert Summaries fuer stale character_relationships."""
-    if not ENABLED:
+    if not is_enabled():
         return {"skipped": True, "reason": "disabled"}
 
     user_id = payload.get("user_id", "")
@@ -41,7 +50,8 @@ def handle_relationship_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"skipped": True, "reason": "no characters"}
 
     total_updates = 0
-    remaining_budget = MAX_SUMMARIES_PER_RUN
+    max_per_run = max_summaries_per_run()
+    remaining_budget = max_per_run
 
     from app.models.character import get_character_config
     from app.models.character_template import is_feature_enabled
@@ -65,7 +75,7 @@ def handle_relationship_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
         if remaining_budget <= 0:
-            logger.info("Batch-Limit erreicht (%d), Rest im naechsten Run", MAX_SUMMARIES_PER_RUN)
+            logger.info("Batch-Limit erreicht (%d), Rest im naechsten Run", max_per_run)
             break
         # Check if task was cancelled externally
         if task_id and _is_cancelled(task_id):

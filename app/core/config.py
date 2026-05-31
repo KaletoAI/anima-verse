@@ -21,9 +21,16 @@ _CONFIG: dict = {}
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "storage" / "config.json"
 _SECRETS_PATH: Optional[Path] = None  # set in load() — sibling of _CONFIG_PATH
 
+# Snapshot der Werte aller `requires_restart: true`-Felder zum Boot-Zeitpunkt.
+# Wird in load() einmalig befuellt und nicht mehr ueberschrieben — so kann
+# die Admin-UI nach einem Save erkennen, ob ein restart-pflichtiges Feld
+# gegenueber dem laufenden Server-Prozess abweicht.
+_BOOT_RESTART_SNAPSHOT: Optional[dict] = None
+
 # Fields that contain sensitive data (API keys, passwords, secrets)
 SENSITIVE_FIELDS = {
     "api_key", "password", "jwt_secret", "bot_token", "secret",
+    "auth_token",
 }
 
 
@@ -82,6 +89,38 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
 }
 
 
+_DEFAULT_MARKETPLACE_CATALOGS = [
+    {
+        "name": "Anima-Verse Public",
+        "url": "https://github.com/KaletoAI/anima-verse-content",
+        "auth_token": "",
+        "enabled": True,
+    },
+]
+
+
+def _seed_default_marketplace_catalogs(config: dict, config_path: Path) -> bool:
+    """Seeds the public catalog on a fresh world.
+
+    Idempotent: only fires when `content_marketplace.catalogs` is absent.
+    If the admin clears the list to [], it stays empty — explicit choice
+    beats implicit re-seeding.
+    """
+    cm = config.setdefault("content_marketplace", {})
+    if "catalogs" in cm:
+        return False
+    import copy
+    cm["catalogs"] = copy.deepcopy(_DEFAULT_MARKETPLACE_CATALOGS)
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        logger.info("Default marketplace catalog seeded -> %s", config_path)
+        return True
+    except OSError as e:
+        logger.error("Failed to seed default marketplace catalog to %s: %s", config_path, e)
+        return False
+
+
 def _seed_default_workflows(config: dict, config_path: Path) -> bool:
     """Seedet bei einer neuen Welt die drei Default-Workflows (Qwen/Z-Image/Flux).
 
@@ -132,6 +171,7 @@ def load(config_path: Optional[Path] = None) -> dict:
     # Bei einer neuen/leeren Welt: Default-Workflows fuer Qwen/Z-Image/Flux
     # automatisch eintragen, damit der Admin nicht alles von Hand anlegen muss.
     _seed_default_workflows(_CONFIG, path)
+    _seed_default_marketplace_catalogs(_CONFIG, path)
 
     # Overlay secrets.json (gitignored — holds api keys / passwords)
     if _SECRETS_PATH.exists():
@@ -146,7 +186,71 @@ def load(config_path: Optional[Path] = None) -> dict:
     # Populate os.environ for backward compatibility
     _flatten_to_env(_CONFIG)
 
+    # Boot-Snapshot der restart-pflichtigen Felder einfrieren (nur einmal,
+    # der erste Load gewinnt — spaetere reload()-Aufrufe veraendern das nicht).
+    global _BOOT_RESTART_SNAPSHOT
+    if _BOOT_RESTART_SNAPSHOT is None:
+        _BOOT_RESTART_SNAPSHOT = _collect_restart_values(_CONFIG)
+
     return _CONFIG
+
+
+def _collect_restart_values(cfg: dict) -> dict:
+    """Liest aktuelle Werte aller `requires_restart`-Pfade aus cfg."""
+    try:
+        from app.core.config_schema import iter_restart_required_paths
+    except Exception:
+        return {}
+    result = {}
+    for path in iter_restart_required_paths():
+        # Pfade mit '[*]' (Array-Item-Felder) auflösen wir gegen alle Indizes
+        if "[*]" in path:
+            for resolved in _expand_wildcards(cfg, path):
+                result[resolved] = get(resolved)
+        else:
+            result[path] = get(path)
+    return result
+
+
+def _expand_wildcards(cfg: dict, path: str) -> list:
+    """Expandiert '[*]'-Wildcards gegen die aktuellen Array-Längen in cfg."""
+    if "[*]" not in path:
+        return [path]
+    prefix, _, rest = path.partition("[*]")
+    try:
+        arr = _resolve_path(cfg, prefix)
+    except (KeyError, IndexError, TypeError):
+        return []
+    if not isinstance(arr, list):
+        return []
+    out = []
+    for i in range(len(arr)):
+        sub = f"{prefix}[{i}]{rest}"
+        out.extend(_expand_wildcards(cfg, sub))
+    return out
+
+
+def restart_pending_fields() -> list:
+    """Vergleicht Boot-Snapshot mit aktueller Config.
+
+    Liefert eine Liste der Pfade, deren Werte sich seit dem Server-Start
+    geaendert haben — d.h. die ohne Restart NICHT wirksam werden.
+    """
+    if _BOOT_RESTART_SNAPSHOT is None:
+        return []
+    pending = []
+    current = _collect_restart_values(_CONFIG)
+    # Geänderte Werte
+    for path, boot_val in _BOOT_RESTART_SNAPSHOT.items():
+        if current.get(path) != boot_val:
+            pending.append(path)
+    # Neu hinzugekommene Pfade (z.B. neuer Provider-Array-Eintrag mit
+    # restart-pflichtigem Feld) — wenn der Boot-Wert leer war und jetzt
+    # ein Wert da ist, faellt das auch unter "pending".
+    for path in current:
+        if path not in _BOOT_RESTART_SNAPSHOT and current[path]:
+            pending.append(path)
+    return sorted(set(pending))
 
 
 def _deep_merge(base: Any, overlay: Any) -> None:
@@ -391,9 +495,16 @@ def _flatten_to_env(config: dict) -> None:
                      "sampling_method", "schedule_type", "vram_required",
                      "checkpoint", "poll_interval", "max_wait", "disable_safety",
                      "scheduler", "clip_skip",
-                     "fallback_mode", "fallback_specific"]:
+                     "fallback_mode", "fallback_specific",
+                     "max_concurrent", "beszel_system_id"]:
             val = be.get(key, "")
             _set(env, f"{p}{key.upper()}", val)
+        for gi, g in enumerate(be.get("gpus", []) or []):
+            gp = f"{p}GPU{gi}_"
+            _set(env, f"{gp}VRAM", g.get("vram_gb", "") or "")
+            _set(env, f"{gp}DEVICE", g.get("device", "") or "")
+            _set(env, f"{gp}LABEL", g.get("label", "") or "")
+            _set(env, f"{gp}MATCH_NAME", g.get("match_name", "") or "")
 
     # ComfyUI Workflows
     for wid, wf in ig.get("comfyui_workflows", {}).items():

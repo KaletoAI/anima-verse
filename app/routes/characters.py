@@ -3642,6 +3642,7 @@ async def animate_character_image(character_name: str, image_name: str, request:
 
             # Ueber Provider-Queue ausfuehren (GPU-Serialisierung + Queue-Panel)
             success = get_llm_queue().submit_gpu_task(
+                provider_name=service,
                 task_type="image_animate",
                 priority=_P.IMAGE_GEN,
                 callable_fn=lambda: animate_image(

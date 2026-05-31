@@ -25,10 +25,12 @@ class ProviderManager:
 
     def __init__(self):
         self.providers: Dict[str, Provider] = {}
-        self.channels: Dict[str, ProviderQueue] = {}  # keyed by "Provider:gpuN" or "Provider"
+        self.channels: Dict[str, ProviderQueue] = {}  # keyed by "Provider:gpuN" or "backend:<name>"
         # Backwards-compat aliases (point to same objects in channels)
         self.queues: Dict[str, ProviderQueue] = {}
         self.gpu_queues: Dict[str, ProviderQueue] = {}
+        # Synthetic Provider objects backing per-backend ComfyUI/A1111 channels
+        self._backend_providers: Dict[str, Provider] = {}
         self._round_robin: int = 0  # Tiebreaker for equal-load channel selection
 
     def load_providers(self) -> None:
@@ -37,6 +39,7 @@ class ProviderManager:
         self.channels.clear()
         self.queues.clear()
         self.gpu_queues.clear()
+        self._backend_providers.clear()
 
         n = 1
         while True:
@@ -90,18 +93,18 @@ class ProviderManager:
 
             # Compute LLM VRAM budget from GPU configs (GPUs with LLM-related types)
             llm_types = {"ollama", "openai", "llm"}
-            # Cloud-Provider (z.B. anthropic) benoetigen keine GPU-Konfiguration
-            cloud_types = {"anthropic", "google", "mistral"}
-            # OpenAI-type providers with external URLs are also cloud
-            if ptype == "openai" and api_base.startswith("https://"):
-                cloud_types.add("openai")
+            # GPU-Tracking ist nur fuer ``ollama`` zwingend (Unload-Logik
+            # bei VRAM-Knappheit). Alle anderen Provider-Typen — Cloud
+            # (anthropic/google/mistral/together) ebenso wie OpenAI-kompatible
+            # Gateways/Proxies (LiteLLM, llama-swap, vLLM) — laufen auch ohne
+            # GPU-Eintrag sauber.
             if gpu_configs:
                 vram_mb = sum(g.vram_mb for g in gpu_configs if set(g.types) & llm_types)
-            elif ptype in cloud_types:
+            elif ptype == "ollama":
+                logger.warning("PROVIDER_%d '%s' has no GPU config (PROVIDER_%d_GPU0_VRAM missing) — VRAM-Unload deaktiviert",
+                              n, name, n)
                 vram_mb = None
             else:
-                logger.warning("PROVIDER_%d '%s' has no GPU config (PROVIDER_%d_GPU0_VRAM missing)",
-                              n, name, n)
                 vram_mb = None
 
             # Auto-derive specs from GPU configs (e.g. "16 GB + 32 GB")
@@ -145,11 +148,15 @@ class ProviderManager:
                     logger.info("  -> Channel %s: %s (%s, %dMB, concurrent=%d, chat_pause=%s)",
                                channel_key, g_label, ",".join(g.types), g.vram_mb, g.max_concurrent, has_llm)
             else:
-                # Cloud provider without GPUs — one virtual channel
+                # Kein GPU-Eintrag konfiguriert → ein virtueller Channel.
+                # chat_pause bleibt aus, weil ohne lokale GPU-Kontention nichts
+                # zu pausieren ist. Wer ueber einen Gateway/Proxy auf eine
+                # lokale GPU geht, traegt die GPU-Slots explizit ein und
+                # bekommt den Normalpfad oben mit chat_pause_enabled=has_llm.
                 pq = ProviderQueue(
                     provider, queue_name=name,
                     max_concurrent=max_concurrent,
-                    chat_pause_enabled=(ptype not in cloud_types),
+                    chat_pause_enabled=False,
                     gpu_indices=[0])
                 self.channels[name] = pq
                 self.queues[name] = pq
@@ -169,12 +176,109 @@ class ProviderManager:
         if not self.providers:
             logger.warning("No providers configured (PROVIDER_1_NAME not found in .env)")
 
-    def get_systems_config(self) -> List[Dict[str, Any]]:
-        """Builds systems list from provider config and SKILL_IMAGEGEN env vars.
+        # Channels fuer ComfyUI/A1111 Backends — jedes Backend bekommt seinen
+        # eigenen Channel zur Serialisierung (Queue pro URL/Endpoint).
+        self._load_backend_channels()
 
-        System name = provider name (PROVIDER_N_NAME).
-        Specs auto-derived from GPU configs.
-        Image backends mapped via SKILL_IMAGEGEN_N_GPU_PROVIDER.
+    def _load_backend_channels(self) -> None:
+        """Creates one channel per enabled ComfyUI/A1111 image backend.
+
+        Reads SKILL_IMAGEGEN_N_* envs (written by app.core.config.update_env_from_config).
+        Each enabled local backend gets a synthetic Provider + ProviderQueue, keyed
+        as ``backend:<name>`` in self.channels. Optional per-backend GPU metadata
+        (vram/label/device/match_name from SKILL_IMAGEGEN_N_GPUi_*) populates
+        gpu_configs for VRAM-display and Beszel mapping only — the channel count
+        stays 1 per backend.
+        """
+        for i in range(1, 30):
+            prefix = f"SKILL_IMAGEGEN_{i}_"
+            name = os.environ.get(f"{prefix}NAME", "").strip()
+            if not name:
+                break
+            enabled = os.environ.get(f"{prefix}ENABLED", "true").strip().lower() in ("true", "1", "yes")
+            if not enabled:
+                continue
+            api_type = os.environ.get(f"{prefix}API_TYPE", "").strip().lower()
+            if api_type not in ("comfyui", "a1111"):
+                continue
+            api_url = os.environ.get(f"{prefix}API_URL", "").strip()
+            if not api_url:
+                continue
+
+            mc_str = os.environ.get(f"{prefix}MAX_CONCURRENT", "1").strip()
+            try:
+                max_concurrent = max(1, int(mc_str))
+            except ValueError:
+                max_concurrent = 1
+            beszel_id = os.environ.get(f"{prefix}BESZEL_SYSTEM_ID", "").strip()
+
+            gpu_configs: List[GpuConfig] = []
+            gi = 0
+            while True:
+                gv = os.environ.get(f"{prefix}GPU{gi}_VRAM", "").strip()
+                if not gv:
+                    break
+                try:
+                    vmb = int(float(gv) * 1024)
+                except ValueError:
+                    break
+                gpu_configs.append(GpuConfig(
+                    index=gi,
+                    vram_mb=vmb,
+                    device=os.environ.get(f"{prefix}GPU{gi}_DEVICE", "").strip(),
+                    types=[api_type],
+                    label=os.environ.get(f"{prefix}GPU{gi}_LABEL", "").strip(),
+                    match_name=os.environ.get(f"{prefix}GPU{gi}_MATCH_NAME", "").strip(),
+                    max_concurrent=max_concurrent))
+                gi += 1
+            if not gpu_configs:
+                # Implicit single-GPU placeholder so find_channel() matches
+                # the backend channel for gpu_type='comfyui'/'a1111'. VRAM 0
+                # disables VRAM-capacity filtering — the backend itself decides.
+                gpu_configs.append(GpuConfig(
+                    index=0, vram_mb=0, device="", types=[api_type],
+                    label="", match_name="", max_concurrent=max_concurrent))
+
+            vram_total = sum(g.vram_mb for g in gpu_configs) or None
+            system_specs = ""
+            if any(g.vram_mb for g in gpu_configs):
+                parts = [f"{g.vram_mb // 1024} GB" for g in gpu_configs if g.vram_mb]
+                system_specs = " + ".join(parts) if len(parts) > 1 else parts[0]
+
+            synth = Provider(
+                name=name,
+                type=api_type,
+                api_base=api_url,
+                api_key="",
+                vram_mb=vram_total,
+                max_concurrent=max_concurrent,
+                beszel_system_id=beszel_id,
+                gpu_configs=gpu_configs,
+                system=name,
+                system_specs=system_specs)
+            # Real availability is tracked on the ImageBackend instance; we
+            # default to True so find_channel() lists this channel. ChannelHealth
+            # then enforces 'backend reachable' independently.
+            synth.available = True
+
+            self._backend_providers[name] = synth
+
+            channel_key = f"backend:{name}"
+            pq = ProviderQueue(
+                synth, queue_name=channel_key,
+                max_concurrent=max_concurrent,
+                chat_pause_enabled=False,
+                gpu_indices=[g.index for g in gpu_configs])
+            self.channels[channel_key] = pq
+            logger.info("  -> Backend-Channel %s: %s (%s, concurrent=%d)",
+                        channel_key, api_url, api_type, max_concurrent)
+
+    def get_systems_config(self) -> List[Dict[str, Any]]:
+        """Builds systems list for dashboard grouping.
+
+        Each LLM provider is one system. Each enabled ComfyUI/A1111 backend is
+        its own system (own channel/queue). Cloud image backends without a
+        local channel are listed as standalone.
 
         Returns list of dicts: {name, specs, providers, image_backends}.
         """
@@ -186,11 +290,15 @@ class ProviderManager:
                 "providers": [prov.name],
                 "image_backends": [],
             }
-
-        # Scan SKILL_IMAGEGEN_N_* for image backends
-        # Map local backends to providers with comfyui GPUs
-        comfyui_providers = [name for name, p in self.providers.items()
-                             if any("comfyui" in g.types for g in p.gpu_configs)]
+        # Each local image backend = its own system (channel-owner)
+        for be_name, synth in self._backend_providers.items():
+            systems[be_name] = {
+                "name": be_name,
+                "specs": synth.system_specs or synth.type,
+                "providers": [],
+                "image_backends": [be_name],
+            }
+        # Cloud backends (not covered above)
         for i in range(1, 20):
             be_name = os.environ.get(f"SKILL_IMAGEGEN_{i}_NAME", "").strip()
             if not be_name:
@@ -198,18 +306,10 @@ class ProviderManager:
             enabled = os.environ.get(f"SKILL_IMAGEGEN_{i}_ENABLED", "true").strip().lower() in ("true", "1", "yes")
             if not enabled:
                 continue
-            api_type = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_TYPE", "").strip().lower()
-            if api_type in ("comfyui", "a1111") and comfyui_providers:
-                # Local backend → assign to first provider with comfyui GPUs
-                prov_name = comfyui_providers[0]
-                if prov_name in systems:
-                    systems[prov_name]["image_backends"].append(be_name)
-                    continue
-            # Standalone/cloud backend
-            if be_name not in systems:
-                systems[be_name] = {"name": be_name, "specs": "Cloud",
-                                    "providers": [], "image_backends": []}
-            systems[be_name]["image_backends"].append(be_name)
+            if be_name in systems:
+                continue
+            systems[be_name] = {"name": be_name, "specs": "Cloud",
+                                "providers": [], "image_backends": [be_name]}
 
         return list(systems.values())
 
@@ -374,7 +474,8 @@ class ProviderManager:
                     if total_vram < vram_required_mb:
                         continue
             else:
-                # Cloud provider (no GPUs): matches LLM types only, never comfyui
+                # Channel ohne GPU-Eintrag: kann nur LLM-Tasks bedienen, niemals
+                # ComfyUI/A1111 (die brauchen einen Backend-Channel).
                 if gpu_type not in llm_types:
                     continue
             # Backend-Health-Check: Channel ueberspringen wenn alle zugeordneten
@@ -413,11 +514,19 @@ class ProviderManager:
         """Routes a GPU-slot task to the best available channel.
 
         Routing priority:
-        1. Explicit channel: provider_name="Provider:gpuIndex" → direct lookup
-        2. Dynamic routing: gpu_type set → find_channel() by type/vram/load
-        3. Legacy fallback: provider_name="Provider" → backwards-compat lookup
+        1. ImageBackend channel: provider_name matches an image backend → ``backend:<name>``
+        2. Explicit Provider GPU: provider_name="Provider:gpuIndex" → direct lookup
+        3. Dynamic routing: gpu_type set → find_channel() by type/vram/load
+        4. Legacy fallback: provider_name="Provider" → backwards-compat LLM-channel lookup
         """
-        # 1. Direct channel lookup: "Provider:N" → "Provider:gpuN"
+        # 1. ImageBackend channel lookup: backend name → ``backend:<name>``
+        if provider_name and provider_name in self._backend_providers:
+            pq = self.channels.get(f"backend:{provider_name}")
+            if pq:
+                return pq.submit_gpu_task(task_type, priority, callable_fn,
+                                          agent_name, label, vram_required_mb)
+
+        # 2. Direct channel lookup: "Provider:N" → "Provider:gpuN"
         if provider_name and ":" in provider_name:
             parts = provider_name.split(":", 1)
             channel_key = f"{parts[0]}:gpu{parts[1]}"
@@ -426,14 +535,14 @@ class ProviderManager:
                 return pq.submit_gpu_task(task_type, priority, callable_fn,
                                           agent_name, label, vram_required_mb)
 
-        # 2. Dynamic routing by GPU type
+        # 3. Dynamic routing by GPU type
         if gpu_type:
             pq = self.find_channel(gpu_type, vram_required_mb)
             if pq:
                 return pq.submit_gpu_task(task_type, priority, callable_fn,
                                           agent_name, label, vram_required_mb)
 
-        # 3. Legacy fallback by provider name
+        # 4. Legacy fallback by provider name
         if provider_name:
             prov_name = provider_name.split(":")[0] if ":" in provider_name else provider_name
             pq = self.gpu_queues.get(prov_name) or self.queues.get(prov_name)

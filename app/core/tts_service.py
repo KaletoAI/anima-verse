@@ -461,9 +461,10 @@ class TTSService:
             }
             logger.info("F5-TTS: Legacy Single-Model Config (keine TTS_F5_MODEL_* Variablen)")
 
-    def _pick_comfyui_url(self) -> str:
-        """Waehlt den ersten erreichbaren ComfyUI-Backend aus den konfigurierten
-        Candidates. Leerer String wenn keiner erreichbar ist.
+    def _pick_comfyui_backend(self) -> Tuple[str, str]:
+        """Waehlt den ersten erreichbaren ComfyUI-Backend (name, url).
+
+        Leeres Tuple wenn keiner erreichbar ist.
         """
         for name, url, _vram in self.comfyui_candidates:
             if not url:
@@ -471,11 +472,15 @@ class TTSService:
             try:
                 resp = requests.get(f"{url}/system_stats", timeout=5)
                 if resp.status_code == 200:
-                    return url
+                    return name, url
                 logger.debug("TTS ComfyUI: %s (%s) HTTP %d", name, url, resp.status_code)
             except Exception as e:
                 logger.debug("TTS ComfyUI: %s (%s) nicht erreichbar: %s", name, url, type(e).__name__)
-        return ""
+        return "", ""
+
+    def _pick_comfyui_url(self) -> str:
+        """Backward-compat helper — gibt nur die URL aus _pick_comfyui_backend zurueck."""
+        return self._pick_comfyui_backend()[1]
 
     def _check_backend_reachable(self, backend: str) -> bool:
         """Prueft ob ein bestimmtes Backend erreichbar ist (ohne Modelle zu laden)."""
@@ -716,7 +721,7 @@ class TTSService:
 
         # Einen ComfyUI-Backend fuer die gesamte Generierung pinnen (Upload + Submit +
         # Poll + Download muessen auf derselben Instanz laufen).
-        comfyui_url = self._pick_comfyui_url()
+        comfyui_backend_name, comfyui_url = self._pick_comfyui_backend()
         if not comfyui_url:
             logger.error("ComfyUI TTS: Kein erreichbares Backend in %s",
                          [n for n, _u, _v in self.comfyui_candidates])
@@ -877,6 +882,7 @@ class TTSService:
             from app.core.llm_queue import get_llm_queue
             mode_label = {"voiceclone": "Voice Clone", "voicedesc": "Voice Design", "voicename": "Voice Name"}.get(mode, mode)
             return get_llm_queue().submit_gpu_task(
+                provider_name=comfyui_backend_name,
                 task_type="tts_comfyui",
                 priority=5,
                 callable_fn=_comfyui_tts_execute,

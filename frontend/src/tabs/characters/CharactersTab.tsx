@@ -4,6 +4,7 @@ import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
+import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import {
   loadActivities,
   loadCharacters,
@@ -198,6 +199,15 @@ export function CharactersTab() {
       <aside className="ga-twocol-left">
         <div className="ga-twocol-header">
           <h3>{t('Characters')}</h3>
+          <div className="ga-twocol-header-actions">
+            <ImportButton
+              endpoint="/characters/import"
+              overwriteSupported
+              onImported={() => {
+                loadCharacters().then(setCharacters).catch(() => {})
+              }}
+            />
+          </div>
         </div>
         <ul className="ga-list">
           {sortedCharacters.length === 0 ? (
@@ -235,6 +245,23 @@ export function CharactersTab() {
               onCancel={dirty ? () => reloadCurrent(selected) : undefined}
               cancelLabel={t('Revert')}
               disabled={saving}
+              extra={
+                <>
+                  <ExportButton
+                    endpoint={`/characters/${encodeURIComponent(selected)}/export`}
+                    filename={`${selected}_export.zip`}
+                    options={[
+                      { key: 'include_chats', label: t('Include chat history') },
+                      { key: 'include_stories', label: t('Include story progress') },
+                    ]}
+                  />
+                  <PublishButton
+                    packType="character"
+                    entityId={selected}
+                    defaultName={selected}
+                  />
+                </>
+              }
             />
             <div className="ga-form">
               <div className="ga-form-section-label">{t('Placement')}</div>

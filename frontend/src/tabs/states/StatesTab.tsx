@@ -6,6 +6,7 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { IconPicker } from '../../components/IconPicker'
+import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 
 interface PromptFilter {
   id: string
@@ -184,6 +185,22 @@ export function StatesTab() {
           onNew={newFilter}
           onCopy={copyFilter}
           copyDisabled={!draft || draft.isNew}
+          extra={
+            <>
+              <ExportButton
+                endpoint="/admin/prompt-filters/export"
+                filename="states.zip"
+                label={t('Export all')}
+                title={t('Download all world-level states as a ZIP')}
+              />
+              <ImportButton
+                endpoint="/admin/prompt-filters/import"
+                onImported={() => reload()}
+                title={t('Upload a states ZIP (merges by id)')}
+              />
+              <PublishButton packType="states" defaultName="States block" />
+            </>
+          }
         />
         <p className="ga-sched-muted">
           {t(

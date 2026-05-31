@@ -6,6 +6,7 @@ import { loadActivities, loadCharacters, loadLocations, type ActivityRef, type C
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
+import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 
 type RuleType = 'block' | 'force' | 'discover'
 type TargetScope = 'location' | 'any_room' | 'danger_level'
@@ -271,6 +272,13 @@ export function RulesTab() {
           onNew={newRule}
           onCopy={copyRule}
           copyDisabled={!draft || draft.isNew}
+          extra={
+            <ImportButton
+              endpoint="/rules/import"
+              overwriteSupported
+              onImported={() => reload()}
+            />
+          }
         />
         <ul className="ga-list">
           {sorted.length === 0 ? (
@@ -323,6 +331,21 @@ export function RulesTab() {
                   : draft.origin === 'world override'
                     ? 'world override'
                     : 'world'
+              }
+              extra={
+                draft.isNew || !draft.id || draft.origin === 'shared' ? null : (
+                  <>
+                    <ExportButton
+                      endpoint={`/rules/${encodeURIComponent(draft.id)}/export`}
+                      filename={`${draft.id}.zip`}
+                    />
+                    <PublishButton
+                      packType="rule"
+                      entityId={draft.id}
+                      defaultName={draft.name || draft.id}
+                    />
+                  </>
+                )
               }
             />
             <RuleForm
