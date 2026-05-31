@@ -1134,13 +1134,14 @@ class PromptBuilder:
         """Baut die Reference-Image Slot-Map fuer ComfyUI-Workflows.
 
         Dispatch je nach WorkflowKind:
-            QWEN_STYLE:  Slots 1-3=Personen, Slot 4=Location (Style-Conditioning)
+            QWEN_STYLE:  Slots 1..max_slots-1=Personen, Slot max_slots=Location
             FLUX_BG:     ein Background-Slot mit Use-Schalter
             Z_IMAGE:     keine Ref-Slots
 
         Args:
             variables: Gesammelte Prompt-Variablen.
-            max_slots: Anzahl Ref-Slots (nur QWEN_STYLE relevant).
+            max_slots: Anzahl Ref-Slots (nur QWEN_STYLE relevant) — aus dem
+                Workflow abgeleitet (ComfyWorkflow.ref_slot_count).
             kind: WorkflowKind-Wert. None -> wie QWEN_STYLE (Backward-Compat).
 
         Returns:

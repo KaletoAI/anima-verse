@@ -37,6 +37,7 @@ class ComfyWorkflow:
     workflow_file: str
     model: str
     kind: WorkflowKind = WorkflowKind.Z_IMAGE  # erkannt aus Workflow-JSON-Nodes
+    ref_slot_count: int = 0     # hoechster input_reference_image_N Slot (QWEN_STYLE) — Slot N = Location, 1..N-1 = Personen
     compatible_backends: list = field(default_factory=list)  # Backend-Namen, leer = alle ComfyUI
     prompt_style: str = "photorealistic"  # Stil-Adjektiv / Style-Keywords (Summary + Style-Zeile)
     image_model: str = ""
@@ -278,6 +279,7 @@ class ImageGenerationSkill(BaseSkill):
             has_input_safetensors = False
             model_type = ""
             kind = WorkflowKind.Z_IMAGE
+            ref_slot_count = 0
             try:
                 import json as _json
                 _wf_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "../../", wf_file))
@@ -294,11 +296,21 @@ class ImageGenerationSkill(BaseSkill):
                         "input_prompt_character", "input_prompt_pose",
                         "input_prompt_expression"
                     }.issubset(_titles)
+                    # Anzahl nummerierter Reference-Slots (input_reference_image_N)
+                    # aus dem Workflow ableiten — der hoechste N ist der Location-
+                    # Slot, 1..N-1 sind Personen-Slots. So passt sich der Code an,
+                    # wenn der Workflow z.B. von 4 auf 3 Slots geaendert wird.
+                    _ref_nums = [
+                        int(t.rsplit("_", 1)[1]) for t in _titles
+                        if t.startswith("input_reference_image_")
+                        and t.rsplit("_", 1)[1].isdigit()
+                    ]
+                    ref_slot_count = max(_ref_nums) if _ref_nums else 0
                     # Workflow-Familie klassifizieren:
-                    # QWEN_STYLE hat Slot-4 (Location) und damit alle 4 Person/Location-Slots.
+                    # QWEN_STYLE hat nummerierte Person/Location-Slots (input_reference_image_N).
                     # FLUX_BG hat einen einzelnen Background-Slot mit Use-Schalter.
                     # Sonst Z_IMAGE (keine Ref-Slots).
-                    if "input_reference_image_4" in _titles:
+                    if ref_slot_count >= 1:
                         kind = WorkflowKind.QWEN_STYLE
                     elif "input_reference_image_background" in _titles:
                         kind = WorkflowKind.FLUX_BG
@@ -341,6 +353,7 @@ class ImageGenerationSkill(BaseSkill):
                 workflow_file=wf_file,
                 model=wf_model,
                 kind=kind,
+                ref_slot_count=ref_slot_count,
                 has_input_unet=has_input_unet,
                 has_input_safetensors=has_input_safetensors,
                 clip=wf_clip,
@@ -2186,7 +2199,8 @@ class ImageGenerationSkill(BaseSkill):
             # aufgeloesten Referenzbilder direkt in die Generierung injiziert.
             if not no_person_detected and pv:
                 _wf_kind = active_workflow.kind.value if active_workflow else None
-                face_refs = builder.resolve_reference_slots(pv, kind=_wf_kind)
+                _wf_slots = active_workflow.ref_slot_count if active_workflow and active_workflow.ref_slot_count else 4
+                face_refs = builder.resolve_reference_slots(pv, max_slots=_wf_slots, kind=_wf_kind)
                 params["reference_images"] = face_refs["reference_images"]
                 params["boolean_inputs"] = face_refs["boolean_inputs"]
                 params["string_inputs"] = face_refs["string_inputs"]

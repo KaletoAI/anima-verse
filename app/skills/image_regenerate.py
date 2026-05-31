@@ -323,7 +323,8 @@ def regenerate_image(character_name: str,
 
             from app.skills.image_generation_skill import WorkflowKind
             _wf_kind = active_workflow.kind.value if active_workflow else None
-            face_refs = _regen_builder.resolve_reference_slots(_regen_pv, kind=_wf_kind)
+            _wf_slots = active_workflow.ref_slot_count if active_workflow and active_workflow.ref_slot_count else 4
+            face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_wf_slots, kind=_wf_kind)
 
             if active_workflow.kind == WorkflowKind.QWEN_STYLE:
                 # Style-Conditioning: Referenzen direkt in die Generierung injizieren
