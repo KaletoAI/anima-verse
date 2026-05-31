@@ -421,29 +421,6 @@
       "fields": []
     },
     {
-      "id": "image_options",
-      "label": "Image Options",
-      "label_de": "Bild-Optionen",
-      "column": 23,
-      "row": 0,
-      "fields": [
-        {
-          "key": "faceswap_enabled",
-          "label": "FaceSwap / MultiSwap",
-          "label_de": "FaceSwap / MultiSwap",
-          "type": "select",
-          "options": [
-            {"value": "true",  "label": "On",  "label_de": "An"},
-            {"value": "false", "label": "Off", "label_de": "Aus"}
-          ],
-          "store": "config",
-          "default": "false",
-          "hint": "Apply face/multi-swap to generated images and expression variants. Off if the model already produces faithful portraits.",
-          "hint_de": "Face/MultiSwap auf generierte Bilder + Expression-Variants anwenden. Aus, wenn das Modell ohnehin schon gute Portraits liefert."
-        }
-      ]
-    },
-    {
       "id": "behavior_config",
       "label": "Behavior",
       "label_de": "Verhalten",
@@ -510,8 +487,8 @@
           ],
           "store": "config",
           "default": "false",
-          "hint": "When active, this character does NOT appear in photos they generate. FaceSwap uses the subjects' faces. Ideal for paparazzi characters.",
-          "hint_de": "Wenn aktiv, erscheint dieser Character NICHT in selbst generierten Fotos. FaceSwap nutzt die Gesichter der Motive. Ideal fuer Paparazzi-Charaktere."
+          "hint": "When active, this character does NOT appear in photos they generate; only the subjects are shown. Ideal for paparazzi characters.",
+          "hint_de": "Wenn aktiv, erscheint dieser Character NICHT in selbst generierten Fotos; nur die Motive sind zu sehen. Ideal fuer Paparazzi-Charaktere."
         }
       ]
     },

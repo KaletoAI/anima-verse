@@ -1925,13 +1925,17 @@ class ImageGenerationSkill(BaseSkill):
                 # profile_only: Profilbild statt Outfit-Bild (z.B. Outfit-Erstellung).
                 # Bei set_profile=True (Profilbild-Erstellung) keine Refs —
                 # sonst Self-Reference-Loop.
+                _profile_only = bool(input_data.get("profile_only", False))
                 if not set_profile:
-                    _profile_only = bool(input_data.get("profile_only", False))
                     for idx, p in enumerate(persons, 1):
                         ref = builder._resolve_person_ref_image(p, profile_only=_profile_only)
                         if ref:
                             pv.ref_images[idx] = ref
-                builder._collect_location(pv)
+                # profile_only = Variant/Outfit-Portrait: keine Location (weder
+                # Location-Prompt noch ref_image_room). Sonst wuerde bei FLUX_BG
+                # das Location-Bild den Profilbild-Referenzslot verdraengen.
+                if not _profile_only:
+                    builder._collect_location(pv)
 
                 appearances = [{"name": p.name, "appearance": p.appearance} for p in persons]
                 agent_mentioned = any(p.is_agent for p in persons)

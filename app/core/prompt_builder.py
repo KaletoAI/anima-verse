@@ -1228,34 +1228,49 @@ class PromptBuilder:
         }
 
     def _resolve_flux_bg_slots(self, variables: PromptVariables) -> Dict[str, Any]:
-        """FLUX_BG: nur input_reference_image_background mit Use-Schalter.
+        """FLUX_BG: ein einzelner Referenz-Slot (input_reference_image_background).
 
-        Charaktere kommen ueber Post-Processing — keine Person-Refs hier.
-        Wenn kein Room-Bild vorhanden, bleibt reference_images leer; das
-        Backend laedt automatisch das 8x8-Placeholder in den BG-LoadImage-Node
-        und das input_reference_image_use Switch-Node wird auf False gesetzt.
+        Der Slot ist derselbe, nur die Quelle unterscheidet sich:
+          - Normale Bilder mit Location: das Background-/Location-Bild.
+          - Variant-/Portrait-Bilder ohne Location: das Personen-Profilbild
+            als Identitaets-Referenz (Profilbild kommt ueber variables.ref_images).
+        Ist keine der beiden Quellen vorhanden, bleibt reference_images leer; das
+        Backend laedt das 8x8-Placeholder und setzt input_reference_image_use=False.
         """
         reference_images: Dict[str, str] = {}
         boolean_inputs: Dict[str, bool] = {}
+        used_person_ref = False
 
+        ref_path = ""
         if variables.ref_image_room and Path(variables.ref_image_room).exists():
-            reference_images["input_reference_image_background"] = variables.ref_image_room
+            ref_path = variables.ref_image_room
+            logger.debug("FLUX_BG: Background-Slot = Location: %s", Path(ref_path).name)
+        else:
+            # Keine Location (z.B. Variant/Portrait): erstes Personen-Refbild
+            # (Profilbild) als Identitaets-Referenz in denselben Slot legen.
+            for idx in sorted(variables.ref_images):
+                cand = variables.ref_images.get(idx, "")
+                if cand and Path(cand).exists():
+                    ref_path = cand
+                    used_person_ref = True
+                    logger.debug("FLUX_BG: Background-Slot = Personen-Ref: %s", Path(ref_path).name)
+                    break
+
+        if ref_path:
+            reference_images["input_reference_image_background"] = ref_path
             # input_reference_image_use wird vom Backend automatisch aktiviert,
             # sobald ein Switch-Node mit dem Title gefunden wird (siehe
             # image_backends._activated_switches Logik).
-            logger.debug("FLUX_BG: Background-Slot belegt: %s", Path(variables.ref_image_room).name)
         else:
-            # Kein Background -> Use-Switch explizit auf False
+            # Keine Referenz -> Use-Switch explizit auf False
             boolean_inputs["input_reference_image_use"] = False
-            logger.debug("FLUX_BG: kein Background, use=False")
+            logger.debug("FLUX_BG: kein Referenzbild, use=False")
 
-        # Charaktere kommen via externes Post-Processing.
-        # has_reference_slots=False signalisiert: kein Style-Conditioning.
         return {
             "reference_images": reference_images,
             "boolean_inputs": boolean_inputs,
             "string_inputs": {},
-            "has_reference_slots": False,
+            "has_reference_slots": used_person_ref,
         }
 
     @staticmethod

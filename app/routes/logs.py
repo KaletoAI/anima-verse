@@ -375,6 +375,12 @@ function buildSections(e, st) {
         const appText = apps.map(a => a.name + ': ' + a.appearance).join('\\n');
         html += buildSection('Appearances (' + apps.length + ')', fmtText(appText, st), false);
     }
+    const refs = e.reference_images || {};
+    const refKeys = Object.keys(refs).filter(k => refs[k]);
+    if (refKeys.length > 0) {
+        const refText = refKeys.map(k => k + ': ' + refs[k]).join('\\n');
+        html += buildSection('Reference Images (' + refKeys.length + ')', fmtText(refText, st), false);
+    }
     const ctx = e.context || {};
     if (Object.keys(ctx).length > 0) {
         html += buildSection('Context', '<pre>' + esc(JSON.stringify(ctx, null, 2)) + '</pre>', false);

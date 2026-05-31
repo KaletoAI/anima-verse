@@ -9408,23 +9408,6 @@ function _buildMetaTableHtml(meta, truncateAnalysis) {
     if (meta.workflow) rows.push(`<tr><td class="git-label">Workflow</td><td class="git-value">${escapeHtml(meta.workflow)}</td></tr>`);
     if (meta.guidance_scale != null && meta.guidance_scale !== '') rows.push(`<tr><td class="git-label">Guidance Scale</td><td class="git-value">${escapeHtml(String(meta.guidance_scale))}</td></tr>`);
     if (meta.num_inference_steps != null && meta.num_inference_steps !== '') rows.push(`<tr><td class="git-label">Inference Steps</td><td class="git-value">${escapeHtml(String(meta.num_inference_steps))}</td></tr>`);
-    if (meta.faceswap !== undefined) {
-        // Methoden-Label: multiswap (Flux MultiSwap) | comfyui (ReActor) | internal (Face Service)
-        const _methodMap = { multiswap: 'MultiSwap', comfyui: 'ComfyUI ReActor', internal: 'Face Service' };
-        const _m = meta.faceswap_method ? (_methodMap[meta.faceswap_method] || meta.faceswap_method) : '';
-        const _icon = meta.faceswap ? '\u2714' : '\u2718';
-        const _status = meta.faceswap ? t('successful') : t('failed');
-        const _fallback = meta.faceswap_fallback ? ' (Fallback)' : '';
-        const _val = _m
-            ? `${_icon} ${_m}${_fallback} \u2014 ${_status}`
-            : `${_icon} ${_status}`;
-        rows.push(`<tr><td class="git-label">FaceSwap</td><td class="git-value">${escapeHtml(_val)}</td></tr>`);
-    }
-    if (meta.face_enhance !== undefined) {
-        const _icon = meta.face_enhance ? '\u2714' : '\u2718';
-        const _status = meta.face_enhance ? 'GFPGAN erfolgreich' : 'nicht angewendet';
-        rows.push(`<tr><td class="git-label">FaceEnhance</td><td class="git-value">${_icon} ${escapeHtml(_status)}</td></tr>`);
-    }
     if (meta.duration_s) rows.push(`<tr><td class="git-label">Dauer</td><td class="git-value">${meta.duration_s}s</td></tr>`);
     if (meta.seed !== undefined && meta.seed !== null) rows.push(`<tr><td class="git-label">Seed</td><td class="git-value">${meta.seed}</td></tr>`);
     if (meta.created_at) rows.push(`<tr><td class="git-label">Erstellt</td><td class="git-value">${escapeHtml(meta.created_at.replace('T', ' '))}</td></tr>`);
@@ -11845,7 +11828,7 @@ function renderInstagramPost(post) {
         if (postMeta.backend) infoParts.push(`Skill: ${postMeta.backend}`);
         if (postMeta.backend_type) infoParts.push(`Typ: ${postMeta.backend_type}`);
         if (postMeta.workflow) infoParts.push(`Workflow: ${postMeta.workflow}`);
-        infoParts.push(`FaceSwap: ${postMeta.faceswap ? 'Ja' : 'Nein'}`);
+        if (postMeta.postprocessed) infoParts.push('Post-Processing: extern');
         if (postMeta.duration_s) infoParts.push(`Dauer: ${postMeta.duration_s}s`);
         if (postMeta.image_analysis) infoParts.push(`Analyse: ${postMeta.image_analysis}`);
         postInfoIcon = `<div class="gallery-info-icon" title="${escapeHtml(infoParts.join('\n'))}">i</div>`;

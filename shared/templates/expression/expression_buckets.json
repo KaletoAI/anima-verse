@@ -1,5 +1,5 @@
 {
-  "_comment": "Maps mood keywords to a small set of body-language buckets. The bucket — not the raw mood — goes into the variant cache key, since fine mood differences are lost during FaceSwap. Synonyms of presets in expression_presets.json are auto-expanded at load time, so listing the canonical mood here is usually enough.",
+  "_comment": "Maps mood keywords to a small set of body-language buckets. The bucket — not the raw mood — goes into the variant cache key, since fine mood differences would otherwise explode the cache. Synonyms of presets in expression_presets.json are auto-expanded at load time, so listing the canonical mood here is usually enough.",
   "default": "neutral",
   "buckets": {
     "positive": [
