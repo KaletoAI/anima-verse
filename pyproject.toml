@@ -24,22 +24,21 @@ name = "agent-system"
 version = "0.1.0"
 dependencies = [
     "openai>=1.0.0",
-    "sse-starlette>=1.6.1",
     "fastapi>=0.95.0",
     "uvicorn>=0.22.0",
     "python-dotenv",
     "jinja2>=3.1.2",
     "python-multipart",
     "bcrypt>=4.0.0",
-    "pyjwt>=2.8.0",
     "apscheduler",
-    "opencv-python-headless",
-    "insightface",
-    "onnxruntime",
+    "onnxruntime",          # runtime for rembg's u2net (rembg declares it only as an extra)
     "aiohttp",
-    "gradio_client",
-    "rembg",
+    "gradio_client",        # TTS backends (F5/XTTS via Gradio)
+    "rembg",                # background removal (u2net)
     "pillow",
-    "langchain-core",
-    "anthropic>=0.40.0"
+    "anthropic>=0.40.0",
+    # Security floors for transitive deps (Dependabot); pulled via
+    # requests/httpx. Pin the patched minimums.
+    "idna>=3.15",
+    "urllib3>=2.7.0"
 ]
