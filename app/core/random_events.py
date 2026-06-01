@@ -21,6 +21,8 @@ import os
 import random
 import re
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -156,10 +158,10 @@ def check_escalation():
 
             # Alter des Events pruefen (TTL/2 vergangen?)
             try:
-                created = datetime.fromisoformat(event.get("created_at", ""))
+                created = parse_iso(event.get("created_at", ""))
                 ttl_hours = event.get("ttl_hours", 6)
                 half_ttl = timedelta(hours=ttl_hours / 2)
-                if datetime.now() - created < half_ttl:
+                if utc_now() - created < half_ttl:
                     continue  # Noch nicht alt genug
             except (ValueError, TypeError):
                 continue
@@ -255,9 +257,9 @@ def try_roll_on_entry(character_name: str, loc_id: str, location: Dict[str, Any]
         cooldown_min = 10
     key = (character_name or "", loc_id)
     last = _ENTRY_ROLL_LAST.get(key)
-    if last and (datetime.now() - last).total_seconds() < cooldown_min * 60:
+    if last and (utc_now() - last).total_seconds() < cooldown_min * 60:
         return
-    _ENTRY_ROLL_LAST[key] = datetime.now()
+    _ENTRY_ROLL_LAST[key] = utc_now()
 
     # Skip wenn an der Location bereits ein aktives ungeloestes
     # disruption/danger-Event steht (Constraint "ein blockendes Event pro
@@ -343,8 +345,8 @@ def _try_generate_for_location(loc_id: str, location: Dict[str, Any], char_names
     if active:
         latest = max(active, key=lambda e: e.get("created_at", ""))
         try:
-            last_time = datetime.fromisoformat(latest.get("created_at", ""))
-            if (datetime.now() - last_time).total_seconds() < cooldown_hours * 3600:
+            last_time = parse_iso(latest.get("created_at", ""))
+            if (utc_now() - last_time).total_seconds() < cooldown_hours * 3600:
                 return
         except (ValueError, TypeError):
             pass
@@ -473,7 +475,7 @@ def _generate_event(loc_id: str,
         char_infos.append(f"{c} (mood: {mood})" if mood else c)
 
     # Tageszeit + Uhrzeit
-    _now = datetime.now()
+    _now = utc_now()
     hour = _now.hour
     current_time = _now.strftime("%H:%M")
     if 6 <= hour < 12:
@@ -703,7 +705,7 @@ def _had_chat_since(location_id: str, since: datetime) -> bool:
             last = history[-1] if history else None
             if last:
                 try:
-                    ts = datetime.fromisoformat(last.get("timestamp", ""))
+                    ts = parse_iso(last.get("timestamp", ""))
                     if ts > since:
                         return True
                 except (ValueError, TypeError):
@@ -725,8 +727,8 @@ def _on_resolution_cooldown(event: Dict[str, Any], cooldown_min: Optional[int] =
         last = (event.get("resolution") or {}).get("last_attempt_at")
         if not last:
             return False
-        last_dt = datetime.fromisoformat(last)
-        return datetime.now() - last_dt < timedelta(minutes=cooldown_min)
+        last_dt = parse_iso(last)
+        return utc_now() - last_dt < timedelta(minutes=cooldown_min)
     except (ValueError, TypeError):
         return False
 

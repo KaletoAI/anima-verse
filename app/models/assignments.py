@@ -9,6 +9,8 @@ Storage: storage/users/{username}/assignments.json (User-Level)
 import json
 import uuid
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -90,7 +92,7 @@ def _load_all() -> List[Dict[str, Any]]:
 
 def _save_all(assignments: List[Dict[str, Any]]) -> None:
     """Save all assignments to DB (upsert) and JSON backup."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     try:
         with transaction() as conn:
             existing_ids = {r[0] for r in conn.execute(
@@ -191,7 +193,7 @@ def create_assignment(title: str,
     Returns:
         The created assignment dict.
     """
-    now = datetime.now()
+    now = utc_now()
     assignment_id = uuid.uuid4().hex[:8]
 
     # Compute expiry
@@ -335,7 +337,7 @@ def add_progress(assignment_id: str,
             if character_name not in participants:
                 return None
             entry = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": utc_now_iso(),
                 "note": note,
             }
             participants[character_name].setdefault("progress", []).append(entry)
@@ -359,12 +361,12 @@ def complete_assignment(assignment_id: str,
         if a["id"] == assignment_id:
             if character_name and character_name in a.get("participants", {}):
                 entry = {
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": utc_now_iso(),
                     "note": note or "Aufgabe abgeschlossen",
                 }
                 a["participants"][character_name].setdefault("progress", []).append(entry)
             a["status"] = "completed"
-            a["completed_at"] = datetime.now().isoformat()
+            a["completed_at"] = utc_now_iso()
             _save_all(assignments)
             logger.info("Assignment completed: %s '%s'", assignment_id, a.get("title"))
             return a
@@ -378,7 +380,7 @@ def complete_assignment(assignment_id: str,
 def expire_overdue() -> List[Dict[str, Any]]:
     """Check and expire overdue assignments. Returns list of newly expired ones."""
     assignments = _load_all()
-    now = datetime.now()
+    now = utc_now()
     expired = []
     changed = False
 
@@ -389,7 +391,7 @@ def expire_overdue() -> List[Dict[str, Any]]:
         if not exp_str:
             continue
         try:
-            exp_dt = datetime.fromisoformat(exp_str)
+            exp_dt = parse_iso(exp_str)
             if now >= exp_dt:
                 a["status"] = "expired"
                 expired.append(a)
@@ -463,7 +465,7 @@ def auto_track_progress(character_name: str,
             # Add progress entries
             for _ in range(count):
                 participant.setdefault("progress", []).append({
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": utc_now_iso(),
                     "note": label,
                 })
             changed = True
@@ -474,7 +476,7 @@ def auto_track_progress(character_name: str,
                 total_progress = len(participant.get("progress", []))
                 if total_progress >= target:
                     a["status"] = "completed"
-                    a["completed_at"] = datetime.now().isoformat()
+                    a["completed_at"] = utc_now_iso()
                     logger.info("Assignment auto-completed: %s '%s' (%d/%d)",
                                 aid, a.get("title"), total_progress, target)
 
@@ -567,7 +569,7 @@ def build_assignment_prompt_section(character_name: str) -> str:
         expires = a.get("expires_at")
         if expires:
             try:
-                exp_dt = datetime.fromisoformat(expires)
+                exp_dt = parse_iso(expires)
                 lines.append(f"  → Frist: bis {exp_dt.strftime('%d.%m.%Y, %H:%M')}")
             except (ValueError, TypeError):
                 pass

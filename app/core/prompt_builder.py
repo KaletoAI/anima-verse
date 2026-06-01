@@ -13,6 +13,8 @@ Ablauf:
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+
+from app.core.timeutils import utc_now
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -775,7 +777,7 @@ class PromptBuilder:
 
         loc_data = get_location(raw_location)
         current_room_id = get_character_current_room(self.character_name)
-        hour = datetime.now().hour
+        hour = utc_now().hour
 
         location_name = ""
         location_desc = ""

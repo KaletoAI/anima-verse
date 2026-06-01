@@ -14,6 +14,8 @@ import json
 import re
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -145,7 +147,7 @@ def _save_stored(character_name: str, entries: List[Dict[str, Any]]) -> None:
                 str_id = entry.get("id")
                 if not str_id:
                     continue
-                ts = entry.get("timestamp", datetime.now().isoformat())
+                ts = entry.get("timestamp", utc_now_iso())
                 content = entry.get("content", "")
                 tags = json.dumps([entry.get("type", "daily_summary")], ensure_ascii=False)
                 meta_blob = json.dumps({
@@ -175,7 +177,7 @@ def add_summary(character_name: str, content: str, date: str) -> Dict[str, Any]:
         "id": uuid.uuid4().hex[:8],
         "type": "daily_summary",
         "content": content,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": utc_now_iso(),
         "metadata": {"date": date},
     }
     stored = _load_stored(character_name)
@@ -186,7 +188,7 @@ def add_summary(character_name: str, content: str, date: str) -> Dict[str, Any]:
 
 def has_daily_summary(character_name: str, date: Optional[str] = None) -> bool:
     if not date:
-        date = datetime.now().strftime("%Y-%m-%d")
+        date = utc_now().strftime("%Y-%m-%d")
     stored = _load_stored(character_name)
     return any(
         e.get("type") == "daily_summary" and e.get("timestamp", "").startswith(date)
@@ -782,7 +784,7 @@ def _enrich_with_relationships(
             if not ts.startswith(date):
                 continue
             try:
-                dt = datetime.fromisoformat(ts)
+                dt = parse_iso(ts)
             except Exception:
                 continue
             stored_delta = h.get("sentiment_delta")
@@ -806,7 +808,7 @@ def _enrich_with_relationships(
         if not ts:
             continue
         try:
-            entry_dt = datetime.fromisoformat(ts)
+            entry_dt = parse_iso(ts)
         except Exception:
             continue
         for ri, rev in enumerate(rel_events):
@@ -895,7 +897,7 @@ def generate_for_day(character_name: str,
     Returns chronologically sorted list.
     """
     if not date:
-        date = datetime.now().strftime("%Y-%m-%d")
+        date = utc_now().strftime("%Y-%m-%d")
 
     entries = []
     entries.extend(_collect_mood(character_name, date))

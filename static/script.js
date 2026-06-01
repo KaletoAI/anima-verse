@@ -9410,12 +9410,20 @@ function _buildMetaTableHtml(meta, truncateAnalysis) {
     if (meta.num_inference_steps != null && meta.num_inference_steps !== '') rows.push(`<tr><td class="git-label">Inference Steps</td><td class="git-value">${escapeHtml(String(meta.num_inference_steps))}</td></tr>`);
     if (meta.duration_s) rows.push(`<tr><td class="git-label">Dauer</td><td class="git-value">${meta.duration_s}s</td></tr>`);
     if (meta.seed !== undefined && meta.seed !== null) rows.push(`<tr><td class="git-label">Seed</td><td class="git-value">${meta.seed}</td></tr>`);
-    if (meta.created_at) rows.push(`<tr><td class="git-label">Erstellt</td><td class="git-value">${escapeHtml(meta.created_at.replace('T', ' '))}</td></tr>`);
+    if (meta.created_at) {
+        const _cd = new Date(meta.created_at);
+        const _cstr = isNaN(_cd.getTime()) ? meta.created_at.replace('T', ' ') : _cd.toLocaleString('de-DE');
+        rows.push(`<tr><td class="git-label">Erstellt</td><td class="git-value">${escapeHtml(_cstr)}</td></tr>`);
+    }
     if (meta.character_names && meta.character_names.length) rows.push(`<tr><td class="git-label">Personen</td><td class="git-value">${escapeHtml(meta.character_names.join(', '))}</td></tr>`);
     if (meta.sent_by) rows.push(`<tr><td class="git-label">Von</td><td class="git-value">${escapeHtml(meta.sent_by)}</td></tr>`);
     if (meta.from_character) rows.push(`<tr><td class="git-label">Erstellt von</td><td class="git-value">${escapeHtml(meta.from_character)}</td></tr>`);
     if (meta.postprocessed) {
-        const _ppWhen = meta.postprocessed_at ? ' (' + escapeHtml(meta.postprocessed_at.replace('T', ' ')) + ')' : '';
+        let _ppWhen = '';
+        if (meta.postprocessed_at) {
+            const _pd = new Date(meta.postprocessed_at);
+            _ppWhen = ' (' + escapeHtml(isNaN(_pd.getTime()) ? meta.postprocessed_at.replace('T', ' ') : _pd.toLocaleString('de-DE')) + ')';
+        }
         rows.push(`<tr><td class="git-label">Post-Processing</td><td class="git-value">Extern bearbeitet${_ppWhen}</td></tr>`);
     }
     if (meta.image_analysis) {
@@ -21447,7 +21455,7 @@ function _tickQueueTimers() {
     const now = Date.now();
     document.querySelectorAll('.queue-elapsed[data-started]').forEach(el => {
         const ts = el.dataset.started;
-        // Server sendet lokale Zeit ohne TZ-Suffix — als lokale Zeit interpretieren
+        // Server sendet UTC-aware ISO (…+00:00); new Date() konvertiert nach lokal.
         const started = new Date(ts).getTime();
         if (isNaN(started)) return;
         const secs = Math.max(0, Math.floor((now - started) / 1000));

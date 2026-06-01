@@ -12,6 +12,8 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+from app.core.timeutils import utc_now
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -77,7 +79,7 @@ def _parse_delay(delay_str: str) -> int:
         return int(v * factor)
     tm = re.fullmatch(r'(\d{1,2}):(\d{2})', s)
     if tm:
-        now = datetime.now()
+        now = utc_now()
         target = now.replace(hour=int(tm.group(1)), minute=int(tm.group(2)),
                               second=0, microsecond=0)
         if target <= now:
@@ -240,8 +242,8 @@ def _submit_to_task_queue(intent: Intent, character_name: str) -> None:
 def _schedule_intent(intent: Intent, character_name: str,
                      scheduler_manager: Any) -> None:
     try:
-        run_at = (datetime.now() + timedelta(seconds=intent.delay_seconds)).isoformat()
-        job_id = f"intent_{character_name}_{int(datetime.now().timestamp())}_{intent.type}"
+        run_at = (utc_now() + timedelta(seconds=intent.delay_seconds)).isoformat()
+        job_id = f"intent_{character_name}_{int(utc_now().timestamp())}_{intent.type}"
 
         if intent.type == "send_message":
             action = {

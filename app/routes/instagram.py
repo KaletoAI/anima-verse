@@ -12,6 +12,8 @@ logger = get_logger("instagram")
 from app.models.instagram import load_feed, save_feed, get_post, delete_post, toggle_like, add_comment, add_character_like, get_instagram_dir, load_image_meta, save_image_meta
 from app.models.memory import upsert_relationship_memory as upsert_character_relationship
 
+from app.core.timeutils import utc_now_iso
+
 router = APIRouter(prefix="/instagram", tags=["instagram"])
 
 
@@ -512,7 +514,7 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
 
             meta = load_image_meta(image_filename) or {}
             meta["animate_prompt"] = prompt
-            meta["animate_created_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            meta["animate_created_at"] = utc_now_iso()
             save_image_meta(image_filename, meta)
             _tq.track_finish(_track_id)
         except Exception as e:

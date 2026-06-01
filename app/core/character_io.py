@@ -17,6 +17,8 @@ import io
 import json
 import zipfile
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -192,7 +194,7 @@ def export_character_to_zip(
         manifest = {
             "version": MANIFEST_VERSION,
             "character_name": character_name,
-            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "exported_at": utc_now_iso(),
             "options": {
                 "include_chats": include_chats,
                 "include_stories": include_stories,

@@ -13,6 +13,8 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
 from .provider import Provider
@@ -117,7 +119,7 @@ class ProviderQueue:
             task_type=task_type,
             priority=priority,
             agent_name=agent_name,
-            created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            created_at=utc_now_iso(),
             provider_name=self.provider.name,
             model=get_model_name(llm),
             _llm=llm,
@@ -168,7 +170,7 @@ class ProviderQueue:
             task_type=task_type,
             priority=priority,
             agent_name=agent_name,
-            created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            created_at=utc_now_iso(),
             provider_name=self.provider.name,
             model=label)
         # Store the callable on the task object
@@ -224,7 +226,7 @@ class ProviderQueue:
             task_type=task_type,
             priority=Priority.CHAT,
             agent_name=agent_name,
-            created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            created_at=utc_now_iso(),
             status="chat_active",
             provider_name=self.provider.name,
             model=model,
@@ -463,7 +465,7 @@ class ProviderQueue:
                 self._current_tasks.append(task)
                 self._tasks_idle.clear()
             task.status = "running"
-            task.started_at = datetime.now().isoformat(timespec="seconds")
+            task.started_at = utc_now_iso()
             _attach_duration_estimate(task)
             logger.info("[%s] Verarbeite: %s (%s) agent=%s",
                         self._queue_name, task.task_id, task.task_type, task.agent_name)

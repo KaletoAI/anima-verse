@@ -9,6 +9,8 @@ Schema-Definition in `app/core/world_db_schema.py` (Tabelle
 der Skill-Code keinen Roh-SQL braucht.
 """
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
@@ -42,7 +44,7 @@ def insert_action_log(*,
                  storyteller_response or "",
                  1 if event_resolved else 0,
                  event_id or "",
-                 datetime.now().isoformat()))
+                 utc_now_iso()))
             return int(cur.lastrowid) if cur.lastrowid else None
     except Exception as e:
         logger.warning("insert_action_log fehlgeschlagen fuer %s: %s",

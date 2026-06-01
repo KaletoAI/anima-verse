@@ -55,6 +55,8 @@ from app.models.character import (
     get_character_outfits_dir)
 from app.core.dependencies import reload_skill_manager, get_skill_manager
 
+from app.core.timeutils import utc_now, utc_now_iso
+
 router = APIRouter(prefix="/characters", tags=["characters"])
 
 
@@ -3545,7 +3547,7 @@ async def animate_character_image(character_name: str, image_name: str, request:
             # Video-Info in bestehende Bild-Metadaten schreiben
             add_character_image_metadata(character_name, image_name, {
                 "animate_prompt": prompt,
-                "animate_created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "animate_created_at": utc_now_iso(),
             })
             _tq.track_finish(_track_id)
         except Exception as e:
@@ -4142,7 +4144,7 @@ def memory_today(character_name: str) -> Dict[str, Any]:
                                    get_room_by_id, _load_world_data)
 
     profile = get_character_profile(character_name)
-    now = datetime.now()
+    now = utc_now()
     cutoff = (now - timedelta(hours=24)).isoformat()
 
     conn = get_connection()

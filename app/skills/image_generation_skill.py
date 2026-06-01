@@ -13,6 +13,8 @@ import uuid
 _re_4xx = re.compile(r"\b(?:HTTP\s*)?4(?:00|01|03|04|05|22)\b|Bad Request|Unprocessable", re.IGNORECASE)
 from dataclasses import dataclass, field
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
@@ -2450,7 +2452,7 @@ class ImageGenerationSkill(BaseSkill):
                 "guidance_scale": params.get("guidance_scale"),
                 "num_inference_steps": params.get("num_inference_steps") or params.get("steps"),
                 "duration_s": round(_gen_duration, 1),
-                "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "created_at": utc_now_iso(),
                 "location": _location,
                 "room_id": _room_id,
                 "seed": params.get("seed", 0),

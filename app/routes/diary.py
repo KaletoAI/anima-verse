@@ -15,6 +15,7 @@ from app.models.diary import (
     add_summary,
     ENTRY_TYPES,
     ENTRY_ICONS)
+from app.core.timeutils import utc_now
 
 logger = get_logger("diary_route")
 
@@ -115,7 +116,7 @@ def _generate_summary_sync(character_name: str, date: str, day_text: str):
         if summary:
             if not date:
                 from datetime import datetime
-                date = datetime.now().strftime("%Y-%m-%d")
+                date = utc_now().strftime("%Y-%m-%d")
             add_summary(character_name, summary, date)
             logger.info("Diary summary generated: %s/%s", character_name)
     except Exception as e:

@@ -24,6 +24,8 @@ from app.models.character import (
 from app.models.character_template import resolve_profile_tokens, get_template
 from app.models.world import get_location, get_activity
 
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
+
 logger = get_logger("instagram_skill")
 
 # Note: get_location(name) and get_activity(name)
@@ -408,9 +410,9 @@ class InstagramSkill(BaseSkill):
             last_ts = (agent_config or {}).get("last_post_timestamp")
             if last_ts:
                 try:
-                    last_post_time = datetime.fromisoformat(last_ts)
+                    last_post_time = parse_iso(last_ts)
                     cooldown_end = last_post_time + timedelta(hours=cooldown_hours)
-                    now = datetime.now()
+                    now = utc_now()
                     if now < cooldown_end:
                         remaining = cooldown_end - now
                         hours_left = remaining.total_seconds() / 3600
@@ -651,7 +653,7 @@ class InstagramSkill(BaseSkill):
             from datetime import datetime
             from app.models.character import get_character_skill_config, save_character_skill_config
             agent_config = get_character_skill_config(character_name, self.SKILL_ID) or {}
-            agent_config["last_post_timestamp"] = datetime.now().isoformat()
+            agent_config["last_post_timestamp"] = utc_now_iso()
             save_character_skill_config(character_name, self.SKILL_ID, agent_config)
             logger.info("Cooldown-Timestamp gespeichert fuer %s", character_name)
         except Exception as e:

@@ -11,6 +11,8 @@ import json
 import aiohttp
 from datetime import datetime
 
+from app.core.timeutils import utc_now_iso
+
 from app.core.log import get_logger
 
 logger = get_logger("telegram_channel")
@@ -94,7 +96,7 @@ class TelegramChannel(ChannelInterface):
 
     def _save_chat_mapping(self) -> None:
         """Speichern Chat-ID Mapping in DB."""
-        now = datetime.now().isoformat()
+        now = utc_now_iso()
         try:
             from app.core.db import transaction as _transaction
             with _transaction() as conn:

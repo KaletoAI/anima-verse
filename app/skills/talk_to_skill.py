@@ -15,6 +15,8 @@ logger = get_logger("talk_to")
 
 from app.models.character import list_available_characters
 
+from app.core.timeutils import utc_now_iso
+
 
 class TalkToSkill(BaseSkill):
     """Ein Character spricht am gleichen Ort mit einem anderen.
@@ -125,7 +127,7 @@ class TalkToSkill(BaseSkill):
         # synchronous reply.
         from datetime import datetime
         from app.models.chat import save_message
-        ts = datetime.now().isoformat()
+        ts = utc_now_iso()
         try:
             save_message({
                 "role": "user", "content": message, "timestamp": ts,

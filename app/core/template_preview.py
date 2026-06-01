@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -226,7 +228,7 @@ def _drive_chat_stream(agent: str, avatar: str) -> PreviewResult:
         for m in old:
             ts = m.get("timestamp") or ""
             try:
-                t = datetime.fromisoformat(ts)
+                t = parse_iso(ts)
                 if newest_old is None or t > newest_old:
                     newest_old = t
             except (ValueError, TypeError):
@@ -322,7 +324,7 @@ def _drive_consolidation_today(agent: str, avatar: str) -> PreviewResult:
         history = get_chat_history(agent, partner_name=avatar) or []
     except Exception:
         history = []
-    today = datetime.now().date().isoformat()
+    today = utc_now().date().isoformat()
     todays = []
     for m in history:
         ts = m.get("timestamp", "") if isinstance(m, dict) else getattr(m, "timestamp", "")
@@ -358,7 +360,7 @@ def _drive_consolidation_daily_diary(agent: str, avatar: str) -> PreviewResult:
     Build it via diary.build_daily_summary_input."""
     try:
         from app.models.diary import build_daily_summary_input
-        day = datetime.now().date().isoformat()
+        day = utc_now().date().isoformat()
         day_text = build_daily_summary_input(agent, day) or ""
     except Exception as e:
         return {"ok": False, "output": "",

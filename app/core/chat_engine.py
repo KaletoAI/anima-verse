@@ -11,6 +11,8 @@ import re
 from typing import Dict, Any, Optional
 from datetime import datetime
 
+from app.core.timeutils import utc_now_iso
+
 from app.core.log import get_logger
 
 logger = get_logger("chat_engine")
@@ -293,7 +295,7 @@ def run_chat_turn(
     try:
         from app.models.account import is_player_controlled
         if is_player_controlled(responder):
-            ts = datetime.now().isoformat()
+            ts = utc_now_iso()
             save_message({
                 "role": "user", "content": incoming_message, "timestamp": ts,
                 "speaker": speaker, "medium": medium,
@@ -348,7 +350,7 @@ def run_chat_turn(
         logger.warning("run_chat_turn: leere Antwort von %s", responder)
         return ""
 
-    ts = datetime.now().isoformat()
+    ts = utc_now_iso()
 
     # Beidseitig speichern (siehe plan-chat-history-redesign: Character↔Character)
     save_message({

@@ -6,6 +6,8 @@ Speichert Story Arcs als JSON pro User:
 import json
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -81,7 +83,7 @@ def _load() -> Dict[str, Any]:
 def _save(data: Dict[str, Any]) -> None:
     """Speichert alle Story Arcs in die DB (Upsert)."""
     arcs = data.get("arcs", [])
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     try:
         with transaction() as conn:
             existing_ids = {r[0] for r in conn.execute(
@@ -151,7 +153,7 @@ def create_arc(title: str,
     first_beat_hint: str = "",
     max_beats: int = 5) -> Dict[str, Any]:
     """Erstellt einen neuen Story Arc."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     arc = {
         "id": f"arc_{uuid.uuid4().hex[:8]}",
         "title": title,
@@ -185,7 +187,7 @@ def advance_arc(arc_id: str,
     for arc in data["arcs"]:
         if arc["id"] != arc_id:
             continue
-        now = datetime.now().isoformat()
+        now = utc_now_iso()
         beat_num = len(arc["beats"]) + 1
         arc["beats"].append({
             "beat": beat_num,
@@ -217,7 +219,7 @@ def resolve_arc(arc_id: str,
     for arc in data["arcs"]:
         if arc["id"] != arc_id:
             continue
-        now = datetime.now().isoformat()
+        now = utc_now_iso()
         arc["status"] = "resolved"
         arc["updated_at"] = now
         arc["resolution"] = resolution
@@ -240,7 +242,7 @@ def can_generate(max_active: int = 2, cooldown_hours: float = 6) -> bool:
     last = data.get("last_generated", "")
     if last:
         try:
-            elapsed = (datetime.now() - datetime.fromisoformat(last)).total_seconds() / 3600
+            elapsed = (utc_now() - parse_iso(last)).total_seconds() / 3600
             if elapsed < cooldown_hours:
                 return False
         except (ValueError, TypeError):

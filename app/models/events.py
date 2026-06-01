@@ -8,6 +8,8 @@ Storage: storage/users/{username}/events.json
 import json
 import uuid
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -79,7 +81,7 @@ def _load_events() -> List[Dict[str, Any]]:
                 evt["ttl_hours"] = DEFAULT_TTL_HOURS
             if "expires_at" not in evt and evt.get("ttl_hours", 0) > 0:
                 try:
-                    created = datetime.fromisoformat(evt["created_at"])
+                    created = parse_iso(evt["created_at"])
                     evt["expires_at"] = (created + timedelta(hours=evt["ttl_hours"])).isoformat()
                 except (ValueError, TypeError, KeyError):
                     pass
@@ -121,7 +123,7 @@ def _save_events(events: List[Dict[str, Any]]):
                 str_id = evt.get("id")
                 if not str_id:
                     continue
-                ts = evt.get("created_at", datetime.now().isoformat())
+                ts = evt.get("created_at", utc_now_iso())
                 payload_str = json.dumps(evt, ensure_ascii=False)
                 if str_id in existing_map:
                     conn.execute(
@@ -153,7 +155,7 @@ def add_event(text: str,
     """
     if ttl_hours is None:
         ttl_hours = DEFAULT_TTL_HOURS
-    now = datetime.now()
+    now = utc_now()
     events = _load_events()
     event = {
         "id": f"evt_{uuid.uuid4().hex[:8]}",
@@ -181,7 +183,7 @@ def _is_expired(event: Dict[str, Any]) -> bool:
     if not expires_at:
         return False  # kein Ablauf (ttl=0)
     try:
-        return datetime.now() > datetime.fromisoformat(expires_at)
+        return utc_now() > parse_iso(expires_at)
     except (ValueError, TypeError):
         return False
 
@@ -237,7 +239,7 @@ def resolve_event(event_id: str,
         if evt.get("resolved"):
             return evt  # Bereits gelöst
 
-        now = datetime.now()
+        now = utc_now()
         evt["resolved"] = True
         evt["resolved_by"] = resolved_by
         evt["resolved_text"] = resolved_text
@@ -283,7 +285,7 @@ def record_attempt(event_id: str,
     for evt in events:
         if evt.get("id") != event_id:
             continue
-        now = datetime.now()
+        now = utc_now()
         resolution = evt.setdefault("resolution", {"attempts": [], "last_attempt_at": None})
         resolution["attempts"].append({
             "when": now.isoformat(),
@@ -415,10 +417,10 @@ def build_events_prompt_section(location_id: Optional[str] = None) -> str:
 def _format_event_timestamp(iso_ts: str) -> str:
     """Kompaktes, LLM-lesbares Datum."""
     try:
-        dt = datetime.fromisoformat(iso_ts)
+        dt = parse_iso(iso_ts)
     except (ValueError, TypeError):
         return ""
-    now = datetime.now()
+    now = utc_now()
     delta = now.date() - dt.date()
     time_str = dt.strftime("%H:%M")
     if delta.days == 0:

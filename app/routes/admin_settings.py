@@ -11,6 +11,8 @@ from app.core import config
 from app.core.config_schema import get_schema
 from app.core.auth_dependency import require_admin
 
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
+
 logger = get_logger("admin_settings")
 
 router = APIRouter(prefix="/admin", tags=["admin-settings"],
@@ -95,13 +97,13 @@ async def llm_stats_data(
     to_str = qp.get("to") or ""
     from_str = qp.get("from") or ""
     if not to_str:
-        to_str = datetime.now().isoformat(timespec="seconds")
+        to_str = utc_now_iso()
     if not from_str:
         # Default-Fenster: letzte 24h
         try:
-            to_dt = datetime.fromisoformat(to_str)
+            to_dt = parse_iso(to_str)
         except Exception:
-            to_dt = datetime.now()
+            to_dt = utc_now()
         from_str = (to_dt - timedelta(hours=24)).isoformat(timespec="seconds")
 
     agents_raw = (qp.get("agents") or "").strip()
@@ -1540,7 +1542,12 @@ function render() {
     const preview = r.preview
       ? `<span class="preview">${escapeHtml(r.preview)}</span>${logLink}`
       : (logLink ? `<span class="muted">—</span>${logLink}` : '<span class="muted">—</span>');
-    const startedShort = (r.started_at || '').replace('T', ' ').split('.')[0];
+    let startedShort = '';
+    if (r.started_at) {
+      const _d = new Date(r.started_at);
+      startedShort = isNaN(_d.getTime()) ? r.started_at.replace('T', ' ').split('.')[0]
+        : _d.toLocaleString('de-DE', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'});
+    }
     tr.innerHTML = `<td>${escapeHtml(r.agent)}</td><td>${escapeHtml(startedShort)}</td><td>${r.duration_s}s</td><td class="${cls}">${escapeHtml(r.outcome)}</td><td>${tagsCell}</td><td>${preview}</td>`;
     tbody.appendChild(tr);
   }

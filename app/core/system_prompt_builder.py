@@ -20,6 +20,8 @@ This module now only provides:
   ``load_prompt_data`` to opt into specific data loads.
 """
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now
 from typing import Any, Dict, Set
 
 from app.core.log import get_logger
@@ -74,7 +76,7 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     data["location_name"] = get_location_name(location_id) if location_id else "Unknown"
     data["activity"] = profile.get("current_activity", "") or "None"
     data["feeling"] = profile.get("current_feeling", "") or "Neutral"
-    data["time_of_day"] = datetime.now().strftime("%H:%M")
+    data["time_of_day"] = utc_now().strftime("%H:%M")
 
     if PRESENCE in sections:
         presence_lines, anyone_nearby = _load_presence(
@@ -298,7 +300,7 @@ def _lookup_chat_partner(character_name: str, ts: str,
         from app.core.db import get_connection
         from datetime import timedelta
         try:
-            target = datetime.fromisoformat(ts)
+            target = parse_iso(ts)
         except (ValueError, TypeError):
             return ""
         lower = (target - timedelta(seconds=window_seconds)).isoformat()
@@ -326,7 +328,7 @@ def build_recent_activity_section(character_name: str,
         from app.core.db import get_connection
         import json as _json
 
-        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+        cutoff = (utc_now() - timedelta(hours=hours)).isoformat()
         conn = get_connection()
         rows = conn.execute(
             "SELECT state_json FROM state_history "

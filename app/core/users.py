@@ -6,6 +6,8 @@ Admin hat vollen Zugriff, user ist beschraenkt auf zugeordnete Characters.
 import json
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Dict, Any, List, Optional
 
 import bcrypt
@@ -26,7 +28,7 @@ MIN_PASSWORD_LENGTH = 8
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat()
+    return utc_now_iso()
 
 
 def hash_password(password: str) -> str:

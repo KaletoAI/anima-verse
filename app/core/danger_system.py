@@ -9,6 +9,8 @@ Zustandswerte (stamina, courage, stress) existieren bereits in
 character_profile["status_effects"] und werden vom activity_engine verwaltet.
 """
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now
 from typing import Any, Dict, List, Tuple
 
 from app.core.log import get_logger
@@ -208,7 +210,7 @@ def build_status_prompt_section(character_name: str) -> str:
         condition_lines: List[str] = []
         condition_names: List[str] = []
         if active_conditions:
-            now = datetime.now()
+            now = utc_now()
             modifiers_config = _load_status_modifiers()
             modifier_by_condition = {}
             for mod in modifiers_config:
@@ -221,7 +223,7 @@ def build_status_prompt_section(character_name: str) -> str:
                 duration_h = cond.get("duration_hours", 0)
                 if duration_h:
                     try:
-                        started = datetime.fromisoformat(cond["started_at"])
+                        started = parse_iso(cond["started_at"])
                         if (now - started).total_seconds() > duration_h * 3600:
                             continue  # Abgelaufen
                     except (ValueError, KeyError):
@@ -269,13 +271,13 @@ def build_condition_reminder(character_name: str) -> str:
         if not active:
             return ""
 
-        now = datetime.now()
+        now = utc_now()
         names: List[str] = []
         for cond in active:
             duration_h = cond.get("duration_hours", 0) or 0
             if duration_h:
                 try:
-                    started = datetime.fromisoformat(cond["started_at"])
+                    started = parse_iso(cond["started_at"])
                     if (now - started).total_seconds() > duration_h * 3600:
                         continue
                 except (ValueError, KeyError):
@@ -308,13 +310,13 @@ def get_active_condition_image_modifiers(character_name: str) -> str:
         if not active:
             return ""
 
-        now = datetime.now()
+        now = utc_now()
         parts: List[str] = []
         for cond in active:
             duration_h = cond.get("duration_hours", 0) or 0
             if duration_h:
                 try:
-                    started = datetime.fromisoformat(cond["started_at"])
+                    started = parse_iso(cond["started_at"])
                     if (now - started).total_seconds() > duration_h * 3600:
                         continue
                 except (ValueError, KeyError):

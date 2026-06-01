@@ -15,6 +15,8 @@ import json
 import random
 import uuid
 from datetime import date, datetime
+
+from app.core.timeutils import utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -84,7 +86,7 @@ def _load_shared_items() -> List[Dict[str, Any]]:
 def _save_shared_items(items: List[Dict[str, Any]]):
     path = _get_shared_items_file()
     path.write_text(
-        json.dumps({"items": items, "last_updated": datetime.now().isoformat()},
+        json.dumps({"items": items, "last_updated": utc_now_iso()},
                     ensure_ascii=False, indent=2),
         encoding="utf-8")
 
@@ -172,7 +174,7 @@ def _load_items() -> List[Dict[str, Any]]:
 
 def _save_items(items: List[Dict[str, Any]]):
     """Speichert alle Item-Definitionen in die DB (Upsert)."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     for item in items:
         item_id = item.get("id", "")
         if not item_id:
@@ -474,7 +476,7 @@ def add_item(name: str,
             "stat_bonuses": {},
             "uses": None,
         },
-        "created_at": datetime.now().isoformat(),
+        "created_at": utc_now_iso(),
     }
     # Piece-spezifisches Sub-Dict nur setzen wenn Kategorie passt
     if category == "outfit_piece" and outfit_piece:
@@ -944,7 +946,7 @@ def _load_inventory(character_name: str) -> Dict[str, Any]:
 
 def _save_inventory(character_name: str, data: Dict[str, Any]):
     """Speichert das Inventar eines Characters in die DB (Upsert)."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     inventory = data.get("inventory", [])
     try:
         with transaction() as conn:
@@ -1117,7 +1119,7 @@ def add_to_inventory(character_name: str,
     new_entry: Dict[str, Any] = {
         "item_id": item_id,
         "quantity": max(1, quantity),
-        "obtained_at": datetime.now().isoformat(),
+        "obtained_at": utc_now_iso(),
         "obtained_from": obtained_from,
         "obtained_method": obtained_method,
         "equipped": False,
@@ -1391,7 +1393,7 @@ def apply_item_effects(character_name: str, item_id: str) -> Dict[str, Any]:
                     active.append({
                         "name": cond_name,
                         "source": f"item:{item.get('name', item_id)}",
-                        "started_at": datetime.now().isoformat(),
+                        "started_at": utc_now_iso(),
                         "duration_hours": max(1, duration),
                     })
                     profile["active_conditions"] = active

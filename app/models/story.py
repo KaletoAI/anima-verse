@@ -2,6 +2,8 @@
 import json
 import re
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -244,7 +246,7 @@ def save_story_state(character_name: str, filename: str, state: Dict[str, Any]
 ) -> None:
     """Speichert den Story-State in die DB."""
     story_id = _story_state_id(character_name, filename)
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     title = re.sub(r"[^a-zA-Z0-9_-]", "_", filename.replace(".md", ""))
     meta_blob = json.dumps({"state": state}, ensure_ascii=False)
     try:

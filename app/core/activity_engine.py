@@ -5,6 +5,8 @@ Wird von set_activity_skill.py und chat.py genutzt.
 """
 import re
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -107,7 +109,7 @@ def _evaluate_single_condition_inner(
             shift = offset_min        # Start spaeter
         else:
             shift = -offset_min       # Start frueher (default fuer "-")
-        now = datetime.now()
+        now = utc_now()
         now_min = now.hour * 60 + now.minute
         lbl_offset = f"{sign}{offset_min}" if offset_min else ""
         if base == "night":
@@ -222,7 +224,7 @@ def _evaluate_single_condition_inner(
                 # Kein aktiver Schedule — schedule-Bedingungen matchen nicht
                 # (weder sleeping noch awake werden erzwungen).
                 return False, "Tagesablauf nicht aktiv"
-            current_hour = datetime.now().hour
+            current_hour = utc_now().hour
             slot = next((s for s in schedule.get("slots", [])
                          if s.get("hour") == current_hour), None)
             if target in ("sleeping", "sleep"):
@@ -586,9 +588,9 @@ def check_cooldown(character_name: str,
         return True, ""
 
     try:
-        last_dt = datetime.fromisoformat(last_used)
+        last_dt = parse_iso(last_used)
         cooldown_end = last_dt + timedelta(minutes=cooldown_minutes)
-        now = datetime.now()
+        now = utc_now()
         if now < cooldown_end:
             remaining = cooldown_end - now
             mins_left = remaining.total_seconds() / 60
@@ -608,7 +610,7 @@ def set_cooldown_timestamp(character_name: str,
         from app.models.character import get_character_profile, save_character_profile
         profile = get_character_profile(character_name)
         cooldowns = profile.get("activity_cooldowns", {})
-        cooldowns[activity_name.lower()] = datetime.now().isoformat()
+        cooldowns[activity_name.lower()] = utc_now_iso()
         profile["activity_cooldowns"] = cooldowns
         save_character_profile(character_name, profile)
     except Exception as e:
@@ -631,7 +633,7 @@ def reset_effects_tracking(character_name: str, activity_name: str):
     key = character_name
     _EFFECTS_TRACKING[key] = {
         "activity": activity_name,
-        "last_applied": datetime.now().isoformat(),
+        "last_applied": utc_now_iso(),
     }
 
 
@@ -683,7 +685,7 @@ def _scale_effects_by_time(character_name: str,
     """
     key = character_name
     tracking = _EFFECTS_TRACKING.get(key, {})
-    now = datetime.now()
+    now = utc_now()
 
     # Event-Trigger: Effects voll anwenden, kein proportionales Skalieren.
     # ABER: nur einmal pro Activity-Start. Wenn Tracking fuer dieselbe
@@ -712,7 +714,7 @@ def _scale_effects_by_time(character_name: str,
     # Calculate elapsed time since last application
     if tracking.get("activity") == activity_name and tracking.get("last_applied"):
         try:
-            last_applied = datetime.fromisoformat(tracking["last_applied"])
+            last_applied = parse_iso(tracking["last_applied"])
             elapsed_minutes = (now - last_applied).total_seconds() / 60
         except (ValueError, TypeError):
             elapsed_minutes = float(duration_minutes)
@@ -939,12 +941,12 @@ def _check_cumulative_effect(character_name: str,
         # Zaehle Wiederholungen innerhalb der letzten 2 Stunden
         # (Unterbrechungen durch andere Aktivitaeten werden ignoriert)
         _cumulative_window_hours = 2
-        cutoff = datetime.now() - timedelta(hours=_cumulative_window_hours)
+        cutoff = utc_now() - timedelta(hours=_cumulative_window_hours)
         count = 0
         for entry in history:
             # Zeitfenster pruefen
             try:
-                ts = datetime.fromisoformat(entry.get("timestamp", ""))
+                ts = parse_iso(entry.get("timestamp", ""))
                 if ts < cutoff:
                     break  # Aelter als Fenster — aufhoeren
             except (ValueError, TypeError):
@@ -977,7 +979,7 @@ def _check_cumulative_effect(character_name: str,
         condition = {
             "name": condition_name,
             "source": f"cumulative:{activity_name}",
-            "started_at": datetime.now().isoformat(),
+            "started_at": utc_now_iso(),
             "duration_hours": cum_config.get("duration_hours", 2),
         }
         active_conditions.append(condition)
@@ -1706,14 +1708,14 @@ def apply_hourly_status_tick(character_name: str):
         pass
 
     tick_key = character_name
-    now = datetime.now()
+    now = utc_now()
 
     # Pruefen ob eine Stunde seit dem letzten Tick vergangen ist
     last_tick_iso = _LAST_HOURLY_TICK.get(tick_key)
     if last_tick_iso:
         try:
             from datetime import timedelta
-            last_tick = datetime.fromisoformat(last_tick_iso)
+            last_tick = parse_iso(last_tick_iso)
             if (now - last_tick).total_seconds() < 3600:
                 return  # Noch keine Stunde her
         except (ValueError, TypeError):
@@ -1927,13 +1929,13 @@ def apply_hourly_status_tick(character_name: str):
         _prof = get_character_profile(character_name)
         _conditions = _prof.get("active_conditions", [])
         if _conditions:
-            _now = datetime.now()
+            _now = utc_now()
             _active = []
             for cond in _conditions:
                 duration_h = cond.get("duration_hours", 0)
                 if duration_h:
                     try:
-                        started = datetime.fromisoformat(cond["started_at"])
+                        started = parse_iso(cond["started_at"])
                         if (_now - started).total_seconds() > duration_h * 3600:
                             logger.info("Condition '%s' abgelaufen fuer %s", cond.get("name"), character_name)
                             continue  # Abgelaufen — nicht behalten

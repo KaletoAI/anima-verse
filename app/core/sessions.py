@@ -7,6 +7,8 @@ TTL: Sliding Expiration — jede Aktivitaet verlaengert um SESSION_TTL_HOURS.
 """
 import secrets
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now
 from typing import Optional, Dict, Any
 
 from app.core.db import get_connection, transaction
@@ -20,7 +22,7 @@ SESSION_TTL_HOURS = 24
 
 
 def _now() -> datetime:
-    return datetime.now()
+    return utc_now()
 
 
 def _iso(dt: datetime) -> str:
@@ -55,7 +57,7 @@ def get_session(token: str) -> Optional[Dict[str, Any]]:
         return None
 
     now = _now()
-    expires = datetime.fromisoformat(row["expires_at"])
+    expires = parse_iso(row["expires_at"])
     if now >= expires:
         # abgelaufen — aufraeumen
         delete_session(token)

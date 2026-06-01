@@ -9,6 +9,8 @@ Storage: world.db — Tabelle chat_messages
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 import json
 
 from app.core.log import get_logger
@@ -218,7 +220,7 @@ class UnifiedChatManager:
             return
 
         if not message.timestamp:
-            message.timestamp = datetime.now().isoformat()
+            message.timestamp = utc_now_iso()
 
         partner = UnifiedChatManager._resolve_partner_key(partner_name, character_name)
 

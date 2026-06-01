@@ -10,6 +10,8 @@ Logik:
 """
 import os
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now
 from typing import Any, Dict
 
 from app.core.log import get_logger
@@ -35,13 +37,13 @@ def handle_relationship_decay(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not rels:
         return {"skipped": True, "reason": "no relationships"}
 
-    now = datetime.now()
+    now = utc_now()
     strength_affected = 0
     romantic_affected = 0
 
     for rel in rels:
         try:
-            last = datetime.fromisoformat(rel.get("last_interaction", ""))
+            last = parse_iso(rel.get("last_interaction", ""))
             days_since = (now - last).total_seconds() / 86400
         except (ValueError, TypeError):
             days_since = 30

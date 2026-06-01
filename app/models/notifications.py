@@ -7,6 +7,8 @@ A sliding window keeps the row count bounded (max MAX_NOTIFICATIONS entries).
 import json
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
 MAX_NOTIFICATIONS = 200
@@ -55,7 +57,7 @@ def create_notification(character: str,
     metadata: Optional[Dict[str, Any]] = None) -> str:
     """Create a new notification. Returns the notification ID."""
     nid = uuid.uuid4().hex[:12]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     meta_blob = json.dumps({
         "str_id": nid,
         "character": character,

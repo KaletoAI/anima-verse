@@ -14,6 +14,7 @@ from app.models.user_gallery import (
     get_user_gallery_comments,
     save_user_gallery_comment,
     delete_user_gallery_image)
+from app.core.timeutils import utc_now_iso
 
 logger = get_logger("user_gallery")
 
@@ -86,7 +87,7 @@ async def upload_user_gallery_image(request: Request) -> Dict[str, Any]:
         from datetime import datetime
         _save_meta(gallery_dir, image_filename, {
             "image_filename": image_filename,
-            "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "created_at": utc_now_iso(),
             "source": "upload",
         })
 

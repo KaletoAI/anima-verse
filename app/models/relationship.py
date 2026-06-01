@@ -13,6 +13,8 @@ Typ-Logik:
 import json
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -32,7 +34,7 @@ DECAY_PER_WEEK = 1
 # ---------------------------------------------------------------------------
 
 def _now_iso() -> str:
-    return datetime.now().isoformat()
+    return utc_now_iso()
 
 
 def _new_id() -> str:

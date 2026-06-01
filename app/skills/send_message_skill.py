@@ -16,6 +16,8 @@ logger = get_logger("send_message")
 
 from app.models.character import list_available_characters
 
+from app.core.timeutils import utc_now_iso
+
 
 class SendMessageSkill(BaseSkill):
     """Schickt eine Remote-Nachricht an einen anderen Character.
@@ -97,7 +99,7 @@ class SendMessageSkill(BaseSkill):
         # das ist DM-Semantik (Messaging, nicht Call). Synchron-Warten wuerde
         # bei nested LLM-Queue-Calls den outer Thought-Timeout sprengen.
         from datetime import datetime
-        ts = datetime.now().isoformat()
+        ts = utc_now_iso()
 
         try:
             from app.models.chat import save_message

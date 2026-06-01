@@ -20,6 +20,8 @@ covering every image kind (characters, events, instagram, world_gallery, items).
 """
 import json
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from pathlib import Path
 from typing import Optional
 
@@ -104,7 +106,7 @@ def _mark_sidecar_postprocessed(sidecar: Path) -> bool:
     except (ValueError, OSError):
         meta = {}
     meta["postprocessed"] = True
-    meta["postprocessed_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    meta["postprocessed_at"] = utc_now_iso()
     try:
         sidecar.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         return True

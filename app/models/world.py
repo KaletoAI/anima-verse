@@ -24,6 +24,7 @@ from app.core.db import get_connection, transaction
 logger = get_logger("world")
 
 from app.core.paths import get_storage_dir
+from app.core.timeutils import utc_now_iso
 
 
 def _get_world_file() -> Path:
@@ -197,7 +198,7 @@ _world_file_lock = threading.Lock()
 
 def _save_world_data(data: Dict[str, Any]):
     """Speichert die Weltdaten in die DB (Locations + Raeume als Upsert)."""
-    now = __import__('datetime').datetime.now().isoformat()
+    now = utc_now_iso()
     locations = data.get("locations", [])
     try:
         with transaction() as conn:

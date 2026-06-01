@@ -11,6 +11,8 @@ import json
 import os
 import re
 from datetime import datetime
+
+from app.core.timeutils import utc_now
 from typing import Any, Dict, List, Optional, Set
 
 from .base import BaseSkill
@@ -97,7 +99,7 @@ class OutfitCreationSkill(BaseSkill):
     def _count_today_items(self, character_name: str) -> int:
         """Zaehlt die outfit_piece-Items die heute im Inventar des Characters
         gelandet sind (obtained_at beginnt mit dem heutigen Datum)."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = utc_now().strftime("%Y-%m-%d")
         try:
             inv_data = get_character_inventory(character_name, include_equipped=True)
             items = (inv_data or {}).get("inventory", [])

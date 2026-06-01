@@ -26,6 +26,8 @@ Input JSON (when called by tool-LLM):
 import json
 import re
 from datetime import datetime, timedelta
+
+from app.core.timeutils import utc_now
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseSkill, ToolSpec
@@ -314,7 +316,7 @@ async def _run_storyteller_agent(
     scope_label = "the whole place" if scope == "location" else "this room"
 
     # ── Uhrzeit / Tageszeit ────────────────────────────────────────────
-    _now = datetime.now()
+    _now = utc_now()
     current_time = _now.strftime("%H:%M")
     _hour = _now.hour
     if 6 <= _hour < 12:
@@ -761,7 +763,7 @@ def _sender_on_cooldown(actor: str, scope: str) -> bool:
     """True if the actor performed any action within the cooldown window."""
     try:
         from app.models.memory import load_memories
-        cutoff = (datetime.now() - timedelta(minutes=SENDER_COOLDOWN_MIN)).isoformat()
+        cutoff = (utc_now() - timedelta(minutes=SENDER_COOLDOWN_MIN)).isoformat()
         target_tag = f"action_performed:{scope}"
         for m in load_memories(actor):
             ts = m.get("timestamp") or ""
@@ -779,7 +781,7 @@ def _recipient_recently_perceived(recipient: str, actor: str, text: str) -> bool
     actor recently."""
     try:
         from app.models.memory import load_memories
-        cutoff = (datetime.now() - timedelta(minutes=RECIPIENT_DEDUP_MIN)).isoformat()
+        cutoff = (utc_now() - timedelta(minutes=RECIPIENT_DEDUP_MIN)).isoformat()
         target_tag = f"action_witnessed:{actor}"
         text_norm = (text or "").strip().lower()[:80]
         if not text_norm:

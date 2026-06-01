@@ -8,6 +8,8 @@ Storage: world.db Tabelle `secrets` (pro Welt).
 import json
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -148,7 +150,7 @@ def add_secret(character_name: str,
         source = "manual"
 
     secrets = _load_secrets(character_name)
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     secret = {
         "id": f"sec_{uuid.uuid4().hex[:8]}",
@@ -230,7 +232,7 @@ def add_known_by(character_name: str,
                     discovered_by.append(knower_name)
                     s["discovered_by"] = discovered_by
                 if not s.get("discovered_at"):
-                    s["discovered_at"] = datetime.now().isoformat()
+                    s["discovered_at"] = utc_now_iso()
             _save_secrets(character_name, secrets)
             logger.info("Secret %s: %s weiss jetzt davon (discovered=%s)",
                         secret_id, knower_name, discovered)

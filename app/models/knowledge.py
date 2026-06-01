@@ -10,6 +10,8 @@ import os
 import re
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from typing import Any, Dict, List
 
 from app.core.log import get_logger
@@ -24,10 +26,10 @@ def _format_knowledge_timestamp(iso_ts: str) -> str:
     Beispiele: 'heute 14:30', 'gestern 09:15', '11.03. 18:00'
     """
     try:
-        dt = datetime.fromisoformat(iso_ts)
+        dt = parse_iso(iso_ts)
     except (ValueError, TypeError):
         return ""
-    now = datetime.now()
+    now = utc_now()
     delta = now.date() - dt.date()
     time_str = dt.strftime("%H:%M")
     if delta.days == 0:
@@ -212,7 +214,7 @@ def upsert_character_relationship(character_name: str,
             facts = facts[-max_facts:]
 
         existing["content"] = "\n".join(facts)
-        existing["timestamp"] = datetime.now().isoformat()
+        existing["timestamp"] = utc_now_iso()
         existing["summary_stale"] = True  # Summary muss neu generiert werden
         save_knowledge(character_name, entries)
         logger.debug("Updated relationship %s -> %s", character_name, related_character)
@@ -221,7 +223,7 @@ def upsert_character_relationship(character_name: str,
         # Neuen Eintrag erstellen
         entry = {
             "id": f"k_{uuid.uuid4().hex[:12]}",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utc_now_iso(),
             "source_type": "character_relationship",
             "source": f"relationship:{related_character}",
             "content": new_fact,

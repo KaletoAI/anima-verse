@@ -5,6 +5,8 @@ und stellt sie als interaktive Timeline mit Chart.js dar.
 """
 import json
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -56,7 +58,7 @@ def dashboard_data(hours: int = Query(24, ge=0)):
     """Liefert aggregierte Dashboard-Daten als JSON."""
     cutoff = ""
     if hours > 0:
-        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+        cutoff = (utc_now() - timedelta(hours=hours)).isoformat(timespec="seconds")
 
     # LLM Calls laden
     raw_llm = _read_jsonl(LLM_LOG, cutoff)
@@ -84,7 +86,7 @@ def dashboard_data(hours: int = Query(24, ge=0)):
         dur = 0.0
         if st and et:
             try:
-                dur = (datetime.fromisoformat(et) - datetime.fromisoformat(st)).total_seconds()
+                dur = (parse_iso(et) - parse_iso(st)).total_seconds()
             except (ValueError, TypeError):
                 pass
         image_calls.append({
@@ -116,7 +118,7 @@ def activity_feed(hours: int = Query(24, ge=0)):
     """Aggregierter Activity-Feed: Instagram, Reaktionen, Story Arcs, Gedanken-Nachrichten."""
     cutoff = ""
     if hours > 0:
-        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+        cutoff = (utc_now() - timedelta(hours=hours)).isoformat(timespec="seconds")
 
     events = []
 
@@ -962,7 +964,12 @@ function renderTable() {
         const badge = r.type === 'LLM' ? 'badge-llm' : 'badge-img';
         const barCls = r.type === 'LLM' ? 'dur-bar-llm' : 'dur-bar-img';
         const barW = Math.max(2, Math.round((r.duration_s / maxDur) * 80));
-        const time = r.starttime ? r.starttime.replace('T', ' ').slice(5, 16) : '';
+        let time = '';
+        if (r.starttime) {
+            const _d = new Date(r.starttime);
+            time = isNaN(_d.getTime()) ? r.starttime.replace('T', ' ').slice(5, 16)
+                : _d.toLocaleString('de-DE', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
+        }
         const sysColor = COLORS.get(r.system);
         const sysLabel = r.system || '—';
         return `<tr>
@@ -1112,7 +1119,12 @@ function renderActivityFeed() {
     }
     container.innerHTML = items.slice(0, 100).map(e => {
         const icon = ACT_ICONS[e.type] || '\u2022';
-        const time = e.timestamp ? e.timestamp.replace('T', ' ').slice(5, 16) : '';
+        let time = '';
+        if (e.timestamp) {
+            const _d = new Date(e.timestamp);
+            time = isNaN(_d.getTime()) ? e.timestamp.replace('T', ' ').slice(5, 16)
+                : _d.toLocaleString('de-DE', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
+        }
         const imgUrl = e.meta && e.meta.image_url ? e.meta.image_url : '';
         return `<div class="activity-item">
             <span class="activity-icon">${icon}</span>

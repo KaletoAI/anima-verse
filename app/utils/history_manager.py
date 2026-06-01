@@ -6,6 +6,8 @@ import json
 import os
 import re
 from datetime import date, datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -75,7 +77,7 @@ def get_time_based_history(
         thresholds = get_memory_thresholds()
     gap_hours = thresholds.get("session_gap_hours", 4.0)
 
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = utc_now() - timedelta(days=days)
     recent: List[Dict] = []
     old: List[Dict] = []
 
@@ -83,7 +85,7 @@ def get_time_based_history(
         ts_str = msg.get("timestamp", "")
         if ts_str:
             try:
-                msg_time = datetime.fromisoformat(ts_str)
+                msg_time = parse_iso(ts_str)
                 if msg_time < cutoff:
                     old.append(msg)
                     continue
@@ -102,8 +104,8 @@ def get_time_based_history(
         gap = timedelta(hours=gap_hours)
         for i in range(len(recent) - 1, 0, -1):
             try:
-                prev_ts = datetime.fromisoformat(recent[i - 1].get("timestamp") or "")
-                cur_ts = datetime.fromisoformat(recent[i].get("timestamp") or "")
+                prev_ts = parse_iso(recent[i - 1].get("timestamp") or "")
+                cur_ts = parse_iso(recent[i].get("timestamp") or "")
             except (ValueError, TypeError):
                 continue
             if cur_ts - prev_ts > gap:
@@ -394,7 +396,7 @@ def get_cached_summary(character_name: str) -> str:
 
 def _save_cached_summary(character_name: str, summary: str, message_count: int = 0):
     """Speichert eine History-Summary in der DB."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     try:
         with transaction() as conn:
             conn.execute("""
@@ -428,7 +430,7 @@ def _is_summary_fresh(character_name: str) -> bool:
             meta = json.loads(row[0] or "{}")
             updated = meta.get("updated_at", "")
             if updated:
-                age = (datetime.now() - datetime.fromisoformat(updated)).total_seconds()
+                age = (utc_now() - parse_iso(updated)).total_seconds()
                 return age < _SUMMARY_THROTTLE_MINUTES * 60
     except Exception:
         pass
@@ -476,7 +478,7 @@ def _summary_updated_at(character_name: str) -> "datetime | None":
             meta = json.loads(row[0] or "{}")
             updated = meta.get("updated_at", "")
             if updated:
-                return datetime.fromisoformat(updated)
+                return parse_iso(updated)
     except Exception:
         pass
     return None
@@ -508,7 +510,7 @@ def refresh_summary_if_uncovered(
         if not ts:
             continue
         try:
-            t = datetime.fromisoformat(ts)
+            t = parse_iso(ts)
             if newest_old is None or t > newest_old:
                 newest_old = t
         except (ValueError, TypeError):

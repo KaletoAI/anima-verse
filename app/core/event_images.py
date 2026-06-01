@@ -28,6 +28,8 @@ import random
 import threading
 import time
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -166,7 +168,7 @@ def get_effective_background_event(location_id: str) -> Optional[Path]:
             if not resolved_at:
                 continue
             try:
-                age_sec = (datetime.now() - datetime.fromisoformat(resolved_at)).total_seconds()
+                age_sec = (utc_now() - parse_iso(resolved_at)).total_seconds()
             except (TypeError, ValueError):
                 continue
             if age_sec > linger_min * 60:
@@ -258,7 +260,7 @@ def _do_generate(event_id: str,
     # waere die Auswahl rein zufaellig zwischen allen Bg-Bildern, was zu
     # einer "alten" oder Tag/Nacht-falschen Vorlage fuer das Event-Bild
     # fuehrt.
-    bg_path = get_background_path(location_id, hour=datetime.now().hour)
+    bg_path = get_background_path(location_id, hour=utc_now().hour)
     if not bg_path or not bg_path.exists():
         logger.info("Event-Bild [%s]: kein Background — skip", event_id)
         return None

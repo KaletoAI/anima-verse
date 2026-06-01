@@ -6,6 +6,8 @@ import json
 import re
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import utc_now, utc_now_iso
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Request, HTTPException
@@ -102,7 +104,7 @@ async def chat_history_delete(days: int, character: str = "") -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="days >= 1 required")
     from datetime import datetime, timedelta
     from app.core.db import get_connection, transaction
-    cutoff = (datetime.now() - timedelta(days=int(days))).isoformat()
+    cutoff = (utc_now() - timedelta(days=int(days))).isoformat()
 
     char = (character or "").strip()
     if char:
@@ -1641,7 +1643,7 @@ async def chat(request: Request) -> StreamingResponse:
         agent.tool_executor = _tool_executor
 
         try:
-            timestamp = datetime.now().isoformat()
+            timestamp = utc_now_iso()
             history_text = "\n".join([msg["content"] for msg in messages])
             tokens_input = estimate_tokens(system_content + history_text + _effective_user_input)
             full_response = ""
@@ -2747,7 +2749,7 @@ def _build_full_system_prompt(character_name: str,
     current_room_id = get_character_current_room(character_name)
     current_activity = get_character_current_activity(character_name)
 
-    now = datetime.now()
+    now = utc_now()
     time_line = f"Current time: {now.strftime('%H:%M')} ({now.strftime('%A, %d %B %Y')})"
     situation_parts = [time_line]
 

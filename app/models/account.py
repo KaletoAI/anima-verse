@@ -9,6 +9,8 @@ import json
 import bcrypt
 from datetime import datetime
 
+from app.core.timeutils import utc_now_iso
+
 from app.core.paths import get_storage_dir, get_account_path
 from app.core.db import get_connection, transaction
 
@@ -61,7 +63,7 @@ def save_user_profile(profile: Dict[str, Any]):
     # Settings-Blob: alle Keys ausser Standard-Felder
     settings = {k: v for k, v in profile.items()
                 if k not in ("user_name", "password_hash", "theme")}
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     try:
         with transaction() as conn:
             conn.execute("""

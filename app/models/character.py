@@ -6,6 +6,8 @@ and directories are stored under characters/ instead of agents/.
 Storage: world.db — Tabellen characters, character_state
 """
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import json
@@ -97,7 +99,7 @@ def _record_state_change(character_name: str, change_type: str, value: str, meta
     Max 200 entries per character (oldest trimmed).
     Optional metadata dict is stored alongside (e.g. effect changes).
     """
-    ts = datetime.now().isoformat()
+    ts = utc_now_iso()
     state_entry = {
         "timestamp": ts,
         "type": change_type,
@@ -516,7 +518,7 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     profile_to_store = profile
 
     # In DB schreiben
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     try:
         with transaction() as conn:
             # Vorhandenes config_json lesen um Config-Patch zu mergen
@@ -884,7 +886,7 @@ def save_character_config(character_name: str, config: Dict[str, Any]):
                        character_name)
         return
 
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     try:
         with transaction() as conn:
             conn.execute("""
@@ -1045,7 +1047,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
         elif location == target:
             profile["movement_target"] = ""
     profile["current_location"] = location
-    profile["location_changed_at"] = datetime.now().isoformat()
+    profile["location_changed_at"] = utc_now_iso()
     # current_room beim Location-Wechsel leeren — sonst zeigt ein Char an
     # Location A weiter auf einen Raum von Location B (stale Reference).
     # Caller (SetLocation-Skill, Scheduler etc.) kann nach diesem Aufruf
@@ -1245,8 +1247,8 @@ def save_character_current_activity(character_name: str, activity: str, detail: 
             try:
                 started_iso = (profile.get("activity_started_at") or "").strip()
                 if started_iso:
-                    started = datetime.fromisoformat(started_iso)
-                    if (datetime.now() - started).total_seconds() < 30:
+                    started = parse_iso(started_iso)
+                    if (utc_now() - started).total_seconds() < 30:
                         return  # idempotent — nichts zu tun
             except (ValueError, TypeError):
                 pass
@@ -1291,7 +1293,7 @@ def save_character_current_activity(character_name: str, activity: str, detail: 
     # sie dann auf "" zurueck (loest on_complete-Trigger aus). Ersetzt
     # die alten APScheduler-One-Time-``activity_done_*``-Jobs.
     if activity and activity != old_activity and not _is_reclassify:
-        profile["activity_started_at"] = datetime.now().isoformat()
+        profile["activity_started_at"] = utc_now_iso()
         try:
             from app.core.activity_engine import _find_activity_definition
             _act_def = _find_activity_definition(character_name, activity) or {}
@@ -1981,7 +1983,7 @@ def _load_outfits_file(character_name: str) -> List[Dict]:
 
 def _save_outfits_file(character_name: str, outfits: List[Dict]):
     """Schreibt Outfit-Definitionen in outfits_sets-Tabelle (KEIN image_meta)."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     new_ids = {o.get("id") for o in outfits if o.get("id")}
     try:
         with transaction() as conn:
@@ -2142,7 +2144,7 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
         "activities": outfit_data.get("activities", []),
         "excluded_locations": outfit_data.get("excluded_locations", []),
         "image": outfit_data.get("image", ""),
-        "created_at": outfit_data.get("created_at", datetime.now().isoformat()),
+        "created_at": outfit_data.get("created_at", utc_now_iso()),
     })
     save_character_outfits(character_name, outfits)
     return outfit_id
@@ -2627,7 +2629,7 @@ def add_character_image_metadata(character_name: str, image_filename: str, metad
             mtime = img_path.stat().st_mtime
             meta["created_at"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M:%S")
         except Exception:
-            meta["created_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            meta["created_at"] = utc_now_iso()
     _save_single_image_meta(character_name, image_filename, meta)
 
 
@@ -2805,7 +2807,7 @@ def get_character_scheduler_jobs(character_name: str) -> List[Dict[str, Any]]:
 
 def save_character_scheduler_jobs(character_name: str, jobs: List[Dict[str, Any]]):
     """Speichert Scheduler-Jobs fuer einen Character in die DB (Upsert)."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     try:
         from app.core.db import transaction as _transaction
         with _transaction() as conn:
@@ -2903,7 +2905,7 @@ def save_character_scheduler_logs(character_name: str, logs: List[Dict[str, Any]
                     "VALUES (?, ?, ?, ?)",
                     (
                         job_id,
-                        log_entry.get("timestamp", datetime.now().isoformat()),
+                        log_entry.get("timestamp", utc_now_iso()),
                         log_entry.get("status", ""),
                         _result,
                     )
@@ -2989,7 +2991,7 @@ def get_character_daily_schedule(character_name: str) -> Dict[str, Any]:
 
 def save_character_daily_schedule(character_name: str, schedule: Dict[str, Any]):
     """Speichert den Tagesablauf fuer einen Character in die DB."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     schedule["last_updated"] = now
     try:
         from app.core.db import transaction as _transaction

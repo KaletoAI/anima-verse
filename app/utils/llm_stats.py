@@ -9,6 +9,8 @@ Schaetzformel:
 Mit hierarchischem Fallback (model,task) -> (model,*) -> None.
 """
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from statistics import median
 from typing import Dict, Optional
 
@@ -50,7 +52,7 @@ def record_call(model: str, task: str, provider: str,
                 "(ts, model, task, provider, agent_name, "
                 " in_tokens, out_tokens, max_tokens, duration_s) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (datetime.now().isoformat(timespec="seconds"),
+                (utc_now_iso(),
                  model, task, prov, agent,
                  int(in_tokens), int(out_tokens), mt, float(duration_s)))
             conn.execute(

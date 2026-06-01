@@ -4,6 +4,8 @@ import json
 import re
 import shutil
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -232,7 +234,7 @@ async def play_story_section(request: Request) -> StreamingResponse:
             # State speichern
             state = get_story_state(character_name, story_filename) or {
                 "history": [],
-                "started_at": datetime.now().isoformat(),
+                "started_at": utc_now_iso(),
             }
 
             if user_choice:
@@ -240,7 +242,7 @@ async def play_story_section(request: Request) -> StreamingResponse:
                     "section": section_id,
                     "choice": user_choice.get("letter", ""),
                     "choice_text": user_choice.get("text", ""),
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": utc_now_iso(),
                 })
 
             # Aktuelle Section speichern (nicht die naechste — der User hat noch nicht gewaehlt)

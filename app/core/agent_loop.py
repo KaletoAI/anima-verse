@@ -26,6 +26,8 @@ startup); this loop does not handle external triggers.
 import asyncio
 import random
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -343,7 +345,7 @@ class AgentLoop:
                 return candidate
 
         cooldown = timedelta(minutes=_get_per_char_cooldown_min())
-        now = datetime.now()
+        now = utc_now()
 
         def _on_cooldown(name: str) -> bool:
             last = self._last_real_turn_at.get(name)
@@ -395,7 +397,7 @@ class AgentLoop:
         """Run a single thought turn for the given character."""
         async with self._lock:
             self._current_agent = character_name
-            started_at = datetime.now()
+            started_at = utc_now()
             outcome = "ok"
             turn_info: Dict[str, Any] = {}
 
@@ -415,7 +417,7 @@ class AgentLoop:
                     remaining_s = max(60.0,
                         (_IN_CHAT_HOT_MIN - chat_age_min) * 60.0)
                     self._chat_skip_until[character_name] = (
-                        datetime.now() + timedelta(seconds=remaining_s))
+                        utc_now() + timedelta(seconds=remaining_s))
                     logger.info(
                         "AgentLoop skip %s: in active chat (%.1f min ago) "
                         "— cooldown %.0fs",
@@ -452,7 +454,8 @@ class AgentLoop:
                     if chat_age_min is None or chat_age_min >= _IN_CHAT_WARM_MIN:
                         from app.models.character import (
                             get_movement_target, clear_movement_target,
-                            save_character_current_location)
+                            save_character_current_location,
+                            get_character_current_location)
                         from app.models.world import next_step_toward
                         target = get_movement_target(character_name)
                         # Leave-Gate: Pinning/Confine-Rules koennen den
@@ -755,7 +758,7 @@ class AgentLoop:
         self._recent.append({
             "agent": name,
             "started_at": started_at.isoformat(),
-            "duration_s": round((datetime.now() - started_at).total_seconds(), 1),
+            "duration_s": round((utc_now() - started_at).total_seconds(), 1),
             "outcome": outcome,
             "tools": list(info.get("tools") or []),
             "intents": list(info.get("intents") or []),
@@ -769,7 +772,7 @@ class AgentLoop:
         # 5min-Block ausloesen, obwohl gar nichts passiert ist.
         is_real = outcome == "ok" or (outcome or "").startswith("ok")
         if is_real:
-            self._last_real_turn_at[name] = datetime.now()
+            self._last_real_turn_at[name] = utc_now()
 
 
 # ---------------------------------------------------------------------------
@@ -847,10 +850,10 @@ def _minutes_since_last_chat_with_avatar(character_name: str) -> Optional[float]
         if not row or not row[0]:
             return None
         try:
-            last = datetime.fromisoformat(row[0])
+            last = parse_iso(row[0])
         except (ValueError, TypeError):
             return None
-        delta = datetime.now() - last
+        delta = utc_now() - last
         return delta.total_seconds() / 60.0
     except Exception as e:
         logger.debug("chat-age check failed for %s: %s", character_name, e)

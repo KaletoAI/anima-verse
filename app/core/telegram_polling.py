@@ -14,6 +14,8 @@ from typing import Dict, Any, Optional, Set
 from pathlib import Path
 from datetime import datetime
 
+from app.core.timeutils import utc_now_iso
+
 import aiohttp
 
 from app.core.log import get_logger
@@ -880,7 +882,7 @@ class CharacterBotPoller:
             from app.models.unified_chat import UnifiedChatManager
             from app.models.channel import Message, ChannelType
             from app.models.character import get_character_config
-            timestamp = datetime.now().isoformat()
+            timestamp = utc_now_iso()
 
             # Partner = avatar controlled by the human on the Telegram side.
             # Comes from the bot's character config (telegram_partner_character).

@@ -21,6 +21,8 @@ Public API:
         -> dict[sender_name, list[Message]]
 """
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Dict, List
 
 from app.core.db import get_connection, transaction
@@ -50,7 +52,7 @@ def mark_thought_processed(character_name: str, ts: str = "") -> None:
     so the inbox does not accumulate unread state from skipped turns."""
     if not character_name:
         return
-    ts = ts or datetime.now().isoformat()
+    ts = ts or utc_now_iso()
     try:
         with transaction() as conn:
             # UPSERT: character_state row may not exist yet for fresh characters.

@@ -6,6 +6,8 @@ Dauer, Token-Nutzung (real oder geschaetzt), max. Context-Laenge.
 import json
 import threading
 from datetime import datetime, timedelta
+
+from app.core.timeutils import utc_now
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -73,7 +75,7 @@ def log_llm_call(
             Wert faellt der Logger auf ``task`` zurueck.
     """
     template_basename = _template_basename(template, task)
-    end_time = datetime.now()
+    end_time = utc_now()
     start_time = end_time - timedelta(seconds=duration_s)
     entry: Dict[str, Any] = {
         "starttime": start_time.isoformat(timespec="seconds"),
@@ -185,7 +187,7 @@ def prune_jsonl_log(path: Path, retention_days: int) -> int:
         return 0
     if not path.exists():
         return 0
-    cutoff = datetime.now() - timedelta(days=retention_days)
+    cutoff = utc_now() - timedelta(days=retention_days)
     cutoff_iso = cutoff.isoformat()
 
     kept: List[str] = []

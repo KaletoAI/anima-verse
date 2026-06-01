@@ -26,6 +26,7 @@ from app.models.character import (
 from app.models.character_template import (
     get_template,
     resolve_profile_tokens)
+from app.core.timeutils import utc_now_iso
 
 router = APIRouter(prefix="/store", tags=["store"])
 
@@ -157,7 +158,7 @@ async def store_data(key: str, request: Request) -> Dict[str, str]:
         if "current_location" in fields:
             from datetime import datetime
             profile["current_location"] = fields["current_location"]
-            profile["location_changed_at"] = datetime.now().isoformat()
+            profile["location_changed_at"] = utc_now_iso()
         # System fields
         for k in ("system_language", "translation_mode"):
             if k in fields:

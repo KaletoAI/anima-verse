@@ -14,6 +14,8 @@ import json
 import os
 import re
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -157,7 +159,7 @@ class MarkdownWriterSkill(BaseSkill):
         found = False
         for entry in entries:
             if entry.get("folder") == folder and entry.get("filename") == filename:
-                entry["last_modified"] = datetime.now().isoformat()
+                entry["last_modified"] = utc_now_iso()
                 entry["last_action"] = action
                 if title:
                     entry["title"] = title
@@ -169,8 +171,8 @@ class MarkdownWriterSkill(BaseSkill):
                 "folder": folder,
                 "filename": filename,
                 "title": title or filename,
-                "created": datetime.now().isoformat(),
-                "last_modified": datetime.now().isoformat(),
+                "created": utc_now_iso(),
+                "last_modified": utc_now_iso(),
                 "last_action": action,
             })
 
@@ -197,7 +199,7 @@ class MarkdownWriterSkill(BaseSkill):
     @staticmethod
     def _generate_filename(title: str = "", folder: str = "") -> str:
         """Generiert einen Dateinamen basierend auf Datum und optionalem Titel."""
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = utc_now().strftime("%Y-%m-%d")
         if title:
             slug = re.sub(r'[^\w\s\-]', '', title)
             slug = re.sub(r'\s+', '-', slug.strip()).lower()[:40]
@@ -323,7 +325,7 @@ class MarkdownWriterSkill(BaseSkill):
             modified = entry.get("last_modified", "?")
             if modified != "?":
                 try:
-                    dt = datetime.fromisoformat(modified)
+                    dt = parse_iso(modified)
                     modified = dt.strftime("%d.%m.%Y %H:%M")
                 except Exception:
                     pass

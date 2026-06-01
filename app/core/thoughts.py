@@ -14,6 +14,8 @@ import os
 import random
 import re
 from datetime import datetime, timedelta
+
+from app.core.timeutils import utc_now
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -204,7 +206,7 @@ class ThoughtRunner:
         location_name = get_location_name(location_id) if location_id else "Unbekannt"
         activity = profile.get("current_activity", "") or "Keine"
         feeling = profile.get("current_feeling", "") or "Neutral"
-        now = datetime.now()
+        now = utc_now()
         time_of_day = now.strftime("%H:%M")
 
         # LLM und Tools erstellen (via Router, Task aus llm_task-Parameter,
@@ -693,7 +695,7 @@ class ThoughtRunner:
                 if not clean_content or clean_content.strip().upper() == "SKIP":
                     logger.info("%s: Gedanken-Nachricht nach Bereinigung leer/SKIP — nicht gespeichert", character_name)
                     return _turn_info
-                ts = datetime.now()
+                ts = utc_now()
                 date_str = ts.strftime("%d.%m.%Y %H:%M")
                 from app.models.account import get_player_identity as _get_pi_save
                 save_message({

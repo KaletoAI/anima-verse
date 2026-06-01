@@ -10,6 +10,8 @@ Beim Start werden alle Character-Verzeichnisse nach Schedulern durchsucht.
 
 import json
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -46,8 +48,8 @@ class SchedulerManager:
         self.jobs_data = {
             "jobs": [],
             "metadata": {
-                "created_at": datetime.now().isoformat(),
-                "last_updated": datetime.now().isoformat(),
+                "created_at": utc_now_iso(),
+                "last_updated": utc_now_iso(),
                 "total_jobs": 0
             }
         }
@@ -273,7 +275,7 @@ class SchedulerManager:
         except Exception as e:
             logger.error("Fehler beim Speichern fuer %s: %s", character, e)
 
-        self.jobs_data["metadata"]["last_updated"] = datetime.now().isoformat()
+        self.jobs_data["metadata"]["last_updated"] = utc_now_iso()
         self.jobs_data["metadata"]["total_jobs"] = len(self.jobs_data["jobs"])
 
     def _schedule_job(self, job_config: Dict[str, Any]):
@@ -311,7 +313,7 @@ class SchedulerManager:
                 anchor = last_exec or created_at
                 if anchor:
                     try:
-                        anchor_dt = datetime.fromisoformat(anchor)
+                        anchor_dt = parse_iso(anchor)
                         kwargs['start_date'] = anchor_dt
                         logger.debug("Interval-Job %s: start_date=%s (aus %s)",
                                      job_id, anchor_dt, "last_execution" if last_exec else "created_at")
@@ -336,8 +338,8 @@ class SchedulerManager:
                 # Sonst feuert APScheduler einen "missed by N days"-Warning und
                 # versucht ggf. nachzuholen — selten sinnvoll.
                 try:
-                    rd = datetime.fromisoformat(run_date) if isinstance(run_date, str) else run_date
-                    if rd and (datetime.now() - rd).total_seconds() > 3 * 86400:
+                    rd = parse_iso(run_date) if isinstance(run_date, str) else run_date
+                    if rd and (utc_now() - rd).total_seconds() > 3 * 86400:
                         logger.info("Stale Date-Job %s uebersprungen (run_date %s liegt >3 Tage zurueck) — wird entfernt",
                                      job_id, run_date)
                         self._purge_job_from_data(job_id)
@@ -453,7 +455,7 @@ class SchedulerManager:
             self._log_execution(job_id, "success", result)
             logger.info("Job erfolgreich: %s", job_id)
             job_config["last_execution"] = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": utc_now_iso(),
                 "success": True
             }
 
@@ -461,7 +463,7 @@ class SchedulerManager:
             logger.error("Fehler beim Ausfuehren von Job %s: %s", job_id, e)
             self._log_execution(job_id, "error", {"error": str(e)})
             job_config["last_execution"] = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": utc_now_iso(),
                 "success": False
             }
 
@@ -564,13 +566,13 @@ class SchedulerManager:
             from app.models.character import get_character_profile
             _profile = get_character_profile(agent) or {}
             RECENT_CHAT_GRACE_MINUTES = 30
-            _cutoff = datetime.now() - timedelta(minutes=RECENT_CHAT_GRACE_MINUTES)
+            _cutoff = utc_now() - timedelta(minutes=RECENT_CHAT_GRACE_MINUTES)
             for _ts_field in ("activity_changed_at", "location_changed_at"):
                 _ts = (_profile.get(_ts_field) or "").strip()
                 if not _ts:
                     continue
                 try:
-                    _dt = datetime.fromisoformat(_ts)
+                    _dt = parse_iso(_ts)
                 except Exception:
                     continue
                 if _dt > _cutoff:
@@ -905,8 +907,8 @@ class SchedulerManager:
             if not started_iso:
                 return False
             try:
-                started = datetime.fromisoformat(started_iso)
-                elapsed_min = (datetime.now() - started).total_seconds() / 60
+                started = parse_iso(started_iso)
+                elapsed_min = (utc_now() - started).total_seconds() / 60
                 return elapsed_min < duration
             except (ValueError, TypeError):
                 return False
@@ -994,7 +996,7 @@ class SchedulerManager:
         from app.models.character import get_character_scheduler_logs, save_character_scheduler_logs
 
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utc_now_iso(),
             "job_id": job_id,
             "status": status,
             "result": result
@@ -1042,7 +1044,7 @@ class SchedulerManager:
             enabled: Ob Job aktiviert ist
         """
         if job_id is None:
-            job_id = f"{agent}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            job_id = f"{agent}_{utc_now().strftime('%Y%m%d_%H%M%S')}"
 
         if any(job['id'] == job_id for job in self.jobs_data['jobs']):
             return {"success": False, "error": f"Job-ID {job_id} existiert bereits"}
@@ -1054,7 +1056,7 @@ class SchedulerManager:
             "enabled": enabled,
             "trigger": trigger,
             "action": action,
-            "created_at": datetime.now().isoformat()
+            "created_at": utc_now_iso()
         }
 
         self.jobs_data['jobs'].append(job_config)
@@ -1150,7 +1152,7 @@ class SchedulerManager:
             "trigger": {"type": "marker"},
             "action": {"type": "daily_schedule_marker",
                        "slots_count": len(slots)},
-            "created_at": datetime.now().isoformat(),
+            "created_at": utc_now_iso(),
         })
         self._save_jobs_for_character(character)
         return 1
@@ -1216,7 +1218,7 @@ class SchedulerManager:
         Beruecksichtigt sowohl 1:1 Chats (chat_messages-Tabelle) als auch Gruppenchats.
         """
         threshold = minutes * 60  # in Sekunden
-        now = datetime.now()
+        now = utc_now()
 
         # 1:1 Chat: juengster ts in chat_messages fuer diesen Character.
         # (Frueher Filesystem-mtime; nach DB-only-Migration nicht mehr nutzbar.)
@@ -1228,7 +1230,7 @@ class SchedulerManager:
                 (character,)).fetchone()
             if row and row[0]:
                 try:
-                    last_ts = datetime.fromisoformat(row[0])
+                    last_ts = parse_iso(row[0])
                 except (ValueError, TypeError):
                     last_ts = None
                 if last_ts:
@@ -1251,7 +1253,7 @@ class SchedulerManager:
                     continue
                 last_activity = s.get("last_activity", "")
                 if last_activity:
-                    activity_ts = datetime.fromisoformat(last_activity).timestamp()
+                    activity_ts = parse_iso(last_activity).timestamp()
                     if (now_ts - activity_ts) < threshold:
                         logger.info("Location-Wechsel blockiert: %s war vor %.0f Min im Gruppenchat %s",
                                     character, (now_ts - activity_ts) / 60, s.get("id", "?"))
@@ -1398,8 +1400,8 @@ def _was_chatted_recently(character_name: str,
             (character_name,)).fetchone()
         if not row or not row[0]:
             return False
-        last_ts = datetime.fromisoformat(row[0])
-        age_s = (datetime.now() - last_ts).total_seconds()
+        last_ts = parse_iso(row[0])
+        age_s = (utc_now() - last_ts).total_seconds()
         return age_s < within_minutes * 60
     except Exception:
         return False

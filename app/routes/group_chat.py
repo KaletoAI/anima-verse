@@ -7,6 +7,8 @@ import asyncio
 import json
 import re
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -800,7 +802,7 @@ async def group_chat(request: Request):
                         "role": "assistant",
                         "character": char_name,
                         "content": clean_response,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": utc_now_iso(),
                     })
 
                 # Extract mood + activity from response (save to character)

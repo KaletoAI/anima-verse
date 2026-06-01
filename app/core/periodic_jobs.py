@@ -28,6 +28,8 @@ Public API:
 """
 import asyncio
 from datetime import datetime
+
+from app.core.timeutils import utc_now
 from typing import Callable, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -322,19 +324,19 @@ async def _world_admin_tick_loop():
         try:
             interval = _get_tick_interval()
             if not _is_paused():
-                now = datetime.now().timestamp()
+                now = utc_now().timestamp()
                 for func, min_iv, label in _SUB_TASKS:
                     last = _last_run.get(label, 0.0)
                     if min_iv and (now - last) < min_iv:
                         continue
-                    started = datetime.now()
+                    started = utc_now()
                     try:
                         await asyncio.to_thread(func)
-                        _last_run[label] = datetime.now().timestamp()
+                        _last_run[label] = utc_now().timestamp()
                     except Exception as _se:
                         logger.error("admin_tick sub %s error: %s",
                                      label, _se, exc_info=True)
-                    duration = (datetime.now() - started).total_seconds()
+                    duration = (utc_now() - started).total_seconds()
                     if duration > 5:
                         logger.info("admin_tick %s done in %.1fs", label, duration)
         except asyncio.CancelledError:

@@ -24,6 +24,8 @@ import threading
 import time
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -140,7 +142,7 @@ class TaskQueue:
         Queued tasks → pending (haben Handler, werden erneut verarbeitet).
         Tracked tasks → interrupted (extern gesteuert, kein Retry moeglich).
         """
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
             # Queued tasks: zurueck auf pending
             c1 = conn.execute(
@@ -189,7 +191,7 @@ class TaskQueue:
             queue_name = "background"
 
         task_id = f"task_{uuid.uuid4().hex[:12]}"
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
 
         with self._write_lock, self._connect() as conn:
             # Dedup check: skip if same task_type (+ same agent if specified)
@@ -281,7 +283,7 @@ class TaskQueue:
 
     def pause_queue(self, queue_name: str) -> bool:
         """Pauses a queue (persisted — survives restart). Returns True."""
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
             conn.execute(
                 """INSERT INTO queue_paused (queue_name, paused, updated_at)
@@ -294,7 +296,7 @@ class TaskQueue:
 
     def resume_queue(self, queue_name: str) -> bool:
         """Resumes a paused queue. Starts workers if not running."""
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
             conn.execute(
                 """INSERT INTO queue_paused (queue_name, paused, updated_at)
@@ -308,7 +310,7 @@ class TaskQueue:
 
     def cancel_task(self, task_id: str) -> bool:
         """Cancels a pending or running task. Returns True if cancelled."""
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
             cur = conn.execute(
                 """UPDATE tasks SET status='cancelled', completed_at=?, error='Abgebrochen'
@@ -368,7 +370,7 @@ class TaskQueue:
     def clear_completed(self, older_than_hours: float = 24, queue_name: str = "") -> int:
         """Deletes completed/failed/cancelled tasks older than N hours."""
         from datetime import timedelta
-        cutoff = (datetime.now() - timedelta(hours=older_than_hours)).isoformat(timespec="seconds")
+        cutoff = (utc_now() - timedelta(hours=older_than_hours)).isoformat(timespec="seconds")
         with self._write_lock, self._connect() as conn:
             if queue_name:
                 cur = conn.execute(
@@ -466,7 +468,7 @@ class TaskQueue:
 
     def _dequeue(self) -> Optional[Dict[str, Any]]:
         """Atomically picks the next pending queued task (not tracked)."""
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
             row = conn.execute(
                 """SELECT task_id, task_type, payload, priority, queue_name,
@@ -495,7 +497,7 @@ class TaskQueue:
         error: str = "",
         duration_s: float = 0.0,
         retry: bool = False) -> None:
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
             if retry:
                 conn.execute(
@@ -542,7 +544,7 @@ class TaskQueue:
         Returns task_id.
         """
         task_id = f"track_{uuid.uuid4().hex[:8]}"
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         if not queue_name:
             # Resolve provider/backend name to a configured queue name
             try:
@@ -588,7 +590,7 @@ class TaskQueue:
             provider: If set, updates the provider field (e.g. when the
                 backend is only known at execution time).
         """
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
         with self._write_lock:
             self._track_start_times[task_id] = time.monotonic()
             with self._connect() as conn:
@@ -622,7 +624,7 @@ class TaskQueue:
         t0 = self._track_start_times.pop(task_id, None)
         duration_s = round(time.monotonic() - t0, 2) if t0 else 0.0
         status = "failed" if error else "completed"
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
 
         with self._write_lock, self._connect() as conn:
             conn.execute(
@@ -645,7 +647,7 @@ class TaskQueue:
         """Cancel a tracked task. Returns True if found."""
         t0 = self._track_start_times.pop(task_id, None)
         duration_s = round(time.monotonic() - t0, 2) if t0 else 0.0
-        now = datetime.now().isoformat(timespec="seconds")
+        now = utc_now_iso()
 
         with self._write_lock, self._connect() as conn:
             cur = conn.execute(

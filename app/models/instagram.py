@@ -5,6 +5,8 @@ import uuid
 import time
 from pathlib import Path
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Dict, Any, List, Optional
 
 from app.core.log import get_logger
@@ -125,7 +127,7 @@ def save_feed(feed: List[Dict[str, Any]]):
                 pid = post.get("id")
                 if not pid:
                     continue
-                ts = post.get("timestamp", datetime.now().isoformat())
+                ts = post.get("timestamp", utc_now_iso())
                 char = post.get("agent_name", "")
                 payload_str = json.dumps(post, ensure_ascii=False)
                 if pid in post_to_db:
@@ -162,7 +164,7 @@ def create_post(character_name: str,
         "image_filename": image_filename,
         "caption": caption,
         "hashtags": hashtags or [],
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": utc_now_iso(),
         "agent_name": character_name,
         "likes": 0,
         "liked_by": [],
@@ -305,7 +307,7 @@ def add_comment(post_id: str,
                 "id": f"c_{uuid.uuid4().hex[:8]}",
                 "author": commenter_name,
                 "text": text,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": utc_now_iso(),
             }
             if "comments" not in post:
                 post["comments"] = []
@@ -456,7 +458,7 @@ def apply_interactions_to_latest_post(character_name: str, interactions: Dict[st
             "id": f"c_{uuid.uuid4().hex[:8]}",
             "author": comment_data["author"],
             "text": comment_data["text"],
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utc_now_iso(),
         }
         if "comments" not in post:
             post["comments"] = []

@@ -6,6 +6,8 @@ Generische Schnittstelle für Multi-Channel Support in der Chat-Anwendung
 from enum import Enum
 from typing import Optional, Dict, Any
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from abc import ABC, abstractmethod
 
 
@@ -47,7 +49,7 @@ class Message:
         self.content = content
         self.role = role
         self.channel = channel
-        self.timestamp = timestamp or datetime.now().isoformat()
+        self.timestamp = timestamp or utc_now_iso()
         self.channel_message_id = channel_message_id
         self.metadata = metadata or {}
         self.speaker = speaker

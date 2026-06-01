@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,11 +54,11 @@ def _save(character_name: str, reports: List[Dict[str, Any]]) -> None:
 
 def _is_expired(report: Dict[str, Any]) -> bool:
     try:
-        created = datetime.fromisoformat(report.get("created_at", ""))
+        created = parse_iso(report.get("created_at", ""))
     except Exception:
         return True
     ttl = report.get("ttl_hours", _DEFAULT_TTL_HOURS)
-    return datetime.now() - created > timedelta(hours=ttl)
+    return utc_now() - created > timedelta(hours=ttl)
 
 
 def list_open(character_name: str) -> List[Dict[str, Any]]:
@@ -107,7 +109,7 @@ def add_report(reporter: str,          # Character der schulden hat (from)
             return r["id"]
 
     rid = f"rep_{uuid.uuid4().hex[:8]}"
-    now = datetime.now()
+    now = utc_now()
     report = {
         "id": rid,
         "from": reporter,
@@ -135,7 +137,7 @@ def mark_resolved(reporter: str, report_id: str) -> bool:
     for r in reports:
         if r.get("id") == report_id:
             r["resolved"] = True
-            r["resolved_at"] = datetime.now().isoformat(timespec="seconds")
+            r["resolved_at"] = utc_now_iso()
             _save(reporter, reports)
             logger.info("pending_report aufgeloest: %s", report_id)
             return True

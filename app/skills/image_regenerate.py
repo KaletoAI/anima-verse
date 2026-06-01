@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from app.core.log import get_logger
+from app.core.timeutils import utc_now_iso
 logger = get_logger("image_regen")
 
 
@@ -461,7 +462,7 @@ def regenerate_image(character_name: str,
         _ref_meta = {}
         for _rk, _rv in _ref_source.items():
             _ref_meta[_rk] = _os.path.basename(_rv) if _rv else ""
-        _now_iso = __import__("datetime").datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        _now_iso = utc_now_iso()
 
         # Original-Metadaten laden (fuer location, created_at und andere Felder)
         _orig_filename = Path(output_path).name

@@ -6,6 +6,8 @@ Negative-Prompt, Backend, erkannte Appearances, Kontext-Daten.
 import json
 import threading
 from datetime import datetime, timedelta
+
+from app.core.timeutils import utc_now
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -61,7 +63,7 @@ def log_image_prompt(
         duration_s: Dauer der Bildgenerierung in Sekunden
         reference_images: Referenzbilder {slot_title: file_path}
     """
-    end_time = datetime.now()
+    end_time = utc_now()
     start_time = end_time - timedelta(seconds=duration_s) if duration_s > 0 else end_time
     entry: Dict[str, Any] = {
         "starttime": start_time.isoformat(timespec="seconds"),

@@ -11,6 +11,8 @@ import os
 import re
 import uuid
 from datetime import datetime
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -28,7 +30,7 @@ def _new_id() -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat()
+    return utc_now_iso()
 
 
 def _row_to_entry(row) -> Dict[str, Any]:
@@ -424,10 +426,10 @@ def _recency_boost(age_days: float) -> float:
 def _compute_decay(entry: Dict[str, Any]) -> float:
     """Berechnet aktuellen Decay basierend auf Alter und Access-Count."""
     try:
-        ts = datetime.fromisoformat(entry.get("timestamp", ""))
+        ts = parse_iso(entry.get("timestamp", ""))
     except (ValueError, TypeError):
         return 0.5
-    age_days = max(0, (datetime.now() - ts).total_seconds() / 86400)
+    age_days = max(0, (utc_now() - ts).total_seconds() / 86400)
     # Base decay: halbes Leben nach 30 Tagen
     base_decay = math.exp(-0.023 * age_days)
     # Access-Bonus: haeufig abgerufene Memories zerfallen langsamer
@@ -492,8 +494,8 @@ def retrieve_relevant_memories(character_name: str,
 
         # Recency-Boost: aktuelle Daten (< 2 Tage) deutlich bevorzugen
         try:
-            ts = datetime.fromisoformat(entry.get("timestamp", ""))
-            age_days = max(0, (datetime.now() - ts).total_seconds() / 86400)
+            ts = parse_iso(entry.get("timestamp", ""))
+            age_days = max(0, (utc_now() - ts).total_seconds() / 86400)
         except (ValueError, TypeError):
             age_days = 30.0  # Unbekanntes Alter = kein Boost
         recency = _recency_boost(age_days)
@@ -527,10 +529,10 @@ def retrieve_relevant_memories(character_name: str,
 def _format_memory_timestamp(iso_ts: str) -> str:
     """Kompaktes, LLM-lesbares Datum."""
     try:
-        dt = datetime.fromisoformat(iso_ts)
+        dt = parse_iso(iso_ts)
     except (ValueError, TypeError):
         return ""
-    now = datetime.now()
+    now = utc_now()
     delta = now.date() - dt.date()
     time_str = dt.strftime("%H:%M")
     if delta.days == 0:
@@ -576,8 +578,8 @@ def build_memory_prompt_section(character_name: str,
         # Recency-Marker fuer sehr aktuelle Eintraege (< 2 Tage)
         recency_marker = ""
         try:
-            mem_ts = datetime.fromisoformat(mem.get("timestamp", ""))
-            mem_age_days = (datetime.now() - mem_ts).total_seconds() / 86400
+            mem_ts = parse_iso(mem.get("timestamp", ""))
+            mem_age_days = (utc_now() - mem_ts).total_seconds() / 86400
             if mem_age_days <= 1.0:
                 recency_marker = "[AKTUELL] "
             elif mem_age_days <= 2.0:

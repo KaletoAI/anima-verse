@@ -16,6 +16,8 @@ new material has accumulated since the last retrospect.
 import json
 import re
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List
 
 from .base import BaseSkill, ToolSpec
@@ -48,7 +50,7 @@ def _mark_retrospect_done(character_name: str) -> None:
                 "INSERT INTO world_kv (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (f"retrospect.last_at:{character_name}",
-                 datetime.now().isoformat()))
+                 utc_now_iso()))
     except Exception as e:
         logger.debug("mark_retrospect_done failed for %s: %s", character_name, e)
 

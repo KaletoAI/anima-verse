@@ -20,6 +20,8 @@ API:
 import json
 import struct
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
@@ -151,7 +153,7 @@ def _create_variant(character_name: str,
                      embedding: Optional[List[float]],
                      example_image: str = "") -> Optional[int]:
     """Schreibt einen neuen Variant. Returns neue ID oder None."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     blob = _pack_embedding(embedding)
     try:
         with transaction() as conn:
@@ -172,7 +174,7 @@ def _create_variant(character_name: str,
 
 def _touch_variant(variant_id: int) -> None:
     """Aktualisiert last_used_at + use_count fuer den Variant."""
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     try:
         with transaction() as conn:
             conn.execute(

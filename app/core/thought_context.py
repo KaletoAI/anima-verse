@@ -12,6 +12,8 @@ Returns a kwargs dict that can be passed straight into
 ``render('chat/agent_thought.md', **ctx)``.
 """
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now
 from typing import Any, Dict, List
 
 from app.core.log import get_logger
@@ -46,7 +48,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "location_name": location_name,
         "activity": (profile.get("current_activity", "") or "None"),
         "feeling": (profile.get("current_feeling", "") or "Neutral"),
-        "time_of_day": datetime.now().strftime("%H:%M"),
+        "time_of_day": utc_now().strftime("%H:%M"),
         # Defaults for optional blocks — keep them present so StrictUndefined
         # doesn't raise on missing keys.
         "inbox_block": _build_inbox_block(character_name),
@@ -199,13 +201,13 @@ def _build_outfit_decision_block(character_name: str) -> str:
         if not row:
             return ""
         loc_changed_at, activity_changed_at, current_activity = row
-        now = datetime.now()
+        now = utc_now()
         cur_activity_lc = (current_activity or "").strip().lower()
 
         # (a) Recent location change
         if loc_changed_at:
             try:
-                changed = datetime.fromisoformat(loc_changed_at)
+                changed = parse_iso(loc_changed_at)
                 if now - changed <= timedelta(minutes=_OUTFIT_AFTER_LOCATION_MINUTES):
                     return (
                         "You recently changed location. Consider whether your "
@@ -220,7 +222,7 @@ def _build_outfit_decision_block(character_name: str) -> str:
         # the wake-up window, signal an outfit decision.
         if cur_activity_lc != "sleeping" and activity_changed_at:
             try:
-                changed = datetime.fromisoformat(activity_changed_at)
+                changed = parse_iso(activity_changed_at)
             except (ValueError, TypeError):
                 changed = None
             if changed and now - changed <= timedelta(minutes=_OUTFIT_AFTER_LOCATION_MINUTES * 2):
@@ -277,12 +279,12 @@ def _build_instagram_pending_block(character_name: str) -> str:
     if not feed:
         return ""
 
-    cutoff = datetime.now() - timedelta(hours=window_h)
+    cutoff = utc_now() - timedelta(hours=window_h)
     relevant = []
     for post in feed:
         ts = post.get("timestamp", "") or ""
         try:
-            post_dt = datetime.fromisoformat(ts.replace("Z", ""))
+            post_dt = parse_iso(ts)
         except Exception:
             continue
         if post_dt < cutoff:
@@ -367,8 +369,8 @@ def _build_retrospective_block(character_name: str) -> str:
         overdue = True
         if last_at:
             try:
-                last_dt = datetime.fromisoformat(last_at)
-                overdue = datetime.now() - last_dt > timedelta(hours=_RETROSPECT_BOOST_HOURS)
+                last_dt = parse_iso(last_at)
+                overdue = utc_now() - last_dt > timedelta(hours=_RETROSPECT_BOOST_HOURS)
             except (ValueError, TypeError):
                 pass
 
@@ -765,7 +767,7 @@ def _build_daily_schedule_block(character_name: str) -> str:
                 continue
             slot_by_hour[h] = s
 
-        now = datetime.now()
+        now = utc_now()
         cur_h = now.hour
         next_h = (cur_h + 1) % 24
 

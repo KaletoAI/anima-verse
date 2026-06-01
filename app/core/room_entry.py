@@ -9,6 +9,8 @@ Minuten — gespeichert als Memory-Tag `room_greeting:{avatar}`.
 """
 import random
 from datetime import datetime, timedelta
+
+from app.core.timeutils import utc_now
 from typing import List, Optional
 
 from app.core.log import get_logger
@@ -83,7 +85,7 @@ def _is_in_cooldown(reactor: str, avatar: str) -> bool:
     """True wenn der reactor den avatar in den letzten N Min schon begruesst hat."""
     try:
         from app.models.memory import load_memories
-        cutoff = datetime.now() - timedelta(minutes=GREETING_COOLDOWN_MIN)
+        cutoff = utc_now() - timedelta(minutes=GREETING_COOLDOWN_MIN)
         cutoff_iso = cutoff.isoformat()
         target_tag = f"room_greeting:{avatar}"
         for m in load_memories(reactor):

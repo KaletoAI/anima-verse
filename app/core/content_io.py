@@ -19,6 +19,8 @@ import json
 import shutil
 import zipfile
 from datetime import datetime
+
+from app.core.timeutils import utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -128,7 +130,7 @@ def export_item_to_zip(item_id: str) -> bytes:
             "version": MANIFEST_VERSION,
             "type": "item",
             "item_id": item_id,
-            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "exported_at": utc_now_iso(),
             "scope": scope,
             "files": sorted(files),
         }
@@ -174,7 +176,7 @@ def export_items_to_bundle_zip(item_ids: List[str]) -> bytes:
             "type": "item_bundle",
             "items": [it["id"] for it in items],
             "scopes": scopes,
-            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "exported_at": utc_now_iso(),
             "files": sorted(all_files),
         }
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -232,7 +234,7 @@ def _persist_imported_item(
             renamed = final_id != original_id
 
     item["id"] = final_id
-    item.setdefault("created_at", datetime.now().isoformat())
+    item.setdefault("created_at", utc_now_iso())
 
     if target == "shared":
         shared = _load_shared_items()
@@ -356,7 +358,7 @@ def export_rule_to_zip(rule_id: str) -> bytes:
             "type": "rule",
             "rule_id": rule_id,
             "scope": scope,
-            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "exported_at": utc_now_iso(),
         }
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
     return buf.getvalue()
@@ -466,7 +468,7 @@ def export_location_to_zip(location_id: str) -> bytes:
                     f.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp")
                 )
             ),
-            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "exported_at": utc_now_iso(),
             "files": sorted(file_entries),
         }
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -593,7 +595,7 @@ def export_states_to_zip() -> bytes:
             "version": MANIFEST_VERSION,
             "type": "states",
             "count": len(rows),
-            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "exported_at": utc_now_iso(),
         }
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
     return buf.getvalue()
@@ -702,7 +704,7 @@ def export_map_layout_to_zip() -> bytes:
             "version": MANIFEST_VERSION,
             "type": "map_layout",
             "count": len(rows),
-            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "exported_at": utc_now_iso(),
         }
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
     return buf.getvalue()

@@ -6,6 +6,8 @@ konsolidiert aeltere Memories periodisch.
 import json
 import re
 from datetime import datetime, timedelta
+
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -364,7 +366,7 @@ def _parse_commitment_delay(delay: str) -> int:
     if time_match:
         target_h = int(time_match.group(1))
         target_m = int(time_match.group(2))
-        now = datetime.now()
+        now = utc_now()
         target = now.replace(hour=target_h, minute=target_m, second=0, microsecond=0)
         if target <= now:
             target += timedelta(days=1)  # Morgen zur gleichen Zeit
@@ -392,7 +394,7 @@ def consolidate_memories(character_name: str) -> int:
         return 0  # Zu wenige zum Konsolidieren
 
     removed = 0
-    now = datetime.now()
+    now = utc_now()
 
     # Konfiguration
     commitment_max_days = int(_os.environ.get("MEMORY_COMMITMENT_MAX_DAYS", "7"))
@@ -408,7 +410,7 @@ def consolidate_memories(character_name: str) -> int:
         if entry.get("memory_type") == "commitment":
             tags = entry.get("tags", []) or []
             try:
-                ts = datetime.fromisoformat(entry.get("timestamp", ""))
+                ts = parse_iso(entry.get("timestamp", ""))
                 age_days = (now - ts).total_seconds() / 86400
                 if "completed" in tags and age_days > completed_max_days:
                     removed += 1
@@ -598,7 +600,7 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
                                             save_daily_summary)
 
     thresholds = get_memory_thresholds()
-    cutoff = datetime.now() - timedelta(days=thresholds["short_term_days"])
+    cutoff = utc_now() - timedelta(days=thresholds["short_term_days"])
 
     entries = load_memories(character_name)
 
@@ -608,7 +610,7 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
         if e.get("memory_type") != "episodic":
             continue
         try:
-            ts = datetime.fromisoformat(e.get("timestamp", ""))
+            ts = parse_iso(e.get("timestamp", ""))
             if ts >= cutoff:
                 continue  # Zu frisch
             day_str = ts.strftime("%Y-%m-%d")
@@ -709,7 +711,7 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
                                             load_daily_summaries_combined)
 
     thresholds = get_memory_thresholds()
-    cutoff = (datetime.now() - timedelta(days=thresholds["mid_term_days"])).date()
+    cutoff = (utc_now() - timedelta(days=thresholds["mid_term_days"])).date()
 
     # Wochen-Konsolidierung verdichtet ueber alle Partner — kombinierter
     # Text pro Tag (alle Partner-Slots zusammen).
@@ -826,7 +828,7 @@ def _consolidate_weekly_to_monthly(character_name: str) -> int:
     from app.utils.history_manager import get_memory_thresholds
 
     thresholds = get_memory_thresholds()
-    cutoff = (datetime.now() - timedelta(days=thresholds["long_term_days"])).date()
+    cutoff = (utc_now() - timedelta(days=thresholds["long_term_days"])).date()
 
     weekly = load_weekly_summaries(character_name)
     if not weekly:
@@ -951,7 +953,7 @@ def handle_three_tier_migration(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         migrated = _migrate_three_tier(character_name)
         if migrated >= 0:
-            marker.write_text(datetime.now().isoformat(), encoding="utf-8")
+            marker.write_text(utc_now_iso(), encoding="utf-8")
             logger.info("3-Tier Migration %s/%s: %d Episodics konsolidiert", character_name, migrated)
             return {"success": True, "character": character_name, "migrated": migrated}
         return {"error": "migration returned -1"}
@@ -983,7 +985,7 @@ def _migrate_three_tier(character_name: str) -> int:
                                             save_daily_summary)
 
     thresholds = get_memory_thresholds()
-    cutoff = datetime.now() - timedelta(days=thresholds["short_term_days"])
+    cutoff = utc_now() - timedelta(days=thresholds["short_term_days"])
 
     entries = load_memories(character_name)
     if not entries:
@@ -995,7 +997,7 @@ def _migrate_three_tier(character_name: str) -> int:
         if e.get("memory_type") != "episodic":
             continue
         try:
-            ts = datetime.fromisoformat(e.get("timestamp", ""))
+            ts = parse_iso(e.get("timestamp", ""))
             if ts >= cutoff:
                 continue
             day_str = ts.strftime("%Y-%m-%d")
