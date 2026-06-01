@@ -482,7 +482,7 @@ class AgentLoop:
                                     "Walk blockiert (leave): %s — Target %s geloescht (%s)",
                                     character_name, target, _leave_reason)
                                 try:
-                                    from app.models.character import record_access_denied, get_character_current_location
+                                    from app.models.character import record_access_denied
                                     from app.models.world import get_location_name as _gln_walk
                                     _cur = get_character_current_location(character_name) or ""
                                     _cur_name = _gln_walk(_cur) or _cur
