@@ -1730,6 +1730,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .sidebar a:hover { color: #c9d1d9; background: #1c2128; }
 .sidebar a.active { color: #58a6ff; border-left-color: #58a6ff; background: #1c2128; }
 .sidebar .nav-icon { margin-right: 6px; }
+.sidebar a.nav-sub { padding: 5px 16px 5px 30px; font-size: 12px; }
+.sidebar a.nav-sub .nav-icon { color: #6e7681; margin-right: 4px; }
+.sidebar a.nav-sub.active .nav-icon { color: #58a6ff; }
 .sidebar .nav-section-label {
     padding: 10px 16px 4px; margin-top: 10px; font-size: 11px; font-weight: 700;
     color: #8b949e; text-transform: uppercase; letter-spacing: 0.8px;
@@ -1821,6 +1824,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .array-item.open .array-item-body { display: block; }
 .array-item-header .chevron { transition: transform 0.2s; color: #8b949e; }
 .array-item.open .array-item-header .chevron { transform: rotate(90deg); }
+
+/* ── Master-Detail (Backends, ComfyUI Workflows) ── */
+.md-grid { display: grid; grid-template-columns: minmax(280px, 38%) 1fr; gap: 16px; align-items: start; }
+.md-list { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 8px; }
+.md-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.md-table th { text-align: left; padding: 6px 8px; color: #8b949e; font-weight: 600;
+    border-bottom: 1px solid #30363d; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.md-row { cursor: pointer; }
+.md-row td { padding: 7px 8px; border-bottom: 1px solid #21262d; color: #c9d1d9; }
+.md-row:hover td { background: #161b22; }
+.md-row.active td { background: rgba(31,111,235,0.15); }
+.md-row.active td:first-child { box-shadow: inset 2px 0 0 #58a6ff; font-weight: 600; }
+.md-status.on { color: #3fb950; }
+.md-status.off { color: #8b949e; }
+.md-empty { color: #484f58; }
+.md-detail { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+.md-detail-head { display: flex; align-items: center; margin-bottom: 12px; padding-bottom: 8px;
+    border-bottom: 1px solid #30363d; }
+.md-detail-title { font-weight: 600; font-size: 14px; color: #58a6ff; }
+.md-empty-detail { color: #8b949e; padding: 28px 12px; text-align: center; }
+@media (max-width: 900px) { .md-grid { grid-template-columns: 1fr; } }
 
 /* LoRA rows */
 .lora-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
@@ -1917,6 +1941,8 @@ let ACTIVE_SECTION = null;
 // Pfad hier fest. So bleibt der Zustand ueber renderSection()-Rerenders
 // (z.B. nach api_type-Wechsel via triggers_rerender) erhalten.
 const OPEN_ITEMS = new Set();
+// Master-Detail: pro Sub-Array-Pfad der aktuell ausgewaehlte Item-Pfad.
+const SELECTED_ITEM = {};
 function toggleArrayItem(el, path) {
     const isOpen = el.parentElement.classList.toggle('open');
     if (isOpen) OPEN_ITEMS.add(path);
@@ -1965,6 +1991,20 @@ function buildNav() {
         a.dataset.section = key;
         a.onclick = (e) => { e.preventDefault(); activateSection(key); };
         nav.appendChild(a);
+        // Sub-Arrays (z.B. Backends, ComfyUI Workflows) als eingerueckte
+        // Unterpunkte — jedes bekommt eine eigene Seite (Key "<sec>::<arr>").
+        if (sec.sub_arrays) {
+            for (const [arrKey, arrDef] of Object.entries(sec.sub_arrays)) {
+                const subKey = key + '::' + arrKey;
+                const sa = document.createElement('a');
+                sa.className = 'nav-sub';
+                sa.href = '#' + subKey;
+                sa.innerHTML = '<span class="nav-icon">›</span> ' + arrDef.label;
+                sa.dataset.section = subKey;
+                sa.onclick = (e) => { e.preventDefault(); activateSection(subKey); };
+                nav.appendChild(sa);
+            }
+        }
     }
 }
 
@@ -2007,6 +2047,8 @@ fetch('/admin/world-name', { credentials: 'same-origin', cache: 'no-store' })
 
 // ── Render Section ──
 function renderSection(key) {
+    // Compound-Key "<section>::<subArray>" -> eigene Sub-Array-Seite.
+    if (key.indexOf('::') !== -1) { renderSubArrayPage(key); return; }
     const sec = SCHEMA[key];
     // null und undefined beide auf Default fallen lassen — sonst wirft
     // renderFields(null, ...) bei data[fKey] einen TypeError.
@@ -2033,22 +2075,9 @@ function renderSection(key) {
         }
     }
 
-    // Sub-arrays (like backends, comfyui_workflows)
-    if (sec.sub_arrays) {
-        for (const [arrKey, arrDef] of Object.entries(sec.sub_arrays)) {
-            html += '<div class="subsection">';
-            html += '<div class="subsection-title" style="display:flex; align-items:center; justify-content:space-between;">';
-            html += arrDef.label;
-            html += '<button class="btn btn-sm" onclick="addArrayItem(\\'' + key + '.' + arrKey + '\\', \\'' + (arrDef.is_dict ? 'dict' : 'array') + '\\')">+ Add</button>';
-            html += '</div>';
-            if (arrDef.is_dict) {
-                html += renderDictItems(arrDef, data[arrKey] || {}, key + '.' + arrKey);
-            } else {
-                html += renderArrayItems(arrDef, data[arrKey] || [], key + '.' + arrKey);
-            }
-            html += '</div>';
-        }
-    }
+    // Sub-arrays (backends, comfyui_workflows, catalogs) werden NICHT hier
+    // gerendert — jedes hat einen eigenen Nav-Unterpunkt (siehe buildNav /
+    // renderSubArrayPage), damit die Hauptseite nicht ueberladen ist.
 
     // Array sections (providers)
     if (sec.is_array) {
@@ -2078,6 +2107,33 @@ function renderSection(key) {
     html += '</div>';
     content.innerHTML = html;
     // image_preview-Felder Meta nachladen (kein <script> via innerHTML moeglich)
+    populateImagePreviewMetas();
+}
+
+// Eigene Seite fuer ein einzelnes Sub-Array (z.B. image_generation::backends).
+function renderSubArrayPage(key) {
+    const sep = key.indexOf('::');
+    const parentKey = key.slice(0, sep);
+    const arrKey = key.slice(sep + 2);
+    const sec = SCHEMA[parentKey];
+    const arrDef = sec && sec.sub_arrays ? sec.sub_arrays[arrKey] : null;
+    const content = document.getElementById('content');
+    if (!sec || !arrDef) { content.innerHTML = '<div class="section active"></div>'; return; }
+    const parentData = (CONFIG[parentKey] && typeof CONFIG[parentKey] === 'object') ? CONFIG[parentKey] : {};
+    const path = parentKey + '.' + arrKey;
+    const items = parentData[arrKey] || (arrDef.is_dict ? {} : []);
+
+    let html = '<div class="section active">';
+    html += '<h1 class="section-title">' + (sec.icon || '') + ' ' + sec.label + ' — ' + arrDef.label + '</h1>';
+    if (arrDef.master_detail) {
+        html += renderMasterDetail(arrDef, items, path);
+    } else {
+        html += '<div style="margin-bottom:12px;"><button class="btn btn-sm" onclick="addArrayItem(\\'' + path + '\\', \\'' + (arrDef.is_dict ? 'dict' : 'array') + '\\')">+ Add</button></div>';
+        if (arrDef.is_dict) html += renderDictItems(arrDef, items, path);
+        else html += renderArrayItems(arrDef, items, path);
+    }
+    html += '</div>';
+    content.innerHTML = html;
     populateImagePreviewMetas();
 }
 
@@ -2741,6 +2797,102 @@ function renderArrayItem(def, item, path, index, labelField) {
     return html;
 }
 
+// ── Master-Detail (links Tabelle, rechts Editor) ──
+// Liefert die geordnete Eintragsliste fuer Array- ODER Dict-Sub-Arrays.
+// Jeder Eintrag traegt seinen vollen Pfad (image_generation.backends[0]
+// bzw. image_generation.comfyui_workflows.Qwen) — identisch zu den Pfaden
+// die renderArrayItem/setVal nutzen.
+function _mdOrder(def, items, path) {
+    let order;
+    if (def.is_dict) {
+        order = Object.entries(items || {}).map(([k, it]) => ({
+            itemPath: path + '.' + k, item: it,
+            label: _itemLabel(it, def.item_label_field, k),
+        }));
+    } else {
+        order = (items || []).map((it, i) => ({
+            itemPath: path + '[' + i + ']', item: it,
+            label: _itemLabel(it, def.item_label_field, 'Item ' + i),
+        }));
+    }
+    if (def.sort_alphabetically) {
+        order.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+    }
+    return order;
+}
+
+function renderMdCell(col, item) {
+    const v = item ? item[col.field] : undefined;
+    if (col.kind === 'status') {
+        const on = v !== false;
+        return '<span class="md-status ' + (on ? 'on' : 'off') + '">' + (on ? '● on' : '○ off') + '</span>';
+    }
+    if (v === undefined || v === null || v === '') return '<span class="md-empty">—</span>';
+    return esc(String(v));
+}
+
+function renderMasterDetail(def, items, path) {
+    const order = _mdOrder(def, items, path);
+    // Aktuelle Auswahl validieren — sonst ersten Eintrag waehlen.
+    let sel = SELECTED_ITEM[path];
+    if (!order.some(o => o.itemPath === sel)) sel = order.length ? order[0].itemPath : null;
+    SELECTED_ITEM[path] = sel;
+
+    const cols = def.list_columns || [{ field: def.item_label_field || 'name', label: 'Name' }];
+
+    let html = '<div class="md-grid">';
+    // Links: Tabelle
+    html += '<div class="md-list">';
+    html += '<table class="md-table"><thead><tr>';
+    for (const c of cols) html += '<th>' + esc(c.label) + '</th>';
+    html += '</tr></thead><tbody>';
+    for (const o of order) {
+        const active = (o.itemPath === sel) ? ' active' : '';
+        html += '<tr class="md-row' + active + '" onclick="selectMasterItem(\\'' + path + '\\', \\'' + o.itemPath + '\\')">';
+        for (const c of cols) html += '<td>' + renderMdCell(c, o.item) + '</td>';
+        html += '</tr>';
+    }
+    if (!order.length) {
+        html += '<tr><td colspan="' + cols.length + '"><span class="md-empty">Keine Eintraege</span></td></tr>';
+    }
+    html += '</tbody></table>';
+    html += '<button class="btn btn-sm" style="margin-top:10px;" onclick="addArrayItem(\\'' + path + '\\', \\'' + (def.is_dict ? 'dict' : 'array') + '\\')">+ Add</button>';
+    html += '</div>';
+    // Rechts: Detail
+    html += '<div class="md-detail" id="detail-' + path + '">';
+    html += renderMasterDetailBody(def, items, path, sel);
+    html += '</div>';
+    html += '</div>';
+    return html;
+}
+
+function renderMasterDetailBody(def, items, path, sel) {
+    if (!sel) return '<div class="md-empty-detail">Eintrag links auswaehlen oder neu anlegen.</div>';
+    let item;
+    if (def.is_dict) {
+        item = (items || {})[sel.slice(path.length + 1)];
+    } else {
+        const m = sel.match(/\\[(\\d+)\\]$/);
+        item = m ? (items || [])[parseInt(m[1], 10)] : null;
+    }
+    if (!item) return '<div class="md-empty-detail">Eintrag links auswaehlen oder neu anlegen.</div>';
+
+    const label = _itemLabel(item, def.item_label_field, 'Eintrag');
+    let html = '<div class="md-detail-head">';
+    html += '<span class="md-detail-title">' + esc(label) + '</span>';
+    html += '<span style="flex:1;"></span>';
+    html += '<button class="btn btn-sm" title="Als neuen Eintrag duplizieren" onclick="duplicateItem(\\'' + sel + '\\')">⧉</button>';
+    html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" title="Loeschen" onclick="removeItem(\\'' + sel + '\\')">✕</button>';
+    html += '</div>';
+    html += renderFields(def.fields, item, sel);
+    return html;
+}
+
+function selectMasterItem(path, itemPath) {
+    SELECTED_ITEM[path] = itemPath;
+    renderSection(ACTIVE_SECTION);
+}
+
 // ── Task/Order List (llm_routing.tasks) ──
 let LLM_TASKS_CACHE = null;
 
@@ -3083,6 +3235,8 @@ function addArrayItem(path, type) {
             ...(detectedModel ? { image_model: detectedModel } : {}),
             ...defaults,
         };
+        // Neuen Eintrag im Master-Detail direkt selektieren (no-op fuer Accordion).
+        SELECTED_ITEM[path] = path + '.' + id;
     } else {
         if (path === 'llm_routing') {
             obj.push({ name: '', enabled: true, preload_on_startup: false, provider: '', model: '', temperature: 0.7, tasks: [] });
@@ -3091,6 +3245,7 @@ function addArrayItem(path, type) {
         } else {
             obj.push({ name: 'New', enabled: true, gpus: [] });
         }
+        SELECTED_ITEM[path] = path + '[' + (obj.length - 1) + ']';
     }
     renderSection(ACTIVE_SECTION);
 }
@@ -3108,6 +3263,12 @@ function removeItem(path) {
     } else {
         delete obj[last];
     }
+    // Auswahl im Master-Detail zuruecksetzen — renderMasterDetail faellt dann
+    // auf den ersten verbliebenen Eintrag zurueck.
+    const arrPath = (typeof last === 'number')
+        ? path.replace(/\\[\\d+\\]$/, '')
+        : path.replace(/\\.[^.\\[\\]]+$/, '');
+    delete SELECTED_ITEM[arrPath];
     renderSection(ACTIVE_SECTION);
 }
 
@@ -3132,12 +3293,16 @@ function duplicateItem(path) {
     if (typeof last === 'number') {
         // Array: direkt hinter Original einfuegen
         parent.splice(last + 1, 0, copy);
+        const arrPath = path.replace(/\\[\\d+\\]$/, '');
+        SELECTED_ITEM[arrPath] = arrPath + '[' + (last + 1) + ']';
     } else {
         // Dict: neuen Key vom User abfragen
         const newKey = prompt('Neuer Schluessel fuer den Klon:', String(last) + '_copy');
         if (!newKey) return;
         if (parent[newKey] !== undefined) { toast('Schluessel existiert bereits: ' + newKey, 'error'); return; }
         parent[newKey] = copy;
+        const arrPath = path.replace(/\\.[^.\\[\\]]+$/, '');
+        SELECTED_ITEM[arrPath] = arrPath + '.' + newKey;
     }
     renderSection(ACTIVE_SECTION);
 }
