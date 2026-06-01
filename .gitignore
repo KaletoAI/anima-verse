@@ -110,6 +110,9 @@ Aufgaben.md
 /models/**/*.gguf
 voices/*.wav
 
+# original comfyui workflows
+workflows/ComfyUI-Workflows/
+
 # SQLite databases
 *.db
 *.db-shm
