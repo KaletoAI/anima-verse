@@ -51,7 +51,6 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_qwen_api.json",
-        "vram_required": 22,
         "prompt_style": "photograph, shot on iPhone 15 Pro, natural window light, skin texture, unedited, detailed anatomy, 8k, high detail, \n",
         "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
         "prompt_instruction": "Write a natural-language descriptive prompt (not tags). Describe the scene as a flowing sentence with rich detail about the setting, characters, poses, and mood. Avoid comma-separated tag lists.",
@@ -64,7 +63,6 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_z-image_api.json",
-        "vram_required": 14,
         "prompt_style": "RAW photo, amateur photograph, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail, \n",
         "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
         "prompt_instruction": "Write a tag-based prompt with comma-separated keywords. Use quality tags like \"masterpiece, best quality\". Describe pose, lighting, and setting as short tags.",
@@ -77,7 +75,6 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_flux2_api.json",
-        "vram_required": 15,
         "prompt_style": "a candid photograph taken with a 35mm lens, natural indoor lighting, skin with visible pores and texture, detailed anatomy, 8k, high detail, ",
         "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
         "prompt_instruction": "Write a natural-language descriptive prompt for a Flux 2 Klein model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.",
@@ -489,7 +486,7 @@ def _flatten_to_env(config: dict) -> None:
         for key in ["name", "enabled", "api_type", "api_url", "api_key", "model",
                      "cost", "width", "height", "prompt_prefix",
                      "negative_prompt", "guidance_scale", "num_inference_steps",
-                     "sampling_method", "schedule_type", "vram_required",
+                     "sampling_method", "schedule_type",
                      "checkpoint", "poll_interval", "max_wait", "disable_safety",
                      "scheduler", "clip_skip",
                      "fallback_mode", "fallback_specific",
@@ -508,7 +505,7 @@ def _flatten_to_env(config: dict) -> None:
         p = f"COMFY_IMAGEGEN_{wid}_"
         for key in ["name", "filter", "skill", "workflow_file",
                      "model", "prompt_style", "prompt_negative", "image_model",
-                     "prompt_instruction", "vram_required", "width", "height",
+                     "prompt_instruction", "width", "height",
                      "clip", "fallback_specific"]:
             val = wf.get(key, "")
             _set(env, f"{p}{key.upper()}", val)
@@ -584,7 +581,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "TTS_COMFYUI_WORKFLOW_VOICECLONE", comfy_tts.get("workflow_voiceclone", ""))
     _set(env, "TTS_COMFYUI_WORKFLOW_VOICEDESC", comfy_tts.get("workflow_voicedesc", ""))
     _set(env, "TTS_COMFYUI_WORKFLOW_VOICENAME", comfy_tts.get("workflow_voicename", ""))
-    _set(env, "TTS_COMFYUI_VRAM_REQUIRED", comfy_tts.get("vram_required", ""))
     _set(env, "TTS_COMFYUI_MAX_WAIT", comfy_tts.get("max_wait", 300))
     _set(env, "TTS_COMFYUI_POLL_INTERVAL", comfy_tts.get("poll_interval", 1.0))
 

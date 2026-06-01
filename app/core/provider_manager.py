@@ -446,12 +446,11 @@ class ProviderManager:
                 pq.register_chat_iteration(task_id, iteration, max_iterations)
                 return
 
-    def find_channel(self, gpu_type: str, vram_required_mb: int = 0) -> Optional[ProviderQueue]:
-        """Find the best channel for a task by GPU type, VRAM and load.
+    def find_channel(self, gpu_type: str) -> Optional[ProviderQueue]:
+        """Find the best channel for a task by GPU type and load.
 
         Args:
             gpu_type: Required GPU type (e.g. "comfyui", "openai", "ollama")
-            vram_required_mb: VRAM needed (0 = don't check)
 
         Returns:
             Best matching ProviderQueue, or None if no match.
@@ -468,11 +467,6 @@ class ProviderManager:
                 # Local provider: match GPU type exactly
                 if not any(gpu_type in g.types for g in gpu_configs):
                     continue
-                # Check VRAM capacity
-                if vram_required_mb > 0:
-                    total_vram = sum(g.vram_mb for g in gpu_configs)
-                    if total_vram < vram_required_mb:
-                        continue
             else:
                 # Channel ohne GPU-Eintrag: kann nur LLM-Tasks bedienen, niemals
                 # ComfyUI/A1111 (die brauchen einen Backend-Channel).
@@ -509,14 +503,13 @@ class ProviderManager:
         priority: int,
         callable_fn,
         agent_name: str = "", label: str = "",
-        vram_required_mb: int = 0,
         gpu_type: str = "") -> Any:
         """Routes a GPU-slot task to the best available channel.
 
         Routing priority:
         1. ImageBackend channel: provider_name matches an image backend → ``backend:<name>``
         2. Explicit Provider GPU: provider_name="Provider:gpuIndex" → direct lookup
-        3. Dynamic routing: gpu_type set → find_channel() by type/vram/load
+        3. Dynamic routing: gpu_type set → find_channel() by type/load
         4. Legacy fallback: provider_name="Provider" → backwards-compat LLM-channel lookup
         """
         # 1. ImageBackend channel lookup: backend name → ``backend:<name>``
@@ -524,7 +517,7 @@ class ProviderManager:
             pq = self.channels.get(f"backend:{provider_name}")
             if pq:
                 return pq.submit_gpu_task(task_type, priority, callable_fn,
-                                          agent_name, label, vram_required_mb)
+                                          agent_name, label)
 
         # 2. Direct channel lookup: "Provider:N" → "Provider:gpuN"
         if provider_name and ":" in provider_name:
@@ -533,14 +526,14 @@ class ProviderManager:
             pq = self.channels.get(channel_key)
             if pq:
                 return pq.submit_gpu_task(task_type, priority, callable_fn,
-                                          agent_name, label, vram_required_mb)
+                                          agent_name, label)
 
         # 3. Dynamic routing by GPU type
         if gpu_type:
-            pq = self.find_channel(gpu_type, vram_required_mb)
+            pq = self.find_channel(gpu_type)
             if pq:
                 return pq.submit_gpu_task(task_type, priority, callable_fn,
-                                          agent_name, label, vram_required_mb)
+                                          agent_name, label)
 
         # 4. Legacy fallback by provider name
         if provider_name:
@@ -548,7 +541,7 @@ class ProviderManager:
             pq = self.gpu_queues.get(prov_name) or self.queues.get(prov_name)
             if pq:
                 return pq.submit_gpu_task(task_type, priority, callable_fn,
-                                          agent_name, label, vram_required_mb)
+                                          agent_name, label)
 
         raise Exception(f"No channel for gpu_type='{gpu_type}', provider='{provider_name}'")
 

@@ -26,8 +26,8 @@ from app.core.paths import get_storage_dir as _get_storage_dir
 _REF_AUDIO_CACHE: Dict[str, str] = {}
 
 
-def _resolve_comfyui_candidates(skill_names: str) -> List[Tuple[str, str, int]]:
-    """Resolve TTS_COMFYUI_SKILL to a list of (name, url, vram_required_mb).
+def _resolve_comfyui_candidates(skill_names: str) -> List[Tuple[str, str]]:
+    """Resolve TTS_COMFYUI_SKILL to a list of (name, url).
 
     skill_names: Kommaseparierte SKILL_IMAGEGEN Backend-Namen (z.B. "ComfyUI-4070,ComfyUI-3090").
     Reihenfolge = Fallback-Reihenfolge. Nicht-ComfyUI-Backends werden uebersprungen.
@@ -36,7 +36,7 @@ def _resolve_comfyui_candidates(skill_names: str) -> List[Tuple[str, str, int]]:
     if not targets:
         return []
 
-    found: Dict[str, Tuple[str, str, int]] = {}
+    found: Dict[str, Tuple[str, str]] = {}
     i = 1
     while True:
         name = os.environ.get(f"SKILL_IMAGEGEN_{i}_NAME", "")
@@ -49,9 +49,7 @@ def _resolve_comfyui_candidates(skill_names: str) -> List[Tuple[str, str, int]]:
                 logger.warning("TTS_COMFYUI_SKILL '%s': Backend ist kein ComfyUI (api_type=%s)", name, api_type)
             else:
                 url = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_URL", "").strip().rstrip("/")
-                vram_str = os.environ.get(f"SKILL_IMAGEGEN_{i}_VRAM_REQUIRED", "").strip()
-                vram_mb = int(float(vram_str) * 1024) if vram_str else 0
-                found[name] = (name, url, vram_mb)
+                found[name] = (name, url)
         i += 1
 
     # Reihenfolge aus skill_names beibehalten
@@ -406,16 +404,9 @@ class TTSService:
         # ComfyUI TTS — Liste von ComfyUI-Backends (Fallback-Reihenfolge).
         # URL wird pro Call aufgeloest (_pick_comfyui_url), nicht beim Init festgepinnt.
         self.comfyui_skill = os.environ.get("TTS_COMFYUI_SKILL", "").strip()
-        self.comfyui_candidates: List[Tuple[str, str, int]] = []
-        self.comfyui_vram_required_mb = 4096
+        self.comfyui_candidates: List[Tuple[str, str]] = []
         if self.comfyui_skill:
             self.comfyui_candidates = _resolve_comfyui_candidates(self.comfyui_skill)
-            vram_values = [v for _n, _u, v in self.comfyui_candidates if v]
-            if vram_values:
-                self.comfyui_vram_required_mb = max(vram_values)
-        _vram_override = os.environ.get("TTS_COMFYUI_VRAM_REQUIRED", "").strip()
-        if _vram_override:
-            self.comfyui_vram_required_mb = int(float(_vram_override) * 1024)
         self.comfyui_mode = os.environ.get("TTS_COMFYUI_MODE", "voiceclone").lower()  # voiceclone | voicedesc | voicename | auto
         self.comfyui_workflow_voiceclone = os.environ.get("TTS_COMFYUI_WORKFLOW_VOICECLONE", "./workflows/tts_voiceclone_workflow_api.json")
         self.comfyui_workflow_voicedesc = os.environ.get("TTS_COMFYUI_WORKFLOW_VOICEDESC", "./workflows/tts_voicedesc_workflow_api.json")
@@ -466,7 +457,7 @@ class TTSService:
 
         Leeres Tuple wenn keiner erreichbar ist.
         """
-        for name, url, _vram in self.comfyui_candidates:
+        for name, url in self.comfyui_candidates:
             if not url:
                 continue
             try:
@@ -724,7 +715,7 @@ class TTSService:
         comfyui_backend_name, comfyui_url = self._pick_comfyui_backend()
         if not comfyui_url:
             logger.error("ComfyUI TTS: Kein erreichbares Backend in %s",
-                         [n for n, _u, _v in self.comfyui_candidates])
+                         [n for n, _u in self.comfyui_candidates])
             return None
 
         with open(workflow_file) as f:
@@ -888,7 +879,6 @@ class TTSService:
                 callable_fn=_comfyui_tts_execute,
                 agent_name=character_name,
                 label=f"TTS {mode_label}",
-                vram_required_mb=self.comfyui_vram_required_mb,
                 gpu_type="comfyui")
         except Exception as e:
             logger.error("ComfyUI TTS: GPU-Task-Fehler: %s", e)
@@ -1296,7 +1286,7 @@ class TTSService:
     def status_info(self) -> Dict[str, Any]:
         """Returns status info for availability summary."""
         if self.backend == "comfyui":
-            url = ",".join(n for n, _u, _v in self.comfyui_candidates) or self.comfyui_skill
+            url = ",".join(n for n, _u in self.comfyui_candidates) or self.comfyui_skill
             voice = f"comfyui-tts ({self.comfyui_mode})"
         elif self.backend == "f5":
             url = self.f5_url

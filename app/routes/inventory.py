@@ -409,7 +409,6 @@ def generate_item_image_sync(
     try:
         from app.core.llm_queue import get_llm_queue, Priority as _P
         _is_local = backend.api_type in ("comfyui", "a1111")
-        _vram = (active_wf.vram_required_mb if active_wf and active_wf.vram_required_mb else backend.vram_required_mb) if _is_local else 0
         if _is_local:
             images = get_llm_queue().submit_gpu_task(
                 provider_name=backend.name,
@@ -418,7 +417,6 @@ def generate_item_image_sync(
                 callable_fn=lambda: backend.generate(prompt_text, negative, params),
                 agent_name=item.get("name", item_id),
                 label=f"Item: {item.get('name', item_id)}",
-                vram_required_mb=_vram,
                 gpu_type="comfyui")
         else:
             images = backend.generate(prompt_text, negative, params)

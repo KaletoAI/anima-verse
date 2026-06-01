@@ -401,15 +401,13 @@ def regenerate_image(character_name: str,
             # GPU-Queue fuer lokale Backends, direkt sonst
             if getattr(b, "api_type", "") in ("comfyui", "a1111"):
                 from app.core.llm_queue import get_llm_queue, Priority
-                _vram = getattr(b, "vram_required_mb", 0) or 0
-                logger.info("GPU-Task (Backend=%s, VRAM %dMB)", b.name, _vram)
+                logger.info("GPU-Task (Backend=%s)", b.name)
                 return get_llm_queue().submit_gpu_task(
                     provider_name=b.name,
                     task_type="image_regen",
                     priority=Priority.NORMAL,
                     callable_fn=lambda: b.generate(_gen_prompt, _gen_neg, _bp),
                     agent_name=character_name,
-                    vram_required_mb=_vram,
                     gpu_type="comfyui")
             return b.generate(_gen_prompt, _gen_neg, _bp)
         return _op

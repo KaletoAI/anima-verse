@@ -42,7 +42,6 @@ class ComfyWorkflow:
     prompt_style: str = "photorealistic"  # Stil-Adjektiv / Style-Keywords (Summary + Style-Zeile)
     image_model: str = ""
     prompt_instruction: str = ""
-    vram_required_mb: int = 0  # VRAM-Bedarf in MB (ueberschreibt Backend-Default)
     has_input_unet: bool = False  # Workflow hat eigenen input_unet Node (nicht input_model)
     has_input_safetensors: bool = False  # Workflow hat input_safetensors Node (z.B. Flux2 UNETLoader)
     clip: str = ""              # CLIP-Modell fuer den Workflow
@@ -253,9 +252,6 @@ class ImageGenerationSkill(BaseSkill):
             # Kompatible Backends (kommasepariert), leer = alle ComfyUI-Backends
             raw_skills = os.environ.get(f"{prefix}SKILL", "").strip()
             compatible = [s.strip() for s in raw_skills.split(",") if s.strip()] if raw_skills else []
-            # VRAM-Bedarf pro Workflow (GB → MB), ueberschreibt Backend-Default
-            vram_str = os.environ.get(f"{prefix}VRAM_REQUIRED", "").strip()
-            vram_mb = int(float(vram_str) * 1024) if vram_str else 0
             # Bildgroesse pro Workflow (ueberschreibt Backend-Default)
             wf_width = int(os.environ.get(f"{prefix}WIDTH", "0").strip() or 0)
             wf_height = int(os.environ.get(f"{prefix}HEIGHT", "0").strip() or 0)
@@ -362,7 +358,6 @@ class ImageGenerationSkill(BaseSkill):
                 negative_prompt=wf_negative_prompt,
                 image_model=wf_image_model,
                 prompt_instruction=wf_prompt_instruction,
-                vram_required_mb=vram_mb,
                 has_loras=has_loras,
                 has_seed=has_seed,
                 has_separated_prompt=has_separated_prompt,
@@ -2258,16 +2253,12 @@ class ImageGenerationSkill(BaseSkill):
                 _is_local = b.api_type in ("comfyui", "a1111")
                 if _is_local:
                     from app.core.llm_queue import get_llm_queue, Priority as _P
-                    _vram = (active_workflow.vram_required_mb
-                             if active_workflow and active_workflow.vram_required_mb
-                             else b.vram_required_mb)
                     return get_llm_queue().submit_gpu_task(
                         provider_name=b.name,
                         task_type="image_generation",
                         priority=_P.IMAGE_GEN,
                         callable_fn=lambda: b.generate(_p, _n, params),
                         agent_name=character_name, label=b.name,
-                        vram_required_mb=_vram,
                         gpu_type="comfyui")
                 return b.generate(_p, _n, params)
 

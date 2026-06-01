@@ -116,10 +116,6 @@ class ImageBackend(ABC):
         self.fallback_mode = _fb_mode
         self.fallback_specific = os.environ.get(f"{env_prefix}FALLBACK_SPECIFIC", "").strip()
 
-        # VRAM-Bedarf in GB (fuer intelligentes VRAM-Management)
-        vram_str = os.environ.get(f"{env_prefix}VRAM_REQUIRED", "").strip()
-        self.vram_required_mb = int(float(vram_str) * 1024) if vram_str else 0
-
         # NVFP4-Architektur: Backend benoetigt NVFP4-quantisierte Modelle (legacy)
         self.nvfp4 = os.environ.get(
             f"{env_prefix}NVFP4", "false"

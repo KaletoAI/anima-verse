@@ -48,7 +48,6 @@ class LLMTask:
     provider_name: str = ""
     model: str = ""
     started_at: str = ""        # Zeitpunkt wann Task tatsaechlich verarbeitet wird (nicht Queue-Einreichung)
-    vram_required_mb: int = 0   # VRAM in MB die dieser Task braucht (0 = unbekannt/unmanaged)
     label: str = ""             # Optional user-friendly label fuer Task-Panel
     # Iteration tracking fuer chat_active Tasks (StreamingAgent kann mehrere
     # LLM-Calls pro Turn machen: Initial → Tool-Call → Follow-Up). Wird vom
@@ -149,7 +148,6 @@ class LLMQueue:
         priority: int = 20,
         callable_fn=None,
         agent_name: str = "", label: str = "",
-        vram_required_mb: int = 0,
         gpu_type: str = "") -> Any:
         """Gibt einen GPU-Slot-Task in die Provider-Queue.
 
@@ -158,7 +156,7 @@ class LLMQueue:
         from .provider_manager import get_provider_manager
         pm = get_provider_manager()
         return pm.submit_gpu_task(provider_name, task_type, priority, callable_fn,
-                                  agent_name, label, vram_required_mb,
+                                  agent_name, label,
                                   gpu_type=gpu_type)
 
     def register_chat_active(self, agent_name: str, llm_instance: Any = None,

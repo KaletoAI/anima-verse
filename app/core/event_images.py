@@ -319,11 +319,7 @@ def _do_generate(event_id: str,
     try:
         from app.core.llm_queue import get_llm_queue, Priority as _P
         is_local = backend.api_type in ("comfyui", "a1111")
-        vram = 0
         if is_local:
-            vram = (active_workflow.vram_required_mb
-                    if active_workflow and active_workflow.vram_required_mb
-                    else getattr(backend, "vram_required_mb", 0))
             images = get_llm_queue().submit_gpu_task(
                 provider_name=backend.name,
                 task_type="event_image",
@@ -331,7 +327,6 @@ def _do_generate(event_id: str,
                 callable_fn=lambda: backend.generate(full_prompt, negative, params),
                 agent_name="system",
                 label=f"Event: {event_id}{' (after)' if resolved else ''}",
-                vram_required_mb=vram,
                 gpu_type="comfyui")
         else:
             images = backend.generate(full_prompt, negative, params)

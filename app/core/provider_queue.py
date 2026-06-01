@@ -156,8 +156,7 @@ class ProviderQueue:
         task_type: str,
         priority: int,
         callable_fn,
-        agent_name: str = "", label: str = "",
-        vram_required_mb: int = 0) -> Any:
+        agent_name: str = "", label: str = "") -> Any:
         """Submits a GPU-holding task to this provider's queue.
 
         The callable runs while holding the GPU slot (semaphore). Used for image
@@ -171,8 +170,7 @@ class ProviderQueue:
             agent_name=agent_name,
             created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             provider_name=self.provider.name,
-            model=label,
-            vram_required_mb=vram_required_mb)
+            model=label)
         # Store the callable on the task object
         task._gpu_callable = callable_fn
 
@@ -475,10 +473,6 @@ class ProviderQueue:
             gpu_callable = getattr(task, '_gpu_callable', None)
 
             if gpu_callable:
-                # GPU-Slot-Task: VRAM pruefen und ggf. Models entladen
-                vram_needed = task.vram_required_mb
-                self.provider.ensure_vram_available(vram_needed, gpu_indices=self._gpu_indices)
-
                 # GPU-Slot-Task: callable ausfuehren (z.B. image generation)
                 try:
                     with ThreadPoolExecutor(max_workers=1) as executor:
