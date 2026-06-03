@@ -215,8 +215,9 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
 
     resolved_event_id = None
     resolved_flag = False
+    resolve_reason = ""
     if marker:
-        resolved_flag, resolved_event_id = _try_resolve(
+        resolved_flag, resolved_event_id, resolve_reason = _try_resolve(
             actor=actor, location_id=actor_loc, active_events=active,
             marker_text=marker, user_text=text)
 
@@ -241,6 +242,7 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
         "narration": narration,
         "resolved": resolved_flag,
         "event_id": resolved_event_id,
+        "reason": resolve_reason,
         "tools_fired": tools_fired,
         "summary": summary,
     }
@@ -454,6 +456,18 @@ async def _run_storyteller_agent(
     # ── Stream konsumieren ─────────────────────────────────────────────
     narration_chunks: List[str] = []
     tools_fired: List[str] = []
+    # Als chat_active in der Provider-Queue registrieren → der Storyteller-Call
+    # wird im Task-Panel sichtbar ("Erzähler: <actor>"), wie ein Chat-/Thought-Turn.
+    from app.core.llm_queue import get_llm_queue as _get_llm_queue
+    _stq = _get_llm_queue()
+    _st_task_id = ""
+    try:
+        _st_task_id = await _stq.register_chat_active_async(
+            actor, llm_instance=st_llm, task_type="storyteller",
+            label=f"Erzähler: {actor}")
+        agent.chat_task_id = _st_task_id
+    except Exception as _re:
+        logger.debug("storyteller chat-active register failed: %s", _re)
     try:
         async for event in agent.stream(sys_prompt, [], user_prompt):
             if isinstance(event, ContentEvent):
@@ -482,6 +496,12 @@ async def _run_storyteller_agent(
                 pass
     except Exception as e:
         logger.error("Storyteller agent.stream failed: %s", e)
+    finally:
+        if _st_task_id:
+            try:
+                _stq.register_chat_done(_st_task_id)
+            except Exception:
+                pass
 
     narration = "".join(narration_chunks).strip()
     narration = re.sub(r"<SPECIAL_\d+>|<\|[A-Z_]+\|>", "", narration).strip()
@@ -586,14 +606,15 @@ def _build_present_people_block(names: List[str]) -> str:
 
 def _try_resolve(actor: str, location_id: str,
                  active_events: List[Dict[str, Any]],
-                 marker_text: str, user_text: str) -> Tuple[bool, Optional[str]]:
+                 marker_text: str, user_text: str) -> Tuple[bool, Optional[str], str]:
     """Apply hybrid resolution policy.
 
     danger    → second-pass validate_solution must agree
     disruption → trust storyteller marker, resolve directly
     ambient   → not resolvable
 
-    Returns (resolved_bool, event_id_or_None).
+    Returns (resolved_bool, event_id_or_None, reason). reason = Begründung des
+    Urteils (v.a. bei abgelehnten danger-Events), für die UI-Anzeige.
     """
     from app.models.events import resolve_event, record_attempt
     from app.core.random_events import validate_solution, _on_resolution_cooldown
@@ -604,7 +625,7 @@ def _try_resolve(actor: str, location_id: str,
                   and not e.get("resolved")
                   and not _on_resolution_cooldown(e)]
     if not candidates:
-        return False, None
+        return False, None, ""
     # Danger before disruption, then newest first
     candidates.sort(key=lambda e: (
         0 if e.get("category") == "danger" else 1,
@@ -618,7 +639,7 @@ def _try_resolve(actor: str, location_id: str,
     event_id = target.get("id", "")
 
     if cat == "ambient":
-        return False, None
+        return False, None, ""
 
     if cat == "disruption":
         # Trust storyteller
@@ -632,14 +653,14 @@ def _try_resolve(actor: str, location_id: str,
             _diary_log_resolution(actor, target, user_text, True)
         except Exception:
             pass
-        return bool(resolved), event_id
+        return bool(resolved), event_id, ""
 
     if cat == "danger":
         # Independent judge call
         val = validate_solution(target, user_text, actor)
+        reason = val.get("reason", "") or ""
         outcome = "success" if val.get("resolved") else "fail"
-        record_attempt(event_id, actor, user_text,
-                       outcome=outcome, reason=val.get("reason", ""))
+        record_attempt(event_id, actor, user_text, outcome=outcome, reason=reason)
         if val.get("resolved"):
             resolved = resolve_event(event_id, resolved_by=actor,
                                       resolved_text=marker_text or user_text)
@@ -650,19 +671,17 @@ def _try_resolve(actor: str, location_id: str,
                 _diary_log_resolution(actor, target, user_text, True)
             except Exception:
                 pass
-            return bool(resolved), event_id
+            return bool(resolved), event_id, reason
         else:
-            logger.info("Act: danger event %s judge declined: %s",
-                        event_id, val.get("reason", ""))
+            logger.info("Act: danger event %s judge declined: %s", event_id, reason)
             try:
                 from app.core.random_events import _diary_log_resolution
-                _diary_log_resolution(actor, target, user_text, False,
-                                      reason=val.get("reason", ""))
+                _diary_log_resolution(actor, target, user_text, False, reason=reason)
             except Exception:
                 pass
-            return False, event_id
+            return False, event_id, reason
 
-    return False, None
+    return False, None, ""
 
 
 def _log_action(actor: str, scope: str, location_id: str, room_id: str,

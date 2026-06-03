@@ -2567,7 +2567,9 @@ def _build_full_system_prompt(character_name: str,
     partner_override: str = "",
     skip_partner: bool = False,
     medium: str = "in_person",
-    room_item_ids: Optional[list] = None) -> str:
+    room_item_ids: Optional[list] = None,
+    respond_opportunity: bool = False,
+    winding_down: bool = False) -> str:
     """Build the chat-stream / talk-to system prompt.
 
     Loads all data sections (character/soul template, partner template,
@@ -2997,4 +2999,6 @@ def _build_full_system_prompt(character_name: str,
         daily_summary_section=daily_summary_section,
         history_summary_block=history_summary_block,
         recent_activity_section=recent_activity_section,
-        condition_reminder=condition_reminder)
+        condition_reminder=condition_reminder,
+        respond_opportunity=respond_opportunity,
+        winding_down=winding_down)

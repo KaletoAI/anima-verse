@@ -2,8 +2,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // Built assets are served by the FastAPI server out of static/game_admin/.
-// The Python route GET /game-admin returns dist/index.html, which references
-// hashed assets under /static/game_admin/ — hence the matching base path.
+// Two pages share this output (same frontend/ project, separate pages/routes):
+//   index.html -> Game-Admin SPA   (served at /game-admin)
+//   play.html  -> Player UI        (served at /play)
+// The matching base path makes the hashed asset URLs resolve under
+// /static/game_admin/ for both.
 export default defineConfig({
   plugins: [react()],
   base: '/static/game_admin/',
@@ -11,6 +14,13 @@ export default defineConfig({
     outDir: '../static/game_admin',
     emptyOutDir: true,
     sourcemap: true,
+    rollupOptions: {
+      // Relative paths resolve from the Vite root (this frontend/ dir).
+      input: {
+        index: 'index.html',
+        play: 'play.html',
+      },
+    },
   },
   server: {
     port: 5173,

@@ -114,6 +114,20 @@ FOCUSED ITEMS IN THE ROOM (the person you're talking to has drawn attention to t
 
 {{ situation_block }}
 {% endif %}
+{% if winding_down %}
+
+=== The conversation is winding down ===
+The exchange here is naturally coming to an end — the energy is fading. Give ONE short, in-character closing beat: a brief goodbye, an "I should get going", a final remark or small gesture that signals you are disengaging. One or two sentences. Do NOT open a new topic or ask a question that invites more back-and-forth.
+
+If nothing fits, reply with exactly: SKIP
+{% elif respond_opportunity %}
+
+=== Overheard — you MAY chime in (no obligation) ===
+You are present and overheard what was just said. It was NOT addressed to you. Join in ONLY if you genuinely have something to say that fits this moment and your character — a brief reaction, a question, a remark. There is no expectation that you speak.
+
+If you have nothing natural to add right now, reply with exactly: SKIP
+(Just the word SKIP — do not explain, do not narrate staying silent.)
+{% endif %}
 {% if status_section %}
 
 {{ status_section }}

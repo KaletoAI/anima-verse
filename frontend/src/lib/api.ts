@@ -29,12 +29,21 @@ function redirectToLogin(): never {
 }
 
 async function parseJsonOrThrow(res: Response): Promise<any> {
-  if (res.status === 401 || res.status === 403) redirectToLogin()
   let body: any = null
   try {
     body = await res.json()
   } catch {
     /* leave body null */
+  }
+  // 401 = nicht eingeloggt → Login. 403 = entweder "nicht Admin" (Auth → Login)
+  // ODER eine Game-Block-Regel (z.B. Bewegung während eines Events gesperrt) —
+  // Letzteres ist KEIN Auth-Fehler und darf NICHT zur (alten) Login-UI umleiten.
+  if (res.status === 401) redirectToLogin()
+  if (res.status === 403) {
+    const d = body && typeof body === 'object' ? (body.detail ?? body) : body
+    const reason = d && typeof d === 'object' ? String(d.reason || '') : ''
+    const isGameBlock = reason.startsWith('block_') || reason === 'not_at_entry_room'
+    if (!isGameBlock) redirectToLogin()
   }
   if (!res.ok) {
     const detail = body && typeof body === 'object' ? body.detail ?? body : body

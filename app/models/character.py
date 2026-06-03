@@ -1621,6 +1621,103 @@ def force_set_status(character_name: str,
     return written
 
 
+# === Szenen-Positionen (Figur-Standpunkt pro Raum + Expression-Bild) =========
+# Wo eine Figur im Umgebungsfenster steht, haengt vom konkreten Expression-Bild
+# (Hash/expr_version) und vom Raum ab. Gespeichert in character_state.meta unter
+# "scene_positions" -> { "<loc>|<room>": { "<expr_version>": {x, y} } }, damit die
+# Platzierung fuer ALLE Spieler gilt (in den Character-Daten, nicht pro User).
+
+_SCENE_POS_MAX_PER_ROOM = 24  # aelteste Hashes verfallen (Bilder aendern sich)
+
+
+def _read_state_meta(character_name: str) -> Dict[str, Any]:
+    """Liest den rohen meta-JSON-Blob aus character_state (oder {})."""
+    if not character_name:
+        return {}
+    try:
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT meta FROM character_state WHERE character_name=?",
+            (character_name,)).fetchone()
+        if row and row[0]:
+            return json.loads(row[0])
+    except Exception:
+        pass
+    return {}
+
+
+def _scene_room_key(location_id: str, room_id: str) -> str:
+    return f"{location_id or ''}|{room_id or ''}"
+
+
+def get_scene_position(character_name: str, location_id: str, room_id: str,
+                       expr_version: str) -> Optional[Dict[str, float]]:
+    """Standpunkt {x, y} (Bruchteile 0..1) der Figur fuer (Raum, Expression-Bild)
+    oder None, wenn fuer dieses Bild in diesem Raum noch nicht platziert."""
+    if not (character_name and expr_version):
+        return None
+    rooms = _read_state_meta(character_name).get("scene_positions") or {}
+    room = rooms.get(_scene_room_key(location_id, room_id)) or {}
+    p = room.get(expr_version)
+    if isinstance(p, dict) and "x" in p and "y" in p:
+        try:
+            return {"x": float(p["x"]), "y": float(p["y"])}
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def set_scene_position(character_name: str, location_id: str, room_id: str,
+                       expr_version: str, x: float, y: float) -> None:
+    """Persistiert den Standpunkt der Figur fuer (Raum, Expression-Bild).
+
+    Schreibt direkt auf character_state.meta — leichtgewichtig, kein voller
+    Profil-Save. Pro Raum bleiben max. _SCENE_POS_MAX_PER_ROOM Hashes (aelteste
+    verfallen, da Bilder sich aendern)."""
+    if not (character_name and expr_version):
+        return
+    try:
+        x = max(0.0, min(1.0, float(x)))
+        y = max(0.0, min(1.0, float(y)))
+    except (TypeError, ValueError):
+        return
+    key = _scene_room_key(location_id, room_id)
+    try:
+        with transaction() as conn:
+            row = conn.execute(
+                "SELECT meta FROM character_state WHERE character_name=?",
+                (character_name,)).fetchone()
+            meta: Dict[str, Any] = {}
+            if row and row[0]:
+                try:
+                    meta = json.loads(row[0])
+                except Exception:
+                    meta = {}
+            rooms = meta.get("scene_positions")
+            if not isinstance(rooms, dict):
+                rooms = {}
+            room = rooms.get(key)
+            if not isinstance(room, dict):
+                room = {}
+            room.pop(expr_version, None)  # ans Ende (Insertion-Order = LRU)
+            room[expr_version] = {"x": x, "y": y}
+            while len(room) > _SCENE_POS_MAX_PER_ROOM:
+                room.pop(next(iter(room)))
+            rooms[key] = room
+            meta["scene_positions"] = rooms
+            mj = json.dumps(meta, ensure_ascii=False)
+            if row is not None:
+                conn.execute(
+                    "UPDATE character_state SET meta=? WHERE character_name=?",
+                    (mj, character_name))
+            else:
+                conn.execute(
+                    "INSERT INTO character_state (character_name, meta) "
+                    "VALUES (?, ?)", (character_name, mj))
+    except Exception as e:
+        logger.error("set_scene_position failed for %s: %s", character_name, e)
+
+
 # === Outfit-Intent (Runtime, in character_state.meta) ====================
 # Plan: development_instructions/plan-outfit-system-rethink.md §3
 # Ersetzt runtime_outfit_skip + outfit_locked + (teilweise) outfit_exceptions.

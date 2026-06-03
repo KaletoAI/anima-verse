@@ -1483,17 +1483,34 @@ async def generate_outfit_image_route(character_name: str, outfit_id: str, reque
     if not image_skill:
         raise HTTPException(status_code=500, detail="ImageGenerationSkill nicht verfuegbar")
 
-    # Workflow/Backend/LoRA/Modell-Auswahl aus Request (Fallback: OUTFIT_IMAGEGEN_DEFAULT)
+    # Workflow/Backend/LoRA/Modell-Auswahl:
+    #   1) explizit aus Request
+    #   2) per-Character-Override (profile.outfit_imagegen) — MUSS vor dem
+    #      Skill-Default greifen, sonst generiert ein Character mit konfiguriertem
+    #      Flux faelschlich mit dem ersten geladenen Workflow (z.B. Z-Image).
+    #   3) ENV OUTFIT_IMAGEGEN_DEFAULT
     workflow_name = data.get("workflow", "").strip()
     backend_name = data.get("backend", "").strip()
+    loras_override = data.get("loras")
+    model_override = data.get("model_override", "").strip()
+    if not workflow_name and not backend_name:
+        try:
+            from app.models.character import get_character_profile as _gcp
+            _ovr = (_gcp(character_name) or {}).get("outfit_imagegen") or {}
+            if isinstance(_ovr, dict):
+                workflow_name = (_ovr.get("workflow") or "").strip()
+                if not model_override:
+                    model_override = (_ovr.get("model") or "").strip()
+                if loras_override is None and isinstance(_ovr.get("loras"), list):
+                    loras_override = _ovr.get("loras")
+        except Exception as _e:
+            logger.debug("outfit-image per-char override read failed: %s", _e)
     if not workflow_name and not backend_name:
         _outfit_default = os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip()
         if _outfit_default.startswith("workflow:"):
             workflow_name = _outfit_default[len("workflow:"):].strip()
         elif _outfit_default.startswith("backend:"):
             backend_name = _outfit_default[len("backend:"):].strip()
-    loras_override = data.get("loras")
-    model_override = data.get("model_override", "").strip()
 
     # Auflösung aus .env (Hochformat für Ganzkörper-Outfits)
     outfit_w = int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None

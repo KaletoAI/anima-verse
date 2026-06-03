@@ -173,7 +173,10 @@ def get_effective_background_event(location_id: str) -> Optional[Path]:
                 continue
             if age_sec > linger_min * 60:
                 continue
-            rimg = evt.get("resolved_image_path") or evt.get("image_path")
+            # NUR ein echtes "Nachher"-Bild zeigen. KEIN Fallback aufs Danger-Bild
+            # (image_path) — ein gelöstes Event soll sofort zum Standard-Hintergrund
+            # zurück, nicht das alte Gefahren-Bild weiter anzeigen.
+            rimg = evt.get("resolved_image_path")
             if rimg and Path(rimg).exists():
                 return Path(rimg)
 

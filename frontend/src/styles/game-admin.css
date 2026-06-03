@@ -21,6 +21,32 @@ body {
   color: var(--text, #e6edf3);
 }
 
+/* Scrollbalken ans (dunkle) Design angleichen statt der weißen Standardleiste.
+   Dünn, transparenter Track, dezenter Thumb der beim Hover heller wird.
+   Themebar über --scrollbar-thumb / --scrollbar-thumb-hover. */
+html, * {
+  scrollbar-width: thin;                                  /* Firefox */
+  scrollbar-color: var(--scrollbar-thumb, rgba(180, 190, 205, 0.28)) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, rgba(180, 190, 205, 0.28));
+  border-radius: 8px;
+  border: 2px solid transparent;       /* schmaler wirkender Thumb mit Luft */
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover, rgba(180, 190, 205, 0.5));
+  background-clip: padding-box;
+}
+
 .ga-shell {
   display: flex;
   flex-direction: column;

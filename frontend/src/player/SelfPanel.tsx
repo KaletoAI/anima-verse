@@ -1,0 +1,121 @@
+/**
+ * SelfPanel — der eigene Zustand des Avatars (B Tier 1, Redesign).
+ * Aufbau (an alter UI orientiert): Profilbild · Status-Balken als 2×3-Grid ·
+ * Stimmung. Aktivität entfällt (wird aus dem Chat gesetzt). Outfit/Inventar
+ * leben im Belongings-Panel.
+ * Quelle: GET /play/self · Setter: POST /play/self/mood.
+ */
+import { useCallback, useEffect, useState } from 'react'
+import { useI18n } from '../i18n/I18nProvider'
+import { apiGet, apiPost } from '../lib/api'
+
+interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
+interface SelfData {
+  avatar: string
+  mood: string
+  status_effects: Record<string, number>
+  bar_meta: Record<string, BarMeta>
+  conditions: Array<{ name?: string; label?: string; icon?: string }>
+  profile_image: string
+}
+
+export function SelfPanel() {
+  const { t } = useI18n()
+  const [data, setData] = useState<SelfData | null>(null)
+  const [moodDraft, setMoodDraft] = useState('')
+  const [moodFocused, setMoodFocused] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const d = await apiGet<SelfData>('/play/self')
+      setData(d)
+      if (!moodFocused) setMoodDraft(d.mood || '')
+    } catch { /* api handles auth redirect */ }
+  }, [moodFocused])
+
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 5000)
+    return () => clearInterval(id)
+  }, [load])
+
+  const setMood = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    try { await apiPost('/play/self/mood', { mood: moodDraft.trim() }); await load() }
+    catch { /* ignore */ } finally { setBusy(false) }
+  }, [busy, moodDraft, load])
+
+  if (!data || !data.avatar) {
+    return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active avatar')}</div>
+  }
+
+  const portraitUrl = data.profile_image
+    ? `/characters/${encodeURIComponent(data.avatar)}/images/${encodeURIComponent(data.profile_image)}`
+    : `/characters/${encodeURIComponent(data.avatar)}/outfit-expression?fallback=default`
+  const bars = Object.entries(data.status_effects || {})
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.9em', height: '100%', minHeight: 0 }}>
+      {/* Profilbild (skaliert mit dem Fenster) mit Balken-Overlay im unteren Bereich */}
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'grid', placeItems: 'center', overflow: 'hidden', borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
+        <img src={portraitUrl} alt={data.avatar}
+          onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
+          style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain', display: 'block' }} />
+
+        {/* Conditions oben über dem Bild */}
+        {data.conditions.length > 0 && (
+          <div style={{ position: 'absolute', top: 6, left: 6, right: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {data.conditions.map((c, i) => (
+              <span key={i} style={{ padding: '1px 7px', borderRadius: 10, fontSize: '0.7em',
+                background: 'rgba(40,30,10,0.7)', border: '1px solid rgba(255,170,90,0.5)' }}>
+                {c.icon ? `${c.icon} ` : ''}{c.label || c.name}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Status-Balken als 2×3-Grid, unten ins Bild gelegt */}
+        {bars.length > 0 && (
+          <div style={{
+            position: 'absolute', left: 0, right: 0, bottom: 0,
+            padding: '14px 8px 6px',
+            background: 'linear-gradient(transparent, rgba(0,0,0,0.7) 38%)',
+            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 10px',
+          }}>
+            {bars.map(([key, val]) => {
+              const m = data.bar_meta?.[key] || {}
+              const pct = Math.max(0, Math.min(100, Number(val) || 0))
+              const full = m.name_de || m.name || key
+              return (
+                <div key={key} title={`${full}: ${pct}/100`}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 26, opacity: 0.8, fontSize: '0.6em', textTransform: 'uppercase' }}>
+                    {m.label || key.slice(0, 3)}
+                  </span>
+                  <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.18)', overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: m.color || 'var(--accent,#6aa9ff)' }} />
+                  </div>
+                  <span style={{ width: 16, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.6em', opacity: 0.7 }}>{pct}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Stimmung */}
+      <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Mood')}</span>
+        <input value={moodDraft} disabled={busy}
+          onFocus={() => setMoodFocused(true)}
+          onBlur={() => { setMoodFocused(false); setMood() }}
+          onChange={(e) => setMoodDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          placeholder={t('How do you feel?')}
+          className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
+      </label>
+    </div>
+  )
+}

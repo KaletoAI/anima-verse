@@ -196,6 +196,13 @@ def save_group_message(session_id: str,
                 s["chat_history"] = history[-MAX_HISTORY:]
             s["last_activity"] = _now_iso()
             save_sessions(sessions)
+            # Shadow-Write in den Wahrnehmungs-Stream (additiv, nie blockierend).
+            # plan-room-conversation Phase 1 — faellt ab Phase 3 weg.
+            try:
+                from app.core import perception_shadow
+                perception_shadow.from_group_message(role, content, character, whisper_to)
+            except Exception:
+                pass
             return
     logger.warning("Session %s not found for user %s", session_id)
 

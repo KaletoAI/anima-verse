@@ -253,6 +253,14 @@ class UnifiedChatManager:
         except Exception as e:
             logger.error("save_message DB-Fehler fuer %s/%s: %s",
                          character_name, partner_name, e)
+
+        # Shadow-Write in den Wahrnehmungs-Stream (additiv, nie blockierend).
+        # plan-room-conversation Phase 1 — faellt ab Phase 3 weg.
+        try:
+            from app.core import perception_shadow
+            perception_shadow.from_chat_message(message, character_name, partner)
+        except Exception:
+            pass
     
     async def send_message_to_channel(
         self, character_name: str,

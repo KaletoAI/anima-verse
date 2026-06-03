@@ -8,7 +8,7 @@ Provides:
 import asyncio
 import json
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
@@ -16,6 +16,119 @@ from app.core.timeutils import utc_now_iso
 from app.core.log import get_logger
 
 logger = get_logger("chat_engine")
+
+
+def _messages_from_room_stream(responder: str,
+                               stream: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Baut die Konversation aus dem Raum-Wahrnehmungs-Stream des Antwortenden
+    (Multi-Party-Transkript) statt der 1:1-Chat-History.
+
+    Kern der Raum-Konversation: was der Character im Raum GEHÖRT hat, ist sein
+    Gesprächskontext — nicht eine alte paarweise History. Fremd-Zeilen werden mit
+    Sprechernamen geprefixt (`Thalion: …`), damit das LLM in einer Mehr-Personen-
+    Szene weiß, wer was gesagt hat. Geflüster-Meta (kein Inhalt) fällt raus.
+    """
+    out: List[Dict[str, str]] = []
+    for row in stream or []:
+        meta = row.get("meta") or {}
+        sp = (row.get("speaker") or meta.get("speaker") or "").strip()
+        content = (row.get("content") or "").strip()
+        kind = row.get("kind") or ""
+        if not content or kind == "whisper_meta":
+            continue
+        if sp and sp == responder:
+            out.append({"role": "assistant", "content": content})
+        else:
+            out.append({"role": "user", "content": f"{sp or '?'}: {content}"})
+    return out
+
+
+def _build_rp_tool_system(character_name: str, agent_tools: list,
+                          tool_format: str, tool_model_name: str,
+                          partner_name: str) -> str:
+    """Baut den System-Prompt für die rp_first-Tool-Phase (non-streaming Variante
+    des Blocks aus routes/chat.py). Der Tool-LLM erkennt damit narrative Aktionen
+    (ChangeOutfit, SetLocation, SetActivity, …) und ruft die passenden Tools.
+    """
+    from app.core.tool_formats import build_tool_instruction
+    from app.core.dependencies import get_skill_manager
+    from app.core.outfit_renderer import render_outfit
+    from app.models.character import (get_character_appearance,
+                                       get_character_current_location,
+                                       get_character_language)
+    from app.models.character_template import is_roleplay_character
+    from app.models.world import list_locations
+    from app.models.account import get_active_character
+
+    sm = get_skill_manager()
+    appearance = get_character_appearance(character_name) or ""
+    usage = sm.get_agent_usage_instructions(character_name, tool_format, check_limits=False)
+    instr = build_tool_instruction(tool_format, agent_tools, appearance, usage,
+                                   model_name=tool_model_name,
+                                   is_roleplay=is_roleplay_character(character_name))
+    names = [t.name for t in agent_tools]
+
+    loc_id = get_character_current_location(character_name) or ""
+    loc_list = ", ".join(l.get("name", "") for l in list_locations() if l.get("name"))
+    act_list = ""
+    if loc_id:
+        try:
+            from app.models.activity_library import get_activity_names
+            act_list = ", ".join(get_activity_names(
+                character_name, location_id=loc_id,
+                lang=get_character_language(character_name)) or [])
+        except Exception:
+            act_list = ""
+    self_outfit = render_outfit(character_name=character_name).get("full", "") or "(nothing equipped)"
+    outfit_block = f"\n{character_name} currently wears: {self_outfit}"
+    avatar = get_active_character() or ""
+    if avatar and avatar != character_name:
+        av_outfit = render_outfit(character_name=avatar).get("full", "") or "(nothing equipped)"
+        outfit_block += f"\n{avatar} currently wears: {av_outfit}"
+
+    real_partner = (partner_name or "").strip()
+    if real_partner.lower() in {"user", "player", "spieler", "admin", ""}:
+        real_partner = ""
+    if real_partner:
+        header = f"Character: {character_name}. Conversation partner: {real_partner}.\n"
+        warn = (f"IMPORTANT: Do NOT use TalkTo for {real_partner} — "
+                f"they are already in the conversation.\n")
+    else:
+        header = f"Character: {character_name}.\n"
+        warn = ""
+    return (f"{header}{instr}\n\nAvailable tools: {', '.join(names)}\n"
+            f"Decide which tools to call based on the conversation. "
+            f"If no tools are needed, respond with: NONE\n{warn}"
+            f"\nKnown locations: {loc_list}\n"
+            f"Available activities at current location: {act_list}{outfit_block}")
+
+
+def _rp_tool_decision_input(user_input: str, rp_response: str) -> str:
+    """Tool-Entscheidungs-Prompt (gekürzte Übernahme aus streaming._stream_rp_first):
+    narrative Aktion → Tool, plus Fallback-Marker."""
+    return (
+        f"The user said: {user_input}\n\n"
+        f"The character responded:\n{rp_response}\n\n"
+        f"Analyze the response and call any tool the character's narrative action "
+        f"triggers. The character NEVER writes tool calls themselves; you do that. "
+        f"Fire the tool whenever the narrative shows the action, even if phrased "
+        f"indirectly (\"she goes to change\", \"puts on a dress\", \"heads to the kitchen\", "
+        f"\"let's go to the forest edge\"):\n"
+        f"  - changes/puts on/takes off clothes/outfit/dress → ChangeOutfit\n"
+        f"  - takes a photo / makes an image → ImageGenerator\n"
+        f"  - posts to Instagram → Instagram\n"
+        f"  - moves to a different location or room → SetLocation\n"
+        f"  - starts a new activity at the same location → SetActivity\n"
+        f"  - looks something up / searches → KnowledgeSearch or WebSearch\n"
+        f"  - relays info to a third party not in the conversation → TalkTo\n"
+        f"Call every tool that applies; multiple are fine. Do NOT skip a tool because "
+        f"the action was \"only described\" narratively — that IS the signal.\n"
+        f"Also emit fallback markers the character forgot (only if NOT already wrapped "
+        f"in **...** in the RP): **I feel <emotion>**, **I do <activity>**, and "
+        f"**I am at <location>** ONLY when the RP explicitly describes physically moving "
+        f"to a NEW place. Use the character's language; match exact names from the lists "
+        f"in your system prompt.\n"
+        f"If nothing applies, respond with: NONE")
 
 
 def build_chat_context(
@@ -26,7 +139,10 @@ def build_chat_context(
     selected_skills: Optional[list] = None,
     speaker: str = "user",
     medium: Optional[str] = None,
-    partner_name: str = "") -> Dict[str, Any]:
+    partner_name: str = "",
+    room_stream: Optional[List[Dict[str, Any]]] = None,
+    respond_opportunity: bool = False,
+    winding_down: bool = False) -> Dict[str, Any]:
     """
     Build everything needed to run a chat: system prompt, message history,
     LLM instances, and tool setup.
@@ -183,6 +299,14 @@ def build_chat_context(
                     len(messages) - len(_deduped))
         messages = _deduped
 
+    # Raum-Modus: die Konversation kommt aus dem Wahrnehmungs-Stream (was der
+    # Character im Raum gehört hat), nicht aus der 1:1-History. Behebt, dass ein
+    # anwesender Dritter (z.B. Rosi) auf eine Ansprache antwortet, ohne das eben
+    # Gehörte zu kennen, und stattdessen aus altem paarweisen Verlauf halluziniert.
+    room_mode = bool(room_stream)
+    if room_mode:
+        messages = _messages_from_room_stream(character_name, room_stream)
+
     # Tools aus aktivierten Skills ableiten
     sm = get_skill_manager()
     agent_tools = sm.get_agent_tools(character_name, check_limits=False)
@@ -203,7 +327,24 @@ def build_chat_context(
         channel=channel,
         has_tool_llm=(mode == "rp_first"),
         partner_override=(speaker if speaker != "user" else ""),
-        medium=medium)
+        medium=medium,
+        respond_opportunity=respond_opportunity,
+        winding_down=winding_down)
+
+    # Zustands-Filter (drunk/exhausted/…): deren prompt_modifier wird nur im
+    # Thought-Pfad angewandt. Hier (Chat-Antwort) ergänzen, damit der Character
+    # auch beim Antworten seinen Zustand zeigt. status_section + condition_reminder
+    # liefert _build_full_system_prompt bereits.
+    try:
+        from app.core.prompt_filters import active_modifiers
+        from app.models.character import get_character_current_location
+        _mods = active_modifiers(character_name,
+                                 get_character_current_location(character_name) or "")
+        if _mods:
+            system_content += ("\n\n[Current state — let this shape how you "
+                               "respond:]\n" + "\n".join(_mods))
+    except Exception as _e:
+        logger.debug("chat-context active_modifiers failed: %s", _e)
 
     # Tool setup
     tools_dict = {}
@@ -241,6 +382,25 @@ def build_chat_context(
         )
         tool_format = get_format_for_model(tool_model_name)
 
+    # rp_first-Tool-Phase: System-Prompt + Tool-Klassen vorbereiten, damit
+    # run_chat_turn nach der RP-Antwort narrative Aktionen ausführen kann.
+    tool_system_content = ""
+    deferred_tools: set = set()
+    content_tools: set = set()
+    if mode == "rp_first" and agent_tools and tool_llm is not None:
+        try:
+            tool_system_content = _build_rp_tool_system(
+                character_name, agent_tools, tool_format, tool_model_name,
+                partner_name=(speaker if speaker != "user" else ""))
+        except Exception as _e:
+            logger.debug("tool_system_content build failed: %s", _e)
+        for _t in agent_tools:
+            _sk = sm.get_skill_by_name(_t.name)
+            if _sk and getattr(_sk, "DEFERRED", False):
+                deferred_tools.add(_t.name)
+            if _sk and getattr(_sk, "CONTENT_TOOL", False):
+                content_tools.add(_t.name)
+
     return {
         "system_content": system_content,
         "messages": messages,
@@ -258,6 +418,12 @@ def build_chat_context(
         "speaker": speaker,
         "medium": medium,
         "partner_name": _history_partner,
+        "room_mode": room_mode,
+        "agent_tools": agent_tools,
+        "tool_system_content": tool_system_content,
+        "deferred_tools": deferred_tools,
+        "content_tools": content_tools,
+        "tool_model_name": tool_model_name if agent_tools else "",
     }
 
 
@@ -267,7 +433,12 @@ def run_chat_turn(
     speaker: str,
     incoming_message: str,
     medium: str = "in_person",
-    task_type: str = "character_talk") -> str:
+    task_type: str = "character_talk",
+    post_process: bool = False,
+    room_stream: Optional[List[Dict[str, Any]]] = None,
+    respond_opportunity: bool = False,
+    hint: str = "",
+    winding_down: bool = False) -> str:
     """Laesst responder EINE Antwort auf incoming_message von speaker generieren.
 
     Synchron. Wird von talk_to / send_message Skills genutzt. Nutzt die
@@ -314,15 +485,25 @@ def run_chat_turn(
 
     ctx = build_chat_context(owner_id, responder, incoming_message,
         speaker=speaker, medium=medium,
-        partner_name=speaker)
+        partner_name=speaker, room_stream=room_stream,
+        respond_opportunity=respond_opportunity, winding_down=winding_down)
 
     if ctx["llm"] is None:
         logger.error("run_chat_turn: Kein LLM fuer %s verfuegbar", responder)
         return ""
 
-    messages = [{"role": "system", "content": ctx["system_content"]}]
+    _sys = ctx["system_content"]
+    if hint:
+        # Einmaliger Sofort-Kontext (z.B. Spell-Effekt) — der Character reagiert
+        # narrativ darauf, ohne dass es dauerhaft im Prompt landet.
+        _sys = _sys + "\n\n[" + hint + "]"
+    messages = [{"role": "system", "content": _sys}]
     messages.extend(ctx["messages"])
-    messages.append({"role": "user", "content": incoming_message})
+    # Im Raum-Modus enthält das Transkript die auslösende Äußerung bereits als
+    # letzte Zeile → nicht nochmal anhängen. Nur als Fallback (leeres Transkript)
+    # den Trigger explizit setzen, sonst hätte das LLM keinen letzten User-Turn.
+    if not ctx.get("room_mode") or not ctx["messages"]:
+        messages.append({"role": "user", "content": incoming_message})
 
     # Label fuer Task-Panel — zeigt klar wer-zu-wem ueber welchen Trigger
     if task_type == "talk_to":
@@ -349,6 +530,53 @@ def run_chat_turn(
     if not clean:
         logger.warning("run_chat_turn: leere Antwort von %s", responder)
         return ""
+
+    # Chime-in-SKIP-Gate: bei einer Gelegenheits-Äußerung (nicht adressiert) darf
+    # der Character schweigen. "SKIP" → keine Antwort, kein Speichern, kein
+    # Post-Processing, keine Utterance. Toleriert Satzzeichen/Anführungszeichen.
+    if respond_opportunity or winding_down:
+        _probe = clean.strip().strip('"\'`*().!').strip().upper()
+        if _probe == "SKIP" or (_probe.startswith("SKIP") and len(_probe) <= 12):
+            logger.info("run_chat_turn: %s klinkt sich nicht ein (SKIP)", responder)
+            return ""
+
+    # rp_first Tool-Phase (Feature-Parität): zweiter Tool-LLM-Call erkennt
+    # narrative Aktionen im RP-Text ("zieht sich Shorts an", "los zum Waldrand")
+    # und führt die Tools aus (ChangeOutfit/SetLocation/SetActivity/…). Plus
+    # Fallback-Marker (Mood/Location/Activity), die ins Post-Processing fließen.
+    # Bild/Video/Search-Tools (deferred/content) werden hier ausgelassen.
+    _markers = ""
+    if (ctx.get("mode") == "rp_first" and ctx.get("tool_system_content")
+            and ctx.get("tool_llm") is not None and ctx.get("tools_dict")):
+        try:
+            from app.core.tool_formats import find_tool_calls
+            from app.core.streaming import _extract_markers
+            _tool_msgs = [
+                {"role": "system", "content": ctx["tool_system_content"]},
+                {"role": "user", "content": _rp_tool_decision_input(incoming_message, clean)},
+            ]
+            _tresp = get_llm_queue().submit(
+                task_type="intent", priority=Priority.CHAT, llm=ctx["tool_llm"],
+                messages_or_prompt=_tool_msgs, agent_name=responder,
+                label=f"Tool: {speaker} → {responder}")
+            _ttext = getattr(_tresp, "content", "") or ""
+            _matches = find_tool_calls(ctx.get("tool_format", "tag"), _ttext, ctx["tools_dict"])
+            _skip_tools = (ctx.get("deferred_tools") or set()) | (ctx.get("content_tools") or set())
+            for _name, _inp in _matches:
+                if _name in _skip_tools:
+                    continue
+                _fn = ctx["tools_dict"].get(_name)
+                if not _fn:
+                    continue
+                try:
+                    _fn(_inp)
+                    logger.info("run_chat_turn[%s]: Tool ausgeführt → %s", responder, _name)
+                except Exception as _te:
+                    logger.warning("run_chat_turn[%s]: Tool %s fehlgeschlagen: %s",
+                                   responder, _name, _te)
+            _markers = _extract_markers(_ttext, clean) or ""
+        except Exception as _e:
+            logger.debug("run_chat_turn rp_first tool-phase failed: %s", _e)
 
     ts = utc_now_iso()
 
@@ -384,6 +612,32 @@ def run_chat_turn(
                 logger.debug("AgentLoop bump failed for %s: %s", speaker, _be)
     except Exception as e:
         logger.debug("pending_report Sofort-Trigger Fehler: %s", e)
+
+    # Post-Processing (Feature-Parität mit dem Stream-Chat): Memory, Relationship,
+    # Intent, Mood-/Location-/Activity-Übernahme, Expression-Regen, History-Summary.
+    # Opt-in (nur Player-Chat via Loop), im Daemon-Thread → blockiert die Antwort
+    # nicht. plan-room-conversation-feature-parity §D.
+    if post_process:
+        try:
+            import threading
+
+            def _bg_post():
+                try:
+                    post_process_response(
+                        owner_id=owner_id, character_name=responder,
+                        user_input=incoming_message,
+                        full_response=(clean + ("\n" + _markers if _markers else "")),
+                        agent_config=ctx["agent_config"], llm=ctx["llm"],
+                        user_display_name=ctx["user_display_name"],
+                        full_chat_history=ctx["full_chat_history"],
+                        old_history=ctx.get("old_history"),
+                        extraction_context={"source": "user_chat"})
+                except Exception as _pe:
+                    logger.error("run_chat_turn post_process(%s) failed: %s",
+                                 responder, _pe)
+            threading.Thread(target=_bg_post, daemon=True).start()
+        except Exception as _e:
+            logger.debug("post_process spawn failed: %s", _e)
 
     return clean
 

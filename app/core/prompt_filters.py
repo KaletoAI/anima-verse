@@ -235,6 +235,40 @@ def _has_tag_condition(character_name: str, tag: str) -> bool:
         return False
 
 
+def active_modifiers(character_name: str, location_id: str = "") -> List[str]:
+    """Prompt-Modifier-Texte aller aktuell getriggerten Filter — OHNE Thought-ctx.
+
+    Für Pfade ohne Thought-Context (z.B. die Chat-Antwort via run_chat_turn),
+    damit der Zustand (drunk/exhausted/…) auch dort das Verhalten steuert.
+    Die drop_blocks bleiben thought-spezifisch; hier zählt nur der Modifier.
+    """
+    out: List[str] = []
+    try:
+        filters = load_filters()
+        avatar_name = ""
+        try:
+            from app.models.account import get_active_character
+            avatar_name = (get_active_character() or "").strip()
+        except Exception:
+            pass
+        avatar_subst = avatar_name or "the avatar"
+        for f in filters:
+            if not f.get("enabled", True):
+                continue
+            fid = (f.get("id") or "").strip()
+            condition = (f.get("condition") or "").strip()
+            triggered = (fid and _has_tag_condition(character_name, fid)) \
+                or (bool(condition) and _evaluate(condition, character_name, location_id))
+            if not triggered:
+                continue
+            modifier = (f.get("prompt_modifier") or "").strip()
+            if modifier:
+                out.append(modifier.replace("{avatar}", avatar_subst))
+    except Exception as e:
+        logger.debug("active_modifiers(%s) failed: %s", character_name, e)
+    return out
+
+
 def apply_filters(character_name: str,
                   ctx: Dict[str, Any],
                   location_id: str = "") -> Dict[str, Any]:

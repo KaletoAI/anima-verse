@@ -226,6 +226,22 @@ def get_cached_expression(character_name: str,
     return None
 
 
+def peek_cached_expression(character_name: str, mood: str, activity: str,
+                           equipped_pieces: Optional[Dict[str, str]] = None,
+                           equipped_items: Optional[list] = None,
+                           equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> Optional[Path]:
+    """Wie get_cached_expression, aber OHNE Seiteneffekt (kein Sidecar-Touch) —
+    für Versions-/Existenz-Checks bei jedem Poll, ohne use_count/LRU zu verfälschen."""
+    expr_dir = _get_expressions_dir(character_name)
+    key = _cache_key(mood, activity, character_name, equipped_pieces,
+                     equipped_items, equipped_pieces_meta)
+    for ext in (".png", ".jpg", ".webp"):
+        path = expr_dir / f"{key}{ext}"
+        if path.exists():
+            return path
+    return None
+
+
 def _touch_sidecar(sidecar_path: Path) -> None:
     """Best-effort update of last_used_at/use_count in a variant sidecar JSON.
 

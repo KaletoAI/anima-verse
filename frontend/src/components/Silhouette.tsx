@@ -103,6 +103,7 @@ export function Silhouette({
   covers,
   partially_covers,
   onCycleSlot,
+  minimal = false,
 }: {
   slots: string[]
   covers: string[]
@@ -110,6 +111,8 @@ export function Silhouette({
   /** When provided, slot regions become clickable and cycle through
    *  empty → slot → cover → partial → empty. */
   onCycleSlot?: (slot: string) => void
+  /** Player-Variante: blendet den Dev-Pfad-Editor (🛠) + die Legende aus. */
+  minimal?: boolean
 }) {
   const { t } = useI18n()
   const slotSet = new Set(slots)
@@ -209,21 +212,25 @@ export function Silhouette({
             )
           })}
         </svg>
-        <button
-          type="button"
-          className={`ga-silhouette-edit-toggle${editing ? ' is-on' : ''}`}
-          onClick={() => setEditing((v) => !v)}
-          title={editing ? t('Close slot editor') : t('Edit slot paths')}
-        >
-          🛠
-        </button>
+        {!minimal && (
+          <button
+            type="button"
+            className={`ga-silhouette-edit-toggle${editing ? ' is-on' : ''}`}
+            onClick={() => setEditing((v) => !v)}
+            title={editing ? t('Close slot editor') : t('Edit slot paths')}
+          >
+            🛠
+          </button>
+        )}
       </div>
-      <div className="ga-silhouette-legend">
-        <span><i className="lg-slot" />{t('slot')}</span>
-        <span><i className="lg-cover" />{t('covers')}</span>
-        <span><i className="lg-partial" />{t('partial')}</span>
-      </div>
-      {editing ? (
+      {!minimal && (
+        <div className="ga-silhouette-legend">
+          <span><i className="lg-slot" />{t('slot')}</span>
+          <span><i className="lg-cover" />{t('covers')}</span>
+          <span><i className="lg-partial" />{t('partial')}</span>
+        </div>
+      )}
+      {!minimal && editing ? (
         <SilhouetteEditor
           paths={paths}
           overrides={overrides}

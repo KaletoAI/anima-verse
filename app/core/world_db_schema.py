@@ -121,6 +121,54 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_chat_char_partner_ts ON chat_messages (character_name, partner, ts)",
     "CREATE INDEX IF NOT EXISTS idx_chat_ts ON chat_messages (ts)",
 
+    # ── Raum-Konversation: Wahrnehmungs-Stream ─────────────────────────
+    # plan-room-conversation Phase 1. `utterances` = kanonische Wahrheit
+    # (eine Zeile pro Sprechakt), `perceptions` = Fan-Out (eine Zeile pro
+    # Wahrnehmendem, beim Schreiben bereits gefiltert). Geheimer Inhalt
+    # liegt NUR in `utterances`; whisper_meta-Perceptions tragen keinen Inhalt.
+    """CREATE TABLE IF NOT EXISTS utterances (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts           TEXT NOT NULL,
+        speaker      TEXT NOT NULL,
+        location_id  TEXT DEFAULT '',
+        room_id      TEXT DEFAULT '',
+        volume       TEXT NOT NULL,            -- whisper | normal | shout
+        addressees   TEXT DEFAULT '[]',        -- json-Liste ([] = an den Raum)
+        content      TEXT NOT NULL,
+        meta         TEXT DEFAULT '{}'         -- meta.source = shadow | inject | ...
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_utterances_room_ts ON utterances (location_id, room_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_utterances_ts ON utterances (ts)",
+    """CREATE TABLE IF NOT EXISTS perceptions (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        perceiver    TEXT NOT NULL,
+        utterance_id INTEGER NOT NULL,
+        ts           TEXT NOT NULL,
+        kind         TEXT NOT NULL,            -- spoken_self | in_room | whisper_meta | distant_shout
+        content      TEXT NOT NULL DEFAULT '', -- fuer diesen Perceiver gefiltert; '' bei whisper_meta
+        meta         TEXT DEFAULT '{}',
+        FOREIGN KEY(utterance_id) REFERENCES utterances(id) ON DELETE CASCADE
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_perceptions_perceiver_ts ON perceptions (perceiver, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_perceptions_utterance ON perceptions (utterance_id)",
+
+    # Szenen (plan-room-conversation §7): eine offene Szene pro Raum, getouched
+    # bei jeder Äußerung. Beim Verebben (Idle) schließt der Loop sie, konsolidiert
+    # die Roh-Wahrnehmungen in eine Szenen-Summary (→ Teilnehmer-Gedächtnis) und
+    # prunt die Perceptions. status: open | consolidated.
+    """CREATE TABLE IF NOT EXISTS scenes (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        location_id    TEXT NOT NULL,
+        room_id        TEXT NOT NULL DEFAULT '',
+        started_ts     TEXT NOT NULL,
+        last_activity_ts TEXT NOT NULL,
+        participants   TEXT NOT NULL DEFAULT '[]',  -- JSON-Liste Charakternamen
+        status         TEXT NOT NULL DEFAULT 'open', -- open | consolidated
+        summary        TEXT NOT NULL DEFAULT ''
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_scenes_open ON scenes (status, location_id, room_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scenes_activity ON scenes (status, last_activity_ts)",
+
     # ── Memories / Summaries ───────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS memories (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,

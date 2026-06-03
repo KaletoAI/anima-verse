@@ -54,6 +54,12 @@ _RECENT_HISTORY = 20
 _IN_CHAT_HOT_MIN = 10
 _IN_CHAT_WARM_MIN = 30
 
+# Phase 3b: Fenster, in dem eine Raum-Äußerung eines Anderen als "aktive
+# Konversation" gilt. Picked der autonome Loop einen Anwesenden in diesem
+# Fenster, läuft sein Turn als Chime (echte Utterance oder SKIP) statt als
+# verworfener in-chat-Gedanke. Backstop begrenzt die Kette zusätzlich.
+_ROOM_CONVO_ACTIVE_SEC = 240
+
 # Pacing — vermeiden dass bei wenigen Charakteren der Loop zu eng taktet.
 # Werte werden live aus der Welt-Config gelesen (Admin-Tab "Gedanken"):
 #   thoughts.min_turn_gap_seconds        (default 30)
@@ -120,6 +126,20 @@ class AgentLoop:
         # and tools restricted by tool_whitelist. Latest perception wins
         # if multiple arrive before the tick.
         self._bump_perception: Dict[str, Dict[str, Any]] = {}
+        # Raum-Konversations-Energie (plan-room-conversation Phase 3b): pro Raum
+        # ein Zähler aufeinanderfolgender KI-Äußerungen seit dem letzten
+        # Avatar-Input. Decay pro Hop + harter Backstop verhindern Endlos-
+        # Kaskaden bei emergenten NPC↔NPC-Gesprächen. Avatar-Input setzt zurück.
+        self._room_ai_turns: Dict[str, int] = {}
+        # Räume, in denen der einmalige sichtbare Abgang (Konzept §5) für die
+        # aktuelle Kaskade bereits ausgelöst wurde. Reset bei Avatar-Input.
+        self._room_winddown_done: set = set()
+        # Letzter Szenen-Idle-Check (§7-Konsolidierung) — gedrosselt, s.u.
+        self._last_scene_check: Optional[datetime] = None
+        # "Lebendig"-Default: bis ~5 KI-Folge-Turns pro Avatar-Input, dann
+        # Cooldown (Stille), bis der Avatar wieder spricht. Pro Welt/Ort später
+        # konfigurierbar (Konzept §5: Decay-Rate ist DIE Stellschraube).
+        self._chime_backstop: int = 5
         # Per-character last-real-turn timestamp for cooldown enforcement.
         # Real = full LLM turn (not in_chat_skip / no_llm / error). Used to
         # skip the same char if they ran within _MIN_PER_CHAR_COOLDOWN_MIN.
@@ -228,6 +248,111 @@ class AgentLoop:
                     f" (perception={perception_template})" if perception_template else "")
         return True
 
+    def bump_respond(self, character_name: str, speaker: str,
+                     content: str, volume: str = "normal",
+                     obligatory: bool = True, hint: str = "",
+                     winding_down: bool = False) -> bool:
+        """Phase 3: Character soll auf eine Raum-Äußerung des Sprechers reagieren.
+
+        Anders als ``bump`` (Gedanken/Perception) löst dies eine sichtbare
+        Chat-Antwort aus, die als Utterance in den Raum aufgezeichnet wird.
+        Umgeht in-chat-Gating (Antworten sollen immer raus).
+
+        ``obligatory`` True = adressiert → Pflicht-Antwort. False = anwesend, nur
+        mitgehört → Gelegenheit (Chime-in): der Turn darf per SKIP schweigen.
+        Eine bereits vorgemerkte Pflicht-Antwort wird durch eine Gelegenheit NICHT
+        herabgestuft.
+        """
+        if not character_name:
+            return False
+        if not _is_respond_eligible(character_name):
+            logger.debug("AgentLoop.bump_respond skipped: %s ineligible", character_name)
+            return False
+        existing = (self._bump_perception.get(character_name) or {}).get("respond_to")
+        if existing and existing.get("obligatory") and not obligatory:
+            return True  # Pflicht schlägt Gelegenheit
+        self._bump_perception[character_name] = {
+            "respond_to": {"speaker": speaker, "content": content,
+                           "volume": volume, "obligatory": obligatory,
+                           "hint": hint, "winding_down": winding_down},
+        }
+        if character_name not in self._bump_queue:
+            self._bump_queue.append(character_name)
+        logger.info("AgentLoop.bump_respond: %s %s auf %s", character_name,
+                    "antwortet" if obligatory else "(Gelegenheit)", speaker)
+        return True
+
+    def _room_key(self, location_id: str, room_id: str) -> str:
+        return f"{location_id or ''}/{room_id or ''}"
+
+    def dispatch_room_reactions(self, *, speaker: str, content: str, volume: str,
+                                location_id: str, room_id: str,
+                                addressees: Optional[List[str]] = None,
+                                is_avatar: bool = False,
+                                hints: Optional[Dict[str, str]] = None) -> Dict[str, List[str]]:
+        """Phase 3b: verteilt Reaktionen auf eine Raum-Äußerung über den Loop.
+
+        - Adressierte Anwesende → Pflicht-Antwort (obligatory).
+        - Übrige Anwesende → Chime-Gelegenheit (SKIP-bar) — nur solange die
+          Raum-Energie nicht erschöpft ist (Backstop). Avatar-Input lädt neu auf;
+          jede KI-Äußerung verbraucht einen Hop (Decay).
+        - Flüstern verteilt KEINE Chimes (privat).
+
+        Gibt {"obligatory": [...], "chime": [...]} der tatsächlich ge-bumpten
+        Charaktere zurück.
+        """
+        from app.core.room_entry import _list_characters_in_room
+        key = self._room_key(location_id, room_id)
+        if is_avatar:
+            self._room_ai_turns[key] = 0  # Avatar als Taktgeber: Energie neu
+            self._room_winddown_done.discard(key)  # neue Kaskade → Abgang wieder erlaubt
+        else:
+            # KI-Äußerung: Energie erschöpft? Dann statt stiller Stille EINMALIG
+            # ein sichtbarer Abgang (Konzept §5) — ein Anwesender gibt einen
+            # kurzen Schluss-Beat. Danach echte Stille, bis der Avatar spricht.
+            if self._room_ai_turns.get(key, 0) >= self._chime_backstop:
+                if key not in self._room_winddown_done and location_id:
+                    self._room_winddown_done.add(key)
+                    present = [c for c in _list_characters_in_room(location_id, room_id)
+                               if c and c != speaker and _is_respond_eligible(c)]
+                    if present:
+                        closer = present[0]
+                        if self.bump_respond(closer, speaker=speaker, content=content,
+                                             volume=volume, obligatory=False,
+                                             winding_down=True):
+                            logger.info("room %s: Backstop (%d) → sichtbarer Abgang von %s",
+                                        key, self._chime_backstop, closer)
+                            return {"obligatory": [], "chime": [], "winddown": [closer]}
+                logger.info("room %s: Chime-Backstop (%d) erreicht → Stille",
+                            key, self._chime_backstop)
+                return {"obligatory": [], "chime": []}
+
+        if not location_id:
+            return {"obligatory": [], "chime": []}
+        present = [c for c in _list_characters_in_room(location_id, room_id)
+                   if c and c != speaker]
+        addr = set(addressees or [])
+        out: Dict[str, List[str]] = {"obligatory": [], "chime": []}
+
+        # 1) Pflicht-Antworten an Adressierte (zuerst → FIFO-Vorrang im Loop).
+        #    Optionaler per-Character-Hint (z.B. Spell-Effekt) wird mitgegeben.
+        _hints = hints or {}
+        for c in present:
+            if c in addr and self.bump_respond(
+                    c, speaker=speaker, content=content, volume=volume,
+                    obligatory=True, hint=_hints.get(c, "")):
+                out["obligatory"].append(c)
+
+        # 2) Chime-Gelegenheiten an die übrigen Anwesenden (nicht bei Flüstern)
+        if volume != "whisper":
+            for c in present:
+                if c in addr:
+                    continue
+                if self.bump_respond(c, speaker=speaker, content=content,
+                                     volume=volume, obligatory=False):
+                    out["chime"].append(c)
+        return out
+
     def pop_hint(self, character_name: str) -> str:
         """Pop accumulated hint text for the character. Returns empty string
         if there is none. Mutates internal state — caller must use the
@@ -275,6 +400,20 @@ class AgentLoop:
                 if self._llm_standby:
                     logger.info("AgentLoop resumed: 'thought' LLM wieder erreichbar")
                     self._llm_standby = False
+
+                # Szenen-Konsolidierung (§7): verebbte Szenen schließen + Roh-
+                # Wahrnehmungen prunen. Gedrosselt (~alle 60s), LLM/DB im Thread.
+                _now = utc_now()
+                if (self._last_scene_check is None
+                        or (_now - self._last_scene_check).total_seconds() >= 60):
+                    self._last_scene_check = _now
+                    try:
+                        from app.core import scene_manager
+                        n = await asyncio.to_thread(scene_manager.run_idle_consolidation)
+                        if n:
+                            logger.info("AgentLoop: %d Szene(n) konsolidiert", n)
+                    except Exception as _sce:
+                        logger.debug("scene consolidation tick failed: %s", _sce)
 
                 agent = self._pick_next_agent()
                 if not agent:
@@ -339,9 +478,15 @@ class AgentLoop:
         (externe Trigger wie Avatar-Roomentry sollen sofort wirken).
         """
         # 1) Bumped agents come first — Cooldown ignorieren (Bump = Prioritaet).
+        #    Respond-Bumps (Phase 3) nutzen die relaxte Eligibility (kein
+        #    Schlaf-/thoughts-Gate), damit Angesprochene immer antworten.
         while self._bump_queue:
             candidate = self._bump_queue.pop(0)
-            if _is_agent_eligible(candidate):
+            is_respond = bool((self._bump_perception.get(candidate) or {}).get("respond_to"))
+            if is_respond:
+                if _is_respond_eligible(candidate):
+                    return candidate
+            elif _is_agent_eligible(candidate):
                 return candidate
 
         cooldown = timedelta(minutes=_get_per_char_cooldown_min())
@@ -393,6 +538,138 @@ class AgentLoop:
     # Turn execution
     # ------------------------------------------------------------------
 
+    async def _run_respond_turn(self, character_name: str,
+                                respond: Dict[str, Any]) -> Dict[str, Any]:
+        """Phase 3: erzeugt eine Chat-Antwort (zustands-bewusst via run_chat_turn)
+        und zeichnet sie als Raum-Utterance auf. Shadow-Write unterdrückt (sonst
+        doppelt — wir zeichnen direkt auf)."""
+        import asyncio as _asyncio
+        speaker = (respond.get("speaker") or "").strip()
+        content = respond.get("content") or ""
+        obligatory = bool(respond.get("obligatory", True))
+        respond_opportunity = not obligatory  # Chime-in darf per SKIP schweigen
+        winding_down = bool(respond.get("winding_down"))  # sichtbarer Abgang (§5)
+        hint = respond.get("hint") or ""      # z.B. Spell-Effekt auf diesen Char
+        if not content.strip():
+            return {"preview": "respond: empty", "tools": [], "intents": []}
+
+        # Bei Ansprache aufwecken (wie der alte Chat-Pfad): Schlaf-Flag löschen,
+        # Aktivität leeren, vom Off-Map zurückholen. Danach ist der Character wach
+        # — antwortet normal und ist auch für den autonomen Loop wieder dabei.
+        try:
+            from app.models.character import (
+                is_character_sleeping, set_is_sleeping,
+                save_character_current_activity, wake_from_offmap)
+            if is_character_sleeping(character_name):
+                set_is_sleeping(character_name, False)
+                save_character_current_activity(character_name, "")
+                try:
+                    wake_from_offmap(character_name)
+                except Exception:
+                    pass
+                logger.info("respond-turn: %s durch Ansprache aufgeweckt", character_name)
+        except Exception as e:
+            logger.debug("respond-turn wake failed for %s: %s", character_name, e)
+
+        # Raum-Wahrnehmungs-Stream des Antwortenden als Gesprächskontext: was er im
+        # Raum GEHÖRT hat (Multi-Party), statt der alten 1:1-History. So kennt ein
+        # angesprochener Dritter (z.B. Rosi) das eben Gesagte und antwortet kohärent.
+        _loc = _room = ""
+        room_stream = []
+        try:
+            from app.models import perception_store
+            from app.models.character import (get_character_current_location,
+                                               get_character_current_room)
+            _loc = get_character_current_location(character_name) or ""
+            _room = get_character_current_room(character_name) or ""
+            if _loc:
+                room_stream = perception_store.get_character_room_stream(
+                    character_name, _loc, _room, limit=40)
+        except Exception as e:
+            logger.debug("respond-turn %s: room_stream fetch failed: %s", character_name, e)
+
+        reply = ""
+        try:
+            from app.core import perception_shadow
+            from app.core.chat_engine import run_chat_turn
+            with perception_shadow.suppressed():
+                reply = await _asyncio.to_thread(
+                    run_chat_turn, "", character_name, speaker, content,
+                    "in_person", "character_talk", True,  # post_process=True
+                    room_stream=room_stream,
+                    respond_opportunity=respond_opportunity,
+                    hint=hint, winding_down=winding_down)
+        except Exception as e:
+            logger.error("respond-turn %s: run_chat_turn failed: %s", character_name, e)
+        if reply and reply.strip():
+            try:
+                from app.core.perception import VOLUME_NORMAL, record_utterance
+                record_utterance(speaker=character_name, content=reply,
+                                 volume=VOLUME_NORMAL,
+                                 addressees=[speaker] if speaker else [],
+                                 source="loop")
+            except Exception as e:
+                logger.error("respond-turn %s: record_utterance failed: %s",
+                             character_name, e)
+            # Kaskade: diese KI-Äußerung verbraucht einen Hop (Decay) und gibt
+            # den übrigen Anwesenden eine Chime-Gelegenheit — bis der Backstop
+            # greift. So entstehen emergente NPC↔NPC-Gespräche, die verebben.
+            try:
+                key = self._room_key(_loc, _room)
+                self._room_ai_turns[key] = self._room_ai_turns.get(key, 0) + 1
+                self.dispatch_room_reactions(
+                    speaker=character_name, content=reply, volume="normal",
+                    location_id=_loc, room_id=_room,
+                    addressees=[speaker] if speaker else [], is_avatar=False)
+            except Exception as e:
+                logger.debug("respond-turn %s: cascade dispatch failed: %s",
+                             character_name, e)
+        return {"preview": (reply or "(no reply)")[:80], "tools": [], "intents": []}
+
+    def _maybe_active_conversation_chime(self, character_name: str) -> Optional[Dict[str, Any]]:
+        """Phase 3b: Steht der Character in einer AKTIVEN Raumkonversation, liefert
+        es ein respond-dict für eine Chime-Gelegenheit (echte Utterance oder SKIP)
+        — statt eines verworfenen in-chat-Gedankens. Vereinheitlicht Gedanke→Rede
+        für Gesprächsteilnehmer.
+
+        None, wenn: keine Location, keine frische Fremd-Äußerung im Raum, oder die
+        Raumenergie (Backstop) erschöpft ist (dann fällt der Loop auf den normalen
+        Gedanken zurück — die Szene ist am Verebben).
+        """
+        try:
+            from app.models.character import (get_character_current_location,
+                                               get_character_current_room)
+            from app.models import perception_store
+            from app.core.timeutils import utc_now as _now, parse_iso
+            loc = get_character_current_location(character_name) or ""
+            room = get_character_current_room(character_name) or ""
+            if not loc:
+                return None
+            if self._room_ai_turns.get(self._room_key(loc, room), 0) >= self._chime_backstop:
+                return None  # Szene verebbt → kein autonomes Nachlegen mehr
+            stream = perception_store.get_character_room_stream(character_name, loc, room, limit=6)
+            for row in reversed(stream):  # jüngste zuerst (stream ist ältest→neuest)
+                meta = row.get("meta") or {}
+                sp = (row.get("speaker") or meta.get("speaker") or "").strip()
+                content = (row.get("content") or "").strip()
+                if not content or (row.get("kind") or "") == "whisper_meta":
+                    continue
+                if not sp or sp == character_name:
+                    continue
+                # Frische prüfen
+                try:
+                    age = (_now() - parse_iso(row.get("ts") or "")).total_seconds()
+                except Exception:
+                    return None
+                if age < 0 or age > _ROOM_CONVO_ACTIVE_SEC:
+                    return None
+                return {"speaker": sp, "content": content, "volume": "normal",
+                        "obligatory": False, "hint": "", "winding_down": False}
+            return None
+        except Exception as e:
+            logger.debug("active-conversation chime check %s failed: %s", character_name, e)
+            return None
+
     async def _run_turn(self, character_name: str) -> None:
         """Run a single thought turn for the given character."""
         async with self._lock:
@@ -402,6 +679,25 @@ class AgentLoop:
             turn_info: Dict[str, Any] = {}
 
             try:
+                # Phase 3: Chat-Antwort-Bump? Direkt antworten, VOR jeglichem
+                # Gating (in-chat/auto-sleep/walk) — Antworten sollen immer raus.
+                _respond = (self._bump_perception.get(character_name) or {}).get("respond_to")
+                if _respond:
+                    self._bump_perception.pop(character_name, None)
+                    turn_info = await self._run_respond_turn(character_name, _respond)
+                    outcome = "respond"
+                    return
+
+                # Phase 3b: in aktiver Raumkonversation? Dann statt eines
+                # verworfenen in-chat-Gedankens eine Chime-Gelegenheit fahren —
+                # der Beitrag wird gesprochen (Utterance) oder bewusst per SKIP
+                # ausgelassen. Backstop in der Erkennung verhindert Endlos-Chatter.
+                _chime = self._maybe_active_conversation_chime(character_name)
+                if _chime:
+                    turn_info = await self._run_respond_turn(character_name, _chime)
+                    outcome = "respond"
+                    return
+
                 from app.core.thought_context import build_thought_context
                 from app.core.prompt_templates import render
                 from app.core.thoughts import get_thought_runner
@@ -770,7 +1066,11 @@ class AgentLoop:
         # produziert oder Tools getriggert). Skips/Errors triggern den
         # Cooldown bewusst NICHT — sonst wuerde ein in_chat_skip einen
         # 5min-Block ausloesen, obwohl gar nichts passiert ist.
-        is_real = outcome == "ok" or (outcome or "").startswith("ok")
+        # respond zählt als echter Turn (LLM lief) → Cooldown setzen, damit der
+        # autonome Round-Robin denselben Char nicht sofort wieder als Chime zieht.
+        # Cascade-Bumps umgehen den Cooldown ohnehin (Gespräch fließt weiter).
+        is_real = (outcome == "ok" or (outcome or "").startswith("ok")
+                   or outcome == "respond")
         if is_real:
             self._last_real_turn_at[name] = utc_now()
 
@@ -885,6 +1185,24 @@ def _is_agent_eligible(character_name: str) -> bool:
             return False
     except Exception:
         return False
+    return True
+
+
+def _is_respond_eligible(character_name: str) -> bool:
+    """Eligibility für eine DIREKTE Antwort (Phase 3, bump_respond).
+
+    Reaktion ≠ autonomes Denken: wer angesprochen wird, antwortet — daher KEIN
+    thoughts_enabled- und KEIN Schlaf-Gate. Nur der vom Spieler gesteuerte
+    Avatar antwortet nicht von selbst.
+    """
+    if not character_name:
+        return False
+    try:
+        from app.models.account import is_player_controlled
+        if is_player_controlled(character_name):
+            return False
+    except Exception:
+        pass
     return True
 
 

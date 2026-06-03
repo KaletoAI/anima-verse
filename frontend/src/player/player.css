@@ -1,0 +1,162 @@
+/* Player-UI — react-grid-layout Panels. Bewusst eigenständig vom Game-Admin.
+   Farben über Theme-Variablen (mit Fallback), damit Themes greifen. */
+
+.player-root {
+  height: 100vh;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 8px;
+}
+
+/* Eine Grid-Kachel = ein „Fenster" */
+.player-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-container, #161b22);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+/* Kopfzeile = Ziehgriff (draggableHandle) */
+.player-panel-head {
+  cursor: move;
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  background: var(--bg-hover, #1f2937);
+  border-bottom: 1px solid var(--border, #30363d);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text, #e6edf3);
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.player-panel-head .sub {
+  font-weight: 400;
+  font-size: 0.82em;
+  opacity: 0.6;
+}
+
+.player-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+/* Szene-Panel: Header fix · Verlauf scrollt · Composer unten angepinnt.
+   Nur der Verlauf bekommt den Scrollbalken, die Eingabe bleibt sichtbar. */
+.player-scene-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.player-scene-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+.player-composer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border, #30363d);
+  background: var(--bg-container, #161b22);
+  padding: 10px 12px;
+}
+
+/* Dialog-Panels: zentriertes Overlay (kommt/geht) statt Grid-Kachel. */
+.player-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+.player-modal {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  max-width: min(520px, 92vw);
+  max-height: 80vh;
+  background: var(--bg-container, #161b22);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+/* Scrollbalken ans dunkle Design angleichen (statt der weißen Standard-Leiste).
+   Dünn, transparenter Track, dezenter Thumb der beim Hover heller wird. */
+.player-root,
+.player-root * {
+  scrollbar-width: thin;                                  /* Firefox */
+  scrollbar-color: var(--scrollbar-thumb, rgba(180, 190, 205, 0.28)) transparent;
+}
+.player-root ::-webkit-scrollbar,
+.player-root::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.player-root ::-webkit-scrollbar-track,
+.player-root::-webkit-scrollbar-track,
+.player-root ::-webkit-scrollbar-corner,
+.player-root::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.player-root ::-webkit-scrollbar-thumb,
+.player-root::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, rgba(180, 190, 205, 0.28));
+  border-radius: 8px;
+  border: 2px solid transparent;       /* schmaler wirkender Thumb mit Luft */
+  background-clip: padding-box;
+}
+.player-root ::-webkit-scrollbar-thumb:hover,
+.player-root::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover, rgba(180, 190, 205, 0.5));
+  background-clip: padding-box;
+}
+
+/* RGL: Platzhalter beim Ziehen an unser Theme angleichen */
+.react-grid-item.react-grid-placeholder {
+  background: var(--accent, #6aa9ff);
+  opacity: 0.18;
+  border-radius: 10px;
+}
+
+/* "denkt …"-Indikator: drei pulsende Punkte (Szene + Task-Panel). */
+.player-thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  vertical-align: middle;
+}
+.player-thinking-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent, #6aa9ff);
+  animation: player-thinking-blink 1.4s infinite both;
+}
+.player-thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.player-thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes player-thinking-blink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+/* Pulsierender Punkt vor laufenden LLM-Tasks im Task-Panel. */
+.player-task-pulse {
+  animation: player-task-pulse 1.4s ease-in-out infinite;
+}
+@keyframes player-task-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
