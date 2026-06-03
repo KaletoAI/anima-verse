@@ -43,6 +43,10 @@
       "image2": [
         "108",
         0
+      ],
+      "image3": [
+        "109",
+        0
       ]
     },
     "class_type": "TextEncodeQwenImageEditPlus",
@@ -79,6 +83,10 @@
       ],
       "image2": [
         "108",
+        0
+      ],
+      "image3": [
+        "109",
         0
       ]
     },
@@ -156,30 +164,6 @@
   },
   "105": {
     "inputs": {
-      "PowerLoraLoaderHeaderWidget": {
-        "type": "PowerLoraLoaderHeaderWidget"
-      },
-      "lora_1": {
-        "on": true,
-        "lora": "Qwen-Image-Lightning-8steps-V2.0-bf16.safetensors",
-        "strength": 1
-      },
-      "lora_2": {
-        "on": true,
-        "lora": "Qwen-Snofs_1_3.safetensors",
-        "strength": 1
-      },
-      "lora_3": {
-        "on": true,
-        "lora": "None",
-        "strength": 1
-      },
-      "lora_4": {
-        "on": true,
-        "lora": "None",
-        "strength": 1
-      },
-      "➕ Add Lora": "",
       "model": [
         "115",
         0
@@ -226,6 +210,23 @@
     "class_type": "LoadAndResizeImage",
     "_meta": {
       "title": "input_reference_image_2"
+    }
+  },
+  "109": {
+    "inputs": {
+      "image": "example.png",
+      "resize": true,
+      "width": 1024,
+      "height": 1024,
+      "repeat": 1,
+      "keep_proportion": true,
+      "divisible_by": 32,
+      "mask_channel": "alpha",
+      "background_color": ""
+    },
+    "class_type": "LoadAndResizeImage",
+    "_meta": {
+      "title": "input_reference_image_3"
     }
   },
   "115": {
