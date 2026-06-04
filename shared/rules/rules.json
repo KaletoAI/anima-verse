@@ -9,7 +9,8 @@
       "message_de": "Bin erschöpft, gehe schlafen.",
       "force_action": {
         "go_to": "home",
-        "set_activity": "sleeping"
+        "set_activity": "sleeping",
+        "set_flags": { "is_sleeping": true }
       },
       "id": "default_sleep_when_exhausted"
     },
@@ -17,12 +18,13 @@
       "name": "Waking up",
       "name_de": "Aufwachen",
       "type": "force",
-      "condition": "stamina>70 AND current_activity:sleeping AND NOT schedule:sleeping",
+      "condition": "stamina>70 AND is_sleeping AND NOT schedule:sleeping",
       "message": "Well-rested, waking up.",
       "message_de": "Ausgeschlafen, wache auf.",
       "force_action": {
         "go_to": "stay",
-        "set_activity": ""
+        "set_activity": "",
+        "set_flags": { "is_sleeping": false }
       },
       "id": "default_wake_when_rested"
     },
@@ -30,12 +32,13 @@
       "name": "Fully rested",
       "name_de": "Ausgeschlafen",
       "type": "force",
-      "condition": "stamina>99 AND current_activity:sleeping",
+      "condition": "stamina>99 AND is_sleeping",
       "message": "You wake up, fully rested.",
       "message_de": "Du wachst auf, da Du ausgeschlafen bist.",
       "force_action": {
         "go_to": "stay",
-        "set_activity": ""
+        "set_activity": "",
+        "set_flags": { "is_sleeping": false }
       },
       "id": "rule_f4e31679"
     },

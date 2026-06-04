@@ -49,6 +49,14 @@
   padding: 10px 12px;
 }
 
+/* Autosize: der Body (= alles außer der Kopfzeile) wird inhaltsgroß statt
+   gestreckt, damit seine gemessene Höhe der natürlichen Inhaltshöhe entspricht.
+   PlayerApp spielt diese Höhe als Grid-Rows zurück → Fenster passt sich an. */
+.player-panel[data-autosize="1"] > :not(.player-panel-head) {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
 /* Szene-Panel: Header fix · Verlauf scrollt · Composer unten angepinnt.
    Nur der Verlauf bekommt den Scrollbalken, die Eingabe bleibt sichtbar. */
 .player-scene-body {

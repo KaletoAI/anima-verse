@@ -652,6 +652,10 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
             "rule_name": localized(rule, "name", _lang),
             "go_to": force.get("go_to", "stay"),
             "set_activity": force.get("set_activity", ""),
+            # B1: orthogonale State-Flags direkt setzbar (z.B. {"is_sleeping": false}
+            # zum Wecken, {"is_sleeping": true} fuer einen Schlafzauber) — der Flag
+            # ist die Autoritaet, unabhaengig vom Activity-String.
+            "set_flags": force.get("set_flags") or {},
             "message": localized(rule, "message", _lang),
         }
 

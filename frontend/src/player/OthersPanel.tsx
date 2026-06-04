@@ -11,6 +11,7 @@ interface BarMeta { color?: string; label?: string; name?: string; name_de?: str
 interface CharState {
   name: string
   mood: string
+  activity: string
   status_effects: Record<string, number>
   bar_meta: Record<string, BarMeta>
   conditions: Array<{ name?: string; label?: string; icon?: string }>
@@ -81,6 +82,7 @@ export function OthersPanel() {
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
               {c.mood && <div style={{ opacity: 0.6, fontSize: '0.78em', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.mood}</div>}
+              {c.activity && <div style={{ opacity: 0.55, fontSize: '0.74em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.activity}</div>}
             </div>
           </div>
           {c.conditions.length > 0 && (

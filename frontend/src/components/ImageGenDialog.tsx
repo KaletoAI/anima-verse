@@ -33,11 +33,6 @@ interface ImagegenOptionsResponse {
   default_location?: string
 }
 
-interface ImagegenModelsResponse {
-  models: string[]
-  models_by_service?: Record<string, string[]>
-}
-
 export interface ImageGenSubmit {
   prompt: string
   workflow?: string
@@ -95,9 +90,7 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
   const [options, setOptions] = useState<ImagegenOption[] | null>(null)
   const [defaultLocationOpt, setDefaultLocationOpt] = useState<string>('')
   const [optionKey, setOptionKey] = useState<string>('') // "workflow:name" | "backend:name"
-  const [modelData, setModelData] = useState<ImagegenModelsResponse | null>(null)
   const [allLoras, setAllLoras] = useState<string[]>([])
-  const [modelOverride, setModelOverride] = useState<string>('')
   const [loraSlots, setLoraSlots] = useState<LoraDefault[]>(
     () => Array.from({ length: LORA_SLOTS }, () => ({ name: 'None', strength: 1.0 })),
   )
@@ -144,33 +137,6 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
     return options.find((o) => o.type === type && o.name === name) || null
   }, [options, optionKey])
 
-  // Fetch model list when the workflow's model_type changes; for backends
-  // with their own models[] no fetch is needed.
-  useEffect(() => {
-    if (!currentOption) return
-    if (currentOption.type === 'backend' && currentOption.models) {
-      setModelData({ models: currentOption.models })
-      setModelOverride(currentOption.default_model || currentOption.models[0] || '')
-      return
-    }
-    if (currentOption.type === 'workflow' && currentOption.model_type) {
-      apiGet<ImagegenModelsResponse>(
-        `/world/imagegen-models?model_type=${encodeURIComponent(currentOption.model_type)}`,
-      )
-        .then((d) => {
-          setModelData(d)
-          setModelOverride(currentOption.default_model || '')
-        })
-        .catch(() => {
-          setModelData({ models: [] })
-          setModelOverride(currentOption.default_model || '')
-        })
-      return
-    }
-    setModelData(null)
-    setModelOverride('')
-  }, [currentOption])
-
   // Reset LoRA slots when workflow changes; pull defaults from the option.
   useEffect(() => {
     if (!currentOption) return
@@ -208,7 +174,6 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
     const payload: ImageGenSubmit = { prompt: prompt.trim() }
     if (currentOption.type === 'workflow') payload.workflow = currentOption.name
     else payload.backend = currentOption.name
-    if (modelOverride) payload.model_override = modelOverride
     if (currentOption.has_loras) {
       const active = loraSlots.filter((l) => l.name && l.name !== 'None')
       payload.loras = active.length ? active : null
@@ -220,7 +185,7 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
     } finally {
       setSubmitting(false)
     }
-  }, [currentOption, prompt, modelOverride, loraSlots, onSubmit, onClose])
+  }, [currentOption, prompt, loraSlots, onSubmit, onClose])
 
   if (!open) return null
 
@@ -263,20 +228,6 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
                   </option>
                 ))}
               </select>
-
-              {modelData ? (
-                <>
-                  <label className="ga-imagegen-label">{t('Model')}</label>
-                  <ModelSelect
-                    data={modelData}
-                    workflowName={currentOption?.name || ''}
-                    filter={currentOption?.filter || ''}
-                    value={modelOverride}
-                    onChange={setModelOverride}
-                    disabled={submitting}
-                  />
-                </>
-              ) : null}
 
               {currentOption?.has_loras ? (
                 <>
@@ -358,70 +309,5 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
         </div>
       </div>
     </div>
-  )
-}
-
-function ModelSelect({
-  data,
-  workflowName,
-  filter,
-  value,
-  onChange,
-  disabled,
-}: {
-  data: ImagegenModelsResponse
-  workflowName: string
-  filter: string
-  value: string
-  onChange: (v: string) => void
-  disabled?: boolean
-}) {
-  const { byService, flat } = useMemo(() => {
-    const svc = data.models_by_service && Object.keys(data.models_by_service).length
-      ? data.models_by_service
-      : null
-    if (svc) {
-      const grouped: Record<string, string[]> = {}
-      for (const [k, v] of Object.entries(svc)) {
-        const filtered = filterByWorkflowName(v, workflowName, filter)
-        if (filtered.length) grouped[k] = filtered
-      }
-      return { byService: grouped, flat: null }
-    }
-    return { byService: null, flat: filterByWorkflowName(data.models, workflowName, filter) }
-  }, [data, workflowName, filter])
-
-  const allValues = byService
-    ? Object.values(byService).flat()
-    : flat || []
-  // Always include the current value as an option even if filtered out.
-  const includesCurrent = !value || allValues.includes(value)
-
-  return (
-    <select
-      className="ga-input"
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {!includesCurrent ? <option value={value}>{value}</option> : null}
-      {byService
-        ? Object.entries(byService)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([svc, models]) => (
-              <optgroup key={svc} label={svc}>
-                {models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </optgroup>
-            ))
-        : (flat || []).map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-    </select>
   )
 }

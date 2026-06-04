@@ -1111,6 +1111,25 @@ def get_character_current_activity(character_name: str) -> str:
     return profile.get("current_activity", "")
 
 
+def get_effective_activity(character_name: str) -> str:
+    """Anzeige-/Render-Aktivitaet — spiegelt den ``is_sleeping``-Flag (B1).
+
+    Der Flag ist die Autoritaet fuer den Schlaf-Zustand; die gespeicherte
+    ``current_activity`` bleibt frei/entkoppelt. EINE Read-seitige Aufloesung,
+    die sowohl die Spieler-Anzeige als auch die Expression-Bild-Version/-
+    Generierung nutzen → "Sleeping" erscheint ueberall konsistent und das Bild
+    wechselt, ohne den Activity-String an den Flag zu koppeln.
+    """
+    if not character_name:
+        return ""
+    try:
+        if is_character_sleeping(character_name):
+            return "Sleeping"
+    except Exception:
+        pass
+    return get_character_current_activity(character_name) or ""
+
+
 def _normalize_activity_name(character_name: str, activity: str) -> tuple:
     """Normalisiert einen Aktivitaetsnamen gegen die Bibliothek.
 
@@ -1622,12 +1641,19 @@ def force_set_status(character_name: str,
 
 
 # === Szenen-Positionen (Figur-Standpunkt pro Raum + Expression-Bild) =========
-# Wo eine Figur im Umgebungsfenster steht, haengt vom konkreten Expression-Bild
-# (Hash/expr_version) und vom Raum ab. Gespeichert in character_state.meta unter
-# "scene_positions" -> { "<loc>|<room>": { "<expr_version>": {x, y} } }, damit die
-# Platzierung fuer ALLE Spieler gilt (in den Character-Daten, nicht pro User).
+# Wo (und wie gross) eine Figur im Umgebungsfenster steht, haengt vom Raum, vom
+# konkreten Hintergrundbild (bg_id = Dateiname) und vom Expression-Bild
+# (Hash/expr_version) ab. BEWUSST OHNE Location im Schluessel: verschiedene
+# Locations (z.B. Wald-Klone) teilen sich dieselben BG-Dateien — die Platzierung
+# soll am Bild haengen, nicht am Ort. Gespeichert in character_state.meta unter
+# "scene_positions" -> { "<room>": { "<bg_id>": { "<expr_version>":
+# {x, y, scale} } } }, damit die Platzierung fuer ALLE Spieler gilt (in den
+# Character-Daten, nicht pro User).
 
-_SCENE_POS_MAX_PER_ROOM = 24  # aelteste Hashes verfallen (Bilder aendern sich)
+_SCENE_POS_MAX_PER_BG = 24   # aelteste expr-Hashes je Hintergrund verfallen
+_SCENE_POS_MAX_BG = 16       # aelteste Hintergruende je Raum verfallen
+_SCENE_SCALE_MIN = 0.3
+_SCENE_SCALE_MAX = 2.0
 
 
 def _read_state_meta(character_name: str) -> Dict[str, Any]:
@@ -1646,42 +1672,48 @@ def _read_state_meta(character_name: str) -> Dict[str, Any]:
     return {}
 
 
-def _scene_room_key(location_id: str, room_id: str) -> str:
-    return f"{location_id or ''}|{room_id or ''}"
+def get_scene_position(character_name: str, room_id: str,
+                       expr_version: str, bg_id: str) -> Optional[Dict[str, float]]:
+    """Standpunkt {x, y, scale} der Figur fuer (Raum, Hintergrundbild,
+    Expression-Bild) oder None, wenn dafuer noch nicht platziert.
 
-
-def get_scene_position(character_name: str, location_id: str, room_id: str,
-                       expr_version: str) -> Optional[Dict[str, float]]:
-    """Standpunkt {x, y} (Bruchteile 0..1) der Figur fuer (Raum, Expression-Bild)
-    oder None, wenn fuer dieses Bild in diesem Raum noch nicht platziert."""
+    x/y sind Bruchteile 0..1; scale ist ein Groessen-Faktor (Default 1.0)."""
     if not (character_name and expr_version):
         return None
     rooms = _read_state_meta(character_name).get("scene_positions") or {}
-    room = rooms.get(_scene_room_key(location_id, room_id)) or {}
-    p = room.get(expr_version)
+    bgs = rooms.get(room_id or "") or {}
+    bg = bgs.get(bg_id or "") or {}
+    p = bg.get(expr_version)
     if isinstance(p, dict) and "x" in p and "y" in p:
         try:
-            return {"x": float(p["x"]), "y": float(p["y"])}
+            return {"x": float(p["x"]), "y": float(p["y"]),
+                    "scale": float(p.get("scale", 1.0))}
         except (TypeError, ValueError):
             return None
     return None
 
 
-def set_scene_position(character_name: str, location_id: str, room_id: str,
-                       expr_version: str, x: float, y: float) -> None:
-    """Persistiert den Standpunkt der Figur fuer (Raum, Expression-Bild).
+def set_scene_position(character_name: str, room_id: str,
+                       expr_version: str, bg_id: str,
+                       x: float, y: float, scale: float = 1.0) -> None:
+    """Persistiert Standpunkt + Groesse der Figur fuer (Raum, Hintergrundbild,
+    Expression-Bild). Location bewusst NICHT im Schluessel — die Platzierung
+    haengt am Bild (geteilt ueber Locations mit denselben BG-Dateien).
 
     Schreibt direkt auf character_state.meta — leichtgewichtig, kein voller
-    Profil-Save. Pro Raum bleiben max. _SCENE_POS_MAX_PER_ROOM Hashes (aelteste
-    verfallen, da Bilder sich aendern)."""
+    Profil-Save. Pro Hintergrund bleiben max. _SCENE_POS_MAX_PER_BG expr-Hashes
+    und pro Raum max. _SCENE_POS_MAX_BG Hintergruende (aelteste verfallen, da
+    Bilder sich aendern)."""
     if not (character_name and expr_version):
         return
     try:
         x = max(0.0, min(1.0, float(x)))
         y = max(0.0, min(1.0, float(y)))
+        scale = max(_SCENE_SCALE_MIN, min(_SCENE_SCALE_MAX, float(scale)))
     except (TypeError, ValueError):
         return
-    key = _scene_room_key(location_id, room_id)
+    key = room_id or ""
+    bg_key = bg_id or ""
     try:
         with transaction() as conn:
             row = conn.execute(
@@ -1696,14 +1728,21 @@ def set_scene_position(character_name: str, location_id: str, room_id: str,
             rooms = meta.get("scene_positions")
             if not isinstance(rooms, dict):
                 rooms = {}
-            room = rooms.get(key)
-            if not isinstance(room, dict):
-                room = {}
-            room.pop(expr_version, None)  # ans Ende (Insertion-Order = LRU)
-            room[expr_version] = {"x": x, "y": y}
-            while len(room) > _SCENE_POS_MAX_PER_ROOM:
-                room.pop(next(iter(room)))
-            rooms[key] = room
+            bgs = rooms.get(key)
+            if not isinstance(bgs, dict):
+                bgs = {}
+            bg = bgs.get(bg_key)
+            if not isinstance(bg, dict):
+                bg = {}
+            bg.pop(expr_version, None)  # ans Ende (Insertion-Order = LRU)
+            bg[expr_version] = {"x": x, "y": y, "scale": scale}
+            while len(bg) > _SCENE_POS_MAX_PER_BG:
+                bg.pop(next(iter(bg)))
+            bgs.pop(bg_key, None)  # ans Ende (LRU der Hintergruende)
+            bgs[bg_key] = bg
+            while len(bgs) > _SCENE_POS_MAX_BG:
+                bgs.pop(next(iter(bgs)))
+            rooms[key] = bgs
             meta["scene_positions"] = rooms
             mj = json.dumps(meta, ensure_ascii=False)
             if row is not None:

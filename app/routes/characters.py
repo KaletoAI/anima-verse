@@ -406,7 +406,8 @@ def get_character_current_location_route(character_name: str) -> Dict[str, Any]:
     activities_on = is_feature_enabled(character_name, "activities_enabled")
     location_id = get_character_current_location(character_name) if locations_on else ""
     location_name = _get_loc_name(location_id) if location_id else ""
-    activity = get_character_current_activity(character_name) if activities_on else ""
+    from app.models.character import get_effective_activity
+    activity = get_effective_activity(character_name) if activities_on else ""
     from app.models.character import get_character_current_room
     current_room = get_character_current_room(character_name) if locations_on else ""
     # Resolve room: could be an ID or a name — normalize to ID + name
@@ -1874,8 +1875,11 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
                 mood = ""
         if not activity:
             try:
-                from app.models.character import get_character_current_activity
-                activity = get_character_current_activity(character_name) or ""
+                # Effektive Aktivitaet (B1): spiegelt den is_sleeping-Flag → ein
+                # schlafender Char bekommt die Sleeping-Pose/Expression, passend
+                # zur _expr_version in /play/scene.
+                from app.models.character import get_effective_activity
+                activity = get_effective_activity(character_name) or ""
             except Exception:
                 activity = ""
 

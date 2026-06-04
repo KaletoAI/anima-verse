@@ -1554,7 +1554,8 @@ def get_activity(activity_name: str) -> Optional[Dict[str, str]]:
 # === Hintergrundbilder ===
 
 def get_background_path(location_identifier: str, room: str = "",
-                        hour: int = -1, strict_room: bool = False) -> Optional[Path]:
+                        hour: int = -1, strict_room: bool = False,
+                        stable: bool = False) -> Optional[Path]:
     """Gibt den Pfad zu einem zufaellig gewaehlten Hintergrundbild zurueck.
 
     Regeln:
@@ -1570,6 +1571,10 @@ def get_background_path(location_identifier: str, room: str = "",
             Bilder hat. Verwendet vom Regenerate-Pfad, damit ein expliziter
             Raumwechsel im Dialog nicht stillschweigend dieselbe Default-
             Datei zurueckgibt (User wuerde den Wechsel nie bemerken).
+        stable: Wenn True wird innerhalb einer Kategorie deterministisch (statt
+            zufaellig) gewaehlt — dasselbe (Ort, Raum, Tageszeit) liefert stets
+            dasselbe Bild. Genutzt von /play, wo das angezeigte Bild stabil sein
+            muss (Figuren-Positionen sind an den Dateinamen gekoppelt).
     """
     loc = resolve_location(location_identifier)
     if not loc:
@@ -1615,6 +1620,12 @@ def get_background_path(location_identifier: str, room: str = "",
     if not candidates:
         return None
 
+    # Auswahl innerhalb einer Kategorie: zufaellig (Standard, Variety) oder
+    # deterministisch (stable=True, fuer /play — sonst wuerde das angezeigte Bild
+    # bei jedem Poll springen und die daran gekoppelten Figuren-Positionen mit).
+    def _pick(lst: List[str]) -> str:
+        return sorted(lst)[0] if stable else _random.choice(lst)
+
     # Tageszeit bestimmen
     time_type = ""
     if 0 <= hour <= 23:
@@ -1624,15 +1635,41 @@ def get_background_path(location_identifier: str, room: str = "",
     if time_type:
         timed = [img for img in candidates if image_types.get(img, "") == time_type]
         if timed:
-            return gallery_base / _random.choice(timed)
+            return gallery_base / _pick(timed)
 
     # Bilder ohne Tageszeit-Zuordnung (neutral) bevorzugen gegenueber dem
     # jeweils unpassenden Typ.
     untyped = [img for img in candidates if not image_types.get(img, "")]
     if untyped:
-        return gallery_base / _random.choice(untyped)
+        return gallery_base / _pick(untyped)
 
-    return gallery_base / _random.choice(candidates)
+    return gallery_base / _pick(candidates)
+
+
+def get_background_file_path(location_identifier: str, file: str) -> Optional[Path]:
+    """Pfad zu einem KONKRETEN Hintergrundbild (per Dateiname/bg_id), validiert
+    gegen die als Hintergrund markierten Bilder der Location. None, wenn der
+    Name nicht zu einem bekannten Hintergrund gehoert oder die Datei fehlt.
+
+    Wird vom /play-Pin verwendet: Frontend kennt den gewaehlten Dateinamen und
+    fordert exakt dieses Bild an, damit Figuren-Positionen daran haften."""
+    if not (location_identifier and file):
+        return None
+    loc = resolve_location(location_identifier)
+    if not loc:
+        return None
+    loc_id = loc.get("id", "")
+    if not loc_id:
+        return None
+    bg_images = loc.get("background_images", [])
+    if not bg_images and loc.get("background_image"):
+        bg_images = [loc["background_image"]]
+    match = next((img for img in bg_images if Path(img).name == file or img == file), None)
+    if not match:
+        return None
+    owner_id = _gallery_owner_id(location_identifier) or loc_id
+    p = get_storage_dir() / "world_gallery" / owner_id / match
+    return p if p.exists() else None
 
 
 def get_background_images(location_id: str) -> List[str]:

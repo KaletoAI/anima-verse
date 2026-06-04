@@ -1,5 +1,6 @@
 """Admin Settings Routes — JSON-based configuration management."""
 import asyncio
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import HTMLResponse
@@ -1177,6 +1178,46 @@ async def provider_models(provider_name: str, user=Depends(require_admin)):
         return {"provider": provider_name, "models": [], "error": str(e)}
 
 
+@router.get("/settings/providers-list")
+async def providers_list(user=Depends(require_admin)):
+    """Namen aller konfigurierten Provider — fuer den Suitability-Test-Picker."""
+    return {"providers": [p.get("name", "") for p in config.get("providers", [])
+                          if p.get("name")]}
+
+
+@router.get("/settings/llm-suitability-checks")
+async def llm_suitability_checks(user=Depends(require_admin)):
+    """Metadaten der Eignungs-Checks (id/label/category) — fuer die UI-Vorschau."""
+    from app.core.model_suitability import list_checks
+    return {"checks": list_checks()}
+
+
+@router.post("/settings/llm-suitability-test")
+async def llm_suitability_test(request: Request, user=Depends(require_admin)):
+    """Fuehrt die Tool-/Helper-Eignungs-Batterie gegen EIN Modell aus und streamt
+    die Ergebnisse als NDJSON (eine JSON-Zeile pro Check, dann ein 'done'-Event).
+    Das Gesamtergebnis wird in model_capabilities.json gespeichert."""
+    from fastapi.responses import StreamingResponse
+    from app.core.model_suitability import iter_suitability_results
+    body = await request.json()
+    provider = str((body or {}).get("provider") or "").strip()
+    model = str((body or {}).get("model") or "").strip()
+    if not model:
+        raise HTTPException(400, "model required")
+    full = f"{provider}::{model}" if provider else model
+
+    def _gen():
+        try:
+            for ev in iter_suitability_results(full):
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        except Exception as e:
+            logger.error("suitability stream failed: %s", e)
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+
+    return StreamingResponse(_gen(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache"})
+
+
 @router.post("/settings/validate")
 async def settings_validate(request: Request, user=Depends(require_admin)):
     """Validate config and return list of issues."""
@@ -2102,7 +2143,17 @@ function renderSection(key) {
             html += '<div id="llm-task-view"><div class="desc">Loading…</div></div>';
             html += '</div>';
             html += '</div>';
-            setTimeout(() => renderLlmTaskView(data || []), 0);
+            // Tool-/Helper-Eignungstest fuer EIN konkretes Modell
+            html += '<div class="subsection-title" style="margin-top:22px; margin-bottom:8px;">🧪 Tool / Helper Suitability Test</div>';
+            html += '<div class="desc" style="margin-bottom:10px;">Run a battery of structured-output, tool-call-format, anti-hallucination, language and length checks against one model. The result is saved to <b>Model Capabilities</b>.</div>';
+            html += '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">';
+            html += '<select id="suit-provider" class="form-input" style="width:auto;" onchange="suitLoadModels()"><option value="">Provider…</option></select>';
+            html += '<select id="suit-model" class="form-input" style="width:auto; min-width:220px;"><option value="">Model…</option></select>';
+            html += '<button class="btn btn-sm" id="suit-run-btn" onclick="suitRun()">Run test</button>';
+            html += '<span id="suit-status" class="desc"></span>';
+            html += '</div>';
+            html += '<div id="suit-results"></div>';
+            setTimeout(() => { renderLlmTaskView(data || []); suitInit(); }, 0);
         } else {
             html += '<div style="margin-bottom: 12px;">';
             html += '<button class="btn btn-sm" onclick="addArrayItem(\\'' + key + '\\', \\'array\\')">+ Add ' + sec.label + '</button>';

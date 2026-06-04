@@ -30,14 +30,14 @@ def _expr_version(name: str) -> str:
     import hashlib
     import os
     from app.models.character import (get_character_current_feeling,
-                                      get_character_current_activity)
+                                      get_effective_activity)
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     mood = activity = ""
     eqp: dict = {}
     eqi: list = []
     try:
         mood = get_character_current_feeling(name) or ""
-        activity = get_character_current_activity(name) or ""
+        activity = get_effective_activity(name) or ""
         eqp = get_equipped_pieces(name) or {}
         eqi = get_equipped_items(name) or []
     except Exception:
@@ -70,11 +70,36 @@ def _bg_version(location_id: str, room: str) -> str:
     if not p or not p.exists():
         try:
             from app.models.world import get_background_path
-            p = get_background_path(location_id, room=room, hour=utc_now().hour)
+            p = get_background_path(location_id, room=room, hour=utc_now().hour,
+                                    stable=True)
         except Exception:
             p = None
     if p and p.exists():
         return hashlib.md5(f"{p}:{int(os.path.getmtime(p))}".encode("utf-8")).hexdigest()[:10]
+    return ""
+
+
+def _bg_id(location_id: str, room: str) -> str:
+    """Dateiname (bg_id) des aktuell gewaehlten Hintergrundbilds — Event-Bild hat
+    Vorrang, sonst die regulaere Auswahl. Das Frontend pinnt damit das <img>
+    (``/background?file=<bg_id>``) und koppelt die Figuren-Positionen an genau
+    dieses Bild. Tageszeit via UTC, konsistent zu :func:`_bg_version`."""
+    from app.core.timeutils import utc_now
+    try:
+        from app.core.event_images import get_effective_background_event
+        p = get_effective_background_event(location_id)
+        if p and p.exists():
+            return p.name
+    except Exception:
+        pass
+    try:
+        from app.models.world import get_background_path
+        p = get_background_path(location_id, room=room, hour=utc_now().hour,
+                                stable=True)
+        if p and p.exists():
+            return p.name
+    except Exception:
+        pass
     return ""
 
 
@@ -101,7 +126,8 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     empty = {"avatar": "", "location_id": "", "location_name": "",
              "room_id": "", "room_name": "", "present": [], "present_detail": [],
              "scene": [], "rooms": [], "neighbors": {}, "at_entry_room": True,
-             "entry_room_name": "", "avatar_expr_version": "", "bg_version": ""}
+             "entry_room_name": "", "avatar_expr_version": "", "bg_version": "",
+             "bg_id": ""}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return empty
@@ -148,6 +174,7 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
         "present": present, "present_detail": present_detail, "scene": scene,
         "avatar_expr_version": _expr_version(avatar),
         "bg_version": _bg_version(loc, room) if loc else "",
+        "bg_id": _bg_id(loc, room) if loc else "",
         "rooms": rooms_out,
         "neighbors": {k: nb.get(k) for k in ("north", "south", "east", "west")},
         "at_entry_room": bool(nb.get("at_entry_room", True)),
@@ -341,12 +368,12 @@ async def play_self(user=Depends(get_current_user)):
     if not avatar:
         return empty
     from app.models.character import (get_character_current_feeling,
-                                      get_character_current_activity,
+                                      get_effective_activity,
                                       get_character_outfits,
                                       get_character_profile_image)
     out = dict(empty, avatar=avatar)
     out["mood"] = get_character_current_feeling(avatar) or ""
-    out["activity"] = get_character_current_activity(avatar) or ""
+    out["activity"] = get_effective_activity(avatar) or ""
     out["profile_image"] = get_character_profile_image(avatar) or ""
     try:
         from app.routes.characters import get_status_effects_route
@@ -384,12 +411,17 @@ async def play_self(user=Depends(get_current_user)):
 def _state_block(name: str) -> dict:
     """Mood + Status-Bars + Conditions + Profilbild eines Characters (geteilt von
     /play/self-Logik, genutzt von /play/others)."""
-    from app.models.character import (get_character_current_feeling,
+    from app.models.character import (get_character_current_activity,
+                                      get_character_current_feeling,
                                       get_character_profile_image)
-    blk = {"name": name, "mood": "", "status_effects": {}, "bar_meta": {},
-           "conditions": [], "profile_image": ""}
+    blk = {"name": name, "mood": "", "activity": "", "status_effects": {},
+           "bar_meta": {}, "conditions": [], "profile_image": ""}
     try:
         blk["mood"] = get_character_current_feeling(name) or ""
+    except Exception:
+        pass
+    try:
+        blk["activity"] = get_character_current_activity(name) or ""
     except Exception:
         pass
     try:
@@ -780,13 +812,14 @@ async def play_put_layout(request: Request, user=Depends(get_current_user)):
 
 
 @router.get("/play/figures")
-async def play_get_figures(user=Depends(get_current_user)):
-    """Figuren-Standpunkte im Umgebungsfenster (Name → {x, y} als Bruchteile
-    0..1) fuer den AKTUELLEN Raum + das aktuelle Expression-Bild jeder Figur.
+async def play_get_figures(bg: str = "", user=Depends(get_current_user)):
+    """Figuren-Standpunkte im Umgebungsfenster (Name → {x, y, scale}, x/y als
+    Bruchteile 0..1) fuer den AKTUELLEN Raum + Hintergrundbild (``bg`` = bg_id)
+    + das aktuelle Expression-Bild jeder Figur.
 
     Quelle sind die Character-Daten (nicht User-Settings) → die Platzierung gilt
-    fuer alle Spieler. Pos ist an (Raum, expr_version) gekoppelt: bei neuem Bild
-    fehlt der Eintrag → Frontend nutzt seine Default-Position."""
+    fuer alle Spieler. Pos ist an (Raum, bg_id, expr_version) gekoppelt: bei
+    neuem Bild fehlt der Eintrag → Frontend nutzt seine Default-Position."""
     from app.core.room_entry import _list_characters_in_room
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
@@ -802,9 +835,8 @@ async def play_get_figures(user=Depends(get_current_user)):
     if avatar not in names:
         names.append(avatar)
     for name in names:
-        nloc = get_character_current_location(name) or ""
         nroom = get_character_current_room(name) or ""
-        p = get_scene_position(name, nloc, nroom, _expr_version(name))
+        p = get_scene_position(name, nroom, _expr_version(name), bg)
         if p:
             positions[name] = p
     return {"positions": positions}
@@ -812,8 +844,9 @@ async def play_get_figures(user=Depends(get_current_user)):
 
 @router.put("/play/figures")
 async def play_save_figures(request: Request, user=Depends(get_current_user)):
-    """Persistiert Figuren-Standpunkte in den Character-Daten, gekoppelt an Raum
-    + Expression-Bild-Hash. Nur Figuren, die im Raum des Avatars anwesend sind."""
+    """Persistiert Figuren-Standpunkte + Groesse in den Character-Daten, gekoppelt
+    an Raum + Hintergrundbild (``bg``) + Expression-Bild-Hash. Nur Figuren, die im
+    Raum des Avatars anwesend sind."""
     from app.core.room_entry import _list_characters_in_room
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
@@ -821,6 +854,7 @@ async def play_save_figures(request: Request, user=Depends(get_current_user)):
                                        set_scene_position)
     body = await request.json()
     positions = body.get("positions") if isinstance(body, dict) else None
+    bg = str(body.get("bg") or "") if isinstance(body, dict) else ""
     if not isinstance(positions, dict):
         raise HTTPException(status_code=400, detail="positions object required")
     avatar = (get_active_character() or "").strip()
@@ -833,10 +867,9 @@ async def play_save_figures(request: Request, user=Depends(get_current_user)):
     for name, p in positions.items():
         if name not in allowed or not isinstance(p, dict):
             continue
-        nloc = get_character_current_location(name) or ""
         nroom = get_character_current_room(name) or ""
-        set_scene_position(name, nloc, nroom, _expr_version(name),
-                           p.get("x"), p.get("y"))
+        set_scene_position(name, nroom, _expr_version(name), bg,
+                           p.get("x"), p.get("y"), p.get("scale", 1.0))
     return {"ok": True}
 
 

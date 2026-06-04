@@ -71,6 +71,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "present_people_block": _build_present_people_block(character_name, location_id),
         "tracker_block": _build_tracker_block(character_name, location_id),
         "known_locations_block": _build_known_locations_block(character_name, location_id),
+        "surroundings_block": _build_surroundings_block(character_name, location_id),
         "travel_block": _build_travel_block(character_name, location_id),
         "available_activities_block": _build_available_activities_block(character_name, location_id, room_id),
         "daily_schedule_block": _build_daily_schedule_block(character_name),
@@ -663,6 +664,63 @@ def _build_travel_block(character_name: str, current_location_id: str) -> str:
                 f"be cleared on the next tick.")
     except Exception as e:
         logger.debug("travel block failed for %s: %s", character_name, e)
+        return ""
+
+
+# Himmelsrichtungen auf dem Grid. grid_y- = Norden (oben in der Karten-UI),
+# grid_x+ = Osten. NUR orthogonal — keine Diagonalen (Move kann sich nicht
+# schraeg bewegen).
+_CARDINALS = (("North", 0, -1), ("East", 1, 0), ("South", 0, 1), ("West", -1, 0))
+
+
+def _build_surroundings_block(character_name: str, current_location_id: str) -> str:
+    """Die vier orthogonal angrenzenden Grid-Tiles, nach Himmelsrichtung.
+
+    Bekannte Nachbarn werden benannt (inkl. wer dort gerade steht, damit der
+    Character gezielt hingehen kann). Unbekannte Nachbarn werden nur angedeutet:
+    passable Terrain ueber seinen generischen Typ-Namen ("Wald (unexplored)"),
+    Unikat-Landmarks bleiben verborgen, bis sie entdeckt sind. Erreichbar ein
+    Tile pro Zug ueber das Move-Tool.
+    """
+    try:
+        from app.models.world import list_locations, get_location_by_id
+        from app.models.character import get_known_locations
+        cur = get_location_by_id(current_location_id) if current_location_id else None
+        if not cur or cur.get("grid_x") is None or cur.get("grid_y") is None:
+            return ""
+        gx, gy = cur["grid_x"], cur["grid_y"]
+        by_cell: Dict[tuple, Dict[str, Any]] = {}
+        for loc in list_locations():
+            lx, ly = loc.get("grid_x"), loc.get("grid_y")
+            if lx is not None and ly is not None:
+                by_cell[(lx, ly)] = loc
+        known = set(get_known_locations(character_name))
+        lines: List[str] = []
+        for label, dx, dy in _CARDINALS:
+            nb = by_cell.get((gx + dx, gy + dy))
+            if not nb:
+                continue
+            nid = nb.get("id") or ""
+            if nid in known:
+                name = (nb.get("name") or "?").strip()
+                ann = ""
+                try:
+                    from app.models.group_chat import get_characters_at_location
+                    people = [c.get("name") for c in get_characters_at_location(nid)
+                              if c.get("name") and c.get("name") != character_name]
+                    if people:
+                        ann = f" ({', '.join(people)} here)"
+                except Exception:
+                    pass
+                lines.append(f"- {label}: {name}{ann}")
+            elif nb.get("passable"):
+                tname = (nb.get("name") or "open terrain").strip()
+                lines.append(f"- {label}: {tname} (unexplored)")
+            else:
+                lines.append(f"- {label}: somewhere unexplored")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug("surroundings block failed for %s: %s", character_name, e)
         return ""
 
 

@@ -183,6 +183,22 @@ def _evaluate_single_condition_inner(
             threshold = int(stat_match.group(3))
             return _check_status_effect(character_name, stat_name, operator, threshold)
 
+    # --- State-Flags: is_sleeping / is_wet / is_intimate (Boolean) ---
+    # B1: regelbasiertes Bedingen auf den orthogonalen Zustands-Flags — der Flag
+    # ist die Autoritaet (nicht der Activity-String). "is_sleeping" → True wenn
+    # gesetzt; "NOT is_sleeping" via NOT-Prefix.
+    flag_m = re.match(r"(is_sleeping|is_wet|is_intimate)$", cond)
+    if flag_m:
+        fname = flag_m.group(1)
+        try:
+            from app.models.character import get_state_flags
+            if bool(get_state_flags(character_name).get(fname)):
+                return True, ""
+            return False, f"{fname} ist nicht gesetzt"
+        except Exception as e:
+            logger.debug("state-flag-Check fehlgeschlagen: %s", e)
+            return False, f"{fname}-Check fehlgeschlagen"
+
     # --- current_activity:X (aktuelle Activity des Characters) ---
     cact_match = re.match(r"current_activity:(.+)", cond)
     if cact_match:

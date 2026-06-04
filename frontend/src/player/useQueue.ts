@@ -40,8 +40,17 @@ export interface TrackedTaskInfo {
 interface ProviderChannel {
   provider?: string
   type?: string
+  healthy?: boolean
   chat_active?: LLMTaskInfo | LLMTaskInfo[] | null
   current_tasks?: LLMTaskInfo[]
+}
+
+/** Verfügbarkeit eines LLM-Backends (Channel) für die Status-Anzeige. */
+export interface ChannelStatus {
+  key: string
+  name: string
+  healthy: boolean
+  busy: boolean
 }
 
 // Nicht-LLM-Tasks, die ebenfalls über Provider-Channels laufen (ComfyUI/TTS) —
@@ -66,9 +75,11 @@ export interface QueueSnapshot {
   trackedTasks: TrackedTaskInfo[]
   /** agent_name → Aktivität (für "antwortet …" / "denkt …"-Indikator). */
   agentActivity: Record<string, AgentActivity>
+  /** LLM-Backends (Channels) mit Verfügbarkeit + busy-Flag. */
+  channels: ChannelStatus[]
 }
 
-const EMPTY: QueueSnapshot = { llmTasks: [], trackedTasks: [], agentActivity: {} }
+const EMPTY: QueueSnapshot = { llmTasks: [], trackedTasks: [], agentActivity: {}, channels: [] }
 
 // task_types, bei denen der Character auf jemanden *antwortet* (sichtbarer Chat),
 // im Gegensatz zu Hintergrund-Gedanken.
@@ -98,6 +109,21 @@ function collectLLM(providers: Record<string, ProviderChannel> | undefined): LLM
   return out
 }
 
+/** LLM-Backends (Channels) aus dem providers-Payload — ComfyUI/Bild-Backends
+ * raus. healthy/busy kommen vom Server (get_combined_status). */
+function collectChannels(providers: Record<string, ProviderChannel> | undefined): ChannelStatus[] {
+  const out: ChannelStatus[] = []
+  for (const [key, ch] of Object.entries(providers || {})) {
+    if ((ch?.type || '') === 'comfyui') continue
+    const ca = ch?.chat_active
+    const nChat = Array.isArray(ca) ? ca.length : ca ? 1 : 0
+    const busy = nChat > 0 || (ch?.current_tasks?.length || 0) > 0
+    out.push({ key, name: ch?.provider || key, healthy: !!ch?.healthy, busy })
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name))
+  return out
+}
+
 export function useQueue(intervalMs = 2000): QueueSnapshot {
   const [snap, setSnap] = useState<QueueSnapshot>(EMPTY)
 
@@ -118,7 +144,8 @@ export function useQueue(intervalMs = 2000): QueueSnapshot {
             agentActivity[name] = { responding, label: tk.label }
           }
         }
-        setSnap({ llmTasks, trackedTasks: d.active_tasks || [], agentActivity })
+        setSnap({ llmTasks, trackedTasks: d.active_tasks || [], agentActivity,
+                  channels: collectChannels(d.providers) })
       } catch {
         /* ignore poll errors (api.ts handles auth redirect) */
       }

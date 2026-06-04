@@ -7,7 +7,7 @@
  * (wahrgenommene Raum-Szene + Composer) und ein Platzhalter (z.B. Karte).
  * Layout-Persistenz ins User-Profil + weitere Panels folgen als nächste Schritte.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { cloneElement, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import GridLayout, { type Layout } from 'react-grid-layout'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api'
@@ -87,6 +87,7 @@ interface SceneData {
   entry_room_name: string
   avatar_expr_version?: string
   bg_version?: string
+  bg_id?: string
 }
 
 export function PlayerApp() {
@@ -98,17 +99,20 @@ export function PlayerApp() {
   const [sending, setSending] = useState(false)
   const [layout, setLayout] = useState<Layout[]>(DEFAULT_LAYOUT)
   const [open, setOpen] = useState<string[]>(GRID_PANELS)  // Dialoge starten geschlossen
+  const [autosize, setAutosize] = useState<string[]>([])  // Panels mit Höhen-Autosize
   const [width, setWidth] = useState(1200)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const layoutLoaded = useRef(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutRef = useRef(layout)
   const openRef = useRef(open)
+  const autosizeRef = useRef(autosize)
   layoutRef.current = layout
   openRef.current = open
+  autosizeRef.current = autosize
 
   const persist = useCallback(() => {
-    apiPut('/play/layout', { layout: { grid: layoutRef.current, open: openRef.current } })
+    apiPut('/play/layout', { layout: { grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current } })
       .catch(() => { /* best-effort */ })
   }, [])
 
@@ -123,6 +127,7 @@ export function PlayerApp() {
         } else if (v && typeof v === 'object') {
           if (Array.isArray(v.grid) && v.grid.length) setLayout(v.grid)
           if (Array.isArray(v.open)) setOpen(v.open)
+          if (Array.isArray(v.autosize)) setAutosize(v.autosize)
         }
       })
       .catch(() => { /* Default behalten */ })
@@ -170,20 +175,30 @@ export function PlayerApp() {
   const closePanel = useCallback((id: string) => {
     setOpenAnd(openRef.current.filter((x) => x !== id))
   }, [setOpenAnd])
+  const toggleAutosize = useCallback((id: string) => {
+    const next = autosizeRef.current.includes(id)
+      ? autosizeRef.current.filter((x) => x !== id)
+      : [...autosizeRef.current, id]
+    autosizeRef.current = next
+    setAutosize(next)
+    if (layoutLoaded.current) persist()
+  }, [persist])
 
   const resetLayout = useCallback(() => {
     layoutRef.current = DEFAULT_LAYOUT
     openRef.current = GRID_PANELS
+    autosizeRef.current = []
     setLayout(DEFAULT_LAYOUT)
     setOpen(GRID_PANELS)
+    setAutosize([])
     persist()
   }, [persist])
 
   // Benannte Layout-Presets
-  const [presets, setPresets] = useState<Record<string, { grid?: Layout[]; open?: string[] }>>({})
+  const [presets, setPresets] = useState<Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[] }>>({})
   const refreshPresets = useCallback(async () => {
     try {
-      const d = await apiGet<{ presets?: Record<string, { grid?: Layout[]; open?: string[] }> }>('/play/layouts')
+      const d = await apiGet<{ presets?: Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[] }> }>('/play/layouts')
       setPresets(d?.presets || {})
     } catch { /* ignore */ }
   }, [])
@@ -194,10 +209,13 @@ export function PlayerApp() {
     if (!p) return
     const grid = Array.isArray(p.grid) && p.grid.length ? p.grid : DEFAULT_LAYOUT
     const op = Array.isArray(p.open) ? p.open : ALL_PANELS
+    const az = Array.isArray(p.autosize) ? p.autosize : []
     layoutRef.current = grid
     openRef.current = op
+    autosizeRef.current = az
     setLayout(grid)
     setOpen(op)
+    setAutosize(az)
     persist()  // geladenes Preset wird auch zum aktiven Layout
     closePanel('layouts')  // Dialog schließt nach dem Laden
   }, [presets, persist, closePanel])
@@ -206,7 +224,7 @@ export function PlayerApp() {
     const n = (name || '').trim()
     if (!n) return
     try {
-      await apiPut('/play/layouts', { name: n, layout: { grid: layoutRef.current, open: openRef.current } })
+      await apiPut('/play/layouts', { name: n, layout: { grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current } })
       await refreshPresets()
       closePanel('layouts')  // Dialog schließt nach Speichern/Überschreiben
     } catch { /* ignore */ }
@@ -229,6 +247,12 @@ export function PlayerApp() {
     // marginRight rückt die Buttons aus der oberen-rechten Ecke, damit der
     // RGL-Resize-Griff (ne) nicht den Klick auf × abfängt.
     <span style={{ marginLeft: 'auto', marginRight: 14, flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, position: 'relative', zIndex: 2 }}>
+      {withBack && (
+        <button onClick={() => toggleAutosize(id)} onMouseDown={(e) => e.stopPropagation()}
+          title={t('Autosize height to content')} aria-label={t('Autosize height to content')}
+          aria-pressed={autosize.includes(id)}
+          style={{ ...ctrlBtn, fontSize: '0.95em', opacity: autosize.includes(id) ? 1 : 0.55 }}>⇕</button>
+      )}
       {withBack && (
         <button onClick={() => sendToBack(id)} onMouseDown={(e) => e.stopPropagation()}
           title={t('Send to back')} aria-label={t('Send to back')}
@@ -458,6 +482,7 @@ export function PlayerApp() {
           avatarName={data?.avatar || ''}
           avatarExprVersion={data?.avatar_expr_version || ''}
           bgVersion={data?.bg_version || ''}
+          bgId={data?.bg_id || ''}
         />
       </div>
     </div>
@@ -564,6 +589,52 @@ export function PlayerApp() {
   // Remount → keine Snap-backs.
   const openKey = [...renderedIds].sort().join('|')
 
+  // Autosize: für jedes aktivierte (und gerenderte) Panel die natürliche
+  // Inhaltshöhe messen und als Grid-Rows (h) zurückspielen. Der Body ist via
+  // CSS (data-autosize) inhaltsgroß → seine offsetHeight = Inhaltshöhe; ein
+  // ResizeObserver feuert bei Inhaltsänderung (z.B. Others bei Character-Wechsel)
+  // und re-fittet automatisch. Breite (w) bleibt unangetastet.
+  const autosizeKey = autosize.filter((id) => renderedIds.includes(id)).sort().join('|')
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const active = autosizeRef.current.filter((id) => renderedIds.includes(id))
+    if (!active.length) return
+    const bodyOf = (id: string): HTMLElement | null => {
+      const panel = root.querySelector(`[data-panel-id="${id}"]`)
+      if (!panel) return null
+      const head = panel.querySelector('.player-panel-head')
+      return (Array.from(panel.children).find(
+        (el) => el !== head && !el.classList.contains('react-resizable-handle')) as HTMLElement) || null
+    }
+    const apply = (id: string) => {
+      const panel = root.querySelector(`[data-panel-id="${id}"]`) as HTMLElement | null
+      const body = bodyOf(id)
+      if (!panel || !body) return
+      const head = panel.querySelector('.player-panel-head') as HTMLElement | null
+      const contentH = body.offsetHeight + (head ? head.offsetHeight : 0)
+      const minH = DEFAULT_BY_ID[id]?.minH ?? 4
+      const rows = Math.max(minH, Math.ceil((contentH + MARGIN) / (CELL + MARGIN)))
+      const cur = layoutRef.current.find((l) => l.i === id)
+      if (!cur || cur.h === rows) return
+      const next = layoutRef.current.map((l) => (l.i === id ? { ...l, h: rows } : l))
+      layoutRef.current = next
+      setLayout(next)
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(persist, 800)
+    }
+    const observers = active.map((id) => {
+      const body = bodyOf(id)
+      if (!body) return null
+      const ro = new ResizeObserver(() => apply(id))
+      ro.observe(body)
+      apply(id)  // initiale Messung
+      return ro
+    })
+    return () => observers.forEach((o) => o?.disconnect())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autosizeKey, openKey, persist])
+
   return (
     <div className="player-root" ref={rootRef}>
       <NoticeBanner />
@@ -610,7 +681,10 @@ export function PlayerApp() {
         compactType={null}
         preventCollision={false}
       >
-        {renderedIds.map((id) => byId[id])}
+        {renderedIds.map((id) => cloneElement(byId[id] as ReactElement, {
+          'data-panel-id': id,
+          'data-autosize': autosize.includes(id) ? '1' : undefined,
+        }))}
       </GridLayout>
 
       {/* Dialog-Panels als zentriertes Overlay */}

@@ -74,7 +74,7 @@ function TrackedRow({ tk }: { tk: TrackedTaskInfo }) {
 
 export function TaskPanel() {
   const { t } = useI18n()
-  const { llmTasks, trackedTasks } = useQueue(2000)
+  const { llmTasks, trackedTasks, channels } = useQueue(2000)
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   // Sekündlicher Tick nur, wenn LLM-Calls mit laufender Dauer angezeigt werden.
@@ -84,12 +84,31 @@ export function TaskPanel() {
     return () => clearInterval(id)
   }, [llmTasks.length])
 
-  if (!llmTasks.length && !trackedTasks.length) {
-    return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active tasks')}</div>
-  }
+  const hasTasks = llmTasks.length > 0 || trackedTasks.length > 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {channels.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+          {channels.map((ch) => (
+            <span key={ch.key}
+              title={ch.healthy ? (ch.busy ? t('busy') : t('available')) : t('unavailable')}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8em' }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto',
+                background: !ch.healthy ? '#e05656' : ch.busy ? 'var(--accent, #6aa9ff)' : '#3fa45a',
+              }} />
+              <span style={{ opacity: ch.healthy ? 0.85 : 0.55 }}>{ch.name}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {channels.length > 0 && hasTasks && (
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }} />
+      )}
+      {!hasTasks && (
+        <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active tasks')}</div>
+      )}
       {llmTasks.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {llmTasks.map((tk, i) => <LLMRow key={tk.task_id || `llm${i}`} tk={tk} nowMs={nowMs} />)}

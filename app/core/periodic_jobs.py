@@ -148,13 +148,33 @@ def _sub_force_rules():
                         except Exception:
                             pass
 
+                # B1: orthogonale State-Flags direkt setzen (z.B. is_sleeping
+                # false zum Wecken, true fuer einen Schlafzauber). Der Flag ist
+                # die Autoritaet — unabhaengig vom Activity-String.
+                _flags_changed = False
+                _set_flags = force.get("set_flags") or {}
+                if _set_flags:
+                    from app.models.character import (
+                        set_is_sleeping, set_is_wet, set_is_intimate,
+                        get_state_flags)
+                    _setters = {"is_sleeping": set_is_sleeping,
+                                "is_wet": set_is_wet,
+                                "is_intimate": set_is_intimate}
+                    _before_flags = get_state_flags(name)
+                    for _fk, _fv in _set_flags.items():
+                        _setter = _setters.get(_fk)
+                        if _setter is not None and bool(_before_flags.get(_fk)) != bool(_fv):
+                            _setter(name, bool(_fv))
+                            _flags_changed = True
+
                 # Nur loggen + ins Tagebuch wenn sich was geaendert hat.
                 _after_loc = (get_character_current_location(name) or "").strip()
                 _after_room = (get_character_current_room(name) or "").strip()
                 _after_act = (get_character_current_activity(name) or "").strip().lower()
                 _changed = (_before_loc != _after_loc
                             or _before_room != _after_room
-                            or _before_act != _after_act)
+                            or _before_act != _after_act
+                            or _flags_changed)
                 if not _changed:
                     continue
 

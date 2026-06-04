@@ -16,7 +16,7 @@ from app.models.world import (
     get_entry_room_id,
     update_location_position,
     list_all_activities,
-    get_background_path,
+    get_background_path, get_background_file_path,
     get_background_images, toggle_background_image, remove_background_image,
     get_gallery_dir, list_gallery_images,
     save_gallery_prompt, get_all_gallery_prompts,
@@ -677,7 +677,8 @@ def list_conditions() -> Dict[str, Any]:
 def get_location_background(
     location_name: str,
     room: str = Query("", description="Raum-ID fuer Bild-Filterung"),
-    hour: int = Query(-1, description="Aktuelle Stunde (0-23) fuer Tag/Nacht-Auswahl")):
+    hour: int = Query(-1, description="Aktuelle Stunde (0-23) fuer Tag/Nacht-Auswahl"),
+    file: str = Query("", description="Konkreter Hintergrund-Dateiname (bg_id) — Pin statt Zufallswahl")):
     """Liefert das Hintergrundbild eines Ortes (per ID oder Name).
 
     Bei aktivem disruption/danger-Event mit gerendertem image_path wird
@@ -685,6 +686,10 @@ def get_location_background(
     das resolved_image_path. Sonst das normale Location-Background.
     Multi-Room: der Swap gilt fuer alle Raeume der Location (konsistent
     zur location-weiten Block-Rule).
+
+    ``file`` pinnt ein konkretes Hintergrundbild (vom /play-Frontend genutzt,
+    damit Figuren-Positionen am exakt angezeigten Bild haften). Ein aktives
+    Event-Bild hat Vorrang und ignoriert ``file``.
     """
     # location_name kann ID oder Name sein — fuer den Event-Swap brauchen wir die ID.
     bg_path: Optional[Path] = None
@@ -698,6 +703,8 @@ def get_location_background(
     except Exception as _e:
         logger.debug("event-bg lookup failed: %s", _e)
 
+    if (not bg_path or not bg_path.exists()) and file:
+        bg_path = get_background_file_path(location_name, file)
     if not bg_path or not bg_path.exists():
         bg_path = get_background_path(location_name, room=room, hour=hour)
     if not bg_path or not bg_path.exists():

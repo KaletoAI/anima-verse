@@ -9,6 +9,7 @@ logger = get_logger("skill_mgr")
 from .image_generation_skill import ImageGenerationSkill
 from .instagram_skill import InstagramSkill
 from .set_location_skill import SetLocationSkill
+from .move_skill import MoveSkill
 from .talk_to_skill import TalkToSkill
 from .send_message_skill import SendMessageSkill
 from .act_skill import ActSkill
@@ -43,6 +44,7 @@ class SkillManager:
         'imagegen': ImageGenerationSkill,
         'instagram': InstagramSkill,
         'setlocation': SetLocationSkill,
+        'move': MoveSkill,
         'talk_to': TalkToSkill,
         'send_message': SendMessageSkill,
         'act': ActSkill,

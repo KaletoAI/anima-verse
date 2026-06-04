@@ -2066,67 +2066,25 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
                     return {"name": new_name, "room": room_id, "location_id": old_loc}
                 return None  # Schon im Raum
 
-    # 2. Location-Match
+    # 2. Location-Match — DEAKTIVIERT (Lösung C, 2026-06): Orts-Bewegung läuft
+    # AUSSCHLIESSLICH über den SetLocation-Skill / Move (mit Wegfinder
+    # find_path_through_known). Der narrative RP-Pfad darf NICHT cross-location
+    # setzen — das umging den Wegfinder und teleportierte den Char zu Orten/Wegen,
+    # die er gar nicht kennt (Bug seit Initial Release, durch den aktiven Loop-RP
+    # sichtbar geworden). Raumwechsel am AKTUELLEN Ort (Section 1 oben) bleibt
+    # erlaubt. Für einen echten Direkt-Sprung gibt es den Teleport-Spell (Anker).
     loc_obj = resolve_location(new_name)
-    if loc_obj and loc_obj.get("id"):
-        new_id = loc_obj["id"]
-        if new_id != old_loc:
-            # Leave-Gate: Pinning-Rule darf via Chat-Narrative nicht
-            # umgangen werden — auch wenn das LLM den Wechsel halluziniert.
-            try:
-                from app.models.rules import check_leave as _chk_leave_loc
-                _ok_l, _why_l = _chk_leave_loc(agent_name,
-                                                target_location_id=new_id)
-                if not _ok_l:
-                    try:
-                        from app.models.character import record_access_denied
-                        from app.models.world import get_location_name as _gln_chat2
-                        _cur_name = _gln_chat2(old_loc) or old_loc
-                        record_access_denied(agent_name, old_loc, _cur_name,
-                                              _why_l, action="leave")
-                    except Exception:
-                        logger.debug("record_access_denied(chat-loc-leave) failed", exc_info=True)
-                    logger.info("Chat-Locationwechsel %s -> %s blockiert (leave): %s",
-                                agent_name, new_id, _why_l)
-                    return None
-            except Exception as _rerr:
-                logger.debug("Chat loc-leave-Check fehlgeschlagen: %s", _rerr)
-
-            # Rules pruefen — LLM-Narrative darf Blockade-Rules nicht umgehen.
-            # Bei Block: access_denied loggen und Location NICHT wechseln.
-            try:
-                from app.models.rules import check_access
-                allowed, reason = check_access(agent_name, new_id)
-                if not allowed:
-                    try:
-                        from app.models.character import record_access_denied
-                        record_access_denied(agent_name, new_id,
-                                              loc_obj.get("name", new_name), reason or "")
-                    except Exception:
-                        logger.debug("record_access_denied im Chat-Extract fehlgeschlagen",
-                                     exc_info=True)
-                    logger.info("Location-Wechsel fuer %s via Chat blockiert: %s -> %s (%s)",
-                                 agent_name, old_loc, new_id, reason)
-                    return None
-            except Exception as _rerr:
-                logger.debug("Rules-Check im Chat-Location-Extract fehlgeschlagen: %s", _rerr)
-
-            save_character_current_location(agent_name, new_id)
-            save_character_current_room(agent_name, '')
-            _move_avatar_loc(new_id)
-            resolved = loc_obj.get("name", new_name)
-            logger.info("Location %s: %s -> %s (%s)", agent_name, old_loc, new_id, resolved)
-            return {"name": resolved, "id": new_id}
-    else:
-        # Weder Raum am aktuellen Ort noch bekannte Welt-Location — ignorieren.
-        # Frueher wurde der Name als "temporaer" in current_location geschrieben,
-        # was die DB-Referenz vergiftet hat (Pathfinding/Map/Compliance brachen,
-        # weil current_location eine ID-Referenz ist). Lieber kein Save als ein
-        # halluzinierter Ort.
+    if loc_obj and loc_obj.get("id") and loc_obj["id"] != old_loc:
         logger.info(
-            "Location-Extract fuer %s ignoriert: '%s' ist weder Raum am aktuellen Ort noch eine Welt-Location",
-            agent_name, new_name)
-        return None
+            "Narrativer Orts-Wechsel fuer %s ignoriert: '%s' (%s) — Bewegung nur "
+            "ueber SetLocation/Move mit Wegfinder, kein Teleport via RP-Text.",
+            agent_name, new_name, loc_obj.get("name", new_name))
+    else:
+        # Weder Raum am aktuellen Ort noch eine (andere) Welt-Location.
+        logger.info(
+            "Location-Extract fuer %s ignoriert: '%s' ist weder Raum am aktuellen "
+            "Ort noch eine Welt-Location.", agent_name, new_name)
+    return None
 
 
 def _extract_activity(agent_name: str, response: str) -> Optional[str]:
