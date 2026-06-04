@@ -332,6 +332,23 @@ class ProviderManager:
         logger.info("%d/%d provider(s) available", available_count, len(self.providers))
         return available_count
 
+    def refresh_availability(self) -> None:
+        """Re-probt die Erreichbarkeit aller Provider und aktualisiert
+        ``provider.available`` — OHNE Channels abzubauen (anders als
+        :meth:`check_all_availability`). Wird periodisch vom Channel-Health-
+        Poller aufgerufen, damit ein nach dem Start ausgeschalteter Host korrekt
+        als nicht verfuegbar angezeigt wird (Queue-Panel) und vom Routing
+        uebersprungen wird. Aktive Cooldowns werden respektiert."""
+        for provider in list(self.providers.values()):
+            try:
+                prev = provider.available
+                provider.check_availability()
+                if prev != provider.available:
+                    logger.info("Provider %s availability %s -> %s",
+                                provider.name, prev, provider.available)
+            except Exception as e:
+                logger.debug("refresh_availability(%s) failed: %s", provider.name, e)
+
     def get_provider(self, name: str) -> Optional[Provider]:
         """Returns a provider by name."""
         return self.providers.get(name)

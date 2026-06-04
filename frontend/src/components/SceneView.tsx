@@ -103,7 +103,15 @@ function SceneRow({ line }: { line: SceneLine }) {
   let body: ReactNode
   let marker = ''
 
-  if (line.kind === 'whisper_meta') {
+  if (speaker === 'Erzähler') {
+    // Erzähler-Narration (Act/Storyteller): farblich abgesetzt — gold + kursiv,
+    // damit es sich klar vom Charakter-Dialog unterscheidet.
+    body = (
+      <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
+        <strong style={{ opacity: 0.85 }}>{speaker}</strong>: {line.content}
+      </span>
+    )
+  } else if (line.kind === 'whisper_meta') {
     // third party: knows the fact, never the content
     const to = addr.length ? addr.join(', ') : t('someone')
     body = <em style={{ opacity: 0.65 }}>🤫 {speaker} {t('whispers something to')} {to}</em>

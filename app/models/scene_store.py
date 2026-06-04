@@ -29,6 +29,29 @@ def _row(r) -> Dict[str, Any]:
     return d
 
 
+def get_recent_scenes_for(character_name: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """Zuletzt konsolidierte Szenen, an denen der Character beteiligt war —
+    für die „Was bisher geschah"-Recap-Leiste im Chat. Neueste zuerst."""
+    if not character_name:
+        return []
+    conn = get_connection()
+    # Name steht als JSON-String (mit Anführungszeichen) in participants → grobes
+    # LIKE-Vorfilter, danach exakt gegen die geparste Liste prüfen.
+    like = f"%{json.dumps(character_name, ensure_ascii=False)}%"
+    rows = conn.execute(
+        "SELECT * FROM scenes WHERE status='consolidated' AND summary != '' "
+        "AND participants LIKE ? ORDER BY last_activity_ts DESC LIMIT ?",
+        (like, max(1, limit) * 3)).fetchall()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = _row(r)
+        if character_name in (d.get("participants") or []):
+            out.append(d)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def touch_scene(location_id: str, room_id: str, speaker: str, ts: str) -> int:
     """Öffnet die Szene des Raums oder aktualisiert sie (last_activity + Teilnehmer).
     Gibt die scene-id zurück. Keine Szene ohne Location."""

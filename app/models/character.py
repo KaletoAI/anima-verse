@@ -1018,6 +1018,62 @@ def clear_movement_target(character_name: str) -> None:
     set_movement_target(character_name, "")
 
 
+def _room_name_for(room_id: str) -> str:
+    """Anzeigename eines Raums (oder die ID als Fallback)."""
+    if not room_id:
+        return ""
+    try:
+        row = get_connection().execute(
+            "SELECT name FROM rooms WHERE id=?", (room_id,)).fetchone()
+        if row and row[0]:
+            return row[0]
+    except Exception:
+        pass
+    return room_id
+
+
+def _movement_trace(character_name: str, location_id: str, room_id: str,
+                    content: str) -> None:
+    """C1: Bewegungs-Spur als „Erzähler"-Zeile in den Wahrnehmungs-Stream, damit
+    Raumwechsel im /play-Chat + Observer sichtbar sind (gold/kursiv) — statt dass
+    ein Weggang still passiert und die Konversation stumm abbricht."""
+    if not (character_name and location_id and content):
+        return
+    try:
+        from app.core.perception import record_utterance
+        record_utterance(speaker="Erzähler", content=content, volume="normal",
+                         location_id=location_id, room_id=room_id or "",
+                         addressees=[], source="movement")
+    except Exception as _e:
+        from app.core.log import get_logger
+        get_logger("character_model").debug("movement trace failed: %s", _e)
+
+
+def _room_in_location(room_id: str, location_id: str) -> bool:
+    """True, wenn ``room_id`` zu ``location_id`` gehört (Raum-Wechsel-Guard)."""
+    if not (room_id and location_id):
+        return False
+    try:
+        from app.models.world import get_location_by_id
+        loc = get_location_by_id(location_id) or {}
+        return any((r.get("id") or "") == room_id for r in (loc.get("rooms") or []))
+    except Exception:
+        return False
+
+
+def _suggest_follow_after_move(leaver: str, from_loc: str, from_room: str,
+                               to_loc: str, to_room: str, to_label: str) -> None:
+    """C2b: Nach einem Raum-/Ortswechsel die aktiv beteiligten NPCs im verlassenen
+    Raum anstoßen, damit sie SELBST über Folgen entscheiden (Loop-seitig gegated +
+    Cooldown). Lazy-Import, um Zyklus character↔agent_loop zu vermeiden."""
+    try:
+        from app.core.agent_loop import get_agent_loop
+        get_agent_loop().suggest_follow(leaver, from_loc, from_room,
+                                        to_loc, to_room, to_label)
+    except Exception:
+        pass
+
+
 def save_character_current_location(character_name: str = "", location: str = "",
                                     _skip_compliance: bool = False,
                                     _preserve_movement_target: bool = False):
@@ -1035,6 +1091,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
     from datetime import datetime
     profile = get_character_profile(character_name)
     old_location = profile.get("current_location", "")
+    old_room = profile.get("current_room", "")
     target = (profile.get("movement_target") or "").strip()
     location_changed = bool(location) and location != old_location
     if location_changed and target:
@@ -1059,6 +1116,22 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
     # (Lebenszyklus gemaess plan-outfit-system-rethink.md §3)
     save_character_profile(character_name, profile)
+    # C1: Bewegungs-Spur (Erzähler) bei echtem Location-Wechsel — Weggang im alten
+    # Ort + Ankunft im neuen sichtbar machen. Off-map (Schlaf-Sentinel) ausgenommen.
+    if location_changed and old_location and old_location != OFFMAP_SLEEP_SENTINEL \
+            and location != OFFMAP_SLEEP_SENTINEL:
+        try:
+            from app.models.world import get_location_name as _gln
+            _ol = _gln(old_location) or old_location
+            _nl = _gln(location) or location
+            _movement_trace(character_name, old_location, old_room,
+                            f"{character_name} verlässt {_ol} (Richtung {_nl}).")
+            _movement_trace(character_name, location, "",
+                            f"{character_name} betritt {_nl}.")
+            _suggest_follow_after_move(character_name, old_location, old_room,
+                                       location, "", _nl)
+        except Exception:
+            pass
     if location and location != old_location:
         try:
             clear_forbidden_slots(character_name)
@@ -1554,6 +1627,7 @@ def save_character_current_room(character_name: str, room_id: str):
     Compliance fuer den Raum (ueberschreibt Location-Vorgabe)."""
     profile = get_character_profile(character_name)
     old_room = profile.get("current_room", "")
+    cur_loc = profile.get("current_location", "")
     profile["current_room"] = room_id
     save_character_profile(character_name, profile)
 
@@ -1570,6 +1644,19 @@ def save_character_current_room(character_name: str, room_id: str):
             pass
         _record_state_change(character_name, "room", room_id,
                               metadata={"name": room_name, "old": old_room})
+        # C1: Bewegungs-Spur (Erzähler) bei Raumwechsel INNERHALB derselben
+        # Location. Guard: beide Räume gehören zum aktuellen Ort → so wird der
+        # Raum-Reset während eines Cross-Location-Moves (alter Raum gehört dann
+        # zum alten Ort) NICHT fälschlich als Raumwechsel getrackt.
+        if old_room and _room_in_location(old_room, cur_loc) \
+                and _room_in_location(room_id, cur_loc):
+            _old_rn = _room_name_for(old_room)
+            _movement_trace(character_name, cur_loc, old_room,
+                            f"{character_name} verlässt {_old_rn} (Richtung {room_name}).")
+            _movement_trace(character_name, cur_loc, room_id,
+                            f"{character_name} betritt {room_name}.")
+            _suggest_follow_after_move(character_name, cur_loc, old_room,
+                                       cur_loc, room_id, room_name)
 
     # Decency-Compliance nur bei echtem Raumwechsel + Avatar ausnehmen
     if not room_id or room_id == old_room:

@@ -12,13 +12,14 @@ placeholders:
 You summarize a scene that happened in a shared world. Be factual and concise.
 
 ## user
-Summarize what happened in this scene at {{ location_name }}{% if room_name %} ({{ room_name }}){% endif %} in 3-6 sentences.
+Summarize what happened in this scene at {{ location_name }}{% if room_name %} ({{ room_name }}){% endif %} in **1-2 short sentences** — concise and easy to read, only the essence.
 Participants: {{ participants }}.
 
-Focus on:
-- What concretely happened and what was decided (not just topics)
-- Notable actions, reactions and shifts between the participants
-- Anything that changed in the world (someone left, an object changed hands, an event resolved)
+Capture only what matters:
+- The one or two things that concretely happened or were decided
+- Anything that changed (someone left, an object changed hands, an event resolved)
+
+If nothing of substance happened, say so in a single short sentence.
 
 Write as a neutral narrative in past tense, naming the actual participants. NEVER write "User", "Player", "Spieler" or "Assistant". Do NOT include tool calls, markers, image URLs or code.{{ lang_instruction }}
 

@@ -156,6 +156,9 @@ class AgentLoop:
         # und floodet das Log. Wird automatisch verworfen sobald die Zeit
         # erreicht ist.
         self._chat_skip_until: Dict[str, datetime] = {}
+        # C2b: Cooldown pro (Verfolger->Leaver), damit ein Folgen-Vorschlag nicht
+        # bei jedem Bewegungs-Event neu gespammt wird.
+        self._follow_cooldown: Dict[str, datetime] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -276,7 +279,14 @@ class AgentLoop:
                            "volume": volume, "obligatory": obligatory,
                            "hint": hint, "winding_down": winding_down},
         }
-        if character_name not in self._bump_queue:
+        # Pflicht-Antworten PRIORISIEREN: ganz nach vorn (die Queue wird per
+        # pop(0) FIFO verarbeitet), damit sie nicht hinter Chimes/Gedanken
+        # verhungern — sonst kann die Szene konsolidieren, bevor die Antwort lief.
+        if character_name in self._bump_queue:
+            self._bump_queue.remove(character_name)
+        if obligatory:
+            self._bump_queue.insert(0, character_name)
+        else:
             self._bump_queue.append(character_name)
         logger.info("AgentLoop.bump_respond: %s %s auf %s", character_name,
                     "antwortet" if obligatory else "(Gelegenheit)", speaker)
@@ -284,6 +294,68 @@ class AgentLoop:
 
     def _room_key(self, location_id: str, room_id: str) -> str:
         return f"{location_id or ''}/{room_id or ''}"
+
+    def _rooms_with_pending_obligatory(self) -> set:
+        """Raum-Keys (loc/room) mit einer ausstehenden PFLICHT-Antwort in der
+        Bump-Queue. Diese Räume dürfen NICHT idle-konsolidiert werden — sonst
+        wird der Stream geprunt, bevor die Antwort lief (keine-Antwort-Bug)."""
+        keys: set = set()
+        try:
+            from app.models.character import (get_character_current_location,
+                                              get_character_current_room)
+            for name in list(self._bump_queue):
+                rt = (self._bump_perception.get(name) or {}).get("respond_to")
+                if rt and rt.get("obligatory"):
+                    loc = get_character_current_location(name) or ""
+                    if loc:
+                        room = get_character_current_room(name) or ""
+                        keys.add(self._room_key(loc, room))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("pending-obligatory rooms failed: %s", e)
+        return keys
+
+    def _recently_conversed(self, npc: str, leaver: str, loc: str, room: str) -> bool:
+        """True, wenn der NPC den Leaver kürzlich in diesem Raum wahrgenommen hat
+        (= sie waren in derselben aktiven Szene)."""
+        try:
+            from app.models import perception_store
+            for r in perception_store.get_character_room_stream(npc, loc, room, 15):
+                if ((r.get("meta") or {}).get("speaker") or "") == leaver:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def suggest_follow(self, leaver: str, from_loc: str, from_room: str,
+                       to_loc: str, to_room: str, to_label: str) -> None:
+        """C2b: Verlässt ein Gesprächspartner den Raum, die dort aktiv beteiligten
+        NPCs kurz anstoßen (Hint), damit sie SELBST entscheiden, ob sie folgen
+        (Move/SetLocation) oder bleiben — keine erzwungene Bewegung, der NPC darf
+        „Nein" sagen, das beendet die Verfolgung auf natürliche Weise. Leichter
+        Cooldown pro Paar gegen Spam. Die C1-Bewegungs-Spur ist ohnehin schon in
+        ihrer Wahrnehmung; der Hint macht die Folgen-Wahl explizit."""
+        if not (leaver and from_loc):
+            return
+        try:
+            from app.core.room_entry import _list_characters_in_room
+            present = [c for c in _list_characters_in_room(from_loc, from_room)
+                       if c and c != leaver and _is_agent_eligible(c)]
+            if not present:
+                return
+            now = utc_now()
+            for npc in present:
+                if not self._recently_conversed(npc, leaver, from_loc, from_room):
+                    continue
+                ck = f"{npc}->{leaver}"
+                last = self._follow_cooldown.get(ck)
+                if last and (now - last).total_seconds() < 60:
+                    continue
+                self._follow_cooldown[ck] = now
+                self.bump(npc, hint=(
+                    f"{leaver} ist gerade nach {to_label} gegangen. Du kannst folgen "
+                    f"(SetLocation/Move) oder hierbleiben — entscheide selbst."))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("suggest_follow failed: %s", e)
 
     def dispatch_room_reactions(self, *, speaker: str, content: str, volume: str,
                                 location_id: str, room_id: str,
@@ -409,7 +481,10 @@ class AgentLoop:
                     self._last_scene_check = _now
                     try:
                         from app.core import scene_manager
-                        n = await asyncio.to_thread(scene_manager.run_idle_consolidation)
+                        # Räume mit offener Pflicht-Antwort NICHT konsolidieren.
+                        _skip = self._rooms_with_pending_obligatory()
+                        n = await asyncio.to_thread(
+                            scene_manager.run_idle_consolidation, _skip)
                         if n:
                             logger.info("AgentLoop: %d Szene(n) konsolidiert", n)
                     except Exception as _sce:
@@ -624,6 +699,12 @@ class AgentLoop:
             except Exception as e:
                 logger.debug("respond-turn %s: cascade dispatch failed: %s",
                              character_name, e)
+        elif obligatory:
+            # Pflicht-Antwort kam LEER zurück (LLM-SKIP/Verweigerung) → sichtbar
+            # machen; sonst wirkt es wie "ignoriert" (keine-Antwort-Bug).
+            logger.warning("respond-turn %s: PFLICHT-Antwort auf %s kam LEER "
+                           "zurück — keine Utterance aufgezeichnet",
+                           character_name, speaker or "?")
         return {"preview": (reply or "(no reply)")[:80], "tools": [], "intents": []}
 
     def _maybe_active_conversation_chime(self, character_name: str) -> Optional[Dict[str, Any]]:

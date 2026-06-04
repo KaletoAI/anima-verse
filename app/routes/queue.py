@@ -33,13 +33,15 @@ async def queue_status() -> Dict[str, Any]:
 
     # Active tracked tasks (running ODER pending) — Image-Gen, TTS, GPU-Tasks
     # die ausserhalb der TaskQueue laufen aber im Panel sichtbar sein sollen.
+    # status explizit setzen — die running/pending-Queries selektieren die
+    # status-Spalte nicht, sonst kaeme im Frontend nie "running" an.
     _active = []
     for t in tq_status.get("running", []) or []:
         if t.get("task_origin") == "tracked":
-            _active.append(t)
+            _active.append({**t, "status": "running"})
     for t in tq_status.get("pending", []) or []:
         if t.get("task_origin") == "tracked":
-            _active.append(t)
+            _active.append({**t, "status": "pending"})
 
     return {
         # Per-Channel Queues (each GPU = own channel with tasks)

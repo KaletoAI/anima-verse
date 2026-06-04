@@ -1,11 +1,11 @@
 /**
  * SelfPanel — der eigene Zustand des Avatars (B Tier 1, Redesign).
  * Aufbau (an alter UI orientiert): Profilbild · Status-Balken als 2×3-Grid ·
- * Stimmung. Aktivität entfällt (wird aus dem Chat gesetzt). Outfit/Inventar
- * leben im Belongings-Panel.
+ * Stimmung (editierbar) · Aktivität (read-only, wird aus dem Chat gesetzt).
+ * Outfit/Inventar leben im Belongings-Panel.
  * Quelle: GET /play/self · Setter: POST /play/self/mood.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
 
@@ -13,6 +13,7 @@ interface BarMeta { color?: string; label?: string; name?: string; name_de?: str
 interface SelfData {
   avatar: string
   mood: string
+  activity: string
   status_effects: Record<string, number>
   bar_meta: Record<string, BarMeta>
   conditions: Array<{ name?: string; label?: string; icon?: string }>
@@ -25,6 +26,22 @@ export function SelfPanel() {
   const [moodDraft, setMoodDraft] = useState('')
   const [moodFocused, setMoodFocused] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Bei sehr schmalem Panel die Balken-Beschriftung + Zahl ausblenden und nur
+  // den Balken (mit klar sichtbarem Ende) zeigen.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [compact, setCompact] = useState(false)
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width || 0
+      setCompact(w > 0 && w < 150)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+    // Re-run sobald das Root-Div existiert (beim Mount ist data noch null →
+    // frueher Return ohne rootRef; erst nach dem Laden ist das Div da).
+  }, [data?.avatar])
 
   const load = useCallback(async () => {
     try {
@@ -57,7 +74,7 @@ export function SelfPanel() {
   const bars = Object.entries(data.status_effects || {})
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.9em', height: '100%', minHeight: 0 }}>
+    <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.9em', height: '100%', minHeight: 0 }}>
       {/* Profilbild (skaliert mit dem Fenster) mit Balken-Overlay im unteren Bereich */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'grid', placeItems: 'center', overflow: 'hidden', borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
         <img src={portraitUrl} alt={data.avatar}
@@ -88,16 +105,30 @@ export function SelfPanel() {
               const m = data.bar_meta?.[key] || {}
               const pct = Math.max(0, Math.min(100, Number(val) || 0))
               const full = m.name_de || m.name || key
+              // Track mit klar sichtbarem Ende (Rahmen), damit man die Füllung
+              // auch ohne Zahl abschätzen kann — besonders im Compact-Modus.
+              const track = (
+                <div style={{
+                  flex: 1, height: compact ? 7 : 5, borderRadius: 3,
+                  background: 'rgba(255,255,255,0.18)',
+                  border: '1px solid rgba(255,255,255,0.45)',
+                  overflow: 'hidden', boxSizing: 'border-box',
+                }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: m.color || 'var(--accent,#6aa9ff)' }} />
+                </div>
+              )
               return (
                 <div key={key} title={`${full}: ${pct}/100`}
                   style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span style={{ width: 26, opacity: 0.8, fontSize: '0.6em', textTransform: 'uppercase' }}>
-                    {m.label || key.slice(0, 3)}
-                  </span>
-                  <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.18)', overflow: 'hidden' }}>
-                    <div style={{ width: `${pct}%`, height: '100%', background: m.color || 'var(--accent,#6aa9ff)' }} />
-                  </div>
-                  <span style={{ width: 16, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.6em', opacity: 0.7 }}>{pct}</span>
+                  {!compact && (
+                    <span style={{ width: 26, opacity: 0.8, fontSize: '0.6em', textTransform: 'uppercase' }}>
+                      {m.label || key.slice(0, 3)}
+                    </span>
+                  )}
+                  {track}
+                  {!compact && (
+                    <span style={{ width: 16, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.6em', opacity: 0.7 }}>{pct}</span>
+                  )}
                 </div>
               )
             })}
@@ -116,6 +147,14 @@ export function SelfPanel() {
           placeholder={t('How do you feel?')}
           className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
       </label>
+
+      {/* Aktuelle Aktivität (read-only — wird aus dem Chat gesetzt) */}
+      <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Activity')}</span>
+        <span style={{ opacity: data.activity ? 0.85 : 0.4, fontSize: '0.9em' }}>
+          {data.activity || '—'}
+        </span>
+      </div>
     </div>
   )
 }

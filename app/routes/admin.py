@@ -535,21 +535,45 @@ function testBadge(caps) {
     const date = caps.tested_date || '';
     const visionResp = caps.tested_vision_responses || {};
     const bestFmt = caps.tested_best_format || '';
+    const toolScore = caps.tested_tool_score || '';
+    const helperScore = caps.tested_helper_score || '';
+    const suit = caps.tested_suitability || null;
+    const verdict = caps.tested_verdict || null;
 
     let cls = 'ok';
     if (ok === 0) cls = 'fail';
     else if (hall > 0) cls = 'warn';
+    // Verdict dominiert: ein Modell, das den strengen Tool-Test nicht besteht,
+    // wird NICHT gruen markiert, auch wenn der Rohscore hoch ist.
+    if (verdict && verdict.tool === false) cls = (hall > 0 ? 'fail' : 'warn');
 
     let tooltip = 'Score: ' + score;
+    if (verdict) tooltip += '\\nVerdict tool: ' + (verdict.tool ? 'SUITABLE' : 'not suitable') +
+        ' / helper: ' + (verdict.helper ? 'suitable' : 'not suitable');
+    if (toolScore) tooltip += '\\nTool: ' + toolScore;
+    if (helperScore) tooltip += '\\nHelper: ' + helperScore;
     if (hall > 0) tooltip += '\\n' + hall + ' mit Halluzination';
     if (bestFmt) tooltip += '\\nBestes Format: ' + bestFmt;
     if (visionResp.red) tooltip += '\\nVision red: ' + visionResp.red;
     if (visionResp.blue) tooltip += '\\nVision blue: ' + visionResp.blue;
     if (date) tooltip += '\\nGetestet: ' + date;
+    if (suit && Array.isArray(suit.checks)) {
+        tooltip += '\\n———';
+        suit.checks.forEach(function(c){
+            const mark = c.ok ? '\\u2713' : (c.hallucinated ? '!' : '\\u2717');
+            tooltip += '\\n' + mark + ' ' + c.label + ' \\u2014 ' + (c.detail || '');
+        });
+    }
 
     let html = '<span class="test-badge ' + cls + '" title="' + esc(tooltip) + '">' + esc(score);
     if (hall > 0) html += ' <span class="test-detail">(' + hall + ' warn)</span>';
     html += '</span>';
+    if (verdict) {
+        const tcol = verdict.tool ? '#3fb950' : '#f85149';
+        const tlab = verdict.tool ? 'TOOL \\u2713' : 'TOOL \\u2717';
+        html += '<span class="test-date" style="color:' + tcol + ';">' + tlab + '</span>';
+    }
+    if (toolScore || helperScore) html += '<span class="test-date">T ' + esc(toolScore) + ' \\u00b7 H ' + esc(helperScore) + '</span>';
     if (date) html += '<span class="test-date">' + esc(date) + '</span>';
     return html;
 }

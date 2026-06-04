@@ -167,11 +167,40 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     except Exception:
         nb = {}
 
+    # C2a: Folgen-Vorschläge — kürzlich aktive Gesprächspartner, die den Raum
+    # gerade verlassen haben (gleiche Location, anderer Raum). Avatar folgt per
+    # Klick (/play/enter-room). So bricht das Gespräch beim Raumwechsel nicht ab.
+    follow_suggestions = []
+    try:
+        from datetime import timedelta
+        from app.core.timeutils import parse_iso, utc_now as _utc_now
+        cutoff = _utc_now() - timedelta(minutes=5)
+        present_set = set(present)
+        _seen: set = set()
+        for ln in (scene or [])[-15:]:
+            sp = ((ln.get("meta") or {}).get("speaker") or "").strip()
+            if not sp or sp == avatar or sp == "Erzähler" or sp in present_set or sp in _seen:
+                continue
+            try:
+                if parse_iso(ln.get("ts") or "") < cutoff:
+                    continue
+            except Exception:
+                pass
+            c_loc = get_character_current_location(sp) or ""
+            c_room = get_character_current_room(sp) or ""
+            if c_loc == loc and c_room and c_room != room:
+                _seen.add(sp)
+                rn = next((r["name"] for r in rooms_out if r["id"] == c_room), c_room)
+                follow_suggestions.append({"character": sp, "room_id": c_room, "room_name": rn})
+    except Exception as _fe:
+        logger.debug("follow_suggestions failed: %s", _fe)
+
     return {
         "avatar": avatar,
         "location_id": loc, "location_name": location_name,
         "room_id": room, "room_name": room_name,
         "present": present, "present_detail": present_detail, "scene": scene,
+        "follow_suggestions": follow_suggestions,
         "avatar_expr_version": _expr_version(avatar),
         "bg_version": _bg_version(loc, room) if loc else "",
         "bg_id": _bg_id(loc, room) if loc else "",
@@ -223,28 +252,12 @@ async def _storyteller_fallback(actor: str, text: str, location_id: str,
     """
     try:
         from app.skills.act_skill import perform_act
-        from app.core.perception import record_utterance
+        # perform_act schreibt Narration + Event-Verdikt jetzt SELBST als
+        # "Erzähler" in den Stream (act_skill._record_act_to_stream) — hier kein
+        # zweites record_utterance mehr, sonst doppelte Einträge.
         scope = "location" if volume == "shout" else "here"
-        result = await perform_act(actor, text, scope) or {}
-        narration = (result.get("narration") or "").strip()
-        if narration:
-            record_utterance(speaker="Erzähler", content=narration, volume=volume,
-                             location_id=location_id, room_id=room_id,
-                             addressees=[], source="storyteller")
-            logger.info("Storyteller-Fallback narrierte für %s (scope=%s)", actor, scope)
-        # Event-Verdikt (gelöst/ungelöst + Grund) als eigener Stream-Eintrag unter
-        # dem Erzähler — markiert via perception_meta, vom SceneView farbig gerendert.
-        if result.get("event_id"):
-            resolved = bool(result.get("resolved"))
-            reason = (result.get("reason") or "").strip()
-            verdict_content = reason or (
-                "Das Ereignis wurde gelöst." if resolved else "Das Ereignis bleibt ungelöst.")
-            record_utterance(
-                speaker="Erzähler", content=verdict_content, volume=volume,
-                location_id=location_id, room_id=room_id, addressees=[],
-                source="event_verdict",
-                perception_meta={"event_verdict": "resolved" if resolved else "unresolved",
-                                 "reason": reason})
+        await perform_act(actor, text, scope)
+        logger.info("Storyteller-Fallback narrierte für %s (scope=%s)", actor, scope)
     except Exception as e:  # noqa: BLE001
         logger.warning("storyteller fallback failed: %s", e)
 
@@ -689,6 +702,37 @@ async def play_gallery(user=Depends(get_current_user)):
         out["images"] = imgs
     except Exception as e:
         logger.debug("play_gallery failed: %s", e)
+    return out
+
+
+@router.get("/play/scenes")
+async def play_scenes(user=Depends(get_current_user), limit: int = 5):
+    """„Was bisher geschah" — zuletzt konsolidierte Szenen, an denen der Avatar
+    beteiligt war (Zeit · Ort/Raum · Mit-Teilnehmer · Summary). Recap-Leiste im
+    Chat, neueste zuerst."""
+    from app.models.account import get_active_character
+    from app.models import scene_store
+    from app.models.world import get_location_by_id
+    out = {"avatar": "", "scenes": []}
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        return out
+    out["avatar"] = avatar
+    for sc in scene_store.get_recent_scenes_for(avatar, limit=limit):
+        loc = get_location_by_id(sc.get("location_id", "")) or {}
+        loc_name = loc.get("name", "") or sc.get("location_id", "")
+        room_name = ""
+        for r in (loc.get("rooms") or []):
+            if (r.get("id") or "") == sc.get("room_id", ""):
+                room_name = r.get("name", "") or ""
+                break
+        others = [p for p in (sc.get("participants") or [])
+                  if p and p != avatar and p != "Erzähler"]
+        out["scenes"].append({
+            "ts": sc.get("last_activity_ts", ""),
+            "location_name": loc_name, "room_name": room_name,
+            "participants": others, "summary": sc.get("summary", ""),
+        })
     return out
 
 

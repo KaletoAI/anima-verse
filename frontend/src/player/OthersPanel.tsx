@@ -3,7 +3,7 @@
  * Gegenstück zu Self. Karten fließen responsive nebeneinander/untereinander
  * (flex-wrap je nach Fensterbreite). Quelle: GET /play/others.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 
@@ -27,20 +27,42 @@ function portraitUrl(c: CharState): string {
 
 function StatBars({ c }: { c: CharState }) {
   const bars = Object.entries(c.status_effects || {})
+  // Bei schmaler Karte Label + Zahl ausblenden, nur Balken (mit klarem Ende).
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [compact, setCompact] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width || 0
+      setCompact(w > 0 && w < 150)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   if (!bars.length) return null
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', marginTop: 4 }}>
+    <div ref={ref} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', marginTop: 4 }}>
       {bars.map(([key, val]) => {
         const m = c.bar_meta?.[key] || {}
         const pct = Math.max(0, Math.min(100, Number(val) || 0))
         return (
           <div key={key} title={`${m.name_de || m.name || key}: ${pct}/100`}
             style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-            <span style={{ width: 24, opacity: 0.7, fontSize: '0.58em', textTransform: 'uppercase' }}>{m.label || key.slice(0, 3)}</span>
-            <div style={{ flex: 1, height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.16)', overflow: 'hidden' }}>
+            {!compact && (
+              <span style={{ width: 24, opacity: 0.7, fontSize: '0.58em', textTransform: 'uppercase' }}>{m.label || key.slice(0, 3)}</span>
+            )}
+            <div style={{
+              flex: 1, height: compact ? 6 : 4, borderRadius: 3,
+              background: 'rgba(255,255,255,0.16)',
+              border: '1px solid rgba(255,255,255,0.45)',
+              overflow: 'hidden', boxSizing: 'border-box',
+            }}>
               <div style={{ width: `${pct}%`, height: '100%', background: m.color || 'var(--accent,#6aa9ff)' }} />
             </div>
-            <span style={{ width: 14, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.58em', opacity: 0.65 }}>{pct}</span>
+            {!compact && (
+              <span style={{ width: 14, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.58em', opacity: 0.65 }}>{pct}</span>
+            )}
           </div>
         )
       })}

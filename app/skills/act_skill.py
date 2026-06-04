@@ -233,6 +233,15 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
 
     _record_actor_diary(actor=actor, narration=narration, scope=scope)
 
+    # Stream-Eintrag: die Erzähler-Narration ins Raum-Logbuch (utterances/
+    # perceptions), damit Acts im /play-Chat + Observer erscheinen — wie
+    # gesprochene Utterances (TalkTo). Vorher fehlte das → Acts waren nur im
+    # LLM-Log/Memory, nirgends im Stream sichtbar.
+    _record_act_to_stream(
+        narration=narration, location_id=actor_loc, room_id=actor_room,
+        scope=scope, resolved=resolved_flag, event_id=resolved_event_id,
+        reason=resolve_reason)
+
     summary = _build_summary(
         recipients=recipients, resolved=resolved_flag,
         resolved_event_id=resolved_event_id,
@@ -818,6 +827,35 @@ def _recipient_recently_perceived(recipient: str, actor: str, text: str) -> bool
     except Exception as e:
         logger.debug("Recipient dedup check failed: %s", e)
     return False
+
+
+def _record_act_to_stream(*, narration: str, location_id: str, room_id: str,
+                          scope: str, resolved: bool, event_id, reason: str) -> None:
+    """Schreibt die Erzähler-Narration eines Acts ins Raum-Logbuch (perception
+    stream), damit sie im /play-Chat + Observer erscheint — analog zu gesprochenen
+    Utterances. ``scope='location'`` → shout (alle Räume der Location hören es),
+    sonst nur der aktuelle Raum. Löst der Act ein Event, kommt zusätzlich ein
+    Verdict-Eintrag (vom SceneView farbig gerendert)."""
+    try:
+        from app.core.perception import record_utterance
+        volume = "shout" if scope == "location" else "normal"
+        if narration:
+            record_utterance(speaker="Erzähler", content=narration, volume=volume,
+                             location_id=location_id, room_id=room_id,
+                             addressees=[], source="act_storyteller")
+        if event_id:
+            r = (reason or "").strip()
+            verdict_content = r or (
+                "Das Ereignis wurde gelöst." if resolved
+                else "Das Ereignis bleibt ungelöst.")
+            record_utterance(
+                speaker="Erzähler", content=verdict_content, volume=volume,
+                location_id=location_id, room_id=room_id, addressees=[],
+                source="event_verdict",
+                perception_meta={"event_verdict": "resolved" if resolved else "unresolved",
+                                 "reason": r})
+    except Exception as e:
+        logger.debug("act stream record failed: %s", e)
 
 
 def _record_perception(recipient: str, actor: str, narration: str, scope: str) -> None:

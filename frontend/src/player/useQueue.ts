@@ -35,6 +35,9 @@ export interface TrackedTaskInfo {
   agent_name?: string
   status?: string
   started_at?: string
+  created_at?: string
+  provider?: string
+  queue_name?: string
 }
 
 interface ProviderChannel {
@@ -45,12 +48,14 @@ interface ProviderChannel {
   current_tasks?: LLMTaskInfo[]
 }
 
-/** Verfügbarkeit eines LLM-Backends (Channel) für die Status-Anzeige. */
+/** Verfügbarkeit eines Backends (Channel) für die Status-Anzeige.
+ *  kind unterscheidet LLM-Provider von Image-Generation-Backends (ComfyUI). */
 export interface ChannelStatus {
   key: string
   name: string
   healthy: boolean
   busy: boolean
+  kind: 'llm' | 'image'
 }
 
 // Nicht-LLM-Tasks, die ebenfalls über Provider-Channels laufen (ComfyUI/TTS) —
@@ -109,18 +114,22 @@ function collectLLM(providers: Record<string, ProviderChannel> | undefined): LLM
   return out
 }
 
-/** LLM-Backends (Channels) aus dem providers-Payload — ComfyUI/Bild-Backends
- * raus. healthy/busy kommen vom Server (get_combined_status). */
+/** Alle Backends (Channels) aus dem providers-Payload: LLM-Provider UND
+ * Image-Generation-Backends (ComfyUI), per `kind` unterscheidbar. healthy/busy
+ * kommen vom Server (get_combined_status; ComfyUI inkl. Backend-Ping). */
 function collectChannels(providers: Record<string, ProviderChannel> | undefined): ChannelStatus[] {
   const out: ChannelStatus[] = []
   for (const [key, ch] of Object.entries(providers || {})) {
-    if ((ch?.type || '') === 'comfyui') continue
+    const isImage = (ch?.type || '') === 'comfyui'
     const ca = ch?.chat_active
     const nChat = Array.isArray(ca) ? ca.length : ca ? 1 : 0
     const busy = nChat > 0 || (ch?.current_tasks?.length || 0) > 0
-    out.push({ key, name: ch?.provider || key, healthy: !!ch?.healthy, busy })
+    out.push({ key, name: ch?.provider || key, healthy: !!ch?.healthy, busy,
+               kind: isImage ? 'image' : 'llm' })
   }
-  out.sort((a, b) => a.name.localeCompare(b.name))
+  // LLM-Provider zuerst, dann Image-Backends; innerhalb der Gruppe alphabetisch.
+  out.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name)
+                                        : a.kind === 'llm' ? -1 : 1))
   return out
 }
 

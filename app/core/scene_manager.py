@@ -33,11 +33,16 @@ def touch(location_id: str, room_id: str, speaker: str, ts: str = "") -> int:
         return 0
 
 
-def run_idle_consolidation() -> int:
+def run_idle_consolidation(skip_room_keys=None) -> int:
     """Schließt + konsolidiert alle verebbten offenen Szenen. Gibt die Anzahl
-    konsolidierter Szenen zurück. Synchron (LLM + DB) — vom Loop via to_thread."""
+    konsolidierter Szenen zurück. Synchron (LLM + DB) — vom Loop via to_thread.
+
+    ``skip_room_keys``: Menge von „loc/room"-Keys, die NICHT konsolidiert werden
+    (Räume mit ausstehender Pflicht-Antwort) — sonst wird der Stream geprunt,
+    bevor der adressierte Character antworten konnte."""
     from datetime import timedelta
     from app.models import scene_store
+    skip = skip_room_keys or set()
     cutoff = (utc_now() - timedelta(seconds=SCENE_IDLE_SEC)).isoformat(timespec="seconds")
     try:
         idle = scene_store.get_idle_open_scenes(cutoff)
@@ -46,6 +51,11 @@ def run_idle_consolidation() -> int:
         return 0
     n = 0
     for scene in idle:
+        key = f"{scene.get('location_id', '')}/{scene.get('room_id', '')}"
+        if key in skip:
+            logger.debug("scene %s nicht konsolidiert: offene Pflicht-Antwort im Raum",
+                         scene.get("id"))
+            continue
         try:
             consolidate_scene(scene)
             n += 1
@@ -118,12 +128,24 @@ def _summarize(scene: Dict[str, Any], lines: list) -> str:
             if (r.get("id") or "") == scene.get("room_id", ""):
                 room_name = r.get("name", "") or ""
                 break
+        # Sprache aus den Teilnehmern ableiten → Summary in der Spielsprache
+        # (sonst defaultet die LLM auf Englisch).
+        lang_instruction = ""
+        try:
+            from app.models.character import get_character_language, LANGUAGE_MAP
+            _parts = [p for p in (scene.get("participants") or [])
+                      if p and p != "Erzähler"]
+            if _parts:
+                _code = (get_character_language(_parts[0]) or "en").strip()
+                lang_instruction = f"\nWrite the summary in {LANGUAGE_MAP.get(_code, 'English')}."
+        except Exception:
+            pass
         sys_prompt, user_prompt = render_task(
             "consolidation_scene",
             location_name=loc_name, room_name=room_name,
             participants=", ".join(scene.get("participants") or []),
             transcript="\n".join(lines[:200]),
-            lang_instruction="")
+            lang_instruction=lang_instruction)
         resp = llm_call(task="consolidation", system_prompt=sys_prompt,
                         user_prompt=user_prompt)
         return (resp.content or "").strip() if resp else ""

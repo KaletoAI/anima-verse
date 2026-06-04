@@ -183,6 +183,13 @@ class ChannelHealthMonitor:
         except Exception as e:
             logger.debug("ChannelHealth: Channels-Liste nicht lesbar: %s", e)
             return
+        # LLM-/OpenAI-Provider re-proben: provider.available wird beim Start nur
+        # einmal gesetzt — ein danach ausgeschalteter Host (z.B. ASUS-GX10)
+        # bliebe sonst dauerhaft "available". Hier dynamisch aktualisieren.
+        try:
+            pm.refresh_availability()
+        except Exception as e:
+            logger.debug("ChannelHealth: refresh_availability fehlgeschlagen: %s", e)
         for key in channel_keys:
             self._poll_channel(key)
 

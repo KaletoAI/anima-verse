@@ -12,6 +12,7 @@ import GridLayout, { type Layout } from 'react-grid-layout'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api'
 import { SceneView, type SceneLine } from '../components/SceneView'
+import { ScenesRecap } from './ScenesRecap'
 import { MovePad } from './MovePad'
 import { EnvironmentPanel } from './EnvironmentPanel'
 import { MapPanel } from './MapPanel'
@@ -81,6 +82,7 @@ interface SceneData {
   present: string[]
   present_detail: Array<{ name: string; avatar_url: string; expr_version?: string }>
   scene: Array<{ ts: string; content: string; kind: string; meta?: Record<string, unknown> }>
+  follow_suggestions?: Array<{ character: string; room_id: string; room_name: string }>
   rooms: RoomInfo[]
   neighbors: Partial<Record<Dir, Neighbor | null>>
   at_entry_room: boolean
@@ -387,9 +389,33 @@ export function PlayerApp() {
             {headerControls('scene', true)}
           </div>
           <div className="player-scene-body">
+            <ScenesRecap />
             <div className="player-scene-scroll" ref={sceneScrollRef} onScroll={onSceneScroll}>
               <SceneView lines={lines} emptyHint={t('Nothing here yet.')} thinking={thinkingHere} />
             </div>
+
+            {(data?.follow_suggestions?.length ?? 0) > 0 && (
+              <div style={{
+                flex: '0 0 auto', padding: '6px 12px', display: 'flex', flexWrap: 'wrap',
+                gap: 10, alignItems: 'center', borderTop: '1px solid var(--border, #30363d)',
+                background: 'rgba(214,176,106,0.08)',
+              }}>
+                {data!.follow_suggestions!.map((f) => (
+                  <span key={f.character} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
+                    <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
+                      {f.character} {t('went to')} {f.room_name}.
+                    </span>
+                    <button onClick={() => handleEnterRoom(f.room_id)} disabled={moving}
+                      style={{
+                        padding: '2px 10px', borderRadius: 12, cursor: 'pointer',
+                        border: '1px solid #d6b06a', background: 'rgba(214,176,106,0.18)', color: 'inherit',
+                      }}>
+                      {t('Follow')}
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
 
             <div className="player-composer">
               {present.length > 0 && (
