@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
+import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
@@ -58,6 +58,16 @@ const MOODS: Array<{ id: string; label: string }> = [
 ]
 
 type SubTabId = 'general' | 'soul' | 'behavior' | 'image' | 'home' | 'secrets' | 'others'
+
+interface ScheduleSlot {
+  hour: number
+  location: string
+  role: string
+  sleep: boolean
+}
+
+// Sentinel home_location value: character sleeps off the map (not in any room).
+const OFFMAP_SLEEP = '__offmap__'
 
 const SUB_TABS: Array<{ id: SubTabId; label: string }> = [
   { id: 'general', label: 'General' },
@@ -117,6 +127,17 @@ export function CharactersTab() {
   const [soulText, setSoulText] = useState<Record<string, string>>({})
   const [soulAvailable, setSoulAvailable] = useState<string[]>([])
   const [soulLoading, setSoulLoading] = useState(false)
+  // Activity & Home: home/sleep location + daily rhythm slots.
+  const [homeLoc, setHomeLoc] = useState<{ home_location: string; home_room: string }>({
+    home_location: '',
+    home_room: '',
+  })
+  const [schedule, setSchedule] = useState<{ enabled: boolean; slots: ScheduleSlot[] }>({
+    enabled: false,
+    slots: [],
+  })
+  const [scheduleDirty, setScheduleDirty] = useState(false)
+  const [homeLoading, setHomeLoading] = useState(false)
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -162,6 +183,47 @@ export function CharactersTab() {
       cancelled = true
     }
   }, [selected, subTab])
+
+  // Load home location + daily rhythm when the Activity & Home tab opens.
+  useEffect(() => {
+    if (subTab !== 'home' || !selected) return
+    let cancelled = false
+    setHomeLoading(true)
+    setScheduleDirty(false)
+    ;(async () => {
+      try {
+        const [home, sched] = await Promise.all([
+          apiGet<{ home_location?: string; home_room?: string }>(
+            `/characters/${encodeURIComponent(selected)}/home-location`,
+          ),
+          apiGet<{ schedule?: { enabled?: boolean; slots?: ScheduleSlot[] } }>(
+            `/scheduler/daily-schedule?character=${encodeURIComponent(selected)}`,
+          ),
+        ])
+        if (cancelled) return
+        setHomeLoc({
+          home_location: home.home_location || '',
+          home_room: home.home_room || '',
+        })
+        setSchedule({
+          enabled: !!sched.schedule?.enabled,
+          slots: (sched.schedule?.slots || []).map((s) => ({
+            hour: Number(s.hour) || 0,
+            location: s.location || '',
+            role: s.role || '',
+            sleep: !!s.sleep,
+          })),
+        })
+      } catch (e) {
+        if (!cancelled) toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
+      } finally {
+        if (!cancelled) setHomeLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [selected, subTab, t, toast])
 
   const reloadCurrent = useCallback(
     async (name: string) => {
@@ -340,6 +402,59 @@ export function CharactersTab() {
     },
     [selected, t, toast],
   )
+
+  // Home/sleep location — saved immediately via /home-location.
+  const saveHome = useCallback(
+    async (next: { home_location: string; home_room: string }) => {
+      if (!selected) return
+      setHomeLoc(next)
+      setSavingField('home_location')
+      try {
+        await apiPost(`/characters/${encodeURIComponent(selected)}/home-location`, next)
+        toast(t('Saved'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setSavingField('')
+      }
+    },
+    [selected, t, toast],
+  )
+
+  const saveSchedule = useCallback(async () => {
+    if (!selected) return
+    setSavingField('schedule')
+    try {
+      await apiPost('/scheduler/daily-schedule', {
+        character: selected,
+        enabled: schedule.enabled,
+        slots: schedule.slots,
+      })
+      setScheduleDirty(false)
+      toast(t('Saved'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setSavingField('')
+    }
+  }, [schedule, selected, t, toast])
+
+  const clearSchedule = useCallback(async () => {
+    if (!selected) return
+    if (!window.confirm(t('Delete the whole daily rhythm for {name}?').replace('{name}', selected)))
+      return
+    setSavingField('schedule')
+    try {
+      await apiDelete(`/scheduler/daily-schedule?character=${encodeURIComponent(selected)}`)
+      setSchedule({ enabled: false, slots: [] })
+      setScheduleDirty(false)
+      toast(t('Deleted'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setSavingField('')
+    }
+  }, [selected, t, toast])
 
   const sortedCharacters = useMemo(
     () => [...characters].sort((a, b) => a.name.localeCompare(b.name)),
@@ -834,6 +949,209 @@ export function CharactersTab() {
                   </Field>
                 </div>
               </div>
+            ) : subTab === 'home' ? (
+              homeLoading ? (
+                <div className="ga-loading">{t('Loading…')}</div>
+              ) : (
+                <div className="ga-form">
+                  <div className="ga-form-section-label">{t('Home / sleep location')}</div>
+                  <div className="ga-form-row">
+                    <Field
+                      label={t('Home location')}
+                      hint={t('Where the character lives and returns to sleep. “Off-map” takes them off the grid while sleeping.')}
+                    >
+                      <select
+                        className="ga-input"
+                        value={homeLoc.home_location}
+                        disabled={savingField === 'home_location'}
+                        onChange={(e) =>
+                          saveHome({ home_location: e.target.value, home_room: '' })
+                        }
+                      >
+                        <option value="">— {t('none')} —</option>
+                        <option value={OFFMAP_SLEEP}>{t('Off-map (sleeps away)')}</option>
+                        {locations.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name || l.id}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field
+                      label={t('Home room')}
+                      hint={t('Optional room within the home location.')}
+                    >
+                      <select
+                        className="ga-input"
+                        value={homeLoc.home_room}
+                        disabled={
+                          savingField === 'home_location' ||
+                          homeLoc.home_location === OFFMAP_SLEEP ||
+                          !homeLoc.home_location
+                        }
+                        onChange={(e) =>
+                          saveHome({ home_location: homeLoc.home_location, home_room: e.target.value })
+                        }
+                      >
+                        <option value="">— {t('any room')} —</option>
+                        {(locations.find((l) => l.id === homeLoc.home_location)?.rooms || []).map(
+                          (r) => (
+                            <option key={r.id} value={r.id || ''}>
+                              {r.name || r.id}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    </Field>
+                  </div>
+
+                  <div className="ga-form-section-label">{t('Daily rhythm')}</div>
+                  <div className="ga-form-row">
+                    <Field
+                      label={t('Schedule active')}
+                      hint={t('When on, the character is moved through the slots below at their hours.')}
+                    >
+                      <select
+                        className="ga-input"
+                        value={schedule.enabled ? 'true' : 'false'}
+                        onChange={(e) => {
+                          setSchedule((s) => ({ ...s, enabled: e.target.value === 'true' }))
+                          setScheduleDirty(true)
+                        }}
+                      >
+                        <option value="true">{t('On')}</option>
+                        <option value="false">{t('Off')}</option>
+                      </select>
+                    </Field>
+                  </div>
+
+                  {schedule.slots.length === 0 ? (
+                    <div className="ga-placeholder">{t('No slots yet — add one below.')}</div>
+                  ) : (
+                    schedule.slots.map((slot, i) => (
+                      <div className="ga-form-row" key={i}>
+                        <Field label={i === 0 ? t('Hour') : ''}>
+                          <select
+                            className="ga-input"
+                            value={String(slot.hour)}
+                            onChange={(e) => {
+                              const hour = parseInt(e.target.value, 10)
+                              setSchedule((s) => ({
+                                ...s,
+                                slots: s.slots.map((sl, j) => (j === i ? { ...sl, hour } : sl)),
+                              }))
+                              setScheduleDirty(true)
+                            }}
+                          >
+                            {Array.from({ length: 24 }, (_, h) => (
+                              <option key={h} value={h}>
+                                {String(h).padStart(2, '0')}:00
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label={i === 0 ? t('Location') : ''}>
+                          <select
+                            className="ga-input"
+                            value={slot.location}
+                            onChange={(e) => {
+                              const location = e.target.value
+                              setSchedule((s) => ({
+                                ...s,
+                                slots: s.slots.map((sl, j) => (j === i ? { ...sl, location } : sl)),
+                              }))
+                              setScheduleDirty(true)
+                            }}
+                          >
+                            <option value="">— {t('none')} —</option>
+                            {locations.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.name || l.id}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label={i === 0 ? t('Role') : ''}>
+                          <input
+                            className="ga-input"
+                            value={slot.role}
+                            placeholder={t('optional')}
+                            onChange={(e) => {
+                              const role = e.target.value
+                              setSchedule((s) => ({
+                                ...s,
+                                slots: s.slots.map((sl, j) => (j === i ? { ...sl, role } : sl)),
+                              }))
+                              setScheduleDirty(true)
+                            }}
+                          />
+                        </Field>
+                        <Field label={i === 0 ? t('Sleep') : ''} compact>
+                          <input
+                            type="checkbox"
+                            checked={slot.sleep}
+                            onChange={(e) => {
+                              const sleep = e.target.checked
+                              setSchedule((s) => ({
+                                ...s,
+                                slots: s.slots.map((sl, j) => (j === i ? { ...sl, sleep } : sl)),
+                              }))
+                              setScheduleDirty(true)
+                            }}
+                          />
+                        </Field>
+                        <Field label={i === 0 ? '' : ''} compact>
+                          <button
+                            type="button"
+                            className="ga-btn ga-btn-sm ga-btn-danger"
+                            onClick={() => {
+                              setSchedule((s) => ({
+                                ...s,
+                                slots: s.slots.filter((_, j) => j !== i),
+                              }))
+                              setScheduleDirty(true)
+                            }}
+                          >
+                            {t('Remove')}
+                          </button>
+                        </Field>
+                      </div>
+                    ))
+                  )}
+
+                  <div className="ga-form-row" style={{ marginTop: 8, gap: 8 }}>
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm"
+                      onClick={() => {
+                        setSchedule((s) => ({
+                          ...s,
+                          slots: [...s.slots, { hour: 8, location: '', role: '', sleep: false }],
+                        }))
+                        setScheduleDirty(true)
+                      }}
+                    >
+                      {t('+ Add slot')}
+                    </button>
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm ga-btn-primary"
+                      disabled={!scheduleDirty || savingField === 'schedule'}
+                      onClick={saveSchedule}
+                    >
+                      {t('Save schedule')}
+                    </button>
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm ga-btn-danger"
+                      disabled={savingField === 'schedule'}
+                      onClick={clearSchedule}
+                    >
+                      {t('Delete schedule')}
+                    </button>
+                  </div>
+                </div>
+              )
             ) : (
               <div className="ga-form">
                 <div className="ga-placeholder">
