@@ -1943,3 +1943,19 @@ html, * {
 .tagesablauf-filled:hover { background: var(--accent, #2f81f7); filter: brightness(1.1); }
 .tagesablauf-sleep { background: #8957e5; }
 .tagesablauf-preview { background: rgba(47, 129, 247, 0.35); }
+
+/* Framed group of related fields (Characters detail sections, e.g. Speech). */
+.ga-fieldset {
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+  background: var(--bg-container, #161b22);
+  padding: 10px 12px 12px;
+  margin: 0 0 12px;
+}
+.ga-fieldset-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted, #8b949e);
+  margin: 0 0 8px;
+}

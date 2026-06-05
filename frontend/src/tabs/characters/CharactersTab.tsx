@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -96,6 +96,16 @@ const LANGUAGES: Array<{ value: string; label: string }> = [
   { value: 'zh', label: '中文' },
   { value: 'ko', label: '한국어' },
 ]
+
+// Framed group of related fields with an uppercase title.
+function FieldSet({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="ga-fieldset">
+      <div className="ga-fieldset-title">{title}</div>
+      {children}
+    </div>
+  )
+}
 
 export function CharactersTab() {
   const { t } = useI18n()
@@ -446,7 +456,7 @@ export function CharactersTab() {
 
             {subTab === 'general' ? (
               <div className="ga-form">
-                <div className="ga-form-section-label">{t('Identity')}</div>
+                <FieldSet title={t('Identity')}>
                 <div className="ga-form-row">
                   <Field label={t('Name')} hint={t('Character identifier — not editable here.')}>
                     <input className="ga-input" value={selected} disabled readOnly />
@@ -470,7 +480,8 @@ export function CharactersTab() {
                   </Field>
                 </div>
 
-                <div className="ga-form-section-label">{t('Current state')}</div>
+                </FieldSet>
+                <FieldSet title={t('Current state')}>
                 <div className="ga-form-row">
                   <Field
                     label={t('Location')}
@@ -575,10 +586,11 @@ export function CharactersTab() {
                     </select>
                   </Field>
                 </div>
+                </FieldSet>
               </div>
             ) : subTab === 'behavior' ? (
               <div className="ga-form">
-                <div className="ga-form-section-label">{t('Behavior')}</div>
+                <FieldSet title={t('Behavior')}>
                 <div className="ga-form-row">
                   <Field
                     label={t('Chat mode')}
@@ -641,10 +653,11 @@ export function CharactersTab() {
                     </select>
                   </Field>
                 </div>
+                </FieldSet>
               </div>
             ) : subTab === 'soul' ? (
               <div className="ga-form">
-                <div className="ga-form-section-label">{t('Thinking')}</div>
+                <FieldSet title={t('Thinking')}>
                 <div className="ga-form-row">
                   <Field
                     label={t('Thoughts')}
@@ -694,12 +707,14 @@ export function CharactersTab() {
                     </select>
                   </Field>
                 </div>
-                <div className="ga-form-section-label">{t('Soul texts')}</div>
+                </FieldSet>
+                <FieldSet title={t('Soul texts')}>
                 <SoulEditor character={selected} />
+                </FieldSet>
               </div>
             ) : subTab === 'others' ? (
               <div className="ga-form">
-                <div className="ga-form-section-label">{t('Speech (TTS)')}</div>
+                <FieldSet title={t('Speech (TTS)')}>
                 <div className="ga-form-row">
                   <Field label={t('TTS enabled')} hint={t('Generate speech audio for this character.')}>
                     <select
@@ -785,8 +800,8 @@ export function CharactersTab() {
                     />
                   </Field>
                 </div>
-
-                <div className="ga-form-section-label">{t('Telegram')}</div>
+                </FieldSet>
+                <FieldSet title={t('Telegram')}>
                 <div className="ga-form-row">
                   <Field
                     label={t('Bot token')}
@@ -820,13 +835,14 @@ export function CharactersTab() {
                     </select>
                   </Field>
                 </div>
+                </FieldSet>
               </div>
             ) : subTab === 'home' ? (
               homeLoading ? (
                 <div className="ga-loading">{t('Loading…')}</div>
               ) : (
                 <div className="ga-form">
-                  <div className="ga-form-section-label">{t('Home / sleep location')}</div>
+                  <FieldSet title={t('Home / sleep location')}>
                   <div className="ga-form-row">
                     <Field
                       label={t('Home location')}
@@ -876,8 +892,9 @@ export function CharactersTab() {
                       </select>
                     </Field>
                   </div>
+                  </FieldSet>
 
-                  <div className="ga-form-section-label">{t('Daily rhythm')}</div>
+                  <FieldSet title={t('Daily rhythm')}>
                   <DailyScheduleGrid
                     character={selected}
                     locations={locations}
@@ -888,6 +905,7 @@ export function CharactersTab() {
                     initialEnabled={schedule.enabled}
                     initialSlots={schedule.slots}
                   />
+                  </FieldSet>
                 </div>
               )
             ) : (
