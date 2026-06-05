@@ -1968,3 +1968,16 @@ html, * {
   border: 1px solid rgba(63, 185, 80, 0.4);
 }
 .ga-img-nomatch { font-size: 12px; color: var(--danger, #f85149); }
+
+/* Image Appearance — per-slot prompt + LoRA override grid (two columns). */
+.ga-img-slotgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ga-img-slotrow {
+  border: 1px solid var(--border, #30363d); border-radius: 6px;
+  padding: 8px; margin-bottom: 8px;
+}
+.ga-img-slotlabel { font-weight: 600; font-size: 12px; margin-bottom: 4px; }
+.ga-img-slotrow .ga-input { font-size: 12px; padding: 4px 6px; margin-bottom: 4px; }
+.ga-img-slotlora { display: flex; gap: 6px; align-items: center; }
+.ga-img-slotlora .ga-input { margin-bottom: 0; }
+.ga-img-slotlora .ga-sched-muted { font-size: 11px; min-width: 40px; }
+@media (max-width: 900px) { .ga-img-slotgrid { grid-template-columns: 1fr; } }
