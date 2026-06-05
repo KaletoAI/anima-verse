@@ -57,6 +57,34 @@ const MOODS: Array<{ id: string; label: string }> = [
   { id: 'sweating', label: 'sweating' },
 ]
 
+type SubTabId = 'general' | 'soul' | 'behavior' | 'image' | 'home' | 'secrets' | 'others'
+
+const SUB_TABS: Array<{ id: SubTabId; label: string }> = [
+  { id: 'general', label: 'General' },
+  { id: 'soul', label: 'Soul' },
+  { id: 'behavior', label: 'Behavior' },
+  { id: 'image', label: 'Image' },
+  { id: 'home', label: 'Activity & Home' },
+  { id: 'secrets', label: 'Secrets' },
+  { id: 'others', label: 'Others' },
+]
+
+// Mirrors the language options in shared/templates/character/base-character.json.
+const LANGUAGES: Array<{ value: string; label: string }> = [
+  { value: 'de', label: 'Deutsch' },
+  { value: 'en', label: 'English' },
+  { value: 'fr', label: 'Français' },
+  { value: 'es', label: 'Español' },
+  { value: 'it', label: 'Italiano' },
+  { value: 'pt', label: 'Português' },
+  { value: 'nl', label: 'Nederlands' },
+  { value: 'pl', label: 'Polski' },
+  { value: 'ru', label: 'Русский' },
+  { value: 'ja', label: '日本語' },
+  { value: 'zh', label: '中文' },
+  { value: 'ko', label: '한국어' },
+]
+
 export function CharactersTab() {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -68,9 +96,12 @@ export function CharactersTab() {
   const [currentFeeling, setCurrentFeeling] = useState<string>('')
   const [draft, setDraft] = useState<DraftPlacement | null>(null)
   const [saving, setSaving] = useState(false)
-  // Per-character chat mode (config field, saved immediately on change).
-  const [chatMode, setChatMode] = useState<string>('')
-  const [chatModeSaving, setChatModeSaving] = useState(false)
+  // Per-character config (chat_mode, behavior toggles, …) + profile language.
+  // Config fields save immediately on change via /config; language via /profile.
+  const [cfg, setCfg] = useState<Record<string, unknown>>({})
+  const [language, setLanguage] = useState<string>('')
+  const [savingField, setSavingField] = useState<string>('')
+  const [subTab, setSubTab] = useState<SubTabId>('general')
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -85,14 +116,17 @@ export function CharactersTab() {
       setDraft(null)
       if (!name) return
       try {
-        const [loc, feel, cfg] = await Promise.all([
+        const [loc, feel, cfgResp] = await Promise.all([
           apiGet<CurrentLocation>(`/characters/${encodeURIComponent(name)}/current-location`),
           apiGet<{ current_feeling?: string }>(`/characters/${encodeURIComponent(name)}/current-feeling`),
-          apiGet<{ config?: { chat_mode?: string } }>(`/characters/${encodeURIComponent(name)}/config`),
+          apiGet<{ config?: Record<string, unknown> }>(`/characters/${encodeURIComponent(name)}/config`),
         ])
         setCurrent(loc)
         setCurrentFeeling(feel.current_feeling || '')
-        setChatMode(cfg.config?.chat_mode || '')
+        const config = cfgResp.config || {}
+        setCfg(config)
+        // /config injects the profile language as tts_language (see get_character_config)
+        setLanguage(String(config.tts_language || ''))
         setDraft({
           locationId: loc.current_location_id || '',
           roomId: loc.current_room || '',
@@ -194,20 +228,41 @@ export function CharactersTab() {
     }
   }, [current, currentFeeling, draft, reloadCurrent, selected, t, toast])
 
-  const saveChatMode = useCallback(
-    async (mode: string) => {
+  // Save a single config field immediately (optimistic), via /config bulk-update.
+  const saveCfg = useCallback(
+    async (key: string, value: unknown) => {
       if (!selected) return
-      setChatMode(mode)
-      setChatModeSaving(true)
+      setCfg((prev) => ({ ...prev, [key]: value }))
+      setSavingField(key)
       try {
         await apiPost(`/characters/${encodeURIComponent(selected)}/config`, {
-          fields: { chat_mode: mode },
+          fields: { [key]: value },
         })
         toast(t('Saved'))
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       } finally {
-        setChatModeSaving(false)
+        setSavingField('')
+      }
+    },
+    [selected, t, toast],
+  )
+
+  // Language is a profile field (not config) — saved via /profile.
+  const saveLanguage = useCallback(
+    async (value: string) => {
+      if (!selected) return
+      setLanguage(value)
+      setSavingField('language')
+      try {
+        await apiPost(`/characters/${encodeURIComponent(selected)}/profile`, {
+          fields: { language: value },
+        })
+        toast(t('Saved'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setSavingField('')
       }
     },
     [selected, t, toast],
@@ -287,128 +342,227 @@ export function CharactersTab() {
                 </>
               }
             />
-            <div className="ga-form">
-              <div className="ga-form-section-label">{t('Placement')}</div>
-              <div className="ga-form-row">
-                <Field
-                  label={t('Location')}
-                  hint={
-                    current.current_location
-                      ? t('Currently at: {name}').replace('{name}', current.current_location)
-                      : t('Currently nowhere — pick a location to place the character.')
-                  }
+            <nav className="ga-subtabs">
+              {SUB_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`ga-btn ga-btn-sm${subTab === tab.id ? ' ga-btn-primary' : ''}`}
+                  onClick={() => setSubTab(tab.id)}
                 >
-                  <select
-                    className="ga-input"
-                    value={draft.locationId}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        locationId: e.target.value,
-                        // Reset room when location changes — the old
-                        // room belongs to a different location.
-                        roomId: '',
-                      })
+                  {t(tab.label)}
+                </button>
+              ))}
+            </nav>
+
+            {subTab === 'general' ? (
+              <div className="ga-form">
+                <div className="ga-form-section-label">{t('Identity')}</div>
+                <div className="ga-form-row">
+                  <Field label={t('Name')} hint={t('Character identifier — not editable here.')}>
+                    <input className="ga-input" value={selected} disabled readOnly />
+                  </Field>
+                  <Field
+                    label={t('Language')}
+                    hint={t('Language the character thinks and speaks in.')}
+                  >
+                    <select
+                      className="ga-input"
+                      value={language}
+                      disabled={savingField === 'language'}
+                      onChange={(e) => saveLanguage(e.target.value)}
+                    >
+                      {LANGUAGES.map((l) => (
+                        <option key={l.value} value={l.value}>
+                          {l.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+
+                <div className="ga-form-section-label">{t('Current state')}</div>
+                <div className="ga-form-row">
+                  <Field
+                    label={t('Location')}
+                    hint={
+                      current.current_location
+                        ? t('Currently at: {name}').replace('{name}', current.current_location)
+                        : t('Currently nowhere — pick a location to place the character.')
                     }
                   >
-                    <option value="">— {t('nowhere')} —</option>
-                    {locations.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name || l.id}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field
-                  label={t('Room')}
-                  hint={
-                    rooms.length === 0
-                      ? t('Pick a location with rooms to choose a room.')
-                      : current.current_room_name
-                        ? t('Currently in: {name}').replace('{name}', current.current_room_name)
-                        : t('Optional — leave empty for "anywhere in this location".')
-                  }
-                >
-                  <select
-                    className="ga-input"
-                    value={draft.roomId}
-                    onChange={(e) => setDraft({ ...draft, roomId: e.target.value })}
-                    disabled={rooms.length === 0}
+                    <select
+                      className="ga-input"
+                      value={draft.locationId}
+                      onChange={(e) => setDraft({ ...draft, locationId: e.target.value, roomId: '' })}
+                    >
+                      <option value="">— {t('nowhere')} —</option>
+                      {locations.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name || l.id}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field
+                    label={t('Room')}
+                    hint={
+                      rooms.length === 0
+                        ? t('Pick a location with rooms to choose a room.')
+                        : current.current_room_name
+                          ? t('Currently in: {name}').replace('{name}', current.current_room_name)
+                          : t('Optional — leave empty for "anywhere in this location".')
+                    }
                   >
-                    <option value="">— {t('any room')} —</option>
-                    {rooms.map((r) => (
-                      <option key={r.id} value={r.id || ''}>
-                        {r.name || r.id}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                    <select
+                      className="ga-input"
+                      value={draft.roomId}
+                      onChange={(e) => setDraft({ ...draft, roomId: e.target.value })}
+                      disabled={rooms.length === 0}
+                    >
+                      <option value="">— {t('any room')} —</option>
+                      {rooms.map((r) => (
+                        <option key={r.id} value={r.id || ''}>
+                          {r.name || r.id}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field
+                    label={t('Activity')}
+                    hint={
+                      current.current_activity
+                        ? t('Currently: {name}').replace('{name}', current.current_activity)
+                        : t('Setting an activity may auto-move the character into a matching room.')
+                    }
+                  >
+                    <select
+                      className="ga-input"
+                      value={draft.activity}
+                      onChange={(e) => setDraft({ ...draft, activity: e.target.value })}
+                    >
+                      <option value="">— {t('none')} —</option>
+                      {/* current value may not be a library id (e.g. flag-derived
+                          "Sleeping") — surface it so the field is never blank-mysterious */}
+                      {draft.activity &&
+                      !activities.some((a) => a.id === draft.activity) ? (
+                        <option value={draft.activity}>{draft.activity}</option>
+                      ) : null}
+                      {activitiesByGroup.map(([group, list]) => (
+                        <optgroup key={group} label={group}>
+                          {list.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.name || a.id}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+                <div className="ga-form-row">
+                  <Field
+                    label={t('Mood')}
+                    hint={
+                      currentFeeling
+                        ? t('Currently: {name}').replace('{name}', currentFeeling)
+                        : t('Canonical mood id from shared/config/moods.json. Empty clears the mood.')
+                    }
+                  >
+                    <select
+                      className="ga-input"
+                      value={draft.feeling}
+                      onChange={(e) => setDraft({ ...draft, feeling: e.target.value })}
+                    >
+                      <option value="">— {t('none')} —</option>
+                      {draft.feeling && !MOODS.some((m) => m.id === draft.feeling) ? (
+                        <option value={draft.feeling}>{draft.feeling}</option>
+                      ) : null}
+                      {MOODS.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
               </div>
-
-              <div className="ga-form-section-label">{t('State')}</div>
-              <div className="ga-form-row">
-                <Field
-                  label={t('Activity')}
-                  hint={t(
-                    'Setting an activity may also auto-move the character into a matching room (skipped while they are the active chat partner or the avatar).',
+            ) : subTab === 'behavior' ? (
+              <div className="ga-form">
+                <div className="ga-form-section-label">{t('Behavior')}</div>
+                <div className="ga-form-row">
+                  <Field
+                    label={t('Chat mode')}
+                    hint={t(
+                      'Single: chat-LLM handles RP and tool decisions in one call. RP-First: chat-LLM writes clean RP, then a tool-LLM decides on tools — better for RP-finetuned models. With no skills active it is always no_tools.',
+                    )}
+                  >
+                    <select
+                      className="ga-input"
+                      value={String(cfg.chat_mode ?? '')}
+                      disabled={savingField === 'chat_mode'}
+                      onChange={(e) => saveCfg('chat_mode', e.target.value)}
+                    >
+                      <option value="">{t('Single (chat-LLM handles all)')}</option>
+                      <option value="rp_first">{t('RP-First (chat-LLM + tool-LLM)')}</option>
+                    </select>
+                  </Field>
+                  <Field
+                    label={t('Relationships')}
+                    hint={t('Track and evolve relationships with other characters.')}
+                  >
+                    <select
+                      className="ga-input"
+                      value={String(cfg.relationships_enabled ?? 'true')}
+                      disabled={savingField === 'relationships_enabled'}
+                      onChange={(e) => saveCfg('relationships_enabled', e.target.value)}
+                    >
+                      <option value="true">{t('On')}</option>
+                      <option value="false">{t('Off')}</option>
+                    </select>
+                  </Field>
+                  <Field
+                    label={t('Mood tracking')}
+                    hint={t('Character ends responses with their current emotional state.')}
+                  >
+                    <select
+                      className="ga-input"
+                      value={String(cfg.mood_tracking ?? 'true')}
+                      disabled={savingField === 'mood_tracking'}
+                      onChange={(e) => saveCfg('mood_tracking', e.target.value)}
+                    >
+                      <option value="true">{t('Yes')}</option>
+                      <option value="false">{t('No')}</option>
+                    </select>
+                  </Field>
+                </div>
+                <div className="ga-form-row">
+                  <Field
+                    label={t('Photographer mode')}
+                    hint={t('On: takes photos of others (not in own shots). Off: appears in own photos.')}
+                  >
+                    <select
+                      className="ga-input"
+                      value={String(cfg.photographer_mode ?? 'false')}
+                      disabled={savingField === 'photographer_mode'}
+                      onChange={(e) => saveCfg('photographer_mode', e.target.value)}
+                    >
+                      <option value="false">{t('Off (appears in own photos)')}</option>
+                      <option value="true">{t('On (takes photos of others)')}</option>
+                    </select>
+                  </Field>
+                </div>
+              </div>
+            ) : (
+              <div className="ga-form">
+                <div className="ga-placeholder">
+                  {t('“{tab}” settings move here next.').replace(
+                    '{tab}',
+                    t(SUB_TABS.find((s) => s.id === subTab)?.label || ''),
                   )}
-                >
-                  <select
-                    className="ga-input"
-                    value={draft.activity}
-                    onChange={(e) => setDraft({ ...draft, activity: e.target.value })}
-                  >
-                    <option value="">— {t('none')} —</option>
-                    {activitiesByGroup.map(([group, list]) => (
-                      <optgroup key={group} label={group}>
-                        {list.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.name || a.id}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </Field>
-                <Field
-                  label={t('Mood')}
-                  hint={t('Canonical mood id from shared/config/moods.json. Empty clears the mood.')}
-                >
-                  <select
-                    className="ga-input"
-                    value={draft.feeling}
-                    onChange={(e) => setDraft({ ...draft, feeling: e.target.value })}
-                  >
-                    <option value="">— {t('none')} —</option>
-                    {MOODS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                </div>
               </div>
-
-              <div className="ga-form-section-label">{t('Behavior')}</div>
-              <div className="ga-form-row">
-                <Field
-                  label={t('Chat mode')}
-                  hint={t(
-                    'Single: chat-LLM handles RP and tool decisions in one call. RP-First: chat-LLM writes clean RP, then a tool-LLM decides on tools — better for RP-finetuned models. Pick the one matching your chat model’s tool-calling ability. With no skills active it is always no_tools.',
-                  )}
-                >
-                  <select
-                    className="ga-input"
-                    value={chatMode}
-                    disabled={chatModeSaving}
-                    onChange={(e) => saveChatMode(e.target.value)}
-                  >
-                    <option value="">{t('Single (chat-LLM handles all)')}</option>
-                    <option value="rp_first">{t('RP-First (chat-LLM + tool-LLM)')}</option>
-                  </select>
-                </Field>
-              </div>
-            </div>
+            )}
           </>
         )}
       </section>

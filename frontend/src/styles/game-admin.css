@@ -682,6 +682,17 @@ html, * {
   margin-top: 8px;
 }
 
+/* Sub-tab bar inside a detail panel (e.g. Characters detail: General / Soul /
+   Behavior / …). A simple wrapping row of pill buttons. */
+.ga-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border, #30363d);
+}
+
 /* Inline section label — used to title a row of fields without consuming
    a full section header. Stays vertically centered on the row's controls
    so it reads as a "row title" left-of-the-fields. */
