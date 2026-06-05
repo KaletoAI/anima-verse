@@ -68,6 +68,9 @@ export function CharactersTab() {
   const [currentFeeling, setCurrentFeeling] = useState<string>('')
   const [draft, setDraft] = useState<DraftPlacement | null>(null)
   const [saving, setSaving] = useState(false)
+  // Per-character chat mode (config field, saved immediately on change).
+  const [chatMode, setChatMode] = useState<string>('')
+  const [chatModeSaving, setChatModeSaving] = useState(false)
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -82,12 +85,14 @@ export function CharactersTab() {
       setDraft(null)
       if (!name) return
       try {
-        const [loc, feel] = await Promise.all([
+        const [loc, feel, cfg] = await Promise.all([
           apiGet<CurrentLocation>(`/characters/${encodeURIComponent(name)}/current-location`),
           apiGet<{ current_feeling?: string }>(`/characters/${encodeURIComponent(name)}/current-feeling`),
+          apiGet<{ config?: { chat_mode?: string } }>(`/characters/${encodeURIComponent(name)}/config`),
         ])
         setCurrent(loc)
         setCurrentFeeling(feel.current_feeling || '')
+        setChatMode(cfg.config?.chat_mode || '')
         setDraft({
           locationId: loc.current_location_id || '',
           roomId: loc.current_room || '',
@@ -188,6 +193,25 @@ export function CharactersTab() {
       setSaving(false)
     }
   }, [current, currentFeeling, draft, reloadCurrent, selected, t, toast])
+
+  const saveChatMode = useCallback(
+    async (mode: string) => {
+      if (!selected) return
+      setChatMode(mode)
+      setChatModeSaving(true)
+      try {
+        await apiPost(`/characters/${encodeURIComponent(selected)}/config`, {
+          fields: { chat_mode: mode },
+        })
+        toast(t('Saved'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setChatModeSaving(false)
+      }
+    },
+    [selected, t, toast],
+  )
 
   const sortedCharacters = useMemo(
     () => [...characters].sort((a, b) => a.name.localeCompare(b.name)),
@@ -361,6 +385,26 @@ export function CharactersTab() {
                         {m.label}
                       </option>
                     ))}
+                  </select>
+                </Field>
+              </div>
+
+              <div className="ga-form-section-label">{t('Behavior')}</div>
+              <div className="ga-form-row">
+                <Field
+                  label={t('Chat mode')}
+                  hint={t(
+                    'Single: chat-LLM handles RP and tool decisions in one call. RP-First: chat-LLM writes clean RP, then a tool-LLM decides on tools — better for RP-finetuned models. Pick the one matching your chat model’s tool-calling ability. With no skills active it is always no_tools.',
+                  )}
+                >
+                  <select
+                    className="ga-input"
+                    value={chatMode}
+                    disabled={chatModeSaving}
+                    onChange={(e) => saveChatMode(e.target.value)}
+                  >
+                    <option value="">{t('Single (chat-LLM handles all)')}</option>
+                    <option value="rp_first">{t('RP-First (chat-LLM + tool-LLM)')}</option>
                   </select>
                 </Field>
               </div>

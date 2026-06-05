@@ -653,6 +653,11 @@ def clean_response(full_response: str) -> str:
     clean = strip_intent_tags(clean)
     from app.models.assignments import strip_assignment_tags
     clean = strip_assignment_tags(clean)
+    # Vereinheitlichte [INTENT:]-Marker (plan-intents-unified.md) — im Room-/
+    # C2C-Pfad laeuft die Bereinigung ueber clean_response, nicht ueber
+    # _strip_tool_hallucinations; ohne dies leakten Marker in Utterance/History.
+    from app.models.intents import strip_intent_markers
+    clean = strip_intent_markers(clean)
     # Strip tool hallucinations
     clean = re.sub(r'<tool_call>.*?</tool_call>', '', clean, flags=re.DOTALL)
     clean = re.sub(r'</?tool_(?:call|result)>', '', clean)
