@@ -25,6 +25,28 @@ _VALID_STATUS = {"active", "done", "expired", "cancelled"}
 _VALID_SOURCE = {"human", "character"}
 _JSON_FIELDS = ("participants", "trigger", "action", "meta")
 
+# Tool-Name → generischer Typ (für Auto-Progress bei zähl-basierten Intents)
+TOOL_NAME_MAP = {
+    "ImageGeneration": "image",
+    "ImageGenerator": "image",
+    "WebSearch": "search",
+    "SearxSearch": "search",
+    "Searx": "search",
+    "TalkTo": "talkto",
+    "SendNotification": "notification",
+    "InstagramPost": "instagram",
+    "KnowledgeExtract": "research",
+}
+
+_TOOL_LABELS = {
+    "image": "Foto generiert",
+    "search": "Recherche durchgefuehrt",
+    "instagram": "Instagram Post erstellt",
+    "talkto": "Gespraech gefuehrt",
+    "notification": "Benachrichtigung gesendet",
+    "research": "Information extrahiert",
+}
+
 
 def _row_to_intent(r) -> Dict[str, Any]:
     d = dict(r)
@@ -169,6 +191,54 @@ def add_progress(intent_id: str, character: str, note: str) -> Optional[Dict[str
     p["progress"] = prog
     parts[character] = p
     return update_intent(intent_id, participants=parts)
+
+
+def auto_track_progress(character_name: str, tool_type: str,
+                        count: int = 1) -> Optional[Dict[str, Any]]:
+    """Tool-Nutzung als Intent-Fortschritt verbuchen.
+
+    Wird nach einem Tool-Lauf (z.B. ImageGeneration) für einen Character mit
+    aktiven Intents aufgerufen. Trägt ``count`` Progress-Einträge bei jedem
+    aktiven Intent ein, an dem der Character beteiligt ist, und schließt den
+    Intent ab, sobald ``target_count`` erreicht ist. Zähl-lose Intents
+    (``target_count == 0``) bleiben aktiv — Progress ist dann nur eine Notiz.
+
+    Gibt Info zum zuletzt berührten Intent zurück oder ``None``.
+    """
+    if count <= 0:
+        return None
+    active = list_intents(owner=character_name, status="active")
+    if not active:
+        return None
+
+    label = _TOOL_LABELS.get(tool_type, tool_type)
+    result = None
+    for it in active:
+        parts = dict(it.get("participants") or {})
+        p = dict(parts.get(character_name) or {"role": "", "progress": []})
+        prog = list(p.get("progress") or [])
+        for _ in range(count):
+            prog.append({"timestamp": utc_now_iso(), "note": label})
+        p["progress"] = prog
+        parts[character_name] = p
+
+        target = int(it.get("target_count") or 0)
+        completed = target > 0 and len(prog) >= target
+        update_intent(it["id"], participants=parts,
+                      **({"status": "done"} if completed else {}))
+        if completed:
+            logger.info("Intent auto-completed: %s '%s' (%d/%d)",
+                        it["id"], it.get("title"), len(prog), target)
+        result = {
+            "intent_id": it["id"],
+            "title": it.get("title", ""),
+            "progress_count": len(prog),
+            "target_count": target,
+            "completed": completed,
+        }
+        logger.info("[%s] Intent auto-progress: %s +%d (%s)",
+                    character_name, it["id"], count, label)
+    return result
 
 
 def expire_overdue() -> int:

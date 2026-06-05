@@ -603,31 +603,25 @@ class ThoughtRunner:
             except Exception as pp_err:
                 logger.error("%s: post_process_response Fehler: %s", character_name, pp_err)
 
-        # Auto-Progress: Tool-Ausfuehrungen als Assignment-Fortschritt zaehlen
+        # Auto-Progress: Tool-Ausfuehrungen als Intent-Fortschritt zaehlen
+        # (vereinheitlichte Intents, plan-intents-unified.md)
         try:
-            from app.models.assignments import auto_track_progress, TOOL_NAME_MAP
+            from app.models.intents import auto_track_progress, TOOL_NAME_MAP
 
-            # 1. Echte Tool-Calls aus dem Stream
-            for _tn, _tc in _tool_exec_counts.items():
-                _tool_type = TOOL_NAME_MAP.get(_tn)
-                if _tool_type:
+            # 1. Echte Tool-Calls aus dem Stream + 2. narrative Tool-Calls
+            for _label, _counts in (("", _tool_exec_counts),
+                                    (" (narrativ)", _narrative_exec_counts)):
+                for _tn, _tc in _counts.items():
+                    _tool_type = TOOL_NAME_MAP.get(_tn)
+                    if not _tool_type:
+                        continue
                     _atp = auto_track_progress(character_name, _tool_type, _tc)
                     if _atp:
-                        logger.info("%s: Assignment auto-progress: %s +%d (%s)%s",
-                                    character_name, _atp.get("title"), _tc, _tn,
-                                    " -> COMPLETED" if _atp.get("completed") else "")
-
-            # 2. Narrative Tool-Calls (oben bereits ausgefuehrt) als Fortschritt zaehlen
-            for _tn, _tc in _narrative_exec_counts.items():
-                _tool_type = TOOL_NAME_MAP.get(_tn)
-                if _tool_type:
-                    _atp = auto_track_progress(character_name, _tool_type, _tc)
-                    if _atp:
-                        logger.info("%s: Assignment auto-progress (narrativ): %s +%d (%s)%s",
-                                    character_name, _atp.get("title"), _tc, _tn,
+                        logger.info("%s: Intent auto-progress%s: %s +%d (%s)%s",
+                                    character_name, _label, _atp.get("title"), _tc, _tn,
                                     " -> COMPLETED" if _atp.get("completed") else "")
         except Exception as _ate:
-            logger.debug("Assignment auto-progress error: %s", _ate)
+            logger.debug("Intent auto-progress error: %s", _ate)
 
         if "SKIP" in full_response and not had_notification_tool:
             logger.info("%s: SKIP (nichts zu melden)", character_name)

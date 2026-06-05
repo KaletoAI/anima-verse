@@ -1884,10 +1884,11 @@ async def chat(request: Request) -> StreamingResponse:
                 _na = _pp["new_assignment"]
                 yield f"data: {json.dumps({'new_assignment': {'title': _na.get('title',''), 'id': _na.get('id','')}})}\n\n"
 
-            # Auto-Progress: Tool-Ausfuehrungen als Assignment-Fortschritt zaehlen
+            # Auto-Progress: Tool-Ausfuehrungen als Intent-Fortschritt zaehlen
+            # (vereinheitlichte Intents, plan-intents-unified.md)
             if _tool_exec_counts:
                 try:
-                    from app.models.assignments import auto_track_progress, TOOL_NAME_MAP
+                    from app.models.intents import auto_track_progress, TOOL_NAME_MAP
                     for _tn, _tc in _tool_exec_counts.items():
                         _tool_type = TOOL_NAME_MAP.get(_tn)
                         if _tool_type:
@@ -1895,9 +1896,9 @@ async def chat(request: Request) -> StreamingResponse:
                             _count = len(_tool_image_urls) if _tool_type == "image" and _tool_image_urls else _tc
                             _atp = auto_track_progress(current_agent, _tool_type, _count)
                             if _atp:
-                                yield f"data: {json.dumps({'assignment_progress': _atp})}\n\n"
+                                yield f"data: {json.dumps({'intent_progress': _atp})}\n\n"
                 except Exception as _ate:
-                    logger.debug("Assignment auto-progress error: %s", _ate)
+                    logger.debug("Intent auto-progress error: %s", _ate)
 
             # Background image analysis: await result after stream with timeout
             # Timeout verhindert dass der SSE-Stream haengt wenn die LLM-Queue
