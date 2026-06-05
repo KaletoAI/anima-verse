@@ -102,11 +102,20 @@ export function CharactersTab() {
   const [language, setLanguage] = useState<string>('')
   const [savingField, setSavingField] = useState<string>('')
   const [subTab, setSubTab] = useState<SubTabId>('general')
+  // Dynamic TTS option lists (Others tab) — loaded once on mount.
+  const [ttsVoices, setTtsVoices] = useState<Array<{ value: string; label: string }>>([])
+  const [ttsSpeakers, setTtsSpeakers] = useState<Array<{ value: string; label: string }>>([])
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
     loadLocations().then(setLocations).catch(() => setLocations([]))
     loadActivities().then(setActivities).catch(() => setActivities([]))
+    apiGet<{ voices?: Array<{ value: string; label: string }> }>('/tts/voices')
+      .then((d) => setTtsVoices(d.voices || []))
+      .catch(() => setTtsVoices([]))
+    apiGet<{ speakers?: Array<{ value: string; label: string }> }>('/tts/speakers')
+      .then((d) => setTtsSpeakers(d.speakers || []))
+      .catch(() => setTtsSpeakers([]))
   }, [])
 
   const reloadCurrent = useCallback(
@@ -549,6 +558,185 @@ export function CharactersTab() {
                     >
                       <option value="false">{t('Off (appears in own photos)')}</option>
                       <option value="true">{t('On (takes photos of others)')}</option>
+                    </select>
+                  </Field>
+                </div>
+              </div>
+            ) : subTab === 'soul' ? (
+              <div className="ga-form">
+                <div className="ga-form-section-label">{t('Thinking')}</div>
+                <div className="ga-form-row">
+                  <Field
+                    label={t('Thoughts')}
+                    hint={t(
+                      'If active, the character periodically thinks and can autonomously act (talk, send messages, change activity, …).',
+                    )}
+                  >
+                    <select
+                      className="ga-input"
+                      value={String(cfg.thoughts_enabled ?? 'false')}
+                      disabled={savingField === 'thoughts_enabled'}
+                      onChange={(e) => saveCfg('thoughts_enabled', e.target.value)}
+                    >
+                      <option value="true">{t('Yes')}</option>
+                      <option value="false">{t('No')}</option>
+                    </select>
+                  </Field>
+                  <Field
+                    label={t('Importance')}
+                    hint={t('How often this character gets to think relative to others. High = 3× as often as Low.')}
+                  >
+                    <select
+                      className="ga-input"
+                      value={String(cfg.importance ?? '1')}
+                      disabled={savingField === 'importance'}
+                      onChange={(e) => saveCfg('importance', e.target.value)}
+                    >
+                      <option value="1">{t('Low')}</option>
+                      <option value="2">{t('Medium')}</option>
+                      <option value="3">{t('High')}</option>
+                    </select>
+                  </Field>
+                  <Field
+                    label={t('Retrospect')}
+                    hint={t(
+                      'If active, the character periodically reflects on recent events to update beliefs, lessons and goals.',
+                    )}
+                  >
+                    <select
+                      className="ga-input"
+                      value={String(cfg.retrospect_enabled ?? 'true')}
+                      disabled={savingField === 'retrospect_enabled'}
+                      onChange={(e) => saveCfg('retrospect_enabled', e.target.value)}
+                    >
+                      <option value="true">{t('Yes')}</option>
+                      <option value="false">{t('No')}</option>
+                    </select>
+                  </Field>
+                </div>
+                <div className="ga-placeholder" style={{ marginTop: 10 }}>
+                  {t('Soul texts (beliefs, lessons, goals) move here in a later phase.')}
+                </div>
+              </div>
+            ) : subTab === 'others' ? (
+              <div className="ga-form">
+                <div className="ga-form-section-label">{t('Speech (TTS)')}</div>
+                <div className="ga-form-row">
+                  <Field label={t('TTS enabled')} hint={t('Generate speech audio for this character.')}>
+                    <select
+                      className="ga-input"
+                      value={String(cfg.tts_enabled ?? 'false')}
+                      disabled={savingField === 'tts_enabled'}
+                      onChange={(e) => saveCfg('tts_enabled', e.target.value)}
+                    >
+                      <option value="true">{t('Yes')}</option>
+                      <option value="false">{t('No')}</option>
+                    </select>
+                  </Field>
+                  <Field label={t('Auto-play')} hint={t('Speak responses automatically without a click.')}>
+                    <select
+                      className="ga-input"
+                      value={String(cfg.tts_auto ?? 'false')}
+                      disabled={savingField === 'tts_auto'}
+                      onChange={(e) => saveCfg('tts_auto', e.target.value)}
+                    >
+                      <option value="true">{t('Yes')}</option>
+                      <option value="false">{t('No')}</option>
+                    </select>
+                  </Field>
+                  <Field label={t('ComfyUI TTS mode')} hint={t('Voice Clone uses a WAV reference. Voice Name generates a voice from the description.')}>
+                    <select
+                      className="ga-input"
+                      value={String(cfg.tts_comfyui_mode ?? '')}
+                      disabled={savingField === 'tts_comfyui_mode'}
+                      onChange={(e) => saveCfg('tts_comfyui_mode', e.target.value)}
+                    >
+                      <option value="">{t('Default (from .env)')}</option>
+                      <option value="voiceclone">{t('Voice Clone (reference audio)')}</option>
+                      <option value="auto">{t('Voice Name (from description)')}</option>
+                    </select>
+                  </Field>
+                </div>
+                <div className="ga-form-row">
+                  <Field label={t('Voice (Magpie)')} hint={t('Voice for the Magpie backend.')}>
+                    <select
+                      className="ga-input"
+                      value={String(cfg.tts_voice ?? '')}
+                      disabled={savingField === 'tts_voice'}
+                      onChange={(e) => saveCfg('tts_voice', e.target.value)}
+                    >
+                      <option value="">— {t('default')} —</option>
+                      {String(cfg.tts_voice ?? '') &&
+                      !ttsVoices.some((v) => v.value === cfg.tts_voice) ? (
+                        <option value={String(cfg.tts_voice)}>{String(cfg.tts_voice)}</option>
+                      ) : null}
+                      {ttsVoices.map((v) => (
+                        <option key={v.value} value={v.value}>
+                          {v.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label={t('Reference voice (XTTS / F5 / ComfyUI)')} hint={t('Reference WAV for voice cloning.')}>
+                    <select
+                      className="ga-input"
+                      value={String(cfg.tts_speaker_wav ?? '')}
+                      disabled={savingField === 'tts_speaker_wav'}
+                      onChange={(e) => saveCfg('tts_speaker_wav', e.target.value)}
+                    >
+                      <option value="">— {t('none')} —</option>
+                      {String(cfg.tts_speaker_wav ?? '') &&
+                      !ttsSpeakers.some((s) => s.value === cfg.tts_speaker_wav) ? (
+                        <option value={String(cfg.tts_speaker_wav)}>{String(cfg.tts_speaker_wav)}</option>
+                      ) : null}
+                      {ttsSpeakers.map((s) => (
+                        <option key={s.value} value={s.value}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label={t('Voice description')} hint={t('For ComfyUI Voice-Name mode, e.g. “young woman, warm and slightly husky voice”.')}>
+                    <input
+                      className="ga-input"
+                      value={String(cfg.tts_voice_description ?? '')}
+                      onChange={(e) => setCfg((p) => ({ ...p, tts_voice_description: e.target.value }))}
+                      onBlur={(e) => saveCfg('tts_voice_description', e.target.value)}
+                    />
+                  </Field>
+                </div>
+
+                <div className="ga-form-section-label">{t('Telegram')}</div>
+                <div className="ga-form-row">
+                  <Field
+                    label={t('Bot token')}
+                    hint={t('Telegram bot token from @BotFather. Each character needs its own bot. Reload polling after saving.')}
+                  >
+                    <input
+                      className="ga-input"
+                      type="password"
+                      autoComplete="off"
+                      value={String(cfg.telegram_bot_token ?? '')}
+                      onChange={(e) => setCfg((p) => ({ ...p, telegram_bot_token: e.target.value }))}
+                      onBlur={(e) => saveCfg('telegram_bot_token', e.target.value)}
+                    />
+                  </Field>
+                  <Field
+                    label={t('Partner character')}
+                    hint={t('In-world character the human on the other side of this bot controls. Empty = no identity tagging.')}
+                  >
+                    <select
+                      className="ga-input"
+                      value={String(cfg.telegram_partner_character ?? '')}
+                      disabled={savingField === 'telegram_partner_character'}
+                      onChange={(e) => saveCfg('telegram_partner_character', e.target.value)}
+                    >
+                      <option value="">— {t('none')} —</option>
+                      {sortedCharacters.map((c) => (
+                        <option key={c.name} value={c.name}>
+                          {c.display_name || c.name}
+                        </option>
+                      ))}
                     </select>
                   </Field>
                 </div>
