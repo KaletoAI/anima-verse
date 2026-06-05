@@ -16,6 +16,7 @@ import {
 } from '../../lib/refs'
 import { SoulEditor } from './SoulEditor'
 import { DailyScheduleGrid } from './DailyScheduleGrid'
+import { ImageOverrides } from './ImageOverrides'
 
 /**
  * Game-Admin "Characters" tab — list-detail like Activities / Rules /
@@ -908,6 +909,8 @@ export function CharactersTab() {
                   </FieldSet>
                 </div>
               )
+            ) : subTab === 'image' ? (
+              <ImageOverrides character={selected} />
             ) : (
               <div className="ga-form">
                 <div className="ga-placeholder">

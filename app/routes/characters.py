@@ -2138,16 +2138,16 @@ async def set_outfit_imagegen_route(character_name: str, request: Request) -> Di
             st = 1.0
         clean_loras.append({"name": nm, "strength": st})
     prof = get_character_profile(character_name) or {}
-    if workflow or model or clean_loras:
-        prof["outfit_imagegen"] = {
-            "workflow": workflow,
-            "model": model,
-            "loras": clean_loras,
-        }
-    elif "outfit_imagegen" in prof:
-        del prof["outfit_imagegen"]
+    # Immer schreiben (auch leer) — sonst persistiert ein Clear nicht: outfit_imagegen
+    # lebt in config_json und wird beim Save nur uebertragen, wenn der Key im Profile
+    # PRAESENT ist. Ein del laesst den alten Config-Wert stehen. Leeres workflow +
+    # keine LoRAs = Override geloescht. ``model`` faellt weg (kommt aus dem Workflow).
+    if workflow or clean_loras:
+        prof["outfit_imagegen"] = {"workflow": workflow, "loras": clean_loras}
+    else:
+        prof["outfit_imagegen"] = {}
     save_character_profile(character_name, prof)
-    return {"status": "ok", "workflow": workflow, "model": model, "loras": clean_loras}
+    return {"status": "ok", "workflow": workflow, "loras": clean_loras}
 
 
 @router.get("/{character_name}/slot-overrides")
