@@ -1111,6 +1111,11 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
             from app.models.character import get_character_profile
             prof = get_character_profile(character_name) or {}
             active_wf_name = ((prof.get("outfit_imagegen") or {}).get("workflow") or "").strip()
+            # Glob-Pattern (z.B. "Qwen*") → konkreter Workflow-Name
+            if active_wf_name:
+                _m = imagegen.match_workflow(active_wf_name, character_name)
+                if _m:
+                    active_wf_name = _m.name
         except Exception:
             pass
     if not active_wf_name:
@@ -1512,6 +1517,16 @@ async def generate_outfit_image_route(character_name: str, outfit_id: str, reque
             workflow_name = _outfit_default[len("workflow:"):].strip()
         elif _outfit_default.startswith("backend:"):
             backend_name = _outfit_default[len("backend:"):].strip()
+    # Glob-Pattern (z.B. "Qwen*") → konkreter Workflow, Wahl nach Verfuegbarkeit.
+    # Greift fuer Override UND expliziten Dialog-Workflow (Render-Match ueberall).
+    if workflow_name:
+        try:
+            _ig = get_skill_manager().get_skill("image_generation")
+            _m = _ig.match_workflow(workflow_name, character_name) if _ig else None
+            if _m:
+                workflow_name = _m.name
+        except Exception as _me:
+            logger.debug("workflow glob resolve failed: %s", _me)
 
     # Auflösung aus .env (Hochformat für Ganzkörper-Outfits)
     outfit_w = int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None

@@ -849,7 +849,10 @@ def generate_expression_image(character_name: str,
     workflow_name = ""
     backend_name = ""
     if char_workflow_override:
-        workflow_name = char_workflow_override
+        # Glob-Pattern (z.B. "Qwen*") → konkreter Workflow, Wahl nach
+        # Backend-Verfuegbarkeit. Exakter Name matcht sich selbst.
+        _matched = image_skill.match_workflow(char_workflow_override, character_name)
+        workflow_name = _matched.name if _matched else char_workflow_override
     else:
         _expr_default = os.environ.get("EXPRESSION_IMAGEGEN_DEFAULT", "").strip()
         if not _expr_default:

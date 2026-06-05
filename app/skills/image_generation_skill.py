@@ -730,17 +730,62 @@ class ImageGenerationSkill(BaseSkill):
         agent_config = get_character_skill_config(character_name, self.SKILL_ID)
         wf_name = (agent_config or {}).get("comfy_workflow", "")
         if wf_name:
-            for wf in self.comfy_workflows:
-                if wf.name == wf_name:
-                    return wf
+            # Glob-faehig: exakter Name ist ein Glob ohne Wildcard.
+            wf = self.match_workflow(wf_name, character_name)
+            if wf:
+                return wf
             logger.warning(
                 "Konfigurierter Workflow '%s' fuer %s nicht gefunden "
                 "(verfuegbar: %s)",
                 wf_name, character_name,
                 ", ".join(wf.name for wf in self.comfy_workflows))
             return None
-        # Kein Workflow explizit konfiguriert — Default aus .env (COMFY_IMAGEGEN_DEFAULT)
+        # Per-Character Render-Pattern (profile.outfit_imagegen.workflow, Glob) —
+        # dasselbe Match-Konzept wie Outfit/Expression, damit Dialog/Chat-Gen
+        # denselben Workflow waehlen (plan-intents-unified … Render-Match).
+        try:
+            from app.models.character import get_character_profile as _gcp
+            _pat = ((_gcp(character_name) or {}).get("outfit_imagegen") or {}).get("workflow", "")
+            wf = self.match_workflow(_pat, character_name)
+            if wf:
+                return wf
+        except Exception as _e:
+            logger.debug("outfit_imagegen-Pattern lesen fehlgeschlagen: %s", _e)
+        # Sonst Default aus .env (COMFY_IMAGEGEN_DEFAULT)
         return self._default_workflow
+
+    def match_workflow(self, pattern: str,
+                       character_name: str = "") -> Optional[ComfyWorkflow]:
+        """Loest ein per-Character Workflow-Glob (z.B. ``Qwen*``) zu einem
+        konkreten ComfyWorkflow auf — Auswahl unter mehreren Treffern nach
+        Backend-Verfuegbarkeit.
+
+        Unabhaengig vom globalen Default/Fallback. Greift case-insensitiv per
+        ``fnmatch``; ein exakter Name ist ein Glob ohne Wildcard, explizite
+        Auswahl funktioniert also weiter. Bei mehreren Treffern gewinnt der
+        Workflow, dessen guenstigster *verfuegbarer* Backend am billigsten ist
+        (≈ freier GPU-Kanal); hat keiner gerade einen freien Backend, faellt es
+        auf den ersten Treffer zurueck. ``None`` wenn leer / kein Treffer.
+        """
+        import fnmatch
+        pat = (pattern or "").strip()
+        if not pat or not self.comfy_workflows:
+            return None
+        pl = pat.lower()
+        matches = [wf for wf in self.comfy_workflows
+                   if fnmatch.fnmatch(wf.name.lower(), pl)]
+        if not matches:
+            return None
+        best = None
+        best_cost = None
+        for wf in matches:
+            avail = self.list_available_backends(character_name=character_name, workflow=wf)
+            if avail:
+                cost = avail[0].effective_cost
+                if best_cost is None or cost < best_cost:
+                    best_cost = cost
+                    best = wf
+        return best or matches[0]
 
     def _select_backend_for_workflow(self, workflow: ComfyWorkflow, character_name: str) -> Optional[ImageBackend]:
         """Waehlt den guenstigsten verfuegbaren Backend fuer einen Workflow.
