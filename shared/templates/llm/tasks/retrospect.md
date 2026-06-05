@@ -1,6 +1,6 @@
 ---
 task: consolidation
-purpose: Character self-reflection — extract new beliefs, lessons and goals from recent experience (Retrospect skill). Output is appended to the character's soul/beliefs.md, soul/lessons.md and soul/goals.md under the matching ## subsection.
+purpose: Character self-reflection — produce a CONSOLIDATED, deduplicated set of beliefs, lessons and goals (merging recent experience into what's on record). Output REPLACES the character's soul/beliefs.md, soul/lessons.md and soul/goals.md (Retrospect skill, rewrite_file).
 placeholders:
   character_name: Character doing the reflecting
   personality: Their stated personality (so the reflection sounds like them)
@@ -26,13 +26,13 @@ Recent days (summaries):
 Recent significant memories:
 {{ recent_memories }}
 
-{% if existing_beliefs %}Beliefs already on record (do NOT repeat — only add genuinely new ones):
+{% if existing_beliefs %}Beliefs currently on record (consolidate these):
 {{ existing_beliefs }}
 {% endif %}
-{% if existing_lessons %}Lessons already on record (do NOT repeat — only add genuinely new ones):
+{% if existing_lessons %}Lessons currently on record (consolidate these):
 {{ existing_lessons }}
 {% endif %}
-{% if existing_goals %}Goals already on record (do NOT repeat — only add genuinely new ones):
+{% if existing_goals %}Goals currently on record (consolidate these):
 {{ existing_goals }}
 {% endif %}
 Reflect from {{ character_name }}'s point of view and identify, across three buckets:
@@ -51,7 +51,14 @@ Reflect from {{ character_name }}'s point of view and identify, across three buc
 - ``mid_term``   — within weeks
 - ``long_term``  — beyond that
 
-Emit at most 3 entries per bucket. Skip buckets/categories that have nothing genuinely new. If nothing meaningful changed, return empty arrays.
+For each bucket, return the **consolidated, updated full set** that should be on record afterwards:
+- keep the still-valid existing entries,
+- merge in any genuinely new insight from the recent experience,
+- **collapse redundancy and near-duplicates** — entries that say essentially the same thing become ONE concise entry (this is the main job: the list must NOT grow with rephrasings),
+- each entry stays one short first-person sentence,
+- **at most 5 entries per category.**
+
+Return the COMPLETE set per bucket — the file is REPLACED by what you return, so include the existing entries you want to keep, not just additions. Return an empty array (or omit a bucket) ONLY if it should stay exactly as it is now.
 
 Reply with ONLY this JSON, no prose. All ``text`` values MUST be in {{ language_name }}:
 {

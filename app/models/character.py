@@ -1130,6 +1130,13 @@ def save_character_current_location(character_name: str = "", location: str = ""
                             f"{character_name} betritt {_nl}.")
             _suggest_follow_after_move(character_name, old_location, old_room,
                                        location, "", _nl)
+            # at_location-Intents (plan-intents-unified.md): passende Vorhaben
+            # des Characters für den neuen Ort anstoßen.
+            try:
+                from app.models.intents import fire_location_intents
+                fire_location_intents(character_name, location)
+            except Exception:
+                pass
         except Exception:
             pass
     if location and location != old_location:

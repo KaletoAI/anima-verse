@@ -414,6 +414,16 @@ class SchedulerManager:
 
             if action_type == 'send_message':
                 result = self._action_send_message(action, agent)
+            elif action_type == 'intent_bump':
+                # at_time-Intent (plan-intents-unified.md): Owner zur geplanten
+                # Zeit mit Hint bumpen — der Char entscheidet selbst, ob/wie.
+                try:
+                    from app.core.agent_loop import get_agent_loop
+                    get_agent_loop().bump(agent, hint=action.get("hint", ""))
+                    result = {"success": True, "action": "intent_bump",
+                              "intent_id": action.get("intent_id", "")}
+                except Exception as _ie:
+                    result = {"success": False, "error": str(_ie)}
             elif action_type == 'notify':
                 result = self._action_notify(action, agent)
             elif action_type == 'execute_tool':

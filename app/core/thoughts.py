@@ -728,33 +728,17 @@ class ThoughtRunner:
             except Exception as e:
                 logger.debug("Arc-Advancement Fehler: %s", e)
 
-        # Intent-Extraktion aus Gedanken-Antwort. ``_tool_executions`` is
-        # the list of tools the agent already ran during streaming —
-        # process_response_intents skips INTENT markers that duplicate
-        # any of them (same tool family, matching content blob).
-        if full_response or notification_content:
-            try:
-                from app.core.intent_engine import process_response_intents
-                from app.routes.scheduler import get_scheduler_manager
-                _intents = process_response_intents(
-                    full_response or notification_content, character_name, config,
-                    get_scheduler_manager(),
-                    executed_tools=_tool_executions,
-                )
-                try:
-                    _turn_info["intents"] = [i.type for i in (_intents or [])]
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.debug("Intent extraction error: %s", e)
+        # (Alter intent_engine-Pfad entfernt — Intents laufen jetzt ueber die
+        # vereinheitlichten [INTENT:]-Marker unten, plan-intents-unified.md.
+        # Damit entfaellt auch der A4-Event-Loop-Bug dieses toten Pfades.)
 
-        # Assignment-Marker-Extraktion aus Gedanken-Antwort
+        # Intent-Marker-Verarbeitung aus Gedanken-Antwort ([INTENT:…] etc.)
         if full_response or notification_content:
             try:
-                from app.models.assignments import extract_assignment_markers
-                extract_assignment_markers(character_name,
+                from app.models.intents import parse_and_apply_intent_markers
+                parse_and_apply_intent_markers(character_name,
                     full_response or notification_content)
             except Exception as e:
-                logger.debug("Assignment marker extraction error: %s", e)
+                logger.debug("Intent marker extraction error: %s", e)
 
         return _turn_info

@@ -50,7 +50,7 @@ except Exception:
     pass
 
 # Import routers
-from app.routes import auth, store, characters, chat, group_chat, scheduler, instagram, world, telegram, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, assignments, diary
+from app.routes import auth, store, characters, chat, group_chat, scheduler, instagram, world, telegram, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
 from app.routes import admin_settings
 from app.routes import user_gallery
 from app.routes import secrets
@@ -103,6 +103,15 @@ async def lifespan(app: FastAPI):
     # Migration: Persistente Location-IDs hinzufuegen, Filesystem bereinigen
     from app.models.world import migrate_location_ids
     migrate_location_ids()
+
+    # Vereinheitlichte Intents (plan-intents-unified.md, Phase 1): bestehende
+    # Assignments idempotent in die intents-Tabelle spiegeln. Kein Verhaltens-
+    # wechsel — assignments bleiben in Phase 1 die treibende Quelle.
+    try:
+        from app.models.intents import migrate_assignments_to_intents
+        migrate_assignments_to_intents()
+    except Exception as _ie:
+        logger.debug("intents migration failed: %s", _ie)
 
     # Klon-Hygiene: off-map / Duplikate / Waisen entfernen.
     from app.models.world import cleanup_orphan_clones
@@ -402,7 +411,7 @@ app.include_router(rules.router, tags=["rules"])
 from app.routes import content_packs
 app.include_router(content_packs.router)
 app.include_router(relationships.router, tags=["relationships"])
-app.include_router(assignments.router, tags=["assignments"])
+app.include_router(intents.router, tags=["intents"])
 app.include_router(diary.router, tags=["diary"])
 app.include_router(user_gallery.router)
 app.include_router(secrets.router, tags=["secrets"])

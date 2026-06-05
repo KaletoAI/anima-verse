@@ -103,6 +103,47 @@ def append_entry(character_name: str, file_id: str, category_id: str,
     return True
 
 
+def rewrite_file(character_name: str, file_id: str, entries,
+                 language: str = "en") -> int:
+    """Schreibt eine Soul-Datei KOMPLETT NEU aus dem konsolidierten Satz
+    ``entries`` (Liste von {text, category}). Ersetzt den bisherigen Inhalt —
+    so kann der Retrospect konsolidieren/deduplizieren statt nur anzuhängen.
+    Reihenfolge der Kategorien folgt dem Schema. Gibt die Anzahl geschriebener
+    Einträge zurück. (Caller entscheidet, ob bei leerem Satz überhaupt ersetzt
+    wird — siehe retrospect._replace_entries, das leere Buckets NICHT wegschreibt.)"""
+    if file_id not in SOUL_FILE_SCHEMA:
+        raise KeyError(f"Unknown soul file: {file_id}")
+    by_cat: Dict[str, List[str]] = {cid: [] for cid in list_categories(file_id)}
+    seen: set = set()
+    for e in entries or []:
+        if not isinstance(e, dict):
+            continue
+        text = (e.get("text") or "").strip()
+        cat = (e.get("category") or "").strip()
+        if not text or cat not in by_cat:
+            continue
+        key = (cat, text.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        by_cat[cat].append(text)
+    schema = SOUL_FILE_SCHEMA[file_id]
+    title = schema["top_de"] if language == "de" else schema["top_en"]
+    parts = [f"# {title}", ""]
+    n = 0
+    for cid, de, en in schema["categories"]:
+        parts.append(f"## {de if language == 'de' else en}")
+        for text in by_cat.get(cid, []):
+            parts.append(text if text.lstrip().startswith("- ") else f"- {text}")
+            n += 1
+        parts.append("")
+    new_text = "\n".join(parts).rstrip() + "\n"
+    path = get_soul_file_path(character_name, file_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new_text, encoding="utf-8")
+    return n
+
+
 def _insert_under_heading(text: str, candidate_lower: set,
                           new_line: str, fallback_head: str) -> str:
     """Insert ``new_line`` just before the next ``##``/``#`` heading after a

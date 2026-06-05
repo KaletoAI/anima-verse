@@ -248,11 +248,12 @@ def _sub_activity_expiry():
 
 
 def _sub_assignment_expiry():
+    # Intents (plan-intents-unified.md): überfällige Intents auf 'expired' setzen.
     try:
-        from app.models.assignments import expire_overdue
+        from app.models.intents import expire_overdue
         expire_overdue()
     except Exception as e:
-        logger.debug("assignment_expiry sub error: %s", e)
+        logger.debug("intent_expiry sub error: %s", e)
 
 
 def _sub_random_events_generate():

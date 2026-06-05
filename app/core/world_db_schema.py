@@ -281,6 +281,29 @@ SCHEMA_STATEMENTS = [
         created_at     TEXT NOT NULL,
         updated_at     TEXT NOT NULL
     )""",
+    # Vereinheitlichte Intents (plan-intents-unified.md): EIN Eintrag für alles,
+    # was ein Character tun soll/will — vom Menschen gesetzt (source=human, frühere
+    # Assignments) ODER vom Character (source=character: Versprechen, Retrospect-
+    # Ziele). trigger/action/participants/meta als JSON.
+    """CREATE TABLE IF NOT EXISTS intents (
+        id             TEXT PRIMARY KEY,
+        source         TEXT NOT NULL DEFAULT 'character',
+        owner          TEXT NOT NULL DEFAULT '',
+        participants   TEXT NOT NULL DEFAULT '{}',
+        title          TEXT NOT NULL DEFAULT '',
+        description    TEXT NOT NULL DEFAULT '',
+        trigger        TEXT NOT NULL DEFAULT '{}',
+        action         TEXT NOT NULL DEFAULT '{}',
+        priority       INTEGER NOT NULL DEFAULT 3,
+        status         TEXT NOT NULL DEFAULT 'active',
+        location_id    TEXT NOT NULL DEFAULT '',
+        target_count   INTEGER NOT NULL DEFAULT 0,
+        outfit_hint    TEXT NOT NULL DEFAULT '',
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        expires_at     TEXT NOT NULL DEFAULT '',
+        meta           TEXT NOT NULL DEFAULT '{}'
+    )""",
     """CREATE TABLE IF NOT EXISTS stories (
         id             TEXT PRIMARY KEY,
         title          TEXT NOT NULL,

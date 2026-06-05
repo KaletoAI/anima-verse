@@ -200,10 +200,10 @@ def _load_arcs(character_name: str) -> str:
 
 def _load_assignments(character_name: str) -> str:
     try:
-        from app.models.assignments import build_assignment_prompt_section
-        return build_assignment_prompt_section(character_name) or ""
+        from app.models.intents import build_intents_prompt_section
+        return build_intents_prompt_section(character_name) or ""
     except Exception as e:
-        logger.debug("Assignment-Section laden fehlgeschlagen: %s", e)
+        logger.debug("Intents-Section laden fehlgeschlagen: %s", e)
     return ""
 
 

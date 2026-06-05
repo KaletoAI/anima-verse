@@ -733,24 +733,16 @@ def post_process_response(
     except Exception as e:
         logger.error("Activity extraction error: %s", e)
 
-    # Assignment marker extraction (progress/done)
+    # Intent-Marker (Vorhaben & Aufgaben): [INTENT:…] (neu) / [INTENT_DONE:…] /
+    # [INTENT_PROGRESS:…]. Ersetzt die alten Assignment-Marker UND den toten
+    # intent_engine-Pfad — eine vereinheitlichte Quelle (plan-intents-unified.md).
     try:
-        from app.models.assignments import extract_assignment_markers
-        markers = extract_assignment_markers(character_name, full_response)
-        if markers:
-            result["assignment_markers"] = markers
+        from app.models.intents import parse_and_apply_intent_markers
+        _ni = parse_and_apply_intent_markers(character_name, full_response)
+        if _ni:
+            result["intent_markers"] = _ni
     except Exception as e:
-        logger.error("Assignment marker extraction error: %s", e)
-
-    # New assignment creation from chat
-    try:
-        from app.models.assignments import extract_new_assignment
-        new_assignment = extract_new_assignment(character_name, full_response)
-        if new_assignment:
-            result["new_assignment"] = new_assignment
-            logger.info("[%s] New assignment from chat: %s", character_name, new_assignment.get("title"))
-    except Exception as e:
-        logger.error("New assignment extraction error: %s", e)
+        logger.error("Intent marker extraction error: %s", e)
 
     # Background extraction: memory + categories + relationships
     # Nur bei substantiellen Antworten (kurze/leere Antworten ueberspringen)
@@ -870,19 +862,9 @@ def post_process_response(
         # No event loop — run synchronously
         _background_extraction()
 
-    # Intent extraction
-    try:
-        from app.core.intent_engine import process_response_intents_async
-        from app.core.thoughts import get_thought_runner
-        _pl = get_thought_runner()
-        _sched = getattr(_pl, '_scheduler', None) if _pl else None
-        asyncio.ensure_future(
-            process_response_intents_async(full_response, character_name,
-                                           agent_config, _sched,
-                                           executed_tools=executed_tools)
-        )
-    except Exception as e:
-        logger.error("[%s] Intent extraction error: %s", character_name, e)
+    # (Alter intent_engine-Pfad entfernt — Intents laufen jetzt über die
+    # vereinheitlichten [INTENT:]-Marker oben, plan-intents-unified.md. Damit
+    # entfällt auch der A4-Event-Loop-Bug dieses toten Pfades.)
 
     # Instagram interaction extraction
     try:

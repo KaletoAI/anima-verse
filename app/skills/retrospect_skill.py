@@ -102,9 +102,11 @@ class RetrospectSkill(BaseSkill):
         if not recent_summaries and not recent_memories:
             return "Nothing to reflect on yet — no recent material."
 
-        existing_beliefs = "\n".join(load_all_body_lines(character_name, "beliefs", limit=15))
-        existing_lessons = "\n".join(load_all_body_lines(character_name, "lessons", limit=15))
-        existing_goals = "\n".join(load_all_body_lines(character_name, "goals", limit=15))
+        # ALLE bestehenden zeigen (nicht nur 15) — die LLM konsolidiert sie und
+        # kann sonst ältere Einträge gar nicht entdoppeln.
+        existing_beliefs = "\n".join(load_all_body_lines(character_name, "beliefs", limit=60))
+        existing_lessons = "\n".join(load_all_body_lines(character_name, "lessons", limit=60))
+        existing_goals = "\n".join(load_all_body_lines(character_name, "goals", limit=60))
 
         try:
             from app.core.llm_router import llm_call
@@ -137,22 +139,44 @@ class RetrospectSkill(BaseSkill):
                            character_name, raw[:200])
             return "Reflection produced no usable output."
 
+        # Konsolidieren statt anhängen: die LLM liefert den vollständigen, schon
+        # deduplizierten Satz pro Bucket → Datei komplett ersetzen. Leere Buckets
+        # NICHT wegschreiben (sonst würde "nichts geändert" die Datei leeren).
         counts = {
-            "beliefs": self._append_entries(character_name, "beliefs",
-                                            data.get("beliefs") or [], lang_code),
-            "lessons": self._append_entries(character_name, "lessons",
-                                            data.get("lessons") or [], lang_code),
-            "goals":   self._append_entries(character_name, "goals",
-                                            data.get("goals") or [], lang_code),
+            "beliefs": self._replace_entries(character_name, "beliefs",
+                                             data.get("beliefs") or [], lang_code),
+            "lessons": self._replace_entries(character_name, "lessons",
+                                             data.get("lessons") or [], lang_code),
+            "goals":   self._replace_entries(character_name, "goals",
+                                             data.get("goals") or [], lang_code),
         }
+
+        # Ziele → standing-Intents (plan-intents-unified.md): jedes Goal wird ein
+        # vom Character gesetzter Intent. Dedupe gegen bestehende aktive Intents
+        # gleichen Titels, damit wiederholte Retrospects sie nicht stapeln.
+        try:
+            from app.models.intents import create_intent, list_intents
+            existing = {(i.get("title") or "").strip().lower()
+                        for i in list_intents(owner=character_name, status="active")}
+            for g in (data.get("goals") or []):
+                if not isinstance(g, dict):
+                    continue
+                title = (g.get("text") or "").strip()
+                if title and title.lower() not in existing:
+                    create_intent(owner=character_name, title=title, source="character",
+                                  trigger={"kind": "standing"}, priority=3,
+                                  meta={"origin": "retrospect_goal"})
+                    existing.add(title.lower())
+        except Exception as _ge:
+            logger.debug("retrospect goals -> intents failed: %s", _ge)
 
         _mark_retrospect_done(character_name)
 
-        added = [(k, v) for k, v in counts.items() if v > 0]
-        if not added:
-            return "Reflected — nothing new worth recording this time."
-        bits = [f"{n} new {k}" for k, n in added]
-        return "Reflected: " + ", ".join(bits) + "."
+        updated = [(k, v) for k, v in counts.items() if v is not None]
+        if not updated:
+            return "Reflected — nothing worth recording this time."
+        bits = [f"{n} {k}" for k, n in updated]
+        return "Reflected (consolidated): " + ", ".join(bits) + "."
 
     # ------------------------------------------------------------------
     # Helpers
@@ -198,30 +222,37 @@ class RetrospectSkill(BaseSkill):
         except Exception:
             return None
 
-    def _append_entries(self, character_name: str, file_id: str,
-                        entries: List[Any], lang_code: str) -> int:
+    def _replace_entries(self, character_name: str, file_id: str,
+                         entries: List[Any], lang_code: str):
+        """Ersetzt eine Soul-Datei durch den konsolidierten Satz der LLM. Gibt die
+        Anzahl geschriebener Einträge zurück — oder ``None`` wenn der Bucket leer
+        war, dann bleibt die bestehende Datei unangetastet („nichts geändert")."""
+        CAP_PER_CATEGORY = 5  # Hard-Safety-Net gegen Überproduktion der LLM
         valid_categories = set(list_categories(file_id))
-        existing_lower = [s.lower() for s in load_all_body_lines(
-            character_name, file_id, limit=50)]
-        added = 0
-        for e in entries:
+        cleaned: List[Dict[str, str]] = []
+        seen: set = set()
+        per_cat: Dict[str, int] = {}
+        for e in entries or []:
             if not isinstance(e, dict):
                 continue
             text = (e.get("text") or "").strip()
             category = (e.get("category") or "").strip()
             if not text or category not in valid_categories:
                 continue
-            tl = text.lower()
-            if any(tl in line for line in existing_lower):
+            k = (category, text.lower())
+            if k in seen or per_cat.get(category, 0) >= CAP_PER_CATEGORY:
                 continue
-            try:
-                append_entry(character_name, file_id, category, text, language=lang_code)
-                existing_lower.append(tl)
-                added += 1
-            except Exception as ex:
-                logger.warning("append_entry failed [%s/%s]: %s",
-                               file_id, category, ex)
-        return added
+            seen.add(k)
+            per_cat[category] = per_cat.get(category, 0) + 1
+            cleaned.append({"text": text, "category": category})
+        if not cleaned:
+            return None  # nichts Brauchbares → bestehende Datei behalten
+        try:
+            from app.core.soul_writer import rewrite_file
+            return rewrite_file(character_name, file_id, cleaned, language=lang_code)
+        except Exception as ex:
+            logger.warning("rewrite_file failed [%s]: %s", file_id, ex)
+            return None
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
         from app.core.tool_formats import format_example

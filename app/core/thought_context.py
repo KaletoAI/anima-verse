@@ -140,12 +140,13 @@ def _build_events_block(location_id: str) -> str:
 
 
 def _build_assignments_block(character_name: str) -> str:
-    """Active assignments for this character."""
+    """Active intents (plans & tasks) for this character — unified store
+    (plan-intents-unified.md)."""
     try:
-        from app.models.assignments import build_assignment_prompt_section
-        return (build_assignment_prompt_section(character_name) or "").strip()
+        from app.models.intents import build_intents_prompt_section
+        return (build_intents_prompt_section(character_name) or "").strip()
     except Exception as e:
-        logger.debug("assignments block failed for %s: %s", character_name, e)
+        logger.debug("intents block failed for %s: %s", character_name, e)
         return ""
 
 

@@ -74,6 +74,14 @@ def _strip_tool_hallucinations(text: str) -> str:
         text = re.sub(r'<tool\s+name="[^"]*">[^<]*', '', text)
     # *An:* / *Betreff:* / *Text:* Bloecke (Notification-Halluzinationen)
     text = re.sub(r'\n\s*\*(?:An|Betreff|Text|Target|Message):\*\s*[^\n]*', '', text, flags=re.IGNORECASE)
+    # Intent-Marker ([INTENT: …] / [INTENT_DONE: …] / [INTENT_PROGRESS: …]) —
+    # interne Vorhaben-Metadaten, duerfen nicht im sichtbaren Text landen
+    # (plan-intents-unified.md). Werden vorher bereits ausgewertet.
+    try:
+        from app.models.intents import strip_intent_markers
+        text = strip_intent_markers(text)
+    except Exception:
+        pass
     # Mehrfache Leerzeilen
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
@@ -2697,11 +2705,11 @@ def _build_full_system_prompt(character_name: str,
     def _has(feat: str) -> bool:
         return _feat(character_name, feat)
 
-    # ---- Active assignments -------------------------------------------
+    # ---- Active intents (Vorhaben & Aufgaben) -------------------------
     assignment_section = ""
     if _has("assignments_enabled"):
-        from app.models.assignments import build_assignment_prompt_section
-        assignment_section = build_assignment_prompt_section(character_name) or ""
+        from app.models.intents import build_intents_prompt_section
+        assignment_section = build_intents_prompt_section(character_name) or ""
 
     # ---- Current situation block --------------------------------------
     current_location_id = get_character_current_location(character_name)
