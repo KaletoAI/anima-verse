@@ -1865,3 +1865,81 @@ html, * {
 @media (max-width: 900px) {
   .ga-loc-twocol { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   Soul editor (Characters → Soul) — file bar + markdown editor +
+   structured preview with editable/locked section badges.
+   ============================================================ */
+.soul-tab { display: flex; flex-direction: column; gap: 10px; }
+.soul-files-bar { display: flex; flex-wrap: wrap; gap: 6px; }
+.soul-file-btn {
+  font: inherit; font-size: 12px; cursor: pointer;
+  background: var(--bg-secondary, #1c2128); color: var(--text, #e6edf3);
+  border: 1px solid var(--border, #30363d); border-radius: var(--radius, 6px);
+  padding: 4px 10px;
+}
+.soul-file-btn:hover { background: var(--bg-hover, #262c36); }
+.soul-file-btn.active { border-color: var(--accent, #2f81f7); background: var(--bg-hover, #262c36); }
+
+.soul-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 360px; }
+.soul-editor-col, .soul-preview-col { display: flex; flex-direction: column; min-width: 0; }
+.soul-col-header {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--text-muted, #8b949e); margin-bottom: 4px;
+}
+.soul-editor {
+  flex: 1; min-height: 340px; resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.5;
+  background: var(--bg, #0d1117); color: var(--text, #e6edf3);
+  border: 1px solid var(--border, #30363d); border-radius: var(--radius, 6px); padding: 8px;
+}
+.soul-preview {
+  flex: 1; overflow-y: auto; min-height: 340px;
+  background: var(--bg, #0d1117); border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px); padding: 8px;
+}
+.soul-h1 { font-size: 14px; margin: 4px 0 6px; color: var(--text, #e6edf3); }
+.soul-h2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; margin: 0 0 4px; }
+.soul-section { border-left: 3px solid var(--border, #30363d); padding: 6px 10px; margin: 0 0 8px; border-radius: 0 4px 4px 0; }
+.soul-section.soul-editable { border-left-color: #3fb950; background: rgba(63, 185, 80, 0.06); }
+.soul-section.soul-locked { border-left-color: var(--text-muted, #8b949e); background: rgba(139, 148, 158, 0.05); }
+.soul-section-badge { font-size: 11px; color: var(--text-muted, #8b949e); white-space: nowrap; }
+.soul-body { font-size: 12.5px; line-height: 1.5; color: var(--text, #e6edf3); white-space: pre-wrap; }
+.soul-body.soul-empty { color: var(--text-muted, #8b949e); font-style: italic; }
+.soul-legend { display: flex; gap: 10px; font-size: 11px; }
+.soul-legend-item::before { content: '■ '; }
+.soul-legend-editable { color: #3fb950; }
+.soul-legend-locked { color: var(--text-muted, #8b949e); }
+
+@media (max-width: 900px) { .soul-editor-grid { grid-template-columns: 1fr; } }
+
+/* ============================================================
+   Tagesablauf (Characters → Activity & Home) — drag-to-paint
+   24h grid: rows = Sleep + locations + roles, columns = hours.
+   ============================================================ */
+.tagesablauf { display: flex; flex-direction: column; gap: 6px; }
+.tagesablauf-enabled { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.tagesablauf-grid { overflow-x: auto; }
+.tagesablauf-table { border-collapse: collapse; font-size: 11px; user-select: none; }
+.tagesablauf-table th {
+  font-weight: 500; color: var(--text-muted, #8b949e); padding: 2px 0; text-align: center;
+  min-width: 22px;
+}
+.tagesablauf-corner { min-width: 130px; }
+.tagesablauf-row-label {
+  padding: 2px 8px 2px 4px; white-space: nowrap; color: var(--text, #e6edf3);
+  border: 1px solid var(--border, #30363d); background: var(--bg-secondary, #1c2128);
+}
+.tagesablauf-loc-header td {
+  padding: 4px 6px; font-size: 11px; color: var(--text-muted, #8b949e);
+  background: var(--bg-alt, #161b22); border: 1px solid var(--border, #30363d);
+}
+.tagesablauf-cell {
+  width: 22px; height: 20px; border: 1px solid var(--border, #30363d);
+  cursor: pointer; background: var(--bg, #0d1117);
+}
+.tagesablauf-cell:hover { background: var(--bg-hover, #262c36); }
+.tagesablauf-filled { background: var(--accent, #2f81f7); }
+.tagesablauf-filled:hover { background: var(--accent, #2f81f7); filter: brightness(1.1); }
+.tagesablauf-sleep { background: #8957e5; }
+.tagesablauf-preview { background: rgba(47, 129, 247, 0.35); }

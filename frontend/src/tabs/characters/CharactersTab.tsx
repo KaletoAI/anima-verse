@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPost } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
@@ -14,6 +14,8 @@ import {
   type LocationRef,
   type RoomRef,
 } from '../../lib/refs'
+import { SoulEditor } from './SoulEditor'
+import { DailyScheduleGrid } from './DailyScheduleGrid'
 
 /**
  * Game-Admin "Characters" tab — list-detail like Activities / Rules /
@@ -95,14 +97,6 @@ const LANGUAGES: Array<{ value: string; label: string }> = [
   { value: 'ko', label: '한국어' },
 ]
 
-// Soul text sections surfaced in the Soul sub-tab — backed by soul/*.md and
-// the /soul/file/{id} endpoints (gated per template/feature).
-const SOUL_SECTIONS: Array<{ id: string; label: string }> = [
-  { id: 'beliefs', label: 'Beliefs & Values' },
-  { id: 'lessons', label: 'Lessons Learned' },
-  { id: 'goals', label: 'Personal Goals' },
-]
-
 export function CharactersTab() {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -123,11 +117,7 @@ export function CharactersTab() {
   // Dynamic TTS option lists (Others tab) — loaded once on mount.
   const [ttsVoices, setTtsVoices] = useState<Array<{ value: string; label: string }>>([])
   const [ttsSpeakers, setTtsSpeakers] = useState<Array<{ value: string; label: string }>>([])
-  // Soul texts (beliefs/lessons/goals) — raw soul/*.md content per section.
-  const [soulText, setSoulText] = useState<Record<string, string>>({})
-  const [soulAvailable, setSoulAvailable] = useState<string[]>([])
-  const [soulLoading, setSoulLoading] = useState(false)
-  // Activity & Home: home/sleep location + daily rhythm slots.
+  // Activity & Home: home/sleep location + daily rhythm (grid is self-managed).
   const [homeLoc, setHomeLoc] = useState<{ home_location: string; home_room: string }>({
     home_location: '',
     home_room: '',
@@ -136,7 +126,6 @@ export function CharactersTab() {
     enabled: false,
     slots: [],
   })
-  const [scheduleDirty, setScheduleDirty] = useState(false)
   const [homeLoading, setHomeLoading] = useState(false)
 
   useEffect(() => {
@@ -151,45 +140,11 @@ export function CharactersTab() {
       .catch(() => setTtsSpeakers([]))
   }, [])
 
-  // Load soul texts when the Soul tab is opened for a character. Each section
-  // is gated per template/feature — a 403/404 just means "not available here".
-  useEffect(() => {
-    if (subTab !== 'soul' || !selected) return
-    let cancelled = false
-    setSoulLoading(true)
-    setSoulText({})
-    setSoulAvailable([])
-    ;(async () => {
-      const text: Record<string, string> = {}
-      const avail: string[] = []
-      for (const sec of SOUL_SECTIONS) {
-        try {
-          const f = await apiGet<{ raw?: string }>(
-            `/characters/${encodeURIComponent(selected)}/soul/file/${sec.id}`,
-          )
-          text[sec.id] = f.raw || ''
-          avail.push(sec.id)
-        } catch {
-          /* section not enabled for this character — skip */
-        }
-      }
-      if (!cancelled) {
-        setSoulText(text)
-        setSoulAvailable(avail)
-        setSoulLoading(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [selected, subTab])
-
   // Load home location + daily rhythm when the Activity & Home tab opens.
   useEffect(() => {
     if (subTab !== 'home' || !selected) return
     let cancelled = false
     setHomeLoading(true)
-    setScheduleDirty(false)
     ;(async () => {
       try {
         const [home, sched] = await Promise.all([
@@ -384,25 +339,6 @@ export function CharactersTab() {
     [selected, t, toast],
   )
 
-  // Save a soul text file (full raw content) via /soul/file/{id}.
-  const saveSoul = useCallback(
-    async (sectionId: string, content: string) => {
-      if (!selected) return
-      setSavingField(`soul:${sectionId}`)
-      try {
-        await apiPost(`/characters/${encodeURIComponent(selected)}/soul/file/${sectionId}`, {
-          content,
-        })
-        toast(t('Saved'))
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      } finally {
-        setSavingField('')
-      }
-    },
-    [selected, t, toast],
-  )
-
   // Home/sleep location — saved immediately via /home-location.
   const saveHome = useCallback(
     async (next: { home_location: string; home_room: string }) => {
@@ -420,41 +356,6 @@ export function CharactersTab() {
     },
     [selected, t, toast],
   )
-
-  const saveSchedule = useCallback(async () => {
-    if (!selected) return
-    setSavingField('schedule')
-    try {
-      await apiPost('/scheduler/daily-schedule', {
-        character: selected,
-        enabled: schedule.enabled,
-        slots: schedule.slots,
-      })
-      setScheduleDirty(false)
-      toast(t('Saved'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      setSavingField('')
-    }
-  }, [schedule, selected, t, toast])
-
-  const clearSchedule = useCallback(async () => {
-    if (!selected) return
-    if (!window.confirm(t('Delete the whole daily rhythm for {name}?').replace('{name}', selected)))
-      return
-    setSavingField('schedule')
-    try {
-      await apiDelete(`/scheduler/daily-schedule?character=${encodeURIComponent(selected)}`)
-      setSchedule({ enabled: false, slots: [] })
-      setScheduleDirty(false)
-      toast(t('Deleted'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      setSavingField('')
-    }
-  }, [selected, t, toast])
 
   const sortedCharacters = useMemo(
     () => [...characters].sort((a, b) => a.name.localeCompare(b.name)),
@@ -794,37 +695,7 @@ export function CharactersTab() {
                   </Field>
                 </div>
                 <div className="ga-form-section-label">{t('Soul texts')}</div>
-                {soulLoading ? (
-                  <div className="ga-loading">{t('Loading…')}</div>
-                ) : soulAvailable.length === 0 ? (
-                  <div className="ga-placeholder">
-                    {t('No editable soul texts for this character (template/Retrospect gated).')}
-                  </div>
-                ) : (
-                  <div className="ga-form-row">
-                    {SOUL_SECTIONS.filter((s) => soulAvailable.includes(s.id)).map((sec) => (
-                      <Field
-                        key={sec.id}
-                        label={t(sec.label)}
-                        hint={t('Auto-generated by Retrospect; editable here (soul/{id}.md).').replace(
-                          '{id}',
-                          sec.id,
-                        )}
-                      >
-                        <textarea
-                          className="ga-textarea"
-                          rows={10}
-                          value={soulText[sec.id] ?? ''}
-                          disabled={savingField === `soul:${sec.id}`}
-                          onChange={(e) =>
-                            setSoulText((p) => ({ ...p, [sec.id]: e.target.value }))
-                          }
-                          onBlur={(e) => saveSoul(sec.id, e.target.value)}
-                        />
-                      </Field>
-                    ))}
-                  </div>
-                )}
+                <SoulEditor character={selected} />
               </div>
             ) : subTab === 'others' ? (
               <div className="ga-form">
@@ -905,8 +776,9 @@ export function CharactersTab() {
                     </select>
                   </Field>
                   <Field label={t('Voice description')} hint={t('For ComfyUI Voice-Name mode, e.g. “young woman, warm and slightly husky voice”.')}>
-                    <input
-                      className="ga-input"
+                    <textarea
+                      className="ga-textarea"
+                      rows={3}
                       value={String(cfg.tts_voice_description ?? '')}
                       onChange={(e) => setCfg((p) => ({ ...p, tts_voice_description: e.target.value }))}
                       onBlur={(e) => saveCfg('tts_voice_description', e.target.value)}
@@ -1006,150 +878,16 @@ export function CharactersTab() {
                   </div>
 
                   <div className="ga-form-section-label">{t('Daily rhythm')}</div>
-                  <div className="ga-form-row">
-                    <Field
-                      label={t('Schedule active')}
-                      hint={t('When on, the character is moved through the slots below at their hours.')}
-                    >
-                      <select
-                        className="ga-input"
-                        value={schedule.enabled ? 'true' : 'false'}
-                        onChange={(e) => {
-                          setSchedule((s) => ({ ...s, enabled: e.target.value === 'true' }))
-                          setScheduleDirty(true)
-                        }}
-                      >
-                        <option value="true">{t('On')}</option>
-                        <option value="false">{t('Off')}</option>
-                      </select>
-                    </Field>
-                  </div>
-
-                  {schedule.slots.length === 0 ? (
-                    <div className="ga-placeholder">{t('No slots yet — add one below.')}</div>
-                  ) : (
-                    schedule.slots.map((slot, i) => (
-                      <div className="ga-form-row" key={i}>
-                        <Field label={i === 0 ? t('Hour') : ''}>
-                          <select
-                            className="ga-input"
-                            value={String(slot.hour)}
-                            onChange={(e) => {
-                              const hour = parseInt(e.target.value, 10)
-                              setSchedule((s) => ({
-                                ...s,
-                                slots: s.slots.map((sl, j) => (j === i ? { ...sl, hour } : sl)),
-                              }))
-                              setScheduleDirty(true)
-                            }}
-                          >
-                            {Array.from({ length: 24 }, (_, h) => (
-                              <option key={h} value={h}>
-                                {String(h).padStart(2, '0')}:00
-                              </option>
-                            ))}
-                          </select>
-                        </Field>
-                        <Field label={i === 0 ? t('Location') : ''}>
-                          <select
-                            className="ga-input"
-                            value={slot.location}
-                            onChange={(e) => {
-                              const location = e.target.value
-                              setSchedule((s) => ({
-                                ...s,
-                                slots: s.slots.map((sl, j) => (j === i ? { ...sl, location } : sl)),
-                              }))
-                              setScheduleDirty(true)
-                            }}
-                          >
-                            <option value="">— {t('none')} —</option>
-                            {locations.map((l) => (
-                              <option key={l.id} value={l.id}>
-                                {l.name || l.id}
-                              </option>
-                            ))}
-                          </select>
-                        </Field>
-                        <Field label={i === 0 ? t('Role') : ''}>
-                          <input
-                            className="ga-input"
-                            value={slot.role}
-                            placeholder={t('optional')}
-                            onChange={(e) => {
-                              const role = e.target.value
-                              setSchedule((s) => ({
-                                ...s,
-                                slots: s.slots.map((sl, j) => (j === i ? { ...sl, role } : sl)),
-                              }))
-                              setScheduleDirty(true)
-                            }}
-                          />
-                        </Field>
-                        <Field label={i === 0 ? t('Sleep') : ''} compact>
-                          <input
-                            type="checkbox"
-                            checked={slot.sleep}
-                            onChange={(e) => {
-                              const sleep = e.target.checked
-                              setSchedule((s) => ({
-                                ...s,
-                                slots: s.slots.map((sl, j) => (j === i ? { ...sl, sleep } : sl)),
-                              }))
-                              setScheduleDirty(true)
-                            }}
-                          />
-                        </Field>
-                        <Field label={i === 0 ? '' : ''} compact>
-                          <button
-                            type="button"
-                            className="ga-btn ga-btn-sm ga-btn-danger"
-                            onClick={() => {
-                              setSchedule((s) => ({
-                                ...s,
-                                slots: s.slots.filter((_, j) => j !== i),
-                              }))
-                              setScheduleDirty(true)
-                            }}
-                          >
-                            {t('Remove')}
-                          </button>
-                        </Field>
-                      </div>
-                    ))
-                  )}
-
-                  <div className="ga-form-row" style={{ marginTop: 8, gap: 8 }}>
-                    <button
-                      type="button"
-                      className="ga-btn ga-btn-sm"
-                      onClick={() => {
-                        setSchedule((s) => ({
-                          ...s,
-                          slots: [...s.slots, { hour: 8, location: '', role: '', sleep: false }],
-                        }))
-                        setScheduleDirty(true)
-                      }}
-                    >
-                      {t('+ Add slot')}
-                    </button>
-                    <button
-                      type="button"
-                      className="ga-btn ga-btn-sm ga-btn-primary"
-                      disabled={!scheduleDirty || savingField === 'schedule'}
-                      onClick={saveSchedule}
-                    >
-                      {t('Save schedule')}
-                    </button>
-                    <button
-                      type="button"
-                      className="ga-btn ga-btn-sm ga-btn-danger"
-                      disabled={savingField === 'schedule'}
-                      onClick={clearSchedule}
-                    >
-                      {t('Delete schedule')}
-                    </button>
-                  </div>
+                  <DailyScheduleGrid
+                    character={selected}
+                    locations={locations}
+                    roles={String(cfg.roles ?? '')
+                      .split(',')
+                      .map((r) => r.trim())
+                      .filter(Boolean)}
+                    initialEnabled={schedule.enabled}
+                    initialSlots={schedule.slots}
+                  />
                 </div>
               )
             ) : (
