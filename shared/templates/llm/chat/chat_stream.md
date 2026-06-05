@@ -42,12 +42,10 @@
      tool_instructions  — pre-built tool spec block (built externally; complex)
      known_locations    — comma-separated location names (when locations_enabled)
      known_activities   — comma-separated activity names (when activities_enabled)
-     other_characters   — comma-separated other character names (for assignment-tracking)
 
    FLAGS:
      tools_enabled, has_tool_llm, mood_tracking_enabled,
-     intent_tracking_enabled, assignment_tracking_enabled,
-     skip_partner
+     intent_tracking_enabled, skip_partner
 #}
 {{ lang_instruction }}
 {% if world_setup %}
@@ -178,22 +176,12 @@ Use the EXACT activity name from the list above. You may also use other activiti
 {% endif %}
 {% if intent_tracking_enabled %}
 
-Intent tracking: If you commit to a concrete real-world action (posting something, sending a message, doing something at a specific time), add this marker at the END of your response on a new line:
-[INTENT: <type> | delay=<0/30m/2h/1d> | key=value]
-Types: instagram_post, send_message, remind, execute_tool
-Delay: 0=now, 30m, 2h, 1d, or 14:00 (time of day)
-Only add this when genuinely committing to a specific action. Do NOT add for hypothetical, past, or uncertain actions.
-{% endif %}
-{% if assignment_tracking_enabled %}
-
-Assignment tracking: If the user gives you a task, mission, or assignment (something to work on over a period of time, not a one-time action), add this marker at the END of your response on a new line:
-[NEW_ASSIGNMENT: <title> | <your_role> | <description> | <priority 1-5> | <duration_minutes>]
-If the user names other characters who should also participate, add them:
-[NEW_ASSIGNMENT: <title> | <your_role> | <description> | <priority> | <duration> | <other_char>=<their_role>, <other_char2>=<their_role2>]
-Available characters: {{ other_characters }}
-Priority: 1=urgent, 2=high, 3=normal, 4=low, 5=background
-Duration: in minutes (60=1h, 120=2h, 1440=1day)
-Only add this when the user explicitly assigns a task. Do NOT add for casual suggestions or roleplay actions.
+Plans & tasks: If you take on an ongoing plan, or the user assigns you a task, record it with a marker at the END of your response on its own line:
+[INTENT: <title> | <description> | when=<standing|now|in:2h|at_location:Place> | prio=<1-5>]
+  when: standing=ongoing, now=act on it right away, in:2h=in 2 hours (or in:30m / in:1d), at_location:<Place>=when you next enter that place
+  prio: 1=critical, 3=normal, 5=background
+To advance or finish one you already have: [INTENT_PROGRESS: <id> | <note>] or [INTENT_DONE: <id>]
+Only for genuine plans or tasks — never for hypothetical, past, or one-off roleplay actions.
 {% endif %}
 {% if tool_instructions %}
 

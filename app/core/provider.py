@@ -420,11 +420,14 @@ class Provider:
                             if not has_serverless:
                                 continue
 
-                        # Text-only filter: skip vision/VL/OCR models
+                        # Vision/VL/OCR-Modelle werden NICHT mehr ausgefiltert
+                        # (die App hat Bild-Tasks, die ein Vision-Modell brauchen)
+                        # — nur per Flag gekennzeichnet, damit die UI sie als
+                        # "(vision)" markieren kann.
                         mid = m.get("id", "").lower()
                         display = m.get("display_name", "").lower()
-                        if any(tag in mid or tag in display for tag in ("-vl-", "-vl ", "vl-", "/vl-", "-ocr", "vision")):
-                            continue
+                        is_vision = any(tag in mid or tag in display for tag in
+                                        ("-vl-", "-vl ", "vl-", "/vl-", "-ocr", "vision"))
 
                         # Extract pricing for display
                         price_in = pricing.get("input", 0) if isinstance(pricing, dict) else 0
@@ -441,6 +444,7 @@ class Provider:
                             "family": m.get("organization", ""),
                             "quantization": "",
                             "context_length": ctx_len,
+                            "vision": is_vision,
                             "pricing": {"input": price_in, "output": price_out},
                         })
 

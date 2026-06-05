@@ -1143,7 +1143,9 @@ async def provider_models(provider_name: str, user=Depends(require_admin)):
         items = await asyncio.to_thread(provider.list_models, True)
         models = sorted({(m.get("name") or "") for m in (items or [])
                          if isinstance(m, dict) and m.get("name")})
-        return {"provider": provider_name, "models": models}
+        vision = sorted({(m.get("name") or "") for m in (items or [])
+                         if isinstance(m, dict) and m.get("name") and m.get("vision")})
+        return {"provider": provider_name, "models": models, "vision": vision}
     except Exception as e:
         return {"provider": provider_name, "models": [], "error": str(e)}
 
@@ -1176,30 +1178,31 @@ async def llm_suitability_cases_rebuild(user=Depends(require_admin)):
     return await asyncio.to_thread(build_cases_from_log)
 
 
-@router.post("/settings/llm-suitability-test")
-async def llm_suitability_test(request: Request, user=Depends(require_admin)):
-    """Fuehrt die Tool-/Helper-Eignungs-Batterie gegen EIN Modell aus und streamt
-    die Ergebnisse als NDJSON (eine JSON-Zeile pro Check, dann ein 'done'-Event).
-    Das Gesamtergebnis wird in model_capabilities.json gespeichert."""
-    from fastapi.responses import StreamingResponse
-    from app.core.model_suitability import iter_suitability_results
+@router.post("/settings/llm-suitability-test/start")
+async def llm_suitability_test_start(request: Request, user=Depends(require_admin)):
+    """Startet den Eignungstest fuer EIN Modell asynchron im Hintergrund und gibt
+    den initialen Status zurueck. Fortschritt/Ergebnis via .../status pollen.
+    Das Gesamtergebnis wird am Ende in model_capabilities.json gespeichert."""
+    from app.core.model_suitability import start_test
     body = await request.json()
     provider = str((body or {}).get("provider") or "").strip()
     model = str((body or {}).get("model") or "").strip()
     if not model:
         raise HTTPException(400, "model required")
     full = f"{provider}::{model}" if provider else model
+    return start_test(full)
 
-    def _gen():
-        try:
-            for ev in iter_suitability_results(full):
-                yield json.dumps(ev, ensure_ascii=False) + "\n"
-        except Exception as e:
-            logger.error("suitability stream failed: %s", e)
-            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
 
-    return StreamingResponse(_gen(), media_type="application/x-ndjson",
-                             headers={"Cache-Control": "no-cache"})
+@router.get("/settings/llm-suitability-test/status")
+async def llm_suitability_test_status(provider: str = "", model: str = "",
+                                      user=Depends(require_admin)):
+    """Aktueller Status/Fortschritt eines (laufenden oder fertigen) Tests."""
+    from app.core.model_suitability import get_job
+    if not model:
+        raise HTTPException(400, "model required")
+    full = f"{provider}::{model}" if provider else model
+    job = get_job(full)
+    return job or {"model": full, "status": "idle"}
 
 
 @router.post("/settings/validate")
@@ -2127,18 +2130,9 @@ function renderSection(key) {
             html += '<div id="llm-task-view"><div class="desc">Loading…</div></div>';
             html += '</div>';
             html += '</div>';
-            // Tool-/Helper-Eignungstest fuer EIN konkretes Modell
-            html += '<div class="subsection-title" style="margin-top:22px; margin-bottom:8px;">🧪 Tool / Helper Suitability Test</div>';
-            html += '<div class="desc" style="margin-bottom:8px;">Replays REAL logged prompts (from logs/llm_calls.jsonl) against one model and validates with production-style parsers — real tool-call format, JSON schema, abstain (no over-eager tools), consistency repeats. Result is saved to <b>Model Capabilities</b>.</div>';
-            html += '<div id="suit-cases" class="desc" style="margin-bottom:10px;">Loading test cases…</div>';
-            html += '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">';
-            html += '<select id="suit-provider" style="background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px; border-radius:4px;" onchange="suitLoadModels()"><option value="">Provider…</option></select>';
-            html += '<select id="suit-model" style="background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px; border-radius:4px; min-width:220px;"><option value="">Model…</option></select>';
-            html += '<button class="btn btn-sm" id="suit-run-btn" onclick="suitRun()">Run test</button>';
-            html += '<span id="suit-status" class="desc"></span>';
-            html += '</div>';
-            html += '<div id="suit-results"></div>';
-            setTimeout(() => { renderLlmTaskView(data || []); suitInit(); suitCasesInfo(); }, 0);
+            // Der Tool-/Helper-Eignungstest lebt jetzt unter "Model Capabilities".
+            html += '<div class="desc" style="margin-top:16px;">🧪 The Tool/Helper suitability test moved to <a href="/admin/models" target="_blank" style="color:#58a6ff;">Model Capabilities</a>.</div>';
+            setTimeout(() => renderLlmTaskView(data || []), 0);
         } else {
             html += '<div style="margin-bottom: 12px;">';
             html += '<button class="btn btn-sm" onclick="addArrayItem(\\'' + key + '\\', \\'array\\')">+ Add ' + sec.label + '</button>';
@@ -2365,138 +2359,6 @@ async function applyTaskPreset(preset) {
         renderLlmTaskView(CONFIG.llm_routing || []);
     } catch (e) {
         toast('Preset error: ' + e.message, 'error');
-    }
-}
-
-// ── Tool/Helper Suitability Test ──
-function suitCasesText(info) {
-    const n = (info && info.total) || 0;
-    const bt = (info && info.by_task) || {};
-    const parts = Object.keys(bt).map(function(k){ return k + ':' + bt[k]; });
-    const built = (info && info.built_at) ? (' · built ' + esc(info.built_at)) : '';
-    return n + ' frozen test cases from log' + (parts.length ? ' (' + esc(parts.join(', ')) + ')' : '') + built;
-}
-async function suitCasesInfo() {
-    const el = document.getElementById('suit-cases');
-    if (!el) return;
-    try {
-        const r = await fetch('/admin/settings/llm-suitability-cases', { headers: authHeaders() });
-        const info = await r.json();
-        el.innerHTML = suitCasesText(info) +
-            ' <button class="btn btn-sm" style="margin-left:6px;" onclick="suitRebuild()">Rebuild from log</button>';
-    } catch (e) { el.textContent = 'Could not load test cases'; }
-}
-async function suitRebuild() {
-    const el = document.getElementById('suit-cases');
-    if (el) el.textContent = 'Rebuilding from log…';
-    try {
-        const r = await fetch('/admin/settings/llm-suitability-cases/rebuild', { method: 'POST', headers: authHeaders() });
-        const info = await r.json();
-        toast('Rebuilt ' + (info.total || 0) + ' test cases', 'success');
-        suitCasesInfo();
-    } catch (e) { toast('Rebuild failed: ' + e.message, 'error'); suitCasesInfo(); }
-}
-async function suitInit() {
-    const sel = document.getElementById('suit-provider');
-    if (!sel) return;
-    try {
-        const r = await fetch('/admin/settings/providers-list', { headers: authHeaders() });
-        const d = await r.json();
-        sel.innerHTML = '<option value="">Provider…</option>' +
-            (d.providers || []).map(function(p){ return '<option value="' + esc(p) + '">' + esc(p) + '</option>'; }).join('');
-    } catch (e) { /* ignore */ }
-}
-
-async function suitLoadModels() {
-    const prov = document.getElementById('suit-provider').value;
-    const msel = document.getElementById('suit-model');
-    if (!prov) { msel.innerHTML = '<option value="">Model…</option>'; return; }
-    msel.innerHTML = '<option value="">Loading…</option>';
-    try {
-        const r = await fetch('/admin/settings/providers/' + encodeURIComponent(prov) + '/models', { headers: authHeaders() });
-        const d = await r.json();
-        const models = d.models || [];
-        if (!models.length) { msel.innerHTML = '<option value="">(no models' + (d.error ? ': ' + esc(d.error) : '') + ')</option>'; return; }
-        msel.innerHTML = '<option value="">Model…</option>' +
-            models.map(function(m){ return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('');
-    } catch (e) {
-        msel.innerHTML = '<option value="">(error)</option>';
-    }
-}
-
-function suitRenderCheck(ev) {
-    const icon = ev.ok ? '✅' : (ev.hallucinated ? '⚠️' : '❌');
-    const color = ev.ok ? '#3fb950' : (ev.hallucinated ? '#d29922' : '#f85149');
-    return '<div style="padding:3px 0; border-bottom:1px solid #21262d;">' +
-        '<span style="color:' + color + ';">' + icon + '</span> ' +
-        '<span style="opacity:.6; font-size:.85em;">[' + esc(ev.category) + ']</span> ' +
-        '<b>' + esc(ev.label) + '</b> <span style="opacity:.7;">— ' + esc(ev.detail || '') + '</span></div>';
-}
-
-async function suitRun() {
-    const prov = document.getElementById('suit-provider').value;
-    const model = document.getElementById('suit-model').value;
-    const btn = document.getElementById('suit-run-btn');
-    const status = document.getElementById('suit-status');
-    const out = document.getElementById('suit-results');
-    if (!model) { toast('Pick a model first', 'error'); return; }
-    btn.disabled = true;
-    status.textContent = 'Running…';
-    out.innerHTML = '';
-    let rows = '';
-    try {
-        const resp = await fetch('/admin/settings/llm-suitability-test', {
-            method: 'POST', headers: authHeaders(),
-            body: JSON.stringify({ provider: prov, model: model }),
-        });
-        if (!resp.ok || !resp.body) { throw new Error('HTTP ' + resp.status); }
-        const reader = resp.body.getReader();
-        const dec = new TextDecoder();
-        let buf = '';
-        let total = 0, done = 0;
-        while (true) {
-            const chunk = await reader.read();
-            if (chunk.done) break;
-            buf += dec.decode(chunk.value, { stream: true });
-            let nl;
-            while ((nl = buf.indexOf('\\n')) >= 0) {
-                const line = buf.slice(0, nl).trim();
-                buf = buf.slice(nl + 1);
-                if (!line) continue;
-                let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
-                if (ev.type === 'start') {
-                    total = ev.total;
-                    status.textContent = 'Testing ' + esc(ev.model) + ' (0/' + total + ')';
-                } else if (ev.type === 'check') {
-                    done++;
-                    rows += suitRenderCheck(ev);
-                    out.innerHTML = rows;
-                    status.textContent = 'Testing… (' + done + '/' + total + ')';
-                } else if (ev.type === 'done') {
-                    const s = ev.summary;
-                    status.textContent = 'Saved ✔';
-                    const v = s.verdict || {};
-                    const vtxt = 'Tool: ' + (v.tool ? '<span style="color:#3fb950;">SUITABLE</span>' : '<span style="color:#f85149;">not suitable</span>') +
-                        ' · Helper: ' + (v.helper ? '<span style="color:#3fb950;">suitable</span>' : '<span style="color:#f85149;">not suitable</span>');
-                    out.innerHTML =
-                        '<div style="margin-bottom:8px; padding:8px; background:#161b22; border:1px solid #30363d; border-radius:6px;">' +
-                        '<div style="margin-bottom:4px;">' + vtxt + '</div>' +
-                        '<b>Score ' + esc(s.score) + '</b> · Tool ' + esc(s.tool) + ' · Helper ' + esc(s.helper) +
-                        ' · Hallucinations ' + s.hallucinations + (s.best_format ? ' · best format: ' + esc(s.best_format) : '') +
-                        ' <span style="opacity:.6;">(' + esc(s.date) + ')</span></div>' + rows;
-                    toast('Suitability test saved to Model Capabilities', 'success');
-                } else if (ev.type === 'error') {
-                    status.textContent = '';
-                    out.innerHTML = '<div style="color:#f85149;">Error: ' + esc(ev.message) + '</div>';
-                    toast('Test failed: ' + ev.message, 'error');
-                }
-            }
-        }
-    } catch (e) {
-        status.textContent = '';
-        toast('Test error: ' + e.message, 'error');
-    } finally {
-        btn.disabled = false;
     }
 }
 

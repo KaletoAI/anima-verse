@@ -279,6 +279,19 @@ tr:hover { background: #161b22; }
 </div>
 
 <div class="content">
+    <div id="suitBox" style="border:1px solid #30363d; border-radius:8px; padding:12px; margin-bottom:18px; background:#0d1117;">
+        <h2 style="margin:0 0 6px;">🧪 Tool / Helper Suitability Test</h2>
+        <p class="info-text" style="margin:0 0 8px;">Replays REAL logged prompts (logs/llm_calls.jsonl) against one model and validates with production-style parsers — real tool-call format, JSON schema, abstain (no over-eager tools), consistency repeats. <b>Runs in the background</b> — you can leave the page; the result is saved to the table below.</p>
+        <div id="suitCases" class="info-text" style="margin-bottom:8px;">Loading test cases…</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <select id="suitProvider" onchange="suitLoadModels()"><option value="">Provider…</option></select>
+            <select id="suitModel" style="min-width:240px;" onchange="suitOnModelChange()"><option value="">Model…</option></select>
+            <button class="btn btn-primary" id="suitStartBtn" onclick="suitStart()">Test starten</button>
+            <span id="suitStatus" class="info-text"></span>
+        </div>
+        <div id="suitProgress" style="margin-top:10px;"></div>
+    </div>
+
     <h2>Verfuegbare Modelle</h2>
     <p class="info-text">Click Tool/Vision to toggle the value. Edit notes directly — saved automatically.</p>
     <table>
@@ -687,7 +700,131 @@ function cssId(s) {
     return String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+// ── Tool/Helper Suitability Test (asynchron, läuft im Hintergrund) ──
+let suitPollTimer = null;
+let suitCur = { provider: '', model: '' };
+
+async function suitInit() {
+    try {
+        const r = await fetch('/admin/settings/providers-list');
+        const d = await r.json();
+        document.getElementById('suitProvider').innerHTML = '<option value="">Provider…</option>' +
+            (d.providers || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    } catch (e) { /* ignore */ }
+    suitCasesInfo();
+}
+async function suitCasesInfo() {
+    const el = document.getElementById('suitCases');
+    if (!el) return;
+    try {
+        const r = await fetch('/admin/settings/llm-suitability-cases');
+        const i = await r.json();
+        const bt = i.by_task || {};
+        const parts = Object.keys(bt).map(k => k + ':' + bt[k]);
+        el.innerHTML = (i.total || 0) + ' frozen test cases from log'
+            + (parts.length ? ' (' + esc(parts.join(', ')) + ')' : '')
+            + (i.built_at ? ' · built ' + esc(i.built_at) : '')
+            + ' <button class="btn" style="margin-left:6px;" onclick="suitRebuild()">Rebuild from log</button>';
+    } catch (e) { el.textContent = 'Could not load test cases'; }
+}
+async function suitRebuild() {
+    const el = document.getElementById('suitCases');
+    if (el) el.textContent = 'Rebuilding from log…';
+    try { await fetch('/admin/settings/llm-suitability-cases/rebuild', { method: 'POST' }); } catch (e) { /* ignore */ }
+    suitCasesInfo();
+}
+async function suitLoadModels() {
+    const prov = document.getElementById('suitProvider').value;
+    const msel = document.getElementById('suitModel');
+    if (!prov) { msel.innerHTML = '<option value="">Model…</option>'; return; }
+    msel.innerHTML = '<option value="">Loading…</option>';
+    try {
+        const r = await fetch('/admin/settings/providers/' + encodeURIComponent(prov) + '/models');
+        const d = await r.json();
+        const models = d.models || [];
+        const vis = new Set(d.vision || []);
+        msel.innerHTML = models.length
+            ? '<option value="">Model…</option>' + models.map(m => `<option value="${esc(m)}">${esc(m)}${vis.has(m) ? ' (vision)' : ''}</option>`).join('')
+            : '<option value="">(no models' + (d.error ? ': ' + esc(d.error) : '') + ')</option>';
+    } catch (e) { msel.innerHTML = '<option value="">(error)</option>'; }
+}
+function suitOnModelChange() {
+    suitCur = { provider: document.getElementById('suitProvider').value,
+                model: document.getElementById('suitModel').value };
+    if (suitPollTimer) { clearTimeout(suitPollTimer); suitPollTimer = null; }
+    document.getElementById('suitProgress').innerHTML = '';
+    document.getElementById('suitStatus').textContent = '';
+    if (suitCur.model) suitPoll();  // bereits laufenden/fertigen Job anzeigen
+}
+async function suitStart() {
+    const provider = document.getElementById('suitProvider').value;
+    const model = document.getElementById('suitModel').value;
+    const status = document.getElementById('suitStatus');
+    if (!model) { status.textContent = 'Bitte ein Modell wählen'; return; }
+    document.getElementById('suitStartBtn').disabled = true;
+    status.textContent = 'Starte…';
+    document.getElementById('suitProgress').innerHTML = '';
+    suitCur = { provider, model };
+    try {
+        await fetch('/admin/settings/llm-suitability-test/start', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider, model }),
+        });
+        suitPoll();
+    } catch (e) {
+        status.textContent = 'Fehler: ' + e.message;
+        document.getElementById('suitStartBtn').disabled = false;
+    }
+}
+function suitRenderJob(job) {
+    const status = document.getElementById('suitStatus');
+    const prog = document.getElementById('suitProgress');
+    const checks = job.checks || [];
+    if (job.status === 'running') {
+        document.getElementById('suitStartBtn').disabled = true;
+        status.textContent = 'Läuft… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
+    } else if (job.status === 'done') {
+        const s = job.summary || {}; const v = s.verdict || {};
+        status.innerHTML = 'Fertig ✔ — Tool: '
+            + (v.tool ? '<span style="color:#3fb950;">SUITABLE</span>' : '<span style="color:#f85149;">not suitable</span>')
+            + ' · Helper: ' + (v.helper ? '<span style="color:#3fb950;">suitable</span>' : '<span style="color:#f85149;">not suitable</span>')
+            + ' · Score ' + esc(s.score || '') + ' (Tool ' + esc(s.tool || '') + ', Helper ' + esc(s.helper || '')
+            + ', Halluz ' + (s.hallucinations || 0) + ')';
+    } else if (job.status === 'error') {
+        status.innerHTML = '<span style="color:#f85149;">Fehler: ' + esc(job.error || '') + '</span>';
+    } else {
+        status.textContent = '';
+    }
+    prog.innerHTML = checks.map(c => {
+        const icon = c.ok ? '✅' : (c.hallucinated ? '⚠️' : '❌');
+        const color = c.ok ? '#3fb950' : (c.hallucinated ? '#d29922' : '#f85149');
+        return '<div style="padding:2px 0; border-bottom:1px solid #21262d; font-size:13px;">'
+            + '<span style="color:' + color + ';">' + icon + '</span> '
+            + '<span style="opacity:.6;">[' + esc(c.category) + ']</span> '
+            + '<b>' + esc(c.label) + '</b> <span style="opacity:.7;">— ' + esc(c.detail || '') + '</span></div>';
+    }).join('');
+}
+async function suitPoll() {
+    if (suitPollTimer) { clearTimeout(suitPollTimer); suitPollTimer = null; }
+    if (!suitCur.model) return;
+    try {
+        const q = 'provider=' + encodeURIComponent(suitCur.provider) + '&model=' + encodeURIComponent(suitCur.model);
+        const r = await fetch('/admin/settings/llm-suitability-test/status?' + q);
+        const job = await r.json();
+        suitRenderJob(job);
+        if (job.status === 'running') {
+            suitPollTimer = setTimeout(suitPoll, 1500);
+        } else {
+            document.getElementById('suitStartBtn').disabled = false;
+            if (job.status === 'done') loadData();  // Tabelle/Badge aktualisieren
+        }
+    } catch (e) {
+        suitPollTimer = setTimeout(suitPoll, 2500);
+    }
+}
+
 loadData();
+suitInit();
 </script>
 </body>
 </html>'''

@@ -25,6 +25,7 @@ Ergebnis -> storage/model_capabilities.json (``tested_*`` + ``tested_suitability
 """
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -428,3 +429,76 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
                     model_full, summary["score"], summary["verdict"]["tool"])
     except Exception as e:
         logger.error("Failed to persist suitability for %s: %s", model_full, e)
+
+
+# ---------------------------------------------------------------------------
+# Asynchroner Job-Runner (Start im Hintergrund-Thread, Status pollbar)
+# ---------------------------------------------------------------------------
+_JOBS: Dict[str, Dict[str, Any]] = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _run_job(model_full: str) -> None:
+    try:
+        for ev in iter_suitability_results(model_full):
+            t = ev.get("type")
+            with _JOBS_LOCK:
+                job = _JOBS.get(model_full)
+                if job is None:
+                    return
+                if t == "start":
+                    job["total"] = ev.get("total", 0)
+                    job["status"] = "running"
+                elif t == "check":
+                    job["checks"].append({k: ev.get(k) for k in
+                                          ("id", "label", "category", "ok",
+                                           "hallucinated", "detail")})
+                    job["done"] = len(job["checks"])
+                elif t == "done":
+                    job["summary"] = ev.get("summary")
+                    job["status"] = "done"
+                elif t == "error":
+                    job["error"] = ev.get("message")
+                    job["status"] = "error"
+    except Exception as e:  # noqa: BLE001
+        logger.error("suitability job %s crashed: %s", model_full, e)
+        with _JOBS_LOCK:
+            job = _JOBS.get(model_full)
+            if job is not None:
+                job["error"] = str(e)
+                job["status"] = "error"
+
+
+def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
+    j = dict(job)
+    j["checks"] = list(job.get("checks") or [])
+    return j
+
+
+def start_test(model_full: str) -> Dict[str, Any]:
+    """Startet den Eignungstest fuer ein Modell im Hintergrund. Laeuft bereits
+    ein Job fuer dasselbe Modell, wird dessen aktueller Status zurueckgegeben."""
+    with _JOBS_LOCK:
+        cur = _JOBS.get(model_full)
+        if cur and cur.get("status") == "running":
+            return _snapshot(cur)
+        job = {"model": model_full, "status": "running", "total": 0, "done": 0,
+               "checks": [], "summary": None, "error": None}
+        _JOBS[model_full] = job
+    threading.Thread(target=_run_job, args=(model_full,), daemon=True,
+                     name="suit-test").start()
+    with _JOBS_LOCK:
+        return _snapshot(_JOBS[model_full])
+
+
+def get_job(model_full: str) -> Optional[Dict[str, Any]]:
+    """Aktueller Status eines (laufenden oder fertigen) Jobs, oder None."""
+    with _JOBS_LOCK:
+        job = _JOBS.get(model_full)
+        return _snapshot(job) if job else None
+
+
+def list_jobs() -> List[Dict[str, Any]]:
+    """Alle bekannten Jobs (fuer 'laeuft noch'-Anzeige nach Reload)."""
+    with _JOBS_LOCK:
+        return [_snapshot(j) for j in _JOBS.values()]

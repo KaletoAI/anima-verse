@@ -2868,14 +2868,10 @@ def _build_full_system_prompt(character_name: str,
             if activity_names:
                 known_activities = ", ".join(activity_names)
 
-    # ---- Intent / assignment tracking flags ---------------------------
+    # ---- Intent tracking flag (vereinheitlichte Vorhaben & Aufgaben) ---
+    # Ein Block lehrt die [INTENT:]-Marker-Syntax (plan-intents-unified.md).
+    # Nur wenn der Chat-LLM selbst Marker setzen darf (kein separates Tool-LLM).
     intent_tracking_enabled = bool(tools_enabled and not has_tool_llm)
-    assignment_tracking_enabled = bool(intent_tracking_enabled and _has("assignments_enabled"))
-    other_characters = ""
-    if assignment_tracking_enabled:
-        from app.models.character import list_available_characters
-        all_characters = list_available_characters()
-        other_characters = ", ".join(c for c in all_characters if c != character_name)
 
     # ---- Tool instructions block (built externally — complex) ---------
     tool_instructions = ""
@@ -2959,8 +2955,6 @@ def _build_full_system_prompt(character_name: str,
         known_locations=known_locations,
         known_activities=known_activities,
         intent_tracking_enabled=intent_tracking_enabled,
-        assignment_tracking_enabled=assignment_tracking_enabled,
-        other_characters=other_characters,
         tool_instructions=tool_instructions,
         longterm_section=longterm_section,
         daily_summary_section=daily_summary_section,
