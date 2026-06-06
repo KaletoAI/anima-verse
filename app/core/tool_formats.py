@@ -238,6 +238,19 @@ def build_tool_instruction(format_name: str, tools: List[Any],
     parts.append("\n=== HOW TO USE TOOLS ===")
     parts.append(fmt["instruction"])
 
+    # Output-Disziplin — abgeleitet aus echten Fehl-Outputs (Suitability-Daten):
+    # Modelle driften in Meta-/Reasoning-Prosa ("Based on...", "We need to
+    # analyse...") oder erfinden eigene Formate ([Brackets], "INTENT:"/"TOOLS:"-
+    # Header, **markdown** Tool-Namen) — der Parser fuehrt dann nichts aus.
+    parts.append(
+        "\nSTRICT OUTPUT:\n"
+        "- Do NOT explain, analyse or think out loud. No preamble, no commentary, "
+        "no phrases like \"Based on...\", \"We need to analyse...\", \"Let me...\".\n"
+        "- Use ONLY the exact tool syntax shown above. Do NOT invent other formats: "
+        "no [square brackets], no \"INTENT:\"/\"TOOLS:\" section headers, "
+        "no **markdown** or bold tool names."
+    )
+
     # Appearance-Hinweis fuer ImageGenerator
     tool_names = [t.name for t in tools]
     if "ImageGenerator" in tool_names:
