@@ -1981,3 +1981,15 @@ html, * {
 .ga-img-slotlora .ga-input { margin-bottom: 0; }
 .ga-img-slotlora .ga-sched-muted { font-size: 11px; min-width: 40px; }
 @media (max-width: 900px) { .ga-img-slotgrid { grid-template-columns: 1fr; } }
+
+/* Secrets editor (Characters → Secrets) — list rows with actions. */
+.ga-secret-list { display: flex; flex-direction: column; gap: 6px; }
+.ga-secret-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  border: 1px solid var(--border, #30363d); border-radius: 6px; padding: 8px 10px;
+  background: var(--bg, #0d1117);
+}
+.ga-secret-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ga-secret-info strong { font-size: 13px; }
+.ga-secret-info .ga-sched-muted { font-size: 11px; }
+.ga-secret-actions { white-space: nowrap; flex-shrink: 0; }
