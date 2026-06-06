@@ -26,6 +26,7 @@ Ergebnis -> storage/model_capabilities.json (``tested_*`` + ``tested_suitability
 import json
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -144,12 +145,14 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
     allowed = sorted({m.group(1) for e in rows if e.get("task") == "thought"
                       for m in _TAG_RE.finditer(e.get("response") or "")})
 
-    cases: List[Dict[str, Any]] = []
+    # --- Pass 1: Kandidaten je Task sammeln (mehr als n, um ungueltige Goldens
+    #     ueberspringen zu koennen) ---
+    pool: Dict[str, List[tuple]] = {}
     for task, n in _SELECT:
         seen = set()
-        picked = 0
+        cand: List[tuple] = []
         for e in rows:
-            if picked >= n:
+            if len(cand) >= n * 5:
                 break
             if e.get("task") != task or e.get("error"):
                 continue
@@ -161,11 +164,44 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
             if key in seen:
                 continue
             fmt = _detect_fmt(golden)
-            # thought-Faelle nur als Positiv (golden feuert Tool) aufnehmen
             if task == "thought" and fmt != "tool":
                 continue
-            category = "tool" if task in _TOOL_TASKS else "helper"
             seen.add(key)
+            cand.append((system, user, golden, fmt))
+        pool[task] = cand
+
+    # Gehaertete JSON-Keys: Schnittmenge ueber ALLE json-Goldens eines Tasks
+    # (entfernt idiosynkratische Keys wie 'action', die nur in einem Golden waren).
+    task_keys: Dict[str, List[str]] = {}
+    for task, cand in pool.items():
+        keysets = []
+        for (_s, _u, g, fmt) in cand:
+            if fmt == "json":
+                obj = _first_json(g, array=False)
+                if isinstance(obj, dict):
+                    keysets.append(set(obj.keys()))
+        if keysets:
+            inter = set.intersection(*keysets) if len(keysets) > 1 else keysets[0]
+            task_keys[task] = sorted(inter)
+
+    # --- Pass 2: Cases bauen; nur Goldens, die ihren EIGENEN Validator bestehen
+    #     (filtert Prosa-/Muell-/uneindeutige Goldens raus). ---
+    cases: List[Dict[str, Any]] = []
+    skipped = 0
+    for task, n in _SELECT:
+        category = "tool" if task in _TOOL_TASKS else "helper"
+        picked = 0
+        for (system, user, golden, fmt) in pool.get(task, []):
+            if picked >= n:
+                break
+            expect = _build_expect(fmt, golden)
+            if fmt == "json" and task in task_keys:
+                expect["keys"] = task_keys[task]
+            validator = _VALIDATORS.get(fmt, _v_text)
+            g_ok, _gh, _gd = validator(golden, expect, allowed)
+            if not g_ok:
+                skipped += 1
+                continue
             picked += 1
             cases.append({
                 "id": f"{task}_{picked}",
@@ -176,7 +212,7 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
                 "system": system,
                 "user": user,
                 "golden": golden[:400],
-                "expect": _build_expect(fmt, golden),
+                "expect": expect,
                 "repeats": _TOOL_REPEATS if category == "tool" else 1,
             })
 
@@ -191,8 +227,9 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
     by_task: Dict[str, int] = {}
     for c in cases:
         by_task[c["task"]] = by_task.get(c["task"], 0) + 1
-    logger.info("Built %d suitability cases from log (%s)", len(cases), by_task)
-    return {"total": len(cases), "by_task": by_task,
+    logger.info("Built %d suitability cases from log (%s); %d invalid goldens skipped",
+                len(cases), by_task, skipped)
+    return {"total": len(cases), "by_task": by_task, "skipped": skipped,
             "allowed_tools": allowed, "built_at": data["built_at"]}
 
 
@@ -297,6 +334,17 @@ def _v_text(out: str, expect: dict, allowed: List[str]) -> Verdict:
 
 _VALIDATORS = {"tool": _v_tool, "abstain": _v_abstain, "json": _v_json, "text": _v_text}
 
+# Infrastruktur-/Erreichbarkeits-Fehler (Provider down, non-serverless, Timeout)
+# — KEINE Modell-Aussage. Solche Laeufe werden NICHT gespeichert.
+_INFRA_MARKERS = ("call error", "unable to access", "connection", "timeout",
+                  "service unavailable", "bad gateway", "error code: 5",
+                  "error code: 4", "non-serverless", "remote end closed")
+
+
+def _is_infra_error(detail: str) -> bool:
+    d = (detail or "").lower()
+    return any(mk in d for mk in _INFRA_MARKERS)
+
 
 def list_checks() -> List[Dict[str, str]]:
     data = load_cases(auto_build=False)
@@ -332,12 +380,17 @@ def iter_suitability_results(model_full: str) -> Iterator[Dict[str, Any]]:
         yield {"type": "error", "message": f"client init failed: {e}"}
         return
 
-    def ask(system: str, user: str) -> str:
+    def ask(system: str, user: str):
+        """Gibt (text, dauer_s, completion_tokens) zurueck."""
+        t0 = time.monotonic()
         resp = client.invoke([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ])
-        return (getattr(resp, "content", "") or "").strip()
+        dt = time.monotonic() - t0
+        usage = getattr(resp, "usage", None) or {}
+        ctok = int(usage.get("completion_tokens") or 0)
+        return (getattr(resp, "content", "") or "").strip(), dt, ctok
 
     yield {"type": "start", "model": model_full, "total": len(cases)}
 
@@ -346,30 +399,51 @@ def iter_suitability_results(model_full: str) -> Iterator[Dict[str, Any]]:
         validator = _VALIDATORS.get(case["fmt"], _v_text)
         repeats = int(case.get("repeats", 1)) or 1
         runs: List[Verdict] = []
+        durs: List[float] = []
+        toks: List[int] = []
+        outputs: List[str] = []
         for _ in range(repeats):
             try:
-                out = ask(case["system"], case["user"])
+                out, dt, ctok = ask(case["system"], case["user"])
                 runs.append(validator(out, case.get("expect", {}), allowed))
+                durs.append(dt)
+                toks.append(ctok)
+                outputs.append(out)
             except Exception as e:
-                runs.append((False, False, f"call error: {str(e)[:100]}"))
+                runs.append((False, False, f"call error: {str(e)[:120]}"))
+                durs.append(0.0)
+                toks.append(0)
+                outputs.append("")
         # Konsistenz: bestehen nur bei Mehrheit; Halluzination bei Mehrheit
         npass = sum(1 for r in runs if r[0])
         nhall = sum(1 for r in runs if r[1])
         need = (repeats // 2) + 1
         ok = npass >= need
         hall = nhall >= need
-        # Detail vom repraesentativsten Run (erster Fail, sonst erster)
-        rep = next((r for r in runs if not r[0]), runs[0])
-        detail = rep[2]
+        infra = any(_is_infra_error(r[2]) for r in runs)
+        # Detail + Output vom repraesentativsten Run (erster Fail, sonst erster)
+        rep_idx = next((i for i, r in enumerate(runs) if not r[0]), 0)
+        detail = runs[rep_idx][2]
         if repeats > 1:
             detail = f"{npass}/{repeats} runs ok — {detail}"
+        # Speed: Dauer (Mittel ueber gueltige Runs) + tok/s
+        valid_durs = [d for d in durs if d > 0]
+        avg_dt = round(sum(valid_durs) / len(valid_durs), 2) if valid_durs else 0.0
+        tot_tok = sum(toks)
+        tps = round(tot_tok / sum(valid_durs), 1) if valid_durs and tot_tok else 0.0
         rec = {"id": case["id"], "label": case["label"], "category": case["category"],
-               "ok": bool(ok), "hallucinated": bool(hall), "detail": detail}
+               "ok": bool(ok), "hallucinated": bool(hall), "detail": detail,
+               "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
+               "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
+               # Roh-Output (gekuerzt) — Material zum Template-Optimieren
+               "output": (outputs[rep_idx] or "")[:600]}
         results.append(rec)
-        yield {"type": "check", "index": idx, **rec}
+        yield {"type": "check", "index": idx, **{k: rec[k] for k in
+               ("id", "label", "category", "ok", "hallucinated", "detail",
+                "infra", "duration_s", "tok_s")}}
 
     summary = _summarize(model_full, results)
-    _persist(model_full, summary, results)
+    summary["saved"] = _persist(model_full, summary, results)
     yield {"type": "done", "summary": summary}
 
 
@@ -385,6 +459,17 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
     tool_hall = sum(1 for r in tool if r["hallucinated"])
     tool_ok = bool(tool_rate >= 0.85 and tool_hall == 0)
     helper_ok = bool(helper_rate >= 0.70)
+    # Speed-Aggregat
+    total_tok = sum(int(r.get("tok") or 0) for r in results)
+    total_dur = sum(float(r.get("dur_total") or 0.0) for r in results)
+    lat = [r["duration_s"] for r in results if r.get("duration_s")]
+    speed = {
+        "avg_latency_s": round(sum(lat) / len(lat), 2) if lat else 0.0,
+        "tok_per_s": round(total_tok / total_dur, 1) if total_dur and total_tok else 0.0,
+        "total_s": round(total_dur, 1),
+        "tokens": total_tok,
+    }
+    infra = any(r.get("infra") for r in results)
     return {
         "model": model_full,
         "date": utc_now().date().isoformat(),
@@ -393,42 +478,53 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
         "helper": f"{hp}/{len(helper)}",
         "hallucinations": halluc,
         "verdict": {"tool": tool_ok, "helper": helper_ok},
+        "speed": speed,
+        "infra": infra,
         "checks": results,
     }
 
 
-def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, Any]]) -> None:
-    from app.core.model_capabilities import (get_all_capabilities,
-                                             save_model_capability)
-    name = model_full.split("::", 1)[1] if "::" in model_full else model_full
-    key = name.lower()
-    caps_all = get_all_capabilities()
-    save_key = key
-    existing: Dict[str, Any] = {}
-    for pat, c in caps_all.items():
-        if pat.lower() == key:
-            existing = dict(c)
-            save_key = pat
-            break
-    existing["tested_date"] = summary["date"]
-    existing["tested_score"] = summary["score"]
-    existing["tested_tool_score"] = summary["tool"]
-    existing["tested_helper_score"] = summary["helper"]
-    existing["tested_hallucinations"] = summary["hallucinations"]
-    existing["tested_verdict"] = summary["verdict"]
-    existing["tested_suitability"] = {
-        "model": model_full,
-        "tool": summary["tool"],
-        "helper": summary["helper"],
-        "verdict": summary["verdict"],
-        "checks": results,
+def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, Any]]) -> bool:
+    """Speichert das Ergebnis — ABER NICHT, wenn Infrastruktur-Fehler auftraten
+    (Provider down/non-serverless/Timeout) → solche Laeufe sind keine Modell-
+    Aussage. Gibt True zurueck, wenn gespeichert wurde."""
+    if summary.get("infra") or any(r.get("infra") for r in results):
+        logger.info("Suitability NOT saved for %s — infrastructure error (provider "
+                    "unreachable/non-serverless)", model_full)
+        return False
+    from app.core.model_capabilities import save_suitability
+    # gespeicherte Checks: ohne interne Felder, MIT Roh-Output/Timing fuers Tuning
+    stored_checks = [{k: r.get(k) for k in
+                      ("id", "label", "category", "ok", "hallucinated", "detail",
+                       "duration_s", "tok_s", "output")} for r in results]
+    # Geschluesselt nach vollem Provider::Model → gleiches Modell auf anderer HW
+    # ueberschreibt sich NICHT mehr.
+    record = {
+        "tested_date": summary["date"],
+        "tested_score": summary["score"],
+        "tested_tool_score": summary["tool"],
+        "tested_helper_score": summary["helper"],
+        "tested_hallucinations": summary["hallucinations"],
+        "tested_verdict": summary["verdict"],
+        "tested_speed": summary.get("speed"),
+        "tested_suitability": {
+            "model": model_full,
+            "tool": summary["tool"],
+            "helper": summary["helper"],
+            "verdict": summary["verdict"],
+            "speed": summary.get("speed"),
+            "checks": stored_checks,
+        },
     }
     try:
-        save_model_capability(save_key, existing)
-        logger.info("Suitability saved for %s: %s (tool_ok=%s)",
-                    model_full, summary["score"], summary["verdict"]["tool"])
+        save_suitability(model_full, record)
+        logger.info("Suitability saved for %s: %s (tool_ok=%s, %.1f tok/s)",
+                    model_full, summary["score"], summary["verdict"]["tool"],
+                    (summary.get("speed") or {}).get("tok_per_s", 0))
+        return True
     except Exception as e:
         logger.error("Failed to persist suitability for %s: %s", model_full, e)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +548,8 @@ def _run_job(model_full: str) -> None:
                 elif t == "check":
                     job["checks"].append({k: ev.get(k) for k in
                                           ("id", "label", "category", "ok",
-                                           "hallucinated", "detail")})
+                                           "hallucinated", "detail", "infra",
+                                           "duration_s", "tok_s")})
                     job["done"] = len(job["checks"])
                 elif t == "done":
                     job["summary"] = ev.get("summary")

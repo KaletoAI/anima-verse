@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from app.core.model_capabilities import (
     get_all_capabilities,
     get_model_capabilities,
+    get_all_suitability,
     save_model_capability,
     delete_model_capability)
 from app.core.provider_manager import get_provider_manager
@@ -46,6 +47,7 @@ def model_capabilities_data() -> Dict[str, Any]:
     """JSON-API: Alle verfuegbaren Modelle + Capabilities."""
     pm = get_provider_manager()
     all_caps = get_all_capabilities()
+    suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
 
     # Alle Modelle von allen Providern sammeln
     models: List[Dict[str, Any]] = []
@@ -57,7 +59,14 @@ def model_capabilities_data() -> Dict[str, Any]:
             name = m.get("name", "")
             if not name:
                 continue
-            caps = get_model_capabilities(f"{prov_name}::{name}")
+            # Caps KOPIEREN (sonst Cache-Mutation). Intrinsisch per Substring,
+            # Vision-Flag vorbelegen, Test-Ergebnis HW-genau (provider::model).
+            caps = dict(get_model_capabilities(f"{prov_name}::{name}"))
+            if caps.get("vision") is None and m.get("vision"):
+                caps["vision"] = True
+            sd = suit_all.get(f"{prov_name}::{name}".lower())
+            if sd:
+                caps.update(sd)
             default_caps = all_caps.get("_default", {})
             has_custom = caps != default_caps
 
@@ -285,10 +294,13 @@ tr:hover { background: #161b22; }
         <div id="suitCases" class="info-text" style="margin-bottom:8px;">Loading test cases…</div>
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <select id="suitProvider" onchange="suitLoadModels()"><option value="">Provider…</option></select>
+            <input type="text" id="suitSearch" placeholder="Modell suchen…" style="min-width:160px;" oninput="suitRenderModels()" />
             <select id="suitModel" style="min-width:240px;" onchange="suitOnModelChange()"><option value="">Model…</option></select>
+            <span id="suitModelCount" class="info-text"></span>
             <button class="btn btn-primary" id="suitStartBtn" onclick="suitStart()">Test starten</button>
             <span id="suitStatus" class="info-text"></span>
         </div>
+        <div id="suitJobs" style="margin-top:10px;"></div>
         <div id="suitProgress" style="margin-top:10px;"></div>
     </div>
 
@@ -458,7 +470,7 @@ function renderModels(models) {
             <td><span class="badge-size">${sizeStr}${paramStr}</span></td>
             <td>${capToggle(m.name, 'tool_calling', caps.tool_calling)}</td>
             <td>${capToggle(m.name, 'vision', caps.vision)}</td>
-            <td>${testBadge(caps)}</td>
+            <td>${testBadge(caps, m.name)}</td>
             <td><input class="notes-input" data-model="${esc(m.name)}" value="${esc(caps.notes_de || '')}"
                 onchange="saveRow(this)" onblur="saveRow(this)" /></td>
             <td>
@@ -537,7 +549,7 @@ function renderUnmatched(entries) {
     });
 }
 
-function testBadge(caps) {
+function testBadge(caps, modelName) {
     const score = caps.tested_score;
     if (!score) return '<span class="test-badge none">-</span>';
 
@@ -560,11 +572,23 @@ function testBadge(caps) {
     // wird NICHT gruen markiert, auch wenn der Rohscore hoch ist.
     if (verdict && verdict.tool === false) cls = (hall > 0 ? 'fail' : 'warn');
 
+    // Welches Modell wurde WIRKLICH getestet? (Substring-Matching kann fremde
+    // Ergebnisse anzeigen.) testedBare = Name ohne Provider-Prefix.
+    const testedFull = (suit && suit.model) ? suit.model : '';
+    const testedBare = testedFull.indexOf('::') >= 0 ? testedFull.split('::').pop() : testedFull;
+    const inherited = !!(testedBare && modelName && testedBare.toLowerCase() !== modelName.toLowerCase());
+
     let tooltip = 'Score: ' + score;
+    if (testedFull) tooltip += '\\nGetestet als: ' + testedFull
+        + (inherited ? '  \\u26a0 GEERBT — dieses Modell wurde NICHT selbst getestet' : '');
     if (verdict) tooltip += '\\nVerdict tool: ' + (verdict.tool ? 'SUITABLE' : 'not suitable') +
         ' / helper: ' + (verdict.helper ? 'suitable' : 'not suitable');
     if (toolScore) tooltip += '\\nTool: ' + toolScore;
     if (helperScore) tooltip += '\\nHelper: ' + helperScore;
+    const sp = caps.tested_speed || null;
+    if (sp && (sp.tok_per_s || sp.avg_latency_s)) tooltip += '\\nSpeed: '
+        + (sp.tok_per_s ? sp.tok_per_s + ' tok/s' : '')
+        + (sp.avg_latency_s ? ' · Ø ' + sp.avg_latency_s + 's/Call' : '');
     if (hall > 0) tooltip += '\\n' + hall + ' mit Halluzination';
     if (bestFmt) tooltip += '\\nBestes Format: ' + bestFmt;
     if (visionResp.red) tooltip += '\\nVision red: ' + visionResp.red;
@@ -578,15 +602,18 @@ function testBadge(caps) {
         });
     }
 
-    let html = '<span class="test-badge ' + cls + '" title="' + esc(tooltip) + '">' + esc(score);
+    let html = '<span class="test-badge ' + cls + '" title="' + esc(tooltip) + '">' + esc(score)
+        + (inherited ? ' *' : '');
     if (hall > 0) html += ' <span class="test-detail">(' + hall + ' warn)</span>';
     html += '</span>';
+    if (inherited) html += '<span class="test-date" style="color:#d29922;" title="' + esc(testedFull) + '">\\u21aa geerbt: ' + esc(testedBare) + '</span>';
     if (verdict) {
         const tcol = verdict.tool ? '#3fb950' : '#f85149';
         const tlab = verdict.tool ? 'TOOL \\u2713' : 'TOOL \\u2717';
         html += '<span class="test-date" style="color:' + tcol + ';">' + tlab + '</span>';
     }
     if (toolScore || helperScore) html += '<span class="test-date">T ' + esc(toolScore) + ' \\u00b7 H ' + esc(helperScore) + '</span>';
+    if (sp && sp.tok_per_s) html += '<span class="test-date">\\u26a1 ' + esc(sp.tok_per_s) + ' tok/s</span>';
     if (date) html += '<span class="test-date">' + esc(date) + '</span>';
     return html;
 }
@@ -703,6 +730,11 @@ function cssId(s) {
 // ── Tool/Helper Suitability Test (asynchron, läuft im Hintergrund) ──
 let suitPollTimer = null;
 let suitCur = { provider: '', model: '' };
+let suitModels = [];          // alle Modelle des gewählten Providers
+let suitVision = new Set();   // davon Vision-Modelle
+let suitLoadErr = '';         // Fehlertext beim Modell-Laden
+
+let suitJobsTimer = null;
 
 async function suitInit() {
     try {
@@ -712,7 +744,54 @@ async function suitInit() {
             (d.providers || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
     } catch (e) { /* ignore */ }
     suitCasesInfo();
+    suitJobsRefresh();  // startet eigenen Poll-Loop
 }
+
+// Liste ALLER Test-Jobs (laufend/fertig) — parallele Taucher auf einen Blick.
+async function suitJobsRefresh() {
+    if (suitJobsTimer) { clearTimeout(suitJobsTimer); suitJobsTimer = null; }
+    const el = document.getElementById('suitJobs');
+    if (!el) return;
+    let jobs = [];
+    try {
+        const r = await fetch('/admin/settings/llm-suitability-test/jobs');
+        jobs = (await r.json()).jobs || [];
+    } catch (e) { /* ignore */ }
+    const running = jobs.filter(j => j.status === 'running');
+    if (!jobs.length) { el.innerHTML = ''; }
+    else {
+        // laufende zuerst, dann der Rest
+        jobs.sort((a, b) => (a.status === 'running' ? 0 : 1) - (b.status === 'running' ? 0 : 1));
+        el.innerHTML = '<div class="info-text" style="margin-bottom:4px;">Test-Jobs ('
+            + running.length + ' laufend):</div>'
+            + jobs.map(j => {
+                const v = j.verdict || {};
+                let st, col;
+                if (j.status === 'running') { st = (j.done || 0) + '/' + (j.total || '?'); col = '#58a6ff'; }
+                else if (j.status === 'done') {
+                    st = (j.score || '') + (v.tool ? ' · TOOL ✓' : ' · TOOL ✗'); col = v.tool ? '#3fb950' : '#d29922';
+                } else if (j.status === 'error') { st = 'Fehler'; col = '#f85149'; }
+                else { st = j.status || ''; col = '#8b949e'; }
+                const dot = j.status === 'running' ? '⏳' : (j.status === 'error' ? '❌' : '✔');
+                return '<div style="padding:2px 0; cursor:pointer; font-size:13px;" '
+                    + 'onclick="suitSelectJob(\\'' + escJs(j.model) + '\\')" title="Anzeigen">'
+                    + dot + ' <b>' + esc(j.model) + '</b> '
+                    + '<span style="color:' + col + ';">' + esc(st) + '</span></div>';
+            }).join('');
+    }
+    // Solange etwas laeuft: haeufig pollen; sonst gemaechlich (zeigt fertige an).
+    suitJobsTimer = setTimeout(suitJobsRefresh, running.length ? 2000 : 8000);
+}
+
+// Job aus der Liste anklicken → in der Detailansicht zeigen.
+function suitSelectJob(modelFull) {
+    const idx = modelFull.indexOf('::');
+    suitCur = idx >= 0
+        ? { provider: modelFull.slice(0, idx), model: modelFull.slice(idx + 2) }
+        : { provider: '', model: modelFull };
+    suitPoll();
+}
+
 async function suitCasesInfo() {
     const el = document.getElementById('suitCases');
     if (!el) return;
@@ -736,17 +815,34 @@ async function suitRebuild() {
 async function suitLoadModels() {
     const prov = document.getElementById('suitProvider').value;
     const msel = document.getElementById('suitModel');
-    if (!prov) { msel.innerHTML = '<option value="">Model…</option>'; return; }
+    suitModels = []; suitVision = new Set();
+    if (!prov) { suitRenderModels(); return; }
     msel.innerHTML = '<option value="">Loading…</option>';
     try {
         const r = await fetch('/admin/settings/providers/' + encodeURIComponent(prov) + '/models');
         const d = await r.json();
-        const models = d.models || [];
-        const vis = new Set(d.vision || []);
-        msel.innerHTML = models.length
-            ? '<option value="">Model…</option>' + models.map(m => `<option value="${esc(m)}">${esc(m)}${vis.has(m) ? ' (vision)' : ''}</option>`).join('')
-            : '<option value="">(no models' + (d.error ? ': ' + esc(d.error) : '') + ')</option>';
-    } catch (e) { msel.innerHTML = '<option value="">(error)</option>'; }
+        suitModels = d.models || [];
+        suitVision = new Set(d.vision || []);
+        suitLoadErr = (!suitModels.length && d.error) ? d.error : '';
+    } catch (e) { suitModels = []; suitLoadErr = 'error'; }
+    suitRenderModels();
+}
+// Modell-Select aus suitModels bauen, gefiltert nach dem Suchfeld.
+function suitRenderModels() {
+    const msel = document.getElementById('suitModel');
+    const cnt = document.getElementById('suitModelCount');
+    if (!msel) return;
+    const q = (document.getElementById('suitSearch').value || '').trim().toLowerCase();
+    const prev = msel.value;
+    if (!suitModels.length) {
+        msel.innerHTML = '<option value="">' + (suitLoadErr ? '(no models: ' + esc(suitLoadErr) + ')' : 'Model…') + '</option>';
+        if (cnt) cnt.textContent = '';
+        return;
+    }
+    const filtered = q ? suitModels.filter(m => m.toLowerCase().includes(q)) : suitModels;
+    msel.innerHTML = '<option value="">Model…</option>' +
+        filtered.map(m => `<option value="${esc(m)}"${m === prev ? ' selected' : ''}>${esc(m)}${suitVision.has(m) ? ' (vision)' : ''}</option>`).join('');
+    if (cnt) cnt.textContent = q ? (filtered.length + '/' + suitModels.length) : (suitModels.length + ' models');
 }
 function suitOnModelChange() {
     suitCur = { provider: document.getElementById('suitProvider').value,
@@ -771,6 +867,7 @@ async function suitStart() {
             body: JSON.stringify({ provider, model }),
         });
         suitPoll();
+        suitJobsRefresh();  // neuen Job sofort in der Liste zeigen
     } catch (e) {
         status.textContent = 'Fehler: ' + e.message;
         document.getElementById('suitStartBtn').disabled = false;
@@ -784,24 +881,32 @@ function suitRenderJob(job) {
         document.getElementById('suitStartBtn').disabled = true;
         status.textContent = 'Läuft… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
     } else if (job.status === 'done') {
-        const s = job.summary || {}; const v = s.verdict || {};
+        const s = job.summary || {}; const v = s.verdict || {}; const sp = s.speed || {};
+        const speedTxt = (sp.tok_per_s ? ' · ⚡ ' + sp.tok_per_s + ' tok/s' : '')
+            + (sp.avg_latency_s ? ' · Ø ' + sp.avg_latency_s + 's/Call' : '');
+        const infraTxt = (s.infra || s.saved === false)
+            ? ' <span style="color:#d29922;">⚠ NICHT gespeichert (Infrastruktur-Fehler — Provider nicht erreichbar)</span>'
+            : '';
         status.innerHTML = 'Fertig ✔ — Tool: '
             + (v.tool ? '<span style="color:#3fb950;">SUITABLE</span>' : '<span style="color:#f85149;">not suitable</span>')
             + ' · Helper: ' + (v.helper ? '<span style="color:#3fb950;">suitable</span>' : '<span style="color:#f85149;">not suitable</span>')
             + ' · Score ' + esc(s.score || '') + ' (Tool ' + esc(s.tool || '') + ', Helper ' + esc(s.helper || '')
-            + ', Halluz ' + (s.hallucinations || 0) + ')';
+            + ', Halluz ' + (s.hallucinations || 0) + ')' + speedTxt + infraTxt;
     } else if (job.status === 'error') {
         status.innerHTML = '<span style="color:#f85149;">Fehler: ' + esc(job.error || '') + '</span>';
     } else {
         status.textContent = '';
     }
     prog.innerHTML = checks.map(c => {
-        const icon = c.ok ? '✅' : (c.hallucinated ? '⚠️' : '❌');
-        const color = c.ok ? '#3fb950' : (c.hallucinated ? '#d29922' : '#f85149');
+        const icon = c.infra ? '🔌' : (c.ok ? '✅' : (c.hallucinated ? '⚠️' : '❌'));
+        const color = c.infra ? '#8b949e' : (c.ok ? '#3fb950' : (c.hallucinated ? '#d29922' : '#f85149'));
+        const spd = (c.duration_s ? ' <span style="opacity:.5;">' + c.duration_s + 's'
+            + (c.tok_s ? ', ' + c.tok_s + ' tok/s' : '') + '</span>' : '');
         return '<div style="padding:2px 0; border-bottom:1px solid #21262d; font-size:13px;">'
             + '<span style="color:' + color + ';">' + icon + '</span> '
             + '<span style="opacity:.6;">[' + esc(c.category) + ']</span> '
-            + '<b>' + esc(c.label) + '</b> <span style="opacity:.7;">— ' + esc(c.detail || '') + '</span></div>';
+            + '<b>' + esc(c.label) + '</b> <span style="opacity:.7;">— ' + esc(c.detail || '') + '</span>'
+            + spd + '</div>';
     }).join('');
 }
 async function suitPoll() {

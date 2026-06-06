@@ -4,6 +4,7 @@ Liest storage/model_capabilities.json und bietet Substring-basiertes Matching
 (laengster Match gewinnt, analog zu tool_formats.MODEL_FORMAT_LIBRARY).
 """
 import json
+import threading
 from typing import Any, Dict, Optional
 
 from app.core.log import get_logger
@@ -13,6 +14,9 @@ logger = get_logger("model_capabilities")
 from app.core.paths import get_storage_dir as _get_storage_dir
 
 _cache: Optional[Dict[str, Any]] = None
+# Serialisiert Read-modify-write auf die JSON-Datei — sonst koennen parallele
+# Test-Jobs (verschiedene Provider) sich beim Speichern gegenseitig ueberschreiben.
+_write_lock = threading.RLock()
 
 
 def _load() -> Dict[str, Any]:
@@ -45,12 +49,48 @@ def _load_full_file() -> Dict[str, Any]:
 
 
 def _save_full_file(data: Dict[str, Any]) -> None:
-    """Speichert die komplette JSON-Datei und invalidiert den Cache."""
-    global _cache
+    """Speichert die komplette JSON-Datei und invalidiert die Caches."""
+    global _cache, _suit_cache
     (_get_storage_dir() / "model_capabilities.json").parent.mkdir(parents=True, exist_ok=True)
     with open((_get_storage_dir() / "model_capabilities.json"), "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     _cache = None
+    _suit_cache = None
+
+
+# Suitability-Test-Ergebnisse: getrennt vom Capabilities-Pattern, geschluesselt
+# nach vollem "Provider::Model" (lowercased) — damit dasselbe Modell auf
+# unterschiedlicher Hardware getrennte Ergebnisse (v.a. Speed) behaelt und sich
+# NICHT gegenseitig ueberschreibt. Capabilities (tool_calling/vision/Notizen)
+# bleiben weiterhin modellweit per Substring-Match geteilt.
+_suit_cache: Optional[Dict[str, Any]] = None
+
+
+def _load_suit() -> Dict[str, Any]:
+    global _suit_cache
+    if _suit_cache is not None:
+        return _suit_cache
+    _suit_cache = _load_full_file().get("suitability", {}) or {}
+    return _suit_cache
+
+
+def get_all_suitability() -> Dict[str, Any]:
+    """Alle Suitability-Ergebnisse (Key = 'provider::model' lowercased)."""
+    return dict(_load_suit())
+
+
+def get_suitability(model_full: str) -> Dict[str, Any]:
+    """Suitability-Ergebnis fuer ein konkretes 'Provider::Model' (oder {})."""
+    return _load_suit().get((model_full or "").lower(), {})
+
+
+def save_suitability(model_full: str, result: Dict[str, Any]) -> None:
+    """Speichert/aktualisiert das Suitability-Ergebnis fuer 'Provider::Model'.
+    Lock-geschuetzt, damit parallele Test-Jobs sich nicht ueberschreiben."""
+    with _write_lock:
+        data = _load_full_file()
+        data.setdefault("suitability", {})[(model_full or "").lower()] = result
+        _save_full_file(data)
 
 
 def get_model_capabilities(model_name: str) -> Dict[str, Any]:
@@ -100,19 +140,21 @@ def get_all_capabilities() -> Dict[str, Any]:
 
 def save_model_capability(pattern: str, capabilities: Dict[str, Any]) -> None:
     """Speichert/aktualisiert einen Eintrag in model_capabilities.json."""
-    data = _load_full_file()
-    if "models" not in data:
-        data["models"] = {}
-    data["models"][pattern] = capabilities
-    _save_full_file(data)
+    with _write_lock:
+        data = _load_full_file()
+        if "models" not in data:
+            data["models"] = {}
+        data["models"][pattern] = capabilities
+        _save_full_file(data)
 
 
 def delete_model_capability(pattern: str) -> bool:
     """Loescht einen Eintrag. Gibt True zurueck wenn er existierte."""
-    data = _load_full_file()
-    models = data.get("models", {})
-    if pattern in models and not pattern.startswith("_"):
-        del models[pattern]
-        _save_full_file(data)
-        return True
-    return False
+    with _write_lock:
+        data = _load_full_file()
+        models = data.get("models", {})
+        if pattern in models and not pattern.startswith("_"):
+            del models[pattern]
+            _save_full_file(data)
+            return True
+        return False

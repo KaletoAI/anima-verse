@@ -1078,6 +1078,7 @@ async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)
     api_url = (b.get("api_url") or "").rstrip("/")
     cur_model = b.get("model", "")
     models: list = []
+    clip: list = []
     try:
         if api_type == "together":
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
@@ -1115,14 +1116,15 @@ async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)
                     _ckpt = _img._cached_checkpoints_by_service.get(backend_name, [])
                     _unet = _img._cached_unet_models_by_service.get(backend_name, [])
                     models = sorted(set(_ckpt + _unet))
+                    clip = sorted(set(_img._cached_clip_models_by_service.get(backend_name, [])))
             except Exception as _e:
                 logger.warning("ComfyUI-Models-Cache nicht lesbar: %s", _e)
     except Exception as e:
-        return {"backend": backend_name, "models": [], "error": str(e)}
+        return {"backend": backend_name, "models": [], "clip": [], "error": str(e)}
     # cur_model immer dabei haben (auch wenn es nicht in der Liste ist)
     if cur_model and cur_model not in models:
         models.insert(0, cur_model)
-    return {"backend": backend_name, "models": models, "current": cur_model}
+    return {"backend": backend_name, "models": models, "clip": clip, "current": cur_model}
 
 
 @router.get("/settings/providers/{provider_name}/models")
@@ -1203,6 +1205,25 @@ async def llm_suitability_test_status(provider: str = "", model: str = "",
     full = f"{provider}::{model}" if provider else model
     job = get_job(full)
     return job or {"model": full, "status": "idle"}
+
+
+@router.get("/settings/llm-suitability-test/jobs")
+async def llm_suitability_test_jobs(user=Depends(require_admin)):
+    """Alle bekannten Test-Jobs (laufend/fertig/fehler) — fuer die 'laufende
+    Tests'-Liste. Ohne Check-Details (nur Kurzstatus)."""
+    from app.core.model_suitability import list_jobs
+    jobs = []
+    for j in list_jobs():
+        s = j.get("summary") or {}
+        jobs.append({
+            "model": j.get("model", ""),
+            "status": j.get("status", ""),
+            "done": j.get("done", 0),
+            "total": j.get("total", 0),
+            "score": s.get("score", ""),
+            "verdict": s.get("verdict") or {},
+        })
+    return {"jobs": jobs}
 
 
 @router.post("/settings/validate")
@@ -1971,6 +1992,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 let CONFIG = {};
 let SCHEMA = {};
 let PROVIDERS_CACHE = {};
+let PROVIDERS_VISION = {};  // provName -> Set(vision model names)
 let ACTIVE_SECTION = null;
 // Wenn ein Array-Item per User-Klick aufgeklappt wurde, halten wir den
 // Pfad hier fest. So bleibt der Zustand ueber renderSection()-Rerenders
@@ -2749,11 +2771,43 @@ function renderComfyModelSelect(val, path) {
     return html;
 }
 
+// Backend(s) am Geschwister-Feld lesen (Workflows: 'skill' multi, Animation:
+// 'backend'). Zur KLICK-Zeit gelesen, damit ein Backend-Wechsel sofort greift.
+function comfyBackendsForPath(path) {
+    const parts = path.split('.');
+    for (const sib of ['skill', 'backend']) {
+        const p = parts.slice(0, -1).concat(sib).join('.');
+        const v = getVal(p);
+        if (v) return String(v).split(',').map(s => s.trim()).filter(Boolean);
+    }
+    return [];
+}
+
 async function populateComfySelect(path, type) {
-    const cache = await loadComfyModels();
-    const items = cache[type] || [];
     const sel = document.getElementById('f-' + path);
     if (!sel) return;
+    const backends = comfyBackendsForPath(path);
+    let items = [];
+    if (backends.length) {
+        // Nur die Modelle der im Workflow gewaehlten Backend(s) — vereinigt.
+        const seen = new Set();
+        sel.innerHTML = '<option>Loading...</option>';
+        for (const b of backends) {
+            try {
+                const resp = await fetch('/admin/settings/imagegen-backends/' + encodeURIComponent(b) + '/models',
+                    { credentials: 'same-origin' });
+                const d = await resp.json();
+                if (d.error) toast('Backend ' + b + ': ' + d.error, 'error');
+                const list = (type === 'clip_models') ? (d.clip || []) : (d.models || []);
+                for (const m of list) { if (!seen.has(m)) { seen.add(m); items.push(m); } }
+            } catch (e) { toast('Load models failed (' + b + '): ' + e.message, 'error'); }
+        }
+        items.sort();
+    } else {
+        // Kein Backend gewaehlt → globale, gemergte Liste (Fallback).
+        const cache = await loadComfyModels();
+        items = cache[type] || [];
+    }
     const current = sel.value;
     let opts = '<option value="">— none —</option>';
     for (const m of items) {
@@ -3391,6 +3445,7 @@ async function loadModels(path, provName) {
             const list = data.models || [];
             if (list.length > 0) {
                 PROVIDERS_CACHE[provName] = list;
+                PROVIDERS_VISION[provName] = new Set(data.vision || []);
             } else {
                 delete PROVIDERS_CACHE[provName];
             }
@@ -3401,9 +3456,10 @@ async function loadModels(path, provName) {
     }
 
     const models = PROVIDERS_CACHE[provName];
+    const vis = PROVIDERS_VISION[provName] || new Set();
     let opts = '<option value="">— select —</option>';
     for (const m of models) {
-        opts += '<option value="' + esc(m) + '"' + (m === currentVal ? ' selected' : '') + '>' + esc(m) + '</option>';
+        opts += '<option value="' + esc(m) + '"' + (m === currentVal ? ' selected' : '') + '>' + esc(m) + (vis.has(m) ? ' (vision)' : '') + '</option>';
     }
     sel.innerHTML = opts;
     if (currentVal && !models.includes(currentVal)) {

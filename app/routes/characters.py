@@ -68,15 +68,29 @@ def get_available_models() -> Dict[str, Any]:
     Used by the frontend for per-character model selection dropdowns.
     """
     from app.core.provider_manager import get_provider_manager
-    from app.core.model_capabilities import get_model_capabilities
+    from app.core.model_capabilities import (get_model_capabilities,
+                                             get_all_suitability)
 
     pm = get_provider_manager()
     providers = pm.list_all_models()
+    suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
 
-    # Capabilities an jedes Model anhaengen
+    # Capabilities an jedes Model anhaengen. Vision-Spalte vorbelegen: ist nichts
+    # gespeichert (None) und erkennt der Name ein Vision-Modell, mit True
+    # vorbelegen. (Name-Heuristik kann Vision nur bestaetigen, nicht ausschliessen
+    # → bei nicht-Vision-Namen bleibt es unbekannt.) Caps KOPIEREN, sonst wuerde
+    # der gecachte _default-/Substring-Eintrag mutiert.
+    # Suitability-Test (HW-abhaengig) wird per vollem provider::model EXAKT
+    # gemergt → gleiches Modell auf anderer Hardware bekommt eigene Werte.
     for provider_name, provider_data in providers.items():
         for model in provider_data.get("models", []):
-            model["capabilities"] = get_model_capabilities(model.get("name", ""))
+            caps = dict(get_model_capabilities(model.get("name", "")))
+            if caps.get("vision") is None and model.get("vision"):
+                caps["vision"] = True
+            sd = suit_all.get(f"{provider_name}::{model.get('name', '')}".lower())
+            if sd:
+                caps.update(sd)
+            model["capabilities"] = caps
 
     return {
         "providers": providers,
