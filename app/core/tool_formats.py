@@ -242,14 +242,32 @@ def build_tool_instruction(format_name: str, tools: List[Any],
     # Modelle driften in Meta-/Reasoning-Prosa ("Based on...", "We need to
     # analyse...") oder erfinden eigene Formate ([Brackets], "INTENT:"/"TOOLS:"-
     # Header, **markdown** Tool-Namen) — der Parser fuehrt dann nichts aus.
+    # STRICT OUTPUT zielt NUR auf das Tool-Call-Format. Wichtig: NICHT pauschal
+    # eckige Klammern / Markdown verbieten — der rp_first-Tool-LLM bekommt diesen
+    # Block als System-Prompt UND soll danach Marker (**I feel ...**) und
+    # [INTENT:/NEW_ASSIGNMENT:]-Zeilen ausgeben. Verboten ist ein TOOL-Call in
+    # fremder Form, nicht Klammern an sich.
     parts.append(
         "\nSTRICT OUTPUT:\n"
         "- Do NOT explain, analyse or think out loud. No preamble, no commentary, "
         "no phrases like \"Based on...\", \"We need to analyse...\", \"Let me...\".\n"
-        "- Use ONLY the exact tool syntax shown above. Do NOT invent other formats: "
-        "no [square brackets], no \"INTENT:\"/\"TOOLS:\" section headers, "
-        "no **markdown** or bold tool names."
+        "- A TOOL CALL is ONLY the exact tag syntax shown above. Never write a tool "
+        "call any other way: not in [square brackets], not as a \"TOOLS:\" list or an "
+        "\"[INTENT: execute_tool ...]\" line, not in **markdown** or bold, "
+        "not buried inside a sentence."
     )
+
+    # Positiv-Beispiel im exakten Zielformat — zieht schwache Modelle ins Format
+    # und zeigt Mehrfach-Calls. Tool-Name = erstes tatsaechlich verfuegbares Tool
+    # (kein erfundener Name), Input als eckiger Platzhalter (von _is_placeholder_input
+    # gefiltert, falls ein Modell das Beispiel doch kopiert).
+    if tools:
+        _ex = format_example(format_name, tools[0].name, "[your input]")
+        parts.append(
+            "\nEXAMPLE of a correct tool call (use this exact shape):\n"
+            f"{_ex}\n"
+            "If two actions happen, write two such lines, one per line."
+        )
 
     # Appearance-Hinweis fuer ImageGenerator
     tool_names = [t.name for t in tools]
