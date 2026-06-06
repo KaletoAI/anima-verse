@@ -23,6 +23,7 @@ import { OthersPanel } from './OthersPanel'
 import { BelongingsPanel } from './BelongingsPanel'
 import { JournalPanel } from './JournalPanel'
 import { GalleryPanel } from './GalleryPanel'
+import { InstagramPanel } from './InstagramPanel'
 import { NoticeBanner } from './NoticeBanner'
 import { useQueue } from './useQueue'
 
@@ -42,6 +43,7 @@ const DEFAULT_LAYOUT: Layout[] = [
   { i: 'belongings', x: 0, y: 38, w: 24, h: 16, minW: 10, minH: 8 },
   { i: 'journal', x: 24, y: 37, w: 17, h: 14, minW: 8, minH: 6 },
   { i: 'gallery', x: 0, y: 54, w: 20, h: 14, minW: 8, minH: 6 },
+  { i: 'instagram', x: 20, y: 54, w: 21, h: 18, minW: 10, minH: 8 },
   { i: 'tasks', x: 24, y: 27, w: 17, h: 10, minW: 6, minH: 4 },
   { i: 'layouts', x: 24, y: 37, w: 17, h: 14, minW: 6, minH: 6 },
 ]
@@ -62,6 +64,7 @@ const PANEL_META: { id: string; label: string; kind?: 'grid' | 'dialog' }[] = [
   { id: 'belongings', label: 'Inventory' },
   { id: 'journal', label: 'Journal' },
   { id: 'gallery', label: 'Gallery' },
+  { id: 'instagram', label: 'Instagram' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'layouts', label: 'Layouts', kind: 'dialog' },
 ]
@@ -568,6 +571,15 @@ export function PlayerApp() {
     </div>
   )
 
+  const instagramPanel = (
+    <div key="instagram" className="player-panel" style={{ zIndex: zOf('instagram') }} onMouseDownCapture={() => bringToFront('instagram')}>
+      <div className="player-panel-head">{t('Instagram')}{headerControls('instagram', true)}</div>
+      <div className="player-panel-body" style={{ padding: 10, overflow: 'auto' }}>
+        <InstagramPanel />
+      </div>
+    </div>
+  )
+
   const othersPanel = (
     <div key="others" className="player-panel" style={{ zIndex: zOf('others') }} onMouseDownCapture={() => bringToFront('others')}>
       <div className="player-panel-head">{t('Others')}{headerControls('others', true)}</div>
@@ -580,7 +592,7 @@ export function PlayerApp() {
   const byId: Record<string, ReactNode> = {
     scene: scenePanel, env: envPanel, map: mapPanel, worldmap: worldMapPanel,
     tasks: tasksPanel, self: selfPanel, others: othersPanel, belongings: belongingsPanel,
-    journal: journalPanel, gallery: galleryPanel,
+    journal: journalPanel, gallery: galleryPanel, instagram: instagramPanel,
   }
 
   // Spaltenzahl aus gemessener Breite: colWidth ≈ CELL → quadratische Zellen.
