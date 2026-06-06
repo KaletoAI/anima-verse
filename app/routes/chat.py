@@ -82,6 +82,9 @@ def _strip_tool_hallucinations(text: str) -> str:
         text = strip_intent_markers(text)
     except Exception:
         pass
+    # LLM-Tokenizer-Artefakte (jedes <|...|>, auch lowercase, + <SPECIAL_N>)
+    text = re.sub(r'<\|[^|>]{0,60}\|>', '', text)
+    text = re.sub(r'<SPECIAL_\d+>', '', text)
     # Mehrfache Leerzeilen
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
@@ -2536,7 +2539,8 @@ def _build_full_system_prompt(character_name: str,
     medium: str = "in_person",
     room_item_ids: Optional[list] = None,
     respond_opportunity: bool = False,
-    winding_down: bool = False) -> str:
+    winding_down: bool = False,
+    present_characters: Optional[list] = None) -> str:
     """Build the chat-stream / talk-to system prompt.
 
     Loads all data sections (character/soul template, partner template,
@@ -2909,6 +2913,43 @@ def _build_full_system_prompt(character_name: str,
         if history_summary:
             history_summary_block = f"Summary of previous conversations:\n{history_summary}"
 
+    # ---- Multi-party room scene framing -------------------------------
+    # Mehrere Anwesende → Gruppen-Szene statt 1:1-Partner-Framing (behebt die
+    # Identitaetsvermischung: Modell narrierte/uebernahm fremde Figuren, weil der
+    # Prompt eine 4-Personen-Szene als "du sprichst mit X" rahmte).
+    _present_str = ""
+    if present_characters:
+        _others = list(dict.fromkeys(
+            c for c in present_characters if c and c != character_name))
+        if _others:
+            _present_str = ", ".join(_others)
+            partner_mode = "room"
+
+    # ---- Szenen als kanonische "fruehere Gespraeche" ------------------
+    # scene_store-Consolidation (Konversation->Szene). Schliesst den Loop und
+    # ersetzt im Raum-Modus die alte paarweise History-Summary (Redundanz raus).
+    scenes_block = ""
+    if _has("memory_enabled"):
+        try:
+            from app.models import scene_store
+            from app.models.world import get_location_by_id
+            _lines = []
+            for sc in scene_store.get_recent_scenes_for(character_name, limit=5):
+                summ = (sc.get("summary") or "").strip()
+                if not summ:
+                    continue
+                _osc = [p for p in (sc.get("participants") or [])
+                        if p and p != character_name and p != "Erzähler"]
+                _loc = get_location_by_id(sc.get("location_id", "")) or {}
+                tag = " · ".join([x for x in (_loc.get("name", ""), ", ".join(_osc)) if x])
+                _lines.append(f"- {summ}" + (f"  ({tag})" if tag else ""))
+            if _lines:
+                scenes_block = "Earlier scenes (what happened before):\n" + "\n".join(_lines)
+        except Exception as _se:
+            logger.debug("scenes_block build failed: %s", _se)
+    if partner_mode == "room" and scenes_block:
+        history_summary_block = ""
+
     # ---- Recent activity ----------------------------------------------
     recent_activity_section = ""
     try:
@@ -2935,6 +2976,7 @@ def _build_full_system_prompt(character_name: str,
         partner_mode=partner_mode,
         partner_name=_partner_name,
         partner_lines=_partner_lines,
+        present_characters=_present_str,
         skip_partner=skip_partner,
         medium=medium,
         self_wearing=self_wearing,
@@ -2958,6 +3000,7 @@ def _build_full_system_prompt(character_name: str,
         tool_instructions=tool_instructions,
         longterm_section=longterm_section,
         daily_summary_section=daily_summary_section,
+        scenes_block=scenes_block,
         history_summary_block=history_summary_block,
         recent_activity_section=recent_activity_section,
         condition_reminder=condition_reminder,

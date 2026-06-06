@@ -15,11 +15,12 @@
        about you, beyond mere appearance).
 
    PARTNER block (one of these three modes, mutually exclusive):
-     partner_mode: "chatbot" | "character" | "fallback" | "none"
-     partner_name: str  (used in chatbot/character/fallback)
+     partner_mode: "chatbot" | "character" | "fallback" | "room" | "none"
+     partner_name: str  (used in chatbot/character/fallback; in room = addressed speaker)
      partner_lines: list[str]  (used only in character mode)
        Like char_lines but for the partner — also carries `character_presence`,
        so the speaker knows the impression the partner radiates.
+     present_characters: str  (room mode — comma-separated other characters in the scene)
 
    PRE-FORMATTED OPTIONAL BLOCKS (omit / pass empty string to skip):
      self_wearing       — clothing + inventory line(s) for the character
@@ -37,6 +38,7 @@
      longterm_section
      daily_summary_section
      history_summary_block — pre-formatted ("Previously: ..." OR "Summary of previous conversations: ...")
+     scenes_block — pre-formatted "Earlier scenes" recap from consolidated scenes (replaces history_summary_block in room mode)
      recent_activity_section
      condition_reminder
      tool_instructions  — pre-built tool spec block (built externally; complex)
@@ -80,6 +82,13 @@ IMPORTANT: You are having a conversation with {{ partner_name }}. {{ partner_nam
 {% elif partner_mode == "fallback" %}
 
 IMPORTANT: The person you are chatting with right now is {{ partner_name }}. Do NOT confuse {{ partner_name }} with any other character. Always address them as {{ partner_name }} (unless a different form of address is specified above).
+{% elif partner_mode == "room" %}
+
+GROUP SCENE — others present: {{ present_characters }}.
+Each of them is their OWN person and speaks and acts on their OWN turn. You do NOT control them and you cannot speak or act for them.
+Write ONLY {{ character_name }}'s own words and actions, in the first person. NEVER write, quote, narrate, or describe what {{ present_characters }} say, do, think, or feel — that is impersonation and breaks the scene. Only react to what they already said.
+{% if partner_name %}{{ partner_name }} just addressed you — answer {{ partner_name }} directly (you may also briefly react to the others present).{% endif %}
+Keep it short: one turn is a few sentences at most — one beat (a line of speech and/or a small action). Do NOT narrate the whole scene or jump ahead.
 {% endif %}
 
 {% if medium == "telegram" %}
@@ -198,6 +207,10 @@ Only for genuine plans or tasks — never for hypothetical, past, or one-off rol
 {% if history_summary_block %}
 
 {{ history_summary_block }}
+{% endif %}
+{% if scenes_block %}
+
+{{ scenes_block }}
 {% endif %}
 {% if recent_activity_section %}
 

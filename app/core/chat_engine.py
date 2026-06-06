@@ -304,8 +304,17 @@ def build_chat_context(
     # anwesender Dritter (z.B. Rosi) auf eine Ansprache antwortet, ohne das eben
     # Gehörte zu kennen, und stattdessen aus altem paarweisen Verlauf halluziniert.
     room_mode = bool(room_stream)
+    present_characters: List[str] = []
     if room_mode:
         messages = _messages_from_room_stream(character_name, room_stream)
+        # Anwesende = die Sprecher im Raum-Stream (außer mir + Erzähler) — daraus
+        # baut der System-Prompt das Gruppen-Szenen-Framing (Anti-Impersonation).
+        _seen = set()
+        for _row in room_stream:
+            _sp = (_row.get("speaker") or (_row.get("meta") or {}).get("speaker") or "").strip()
+            if _sp and _sp != character_name and _sp.lower() != "erzähler" and _sp not in _seen:
+                _seen.add(_sp)
+                present_characters.append(_sp)
 
     # Tools aus aktivierten Skills ableiten
     sm = get_skill_manager()
@@ -329,7 +338,8 @@ def build_chat_context(
         partner_override=(speaker if speaker != "user" else ""),
         medium=medium,
         respond_opportunity=respond_opportunity,
-        winding_down=winding_down)
+        winding_down=winding_down,
+        present_characters=present_characters)
 
     # Zustands-Filter (drunk/exhausted/…): deren prompt_modifier wird nur im
     # Thought-Pfad angewandt. Hier (Chat-Antwort) ergänzen, damit der Character
@@ -661,8 +671,12 @@ def clean_response(full_response: str) -> str:
     # Strip tool hallucinations
     clean = re.sub(r'<tool_call>.*?</tool_call>', '', clean, flags=re.DOTALL)
     clean = re.sub(r'</?tool_(?:call|result)>', '', clean)
-    # LLM-Tokenizer-Artefakte entfernen (z.B. <SPECIAL_28>, <|END_OF_TURN_TOKEN|>)
-    clean = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', clean)
+    # LLM-Tokenizer-Artefakte entfernen — JEDES <|...|> (auch lowercase wie
+    # <|python_tag|>, <|reserved_special_token_72|>) + <SPECIAL_28>. Frueher nur
+    # GROSSBUCHSTABEN-<|...|> → lowercase-Tokens leakten in den Room-Stream und
+    # wurden beim naechsten Turn als Kontext zurueckgefuettert (Kaskade).
+    clean = re.sub(r'<\|[^|>]{0,60}\|>', '', clean)
+    clean = re.sub(r'<SPECIAL_\d+>', '', clean)
     return clean.strip()
 
 
