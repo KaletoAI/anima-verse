@@ -593,10 +593,9 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
     Nur die erste matchende Regel wird zurueckgegeben.
     """
     from app.core.activity_engine import evaluate_condition
-    from app.models.character import get_character_current_location, get_character_current_activity
+    from app.models.character import get_character_current_location
 
     location_id = get_character_current_location(character_name) or ""
-    current_activity = get_character_current_activity(character_name) or ""
 
     # Regeln in zwei Buckets: char-spezifisch (rule.character == character_name)
     # vor globalen (rule.character leer/None). Damit gewinnt z.B. eine
@@ -626,14 +625,18 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
         force = rule.get("force_action", {})
         if not force:
             continue
-        # Bereits in der erzwungenen Aktivitaet? Char-spezifisch: dann
-        # globale Regeln BLOCKIEREN (sonst kann z.B. der Default-Wake-
-        # Trigger den char-spezifischen Sleep-Modus aushebeln). Global:
-        # nur weiterspringen.
-        forced_activity = force.get("set_activity", "")
-        already_applied = (
-            forced_activity and
-            current_activity.lower() == forced_activity.lower())
+        # Bereits im erzwungenen Zustand? (Flags stimmen schon ueberein.)
+        # Char-spezifisch: dann globale Regeln BLOCKIEREN (sonst kann z.B. der
+        # Default-Wake-Trigger den char-spezifischen Sleep-Modus aushebeln).
+        # Global: nur weiterspringen.
+        _set_flags = force.get("set_flags") or {}
+        already_applied = False
+        if _set_flags:
+            from app.models.character import get_state_flags
+            _cur_flags = get_state_flags(character_name)
+            already_applied = all(
+                bool(_cur_flags.get(_k)) == bool(_v)
+                for _k, _v in _set_flags.items())
         is_char_specific = bool((rule.get("character") or "").strip())
         if already_applied:
             if is_char_specific:
@@ -651,7 +654,6 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
             "rule_id": rule.get("id", ""),
             "rule_name": localized(rule, "name", _lang),
             "go_to": force.get("go_to", "stay"),
-            "set_activity": force.get("set_activity", ""),
             # B1: orthogonale State-Flags direkt setzbar (z.B. {"is_sleeping": false}
             # zum Wecken, {"is_sleeping": true} fuer einen Schlafzauber) — der Flag
             # ist die Autoritaet, unabhaengig vom Activity-String.

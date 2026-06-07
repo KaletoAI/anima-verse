@@ -22,8 +22,9 @@ from app.models.character import (
     save_character_personality,
     get_character_current_location,
     save_character_current_location,
-    get_character_current_activity,
-    save_character_current_activity,
+    get_effective_activity,
+    set_pose_intent,
+    clear_pose_intent,
     get_character_current_feeling,
     save_character_current_feeling,
     get_character_outfits,
@@ -447,7 +448,7 @@ def get_character_current_location_route(character_name: str) -> Dict[str, Any]:
     # Detail-Beschreibung der Aktivitaet
     from app.models.character import get_character_profile, get_movement_target
     profile = get_character_profile(character_name)
-    activity_detail = profile.get("current_activity_detail", "") if activities_on else ""
+    activity_detail = ""  # current_activity_detail entfernt (Pose-Modell)
     movement_target_id = get_movement_target(character_name) if locations_on else ""
     movement_target_name = _get_loc_name(movement_target_id) if movement_target_id else ""
     return {
@@ -526,7 +527,7 @@ async def update_character_current_location(character_name: str, request: Reques
 
         # Name → ID aufloesen falls noetig
         from app.models.world import resolve_location as _resolve_loc, get_entry_room_id
-        from app.models.character import get_character_current_location, get_character_current_room, save_character_current_room, save_character_current_activity
+        from app.models.character import get_character_current_location, get_character_current_room, save_character_current_room, clear_pose_intent
         loc_obj = _resolve_loc(location)
         location_to_save = loc_obj["id"] if loc_obj and loc_obj.get("id") else location
         location_name_resp = loc_obj.get("name", location) if loc_obj else location
@@ -559,7 +560,7 @@ async def update_character_current_location(character_name: str, request: Reques
         if location_to_save != old_loc:
             save_character_current_room(character_name, room or '')
             if not room:
-                save_character_current_activity(character_name, '')
+                clear_pose_intent(character_name)
         elif room:
             save_character_current_room(character_name, room)
 
@@ -635,7 +636,7 @@ async def place_character_on_map(character_name: str, request: Request) -> Dict[
         from app.models.world import resolve_location as _resolve_loc, get_entry_room_id
         from app.models.character import (
             add_known_location, get_character_current_room,
-            save_character_current_room, save_character_current_activity)
+            save_character_current_room, clear_pose_intent)
 
         loc_obj = _resolve_loc(location)
         location_to_save = loc_obj["id"] if loc_obj and loc_obj.get("id") else location
@@ -670,7 +671,7 @@ async def place_character_on_map(character_name: str, request: Request) -> Dict[
         if location_to_save != old_loc:
             save_character_current_room(character_name, room or '')
             if not room:
-                save_character_current_activity(character_name, '')
+                clear_pose_intent(character_name)
         elif room:
             save_character_current_room(character_name, room)
 
@@ -720,9 +721,9 @@ async def place_character_on_map(character_name: str, request: Request) -> Dict[
 
 
 @router.get("/{character_name}/current-activity")
-def get_character_current_activity_route(character_name: str) -> Dict[str, Any]:
+def get_effective_activity_route(character_name: str) -> Dict[str, Any]:
     """Gibt die aktuelle Aktivitaet zurueck"""
-    activity = get_character_current_activity(character_name)
+    activity = get_effective_activity(character_name)
     return {"character": character_name, "current_activity": activity or ""}
 
 
@@ -734,44 +735,12 @@ async def update_character_current_activity(character_name: str, request: Reques
         user_id = data.get("user_id", "")
         activity = data.get("current_activity", "")
 
-        save_character_current_activity(character_name, activity)
+        # Freie Pose setzen (kein Library-Matching, kein Auto-Raum-Move mehr —
+        # Raum/Ort bleiben unveraendert, die Pose ist freier Text).
+        set_pose_intent(character_name, activity)
 
-        # Effects werden zeitproportional via save_character_current_activity
-        # und hourly_status_tick angewendet (nicht mehr sofort).
-
-        # Room automatisch aus Activity ableiten — ABER NICHT wenn der
-        # Character gerade im aktiven Chat des Users ist. Sonst springt Kira
-        # mitten im Pool-RP plotzlich ins Schlafzimmer wenn der LLM-Stream
-        # ein "**I do** Sex" emittiert. Avatar wird ebenso nie verschoben.
-        room_name = ""
-        room_id = ""
-        if activity:
-            from app.models.character import save_character_current_room
-            from app.models.world import find_room_by_activity, get_location
-            from app.models.account import is_player_controlled
-            try:
-                from app.models.account import get_chat_partner
-                _is_chat_partner = (get_chat_partner() == character_name)
-            except Exception:
-                _is_chat_partner = False
-            _skip_room_move = _is_chat_partner or is_player_controlled(character_name)
-            if _skip_room_move:
-                logger.info("update_current_activity: Auto-Raum-Move fuer %s "
-                             "uebersprungen (chat_partner=%s, avatar=%s)",
-                             character_name, _is_chat_partner,
-                             is_player_controlled(character_name))
-            else:
-                loc_id = get_character_current_location(character_name)
-                if loc_id:
-                    loc_data = get_location(loc_id)
-                    if loc_data:
-                        room = find_room_by_activity(loc_data, activity)
-                        if room:
-                            room_id = room.get("id", "")
-                            save_character_current_room(character_name, room_id)
-                            room_name = room.get("name", "")
-
-        return {"status": "success", "character": character_name, "current_activity": activity, "current_room": room_name, "current_room_id": room_id}
+        return {"status": "success", "character": character_name,
+                "current_activity": activity, "current_room": "", "current_room_id": ""}
     except HTTPException:
         raise
     except Exception as e:
@@ -1787,7 +1756,7 @@ def get_current_outfit_route(character_name: str) -> Dict[str, Any]:
     from app.core.outfit_renderer import render_outfit
     outfit = (render_outfit(character_name=character_name).get("full", "") or "").removeprefix("wearing: ")
     current_location_id = get_character_current_location(character_name)
-    current_activity = get_character_current_activity(character_name)
+    current_activity = get_effective_activity(character_name)
     current_room = get_character_current_room(character_name)
     return {
         "character": character_name,
@@ -4200,27 +4169,9 @@ def memory_today(character_name: str) -> Dict[str, Any]:
     conn = get_connection()
     import json as _json
 
-    # --- Activity-Dauern (Cap fuer Lane-Bands, sonst zieht eine 1-min
-    # Aktivitaet wie "Orgasm" sich endlos bis zum naechsten Wechsel hin).
-    # activity_library liefert shared + world-JSON + world-DB Aktivitaeten,
-    # wir bauen daraus eine name-variant -> duration_min Map.
+    # Activity-Dauern (Lane-Band-Caps) gibt es nicht mehr — Activity-Library
+    # entfernt, Posen haben keine feste Dauer.
     activity_durations: Dict[str, Optional[int]] = {}
-    try:
-        from app.models.activity_library import get_all_library_activities
-        for act in get_all_library_activities():
-            d = act.get("duration_minutes")
-            if not isinstance(d, (int, float)):
-                continue
-            d_int = int(d)
-            # Alle Namens-Varianten (name, name_de, name_en, name_XX) als Keys
-            for key, val in act.items():
-                if (key == "name" or key.startswith("name_")) and isinstance(val, str) and val:
-                    activity_durations[val] = d_int
-            # Auch ID, falls state_history die ID statt den Anzeigenamen nutzt
-            if act.get("id"):
-                activity_durations[act["id"]] = d_int
-    except Exception as _e:
-        logger.debug("activity duration lookup skipped: %s", _e)
 
     # --- 24h State-History (alle Types) — fuer Lanes ---
     rows = conn.execute(
@@ -4267,7 +4218,7 @@ def memory_today(character_name: str) -> Dict[str, Any]:
             prev = ev.get("value")
         return last_ts
 
-    current_activity = profile.get("current_activity") or ""
+    current_activity = profile.get("pose_intent") or ""
     current_location_id = profile.get("current_location") or ""
     current_room_id = profile.get("current_room") or ""
     current_mood = profile.get("current_feeling") or profile.get("current_mood") or ""

@@ -443,10 +443,10 @@ class AgentLoop:
                                              volume=volume, obligatory=False,
                                              winding_down=True):
                             logger.info("room %s: Backstop (%d) → sichtbarer Abgang von %s",
-                                        key, self._chime_backstop, closer)
+                                        key, effective_backstop, closer)
                             return {"obligatory": [], "chime": [], "winddown": [closer]}
                 logger.info("room %s: Chime-Backstop (%d) erreicht → Stille",
-                            key, self._chime_backstop)
+                            key, effective_backstop)
                 return {"obligatory": [], "chime": []}
 
         if not location_id:
@@ -1090,14 +1090,14 @@ class AgentLoop:
                                 character_name)
                     return {"outcome": "auto_sleep_offmap_continue",
                             "preview": f"already offmap, sleeping (stamina={stamina})",
-                            "tools": ["SetActivity"]}
+                            "tools": ["Sleep"]}
                 if enter_offmap_sleep(character_name):
                     set_is_sleeping(character_name, True)
                     logger.info("Auto-Sleep: %s erschoepft (stamina=%s) -> offmap",
                                 character_name, stamina)
                     return {"outcome": "auto_sleep_offmap",
                             "preview": f"exhausted (stamina={stamina}) → offmap sleep",
-                            "tools": ["SetLocation", "SetActivity"]}
+                            "tools": ["SetLocation", "Sleep"]}
 
             # Pfad 2/3: home ist eine reguläre Location
             if cur_loc == home_loc:
@@ -1107,7 +1107,7 @@ class AgentLoop:
                             character_name)
                 return {"outcome": "auto_sleep_at_home",
                         "preview": f"home & exhausted (stamina={stamina}) → sleeping",
-                        "tools": ["SetActivity"]}
+                        "tools": ["Sleep"]}
 
             # Leave-Gate: Confined Char kann auch erschoepft nicht heim
             # laufen. Schlaeft dann am aktuellen Ort ein.
@@ -1122,7 +1122,7 @@ class AgentLoop:
                             character_name, _auto_leave_reason)
                 return {"outcome": "auto_sleep_confined",
                         "preview": f"exhausted (stamina={stamina}) → confined, sleeping in place",
-                        "tools": ["SetActivity"]}
+                        "tools": ["Sleep"]}
 
             # Anderswo — movement_target setzen UND sofort den ersten
             # Schritt ausfuehren. Der Walk-Step im normalen Tick-Flow wird
@@ -1165,7 +1165,7 @@ class AgentLoop:
                             character_name)
                 return {"outcome": "auto_sleep_arrived_home",
                         "preview": f"exhausted (stamina={stamina}) → arrived home → sleeping",
-                        "tools": ["SetLocation", "SetActivity"]}
+                        "tools": ["SetLocation", "Sleep"]}
 
             logger.info("Auto-Sleep: %s erschoepft (stamina=%s) -> Reise nach Hause (%s) [Schritte: %d]",
                         character_name, stamina, home_loc, steps_taken)

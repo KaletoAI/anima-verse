@@ -948,6 +948,37 @@ def get_known_locations(character_name: str) -> List[str]:
     return []
 
 
+def get_gallery_viewers(character_name: str) -> List[str]:
+    """Liefert die Freigabeliste fuer die Galerie eines Characters.
+
+    ``gallery_allowed_viewers`` ist eine Liste von Avatar-/Character-Namen, die
+    die Galerie dieses Characters im Player-UI durchstoebern duerfen. Leere
+    Liste = nur der Character selbst (Besitzer) sieht seine Galerie.
+    """
+    if not character_name:
+        return []
+    cfg = get_character_config(character_name) or {}
+    val = cfg.get("gallery_allowed_viewers")
+    if isinstance(val, list):
+        return [str(v) for v in val if v]
+    return []
+
+
+def can_view_gallery(viewer: str, owner: str) -> bool:
+    """True, wenn ``viewer`` die Galerie von ``owner`` sehen darf.
+
+    Der Besitzer sieht seine eigene Galerie immer; sonst entscheidet die
+    Freigabeliste (``gallery_allowed_viewers``) des Besitzers.
+    """
+    viewer = (viewer or "").strip()
+    owner = (owner or "").strip()
+    if not viewer or not owner:
+        return False
+    if viewer == owner:
+        return True
+    return viewer in get_gallery_viewers(owner)
+
+
 def add_known_location(character_name: str, location_id: str) -> List[str]:
     """Fuegt eine Location-ID zur known_locations-Liste hinzu (idempotent).
 
@@ -980,7 +1011,7 @@ def _schedule_background_variant(character_name: str) -> None:
         from app.models.inventory import get_equipped_pieces, get_equipped_items
         profile = get_character_profile(character_name) or {}
         mood = profile.get("current_feeling", "") or ""
-        activity = profile.get("current_activity", "") or ""
+        activity = get_effective_activity(character_name)
         eq_p = get_equipped_pieces(character_name)
         eq_i = get_equipped_items(character_name)
         trigger_expression_generation(
@@ -1183,22 +1214,64 @@ def get_location_changed_at(character_name: str = "") -> str:
     return profile.get("location_changed_at", "")
 
 
-def get_character_current_activity(character_name: str) -> str:
-    """Gibt die aktuelle Aktivitaet zurueck"""
+def get_character_pose_intent(character_name: str) -> str:
+    """Gibt die aktuelle freie Pose/Taetigkeit (pose_intent) zurueck.
+
+    Ersetzt das fruehere current_activity-Feld als kanonische Quelle dafuer,
+    "was der Character gerade tut" (Freitext, vom Chat-Extraktor / SetPose-Skill
+    gesetzt). Fuer Anzeige/Render inkl. Schlaf-Zustand: get_effective_activity.
+    """
     if not character_name:
         return ""
     profile = get_character_profile(character_name)
-    return profile.get("current_activity", "")
+    return (profile.get("pose_intent") or "") if profile else ""
+
+
+def set_pose_intent(character_name: str, pose: str) -> None:
+    """Setzt die freie Pose (pose_intent) + resolved den Pose-Variant.
+
+    Kanonischer Setter fuer "Character/Avatar macht jetzt X" (manuelle Wahl,
+    Spell, TalkTo). Ersetzt das fruehere save_character_current_activity.
+    Leerer pose => Pose zuruecksetzen.
+    """
+    if not character_name:
+        return
+    pose = (pose or "").strip()
+    variant = None
+    if pose:
+        try:
+            from app.core.pose_engine import resolve_pose_variant
+            variant = resolve_pose_variant(character_name, pose)
+        except Exception:
+            variant = None
+    profile = get_character_profile(character_name) or {}
+    profile["pose_intent"] = pose
+    if variant:
+        profile["pose_variant_id"] = variant["id"]
+    elif not pose:
+        profile.pop("pose_variant_id", None)
+    save_character_profile(character_name, profile)
+
+
+def clear_pose_intent(character_name: str) -> None:
+    """Leert die freie Pose (z.B. nach Orts-/Raumwechsel — Pose wird stale)."""
+    if not character_name:
+        return
+    profile = get_character_profile(character_name) or {}
+    if profile.get("pose_intent") or profile.get("pose_variant_id"):
+        profile["pose_intent"] = ""
+        profile.pop("pose_variant_id", None)
+        save_character_profile(character_name, profile)
 
 
 def get_effective_activity(character_name: str) -> str:
-    """Anzeige-/Render-Aktivitaet — spiegelt den ``is_sleeping``-Flag (B1).
+    """Anzeige-/Render-Taetigkeit — spiegelt den ``is_sleeping``-Flag (B1).
 
-    Der Flag ist die Autoritaet fuer den Schlaf-Zustand; die gespeicherte
-    ``current_activity`` bleibt frei/entkoppelt. EINE Read-seitige Aufloesung,
+    Der Flag ist die Autoritaet fuer den Schlaf-Zustand; die freie
+    ``pose_intent`` bleibt davon entkoppelt. EINE Read-seitige Aufloesung,
     die sowohl die Spieler-Anzeige als auch die Expression-Bild-Version/-
     Generierung nutzen → "Sleeping" erscheint ueberall konsistent und das Bild
-    wechselt, ohne den Activity-String an den Flag zu koppeln.
+    wechselt, ohne den Pose-String an den Flag zu koppeln.
     """
     if not character_name:
         return ""
@@ -1207,418 +1280,7 @@ def get_effective_activity(character_name: str) -> str:
             return "Sleeping"
     except Exception:
         pass
-    return get_character_current_activity(character_name) or ""
-
-
-def _normalize_activity_name(character_name: str, activity: str) -> tuple:
-    """Normalisiert einen Aktivitaetsnamen gegen die Bibliothek.
-
-    Wenn die Aktivitaet in der Bibliothek gefunden wird, wird der kanonische
-    Name zurueckgegeben. Der Original-Freitext wird als Detail behalten.
-
-    Returns: (normalized_name, detail_or_empty)
-    """
-    if not activity:
-        return activity, ""
-    try:
-        from app.models.activity_library import get_library_activity, find_library_activity_by_name
-        # Erst nach ID, dann nach Name (inkl. Stemming)
-        lib_act = get_library_activity(activity)
-        if not lib_act:
-            lib_act = find_library_activity_by_name(activity)
-        if lib_act:
-            canonical = lib_act.get("name", activity)
-            if canonical.lower() != activity.lower():
-                return canonical, activity  # Freitext als Detail behalten
-            return canonical, ""
-    except Exception:
-        pass
-    return activity, ""
-
-
-def _decide_partner_on_change(profile: dict, new_activity: str, location_id: str):
-    """Entscheidet was beim Activity-Wechsel mit activity_partner passiert.
-
-    Returns:
-      str(partner_name) — vererben (neue Activity ist requires_partner und
-                          alter Partner ist am gleichen Ort)
-      ""               — verwerfen (klar Solo: Library-Activity ohne
-                          requires_partner ODER Partner abwesend)
-      None             — unentschieden (Freitext, nicht in Library) — der
-                          Aufrufer soll activity_partner unangetastet lassen.
-                          Der nachgelagerte Background-Classifier setzt den
-                          State-History-Eintrag dann mit Partner-Tag, sobald
-                          die Reklassifizierung greift.
-
-    Damit bleibt der Partner ueber Activity-Ketten und Chat-Marker-Freitext
-    hinweg erhalten (Passionate kissing → Foreplay → Sex), ohne dass jeder
-    Pfad den partner-Parameter explizit durchreichen muss.
-    """
-    if not new_activity or not location_id:
-        return ""
-    old_partner = (profile.get("activity_partner") or "").strip()
-    if not old_partner:
-        return ""
-    try:
-        from app.models.activity_library import get_library_activity, find_library_activity_by_name
-        lib_act = get_library_activity(new_activity) or find_library_activity_by_name(new_activity)
-        if not lib_act:
-            # Unbekannter Freitext — Entscheidung verschieben.
-            return None
-        if not lib_act.get("requires_partner"):
-            return ""
-        partner_loc = get_character_current_location(old_partner) or ""
-        if partner_loc != location_id:
-            return ""
-        return old_partner
-    except Exception:
-        return ""
-
-
-def save_character_current_activity(character_name: str, activity: str, detail: str = "",
-                                    _skip_classify: bool = False, _is_reclassify: bool = False,
-                                    partner: str = "",
-                                    _skip_partner_transfer: bool = False):
-    """Speichert die aktuelle Aktivitaet.
-
-    activity: Kurzer Kategorie-Name fuer Mechanik (Outfits, Effects, Conditions)
-    detail: Optionale ausfuehrliche Beschreibung (fuer Prompt-Flavour, Bild-Generierung)
-    partner: Optional — der Partner dieser Aktivitaet (fuer requires_partner Activities).
-             Wird im Profil als activity_partner gespeichert.
-    _skip_classify: Internal flag to prevent recursive classify calls
-    _is_reclassify: True wenn Background-Classify den kurzen Namen nachliefert (ersetzt letzten Eintrag)
-    _skip_partner_transfer: Internal flag to prevent recursion during auto partner transfer
-    """
-    # Sanitize: LLM-Tokenizer-Artefakte entfernen (<|END_OF_TURN_TOKEN|>, <SPECIAL_X>)
-    if activity:
-        import re as _re
-        activity = _re.sub(r'<SPECIAL_\d+>|<\|[A-Z_][A-Z_0-9]*\|>', '', activity).strip()
-    if detail:
-        import re as _re
-        detail = _re.sub(r'<SPECIAL_\d+>|<\|[A-Z_][A-Z_0-9]*\|>', '', detail).strip()
-    # Schritt 6 (May 2026): Activity-Sentinel "Sleeping" spiegeln auf is_sleeping-Flag
-    # damit Compliance/AgentLoop konsistent reagieren waehrend die Activity-Library
-    # noch parallel laeuft.
-    if (activity or "").strip().lower() == "sleeping":
-        try:
-            set_is_sleeping(character_name, True)
-        except Exception:
-            pass
-
-    # Pose-Bridge (Schritt 8 Cleanup, May 2026): jede gesetzte Activity
-    # spiegelt parallel auf pose_intent + pose_variant_id, damit Expression-
-    # Cache + Prompt-Builder im pose_system_active-Modus den variant nutzen.
-    # resolve_pose_variant macht bei kurzen Strings keinen LLM-Call.
-    if activity and not (activity or "").strip().lower() == "sleeping":
-        try:
-            from app.models.world import is_pose_system_active
-            if is_pose_system_active():
-                from app.core.pose_engine import resolve_pose_variant
-                variant = resolve_pose_variant(character_name, activity)
-                if variant:
-                    _prof_pose = get_character_profile(character_name) or {}
-                    _prof_pose["pose_intent"] = activity
-                    _prof_pose["pose_variant_id"] = variant["id"]
-                    save_character_profile(character_name, _prof_pose)
-        except Exception as _pe:
-            logger.debug("pose-bridge bei save_activity: %s", _pe)
-
-    # Normalisierung: Freitext gegen Bibliothek matchen
-    if activity and not _is_reclassify:
-        normalized, auto_detail = _normalize_activity_name(character_name, activity)
-        if normalized != activity:
-            if not detail:
-                detail = auto_detail
-            activity = normalized
-
-    profile = get_character_profile(character_name)
-    old_activity = profile.get("current_activity", "")
-    old_detail = profile.get("current_activity_detail", "")
-
-    # Duplicate-Skip: gleiche Activity (case-insensitive) UND gleiche detail
-    # innerhalb der letzten 30s → no-op. Verhindert dass Tool-LLM-Doppelaufrufe
-    # oder AgentLoop-Auto-Sleep wiederholt dieselbe Activity setzen + on_start
-    # nochmal feuern. Reclassify ist bewusst ausgenommen (das ist genau dafuer
-    # da, den Namen zu normalisieren).
-    if activity and not _is_reclassify and old_activity:
-        if (activity.strip().lower() == old_activity.strip().lower()
-                and (detail or "").strip() == (old_detail or "").strip()):
-            try:
-                started_iso = (profile.get("activity_started_at") or "").strip()
-                if started_iso:
-                    started = parse_iso(started_iso)
-                    if (utc_now() - started).total_seconds() < 30:
-                        return  # idempotent — nichts zu tun
-            except (ValueError, TypeError):
-                pass
-
-    # Zeitproportionale Effekte fuer die alte Aktivitaet abrechnen
-    if activity and old_activity and activity != old_activity and not _is_reclassify:
-        try:
-            from app.core.activity_engine import finalize_activity_effects
-            finalize_activity_effects(character_name, old_activity)
-            # Profil neu laden, da finalize status_effects geaendert haben kann
-            profile = get_character_profile(character_name)
-        except Exception:
-            pass
-
-        # on_interrupted Trigger: alte Aktivitaet wurde vor Ablauf abgebrochen.
-        # Unterscheidet sich von on_complete: on_complete feuert wenn die Aktivitaet
-        # ihre duration_minutes regulaer abschliesst (Scheduler setzt activity='').
-        # Hier: activity wird zu einem anderen nicht-leeren Wert geaendert.
-        try:
-            from app.core.activity_engine import _find_activity_definition, execute_trigger
-            _old_def = _find_activity_definition(character_name, old_activity)
-            if _old_def and _old_def.get("interruptible", True):
-                _triggers = _old_def.get("triggers", {}) or {}
-                _on_int = _triggers.get("on_interrupted")
-                if _on_int:
-                    execute_trigger(character_name, _on_int,
-                                    context={"interrupted_activity": old_activity,
-                                             "new_activity": activity})
-        except Exception:
-            pass
-
-    profile["current_activity"] = activity
-    if detail:
-        profile["current_activity_detail"] = detail
-    elif activity != old_activity:
-        profile.pop("current_activity_detail", None)
-
-    # Activity-Lifetime: bei einem ECHTEN Activity-Wechsel (nicht
-    # Reclassify) den Start-Timestamp + duration_minutes aus der Library
-    # ins Profil schreiben. Der World-Admin-Tick (periodic_jobs) prueft
-    # zyklisch ob die Activity ihre Dauer ueberschritten hat und setzt
-    # sie dann auf "" zurueck (loest on_complete-Trigger aus). Ersetzt
-    # die alten APScheduler-One-Time-``activity_done_*``-Jobs.
-    if activity and activity != old_activity and not _is_reclassify:
-        profile["activity_started_at"] = utc_now_iso()
-        try:
-            from app.core.activity_engine import _find_activity_definition
-            _act_def = _find_activity_definition(character_name, activity) or {}
-            _dur = int(_act_def.get("duration_minutes") or 0)
-            if _dur > 0:
-                profile["activity_duration_minutes"] = _dur
-            else:
-                profile.pop("activity_duration_minutes", None)
-        except Exception:
-            profile.pop("activity_duration_minutes", None)
-    elif not activity and old_activity:
-        # Activity geleert (Aufwach-/Reset-Pfad) — Lifetime-Felder weg.
-        profile.pop("activity_started_at", None)
-        profile.pop("activity_duration_minutes", None)
-
-    current_location = profile.get("current_location", "")
-    # Partner-Feld pflegen:
-    # - explizit gesetzt -> speichern.
-    # - Reklassifizierung -> activity_partner unangetastet lassen (Rename, kein
-    #   Wechsel; der Vorgaenger-Save hat den Partner bereits korrekt gesetzt).
-    # - sonst bei Activity-Wechsel pruefen ob die neue Activity requires_partner
-    #   ist und der bisherige Partner noch am gleichen Ort — dann erben, sonst
-    #   verwerfen (Solo-Wechsel oder Partner abwesend).
-    if partner:
-        profile["activity_partner"] = partner
-    elif _is_reclassify:
-        # Existierenden Partner mitfuehren, damit detail_meta unten ihn
-        # mit in die Reclassify-Metadata schreibt.
-        partner = (profile.get("activity_partner") or "").strip()
-    elif activity != old_activity:
-        decision = _decide_partner_on_change(profile, activity, current_location)
-        if decision is None:
-            # Freitext (Chat-Marker) — Partner unangetastet lassen, Reclassify entscheidet.
-            partner = (profile.get("activity_partner") or "").strip()
-        elif decision:
-            profile["activity_partner"] = decision
-            partner = decision
-        else:
-            profile.pop("activity_partner", None)
-    # Raum aus Activity ableiten: wenn ein Raum am aktuellen Ort diese Activity hat,
-    # Character automatisch dorthin bewegen. Damit bleiben Activity und Raum immer
-    # konsistent, egal ob Chat-Marker, Tool-LLM, Skill oder Scheduler die Activity setzt.
-    if activity and activity != old_activity and current_location:
-        try:
-            from app.models.world import get_location_by_id, find_room_by_activity
-            _loc_data = get_location_by_id(current_location)
-            if _loc_data:
-                _matched_room = find_room_by_activity(_loc_data, activity)
-                if _matched_room:
-                    _new_room_id = _matched_room.get("id", "")
-                    if _new_room_id and profile.get("current_room", "") != _new_room_id:
-                        profile["current_room"] = _new_room_id
-        except Exception:
-            pass
-    save_character_profile(character_name, profile)
-
-    # on_start Trigger fuer die NEUE Activity feuern — egal welcher Pfad
-    # save_character_current_activity aufruft (set_activity_skill,
-    # avatar_activity_detect, thoughts, scheduler-extras). Frueher hat
-    # nur set_activity_skill den Trigger gerufen, was reine
-    # Keyword-Detection-Aenderungen (z.B. Avatar tippt "ich gehe schlafen")
-    # ohne Wirkung liess. Reclassify nicht doppelt feuern.
-    if activity and activity != old_activity and not _is_reclassify:
-        try:
-            from app.core.activity_engine import _find_activity_definition, execute_trigger
-            _new_def = _find_activity_definition(character_name, activity)
-            if _new_def:
-                _triggers = _new_def.get("triggers", {}) or {}
-                _on_start = _triggers.get("on_start")
-                if _on_start:
-                    execute_trigger(character_name, _on_start,
-                                    context={"activity": activity,
-                                             "previous_activity": old_activity})
-        except Exception as _trig_err:
-            from app.core.log import get_logger
-            get_logger("character_model").debug(
-                "on_start-Trigger fuer %s/%s fehlgeschlagen: %s",
-                character_name, activity, _trig_err)
-
-    # Effects-Tracking aktualisieren
-    if activity:
-        try:
-            from app.core.activity_engine import reset_effects_tracking, update_effects_tracking_name
-            if not _is_reclassify:
-                reset_effects_tracking(character_name, activity)
-            else:
-                update_effects_tracking_name(character_name, activity)
-        except Exception:
-            pass
-
-    # Activity-History aufzeichnen (nur bei echtem Wechsel)
-    detail_meta = {"detail": detail} if detail and detail.lower() != activity.lower() else None
-    if partner:
-        detail_meta = detail_meta or {}
-        detail_meta["partner"] = partner
-    if activity and activity != old_activity:
-        if _is_reclassify:
-            # Reklassifizierung: letzten Aktivitaets-Eintrag ersetzen statt neuen anlegen
-            _replace_last_state_entry(character_name, "activity", activity, metadata=detail_meta)
-        else:
-            _record_state_change(character_name, "activity", activity, metadata=detail_meta)
-
-        # Outfit-Compliance bei Activity-Wechsel.
-        # Im neuen Decency-Modell triggert Activity selbst keine eigene
-        # Compliance mehr — die Decency kommt aus Raum/Location, Activity
-        # liefert nur einen optionalen decency_override-Flag (kommt in
-        # Schritt 6 mit den State-Flags). Hier ruft apply_outfit_compliance
-        # nochmal, falls die Activity das Outfit beeinflussen sollte
-        # (z.B. Variant-Trigger).
-        if not _is_reclassify and not _skip_partner_transfer:
-            try:
-                from app.models.account import is_player_controlled
-                if not is_player_controlled(character_name) and not is_outfit_locked(character_name):
-                    from app.core.outfit_compliance import apply_outfit_compliance
-                    apply_outfit_compliance(character_name)
-                    # Variant-Trigger neu anstossen — coalesce merged mit
-                    # dem evtl. schon pending Mood-Trigger.
-                    _schedule_background_variant(character_name)
-            except Exception as _e:
-                from app.core.log import get_logger
-                get_logger("character_model").debug(
-                    "Outfit-Compliance bei Activity-Wechsel fehlgeschlagen: %s", _e)
-    # Auto-classify long activity text in background (if no detail provided = raw text as activity)
-    if activity and not detail and not _skip_classify and len(activity) > 25:
-        try:
-            from app.core.activity_engine import classify_activity_background
-            classify_activity_background(character_name, activity)
-        except Exception:
-            pass
-    # Kurze Aktivitaeten direkt im Raum tracken (Zaehler + Auto-Add)
-    elif activity and len(activity) <= 30 and not _is_reclassify:
-        try:
-            room_id = profile.get("current_room", "")
-            if current_location and room_id:
-                from app.models.world import track_room_activity
-                track_room_activity(current_location, room_id, activity)
-        except Exception:
-            pass
-
-    # Partner-Auto-Transfer: requires_partner Activities setzen den Partner mit.
-    # Greift fuer alle Aufrufer (SetActivity-Skill, Follow-up, Scheduler, Chat-Marker).
-    if (activity and activity != old_activity and not _is_reclassify
-            and not _skip_partner_transfer):
-        try:
-            _auto_transfer_partner_activity(character_name, activity,
-                current_location, explicit_partner=partner)
-        except Exception as _pt_err:
-            from app.core.log import get_logger
-            get_logger("character").debug("Partner auto-transfer failed: %s", _pt_err)
-
-
-def _auto_transfer_partner_activity(initiator: str, activity_name: str,
-    location_id: str, explicit_partner: str = "") -> str:
-    """Setzt die Gegenaktivitaet beim Partner, wenn die Activity requires_partner ist.
-
-    Partner-Ermittlung (in Reihenfolge):
-      1. explicit_partner (Argument)
-      2. activity_partner im Initiator-Profil (aus vorherigem Transfer-Zyklus)
-      3. Aktiver Avatar, wenn am gleichen Ort
-
-    Kein Fallback auf "irgendein Character am Ort" — lieber kein Transfer als
-    falscher Partner. Der Initiator behaelt seine Activity solo, sein
-    State-History-Eintrag ohne Partner-Tag ist ein ehrliches Signal.
-
-    Returns: Name des transferierten Partners oder "" wenn kein Transfer passierte.
-    """
-    from app.models.activity_library import (
-        get_library_activity, find_library_activity_by_name)
-
-    if not activity_name or not location_id:
-        return ""
-    lib_act = get_library_activity(activity_name) or find_library_activity_by_name(activity_name)
-    if not lib_act or not lib_act.get("requires_partner"):
-        return ""
-
-    partner = explicit_partner or ""
-    if not partner:
-        prof = get_character_profile(initiator) or {}
-        partner = prof.get("activity_partner", "") or ""
-    if not partner:
-        try:
-            from app.models.account import get_active_character
-            avatar = get_active_character()
-            if avatar and avatar != initiator:
-                if get_character_current_location(avatar) == location_id:
-                    partner = avatar
-        except Exception:
-            pass
-
-    if not partner or partner == initiator:
-        return ""
-
-    try:
-        partner_loc = get_character_current_location(partner) or ""
-    except Exception:
-        partner_loc = ""
-    if partner_loc != location_id:
-        return ""
-
-    partner_activity_id = lib_act.get("partner_activity", "") or ""
-    partner_activity_name = activity_name
-    if partner_activity_id:
-        p_def = (get_library_activity(partner_activity_id)
-                 or find_library_activity_by_name(partner_activity_id))
-        if p_def:
-            partner_activity_name = p_def.get("name", partner_activity_id)
-
-    partner_profile = get_character_profile(partner) or {}
-    if partner_profile.get("current_activity", "") == partner_activity_name:
-        # Schon gesetzt — nur Partner-Feld aktualisieren, falls noetig
-        if partner_profile.get("activity_partner", "") != initiator:
-            partner_profile["activity_partner"] = initiator
-            save_character_profile(partner, partner_profile)
-        return ""
-
-    save_character_current_activity(partner, partner_activity_name,
-        partner=initiator,
-        _skip_partner_transfer=True)
-    try:
-        from app.core.log import get_logger
-        get_logger("activity_engine").info(
-            "Partner-Auto-Transfer: %s -> Activity '%s' (mit %s)",
-            partner, partner_activity_name, initiator)
-    except Exception:
-        pass
-    return partner
+    return get_character_pose_intent(character_name)
 
 
 def get_character_current_room(character_name: str) -> str:
@@ -1725,8 +1387,7 @@ def force_set_status(character_name: str,
         save_character_current_room(character_name, room)
         written["room"] = room
     if activity is not None:
-        save_character_current_activity(
-            character_name, activity, detail="", _skip_classify=True)
+        set_pose_intent(character_name, activity)
         written["activity"] = activity
     if feeling is not None:
         save_character_current_feeling(character_name, feeling)
@@ -3313,12 +2974,58 @@ def is_character_sleeping(character_name: str) -> bool:
     """
     try:
         profile = get_character_profile(character_name) or {}
-        if profile.get("is_sleeping"):
-            return True
-        cur_act = (profile.get("current_activity") or "").strip().lower()
-        return cur_act == "sleeping"
+        return bool(profile.get("is_sleeping"))
     except Exception:
         return False
+
+
+def adjust_status_effects(character_name: str, deltas: Dict[str, int],
+                          source: str = "") -> Dict[str, Any]:
+    """Wendet ganzzahlige Deltas auf status_effects an (geclamped 0-100).
+
+    deltas: {stat_key: delta}. Keys, die nicht bereits im status_effects-Dict
+    des Characters existieren, werden ignoriert — es werden keine neuen Stats
+    erfunden (passt zur generischen, template-getriebenen Stat-Definition).
+
+    Returns die tatsaechlich angewandten Aenderungen
+    ``{stat: {"old": x, "new": y}}`` und schreibt eine state-change-History.
+    """
+    if not deltas:
+        return {}
+    try:
+        profile = get_character_profile(character_name) or {}
+    except Exception:
+        return {}
+    status = profile.get("status_effects", {}) or {}
+    if not status:
+        return {}
+    changes: Dict[str, Any] = {}
+    for key, delta in deltas.items():
+        if key not in status:
+            continue
+        try:
+            d = int(delta)
+        except (ValueError, TypeError):
+            continue
+        if d == 0:
+            continue
+        try:
+            old = int(status[key])
+        except (ValueError, TypeError):
+            continue
+        new = max(0, min(100, old + d))
+        if new != old:
+            status[key] = new
+            changes[key] = {"old": old, "new": new}
+    if changes:
+        profile["status_effects"] = status
+        save_character_profile(character_name, profile)
+        try:
+            _record_state_change(character_name, "effects", source or "chat",
+                                 metadata={"changes": changes, "source": source})
+        except Exception:
+            pass
+    return changes
 
 
 # === State-Flag-Setter (Schritt 6, May 2026) =============================

@@ -98,10 +98,9 @@ def _sub_force_rules():
         from app.models.character import (
             list_available_characters,
             get_character_current_location, get_character_current_room,
-            get_character_current_activity,
+            get_effective_activity,
             save_character_current_location,
             save_character_current_room,
-            save_character_current_activity,
             enter_offmap_sleep, wake_from_offmap,
             OFFMAP_SLEEP_SENTINEL,
             _record_state_change)
@@ -122,7 +121,7 @@ def _sub_force_rules():
                 # Erschoepfungs-/Wake-Regel jede Minute das Tagebuch.
                 _before_loc = (get_character_current_location(name) or "").strip()
                 _before_room = (get_character_current_room(name) or "").strip()
-                _before_act = (get_character_current_activity(name) or "").strip().lower()
+                _before_act = (get_effective_activity(name) or "").strip().lower()
 
                 # Offmap-Sentinel: nicht als echte Location speichern. Wenn
                 # home=__offmap__ → Char vom Grid nehmen via enter_offmap_sleep.
@@ -139,18 +138,11 @@ def _sub_force_rules():
                     save_character_current_location(name, dest_loc)
                 if dest_room:
                     save_character_current_room(name, dest_room)
-                if "set_activity" in force:
-                    new_act = (force.get("set_activity") or "").strip()
-                    save_character_current_activity(name, new_act)
-                    if not new_act:
-                        try:
-                            wake_from_offmap(name)
-                        except Exception:
-                            pass
 
-                # B1: orthogonale State-Flags direkt setzen (z.B. is_sleeping
-                # false zum Wecken, true fuer einen Schlafzauber). Der Flag ist
-                # die Autoritaet — unabhaengig vom Activity-String.
+                # B1: orthogonale State-Flags sind die Autoritaet (z.B.
+                # is_sleeping false zum Wecken, true fuer einen Schlafzauber).
+                # Das fruehere set_activity (sleeping/"") ist durch set_flags
+                # ersetzt. Beim Aufwecken zusaetzlich vom Off-Map zurueckholen.
                 _flags_changed = False
                 _set_flags = force.get("set_flags") or {}
                 if _set_flags:
@@ -166,11 +158,16 @@ def _sub_force_rules():
                         if _setter is not None and bool(_before_flags.get(_fk)) != bool(_fv):
                             _setter(name, bool(_fv))
                             _flags_changed = True
+                            if _fk == "is_sleeping" and not _fv:
+                                try:
+                                    wake_from_offmap(name)
+                                except Exception:
+                                    pass
 
                 # Nur loggen + ins Tagebuch wenn sich was geaendert hat.
                 _after_loc = (get_character_current_location(name) or "").strip()
                 _after_room = (get_character_current_room(name) or "").strip()
-                _after_act = (get_character_current_activity(name) or "").strip().lower()
+                _after_act = (get_effective_activity(name) or "").strip().lower()
                 _changed = (_before_loc != _after_loc
                             or _before_room != _after_room
                             or _before_act != _after_act
@@ -183,68 +180,13 @@ def _sub_force_rules():
                     force.get("message") or force.get("rule_name") or "",
                     metadata={"rule": force.get("rule_name", ""),
                               "go_to": go_to,
-                              "activity": force.get("set_activity", "")})
+                              "flags": force.get("set_flags", {})})
                 logger.info("Force-Rule %s -> %s (%s)",
                             force.get("rule_name", "?"), name, go_to)
             except Exception as _ce:
                 logger.debug("force_rules check failed for %s: %s", name, _ce)
     except Exception as e:
         logger.debug("force_rules sub error: %s", e)
-
-
-def _sub_activity_expiry():
-    """Setzt Activities zurueck deren ``duration_minutes`` ueberschritten ist.
-
-    Ersetzt den frueheren APScheduler-One-Time-``activity_done_*``-Job-Pfad
-    in ``set_activity_skill._schedule_duration_complete``. Profil-Felder
-    ``activity_started_at`` + ``activity_duration_minutes`` werden von
-    ``save_character_current_activity`` geschrieben — hier nur lesen +
-    ggf. Activity loeschen + on_complete-Trigger feuern.
-    """
-    try:
-        from app.models.character import (
-            list_available_characters, get_character_profile,
-            save_character_current_activity)
-        from app.core.activity_engine import _find_activity_definition, execute_trigger
-        from datetime import datetime as _dt
-        now = _dt.now()
-        for name in list_available_characters():
-            try:
-                prof = get_character_profile(name) or {}
-                act = (prof.get("current_activity") or "").strip()
-                if not act:
-                    continue
-                dur = int(prof.get("activity_duration_minutes") or 0)
-                if dur <= 0:
-                    continue  # endlose Activity — laeuft bis aktiv geaendert
-                started_iso = (prof.get("activity_started_at") or "").strip()
-                if not started_iso:
-                    continue
-                try:
-                    started = _dt.fromisoformat(started_iso)
-                except (ValueError, TypeError):
-                    continue
-                elapsed_min = (now - started).total_seconds() / 60.0
-                if elapsed_min < dur:
-                    continue
-                # Abgelaufen — on_complete-Trigger feuern bevor Activity raus
-                try:
-                    act_def = _find_activity_definition(name, act) or {}
-                    on_complete = (act_def.get("triggers") or {}).get("on_complete")
-                    if on_complete:
-                        execute_trigger(name, on_complete,
-                                        context={"completed_activity": act,
-                                                 "elapsed_minutes": round(elapsed_min, 1)})
-                except Exception as _te:
-                    logger.debug("on_complete trigger failed for %s/%s: %s",
-                                 name, act, _te)
-                save_character_current_activity(name, "")
-                logger.info("Activity-Expiry: %s / '%s' nach %.1f min beendet (dur=%d)",
-                            name, act, elapsed_min, dur)
-            except Exception as _ce:
-                logger.debug("activity_expiry check failed for %s: %s", name, _ce)
-    except Exception as e:
-        logger.debug("activity_expiry sub error: %s", e)
 
 
 def _sub_assignment_expiry():

@@ -576,8 +576,8 @@ SECTIONS = {
                     "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
                 },
             },
-            "set_activity": {
-                "label": "SetActivity",
+            "set_pose": {
+                "label": "SetPose",
                 "fields": {
                     "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
                 },

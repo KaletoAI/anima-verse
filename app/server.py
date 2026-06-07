@@ -56,7 +56,6 @@ from app.routes import user_gallery
 from app.routes import secrets
 from app.routes import inventory
 from app.routes import account
-from app.routes import activities as activities_route
 from app.routes import i18n as i18n_route
 from app.routes import state as state_route
 from app.routes import game_admin as game_admin_route
@@ -416,7 +415,6 @@ app.include_router(diary.router, tags=["diary"])
 app.include_router(user_gallery.router)
 app.include_router(secrets.router, tags=["secrets"])
 app.include_router(inventory.router, tags=["inventory"])
-app.include_router(activities_route.router, tags=["activities"])
 app.include_router(i18n_route.router, tags=["i18n"])
 app.include_router(account.router)
 app.include_router(state_route.router)

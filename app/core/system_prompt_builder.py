@@ -74,7 +74,8 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     location_id = profile.get("current_location", "")
     data["location_id"] = location_id
     data["location_name"] = get_location_name(location_id) if location_id else "Unknown"
-    data["activity"] = profile.get("current_activity", "") or "None"
+    data["activity"] = ("Sleeping" if profile.get("is_sleeping")
+                        else (profile.get("pose_intent") or "")) or "None"
     data["feeling"] = profile.get("current_feeling", "") or "Neutral"
     data["time_of_day"] = utc_now().strftime("%H:%M")
 
@@ -135,7 +136,7 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
     from app.models.character import (
         list_available_characters,
         get_character_current_location,
-        get_character_current_activity)
+        get_effective_activity)
     from app.models.account import get_active_character
 
     nearby = []
@@ -161,7 +162,7 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         )
 
     for other in nearby:
-        other_act = get_character_current_activity(other) or ""
+        other_act = get_effective_activity(other) or ""
         suffix = f" ({other_act})" if other_act else ""
         lines.append(f"- {other} is here{suffix}")
 

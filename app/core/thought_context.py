@@ -46,7 +46,8 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "character_name": character_name,
         "personality": (profile.get("character_personality", "") or "").strip(),
         "location_name": location_name,
-        "activity": (profile.get("current_activity", "") or "None"),
+        "activity": ("Sleeping" if profile.get("is_sleeping")
+                     else (profile.get("pose_intent") or "")) or "None",
         "feeling": (profile.get("current_feeling", "") or "Neutral"),
         "time_of_day": utc_now().strftime("%H:%M"),
         # Defaults for optional blocks — keep them present so StrictUndefined
@@ -770,21 +771,8 @@ def _build_available_activities_block(character_name: str,
     if not location_id:
         return ""
     try:
-        from app.models.activity_library import get_available_activities
-        acts = get_available_activities(
-            character_name, location_id, room_id, filter_conditions=True) or []
-        names: List[str] = []
-        for a in acts:
-            if a.get("auto_pick") is False:
-                continue
-            n = (a.get("name") or a.get("id") or "").strip()
-            if n and n not in names:
-                names.append(n)
-            if len(names) >= 10:
-                break
-        if not names:
-            return ""
-        return ", ".join(names)
+        from app.models.world import get_room_activity_hint
+        return get_room_activity_hint(location_id, room_id)
     except Exception as e:
         logger.debug("available_activities block failed for %s: %s", character_name, e)
         return ""

@@ -554,173 +554,69 @@ class SchedulerManager:
             return {"success": False, "error": str(e)}
 
 
-    def _action_set_status(self, action: Dict[str, Any], agent: str) -> Dict[str, Any]:
-        """Setzt Location, Activity und/oder Mood eines Characters direkt.
+    def _action_set_status(self, action, agent):
+        """Setzt Location, Raum und/oder Mood eines Characters direkt.
 
         location in action ist eine Location-ID (nach Migration).
         Player-controlled characters are skipped (no autonomous status changes).
-
-        Wenn der Character vor <RECENT_CHAT_GRACE_MINUTES> Minuten via Chat/User-
-        Interaktion Activity oder Location gesetzt bekam, ueberspringt der
-        Scheduler ihn ebenfalls — sonst wuerde der stuendliche Tick eine
-        laufende Szene (Sex, Gespraech, Tanz) ungefragt abbrechen und den
-        Character in einen anderen Raum schicken.
+        Eine Activity/Pose setzt der Scheduler NICHT mehr (Activity-Library
+        entfernt) — Posen entstehen frei im Chat/AgentLoop.
         """
         from app.models.account import is_player_controlled
         if is_player_controlled(agent):
             return {"skipped": True, "reason": "Character player-controlled"}
 
-        # Grace-Window gegen Chat-Interferenz
+        # Grace-Window gegen Chat-Interferenz: kuerzlicher Location-Wechsel
+        # via Chat/User -> Scheduler nicht drueberbuegeln.
         try:
-            from datetime import datetime, timedelta
+            from datetime import timedelta
             from app.models.character import get_character_profile
             _profile = get_character_profile(agent) or {}
             RECENT_CHAT_GRACE_MINUTES = 30
             _cutoff = utc_now() - timedelta(minutes=RECENT_CHAT_GRACE_MINUTES)
-            for _ts_field in ("activity_changed_at", "location_changed_at"):
-                _ts = (_profile.get(_ts_field) or "").strip()
-                if not _ts:
-                    continue
+            _ts = (_profile.get("location_changed_at") or "").strip()
+            if _ts:
                 try:
-                    _dt = parse_iso(_ts)
+                    if parse_iso(_ts) > _cutoff:
+                        logger.info("Scheduler skip %s: location_changed_at kuerzlich (%s)",
+                                     agent, _ts[:19])
+                        return {"skipped": True,
+                                "reason": f"location_changed_at within {RECENT_CHAT_GRACE_MINUTES}min"}
                 except Exception:
-                    continue
-                if _dt > _cutoff:
-                    logger.info("Scheduler skip %s: %s kuerzlich gesetzt (%s)",
-                                 agent, _ts_field, _ts[:19])
-                    return {"skipped": True,
-                            "reason": f"{_ts_field} within {RECENT_CHAT_GRACE_MINUTES}min"}
+                    pass
         except Exception as _ge:
             logger.debug("Grace-Check fuer %s fehlgeschlagen: %s", agent, _ge)
 
         location = action.get('location', '')
-        activity = action.get('activity', '')
         mood = action.get('mood', '')
 
-        # Duration auto-complete: Aktivitaet beenden + on_complete Trigger
-        if activity == '__default__':
-            try:
-                from app.models.character import (
-                    get_character_current_location, get_character_current_activity,
-                    save_character_current_activity)
-                completed_activity = action.get('_completed_activity', '')
-                current_act = get_character_current_activity(agent)
-
-                # Nur wenn der Character noch die gleiche Aktivitaet macht
-                if current_act and completed_activity and current_act.lower() == completed_activity.lower():
-                    save_character_current_activity(agent, '')
-                    logger.info("Duration abgelaufen: %s beendet '%s'", agent, completed_activity)
-
-                    # on_complete Trigger ausfuehren
-                    trigger_json = action.get('_on_complete_trigger', '')
-                    if trigger_json:
-                        import json as _json
-                        from app.core.activity_engine import execute_trigger
-                        trigger_config = _json.loads(trigger_json)
-                        execute_trigger(agent, trigger_config)
-                else:
-                    logger.info("Duration-Job ignoriert: %s macht nicht mehr '%s' (aktuell: %s)",
-                                agent, completed_activity, current_act)
-
-                return {"success": True, "action": "duration_complete", "activity": completed_activity}
-            except Exception as e:
-                logger.error("Duration auto-complete Fehler: %s", e)
-                return {"success": False, "error": str(e)}
-
-        # Phase-2 Cleanup: __llm_choice__ als Force-Slot entfernt — wenn ein
-        # alter set_status-Job mit __llm_choice__ ankommt, abbrechen statt
-        # einen LLM-Call zu triggern. Der AgentLoop entscheidet selbst.
+        # __llm_choice__ slot: AgentLoop entscheidet selbst.
         if location == "__llm_choice__":
             return {"success": False, "error":
                     "__llm_choice__ slot ignored — AgentLoop chooses autonomously"}
 
-        # Location per ID/Name aufloesen — sicherstellen dass wir eine ID haben
-        from app.models.world import get_location, get_location_name as _get_loc_name, resolve_location
+        from app.models.world import (get_location_name as _get_loc_name,
+                                       resolve_location, get_location,
+                                       get_entry_room_id)
         if location:
             loc_obj = resolve_location(location)
             if loc_obj:
                 location = loc_obj.get("id", location)
 
-        # Raum bestimmen: entweder aus Activity ableiten oder zufaellig waehlen
-        # Waehlt einen zufaelligen Raum (der Aktivitaeten hat) und eine
-        # zufaellige Aktivitaet daraus, damit Raum und Aktivitaet zusammenpassen.
-        random_room_id = ''
-        if activity and activity != '__random__' and location:
-            # Feste Activity: passenden Raum finden
-            try:
-                from app.models.world import find_room_by_activity
-                loc_data = get_location(location)
-                if loc_data:
-                    matched_room = find_room_by_activity(loc_data, activity)
-                    if matched_room:
-                        random_room_id = matched_room.get('id', '')
-                    elif loc_data.get('rooms'):
-                        # Kein Raum passt zur Activity: zufaelligen waehlen
-                        import random
-                        random_room_id = random.choice(loc_data['rooms']).get('id', '')
-            except Exception as e:
-                logger.error("Fehler bei Raum-Bestimmung fuer Activity '%s': %s", activity, e)
-        if activity == '__random__' and location:
-            try:
-                import random
-                from app.models.activity_library import get_available_activities
-                # Bibliothek: gefiltert nach Conditions, Cooldowns, requires_partner
-                available = get_available_activities(agent, location, filter_conditions=True
-                )
-                # Scheduler darf NICHT autonom requires_partner-Aktivitaeten waehlen —
-                # auch wenn ein Partner anwesend ist. Partneraktivitaeten brauchen
-                # expliziten Chat-/User-Kontext; der Zufallspicker wuerde sonst
-                # "Sex um 10 Uhr im Buero" o.ae. triggern.
-                # auto_pick=false filtert zusaetzlich "stille" Activities raus
-                # (sleeping, orgasm, masturbating ...), die nur via Force-Rules,
-                # __sleep__-Slot, Chat-LLM oder Follow-Up getriggert werden sollen.
-                available = [a for a in available
-                             if not a.get("requires_partner")
-                             and a.get("auto_pick", True) is not False]
-                if available:
-                    chosen = random.choice(available)
-                    activity = chosen.get("name", "")
-                    # Passenden Raum finden
-                    loc_data = get_location(location)
-                    if loc_data:
-                        from app.models.world import find_room_by_activity
-                        matched_room = find_room_by_activity(loc_data, activity)
-                        if matched_room:
-                            random_room_id = matched_room.get('id', '')
-                    logger.info("Scheduler[%s]: zufaellige Aktivitaet '%s' (aus %d verfuegbaren)",
-                                agent, activity, len(available))
-                else:
-                    logger.info("Scheduler[%s]: keine verfuegbare Aktivitaet am Ort %s",
-                                agent, location)
-                    activity = ''
-            except Exception as e:
-                logger.error("Fehler bei zufaelliger Aktivitaet: %s", e)
-                activity = ''
-
-        if not location:
-            return {"success": False, "error": "Kein Ort angegeben"}
-        if not agent:
-            return {"success": False, "error": "Kein Character angegeben"}
-
         try:
             from app.models.character import (
-                save_character_current_location, save_character_current_activity,
+                save_character_current_location,
                 save_character_current_feeling, save_character_current_room,
-                get_character_current_location, get_character_config)
+                get_character_current_location)
 
-            # location ist eine ID (nach Migration) — direkt speichern
             if location:
-                # Leave-Check: Pinning/Confine-Rule darf vom Scheduler nicht
-                # umgangen werden. Wenn der Char am aktuellen Ort gehalten
-                # wird, ueberspringt der Scheduler den Move komplett.
+                # Leave-Check: Pinning/Confine darf nicht umgangen werden.
                 try:
                     from app.models.rules import check_leave
                     cur_loc_for_leave = get_character_current_location(agent) or ""
                     if cur_loc_for_leave:
                         leave_ok, leave_reason = check_leave(
-                            agent,
-                            target_location_id=location,
-                            target_room_id=random_room_id or "")
+                            agent, target_location_id=location)
                         if not leave_ok:
                             logger.info("Scheduler: Leave blockiert %s (cur=%s -> tgt=%s): %s",
                                         agent, cur_loc_for_leave, location, leave_reason)
@@ -733,24 +629,15 @@ class SchedulerManager:
                             except Exception:
                                 logger.debug("record_access_denied(scheduler-leave) failed", exc_info=True)
                             location = cur_loc_for_leave
-                            activity = ""
-                            random_room_id = ""
                 except Exception:
                     pass
 
-                # Rules-Check: darf der Character diesen Ort/Raum betreten?
-                # Zwei Stufen: erst Location, dann Raum (falls Raum gewaehlt).
+                # Access-Check: darf der Character den Ort betreten?
                 try:
                     from app.models.rules import check_access
                     rules_ok, rules_reason = check_access(agent, location)
-                    # Wenn Location OK und ein Raum gewaehlt wurde, auch Raum-Ebene pruefen
-                    if rules_ok and random_room_id:
-                        rules_ok, rules_reason = check_access(
-                            agent, location, room_id=random_room_id)
                     if not rules_ok:
-                        logger.info("Scheduler: Rule blockiert %s -> %s%s",
-                                    agent, location,
-                                    f"/{random_room_id}" if random_room_id else "")
+                        logger.info("Scheduler: Rule blockiert %s -> %s", agent, location)
                         try:
                             from app.models.character import record_access_denied
                             from app.models.world import get_location_name
@@ -759,171 +646,39 @@ class SchedulerManager:
                         except Exception:
                             logger.debug("record_access_denied failed", exc_info=True)
                         location = get_character_current_location(agent)  # bleiben
-                        # Activity/Raum verwerfen — passen zur blockierten Location, nicht zur aktuellen
-                        activity = ""
-                        random_room_id = ""
+
                 except Exception:
                     pass
+
                 old_loc = get_character_current_location(agent)
                 save_character_current_location(agent, location)
-                # Raum und Aktivitaet zuruecksetzen wenn Ort gewechselt
-                if location != old_loc:
-                    save_character_current_room(agent, random_room_id)
-                    if not activity:
-                        save_character_current_activity(agent, '')
-                elif random_room_id:
-                    save_character_current_room(agent, random_room_id)
-            if activity:
-                # Partner aus dem Condition-Matching der GEWAEHLTEN Aktivitaet
-                # neu auflösen. get_last_matched_partner() reflektiert sonst die
-                # zuletzt evaluierte Condition (z.B. aus get_available_activities),
-                # was nicht unbedingt die gewaehlte Activity war.
-                matched_partner = ""
-                try:
-                    from app.core.activity_engine import (
-                        evaluate_condition as _eval_cond,
-                        get_last_matched_partner)
-                    from app.models.activity_library import (
-                        get_library_activity, find_library_activity_by_name)
-                    _act_def = get_library_activity(activity) or find_library_activity_by_name(activity)
-                    _cond = (_act_def or {}).get("condition", "")
-                    if _cond:
-                        _eval_cond(_cond, agent, location)
-                        matched_partner = get_last_matched_partner() or ""
-                except Exception:
-                    pass
+                # Bei echtem Ortswechsel in den Entry-Room des neuen Orts setzen.
+                if location and location != old_loc:
+                    try:
+                        _ld = get_location(location)
+                        _room = get_entry_room_id(_ld) if _ld else ""
+                    except Exception:
+                        _room = ""
+                    save_character_current_room(agent, _room or "")
 
-                save_character_current_activity(agent, activity,
-                    partner=matched_partner)
-
-                # Partner-Activity transferieren: wenn die gewaehlte Aktivitaet
-                # einen Partner hat und dieser NICHT player-controlled ist, beim
-                # Partner die Gegen-Aktivitaet setzen (er bleibt am Ort gebunden).
-                if matched_partner:
-                    self._transfer_partner_activity(agent, matched_partner, activity, location)
             if mood:
                 save_character_current_feeling(agent, mood)
 
-            loc_display = _get_loc_name(location)
             parts = []
             if location:
-                parts.append(f"{loc_display}" + (f" ({activity})" if activity else ""))
+                parts.append(f"{_get_loc_name(location)}")
             if mood:
                 parts.append(f"Mood: {mood}")
             logger.info("Status gesetzt: %s -> %s", agent, ", ".join(parts))
 
-            # Social Dialog: Pruefen ob andere Characters am selben Ort
             if location:
                 self._try_social_dialog(agent, location)
 
-            return {
-                "success": True,
-                "action": "set_status",
-                "location": location,
-                "activity": activity,
-                "mood": mood,
-            }
+            return {"success": True, "action": "set_status",
+                    "location": location, "mood": mood}
         except Exception as e:
             logger.error("Fehler bei set_status: %s", e)
             return {"success": False, "error": str(e)}
-
-    def _transfer_partner_activity(
-        self, initiator: str, partner: str,
-        activity_name: str, location: str,
-        allow_player: bool = False) -> None:
-        """Setzt beim Partner die Gegenaktivitaet einer partner-basierten Activity.
-
-        z.B. Vallerie waehlt Sex mit Diego als Partner -> Diegos Activity wird
-        auch auf 'Sex' gesetzt, sein Partner auf 'Vallerie'. Seine Location wird
-        nicht geaendert; er bleibt also am selben Ort.
-
-        Scheduler-driven: Player-controlled Characters NICHT automatisch umsetzen.
-        Chat-driven (allow_player=True): Auch den Avatar mitsetzen — der Spieler
-        hat durch den Chat-Input implizit zugestimmt.
-        """
-        from app.models.activity_library import (
-            get_library_activity, find_library_activity_by_name)
-        from app.models.account import is_player_controlled
-        from app.models.character import (
-            save_character_current_activity,
-            get_character_current_location)
-
-        if not partner or partner == initiator:
-            return
-
-        # Player-controlled: nur im Scheduler-Pfad ueberspringen
-        if not allow_player:
-            try:
-                if is_player_controlled(partner):
-                    logger.info("Partner-Transfer uebersprungen: %s ist player-controlled", partner)
-                    return
-            except Exception:
-                pass
-
-        # Partner muss am gleichen Ort sein, sonst kein Transfer
-        try:
-            partner_loc = get_character_current_location(partner) or ""
-        except Exception:
-            partner_loc = ""
-        if partner_loc != location:
-            logger.info("Partner-Transfer uebersprungen: %s nicht an %s (ist an %s)",
-                        partner, location, partner_loc)
-            return
-
-        # partner_activity aus der Library auslesen; Default: gleiche Activity
-        act_def = get_library_activity(activity_name) or find_library_activity_by_name(activity_name)
-        partner_activity_id = (act_def or {}).get("partner_activity", "")
-        partner_activity_name = activity_name  # Fallback
-        if partner_activity_id:
-            _p_def = get_library_activity(partner_activity_id) or find_library_activity_by_name(partner_activity_id)
-            if _p_def:
-                partner_activity_name = _p_def.get("name", partner_activity_id)
-
-        save_character_current_activity(partner, partner_activity_name,
-            partner=initiator,
-            _skip_partner_transfer=True)
-        logger.info("Partner-Transfer: %s -> Activity '%s' (mit %s)",
-                    partner, partner_activity_name, initiator)
-
-    def _is_partner_locked(self, character: str) -> bool:
-        """Prueft ob ein Character in einer Partner-Aktivitaet gebunden ist.
-
-        True wenn:
-          - current_activity ist eine Library-Activity mit requires_partner=true
-          - AND duration ist noch nicht abgelaufen (activity_started_at + duration > now)
-        """
-        try:
-            from app.models.character import get_character_profile
-            from app.models.activity_library import (
-                get_library_activity, find_library_activity_by_name)
-            profile = get_character_profile(character) or {}
-            current = profile.get("current_activity", "")
-            if not current:
-                return False
-            act_def = get_library_activity(current) or find_library_activity_by_name(current)
-            if not act_def or not act_def.get("requires_partner"):
-                return False
-            duration = int(act_def.get("duration_minutes", 0) or 0)
-            if duration <= 0:
-                return False
-            # Startzeit aus activity_started_at oder aus state_history ableiten
-            started_iso = profile.get("activity_started_at", "")
-            if not started_iso:
-                # Fallback: letzte activity-Aenderung
-                for e in reversed(profile.get("_state_history_cache", [])[-20:]):
-                    if e.get("type") == "activity" and e.get("value") == current:
-                        started_iso = e.get("timestamp", "")
-                        break
-            if not started_iso:
-                return False
-            try:
-                started = parse_iso(started_iso)
-                elapsed_min = (utc_now() - started).total_seconds() / 60
-                return elapsed_min < duration
-            except (ValueError, TypeError):
-                return False
-        except Exception:
-            return False
 
     def _try_social_dialog(self, agent: str, location: str):
         """Prueft ob andere Characters am selben Ort sind und startet ggf. einen Dialog."""

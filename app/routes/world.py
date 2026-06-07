@@ -124,7 +124,7 @@ async def avatar_step_route(request: Request) -> Dict[str, Any]:
     from app.models.character import (
         get_character_current_location,
         get_character_current_room,
-        save_character_current_activity,
+        clear_pose_intent,
         save_character_current_location,
         save_character_current_room,
     )
@@ -185,9 +185,9 @@ async def avatar_step_route(request: Request) -> Dict[str, Any]:
     save_character_current_location(avatar, target_id)
     if target_entry_room:
         save_character_current_room(avatar, target_entry_room)
-    # Ortswechsel unterbricht die laufende Aktivität (sonst bleibt die alte am
+    # Ortswechsel unterbricht die laufende Pose (sonst bleibt die alte am
     # neuen Ort stehen). Avatar ist spielergesteuert → leeren, nicht neu zuweisen.
-    save_character_current_activity(avatar, "")
+    clear_pose_intent(avatar)
 
     # Roll-on-Entry: bei Eintritt an einer Location sofort wuerfeln, ob ein
     # Event fuer den Avatar entsteht (z.B. "Wölfe versperren den Weg").

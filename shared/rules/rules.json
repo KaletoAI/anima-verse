@@ -9,8 +9,9 @@
       "message_de": "Bin erschöpft, gehe schlafen.",
       "force_action": {
         "go_to": "home",
-        "set_activity": "sleeping",
-        "set_flags": { "is_sleeping": true }
+        "set_flags": {
+          "is_sleeping": true
+        }
       },
       "id": "default_sleep_when_exhausted"
     },
@@ -23,8 +24,9 @@
       "message_de": "Ausgeschlafen, wache auf.",
       "force_action": {
         "go_to": "stay",
-        "set_activity": "",
-        "set_flags": { "is_sleeping": false }
+        "set_flags": {
+          "is_sleeping": false
+        }
       },
       "id": "default_wake_when_rested"
     },
@@ -37,8 +39,9 @@
       "message_de": "Du wachst auf, da Du ausgeschlafen bist.",
       "force_action": {
         "go_to": "stay",
-        "set_activity": "",
-        "set_flags": { "is_sleeping": false }
+        "set_flags": {
+          "is_sleeping": false
+        }
       },
       "id": "rule_f4e31679"
     },

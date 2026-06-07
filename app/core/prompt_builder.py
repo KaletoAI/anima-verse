@@ -22,7 +22,7 @@ from app.core.log import get_logger
 from app.models.character import (
     get_character_appearance,
     get_character_config,
-    get_character_current_activity,
+    get_effective_activity,
     get_character_current_feeling,
     get_character_current_location,
     get_character_current_room,
@@ -701,7 +701,7 @@ class PromptBuilder:
             from app.core.expression_regen import get_cached_expression
             from app.models.inventory import get_equipped_pieces, get_equipped_items
             mood = get_character_current_feeling(person.name) or ""
-            activity = get_character_current_activity(person.name) or ""
+            activity = get_effective_activity(person.name) or ""
             try:
                 eq_p = get_equipped_pieces(person.name)
                 eq_i = get_equipped_items(person.name)
@@ -754,17 +754,11 @@ class PromptBuilder:
         for person in persons:
             if person.is_user:
                 continue
-            raw = get_character_current_activity(person.name)
+            raw = get_effective_activity(person.name)
             if raw:
-                from app.models.activity_library import find_library_activity_by_name, get_library_activity, get_localized_field
-                from app.models.character import get_character_language
-                _plang = get_character_language(person.name)
-                act_data = get_library_activity(raw) or find_library_activity_by_name(raw) or get_activity(raw)
-                desc = get_localized_field(act_data, "description", _plang) if act_data else ""
-                if desc:
-                    activity_parts.append(f"{person.actor_label} is {desc}")
-                else:
-                    activity_parts.append(f"{person.actor_label} is {raw}")
+                # Pose ist freier, schon beschreibender Text — keine Library-
+                # Beschreibung mehr.
+                activity_parts.append(f"{person.actor_label} is {raw}")
 
         if activity_parts:
             variables.prompt_activity = ", ".join(activity_parts)

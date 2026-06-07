@@ -78,7 +78,7 @@ from app.models.character import (
     get_character_skill_config,
     save_character_skill_config,
     get_character_current_location,
-    get_character_current_activity,
+    get_effective_activity,
     get_character_current_feeling,
     get_character_current_room)
 from app.core.outfit_renderer import render_outfit, collect_covered_slots
@@ -2019,12 +2019,12 @@ class ImageGenerationSkill(BaseSkill):
                 try:
                     from app.models.character import (
                         get_character_current_feeling,
-                        get_character_current_activity)
+                        get_effective_activity)
                     if character_name:
                         _mood = get_character_current_feeling(character_name) or ""
                         if _mood:
                             pv.prompt_mood = _mood
-                        _act = get_character_current_activity(character_name) or ""
+                        _act = get_effective_activity(character_name) or ""
                         if _act:
                             pv.prompt_activity = _act
                         _outfit = render_outfit(character_name=character_name).get("full", "") or ""

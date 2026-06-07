@@ -23,7 +23,7 @@ from app.core.streaming import (
 from app.core.turn_taking import calculate_response_scores
 from app.models.character import (
     get_character_config,
-    get_character_current_activity,
+    get_effective_activity,
     get_character_language_instruction,
     get_character_profile)
 from app.models.group_chat import (
@@ -89,8 +89,7 @@ def _build_group_system_prompt(character_name: str,
 
     # Build participant info with relationship context + activity visibility
     from app.models.relationship import get_relationship
-    from app.models.character import get_character_current_activity
-    from app.core.activity_engine import resolve_activity_visibility
+    from app.models.character import get_effective_activity
     from app.models.account import get_active_character
     # Avatar nur einbinden wenn echt aktiv — kein "Player"-Phantom in der
     # Participant-Liste, sonst behauptet der System-Prompt eine Person, die
@@ -107,10 +106,9 @@ def _build_group_system_prompt(character_name: str,
         if p == character_name:
             continue
         rel = get_relationship(character_name, p)
-        # Activity mit Visibility-Check (am selben Ort = immer sichtbar)
-        p_activity = get_character_current_activity(p) or ""
-        visible_activity = resolve_activity_visibility(p, character_name, p_activity, same_location=True) if p_activity else ""
-        activity_info = f", doing: {visible_activity}" if visible_activity else ""
+        # Pose ist immer sichtbar (kein Hidden-Activity-Konzept mehr)
+        p_activity = get_effective_activity(p) or ""
+        activity_info = f", doing: {p_activity}" if p_activity else ""
         is_player = (p == user_name)
         player_tag = ", you are talking to them" if is_player else ""
 
@@ -119,7 +117,7 @@ def _build_group_system_prompt(character_name: str,
             strength = rel.get("strength", 10)
             participant_lines.append(f"- {p} ({rel_type}, closeness {int(strength)}/100{activity_info}{player_tag})")
         else:
-            suffix = f" ({visible_activity})" if visible_activity else ""
+            suffix = f" ({p_activity})" if p_activity else ""
             participant_lines.append(f"- {p}{suffix}{' — ' + player_tag.strip(', ') if is_player else ''}")
 
     others_text = "\n".join(participant_lines) if participant_lines else "- (none)"
@@ -164,78 +162,6 @@ def _build_group_system_prompt(character_name: str,
     return base_prompt + group_section
 
 
-def _check_activity_discovery(all_chars: List[str], location_id: str):
-    """Prueft ob Characters hidden Activities anderer an der Location entdecken.
-
-    Wahrscheinlichkeits-basiert: discovery_difficulty vs. Zufall.
-    Bei Entdeckung: on_discovered Trigger wird ausgefuehrt.
-    """
-    import random
-    from app.models.character import get_character_current_activity
-    from app.core.activity_engine import _find_activity_definition, execute_trigger
-
-    for actor in all_chars:
-        activity = get_character_current_activity(actor) or ""
-        if not activity:
-            continue
-
-        sa = _find_activity_definition(actor, activity)
-        if not sa:
-            continue
-
-        visibility = sa.get("visibility", "visible")
-        if visibility == "visible":
-            continue
-
-        difficulty = sa.get("discovery_difficulty", 3)
-        triggers = sa.get("triggers", {}) or {}
-        on_discovered = triggers.get("on_discovered")
-
-        # Jeder andere Character hat eine Chance zu entdecken
-        for observer in all_chars:
-            if observer == actor:
-                continue
-
-            # Observer-Aufmerksamkeit aus aktuellem Status-Effect (default 100)
-            from app.models.character import get_character_profile as _gcp
-            obs_status = _gcp(observer).get("status_effects", {})
-            perception = int(obs_status.get("attention", obs_status.get("alertness", 100)))
-
-            # Basis-Chance nach Schwierigkeit, modifiziert durch Perception
-            # difficulty 1 = 40%, 2 = 25%, 3 = 15%, 4 = 8%, 5 = 3% (bei perception 50)
-            base_chance = {1: 0.40, 2: 0.25, 3: 0.15, 4: 0.08, 5: 0.03}.get(difficulty, 0.10)
-            # Perception-Modifier: 0 perception = 0.5x, 50 = 1.0x, 100 = 1.5x
-            perception_mod = 0.5 + (perception / 100.0)
-            chance = min(0.80, base_chance * perception_mod)
-
-            if random.random() < chance:
-                logger.info("DISCOVERY: %s hat bemerkt dass %s '%s' macht (was als '%s' getarnt war)",
-                            observer, actor, activity, visibility)
-
-                # on_discovered Trigger
-                if on_discovered:
-                    execute_trigger(actor, on_discovered, context={"observer": observer})
-
-                # Memory fuer den Observer
-                try:
-                    from app.models.memory import add_memory
-                    add_memory(
-                        character_name=observer,
-                        content=f"Habe bemerkt dass {actor} etwas Verdaechtiges tut: {activity}",
-                        memory_type="episodic",
-                        importance=3,
-                        related_character=actor)
-                except Exception:
-                    pass
-
-                break  # Nur ein Observer pro Runde entdeckt es
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-@router.get("/{user_id}/group/session")
 async def get_group_session(location_id: str = "") -> Dict[str, Any]:
     """Get or create a group session for the user's current location."""
     # Resolve location
@@ -849,8 +775,6 @@ async def group_chat(request: Request):
                             character_name=rname,
                             related_character=user_display_name,
                             new_fact=f"Had a group conversation with {', '.join(other_names)} at {loc_name}")
-                # Discovery-Check: Haben Characters hidden Activities bemerkt?
-                _check_activity_discovery(responders + passive, location_id)
 
             except Exception as bg_err:
                 logger.error("Background group updates error: %s", bg_err)

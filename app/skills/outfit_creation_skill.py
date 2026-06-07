@@ -23,7 +23,7 @@ from app.models.character import (
     get_character_appearance,
     get_character_personality,
     get_character_current_location,
-    get_character_current_activity,
+    get_effective_activity,
     get_character_current_feeling)
 from app.models.inventory import (
     add_item, add_to_inventory, get_character_inventory,
@@ -424,7 +424,7 @@ class OutfitCreationSkill(BaseSkill):
             personality = get_character_personality(character_name) or ""
             appearance = get_character_appearance(character_name) or ""
             loc_id = get_character_current_location(character_name) or ""
-            activity = get_character_current_activity(character_name) or ""
+            activity = get_effective_activity(character_name) or ""
             feeling = get_character_current_feeling(character_name) or ""
             target_type = self._resolve_target_outfit_type(character_name)
 
@@ -435,9 +435,6 @@ class OutfitCreationSkill(BaseSkill):
                 location_label = loc.get("name") or loc_id
                 location_desc = loc.get("description", "")
             activity_desc = ""
-            if activity:
-                act = get_activity(activity) or {}
-                activity_desc = act.get("description", "")
 
             ctx_lines = []
             if location_label:

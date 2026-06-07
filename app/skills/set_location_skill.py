@@ -14,7 +14,7 @@ logger = get_logger("set_location")
 
 from app.models.character import (
     save_character_current_location,
-    save_character_current_activity,
+    set_pose_intent,
     save_character_current_room,
     get_character_current_location,
     get_character_config,
@@ -22,7 +22,6 @@ from app.models.character import (
     get_known_locations)
 from app.models.world import (
     list_locations, get_location_rooms, get_room_by_name,
-        find_room_by_activity,
         get_location_by_id,
         find_path_through_known)
 
@@ -281,13 +280,11 @@ class SetLocationSkill(BaseSkill):
 
         rooms = get_location_rooms(matched_location)
 
-        # Alle verfuegbaren Activities (Bibliothek + Location + Character)
-        from app.models.activity_library import get_activity_names as _lib_act_names
-        all_activity_names = _lib_act_names(character_name, location_id=location_id)
-
-        # Raum und Activity bestimmen
+        # Raum und (freie) Pose bestimmen. Es gibt keine Activity-Library mehr —
+        # ein optional mitgegebener Pose-Teil ist freier Text, der Raum gibt
+        # ueber activity_hint nur die Richtung vor (LLM entscheidet).
         matched_room = None
-        activity = ""
+        pose = ""
 
         if requested_second:
             # 1. Versuche zweiten Part als Raum-Name zu matchen
@@ -311,50 +308,12 @@ class SetLocationSkill(BaseSkill):
                         f"{location_name} / {room_label}" if room_label else location_name,
                         room_rules_reason)
                     return room_rules_reason
-                # Dritter Part = Activity innerhalb des Raums
+                # Dritter Part = freie Pose im Raum
                 if requested_third:
-                    room_acts = [
-                        (a.get("name", "") if isinstance(a, dict) else str(a))
-                        for a in matched_room.get("activities", [])
-                    ]
-                    # Exakt
-                    for act_name in room_acts:
-                        if act_name.lower() == requested_third.lower():
-                            activity = act_name
-                            break
-                    # Fuzzy
-                    if not activity:
-                        for act_name in room_acts:
-                            if requested_third.lower() in act_name.lower() or act_name.lower() in requested_third.lower():
-                                activity = act_name
-                                break
-                    if not activity:
-                        activity = requested_third  # Freitext
-                else:
-                    # Zufaellige Activity aus dem Raum
-                    room_acts = [
-                        (a.get("name", "") if isinstance(a, dict) else str(a))
-                        for a in matched_room.get("activities", [])
-                    ]
-                    if room_acts:
-                        activity = random.choice(room_acts)
+                    pose = requested_third
             else:
-                # 2. Zweiter Part ist kein Raum → versuche als Activity
-                for act_name in all_activity_names:
-                    if act_name.lower() == requested_second.lower():
-                        activity = act_name
-                        break
-                if not activity:
-                    for act_name in all_activity_names:
-                        if requested_second.lower() in act_name.lower() or act_name.lower() in requested_second.lower():
-                            activity = act_name
-                            break
-                if not activity:
-                    activity = requested_second  # Freitext
-
-                # Raum aus Activity ableiten
-                if activity:
-                    matched_room = find_room_by_activity(matched_location, activity)
+                # 2. Zweiter Part ist kein Raum → als freie Pose deuten
+                pose = requested_second
 
         # Falls kein Raum gefunden: Entry-Room der Location nehmen (statt random)
         if not matched_room and rooms:
@@ -363,21 +322,6 @@ class SetLocationSkill(BaseSkill):
             matched_room = next(
                 (r for r in rooms if r.get("id") == _entry_id),
                 rooms[0])
-            # Activity aus dem gewaehlten Raum
-            if not activity:
-                room_acts = [
-                    (a.get("name", "") if isinstance(a, dict) else str(a))
-                    for a in matched_room.get("activities", [])
-                ]
-                if room_acts:
-                    activity = random.choice(room_acts)
-
-        # Falls immer noch keine Activity aber welche vorhanden
-        if not activity and all_activity_names:
-            if len(all_activity_names) == 1:
-                activity = all_activity_names[0]
-            else:
-                activity = random.choice(all_activity_names)
 
         room_id = matched_room.get("id", "") if matched_room else ""
         room_name = matched_room.get("name", "") if matched_room else ""
@@ -385,8 +329,8 @@ class SetLocationSkill(BaseSkill):
         # Status setzen: Location-ID speichern (nicht Name)
         save_character_current_location(character_name, location_id)
         save_character_current_room(character_name, room_id)
-        if activity:
-            save_character_current_activity(character_name, activity)
+        if pose:
+            set_pose_intent(character_name, pose)
 
         # Avatar-Follow: Location-Wechsel laeuft NICHT mehr automatisch
         # (Avatar bleibt wo der User ihn hat). Nur Raum-Wechsel wird
@@ -414,14 +358,14 @@ class SetLocationSkill(BaseSkill):
             )
 
         logger.info(f"Gesetzt: Location='{location_name}' (ID: {location_id}), "
-              f"Room='{room_name}' (ID: {room_id}), Activity='{activity}'")
+              f"Room='{room_name}' (ID: {room_id}), Pose='{pose}'")
 
         # Bestaetigung
         result = f"Standort aktualisiert: {location_name}"
         if room_name:
             result += f", Raum: {room_name}"
-        if activity:
-            result += f" ({activity})"
+        if pose:
+            result += f" ({pose})"
         if matched_location.get("description"):
             result += f"\nOrt-Beschreibung: {matched_location['description']}"
         if matched_room and matched_room.get("description"):

@@ -277,7 +277,7 @@ class CharacterBotPoller:
     async def _handle_info(self, chat_id: int) -> None:
         """Handle /info — show character profile."""
         try:
-            from app.models.character import get_character_profile, get_character_current_location, get_character_current_activity
+            from app.models.character import get_character_profile, get_character_current_location, get_effective_activity
             from app.models.world import get_location_name
 
             profile = get_character_profile(self.character_name)
@@ -289,7 +289,7 @@ class CharacterBotPoller:
 
             loc_id = get_character_current_location(self.character_name)
             location = get_location_name(loc_id) if loc_id else ""
-            activity = get_character_current_activity(self.character_name)
+            activity = get_effective_activity(self.character_name)
             feeling = profile.get("current_feeling", "")
 
             lines = [f"👤 {name}"]

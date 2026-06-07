@@ -79,26 +79,13 @@ async def get_template_coverage(character_name: str) -> Dict[str, Any]:
     if template is None:
         raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
 
-    extras_raw = template.get("extra_activities") or []
-    extras = [str(x).strip() for x in extras_raw if x and str(x).strip()]
-
-    from app.models.activity_library import get_library_activity
-    present: List[Dict[str, str]] = []
-    missing: List[str] = []
-    for eid in extras:
-        act = get_library_activity(eid)
-        if act:
-            present.append({"id": act.get("id", eid),
-                            "name": act.get("name") or eid})
-        else:
-            missing.append(eid)
-
+    # Activity-Library entfernt — extra_activities-Coverage ist obsolet.
     return {
         "character": character_name,
         "template": template_name,
-        "extra_activities": extras,
-        "present": present,
-        "missing": missing,
+        "extra_activities": [],
+        "present": [],
+        "missing": [],
     }
 
 
@@ -112,38 +99,8 @@ async def seed_template_coverage(character_name: str) -> Dict[str, Any]:
     keine Conditions — der User soll die Werte im Game-Admin-Editor
     nachpflegen. Reload der Library wird automatisch invalidiert.
     """
-    profile = get_character_profile(character_name)
-    if not profile:
-        raise HTTPException(status_code=404, detail="Character not found")
-    template_name = profile.get("template", "human-default")
-    template = get_template(template_name)
-    if template is None:
-        raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
-
-    extras_raw = template.get("extra_activities") or []
-    extras = [str(x).strip() for x in extras_raw if x and str(x).strip()]
-
-    from app.models.activity_library import (
-        get_library_activity, save_library_activity, reload_library)
-    created: List[str] = []
-    for eid in extras:
-        if get_library_activity(eid):
-            continue
-        # Title-Case fuer den Anzeige-Namen
-        name = eid.replace("_", " ").strip().title() or eid
-        stub = {
-            "id": eid,
-            "name": name,
-            "description": f"(Auto-generated stub for template '{template_name}')",
-            "category": "custom",
-            "_group": "custom",
-            "effects": {},
-        }
-        save_library_activity(stub, target_dir="world")
-        created.append(eid)
-    if created:
-        reload_library()
-    return {"created": created, "count": len(created)}
+    # Activity-Library entfernt — es gibt nichts mehr zu seeden.
+    return {"created": [], "count": 0}
 
 
 @router.get("/readiness/{character_name}")

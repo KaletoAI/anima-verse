@@ -1996,6 +1996,9 @@ def _extract_mood(agent_name: str, response: str) -> Optional[str]:
     if not match:
         return None
     mood = match.group(1).strip().rstrip('.!,')
+    # Falls der Fallback die ganze Phrase fing (\u201EIch f\u00FChle aggressiv"), den
+    # Gef\u00FChls-Vorsatz wegnormalisieren \u2192 nur die Emotion als State.
+    mood = re.sub(r'^(?:I\s+feel|Ich\s+f[\u00FCu]hle)\s+', '', mood, flags=re.IGNORECASE).strip()
     save_character_current_feeling(agent_name, mood)
     # Mood-History aufzeichnen
     try:
@@ -2907,7 +2910,8 @@ def _build_full_system_prompt(character_name: str,
                 tag = " · ".join([x for x in (_loc.get("name", ""), ", ".join(_osc)) if x])
                 _lines.append(f"- {summ}" + (f"  ({tag})" if tag else ""))
             if _lines:
-                scenes_block = "Earlier scenes (what happened before):\n" + "\n".join(_lines)
+                _parts.append("Earlier scenes today:\n" + "\n".join(_lines))
+            scenes_block = "\n\n".join(_parts)
         except Exception as _se:
             logger.debug("scenes_block build failed: %s", _se)
     # Raum-Modus = neue Pipeline (Stufe 1 Live-Transkript + Stufe 2 Szenen +

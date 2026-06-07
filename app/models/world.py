@@ -446,6 +446,27 @@ def get_room_by_name(location: Dict[str, Any], room_name: str) -> Optional[Dict[
     return None
 
 
+def get_room_activity_hint(location_id: str, room_id: str = "") -> str:
+    """Freitext-Richtung „was man hier typischerweise tut" aus dem Raum
+    (Fallback: Location). Ersetzt die fruehere Activity-Namen-Liste — der
+    Raum gibt nur die Richtung vor, das LLM entscheidet frei.
+    """
+    if not location_id:
+        return ""
+    try:
+        loc = get_location_by_id(location_id) or {}
+        if room_id:
+            for r in (loc.get("rooms") or []):
+                if r.get("id") == room_id:
+                    h = (r.get("activity_hint") or "").strip()
+                    if h:
+                        return h
+                    break
+        return (loc.get("activity_hint") or "").strip()
+    except Exception:
+        return ""
+
+
 def find_room_by_activity(location: Dict[str, Any], activity_name: str) -> Optional[Dict[str, Any]]:
     """Findet den Raum, der eine bestimmte Aktivitaet enthaelt."""
     if not activity_name:
@@ -587,108 +608,6 @@ def clear_location_prompt_changed(location_id: str) -> bool:
     return False
 
 
-def track_room_activity(location_id: str,
-    room_id: str,
-    activity_name: str,
-    auto_add_threshold: int = 3) -> bool:
-    """Zaehlt Nutzung einer Aktivitaet im Raum hoch. Fuegt neue automatisch hinzu.
-
-    Wird aufgerufen wenn ein Character eine (kurze) Aktivitaet ausfuehrt.
-    Raum-Aktivitaeten sind ID-Referenzen auf die Bibliothek.
-    - Existierende Referenz: nichts tun (bereits zugewiesen)
-    - Neue Aktivitaet: als Kandidat tracken, ab Schwellwert als Bibliotheks-Referenz hinzufuegen
-
-    Args:
-        activity_name: Kurzer Kategorie-Name (max ~25 Zeichen, nie detail-Text)
-        auto_add_threshold: Ab wie vielen Nutzungen eine neue Aktivitaet
-            dauerhaft zum Raum hinzugefuegt wird.
-
-    Returns:
-        True wenn eine neue Aktivitaet zum Raum hinzugefuegt wurde.
-    """
-    if not activity_name or not location_id or not room_id:
-        return False
-    if len(activity_name) > 30:
-        return False
-    # Noise-Werte ignorieren — sonst landen Platzhalter als echte Aktivitaeten
-    # in der Bibliothek und werden vom Scheduler zufaellig gewaehlt.
-    if activity_name.strip().lower() in {"none", "null", "n/a", "-", "—", "undefined"}:
-        return False
-
-    # Bibliotheks-Aktivitaet per Name suchen
-    from app.models.activity_library import find_library_activity_by_name
-    lib_act = find_library_activity_by_name(activity_name)
-
-    data = _load_world_data()
-    added = False
-
-    for loc in data.get("locations", []):
-        if loc.get("id") != location_id:
-            continue
-        for room in loc.get("rooms", []):
-            if room.get("id") != room_id:
-                continue
-
-            activities = room.get("activities", [])
-
-            # Pruefen ob Aktivitaet bereits als Referenz zugewiesen
-            if lib_act:
-                act_id = lib_act.get("id", "")
-                if act_id and act_id in activities:
-                    # Bereits zugewiesen — nichts tun
-                    return False
-
-            # Auch per Name pruefen (fuer String-Referenzen ohne Bibliothek)
-            act_lower = activity_name.lower().replace(" ", "_")
-            if act_lower in activities:
-                return False
-
-            # Kandidaten-Tracking: _pending_activities am Raum
-            pending = room.setdefault("_pending_activities", {})
-            count = pending.get(activity_name, 0) + 1
-            pending[activity_name] = count
-
-            if count >= auto_add_threshold:
-                if lib_act:
-                    # Bibliotheks-Referenz hinzufuegen
-                    act_id = lib_act.get("id", "")
-                    if act_id:
-                        activities.append(act_id)
-                        room["activities"] = activities
-                        added = True
-                        logger.info("Auto-added library ref '%s' to room '%s' (used %dx)",
-                                    act_id, room.get("name", room_id), count)
-                else:
-                    # Nicht in Bibliothek — zuerst in Bibliothek anlegen, dann referenzieren
-                    from app.models.activity_library import save_library_activity
-                    import re
-                    new_id = re.sub(r'[^a-z0-9]+', '_', activity_name.lower()).strip('_')
-                    save_library_activity({
-                        "id": new_id,
-                        "name": activity_name,
-                        "description": "",
-                        "_group": "Auto-erkannt",
-                    }, target_dir="world")
-                    activities.append(new_id)
-                    room["activities"] = activities
-                    added = True
-                    logger.info("Auto-created library activity '%s' and added to room '%s' (used %dx)",
-                                new_id, room.get("name", room_id), count)
-
-                del pending[activity_name]
-                if not pending:
-                    del room["_pending_activities"]
-
-            _save_world_data(data)
-            return added
-
-    return False
-
-
-# Felder die bei einem Klon immer vom Template kommen sollen — Klone
-# teilen das Bildmaterial mit ihrem Template (Galerie-Pfad geht ueber
-# _gallery_owner_id = Template-ID). Eine eigene Liste auf dem Klon
-# wuerde mit der Zeit stale.
 _CLONE_TEMPLATE_ONLY_KEYS = ("background_images",)
 
 

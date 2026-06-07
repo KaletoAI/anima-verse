@@ -321,7 +321,7 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
         # versuche den generischen Parent-Task. Pattern: "<parent>_<sub>" faellt
         # auf "<parent>" zurueck. So kann der User Sub-Tasks per Admin-UI
         # nachtraeglich differenziert zuweisen, ohne dass die Funktion ausfaellt.
-        for _parent in ("intent", "thought"):
+        for _parent in ("intent", "thought", "extraction"):
             if task.startswith(_parent + "_") and task != _parent:
                 logger.debug("resolve_llm(%s): kein Routing, Fallback auf '%s'",
                              task, _parent)

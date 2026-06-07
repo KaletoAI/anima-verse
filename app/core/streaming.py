@@ -151,7 +151,7 @@ _STREAM_END = object()
 # einem Stream wuerden alle Calls nacheinander laufen und nur der letzte
 # bleibt erhalten. Wir behalten daher pro Stream nur den letzten Call.
 _SINGLETON_TOOLS = frozenset({
-    "SetActivity", "SetLocation", "SetMood", "SetFeeling",
+    "SetPose", "SetLocation", "SetMood", "SetFeeling",
     "OutfitChange", "ChangeOutfit",
 })
 
@@ -344,7 +344,7 @@ class StreamingAgent:
         "SendMessage":      "Character writes a remote text message to another character NOT in the same room (use this to proactively reach out)",
         "ChangeOutfit":     "Character changes/puts on/takes off clothes (e.g. gets dressed because not alone anymore)",
         "OutfitCreation":   "Character creates a brand new outfit (when nothing fitting exists)",
-        "SetActivity":      "Character starts a different activity (e.g. stops what they were doing)",
+        "SetPose":          "Character changes what they're physically doing right now (free-text pose)",
         "SetLocation":      "Character moves to a different room/location (e.g. flees, gives privacy)",
         "ImageGenerator":   "Character takes a photo / makes an image",
         "Instagram":        "Character posts to Instagram",
@@ -585,7 +585,7 @@ class StreamingAgent:
                 f"     - Character takes a photo / makes an image / shows a picture → ImageGenerator\n"
                 f"     - Character posts to Instagram / shares a photo publicly → Instagram\n"
                 f"     - Character moves to a different location or room → SetLocation\n"
-                f"     - Character starts a new activity at the same location → SetActivity\n"
+                f"     - Character changes what they're physically doing (pose) → SetPose\n"
                 f"     - Character looks something up / searches / checks facts → KnowledgeSearch or WebSearch\n"
                 f"     - Character relays info to a third party not in chat → TalkTo\n"
                 f"   For a REAL action listed above, narrative description IS the signal — do not skip the "

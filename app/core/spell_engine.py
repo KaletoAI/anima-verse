@@ -346,26 +346,17 @@ def execute_cast(avatar_name: str, target_name: str,
             success = False
 
     if success:
-        # Avatar-Activity setzen — Default "cast_spell" aus shared/activities/magic.json,
-        # ueberschreibbar pro Spell ueber cast_activity. Greift in beiden Pfaden
-        # (klassisch + Anker-Teleport) und beim Self-Cast aus dem Inventar.
-        # Auto-Ablauf laeuft ueber die duration_minutes der Activity
-        # (siehe periodic_jobs _sub_activity_expiry). save_character_current_activity
-        # setzt activity_started_at und activity_duration_minutes aus der
-        # Library-Definition automatisch.
-        cast_activity = (spell.get("cast_activity") or "cast_spell").strip()
+        # Avatar-Pose setzen — Default "casting a spell", ueberschreibbar pro
+        # Spell ueber cast_activity. Greift in beiden Pfaden (klassisch +
+        # Anker-Teleport) und beim Self-Cast aus dem Inventar.
+        cast_activity = (spell.get("cast_activity") or "casting a spell").strip()
         if cast_activity:
             try:
-                from app.models.activity_library import (
-                    get_library_activity, find_library_activity_by_name)
-                from app.models.character import save_character_current_activity
-                _act = (get_library_activity(cast_activity)
-                        or find_library_activity_by_name(cast_activity))
-                _act_name = (_act.get("name") if _act else cast_activity)
-                save_character_current_activity(avatar_name, _act_name)
-                logger.info("Cast activity set: %s -> %s", avatar_name, _act_name)
+                from app.models.character import set_pose_intent
+                set_pose_intent(avatar_name, cast_activity)
+                logger.info("Cast pose set: %s -> %s", avatar_name, cast_activity)
             except Exception as e:
-                logger.warning("Cast activity set fehlgeschlagen: %s", e)
+                logger.warning("Cast pose set fehlgeschlagen: %s", e)
 
         hint = (spell.get("success_text") or "").strip()
         if not hint:

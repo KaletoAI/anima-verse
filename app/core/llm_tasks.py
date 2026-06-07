@@ -28,6 +28,12 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
 
     # Tool / Decision LLM
     "extraction":         {"label": "Memory Extraction",        "priority": Priority.NORMAL, "category": "helper"},
+    # Chat-State-Extraktor (chat.py): Outfit-Abzug + Pose + Stat-Deltas aus dem
+    # letzten Chat-Text. Eigener Task (frueher unter "extraction" → im LLM-Log
+    # nicht von der Memory-Extraktion unterscheidbar). Faellt ueber den
+    # Parent-Fallback in resolve_llm auf "extraction"-Routing zurueck, solange
+    # er nicht separat zugewiesen ist.
+    "extraction_chat_state": {"label": "Chat State Extract (Outfit/Pose/Stats)", "priority": Priority.NORMAL, "category": "tool"},
     "social_reaction":    {"label": "Social Reaction (Thought)","priority": Priority.LOW,    "category": "tool",   "gate": "social_reactions.enabled"},
     "random_event":       {"label": "Random Event",             "priority": Priority.LOW,    "category": "tool",   "gate": "random_events.enabled"},
     "secret_generation":  {"label": "Secret Generation",        "priority": Priority.LOW,    "category": "tool"},
@@ -40,7 +46,6 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # geroutet ist (siehe llm_router.resolve_llm). Direkt nutzen sollte ihn
     # neuer Code nicht mehr — stattdessen einen der intent_*-Sub-Tasks.
     "intent":             {"label": "Intent (Fallback)",        "priority": Priority.NORMAL, "category": "tool"},
-    "classify_activity":  {"label": "Classify Activity",            "priority": Priority.NORMAL, "category": "tool"},
     "spell_detect":       {"label": "Spell Cast Detection",      "priority": Priority.NORMAL, "category": "tool"},
     # Pose-Konsolidierung (Schritt 5, May 2026, plan-outfit-system-rethink.md §6.3)
     # pose_normalize:  free-text "sitzt am Tisch und blaettert" → "sitting at table, reading"

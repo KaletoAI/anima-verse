@@ -217,7 +217,7 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     der Entry-Room-Zwang gilt nur fürs Verlassen des Orts)."""
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
-                                       save_character_current_activity,
+                                       clear_pose_intent,
                                        save_character_current_room)
     from app.models.world import get_location_by_id
 
@@ -234,9 +234,9 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     if room_id not in valid:
         raise HTTPException(status_code=400, detail="room not in current location")
     save_character_current_room(avatar, room_id)
-    # Bewegung unterbricht die laufende Aktivität — sonst „kocht" der Avatar
+    # Bewegung unterbricht die laufende Pose — sonst „kocht" der Avatar
     # weiter, obwohl er gerade den Raum gewechselt hat.
-    save_character_current_activity(avatar, "")
+    clear_pose_intent(avatar)
     return {"ok": True, "room_id": room_id}
 
 
@@ -424,7 +424,7 @@ async def play_self(user=Depends(get_current_user)):
 def _state_block(name: str) -> dict:
     """Mood + Status-Bars + Conditions + Profilbild eines Characters (geteilt von
     /play/self-Logik, genutzt von /play/others)."""
-    from app.models.character import (get_character_current_activity,
+    from app.models.character import (get_effective_activity,
                                       get_character_current_feeling,
                                       get_character_profile_image)
     blk = {"name": name, "mood": "", "activity": "", "status_effects": {},
@@ -434,7 +434,7 @@ def _state_block(name: str) -> dict:
     except Exception:
         pass
     try:
-        blk["activity"] = get_character_current_activity(name) or ""
+        blk["activity"] = get_effective_activity(name) or ""
     except Exception:
         pass
     try:
@@ -661,18 +661,17 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
             "hint": res.get("hint") or ""}
 
 
-@router.get("/play/gallery")
-async def play_gallery(user=Depends(get_current_user)):
-    """Bilder-Galerie des Avatars (Tier 2, read-only). Avatar serverseitig."""
-    from app.models.account import get_active_character
-    out = {"avatar": "", "images": [], "profile_image": ""}
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
+def _build_gallery_payload(character: str) -> dict:
+    """Baut die Galerie-Nutzlast (Bilder + Meta) fuer einen Character.
+
+    Gleiche Form wie ``/play/gallery`` (images[], profile_image). Kein Zugriffs-
+    Check hier — der gehoert in die aufrufende Route."""
+    out = {"character": character, "images": [], "profile_image": ""}
+    if not character:
         return out
-    out["avatar"] = avatar
     try:
         from app.routes.characters import get_character_images_list
-        d = get_character_images_list(avatar)
+        d = get_character_images_list(character)
         prof = d.get("profile_image") or ""
         vids = d.get("image_videos") or {}
         meta_all = d.get("image_metadata") or {}
@@ -684,9 +683,9 @@ async def play_gallery(user=Depends(get_current_user)):
             m = meta_all.get(n) or {}
             imgs.append({
                 "name": n,
-                "url": f"/characters/{avatar}/images/{n}",
+                "url": f"/characters/{character}/images/{n}",
                 "is_profile": n == prof,
-                "video": (f"/characters/{avatar}/images/{vids[n]}" if vids.get(n) else ""),
+                "video": (f"/characters/{character}/images/{vids[n]}" if vids.get(n) else ""),
                 "postprocessed": bool(m.get("postprocessed")),
                 "info": {
                     "prompt": (prompts.get(n) or m.get("prompt") or ""),
@@ -701,8 +700,125 @@ async def play_gallery(user=Depends(get_current_user)):
             })
         out["images"] = imgs
     except Exception as e:
-        logger.debug("play_gallery failed: %s", e)
+        logger.debug("gallery payload failed for %s: %s", character, e)
     return out
+
+
+@router.get("/play/gallery")
+async def play_gallery(user=Depends(get_current_user)):
+    """Bilder-Galerie des eigenen Avatars (Tier 2, read-only). Avatar serverseitig."""
+    from app.models.account import get_active_character
+    avatar = (get_active_character() or "").strip()
+    out = _build_gallery_payload(avatar)
+    out["avatar"] = avatar
+    return out
+
+
+@router.get("/play/galleries")
+async def play_galleries(user=Depends(get_current_user)):
+    """Liste der Galerien, die der aktive Avatar durchstoebern darf
+    (eigene zuerst, danach freigegebene fremde)."""
+    from app.models.account import get_active_character
+    from app.models.character import (
+        list_available_characters, can_view_gallery, get_character_profile_image,
+    )
+    avatar = (get_active_character() or "").strip()
+    out = {"avatar": avatar, "galleries": []}
+    if not avatar:
+        return out
+    for name in list_available_characters():
+        if not can_view_gallery(avatar, name):
+            continue
+        prof = get_character_profile_image(name) or ""
+        out["galleries"].append({
+            "character": name,
+            "is_self": name == avatar,
+            "profile_url": (f"/characters/{name}/images/{prof}" if prof else ""),
+        })
+    # Eigene Galerie immer zuerst.
+    out["galleries"].sort(key=lambda g: (not g["is_self"], g["character"].lower()))
+    return out
+
+
+@router.get("/play/gallery/{character}")
+async def play_gallery_of(character: str, user=Depends(get_current_user)):
+    """Galerie eines bestimmten Characters — nur wenn der aktive Avatar in
+    dessen Freigabeliste steht (oder es die eigene Galerie ist)."""
+    from app.models.account import get_active_character
+    from app.models.character import can_view_gallery
+    avatar = (get_active_character() or "").strip()
+    if not avatar or not can_view_gallery(avatar, character):
+        raise HTTPException(status_code=403, detail="Gallery not accessible")
+    out = _build_gallery_payload(character)
+    out["avatar"] = avatar
+    return out
+
+
+@router.get("/play/worldmap")
+async def play_worldmap(user=Depends(get_current_user)):
+    """Aggregierte 2.5D-Weltkarte: Orte (Grid/Passable/Z-Offset), Character-
+    Positionen (+Avatar/Aktivitaet/Reiseziel) und aktive disruption/danger-Events.
+    Eine Anfrage statt N×Fetch — read-only fuer das Player-Karten-Panel."""
+    from app.models.account import get_active_character
+    from app.models.world import list_locations
+    from app.models.events import list_events
+    from app.models.character import (
+        list_available_characters, get_character_current_location,
+        get_effective_activity, get_movement_target, get_character_profile_image,
+    )
+
+    avatar = (get_active_character() or "").strip()
+
+    locations = []
+    name_by_id = {}
+    for loc in list_locations():
+        lid = loc.get("id") or ""
+        name_by_id[lid] = loc.get("name") or ""
+        locations.append({
+            "id": lid,
+            "name": loc.get("name") or "",
+            "grid_x": loc.get("grid_x"),
+            "grid_y": loc.get("grid_y"),
+            "passable": bool(loc.get("passable")),
+            "template_location_id": (loc.get("template_location_id") or ""),
+            "map_z_offset": int(loc.get("map_z_offset") or 0),
+        })
+
+    characters = []
+    for name in list_available_characters():
+        mt = get_movement_target(name) or ""
+        prof = get_character_profile_image(name) or ""
+        characters.append({
+            "name": name,
+            "location_id": get_character_current_location(name) or "",
+            "activity": get_effective_activity(name) or "",
+            "movement_target_id": mt,
+            "movement_target_name": name_by_id.get(mt, "") or mt,
+            "avatar_url": (f"/characters/{name}/images/{prof}" if prof else ""),
+        })
+
+    events_by_location = {}
+    for ev in list_events():
+        if ev.get("resolved"):
+            continue
+        cat = ev.get("category") or ""
+        if cat not in ("disruption", "danger"):
+            continue
+        lid = ev.get("location_id") or ""
+        if not lid:
+            continue
+        events_by_location.setdefault(lid, []).append({
+            "category": cat,
+            "text": ev.get("text") or "",
+        })
+
+    return {
+        "avatar": avatar,
+        "current_location_id": (get_character_current_location(avatar) if avatar else ""),
+        "locations": locations,
+        "characters": characters,
+        "events_by_location": events_by_location,
+    }
 
 
 @router.get("/play/scenes")
@@ -791,12 +907,12 @@ async def play_set_mood(request: Request, user=Depends(get_current_user)):
 
 @router.post("/play/self/activity")
 async def play_set_activity(request: Request, user=Depends(get_current_user)):
-    """Avatar setzt seine eigene Aktivität (wechselt ggf. den Raum automatisch)."""
-    from app.models.character import save_character_current_activity
+    """Avatar setzt seine eigene Pose/Tätigkeit (freie Pose)."""
+    from app.models.character import set_pose_intent
     avatar = _require_avatar()
     body = await request.json()
     activity = str((body or {}).get("activity") or "").strip()
-    save_character_current_activity(avatar, activity)
+    set_pose_intent(avatar, activity)
     return {"ok": True, "activity": activity}
 
 

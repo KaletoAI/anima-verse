@@ -18,7 +18,7 @@ from app.models.character import (
     get_character_appearance,
     get_character_profile,
     get_character_current_location,
-    get_character_current_activity,
+    get_effective_activity,
     save_character_current_feeling,
     list_available_characters)
 from app.models.character_template import resolve_profile_tokens, get_template
@@ -198,9 +198,7 @@ class InstagramSkill(BaseSkill):
             loc_desc = loc_data.get("description", "") if loc_data else ""
             context_parts.append(f"- Ort: {loc_name}" + (f" ({loc_desc})" if loc_desc else ""))
         if current_activity:
-            act_data = get_activity(current_activity)
-            act_desc = act_data.get("description", "") if act_data else ""
-            context_parts.append(f"- Aktivitaet: {current_activity}" + (f" ({act_desc})" if act_desc else ""))
+            context_parts.append(f"- Aktivitaet: {current_activity}")
         if chat_text:
             context_parts.append(f"- Aktuelle Situation: {chat_text[:500]}")
         if context_parts:
@@ -428,7 +426,7 @@ class InstagramSkill(BaseSkill):
 
         # Location und Activity fuer Caption-Generierung merken
         current_location = get_character_current_location(character_name)
-        current_activity = get_character_current_activity(character_name)
+        current_activity = get_effective_activity(character_name)
 
         # Task-Tracking
         _tq = get_task_queue()
@@ -562,7 +560,7 @@ class InstagramSkill(BaseSkill):
             dst_path = src_path
 
         # Hole aktuelle Location und Activity
-        current_activity = get_character_current_activity(character_name)
+        current_activity = get_effective_activity(character_name)
         
         # Schritt 2+3: LLM analysiert Bild und generiert Caption
         _tq.track_update_label(_track_id, "Instagram: Caption generieren")

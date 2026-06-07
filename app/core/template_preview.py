@@ -187,7 +187,7 @@ def _drive_agent_thought_in_chat(agent: str, avatar: str) -> PreviewResult:
 def _drive_agent_thought_template(agent: str, template_rel: str) -> PreviewResult:
     from app.core.thought_context import build_thought_context
     from app.core.prompt_templates import render
-    tools_hint = "# Available tools: SendMessage, TalkTo, Retrospect, OutfitChange, SetActivity, SetLocation, ImageGeneration"
+    tools_hint = "# Available tools: SendMessage, TalkTo, Retrospect, OutfitChange, SetPose, SetLocation, ImageGeneration"
     ctx = build_thought_context(agent, tools_hint=tools_hint)
     out = render(template_rel, **ctx)
     return {"ok": True, "output": out,
@@ -407,39 +407,6 @@ def _drive_relationship_summary_romantic_interests(agent: str, avatar: str) -> P
                     "build (kwargs assembled inline before llm_call)."}
 
 
-def _drive_classify_activity(agent: str, avatar: str) -> PreviewResult:
-    """activity_engine has a complex async classifier. The prompt build
-    happens inside _do_classify which runs in an executor. We invoke it
-    by triggering save_character_current_activity which runs the
-    classifier — capture intercepts the llm_call before it fires."""
-    raw = "drinking coffee at the cafe"
-    # _do_classify is nested inside save_character_current_activity. Call
-    # the inner classifier directly via the activity_engine module's
-    # function to avoid touching the agent's stored state.
-    try:
-        # Build the prompt path manually by re-invoking what the
-        # production classifier does — there is no top-level helper.
-        # Best we can do is replicate the exact kwargs gathering from
-        # activity_engine._do_classify and then call render_task.
-        from app.models.activity_library import get_available_activities
-        from app.models.character import get_character_current_location
-        loc_id = get_character_current_location(agent) or ""
-        all_acts = get_available_activities(agent, loc_id) or []
-        known_lines = []
-        for a in all_acts[:25]:
-            n, d = a.get("name", ""), a.get("description", "")
-            known_lines.append(f"- {n}: {d}" if (n and d) else f"- {n}")
-        known_list = "\n".join(known_lines) if known_lines else "(none)"
-        from app.core.prompt_templates import render_task
-        sys, user = render_task("classify_activity",
-            raw_activity=raw, known_list=known_list)
-        return {"ok": True, "output": _format("classify_activity", sys, user),
-                "note": (f"Production kwargs reproduced from activity_engine._do_classify. "
-                         f"Sample raw_activity={raw!r}, real known_list from agent's location.")}
-    except Exception as e:
-        return {"ok": False, "output": "", "note": f"Failed: {e}"}
-
-
 def _drive_retrospect(agent: str, avatar: str) -> PreviewResult:
     """RetrospectSkill.execute parses input but the prompt build only
     needs agent_name. Run with a stub raw_input."""
@@ -641,8 +608,8 @@ def _drive_expression_map(agent: str, avatar: str) -> PreviewResult:
             "note": "Production: expression_pose_maps._llm_generate_prompt('expression', 'wistful')."}
 
 
-def _drive_extraction_chat_context(agent: str, avatar: str) -> PreviewResult:
-    """The chat-context extractor is nested deep inside chat.py and runs
+def _drive_extraction_chat_state(agent: str, avatar: str) -> PreviewResult:
+    """The chat-state extractor is nested deep inside chat.py and runs
     asynchronously. It's invoked per request — for preview we'd need
     to call the inner _extract_for_character. Reproduce kwargs."""
     from app.core.prompt_templates import render_task
@@ -666,14 +633,46 @@ def _drive_extraction_chat_context(agent: str, avatar: str) -> PreviewResult:
         piece_list = "\n".join(f"- {n}" for n in _names)
     except Exception:
         piece_list = ""
-    sys, user = render_task("extraction_chat_context",
+    # Stat-Liste wie im Extraktor (dynamisch aus dem Template)
+    stats_enabled = False
+    stat_list = ""
+    try:
+        from app.models.character_template import is_feature_enabled, get_template
+        from app.models.character import get_character_profile
+        if is_feature_enabled(agent, "status_effects_enabled"):
+            _prof = get_character_profile(agent) or {}
+            _cur = _prof.get("status_effects", {}) or {}
+            _tmpl = get_template(_prof.get("template", "")) if _prof.get("template") else None
+            if _tmpl and _cur:
+                _lines: List[str] = []
+                for _section in _tmpl.get("sections", []):
+                    for _fld in _section.get("fields", []):
+                        if _fld.get("store") != "status_effects":
+                            continue
+                        _k = _fld.get("key")
+                        if not _k or _k not in _cur:
+                            continue
+                        _hint = (_fld.get("hint") or "").strip()
+                        _line = f"- {_k}, currently {_cur.get(_k)}/100"
+                        if _hint:
+                            _line += f" — {_hint}"
+                        _lines.append(_line)
+                if _lines:
+                    stat_list = "\n".join(_lines)
+                    stats_enabled = True
+    except Exception:
+        pass
+    sys, user = render_task("extraction_chat_state",
         target_name=agent,
         piece_list=piece_list,
         source_label="Character reply",
         source_text=asst_msg,
+        context_text="",
         outfit_locked=False,
-        is_avatar=False)
-    return {"ok": True, "output": _format("extraction", sys, user),
+        is_avatar=False,
+        stats_enabled=stats_enabled,
+        stat_list=stat_list)
+    return {"ok": True, "output": _format("extraction_chat_state", sys, user),
             "note": ("Production kwargs reproduced (extraction is async/per-request "
                      "in routes/chat._extract_context_from_last_chat). Latest "
                      "assistant message used.")}
@@ -749,7 +748,7 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "chat/agent_thought_in_chat.md": _drive_agent_thought_in_chat,
     "chat/chat_stream.md": _drive_chat_stream,
     "tasks/extraction_memory.md": _drive_extraction_memory,
-    "tasks/extraction_chat_context.md": _drive_extraction_chat_context,
+    "tasks/extraction_chat_state.md": _drive_extraction_chat_state,
     "tasks/consolidation_daily.md": _drive_consolidation_daily,
     "tasks/consolidation_weekly.md": _drive_consolidation_weekly,
     "tasks/consolidation_monthly.md": _drive_consolidation_monthly,
@@ -759,7 +758,6 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "tasks/relationship_summary.md": _drive_relationship_summary,
     "tasks/relationship_summary_pair.md": _drive_relationship_summary_pair,
     "tasks/relationship_summary_romantic_interests.md": _drive_relationship_summary_romantic_interests,
-    "tasks/classify_activity.md": _drive_classify_activity,
     "tasks/retrospect.md": _drive_retrospect,
     "tasks/secret_generation.md": _drive_secret_generation,
     "tasks/outfit_generation.md": _drive_outfit_generation,

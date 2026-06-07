@@ -65,19 +65,8 @@ def _list_characters_in_room(location_id: str, room_id: str, exclude: str = "") 
 
 
 def _is_interruptible(char_name: str) -> bool:
-    """True wenn die aktuelle Activity unterbrechbar ist (oder keine gesetzt)."""
-    from app.models.character import get_character_current_activity
-    act = (get_character_current_activity(char_name) or "").strip()
-    if not act:
-        return True
-    try:
-        from app.models.activity_library import (
-            get_library_activity, find_library_activity_by_name)
-        lib = get_library_activity(act) or find_library_activity_by_name(act)
-        if lib and lib.get("interruptible") is False:
-            return False
-    except Exception:
-        pass
+    """Pose-Modell: es gibt keine ``interruptible``-Flags mehr (Activity-Library
+    entfernt). Eine freie Pose ist immer unterbrechbar."""
     return True
 
 

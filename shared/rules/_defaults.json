@@ -11,7 +11,7 @@
       "condition": "stamina<10",
       "force_action": {
         "go_to": "home",
-        "set_activity": "Sleeping"
+        "set_flags": {"is_sleeping": true}
       },
       "message": "Worn out, going to sleep.",
       "message_de": "Bin erschöpft, gehe schlafen."
@@ -21,10 +21,10 @@
       "name": "Waking up",
       "name_de": "Aufwachen",
       "type": "force",
-      "condition": "stamina>60 AND current_activity:sleeping AND NOT schedule:sleeping",
+      "condition": "stamina>60 AND is_sleeping AND NOT schedule:sleeping",
       "force_action": {
         "go_to": "stay",
-        "set_activity": ""
+        "set_flags": {"is_sleeping": false}
       },
       "message": "Well-rested, waking up.",
       "message_de": "Ausgeschlafen, wache auf."

@@ -73,10 +73,9 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     act_list = ""
     if loc_id:
         try:
-            from app.models.activity_library import get_activity_names
-            act_list = ", ".join(get_activity_names(
-                character_name, location_id=loc_id,
-                lang=get_character_language(character_name)) or [])
+            from app.models.world import get_room_activity_hint
+            from app.models.character import get_character_current_room
+            act_list = get_room_activity_hint(loc_id, get_character_current_room(character_name))
         except Exception:
             act_list = ""
     self_outfit = render_outfit(character_name=character_name).get("full", "") or "(nothing equipped)"
@@ -100,7 +99,8 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
             f"Decide which tools to call based on the conversation. "
             f"If no tools are needed, respond with: NONE\n{warn}"
             f"\nKnown locations: {loc_list}\n"
-            f"Available activities at current location: {act_list}{outfit_block}")
+            + (f"What people typically do here: {act_list}\n" if act_list else "")
+            + outfit_block)
 
 
 def _rp_tool_decision_input(user_input: str, rp_response: str) -> str:
@@ -118,7 +118,7 @@ def _rp_tool_decision_input(user_input: str, rp_response: str) -> str:
         f"  - takes a photo / makes an image → ImageGenerator\n"
         f"  - posts to Instagram → Instagram\n"
         f"  - moves to a different location or room → SetLocation\n"
-        f"  - starts a new activity at the same location → SetActivity\n"
+        f"  - changes what they're physically doing (pose/activity) → SetPose\n"
         f"  - looks something up / searches → KnowledgeSearch or WebSearch\n"
         f"  - relays info to a third party not in the conversation → TalkTo\n"
         f"Call every tool that applies; multiple are fine. Do NOT skip a tool because "

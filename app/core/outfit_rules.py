@@ -70,39 +70,22 @@ def resolve_target_outfit_type(character_name: str) -> str:
     """Zentrale Aufloesung des aktuell relevanten outfit_type.
 
     Prioritaet (hoch → niedrig):
-        1. Activity (aus Library: activity.outfit_type)
-        2. Raum (room.outfit_type)
-        3. Location (location.outfit_type)
-        4. Default-Regel (outfit_rules.json Eintrag mit ``default: true``)
-        5. '' (kein Type → Compliance laeuft nicht)
+        1. Raum (room.outfit_type)
+        2. Location (location.outfit_type)
+        3. Default-Regel (outfit_rules.json Eintrag mit ``default: true``)
+        4. '' (kein Type → Compliance laeuft nicht)
 
-    Activity gewinnt, weil die Taetigkeit die semantisch genaueste Aussage
-    ueber passende Kleidung ist ("Sonnenbaden" → swimwear, auch wenn der
-    Raum generisch "Outdoor" ist).
+    (Die fruehere Activity-Prioritaet entfaellt — Activity-Library entfernt.)
     """
     if not character_name:
         return ""
     try:
         from app.models.character import (
-            get_character_profile, get_character_current_activity,
             get_character_current_location, get_character_current_room)
     except Exception:
         return ""
 
-    # 1) Activity
-    try:
-        activity = (get_character_current_activity(character_name) or "").strip()
-        if activity:
-            from app.models.activity_library import get_library_activity, find_library_activity_by_name
-            act = get_library_activity(activity) or find_library_activity_by_name(activity)
-            if act:
-                t = (act.get("outfit_type") or "").strip()
-                if t:
-                    return t
-    except Exception as e:
-        logger.debug("Activity-outfit_type lookup fehlgeschlagen: %s", e)
-
-    # 2) Raum
+    # 1) Raum
     try:
         loc_id = get_character_current_location(character_name) or ""
         room_id = get_character_current_room(character_name) or ""

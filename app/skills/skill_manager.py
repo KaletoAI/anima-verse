@@ -20,7 +20,6 @@ from .describe_room_skill import DescribeRoomSkill
 from .consume_item_skill import ConsumeItemSkill
 from .outfit_change_skill import OutfitChangeSkill
 from .outfit_creation_skill import OutfitCreationSkill
-from .set_activity_skill import SetActivitySkill
 from .video_generation_skill import VideoGenerationSkill
 from .markdown_writer_skill import MarkdownWriterSkill
 from .retrospect_skill import RetrospectSkill
@@ -55,7 +54,6 @@ class SkillManager:
         'consume_item': ConsumeItemSkill,
         'outfit_change': OutfitChangeSkill,
         'outfit_creation': OutfitCreationSkill,
-        'setactivity': SetActivitySkill,
         'videogen': VideoGenerationSkill,
         'markdown_writer': MarkdownWriterSkill,
         'retrospect': RetrospectSkill,
