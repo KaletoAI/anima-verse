@@ -656,7 +656,10 @@ def clean_response(full_response: str) -> str:
     """Strip meta-tags from response for saving to history."""
     clean = full_response
     clean = re.sub(r'!\[([^\]]*)\]\(data:image/[^)]+\)', '', clean)
-    clean = re.sub(r'\n?\s*\*\*I\s+feel\s+[^*]+\*\*\s*', '', clean, flags=re.IGNORECASE)
+    # Mood-Marker (Zustand, kein Gesprächsinhalt) — sprach-robust: EN „I feel"
+    # UND lokalisiert „Ich fühle …" (RP-Modell schreibt deutsch). Sonst leakte
+    # „**Ich fühle aggressiv**" in Utterance + History.
+    clean = re.sub(r'\n?\s*\*\*\s*(?:I\s+feel|Ich\s+f[üu]hle)\s+[^*]+\*\*\s*', '', clean, flags=re.IGNORECASE)
     clean = re.sub(r'\n?\s*\*\*I\s+am\s+at\s+[^*]+\*\*\s*', '', clean, flags=re.IGNORECASE)
     clean = re.sub(r'\n?\s*\*\*I\s+do\s+[^*]+\*\*\s*', '', clean, flags=re.IGNORECASE)
     from app.core.intent_engine import strip_intent_tags

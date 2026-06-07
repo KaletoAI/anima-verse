@@ -140,6 +140,12 @@ class AgentLoop:
         # Cooldown (Stille), bis der Avatar wieder spricht. Pro Welt/Ort später
         # konfigurierbar (Konzept §5: Decay-Rate ist DIE Stellschraube).
         self._chime_backstop: int = 5
+        # Spieler-Vorrang (Option A): ist der Avatar im Raum, bekommen NPCs nur
+        # EINE Reaktion, dann hat der Spieler die Bühne — bis er handelt ODER
+        # `chat.avatar_floor_timeout_minutes` ohne Reaktion vergehen (dann darf
+        # die Welt wieder unter sich reden). _room_avatar_idle[key] = Startzeit
+        # der Floor-Wartephase (Unix-ts); None/fehlt = Avatar gerade aktiv.
+        self._room_avatar_idle: Dict[str, float] = {}
         # Per-character last-real-turn timestamp for cooldown enforcement.
         # Real = full LLM turn (not in_chat_skip / no_llm / error). Used to
         # skip the same char if they ran within _MIN_PER_CHAR_COOLDOWN_MIN.
@@ -383,14 +389,49 @@ class AgentLoop:
             tgt = _gmt(c)
             return bool(tgt and tgt != location_id)
         key = self._room_key(location_id, room_id)
+        # Spieler-Vorrang (Option A): Avatar im Raum? Dann effektiver Backstop = 1
+        # (eine Reaktions-Runde, danach Bühne frei) — außer der Avatar ist seit dem
+        # Timeout untätig, dann darf die Welt wieder normal weiterreden.
+        from app.core.timeutils import utc_now as _un
+        _now_ts = _un().timestamp()
+        avatar_present = False
+        if location_id:
+            try:
+                from app.models.account import is_player_controlled
+                avatar_present = any(is_player_controlled(c)
+                                     for c in _list_characters_in_room(location_id, room_id))
+            except Exception:
+                avatar_present = False
+        effective_backstop = self._chime_backstop
+        floor_mode = False
+        if avatar_present and not is_avatar:
+            idle_since = self._room_avatar_idle.get(key)
+            if idle_since is None:
+                idle_since = _now_ts
+                self._room_avatar_idle[key] = idle_since
+            try:
+                from app.core import config as _cfg
+                timeout_min = float(_cfg.get("chat.avatar_floor_timeout_minutes", 8) or 8)
+            except Exception:
+                timeout_min = 8.0
+            if (_now_ts - idle_since) < timeout_min * 60:
+                effective_backstop = 1
+                floor_mode = True
+
         if is_avatar:
             self._room_ai_turns[key] = 0  # Avatar als Taktgeber: Energie neu
             self._room_winddown_done.discard(key)  # neue Kaskade → Abgang wieder erlaubt
+            self._room_avatar_idle.pop(key, None)  # Avatar aktiv → Floor-Uhr zurück
         else:
-            # KI-Äußerung: Energie erschöpft? Dann statt stiller Stille EINMALIG
-            # ein sichtbarer Abgang (Konzept §5) — ein Anwesender gibt einen
-            # kurzen Schluss-Beat. Danach echte Stille, bis der Avatar spricht.
-            if self._room_ai_turns.get(key, 0) >= self._chime_backstop:
+            if self._room_ai_turns.get(key, 0) >= effective_backstop:
+                # Bei Avatar-Vorrang: einfach still werden (Spieler ist am Zug),
+                # KEIN sichtbarer Abgangs-Beat.
+                if floor_mode:
+                    logger.info("room %s: Avatar anwesend → Buehne frei nach 1 Runde "
+                                "(Stille bis Spieler/Timeout)", key)
+                    return {"obligatory": [], "chime": []}
+                # Sonst (kein Avatar / Avatar laenger untaetig): EINMALIG ein
+                # sichtbarer Abgang (Konzept §5), danach Stille bis Avatar spricht.
                 if key not in self._room_winddown_done and location_id:
                     self._room_winddown_done.add(key)
                     present = [c for c in _list_characters_in_room(location_id, room_id)

@@ -1985,8 +1985,8 @@ def _extract_mood(agent_name: str, response: str) -> Optional[str]:
     config = get_character_config(agent_name)
     if not config.get("mood_tracking", False):
         return None
-    # Primaer: **I feel <emotion>**
-    match = re.search(r'\*\*I\s+feel\s+(.+?)\*\*', response, re.IGNORECASE)
+    # Primaer: **I feel <emotion>** ODER lokalisiert **Ich f\u00FChle <emotion>**
+    match = re.search(r'\*\*\s*(?:I\s+feel|Ich\s+f[\u00FCu]hle)\s+(.+?)\*\*', response, re.IGNORECASE)
     # Fallback: letztes **<emotion>** am Ende der Antwort
     if not match:
         match = re.search(
