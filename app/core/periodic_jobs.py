@@ -304,6 +304,26 @@ def _sub_variant_prune():
         logger.debug("variant_prune sub error: %s", e)
 
 
+def _sub_day_consolidation():
+    """Tages-Konsolidierung: pro Character prüfen, ob ein Wach-Block zu schließen
+    ist (Hauptschlaf erkannt oder Stau-Fallback) → Szenen → 1 Tages-Eintrag.
+    (plan-history-consolidation-cleanup.md, Phase 2)
+    """
+    try:
+        from app.core import day_consolidation as dc
+        from app.models.character import list_available_characters
+        total = 0
+        for name in list_available_characters():
+            try:
+                total += dc.maybe_consolidate(name)
+            except Exception as e:
+                logger.debug("day_consolidation(%s) error: %s", name, e)
+        if total:
+            logger.info("day_consolidation: %d Szenen in Tages-Einträge eingeklappt", total)
+    except Exception as e:
+        logger.debug("day_consolidation sub error: %s", e)
+
+
 # Sub-Task-Tabelle: (callable, min_interval_seconds, label).
 # min_interval_seconds = wie oft soll dieser Sub-Task LAUFEN. Der Tick
 # selbst feuert haeufiger; jeder Sub-Task wird nur ausgefuehrt wenn seit
@@ -313,13 +333,13 @@ _SUB_TASKS: List[tuple] = [
     # (func,                         min_interval_s,        label)
     (_sub_status_tick,               60,                    "status_tick"),
     (_sub_force_rules,               0,                     "force_rules"),
-    (_sub_activity_expiry,           0,                     "activity_expiry"),
     (_sub_assignment_expiry,         60,                    "assignment_expiry"),
     (_sub_random_events_generate,    3600,                  "random_events_generate"),
     (_sub_random_events_escalate,    300,                   "random_events_escalate"),
     (_sub_random_events_resolve,     300,                   "random_events_resolve"),
     (_sub_relationship_decay,        24 * 3600,             "relationship_decay"),
     (_sub_variant_prune,             3600,                  "variant_prune"),
+    (_sub_day_consolidation,         600,                   "day_consolidation"),
 ]
 
 

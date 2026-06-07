@@ -785,18 +785,24 @@ def post_process_response(
         _extract_partner = ""
 
     def _background_extraction():
-        # Memory extraction
-        try:
-            from app.core.memory_service import extract_memories_from_exchange, apply_extracted_memories
-            extracted = extract_memories_from_exchange(
-                character_name, _extract_partner, _mem_user_input, cleaned, llm
-            )
-            if extracted:
-                count = apply_extracted_memories(character_name, extracted,
-                                                 extraction_context=extraction_context)
-                logger.debug("[%s] Memory extraction: %d new", character_name, count)
-        except Exception as e:
-            logger.error("[%s] Memory extraction error: %s", character_name, e)
+        # Memory extraction — NUR aus Gedanken (thought). Gespräch-Memories
+        # kommen ausschließlich aus der Szenen-Konsolidierung (consolidate_scene
+        # legt pro Szene ein Episodic-Memory je Teilnehmer an). Die alte
+        # Per-Turn-Extraktion war redundant zu den Szenen UND die Müll-Quelle
+        # (z.B. „X will use Y to steal…") — sie ist für Gespräche raus.
+        # (plan-history-consolidation-cleanup.md, Phase 2)
+        if _is_thought:
+            try:
+                from app.core.memory_service import extract_memories_from_exchange, apply_extracted_memories
+                extracted = extract_memories_from_exchange(
+                    character_name, _extract_partner, _mem_user_input, cleaned, llm
+                )
+                if extracted:
+                    count = apply_extracted_memories(character_name, extracted,
+                                                     extraction_context=extraction_context)
+                    logger.debug("[%s] Memory extraction (thought): %d new", character_name, count)
+            except Exception as e:
+                logger.error("[%s] Memory extraction error: %s", character_name, e)
 
         # Relationship update — im Thought-Modus skippen, da Gedanken keine
         # Interaktion mit dem User sind (sonst falsche Closeness-Increments

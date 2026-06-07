@@ -2878,13 +2878,26 @@ def _build_full_system_prompt(character_name: str,
     # ---- Szenen als kanonische "fruehere Gespraeche" ------------------
     # scene_store-Consolidation (Konversation->Szene). Schliesst den Loop und
     # ersetzt im Raum-Modus die alte paarweise History-Summary (Redundanz raus).
+    # Vergangene Tage = je EIN Tages-Eintrag (Stufe 2b); heutige, noch nicht
+    # eingeklappte Szenen einzeln (Stufe 2, gefiltert über den Tages-Cursor).
     scenes_block = ""
     if _has("memory_enabled"):
         try:
             from app.models import scene_store
             from app.models.world import get_location_by_id
+            from app.core import day_consolidation as _dc
+            _parts = []
+            # Stufe 2b: vergangene Tage
+            _days = _dc.recent_daily_entries(character_name, limit=7)
+            if _days:
+                _parts.append("Earlier days:\n" + "\n".join(
+                    f"- {dk}: {txt.strip()}" for dk, txt in _days if (txt or "").strip()))
+            # Stufe 2: heutige Szenen (nach dem Cursor — eingeklappte fallen raus)
+            _cursor = _dc.get_cursor(character_name)
             _lines = []
-            for sc in scene_store.get_recent_scenes_for(character_name, limit=5):
+            for sc in scene_store.get_recent_scenes_for(character_name, limit=8):
+                if (sc.get("last_activity_ts") or "") <= _cursor:
+                    continue
                 summ = (sc.get("summary") or "").strip()
                 if not summ:
                     continue

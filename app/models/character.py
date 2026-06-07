@@ -3335,8 +3335,18 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     if not character_name:
         return
     profile = get_character_profile(character_name) or {}
+    was = bool(profile.get("is_sleeping"))
     profile["is_sleeping"] = bool(value)
     save_character_profile(character_name, profile)
+    # Schlaf-Längen-Messung für die Tages-Konsolidierung (plan-history-
+    # consolidation-cleanup.md, Phase 2): Einschlafen merkt die Startzeit,
+    # Aufwachen prüft, ob es Hauptschlaf war (≥ Schwelle) → Tages-Eintrag.
+    if value != was:
+        try:
+            from app.core import day_consolidation as _dc
+            (_dc.note_sleep_start if value else _dc.note_wake)(character_name)
+        except Exception:
+            pass
 
 
 def set_is_wet(character_name: str, value: bool) -> None:
