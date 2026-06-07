@@ -374,6 +374,14 @@ class AgentLoop:
         Charaktere zurück.
         """
         from app.core.room_entry import _list_characters_in_room
+        # „Leaving"-Filter: wer ein Reiseziel WEG von dieser Location hat, ist im
+        # Abgang — er gab seinen Abschieds-Beat im auslösenden Turn und bekommt
+        # KEINE weiteren Room-Reaktionen mehr (sonst „X verlässt, labert aber
+        # weiter"). Beim Ankommen wird das Ziel gelöscht → er ist wieder dabei.
+        from app.models.character import get_movement_target as _gmt
+        def _leaving(c: str) -> bool:
+            tgt = _gmt(c)
+            return bool(tgt and tgt != location_id)
         key = self._room_key(location_id, room_id)
         if is_avatar:
             self._room_ai_turns[key] = 0  # Avatar als Taktgeber: Energie neu
@@ -386,7 +394,8 @@ class AgentLoop:
                 if key not in self._room_winddown_done and location_id:
                     self._room_winddown_done.add(key)
                     present = [c for c in _list_characters_in_room(location_id, room_id)
-                               if c and c != speaker and _is_respond_eligible(c)]
+                               if c and c != speaker and _is_respond_eligible(c)
+                               and not _leaving(c)]
                     if present:
                         closer = present[0]
                         if self.bump_respond(closer, speaker=speaker, content=content,
@@ -402,7 +411,7 @@ class AgentLoop:
         if not location_id:
             return {"obligatory": [], "chime": []}
         present = [c for c in _list_characters_in_room(location_id, room_id)
-                   if c and c != speaker]
+                   if c and c != speaker and not _leaving(c)]
         addr = set(addressees or [])
         out: Dict[str, List[str]] = {"obligatory": [], "chime": []}
 
@@ -633,11 +642,9 @@ class AgentLoop:
         # — antwortet normal und ist auch für den autonomen Loop wieder dabei.
         try:
             from app.models.character import (
-                is_character_sleeping, set_is_sleeping,
-                save_character_current_activity, wake_from_offmap)
+                is_character_sleeping, set_is_sleeping, wake_from_offmap)
             if is_character_sleeping(character_name):
                 set_is_sleeping(character_name, False)
-                save_character_current_activity(character_name, "")
                 try:
                     wake_from_offmap(character_name)
                 except Exception:
@@ -1012,7 +1019,7 @@ class AgentLoop:
             from app.models.character import (
                 get_character_profile, get_character_config,
                 get_character_current_location, OFFMAP_SLEEP_SENTINEL,
-                enter_offmap_sleep, save_character_current_activity,
+                enter_offmap_sleep, set_is_sleeping,
                 set_movement_target)
             profile = get_character_profile(character_name) or {}
             stamina = (profile.get("status_effects") or {}).get("stamina")
@@ -1037,14 +1044,14 @@ class AgentLoop:
             # Pfad 1: home ist offmap
             if home_loc == OFFMAP_SLEEP_SENTINEL:
                 if already_offmap:
-                    save_character_current_activity(character_name, "Sleeping")
+                    set_is_sleeping(character_name, True)
                     logger.info("Auto-Sleep: %s bereits offmap, Activity=Sleeping",
                                 character_name)
                     return {"outcome": "auto_sleep_offmap_continue",
                             "preview": f"already offmap, sleeping (stamina={stamina})",
                             "tools": ["SetActivity"]}
                 if enter_offmap_sleep(character_name):
-                    save_character_current_activity(character_name, "Sleeping")
+                    set_is_sleeping(character_name, True)
                     logger.info("Auto-Sleep: %s erschoepft (stamina=%s) -> offmap",
                                 character_name, stamina)
                     return {"outcome": "auto_sleep_offmap",
@@ -1054,7 +1061,7 @@ class AgentLoop:
             # Pfad 2/3: home ist eine reguläre Location
             if cur_loc == home_loc:
                 # Schon zuhause — Activity auf Sleeping setzen
-                save_character_current_activity(character_name, "Sleeping")
+                set_is_sleeping(character_name, True)
                 logger.info("Auto-Sleep: %s zuhause, Activity=Sleeping",
                             character_name)
                 return {"outcome": "auto_sleep_at_home",
@@ -1069,7 +1076,7 @@ class AgentLoop:
             except Exception:
                 _auto_leave_ok, _auto_leave_reason = True, ""
             if not _auto_leave_ok:
-                save_character_current_activity(character_name, "Sleeping")
+                set_is_sleeping(character_name, True)
                 logger.info("Auto-Sleep: %s confined (%s) -> Sleeping vor Ort",
                             character_name, _auto_leave_reason)
                 return {"outcome": "auto_sleep_confined",
@@ -1112,7 +1119,7 @@ class AgentLoop:
             # Wenn beim ersten Step schon angekommen: Activity sofort auf
             # Sleeping setzen, sonst kommt Char zwar an, ist aber wach.
             if arrived:
-                save_character_current_activity(character_name, "Sleeping")
+                set_is_sleeping(character_name, True)
                 logger.info("Auto-Sleep: %s zuhause angekommen, Activity=Sleeping",
                             character_name)
                 return {"outcome": "auto_sleep_arrived_home",
