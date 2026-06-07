@@ -29,11 +29,10 @@ from app.models.character import (
     get_character_appearance,
     get_character_language_instruction,
     get_character_current_location,
-    get_character_current_activity,
+    get_effective_activity,
     get_character_current_room,
     save_character_current_feeling,
     save_character_current_location,
-    save_character_current_activity,
     is_character_sleeping,
     list_available_characters,
     get_character_images_dir)
@@ -431,11 +430,9 @@ async def visualize(request: Request) -> Dict[str, Any]:
             loc_desc = loc_data.get("description", "") if loc_data else ""
             scene_parts.append(f"Location: {loc_name}" + (f" ({loc_desc})" if loc_desc else ""))
 
-        raw_activity = get_character_current_activity(agent_name)
+        raw_activity = get_effective_activity(agent_name)
         if raw_activity:
-            act_data = get_activity(raw_activity)
-            act_desc = act_data.get("description", "") if act_data else ""
-            scene_parts.append(f"Activity: {raw_activity}" + (f" ({act_desc})" if act_desc else ""))
+            scene_parts.append(f"Activity: {raw_activity}")
     except Exception as e:
         logger.error("Szenen-Kontext Fehler: %s", e)
 
@@ -970,7 +967,7 @@ async def instagram_post(request: Request) -> Dict[str, Any]:
 
         if insta_skill:
             current_location = get_character_current_location(agent_name)
-            current_activity = get_character_current_activity(agent_name)
+            current_activity = get_effective_activity(agent_name)
 
             caption = await asyncio.to_thread(
                 insta_skill._generate_caption,
@@ -1148,24 +1145,9 @@ async def chat(request: Request) -> StreamingResponse:
         except Exception as _mood_err:
             logger.debug("avatar mood detect failed: %s", _mood_err)
 
-    # Avatar-Activity aus User-Input ableiten (nur Whitelist der Ort-Activities).
-    if _avatar and user_input:
-        try:
-            from app.core.avatar_activity_detect import detect_avatar_activity
-            from app.models.activity_library import get_available_activities as _gav
-            from app.models.character import (
-                get_character_current_activity as _gca,
-                save_character_current_activity as _sca)
-            _cur_act = _gca(_avatar) or ""
-            _available = _gav(_avatar)
-            _names = [(a.get("name") or "") for a in _available if a.get("name")]
-            _new_act = detect_avatar_activity(user_input, _names, _cur_act)
-            if _new_act:
-                _sca(_avatar, _new_act)
-                logger.info("Avatar activity updated: %s -> %s (via keyword detect)",
-                            _avatar, _new_act)
-        except Exception as _act_err:
-            logger.debug("avatar activity detect failed: %s", _act_err)
+    # (Avatar-Pose wird nicht mehr automatisch aus User-Input abgeleitet — die
+    # Activity-Library/Whitelist ist entfernt; der Avatar ist spielergesteuert
+    # und setzt seine Pose ueber /play/self/activity.)
 
     # Spell-Cast-Detection: Avatar-Inventory hat Items mit `incantation`?
     # Tool-LLM prueft ob die User-Message einen Zauber wirkt. Bei Match
@@ -1542,14 +1524,7 @@ async def chat(request: Request) -> StreamingResponse:
         # koennen welche Location/Activity gemeint ist wenn RP-LLM es vergessen hat)
         _tool_loc_id = get_character_current_location(current_agent)
         _tool_loc_list = ", ".join(l.get("name", "") for l in list_locations() if l.get("name"))
-        _tool_act_list = ""
-        if _tool_loc_id:
-            from app.models.activity_library import get_activity_names as _tl_act_names
-            from app.models.character import get_character_language as _tl_lang
-            _tl_l = _tl_lang(current_agent)
-            _tl_acts = _tl_act_names(current_agent, location_id=_tool_loc_id, lang=_tl_l)
-            if _tl_acts:
-                _tool_act_list = ", ".join(_tl_acts)
+        _tool_act_list = _current_activity_hint(current_agent, _tool_loc_id)
         # Aktuelles Outfit beider Gespraechspartner fuer ChangeOutfit-Kontext
         from app.models.account import get_active_character
         _tool_agent_outfit = render_outfit(character_name=current_agent).get("full", "") or "(nothing equipped)"
@@ -1579,8 +1554,8 @@ async def chat(request: Request) -> StreamingResponse:
             f"If no tools are needed, respond with: NONE\n"
             f"{_partner_talk_warn}"
             f"\nKnown locations: {_tool_loc_list}\n"
-            f"Available activities at current location: {_tool_act_list}"
-            f"{_outfit_block}"
+            + (f"What people typically do here: {_tool_act_list}" if _tool_act_list else "")
+            + f"{_outfit_block}"
         )
         logger.debug("Tool-System-Prompt erstellt (%d Zeichen)", len(tool_system_content))
 
@@ -1668,7 +1643,8 @@ async def chat(request: Request) -> StreamingResponse:
             # --- Wake-Up: Schlafenden Character aufwecken ---
             _was_sleeping = is_character_sleeping(current_agent)
             if _was_sleeping:
-                save_character_current_activity(current_agent, "")
+                from app.models.character import set_is_sleeping as _sis
+                _sis(current_agent, False)
                 # Wenn er offmap geschlafen hat: vor-Offmap-Standort wieder
                 # herstellen, sonst hat der Char nach dem Aufwachen keinen Ort
                 # (Pathfinder/Compliance/Outfit alle ohne Standort kaputt).
@@ -1982,6 +1958,28 @@ async def chat_stream(task_id: str, request: Request) -> StreamingResponse:
 # Post-Stream Helpers — ausgelagert aus generate() fuer Lesbarkeit
 # ---------------------------------------------------------------------------
 
+def _current_activity_hint(character_name: str, location_id: str) -> str:
+    """Freitext-Richtung „was man hier tut" aus dem aktuellen Raum (Fallback:
+    Location). Ersetzt die fruehere Activity-Namen-Liste aus der Library —
+    der Raum gibt nur noch eine Richtung vor, das LLM entscheidet frei.
+    """
+    if not location_id:
+        return ""
+    try:
+        from app.models.world import get_location_by_id
+        loc = get_location_by_id(location_id) or {}
+        rid = get_character_current_room(character_name)
+        for r in (loc.get("rooms") or []):
+            if r.get("id") == rid:
+                h = (r.get("activity_hint") or "").strip()
+                if h:
+                    return h
+                break
+        return (loc.get("activity_hint") or "").strip()
+    except Exception:
+        return ""
+
+
 def _extract_mood(agent_name: str, response: str) -> Optional[str]:
     """Extrahiert Mood aus LLM-Antwort. Returns mood string or None."""
     config = get_character_config(agent_name)
@@ -2014,7 +2012,7 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
     Wenn der Chat-Character den Ort wechselt, geht der Spieler-Avatar
     automatisch mit (gemeinsam einen Ort besuchen).
     """
-    from app.models.character import save_character_current_room, save_character_current_activity
+    from app.models.character import save_character_current_room
     from app.models.account import get_active_character
     from app.models.world import get_location_by_id, get_room_by_name
     match = re.search(r'\*\*I\s+am\s+at\s+(.+?)\*\*', response, re.IGNORECASE)
@@ -2100,124 +2098,23 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
 
 
 def _extract_activity(agent_name: str, response: str) -> Optional[str]:
-    """Extrahiert Activity aus LLM-Antwort. Returns activity name or None.
+    """Extrahiert die freie Pose aus der LLM-Antwort (Marker ``**I do X**``).
 
-    Zwei-Ebenen-System:
-    - current_activity: Kurzer Kategorie-Name (fuer Mechanik: Outfits, Effects, Conditions)
-    - current_activity_detail: Originaler Freitext (fuer Prompt-Flavour, Bild-Generierung)
-
-    Versucht zuerst ein direktes Match gegen bekannte Aktivitaeten.
-    Falls kein Match: LLM-Call im Hintergrund um ein Kategorie-Wort zu bestimmen.
+    Setzt ``pose_intent`` direkt (es gibt keine Activity-Library mehr — die
+    Pose ist freier Text, der Pose-Variant wird via pose_engine resolved).
+    Returns die gesetzte Pose oder None.
     """
     match = re.search(r'\*\*I\s+do\s+(.+?)\*\*', response, re.IGNORECASE)
     if not match:
         return None
     raw_activity = match.group(1).strip().rstrip('.!,')
-    old_activity = get_character_current_activity(agent_name)
-    if raw_activity.lower() == (old_activity or "").lower():
+    old_activity = get_effective_activity(agent_name)
+    if not raw_activity or raw_activity.lower() == (old_activity or "").lower():
         return None
-
-    # Bekannte Aktivitaeten am Standort sammeln (Bibliothek + Location + Character)
-    current_loc_id = get_character_current_location(agent_name)
-    loc_data = None
-    if current_loc_id:
-        from app.models.world import get_location_by_id
-        loc_data = get_location_by_id(current_loc_id)
-
-    from app.models.activity_library import get_available_activities, _get_all_names
-    all_activities = get_available_activities(agent_name, current_loc_id or "")
-    raw_lower = raw_activity.lower()
-
-    # Direktes Match versuchen (alle Namensvarianten + ID)
-    matched = ""
-    for act in all_activities:
-        aid = act.get("id", "").lower()
-        all_names = _get_all_names(act)
-        if aid == raw_lower or any(n.lower() == raw_lower for n in all_names):
-            matched = act.get("name", "")
-            break
-    # Fuzzy-Match (Substring)
-    if not matched:
-        for act in all_activities:
-            aid = act.get("id", "").lower()
-            all_names = [n.lower() for n in _get_all_names(act)]
-            if raw_lower in aid or aid in raw_lower:
-                matched = act.get("name", "")
-                break
-            for n in all_names:
-                if raw_lower in n or n in raw_lower:
-                    matched = act.get("name", "")
-                    break
-            if matched:
-                break
-    # Wort-Ueberlappung mit Stammform (z.B. "sipping a cocktail" → "Drinking cocktails")
-    if not matched:
-        _stops = {"a", "an", "the", "at", "in", "on", "and", "or", "to", "with", "some", "my"}
-        def _stems(words):
-            """Einfaches Stemming: trailing s/ing/ed entfernen."""
-            result = set()
-            for w in words:
-                result.add(w)
-                if w.endswith("s") and len(w) > 3:
-                    result.add(w[:-1])
-                if w.endswith("ing") and len(w) > 5:
-                    result.add(w[:-3])
-                if w.endswith("ed") and len(w) > 4:
-                    result.add(w[:-2])
-            return result - _stops
-
-        raw_stems = _stems(raw_lower.replace("_", " ").split())
-        best_overlap = 0
-        for act in all_activities:
-            aid = act.get("id", "").lower().replace("_", " ")
-            all_names = [n.lower() for n in _get_all_names(act)]
-            act_words = set(aid.split())
-            for n in all_names:
-                act_words.update(n.split())
-            act_stems = _stems(act_words)
-            overlap = len(raw_stems & act_stems)
-            if overlap > best_overlap and overlap >= 1:
-                best_overlap = overlap
-                matched = act.get("name", "")
-
-    if matched:
-        # Direkter Match — Kategorie-Name gefunden
-        activity_name = matched
-        detail = raw_activity if raw_activity.lower() != matched.lower() else ""
-    else:
-        # Kein Match — LLM im Hintergrund fuer Kategorie-Wort, Freitext sofort speichern
-        activity_name = raw_activity  # Vorerst Freitext als Name
-        detail = raw_activity
-        _classify_activity_background(agent_name, raw_activity, all_activities)
-
-    save_character_current_activity(agent_name, activity_name, detail=detail)
-
-    # Passenden Raum und Outfit aktualisieren
-    if current_loc_id and loc_data:
-        from app.models.world import find_room_by_activity
-        from app.models.character import save_character_current_room
-        matched_room = find_room_by_activity(loc_data, activity_name)
-        if matched_room:
-            save_character_current_room(agent_name, matched_room.get("id", ""))
-        # Decency-Compliance nach dem (ggf. veraenderten) Raum/Location
-        try:
-            from app.core.outfit_compliance import apply_outfit_compliance
-            apply_outfit_compliance(agent_name)
-        except Exception as _ce:
-            logger.debug("outfit_compliance bei Activity-Aktion fehlgeschlagen: %s", _ce)
-
-    # Effects werden zeitproportional via save_character_current_activity
-    # und hourly_status_tick angewendet (nicht mehr sofort).
-
-    logger.info("Activity %s: %s -> %s (detail: %s)", agent_name, old_activity, activity_name, detail[:50] if detail else "-")
-    return activity_name
-
-
-def _classify_activity_background(agent_name: str, raw_activity: str, known_activities: list):
-    """DEPRECATED — classify is now auto-triggered by save_character_current_activity.
-    Kept as wrapper for backward compatibility."""
-    from app.core.activity_engine import classify_activity_background
-    classify_activity_background(agent_name, raw_activity)
+    from app.models.character import set_pose_intent
+    set_pose_intent(agent_name, raw_activity)
+    logger.info("Pose %s: %s -> %s", agent_name, old_activity, raw_activity)
+    return raw_activity
 
 
 def _apply_removed_pieces(character_name: str,
@@ -2300,9 +2197,9 @@ def _apply_removed_pieces(character_name: str,
                 from app.core.expression_regen import trigger_expression_generation
                 from app.models.inventory import get_equipped_pieces, get_equipped_items
                 from app.models.character import (
-                    get_character_current_feeling, get_character_current_activity)
+                    get_character_current_feeling, get_character_profile)
                 _mood = get_character_current_feeling(character_name) or ""
-                _act = get_character_current_activity(character_name) or ""
+                _act = (get_character_profile(character_name) or {}).get("pose_intent") or ""
                 _eqp = get_equipped_pieces(character_name)
                 _eqi = get_equipped_items(character_name)
                 trigger_expression_generation(character_name, _mood, _act,
@@ -2389,8 +2286,9 @@ def _extract_context_from_last_chat(agent_name: str,
         source_text: str, is_avatar: bool):
         """Ein LLM-Call fuer EINEN Character aus EINER Quelle.
 
-        - is_avatar=False: Quelle = Character-Antwort. Extrahiert Agent-Outfit + Activity.
-        - is_avatar=True:  Quelle = User-Eingabe. Extrahiert Avatar-Outfit.
+        - is_avatar=False: Quelle = Character-Antwort. Extrahiert Agent-Outfit,
+          Pose (pose_intent) und Stat-Deltas (status_effects).
+        - is_avatar=True:  Quelle = User-Eingabe. Extrahiert nur Avatar-Outfit.
 
         Laeuft unter der Tool-LLM-Config von target_name — Logs + LLM-Wahl
         sind korrekt dem jeweiligen Character zugeordnet.
@@ -2442,21 +2340,57 @@ def _extract_context_from_last_chat(agent_name: str,
         # bleibt aber strikt auf source_text begrenzt — der Template-Prompt
         # macht das explizit klar.
         context_text = avatar_source if not is_avatar else character_source
+
+        # Stat-Bewertung (C): nur fuer Character-Calls, nur wenn das Feature
+        # aktiv ist. Die verfuegbaren Stats werden dynamisch aus dem Character-
+        # Template gelesen (store=status_effects) — nichts hardcoden.
+        stats_enabled = False
+        stat_list = ""
+        if not is_avatar:
+            try:
+                from app.models.character_template import is_feature_enabled, get_template
+                from app.models.character import get_character_profile as _gcp
+                if is_feature_enabled(target_name, "status_effects_enabled"):
+                    _prof = _gcp(target_name) or {}
+                    _cur = _prof.get("status_effects", {}) or {}
+                    _tmpl = get_template(_prof.get("template", "")) if _prof.get("template") else None
+                    if _tmpl and _cur:
+                        _lines: List[str] = []
+                        for _section in _tmpl.get("sections", []):
+                            for _fld in _section.get("fields", []):
+                                if _fld.get("store") != "status_effects":
+                                    continue
+                                _k = _fld.get("key")
+                                if not _k or _k not in _cur:
+                                    continue
+                                _hint = (_fld.get("hint") or "").strip()
+                                _line = f"- {_k}, currently {_cur.get(_k)}/100"
+                                if _hint:
+                                    _line += f" — {_hint}"
+                                _lines.append(_line)
+                        if _lines:
+                            stat_list = "\n".join(_lines)
+                            stats_enabled = True
+            except Exception as _se:
+                logger.debug("Stat-Liste fuer Extraktor [%s] fehlgeschlagen: %s", target_name, _se)
+
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
-            "extraction_chat_context",
+            "extraction_chat_state",
             target_name=target_name,
             piece_list=piece_list,
             source_label=source_label,
             source_text=source_text,
             context_text=context_text,
             outfit_locked=outfit_locked,
-            is_avatar=is_avatar)
+            is_avatar=is_avatar,
+            stats_enabled=stats_enabled,
+            stat_list=stat_list)
 
         try:
             from app.core.llm_router import llm_call as _llm_call
             response = _llm_call(
-                task="extraction",
+                task="extraction_chat_state",
                 system_prompt=sys_prompt,
                 user_prompt=user_prompt,
                 agent_name=target_name)
@@ -2495,13 +2429,41 @@ def _extract_context_from_last_chat(agent_name: str,
         # is_player_controlled-Check faengt das ab.
         from app.models.account import is_player_controlled as _is_pc
         if not is_avatar and not _is_pc(target_name):
-            extracted_activity = (data.get("activity") or "").strip()
-            if extracted_activity:
-                old_activity = get_character_current_activity(target_name)
-                if extracted_activity.lower() != (old_activity or "").lower():
-                    save_character_current_activity(target_name, extracted_activity)
-                    logger.info("Chat-Kontext [%s]: Activity '%s' -> '%s'",
-                                 target_name, old_activity, extracted_activity)
+            # Pose: pose_intent + Variant aktualisieren (ersetzt current_activity)
+            extracted_pose = (data.get("pose") or "").strip()
+            if extracted_pose:
+                from app.models.character import (
+                    get_character_profile as _gcp2,
+                    save_character_profile as _scp2)
+                _prof2 = _gcp2(target_name) or {}
+                old_pose = (_prof2.get("pose_intent") or "").strip()
+                if extracted_pose.lower() != old_pose.lower():
+                    try:
+                        from app.core.pose_engine import resolve_pose_variant
+                        variant = resolve_pose_variant(target_name, extracted_pose)
+                    except Exception as _pe:
+                        variant = None
+                        logger.debug("resolve_pose_variant [%s]: %s", target_name, _pe)
+                    _prof2 = _gcp2(target_name) or {}
+                    _prof2["pose_intent"] = extracted_pose
+                    if variant:
+                        _prof2["pose_variant_id"] = variant["id"]
+                    _scp2(target_name, _prof2)
+                    logger.info("Chat-Kontext [%s]: Pose '%s' -> '%s'",
+                                 target_name, old_pose, extracted_pose)
+
+            # Stats: Malus/Bonus dieser Szene auf status_effects anwenden
+            stats_raw = data.get("stats")
+            if isinstance(stats_raw, dict) and stats_raw:
+                try:
+                    from app.models.character import adjust_status_effects
+                    applied = adjust_status_effects(target_name, stats_raw, source="chat")
+                    if applied:
+                        logger.info("Chat-Kontext [%s]: Stats %s", target_name,
+                                     ", ".join(f"{k} {v['old']}->{v['new']}"
+                                               for k, v in applied.items()))
+                except Exception as _ste:
+                    logger.debug("Stat-Apply [%s] fehlgeschlagen: %s", target_name, _ste)
 
         # Pieces ablegen, deren Name in der removed-Liste steht.
         # Neue Pieces koennen nicht aus dem Freitext erzeugt werden —
@@ -2602,7 +2564,7 @@ def _build_full_system_prompt(character_name: str,
                 _p_feeling = (partner_profile.get("current_feeling") or "").strip()
                 if _p_feeling:
                     _partner_lines.append(f"Current mood: {_p_feeling}")
-                _p_activity = (partner_profile.get("current_activity") or "").strip()
+                _p_activity = (partner_profile.get("pose_intent") or "").strip()
                 if _p_activity:
                     _partner_lines.append(f"Currently doing: {_p_activity}")
             except Exception:
@@ -2720,7 +2682,7 @@ def _build_full_system_prompt(character_name: str,
     current_location_id = get_character_current_location(character_name)
     current_location = get_location_name(current_location_id) if current_location_id else ""
     current_room_id = get_character_current_room(character_name)
-    current_activity = get_character_current_activity(character_name)
+    current_activity = get_effective_activity(character_name)
 
     now = utc_now()
     time_line = f"Current time: {now.strftime('%H:%M')} ({now.strftime('%A, %d %B %Y')})"
@@ -2748,13 +2710,9 @@ def _build_full_system_prompt(character_name: str,
                     situation_parts.append(f"Room: {room_name}")
 
     if _has("activities_enabled") and current_activity:
-        act_data = get_activity(current_activity)
-        act_desc = act_data.get("description", "") if act_data else ""
-        act_detail = char_profile.get("current_activity_detail", "")
-        display_desc = act_detail or act_desc
-        situation_parts.append(
-            f"Activity: {current_activity} - {display_desc}" if display_desc
-            else f"Activity: {current_activity}")
+        # current_activity == pose_intent (freier Text, schon beschreibend) bzw.
+        # "Sleeping" via Flag. Keine Library-Beschreibung mehr.
+        situation_parts.append(f"Activity: {current_activity}")
 
     if len(situation_parts) == 1:
         situation_block = time_line
@@ -2862,15 +2820,7 @@ def _build_full_system_prompt(character_name: str,
 
     known_activities = ""
     if current_location_id and _has("activities_enabled"):
-        loc_data_act = get_location(current_location_id)
-        if loc_data_act:
-            from app.models.activity_library import get_activity_names as _get_act_names
-            from app.models.character import get_character_language as _get_lang
-            _char_lang = _get_lang(character_name)
-            activity_names = _get_act_names(
-                character_name, location_id=current_location_id, lang=_char_lang)
-            if activity_names:
-                known_activities = ", ".join(activity_names)
+        known_activities = _current_activity_hint(character_name, current_location_id)
 
     # ---- Intent tracking flag (vereinheitlichte Vorhaben & Aufgaben) ---
     # Ein Block lehrt die [INTENT:]-Marker-Syntax (plan-intents-unified.md).
@@ -2947,8 +2897,15 @@ def _build_full_system_prompt(character_name: str,
                 scenes_block = "Earlier scenes (what happened before):\n" + "\n".join(_lines)
         except Exception as _se:
             logger.debug("scenes_block build failed: %s", _se)
-    if partner_mode == "room" and scenes_block:
+    # Raum-Modus = neue Pipeline (Stufe 1 Live-Transkript + Stufe 2 Szenen +
+    # Stufe 3 Memories). Die chat_messages-basierten Alt-Blöcke (paarweise
+    # History-Summary, Daily-Summaries, Longterm-Summary) gehören NICHT mehr in
+    # den Raum-Prompt — sie sind redundant zu den Szenen und waren die
+    # Müll-Flutungsquelle (plan-history-consolidation-cleanup.md, Phase 1).
+    if partner_mode == "room":
         history_summary_block = ""
+        daily_summary_section = ""
+        longterm_section = ""
 
     # ---- Recent activity ----------------------------------------------
     recent_activity_section = ""
