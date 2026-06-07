@@ -162,10 +162,10 @@ SECTIONS = {
         "label": "Chat / Anti-Repetition",
         "icon": "💬",
         "fields": {
-            "frequency_penalty": {"type": "float", "label": "Frequency Penalty", "default": 0.3, "min": 0, "max": 2, "step": 0.05, "description": "OpenAI-API-Parameter: Token-Wiederholungen werden mit dieser Strafe gewichtet. 0 = aus, 0.3 = leicht, 0.6+ = aggressiv. Wirkt auf Token-Ebene."},
-            "anti_rep_step": {"type": "float", "label": "Temperature-Bump pro Wiederholung", "default": 0.1, "min": 0, "max": 0.5, "step": 0.05, "description": "Wenn der LLM in den letzten Turns Phrasen wiederholt, wird die Temperature pro erkannter Wiederholung um diesen Wert erhoeht. 0 = aus."},
-            "anti_rep_max": {"type": "float", "label": "Temperature Max", "default": 1.2, "min": 0.7, "max": 2, "step": 0.05, "description": "Obergrenze fuer die dynamisch erhoehte Temperature. Verhindert dass extreme Wiederholungs-Spiralen die Antwort total chaotisieren."},
-            "anti_rep_lookback": {"type": "int", "label": "Wiederholungs-Lookback (Turns)", "default": 6, "min": 2, "max": 20, "description": "Wie viele letzte Assistant-Antworten auf Fuzzy-Duplikate gepruefte werden."},
+            "frequency_penalty": {"type": "float", "label": "Frequency Penalty", "default": 0.3, "min": 0, "max": 2, "step": 0.05, "description": "Static token-repetition penalty sent to the chat model on every reply (OpenAI param). 0 = off, 0.3 = light, 0.6+ = strong. This is a global default ON TOP of the per-model base temperature configured in LLM Routing — not a per-model sampling value. Some backends ignore it."},
+            "anti_rep_step": {"type": "float", "label": "Temperature bump per repetition", "default": 0.1, "min": 0, "max": 0.5, "step": 0.05, "description": "Reactive anti-loop: when the character repeats phrases across its recent replies, the temperature is raised by this amount PER detected repetition — added on top of the LLM Routing base temperature. Model-agnostic safety layer, NOT a static sampling value. 0 = disable the reactive bump."},
+            "anti_rep_max": {"type": "float", "label": "Temperature ceiling", "default": 1.2, "min": 0.7, "max": 2, "step": 0.05, "description": "Upper bound for the reactively-raised temperature, so a repetition spiral cannot push it into pure chaos."},
+            "anti_rep_lookback": {"type": "int", "label": "Repetition lookback (turns)", "default": 6, "min": 2, "max": 20, "description": "How many of the character's recent replies are fuzzy-checked for near-duplicates to drive the reactive temperature bump."},
         },
     },
     "memory": {
