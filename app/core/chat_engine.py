@@ -227,7 +227,18 @@ def build_chat_context(
     _step = float(_cfg.get("chat.anti_rep_step", 0.1) or 0)
     if _step > 0:
         _lookback = int(_cfg.get("chat.anti_rep_lookback", 6) or 6)
-        _rep_count = count_assistant_repetitions(full_chat_history, _lookback)
+        # Wiederholungs-Detection: im Raum-Modus über die eigenen jüngsten
+        # Room-Äußerungen des Responders (Perception-Stream) statt der
+        # chat_messages-History — so greift es korrekt über die ganze Szene UND
+        # überlebt das chat_messages-Aus (plan-history-consolidation-cleanup.md).
+        if room_stream:
+            _rep_source = [{"role": "assistant", "content": (r.get("content") or "")}
+                           for r in room_stream
+                           if (r.get("speaker") or (r.get("meta") or {}).get("speaker") or "").strip()
+                           == character_name and (r.get("content") or "").strip()]
+        else:
+            _rep_source = full_chat_history
+        _rep_count = count_assistant_repetitions(_rep_source, _lookback)
         if _rep_count > 0:
             _max = float(_cfg.get("chat.anti_rep_max", 1.2) or 1.2)
             _base_temp = float(getattr(_chat_instance, "temperature", 0.7))
@@ -590,23 +601,28 @@ def run_chat_turn(
 
     ts = utc_now_iso()
 
-    # Beidseitig speichern (siehe plan-chat-history-redesign: Character↔Character)
-    save_message({
-        "role": "user", "content": incoming_message, "timestamp": ts,
-        "speaker": speaker, "medium": medium,
-    }, character_name=responder, partner_name=speaker)
-    save_message({
-        "role": "assistant", "content": clean, "timestamp": ts,
-        "speaker": responder, "medium": medium,
-    }, character_name=responder, partner_name=speaker)
-    save_message({
-        "role": "assistant", "content": incoming_message, "timestamp": ts,
-        "speaker": speaker, "medium": medium,
-    }, character_name=speaker, partner_name=responder)
-    save_message({
-        "role": "user", "content": clean, "timestamp": ts,
-        "speaker": responder, "medium": medium,
-    }, character_name=speaker, partner_name=responder)
+    # chat_messages NUR für gerichtetes Messaging (talk_to/send_message, Telegram/
+    # Web) — dort speist es die Agent-Inbox (load_unread_messages). Im RAUM-Modus
+    # ist der Perception-Stream die kanonische Quelle (Anzeige in /play + Szenen);
+    # chat_messages würde nur die alte paarweise History duplizieren und ist Teil
+    # des Cutovers (plan-history-consolidation-cleanup.md, Phase 3).
+    if not ctx.get("room_mode"):
+        save_message({
+            "role": "user", "content": incoming_message, "timestamp": ts,
+            "speaker": speaker, "medium": medium,
+        }, character_name=responder, partner_name=speaker)
+        save_message({
+            "role": "assistant", "content": clean, "timestamp": ts,
+            "speaker": responder, "medium": medium,
+        }, character_name=responder, partner_name=speaker)
+        save_message({
+            "role": "assistant", "content": incoming_message, "timestamp": ts,
+            "speaker": speaker, "medium": medium,
+        }, character_name=speaker, partner_name=responder)
+        save_message({
+            "role": "user", "content": clean, "timestamp": ts,
+            "speaker": responder, "medium": medium,
+        }, character_name=speaker, partner_name=responder)
 
     # Pending-Report Sofort-Trigger: if the speaker owes someone a report
     # back, bump them in the AgentLoop so they think on the next slot.
