@@ -2272,7 +2272,7 @@ async function renderLlmTaskView(entries) {
     // Sortierung nach Category (chat → tool → helper → image), innerhalb
     // dann nach Label. So sind groessere Modelle (chat) oben, kleine
     // Helfer unten — entspricht der Lese-Erwartung "wer braucht was".
-    const _CAT_ORDER = { chat: 0, tool: 1, helper: 2, image: 3 };
+    const _CAT_ORDER = { chat: 0, tool: 1, helper: 2, image: 3, embedding: 4 };
     // Per-Category Farben fuer Border + Badge:
     //   chat:   blau    — grosse Modelle
     //   tool:   violett — strukturierte Outputs
@@ -2283,6 +2283,7 @@ async function renderLlmTaskView(entries) {
         tool:   { bg: '#3a2f5f', fg: '#d2a8ff', border: '#54497a' },
         helper: { bg: '#1c3a2c', fg: '#7ee787', border: '#2d553f' },
         image:  { bg: '#5a3a1f', fg: '#ffaa66', border: '#7a543d' },
+        embedding: { bg: '#3a1f4f', fg: '#c879ff', border: '#54387a' },
         '':     { bg: '#21262d', fg: '#8b949e', border: '#30363d' },
     };
     const sortedTasks = [...tasks].sort((a, b) => {
@@ -2466,7 +2467,10 @@ function renderFields(fields, data, path) {
         const pill = f.requires_restart
             ? ' <span class="restart-pill" title="Changing this value requires a server restart">restart</span>'
             : '';
-        html += '<div class="field">';
+        // Felder, die bei Embedding-Eintraegen (Tasks der Gruppe "embedding")
+        // irrelevant sind (temperature/max_tokens) — per Post-Pass ein-/ausgeblendet.
+        const embedAttr = f.hide_for_embedding ? ' data-embedhide-entry="' + path + '"' : '';
+        html += '<div class="field"' + embedAttr + '>';
         html += '<label for="f-' + fullPath + '">' + f.label + pill + '</label>';
         html += '<div class="input-wrap">';
         html += renderInput(f, val, fullPath);
@@ -3016,6 +3020,7 @@ function renderTaskOrderList(items, path, f) {
     html += '<button class="btn btn-sm" title="Add all Tool tasks not yet assigned" onclick="addTaskGroup(\\'' + path + '\\', \\'tool\\')">+ All Tools</button>';
     html += '<button class="btn btn-sm" title="Add all Large Chat Model tasks not yet assigned" onclick="addTaskGroup(\\'' + path + '\\', \\'chat\\')">+ All Chat</button>';
     html += '<button class="btn btn-sm" title="Add all Small Helper tasks not yet assigned" onclick="addTaskGroup(\\'' + path + '\\', \\'helper\\')">+ All Helper</button>';
+    html += '<button class="btn btn-sm" title="Add all Embedding tasks not yet assigned" onclick="addTaskGroup(\\'' + path + '\\', \\'embedding\\')">+ All Embedding</button>';
     html += '</div>';
     // Bulk-Action: alle Task-Orders dieses LLMs auf einen Wert setzen
     html += '<div style="margin-top:6px; display:flex; align-items:center; gap:6px;">';
@@ -3045,7 +3050,7 @@ function renderTaskOrderRow(item, path, i) {
 async function populateTaskSelects(path) {
     const tasks = await loadLlmTasks();
     // Group tasks by category for guidance — show grouped <optgroup>s in the dropdown.
-    const order = ['image', 'tool', 'chat', 'helper', ''];
+    const order = ['image', 'tool', 'chat', 'helper', 'embedding', ''];
     const grouped = {};
     for (const t of tasks) {
         const cat = t.category || '';
@@ -3067,6 +3072,27 @@ async function populateTaskSelects(path) {
             opts += '</optgroup>';
         }
         sel.innerHTML = opts;
+    });
+    applyEmbedVisibility();
+}
+
+// True, wenn der Routing-Eintrag mindestens einen Task der Gruppe "embedding"
+// bedient (Embedding-Modelle nutzen kein temperature/max_tokens).
+function _entryIsEmbedding(data) {
+    if (!data || !Array.isArray(data.tasks) || !data.tasks.length) return false;
+    const cache = LLM_TASKS_CACHE || [];
+    const embedIds = new Set(cache.filter(t => t.category === 'embedding').map(t => t.id));
+    if (!embedIds.size) embedIds.add('pose_embedding');  // Fallback bis Cache geladen
+    return data.tasks.some(it => it && embedIds.has(it.task));
+}
+
+// Blendet temperature/max_tokens bei Embedding-Eintraegen aus (Post-Pass, damit
+// es auch live beim Hinzufuegen/Entfernen des Tasks toggelt).
+function applyEmbedVisibility() {
+    document.querySelectorAll('[data-embedhide-entry]').forEach(el => {
+        const entryPath = el.getAttribute('data-embedhide-entry');
+        const entry = getVal(entryPath);
+        el.style.display = _entryIsEmbedding(entry) ? 'none' : '';
     });
 }
 

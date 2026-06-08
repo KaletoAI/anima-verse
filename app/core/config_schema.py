@@ -119,6 +119,14 @@ SECTIONS = {
             },
         },
     },
+    "llm_retry": {
+        "label": "LLM Busy-Retry",
+        "icon": "🔁",
+        "fields": {
+            "busy_max_attempts": {"type": "int", "label": "Max Busy Retries", "default": 3, "min": 0, "max": 10, "description": "When an LLM provider answers 503 ('busy' — the gateway is at its parallel-call limit), wait and retry the SAME model this many times before giving up. 0 disables busy-retry. Triggers ONLY on a real 503 / Service Unavailable; other errors (500/502/504/timeout) keep the cooldown + fallback path."},
+            "busy_base_delay_seconds": {"type": "float", "label": "Busy Retry Base Delay (s)", "default": 10, "min": 1, "max": 120, "step": 1, "description": "Backoff base wait before retrying a busy (503) model. Doubles each attempt (e.g. 10 → 20 → 40s), capped at 120s. Keep total backoff under the provider Timeout so the queue worker does not abort mid-wait."},
+        },
+    },
     "llm_routing": {
         "label": "LLM Routing",
         "icon": "🧭",
@@ -152,8 +160,9 @@ SECTIONS = {
                 "max": 2,
                 "step": 0.1,
                 "description": "Recommended by task category — Tools: 0.0-0.2 · Image: 0.2-0.4 · Helper: 0.3-0.6 · Chat: 0.7-0.9",
+                "hide_for_embedding": True,
             },
-            "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 100000},
+            "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 100000, "hide_for_embedding": True},
             "chat_template": {
                 "type": "text",
                 "label": "Chat Template (optional)",

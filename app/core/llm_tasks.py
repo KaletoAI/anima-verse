@@ -51,7 +51,7 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # pose_normalize:  free-text "sitzt am Tisch und blaettert" → "sitting at table, reading"
     # pose_embedding:  Vektor zum Similarity-Match gegen bestehende Variants
     "pose_normalize":     {"label": "Pose Normalize",            "priority": Priority.NORMAL, "category": "helper"},
-    "pose_embedding":     {"label": "Pose Embedding",            "priority": Priority.LOW,    "category": "helper"},
+    "pose_embedding":     {"label": "Pose Embedding",            "priority": Priority.LOW,    "category": "embedding"},
     # `world_dev_validate` removed: validator model is now picked
     # dynamically in the World Dev UI right next to the chat model — no
     # separate task entry to maintain in /admin/settings → LLM Routing.
@@ -82,6 +82,7 @@ CATEGORY_LABELS: Dict[str, str] = {
     "tool":   "Tools Required",
     "chat":   "Large Chat Model",
     "helper": "Small Helper Model",
+    "embedding": "Embedding Model",
 }
 
 
