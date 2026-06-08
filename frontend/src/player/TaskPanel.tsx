@@ -10,7 +10,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
-import { useQueue, elapsedSeconds, type LLMTaskInfo, type TrackedTaskInfo } from './useQueue'
+import { useQueue, elapsedSeconds, type LLMTaskInfo, type TrackedTaskInfo, type RecentTaskInfo } from './useQueue'
 
 function fmtDur(s: number): string {
   if (s < 60) return `${s}s`
@@ -18,38 +18,76 @@ function fmtDur(s: number): string {
   return `${m}m ${s % 60}s`
 }
 
-function LLMRow({ tk, nowMs }: { tk: LLMTaskInfo; nowMs: number }) {
+function LLMRow({ tk, nowMs, pending }: { tk: LLMTaskInfo; nowMs: number; pending?: boolean }) {
   const { t } = useI18n()
   // started_at wird erst bei Verarbeitungsstart gesetzt; chat_active-Tasks haben
   // es oft (noch) nicht → created_at (Registrierungszeit) als Fallback, damit die
-  // Zeit von Anfang an mitläuft.
-  const elapsed = elapsedSeconds(tk.started_at || tk.created_at, nowMs)
+  // Zeit von Anfang an mitläuft. Wartende Calls haben nur created_at.
+  const elapsed = elapsedSeconds(pending ? tk.created_at : (tk.started_at || tk.created_at), nowMs)
   const eta = tk.estimated_duration_s && tk.estimated_duration_s > 0 ? tk.estimated_duration_s : null
   const iter = tk.iteration && tk.iteration > 0 ? `iter ${tk.iteration}/${tk.max_iterations || 1}` : ''
   const meta = [tk.provider_name, tk.model].filter(Boolean).join(' / ')
   const title = tk.label || (tk.agent_name ? `${tk.agent_name}` : tk.task_type || t('LLM call'))
   // Sekundärzeile (Status · Dauer · Provider · Iteration) — als umbrechender
   // Text, damit es bei schmaler Panel-Breite lesbar bleibt statt abzuschneiden.
-  const sub = [
-    elapsed != null ? t('thinking {n}').replace('{n}', fmtDur(elapsed)) : t('thinking'),
-    eta != null ? `~${fmtDur(Math.round(eta))}` : '',
-    meta, iter,
-  ].filter(Boolean).join(' · ')
+  const sub = pending
+    ? [
+        elapsed != null ? t('waiting {n}').replace('{n}', fmtDur(elapsed)) : t('pending'),
+        meta, iter,
+      ].filter(Boolean).join(' · ')
+    : [
+        elapsed != null ? t('thinking {n}').replace('{n}', fmtDur(elapsed)) : t('thinking'),
+        eta != null ? `~${fmtDur(Math.round(eta))}` : '',
+        meta, iter,
+      ].filter(Boolean).join(' · ')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span className="player-task-pulse" style={{
-          width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto',
-          background: 'var(--accent, #6aa9ff)',
-        }} />
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.85em' }}>
+        {/* laufend: gefüllter, pulsierender Punkt. wartend: hohler gestrichelter Ring. */}
+        {pending ? (
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto',
+            background: 'transparent', border: '1.5px dashed var(--text-muted, #8b949e)',
+            boxSizing: 'border-box',
+          }} />
+        ) : (
+          <span className="player-task-pulse" style={{
+            width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto',
+            background: 'var(--accent, #6aa9ff)',
+          }} />
+        )}
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.85em', opacity: pending ? 0.7 : 1 }}>
           {title}
         </span>
       </div>
-      <div style={{ paddingLeft: 16, fontSize: '0.72em', opacity: 0.6, lineHeight: 1.3,
-                    fontVariantNumeric: 'tabular-nums', wordBreak: 'break-word' }}>
+      <div style={{ paddingLeft: 16, fontSize: '0.72em', opacity: pending ? 0.45 : 0.6, lineHeight: 1.3,
+                    fontVariantNumeric: 'tabular-nums', wordBreak: 'break-word',
+                    fontStyle: pending ? 'italic' : 'normal' }}>
         {sub}
       </div>
+    </div>
+  )
+}
+
+function RecentRow({ r }: { r: RecentTaskInfo }) {
+  const { t } = useI18n()
+  const failed = (r.status || '') === 'failed'
+  const cancelled = (r.status || '') === 'cancelled'
+  const icon = failed ? '✗' : cancelled ? '⊘' : '✓'
+  const color = failed ? '#e05656' : cancelled ? 'var(--text-muted, #8b949e)' : '#3fa45a'
+  const title = r.label || (r.agent_name || r.task_type || t('Task'))
+  const dur = r.duration_s != null ? fmtDur(Math.round(r.duration_s)) : ''
+  const meta = [dur, r.provider, r.model].filter(Boolean).join(' · ')
+  return (
+    <div title={r.error || ''}
+      style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: '0.74em', opacity: 0.7 }}>
+      <span style={{ color, flex: '0 0 auto' }}>{icon}</span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {title}
+      </span>
+      {meta ? (
+        <span style={{ flex: '0 0 auto', opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>{meta}</span>
+      ) : null}
     </div>
   )
 }
@@ -103,20 +141,20 @@ function TrackedRow({ tk, nowMs }: { tk: TrackedTaskInfo; nowMs: number }) {
 
 export function TaskPanel() {
   const { t } = useI18n()
-  const { llmTasks, trackedTasks, channels } = useQueue(2000)
+  const { llmTasks, pendingLLM, trackedTasks, recent, channels } = useQueue(2000)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  const [showRecent, setShowRecent] = useState(false)
 
-  // Sekündlicher Tick, wenn LLM-Calls ODER laufende Tracked-Tasks (z.B.
-  // Bildgenerierung) mit laufender Dauer angezeigt werden.
-  const anyRunning = llmTasks.length > 0
-    || trackedTasks.some((t) => (t.status || '') === 'running')
+  // Sekündlicher Tick, solange irgendwas mit mitlaufender Dauer/Wartezeit
+  // angezeigt wird (laufende + wartende LLM-Calls + getrackte Tasks).
+  const anyLive = llmTasks.length > 0 || pendingLLM.length > 0 || trackedTasks.length > 0
   useEffect(() => {
-    if (!anyRunning) return
+    if (!anyLive) return
     const id = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [anyRunning])
+  }, [anyLive])
 
-  const hasTasks = llmTasks.length > 0 || trackedTasks.length > 0
+  const hasTasks = llmTasks.length > 0 || pendingLLM.length > 0 || trackedTasks.length > 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -140,6 +178,13 @@ export function TaskPanel() {
                   opacity: ch.healthy ? 0.85 : 0.55,
                   fontStyle: ch.kind === 'image' ? 'italic' : 'normal',
                 }}>{ch.name}</span>
+                {ch.running > 0 || ch.waiting > 0 ? (
+                  <span style={{ opacity: 0.55, fontVariantNumeric: 'tabular-nums' }}>
+                    {ch.running > 0 ? `▶${ch.running}` : ''}
+                    {ch.running > 0 && ch.waiting > 0 ? ' ' : ''}
+                    {ch.waiting > 0 ? `⏳${ch.waiting}` : ''}
+                  </span>
+                ) : null}
               </span>
             )
           })}
@@ -151,17 +196,36 @@ export function TaskPanel() {
       {!hasTasks && (
         <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active tasks')}</div>
       )}
-      {llmTasks.length > 0 && (
+      {llmTasks.length > 0 || pendingLLM.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {llmTasks.map((tk, i) => <LLMRow key={tk.task_id || `llm${i}`} tk={tk} nowMs={nowMs} />)}
+          {pendingLLM.map((tk, i) => <LLMRow key={tk.task_id || `pllm${i}`} tk={tk} nowMs={nowMs} pending />)}
         </div>
-      )}
-      {llmTasks.length > 0 && trackedTasks.length > 0 && (
+      ) : null}
+      {(llmTasks.length > 0 || pendingLLM.length > 0) && trackedTasks.length > 0 && (
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }} />
       )}
       {trackedTasks.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {trackedTasks.map((tk, i) => <TrackedRow key={tk.task_id || `trk${i}`} tk={tk} nowMs={nowMs} />)}
+        </div>
+      )}
+      {recent.length > 0 && (
+        <div style={{ marginTop: 2 }}>
+          <button
+            onClick={() => setShowRecent((v) => !v)}
+            style={{
+              background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit',
+              opacity: 0.55, fontSize: '0.78em',
+            }}
+          >
+            {showRecent ? '▾' : '▸'} {t('Recently')} ({recent.length})
+          </button>
+          {showRecent && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 4 }}>
+              {recent.map((r, i) => <RecentRow key={r.task_id || `rec${i}`} r={r} />)}
+            </div>
+          )}
         </div>
       )}
     </div>
