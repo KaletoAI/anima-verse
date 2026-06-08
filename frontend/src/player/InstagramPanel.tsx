@@ -66,6 +66,7 @@ function metaTitle(m?: ImageMeta): string {
   const parts: string[] = []
   if (m.model) parts.push(`Model: ${m.model}`)
   if (m.backend) parts.push(`Skill: ${m.backend}`)
+  if (m.backend_type) parts.push(`Type: ${m.backend_type}`)
   if (m.workflow) parts.push(`Workflow: ${m.workflow}`)
   if (m.postprocessed) parts.push('Post-processing: external')
   if (m.duration_s) parts.push(`Duration: ${m.duration_s}s`)
@@ -80,6 +81,8 @@ export function InstagramPanel() {
   const [carousel, setCarousel] = useState<Record<string, number>>({})
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [avatarFail, setAvatarFail] = useState<Record<string, boolean>>({})
+  const [liked, setLiked] = useState<Record<string, boolean>>({})
   const [zoom, setZoom] = useState<string | null>(null)
   const alive = useRef(true)
 
@@ -109,6 +112,7 @@ export function InstagramPanel() {
         setPosts((prev) =>
           (prev || []).map((x) => (x.id === p.id ? { ...x, likes: r.likes ?? x.likes } : x)),
         )
+        setLiked((m) => ({ ...m, [p.id]: true }))
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
@@ -177,14 +181,16 @@ export function InstagramPanel() {
         return (
           <div className="ig-post" key={p.id}>
             <div className="ig-post-head">
-              <img
-                className="ig-avatar"
-                src={`/characters/${encodeURIComponent(agent)}/images/profile`}
-                alt={agent}
-                onError={(e) => {
-                  ;(e.currentTarget as HTMLImageElement).style.display = 'none'
-                }}
-              />
+              {avatarFail[agent] ? (
+                <div className="ig-avatar ig-avatar-ph">{agent.charAt(0).toUpperCase()}</div>
+              ) : (
+                <img
+                  className="ig-avatar"
+                  src={`/characters/${encodeURIComponent(agent)}/images/profile`}
+                  alt={agent}
+                  onError={() => setAvatarFail((m) => ({ ...m, [agent]: true }))}
+                />
+              )}
               <span className="ig-author">{agent}</span>
               <span className="ig-time">{fmt(p.timestamp)}</span>
               {metaTitle(p.image_meta) ? (
@@ -242,7 +248,10 @@ export function InstagramPanel() {
             </div>
 
             <div className="ig-actions">
-              <button className="ig-act" onClick={() => like(p)}>
+              <button
+                className={`ig-act ig-like${liked[p.id] ? ' ig-liked' : ''}`}
+                onClick={() => like(p)}
+              >
                 ♥ <span>{p.likes || 0}</span>
               </button>
               <button className="ig-act">💬 {comments.length}</button>
@@ -292,6 +301,7 @@ export function InstagramPanel() {
                           ))}
                         </span>
                       ) : null}
+                      {c.timestamp ? <span className="ig-comment-time">{fmt(c.timestamp)}</span> : null}
                     </div>
                   )
                 })}
