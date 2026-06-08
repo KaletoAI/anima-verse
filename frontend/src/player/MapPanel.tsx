@@ -15,6 +15,19 @@ interface Loc { id: string; name: string; grid_x?: number | null; grid_y?: numbe
 const CELL = 64
 const GAP = 4
 
+// Flat 2D icon for the 2D map, with fallback to the iso map-icon, then hide.
+function MapIcon({ loc }: { loc: Loc }) {
+  const [stage, setStage] = useState(0) // 0 = 2D icon, 1 = iso icon, 2 = hidden
+  if (stage >= 2) return null
+  const src = stage === 0
+    ? `/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d`
+    : `/world/locations/${encodeURIComponent(loc.id)}/map-icon`
+  return (
+    <img src={src} alt={loc.name} onError={() => setStage((s) => s + 1)}
+      style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+  )
+}
+
 export function MapPanel({ currentLocationId }: { currentLocationId: string }) {
   const { t } = useI18n()
   const [locs, setLocs] = useState<Loc[]>([])
@@ -51,11 +64,7 @@ export function MapPanel({ currentLocationId }: { currentLocationId: string }) {
           border: cur ? '2px solid var(--accent, #6aa9ff)' : '1px solid var(--border, #30363d)',
           background: 'var(--bg, #0d1117)', opacity: l ? 1 : 0.12,
         }}>
-          {l && (
-            <img src={`/world/locations/${encodeURIComponent(l.id)}/map-icon`} alt={l.name}
-              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-          )}
+          {l && <MapIcon loc={l} />}
           {l && (
             <div style={{
               position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: '0.6em',

@@ -266,6 +266,7 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
         image_prompt_day = data.get("image_prompt_day")
         image_prompt_night = data.get("image_prompt_night")
         image_prompt_map = data.get("image_prompt_map")
+        image_prompt_map_2d = data.get("image_prompt_map_2d")
         danger_level = data.get("danger_level")
         event_settings = data.get("event_settings")
         outfit_type = data.get("outfit_type")
@@ -286,7 +287,8 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
         location = add_location(location_name, description, rooms=rooms,
                                 image_prompt_day=image_prompt_day,
                                 image_prompt_night=image_prompt_night,
-                                image_prompt_map=image_prompt_map)
+                                image_prompt_map=image_prompt_map,
+                                image_prompt_map_2d=image_prompt_map_2d)
 
         # Extra-Felder direkt in der Location setzen
         _has_extra = (danger_level is not None or event_settings is not None
@@ -355,6 +357,7 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
         image_prompt_day = data.get("image_prompt_day")
         image_prompt_night = data.get("image_prompt_night")
         image_prompt_map = data.get("image_prompt_map")
+        image_prompt_map_2d = data.get("image_prompt_map_2d")
         danger_level = data.get("danger_level")
         event_settings = data.get("event_settings")
         outfit_type = data.get("outfit_type")
@@ -376,7 +379,7 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
             rename_location(location_id, new_name)
 
         # Description, Rooms und Image-Prompts aktualisieren falls mitgegeben
-        has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map])
+        has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map, image_prompt_map_2d])
         if has_updates:
             loc = get_location_by_id(location_id)
             if loc:
@@ -385,7 +388,8 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
                     rooms=rooms if rooms is not None else loc.get("rooms", []),
                     image_prompt_day=image_prompt_day if image_prompt_day is not None else loc.get("image_prompt_day", ""),
                     image_prompt_night=image_prompt_night if image_prompt_night is not None else loc.get("image_prompt_night", ""),
-                    image_prompt_map=image_prompt_map if image_prompt_map is not None else loc.get("image_prompt_map", ""))
+                    image_prompt_map=image_prompt_map if image_prompt_map is not None else loc.get("image_prompt_map", ""),
+                    image_prompt_map_2d=image_prompt_map_2d if image_prompt_map_2d is not None else loc.get("image_prompt_map_2d", ""))
 
         # Extra-Felder (inkl. knowledge_item_id) direkt in der Location setzen
         _has_extra = (danger_level is not None or event_settings is not None
@@ -756,6 +760,44 @@ def get_location_map_icon(
             )
 
     raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
+
+
+@router.head("/locations/{location_name}/map-icon-2d")
+@router.get("/locations/{location_name}/map-icon-2d")
+def get_location_map_icon_2d(
+    location_name: str):
+    """Liefert das flache 2D-Karten-Icon eines Ortes (erstes als 'map_2d' getaggtes Bild)."""
+
+    loc = resolve_location(location_name)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+
+    loc_id = loc.get("id", "")
+    if not loc_id:
+        raise HTTPException(status_code=404, detail="Kein 2D-Karten-Bild vorhanden")
+
+    # Klone teilen das Map-Icon ihres Templates (Galerie unter der Template-ID).
+    from app.models.world import _gallery_owner_id
+    owner_id = _gallery_owner_id(location_name) or loc_id
+
+    image_types = get_gallery_image_types(owner_id)
+    map_images = [img for img, t in image_types.items() if t == "map_2d"]
+    if not map_images:
+        raise HTTPException(status_code=404, detail="Kein 2D-Karten-Bild vorhanden")
+
+    gallery_dir = get_gallery_dir(owner_id)
+    for img_name in map_images:
+        img_path = gallery_dir / img_name
+        if img_path.exists():
+            suffix = img_path.suffix.lower()
+            media_types = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
+            return FileResponse(
+                str(img_path),
+                media_type=media_types.get(suffix, 'image/png'),
+                headers={"Cache-Control": "max-age=300"}
+            )
+
+    raise HTTPException(status_code=404, detail="Kein 2D-Karten-Bild vorhanden")
 
 
 @router.post("/locations/{location_name}/background")
@@ -1203,6 +1245,8 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 description = location.get("image_prompt_night", "").strip()
             elif not description and prompt_type == "map":
                 description = location.get("image_prompt_map", "").strip()
+            elif not description and prompt_type == "map_2d":
+                description = location.get("image_prompt_map_2d", "").strip()
             if not description:
                 description = location.get("description", location.get("name", location_name))
 
@@ -1210,6 +1254,11 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 prompt = (
                     f"{description}, small icon, top-down view, miniature, "
                     f"game map tile, simple, clean, centered"
+                )
+            elif prompt_type == "map_2d":
+                prompt = (
+                    f"{description}, top-down map tile, flat 2D illustration, "
+                    f"bird's eye view, simple, clean, fills the frame"
                 )
             else:
                 prompt = (
@@ -1297,7 +1346,7 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         # runtergerechnet. Day/Night/Description bleiben in voller Aufloesung
         # als Hintergrund-Bilder.
         params: Dict[str, Any] = {"width": _location_image_width(), "height": _location_image_height()}
-        if prompt_type == "map":
+        if prompt_type in ("map", "map_2d"):
             params["image_use_case"] = "map"
         # Workflow-File: expliziter Workflow hat Vorrang vor Default-Workflow
         active_wf = None
@@ -1416,8 +1465,8 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 "model": _model_used,
             })
 
-            # Bild-Typ setzen wenn prompt_type angegeben (day/night/map)
-            if prompt_type in ("day", "night", "map"):
+            # Bild-Typ setzen wenn prompt_type angegeben (day/night/map/map_2d)
+            if prompt_type in ("day", "night", "map", "map_2d"):
                 set_gallery_image_type(loc_id, image_name, prompt_type)
 
             # Karten-Bilder: Hintergrund entfernen (transparent)

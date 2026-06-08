@@ -53,6 +53,7 @@ interface Location {
   image_prompt_day?: string
   image_prompt_night?: string
   image_prompt_map?: string
+  image_prompt_map_2d?: string
   image_count?: number
   is_template?: boolean
   template_location_id?: string
@@ -68,7 +69,7 @@ interface GalleryResponse {
   image_metas?: Record<string, { backend?: string; model?: string }>
 }
 
-const IMAGE_TYPES = ['', 'day', 'night', 'map'] as const
+const IMAGE_TYPES = ['', 'day', 'night', 'map', 'map_2d'] as const
 
 type Selection =
   | { kind: 'location'; locationId: string }
@@ -137,6 +138,7 @@ export function WorldTab() {
         image_prompt_day: src.image_prompt_day || '',
         image_prompt_night: src.image_prompt_night || '',
         image_prompt_map: src.image_prompt_map || '',
+        image_prompt_map_2d: src.image_prompt_map_2d || '',
         danger_level: src.danger_level,
         indoor: src.indoor || '',
         outfit_type: src.outfit_type,
@@ -335,6 +337,7 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
         image_prompt_day: draft.image_prompt_day,
         image_prompt_night: draft.image_prompt_night,
         image_prompt_map: draft.image_prompt_map,
+        image_prompt_map_2d: draft.image_prompt_map_2d,
         event_settings: draft.event_settings,
       })
       toast(t('Saved'))
@@ -551,6 +554,14 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
                   rows={2}
                   value={draft.image_prompt_map || ''}
                   onChange={(e) => upd('image_prompt_map', e.target.value)}
+                />
+              </Field>
+              <Field label={t('2D map icon prompt')}>
+                <textarea
+                  className="ga-textarea"
+                  rows={2}
+                  value={draft.image_prompt_map_2d || ''}
+                  onChange={(e) => upd('image_prompt_map_2d', e.target.value)}
                 />
               </Field>
             </div>
@@ -859,7 +870,7 @@ function LocationGallery({
   const [data, setData] = useState<GalleryResponse | null>(null)
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map' | null>(null)
+  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map' | 'map_2d' | null>(null)
 
   const reload = useCallback(async () => {
     try {
@@ -935,11 +946,12 @@ function LocationGallery({
   // first, then location, falling back to description. The user can
   // edit it before submitting; edits are not persisted.
   const buildDefaultPrompt = useCallback(
-    (promptType: 'day' | 'night' | 'map'): string => {
+    (promptType: 'day' | 'night' | 'map' | 'map_2d'): string => {
       const fromRoom = (key: 'image_prompt_day' | 'image_prompt_night') =>
         (room && (room as Record<string, unknown>)[key]) as string | undefined
+      const isMap = promptType === 'map' || promptType === 'map_2d'
       let desc = ''
-      if (room && promptType !== 'map') {
+      if (room && !isMap) {
         if (promptType === 'day') desc = (fromRoom('image_prompt_day') || '').trim()
         else if (promptType === 'night') desc = (fromRoom('image_prompt_night') || '').trim()
         if (!desc) desc = (fromRoom('image_prompt_day') || room.description || '').trim()
@@ -947,9 +959,13 @@ function LocationGallery({
       if (!desc && promptType === 'day') desc = (location.image_prompt_day || '').trim()
       if (!desc && promptType === 'night') desc = (location.image_prompt_night || '').trim()
       if (!desc && promptType === 'map') desc = (location.image_prompt_map || '').trim()
+      if (!desc && promptType === 'map_2d') desc = (location.image_prompt_map_2d || '').trim()
       if (!desc) desc = location.description || location.name || ''
       if (promptType === 'map') {
         return `${desc}, small icon, top-down view, miniature, game map tile, simple, clean, centered`
+      }
+      if (promptType === 'map_2d') {
+        return `${desc}, top-down map tile, flat 2D illustration, bird's eye view, simple, clean, fills the frame`
       }
       return `${desc}, wide angle establishing shot, no people, atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio`
     },
@@ -967,7 +983,7 @@ function LocationGallery({
         prompt_type: dialogType,
         prompt: payload.prompt,
       }
-      if (roomFilter && dialogType !== 'map') body.room_id = roomFilter
+      if (roomFilter && dialogType !== 'map' && dialogType !== 'map_2d') body.room_id = roomFilter
       if (payload.workflow) body.workflow = payload.workflow
       if (payload.backend) body.backend = payload.backend
       if (payload.model_override) body.model_override = payload.model_override
@@ -1039,6 +1055,16 @@ function LocationGallery({
           🗺️ {t('Generate map icon')}
         </button>
       ) : null}
+      {!roomFilter ? (
+        <button
+          className="ga-btn ga-btn-sm"
+          disabled={!!busy}
+          onClick={() => setDialogType('map_2d')}
+          title={t('Open the image generation dialog for the flat 2D map icon.')}
+        >
+          🟦 {t('Generate 2D icon')}
+        </button>
+      ) : null}
     </div>
   )
 
@@ -1050,7 +1076,9 @@ function LocationGallery({
           ? t('Generate day image — {name}').replace('{name}', room?.name || locationName)
           : dialogType === 'night'
             ? t('Generate night image — {name}').replace('{name}', room?.name || locationName)
-            : t('Generate map icon — {name}').replace('{name}', locationName)
+            : dialogType === 'map_2d'
+              ? t('Generate 2D map icon — {name}').replace('{name}', locationName)
+              : t('Generate map icon — {name}').replace('{name}', locationName)
       }
       defaultPrompt={buildDefaultPrompt(dialogType)}
       onSubmit={submitGenerate}

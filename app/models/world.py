@@ -825,7 +825,8 @@ def add_location(name: str, description: str,
                   activities: List[Dict[str, str]] = None,
                   image_prompt_day: str = None,
                   image_prompt_night: str = None,
-                  image_prompt_map: str = None) -> Dict[str, Any]:
+                  image_prompt_map: str = None,
+                  image_prompt_map_2d: str = None) -> Dict[str, Any]:
     """Fuegt einen neuen Ort hinzu oder aktualisiert einen bestehenden.
 
     Args:
@@ -833,7 +834,8 @@ def add_location(name: str, description: str,
         activities: Legacy — wird ignoriert wenn rooms angegeben
         image_prompt_day: Prompt fuer Hintergrundbild bei Tag (6-18 Uhr)
         image_prompt_night: Prompt fuer Hintergrundbild bei Nacht (18-6 Uhr)
-        image_prompt_map: Prompt fuer Kartenbild
+        image_prompt_map: Prompt fuer isometrisches Kartenbild
+        image_prompt_map_2d: Prompt fuer flaches 2D-Kartenicon
     """
     data = _load_world_data()
     locations = data.get("locations", [])
@@ -890,6 +892,8 @@ def add_location(name: str, description: str,
                 location["image_prompt_night"] = image_prompt_night
             if image_prompt_map is not None:
                 location["image_prompt_map"] = image_prompt_map
+            if image_prompt_map_2d is not None:
+                location["image_prompt_map_2d"] = image_prompt_map_2d
             # ID nachrüsten falls fehlend
             if not location.get("id"):
                 location["id"] = _generate_location_id()
@@ -909,6 +913,7 @@ def add_location(name: str, description: str,
         "image_prompt_day": image_prompt_day or "",
         "image_prompt_night": image_prompt_night or "",
         "image_prompt_map": image_prompt_map or "",
+        "image_prompt_map_2d": image_prompt_map_2d or "",
     }
     if image_prompt_day or image_prompt_night:
         new_location["prompt_changed"] = True
