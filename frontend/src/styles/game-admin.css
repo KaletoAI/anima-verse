@@ -1968,6 +1968,9 @@ html, * {
   border: 1px solid rgba(63, 185, 80, 0.4);
 }
 .ga-img-nomatch { font-size: 12px; color: var(--danger, #f85149); }
+.ga-gallery-access { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 14px; }
+.ga-check-row { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.ga-check-row input { cursor: pointer; }
 
 /* Image Appearance — per-slot prompt + LoRA override grid (two columns). */
 .ga-img-slotgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
