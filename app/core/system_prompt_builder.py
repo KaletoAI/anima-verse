@@ -77,7 +77,8 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     data["activity"] = ("Sleeping" if profile.get("is_sleeping")
                         else (profile.get("pose_intent") or "")) or "None"
     data["feeling"] = profile.get("current_feeling", "") or "Neutral"
-    data["time_of_day"] = utc_now().strftime("%H:%M")
+    from app.core.timeutils import local_now as _lnow
+    data["time_of_day"] = _lnow().strftime("%H:%M")  # Welt-Uhr = konfigurierte TZ
 
     if PRESENCE in sections:
         presence_lines, anyone_nearby = _load_presence(

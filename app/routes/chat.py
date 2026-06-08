@@ -2687,7 +2687,8 @@ def _build_full_system_prompt(character_name: str,
     current_room_id = get_character_current_room(character_name)
     current_activity = get_effective_activity(character_name)
 
-    now = utc_now()
+    from app.core.timeutils import local_now as _lnow
+    now = _lnow()  # Welt-Uhr in der konfigurierten Zeitzone (Storage bleibt UTC)
     time_line = f"Current time: {now.strftime('%H:%M')} ({now.strftime('%A, %d %B %Y')})"
     situation_parts = [time_line]
 

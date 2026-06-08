@@ -17,6 +17,34 @@ def utc_now_iso(timespec: str = "seconds") -> str:
     return datetime.now(timezone.utc).isoformat(timespec=timespec)
 
 
+def _world_tz():
+    """Konfigurierte Welt-Zeitzone (``server.timezone``, IANA-Name). Steuert die
+    *Anzeige*-/Welt-Uhr + Tagesgrenzen — NICHT die Speicherung (die bleibt UTC).
+    Fallback UTC, wenn nicht gesetzt / ungültig."""
+    try:
+        from app.core import config
+        name = (config.get("server.timezone") or "").strip()
+        if name:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(name)
+    except Exception:
+        pass
+    return timezone.utc
+
+
+def local_now() -> datetime:
+    """Aktuelle Zeit in der konfigurierten Welt-Zeitzone (aware). Für die Welt-Uhr
+    im Prompt + Tagesgrenzen. Speicherung nutzt weiterhin ``utc_now()``."""
+    return datetime.now(timezone.utc).astimezone(_world_tz())
+
+
+def to_local(dt: datetime) -> datetime:
+    """UTC-(oder beliebig-aware-)Stempel → konfigurierte Welt-Zeitzone."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_world_tz())
+
+
 def parse_iso(s: str) -> datetime:
     """ISO string -> timezone-aware datetime.
 

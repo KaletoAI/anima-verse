@@ -33,6 +33,14 @@ SECTIONS = {
                 "description": "Basisverzeichnis fuer Datenbanken, Configs und Uploads",
                 "requires_restart": True,
             },
+            "timezone": {
+                "type": "str",
+                "label": "World Timezone",
+                "default": "Europe/Berlin",
+                "description": "IANA timezone (e.g. Europe/Berlin) for the in-world clock the "
+                               "characters see and for day boundaries. Storage stays UTC — this "
+                               "only affects displayed/world time. Empty = UTC.",
+            },
             "log_retention_days": {
                 "type": "int",
                 "label": "Log Aufbewahrung (Tage)",

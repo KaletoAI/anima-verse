@@ -79,7 +79,13 @@ def consolidate_block_for(character_name: str, reason: str = "") -> int:
         return 0
     scenes.sort(key=lambda s: s.get("last_activity_ts") or "")
     new_cursor = scenes[-1].get("last_activity_ts") or now
-    date_key = (new_cursor or now)[:10]
+    # date_key = LOKALES Datum des Block-Endes (Welt-Zeitzone), damit „der Tag"
+    # dem Kalender des Spielers entspricht (Storage/cursor bleiben UTC).
+    try:
+        from app.core.timeutils import to_local, parse_iso
+        date_key = to_local(parse_iso(new_cursor)).strftime("%Y-%m-%d")
+    except Exception:
+        date_key = (new_cursor or now)[:10]
     summary = _summarize_day(character_name, scenes)
     if summary:
         _save_daily(character_name, date_key, summary)
