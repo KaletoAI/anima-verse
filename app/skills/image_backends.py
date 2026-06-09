@@ -105,16 +105,10 @@ class ImageBackend(ABC):
         self.prompt_prefix = os.environ.get(f"{env_prefix}PROMPT_PREFIX", "").strip()
         self.negative_prompt = os.environ.get(f"{env_prefix}NEGATIVE_PROMPT", "").strip()
 
-        # Fallback-Strategie: was tun wenn dieses Backend nicht verfuegbar ist?
-        #   none           → Fehler an Caller, kein Versuch eines anderen Backends
-        #   next_cheaper   → naechst-billigeres Backend mit dessen Default-Workflow
-        #   specific       → genau das in fallback_specific eingetragene Backend
-        # Default: next_cheaper (sanftester Fallback).
-        _fb_mode = os.environ.get(f"{env_prefix}FALLBACK_MODE", "next_cheaper").strip().lower()
-        if _fb_mode not in ("none", "next_cheaper", "specific"):
-            _fb_mode = "next_cheaper"
-        self.fallback_mode = _fb_mode
-        self.fallback_specific = os.environ.get(f"{env_prefix}FALLBACK_SPECIFIC", "").strip()
+        # Statische Fallback-Konfiguration (fallback_mode/fallback_specific)
+        # entfernt: bei Ausfall waehlt run_with_fallback dynamisch das naechste
+        # verfuegbare kompatible Backend — die Verfuegbarkeits-Logik IST der
+        # Fallback (Match-Konzept).
 
         # NVFP4-Architektur: Backend benoetigt NVFP4-quantisierte Modelle (legacy)
         self.nvfp4 = os.environ.get(
@@ -1126,6 +1120,9 @@ class ComfyUIBackend(ImageBackend):
                 class_type = workflow[model_node].get("class_type", "")
                 if class_type == "UNETLoader":
                     workflow[model_node]["inputs"]["unet_name"] = model_name
+                    _wdt0 = (params.get("weight_dtype") or "").strip()
+                    if _wdt0 and "weight_dtype" in workflow[model_node]["inputs"]:
+                        workflow[model_node]["inputs"]["weight_dtype"] = _wdt0
                 elif class_type == "CheckpointLoaderSimple":
                     workflow[model_node]["inputs"]["ckpt_name"] = model_name
                 else:
@@ -1168,6 +1165,12 @@ class ComfyUIBackend(ImageBackend):
                 _key = "gguf_name" if "gguf_name" in _inputs else "unet_name"
                 _inputs[_key] = _model_for_loader
                 logger.debug(f"Model -> {_target_kind} ({_cls}.{_key}): {_model_for_loader}")
+                # weight_dtype patchen (nur UNETLoader/Safetensors — GGUF hat keinen).
+                # Leerer/fehlender Param laesst den Workflow-Wert unveraendert.
+                _wdt = (params.get("weight_dtype") or "").strip()
+                if _wdt and "weight_dtype" in _inputs:
+                    _inputs["weight_dtype"] = _wdt
+                    logger.info(f"weight_dtype -> {_wdt} (node {_target_node})")
 
             # input_unet (Legacy) auch befuellen, falls separat vorhanden
             if _unet_node and _unet_node != _target_node:

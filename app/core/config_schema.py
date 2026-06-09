@@ -209,6 +209,15 @@ SECTIONS = {
             "postprocess_enabled": {"type": "bool", "label": "Post-Processing aktiviert", "default": False, "description": "Nach dem Erzeugen eines geeigneten Bildes einen externen Post-Processing-Dienst benachrichtigen. Der Dienst liest das Bild selbst (Galerie-API / Dateisystem) und schreibt das Ergebnis ueber den API-Endpoint zurueck. Dieses Programm bearbeitet keine Bilder selbst und sendet keine Bild-Bytes."},
             "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Basis-URL, die nach der Erzeugung benachrichtigt wird. Das Programm haengt Parameter an (welt-relativer Bildpfad). Es werden KEINE Bild-Bytes gesendet. Beispiel: http://127.0.0.1:8005/trigger"},
 
+            # --- UNET Loader ---
+            "unet_weight_dtype": {
+                "type": "select",
+                "label": "UNET weight_dtype",
+                "choices": ["", "default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],
+                "default": "",
+                "description": "weight_dtype fuer den Safetensors/UNET-Loader (Node mit weight_dtype-Input) in ComfyUI-Workflows. Leer = Workflow-Wert unveraendert lassen. Fuer fp8-quantisierte Flux-Modelle 'fp8_e4m3fn' setzen — sonst 'Only Tensors of floating point and complex dtype can require gradients' beim Laden. Gilt nicht fuer GGUF-Loader.",
+            },
+
             # --- Default-Backends ---
             "comfy_default_workflow": {"type": "workflow_select", "label": "Default ComfyUI Workflow", "description": "Standard-Workflow fuer normale Bildgenerierung"},
             "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Vorschau Default Backend", "description": "Backend fuer Garderobe-Vorschau + Outfit-Bilder"},
@@ -334,18 +343,6 @@ SECTIONS = {
                     "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Erforderlich fuer Cloud-Backends (mammouth, civitai, together)", "applicable_for": ["mammouth", "civitai", "together"]},
                     "model": {"type": "str", "label": "Model", "description": "Modell-ID oder URN (civitai: urn:air:sdxl:checkpoint:...)", "applicable_for": ["mammouth", "civitai", "together"]},
                     "cost": {"type": "int", "label": "Kosten", "default": 0, "min": 0, "description": "Relative Kosten (0 = lokal/kostenlos, hoeher = teurer)"},
-                    "fallback_mode": {
-                        "type": "select",
-                        "label": "Fallback-Strategie",
-                        "default": "next_cheaper",
-                        "choices": ["none", "next_cheaper", "specific"],
-                        "description": "Was tun wenn dieses Backend nicht verfuegbar ist? none = Fehler, next_cheaper = naechst-billigeres aktives Backend, specific = explizites Backend",
-                    },
-                    "fallback_specific": {
-                        "type": "imagegen_backend_select",
-                        "label": "Fallback-Backend (specific)",
-                        "description": "Nur relevant wenn Fallback-Strategie = specific. Backend das uebernimmt wenn dieses ausfaellt — kann anderer api_type/Workflow sein (z.B. Qwen-Backend down -> Together-Flux).",
-                    },
                     "width": {
                         "type": "int",
                         "label": "Breite",
@@ -450,11 +447,6 @@ SECTIONS = {
                         "type": "lora_array",
                         "label": "LoRAs",
                         "max_items": 4,
-                    },
-                    "fallback_specific": {
-                        "type": "imagegen_backend_select",
-                        "label": "Workflow-Fallback (override)",
-                        "description": "Optional: Backend das uebernimmt wenn das Primaer-Backend fuer DIESEN Workflow ausfaellt. Ueberschreibt die Backend-eigene fallback_specific-Einstellung — so kann z.B. Z-Image auf Together und Qwen auf ein anderes Backend gehen, obwohl beide auf ComfyUI-3090 laufen.",
                     },
                 },
             },

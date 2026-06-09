@@ -2141,6 +2141,19 @@ class ImageGenerationSkill(BaseSkill):
                 params["clip_name"] = active_workflow.clip
                 logger.info("CLIP: %s (Workflow: %s)", active_workflow.clip, active_workflow.name)
 
+            # weight_dtype fuer den Safetensors/UNET-Loader (global konfigurierbar).
+            # Leer = Workflow-Wert unveraendert. fp8-Modelle brauchen fp8_e4m3fn,
+            # sonst crasht UNETLoader beim state_dict-Laden. Gilt nicht fuer GGUF.
+            if active_workflow and (active_workflow.has_input_unet or active_workflow.has_input_safetensors):
+                try:
+                    from app.core import config as _cfg_mod
+                    _wdt = (_cfg_mod.get("image_generation.unet_weight_dtype") or "").strip()
+                except Exception:
+                    _wdt = ""
+                if _wdt:
+                    params["weight_dtype"] = _wdt
+                    logger.info("UNET weight_dtype: %s", _wdt)
+
             if not uses_custom_workflow:
                 # Sampling-Params nur fuer Default-/A1111-Workflows relevant
                 if hasattr(backend, 'guidance_scale'):
