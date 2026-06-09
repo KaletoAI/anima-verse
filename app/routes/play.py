@@ -103,6 +103,20 @@ def _bg_id(location_id: str, room: str) -> str:
     return ""
 
 
+def _spell_effect_narration(caster: str, target: str, spell: dict) -> str:
+    """Neutrale Erzähler-Narration eines Spell-Effekts. Bevorzugt das vom
+    spell_detect-LLM gelieferte ``chat_substitute`` (narrativer Ersatz der rohen
+    Beschwörung), sonst den success_/fail_text-Hint, sonst einen generischen Satz."""
+    sub = (spell.get("chat_substitute") or "").strip()
+    if sub:
+        return sub
+    hint = (spell.get("hint") or "").strip()
+    if hint:
+        return hint
+    name = spell.get("spell_name") or spell.get("spell_id") or "a spell"
+    return f"{caster} casts {name} on {target}."
+
+
 @router.get("/play", include_in_schema=False)
 async def play_page(user=Depends(get_current_user)):
     if not _SHELL.is_file():
@@ -329,6 +343,28 @@ async def play_say(request: Request, user=Depends(get_current_user)):
                             "SUCCESS" if spell.get("success") else "FAIL")
         except Exception as e:  # noqa: BLE001
             logger.debug("play_say spell detect failed: %s", e)
+
+    # 1b) Spell-Cast: die Beschwörung wird NICHT als normale Rede behandelt —
+    #     die Anwesenden nehmen die Zauberworte nicht „voll" wahr, sondern spüren
+    #     die AUSWIRKUNG. Daher: Beschwörung markiert aufzeichnen (löst keine
+    #     Reaktion/Chime aus, s. agent_loop), und der EFFEKT kommt als Erzähler-
+    #     Zeile in den Stream (bevorzugt der vom spell_detect-LLM gelieferte
+    #     `chat_substitute`). KEINE Pflicht-Verbal-Antwort des Ziels.
+    if spell and spell.get("hint"):
+        record_utterance(speaker=avatar, content=content, volume=volume,
+                         addressees=addressees, source="play",
+                         perception_meta={"spell_incantation": True})
+        effect = _spell_effect_narration(avatar, spell_target, spell)
+        eid = record_utterance(speaker="Erzähler", content=effect,
+                               volume=VOLUME_NORMAL, source="spell")
+        return {"ok": eid is not None, "utterance_id": eid,
+                "bumped": [], "chimed": [],
+                "spell": {
+                    "spell_id": spell.get("spell_id") or "",
+                    "spell_name": spell.get("spell_name") or spell.get("spell_id") or "",
+                    "target": spell_target,
+                    "success": bool(spell.get("success")),
+                }}
 
     # 2) Avatar-Äußerung in den Stream
     uid = record_utterance(speaker=avatar, content=content, volume=volume,
@@ -754,6 +790,23 @@ async def play_gallery_of(character: str, user=Depends(get_current_user)):
     return out
 
 
+@router.delete("/play/gallery/image/{filename}")
+async def play_gallery_delete_image(filename: str, user=Depends(get_current_user)):
+    """Loescht ein Bild aus der EIGENEN Avatar-Galerie. Fremde Galerien sind
+    bewusst read-only -> hier nur das eigene aktive Avatar zugelassen."""
+    from app.models.account import get_active_character
+    from app.models.character import delete_character_image
+
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=400, detail="No active avatar")
+    if not delete_character_image(avatar, filename):
+        raise HTTPException(status_code=404, detail="Image not found")
+    return {"ok": True}
+
+
 @router.get("/play/worldmap")
 async def play_worldmap(user=Depends(get_current_user)):
     """Aggregierte 2.5D-Weltkarte: Orte (Grid/Passable/Z-Offset), Character-
@@ -1073,3 +1126,164 @@ async def play_delete_layout(name: str, user=Depends(get_current_user)):
     presets.pop(name, None)
     _update_current_user_settings({"play_layout_presets": presets})
     return {"ok": True, "names": sorted(presets.keys())}
+
+
+# ---- Phone / Messaging (Säule B: 1:1-DMs, medium="messaging") -----------
+# Async-Modell: eine Avatar-DM landet als chat_messages-Zeile (= Inbox des
+# Charakters) und bumpt ihn. Er sieht sie auf seinem nächsten Turn und kann
+# per send_message-Maschinerie antworten — DARF aber ignorieren. Das Panel
+# pollt Verlauf + Status; Lesestand pro Konversation in world_kv.
+
+def _msg_portrait(name: str) -> str:
+    from app.models.character import get_character_profile_image
+    img = get_character_profile_image(name) or ""
+    return f"/characters/{name}/images/{img}" if img else ""
+
+
+def _messaging_partners(avatar: str) -> list:
+    """Distinct 1:1-Konversationspartner des Avatars (beide Speicher-Richtungen)."""
+    from app.core.db import get_connection
+    try:
+        rows = get_connection().execute(
+            "SELECT partner AS other FROM chat_messages "
+            "WHERE character_name=? AND partner!='' "
+            "UNION "
+            "SELECT character_name AS other FROM chat_messages "
+            "WHERE partner=? AND character_name!=''",
+            (avatar, avatar)).fetchall()
+    except Exception as e:
+        logger.debug("messaging partners query failed: %s", e)
+        return []
+    return [r[0] for r in rows if r[0] and r[0] != avatar]
+
+
+def _phone_read_key(avatar: str, partner: str) -> str:
+    return f"phone_read:{avatar}:{partner}"
+
+
+def _phone_read_ts(avatar: str, partner: str) -> str:
+    from app.core.db import get_connection
+    try:
+        row = get_connection().execute(
+            "SELECT value FROM world_kv WHERE key=?",
+            (_phone_read_key(avatar, partner),)).fetchone()
+        return (row[0] or "") if row else ""
+    except Exception:
+        return ""
+
+
+def _phone_set_read(avatar: str, partner: str, ts: str) -> None:
+    from app.core.db import transaction
+    try:
+        with transaction() as conn:
+            conn.execute(
+                "INSERT INTO world_kv (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (_phone_read_key(avatar, partner), ts or ""))
+    except Exception as e:
+        logger.debug("phone read marker write failed: %s", e)
+
+
+@router.get("/play/messages")
+async def play_messages_list(user=Depends(get_current_user)):
+    """Kontaktliste: 1:1-Konversationen des Avatars mit Vorschau, Unread, Status."""
+    from app.models.account import get_active_character
+    from app.models.chat import get_chat_history
+    from app.models.character import (is_character_sleeping,
+                                      get_character_current_location,
+                                      list_available_characters)
+    from app.models.world import get_location_by_id
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        return {"avatar": "", "conversations": [], "available": []}
+    convs = []
+    for partner in _messaging_partners(avatar):
+        hist = [m for m in (get_chat_history(avatar, partner_name=partner) or [])
+                if (m.get("content") or "").strip()]
+        if not hist:
+            continue
+        last = hist[-1]
+        read_ts = _phone_read_ts(avatar, partner)
+        unread = sum(1 for m in hist if m.get("role") == "user"
+                     and (m.get("timestamp") or "") > read_ts)
+        loc_id = get_character_current_location(partner) or ""
+        loc = (get_location_by_id(loc_id) or {}) if loc_id else {}
+        convs.append({
+            "partner": partner,
+            "avatar_url": _msg_portrait(partner),
+            "last": (last.get("content") or "")[:80],
+            "last_ts": last.get("timestamp") or "",
+            "mine_last": last.get("role") == "assistant",
+            "unread": unread,
+            "status": "sleeping" if is_character_sleeping(partner) else "awake",
+            "location": loc.get("name", ""),
+        })
+    convs.sort(key=lambda c: c.get("last_ts") or "", reverse=True)
+    # Für "neue Konversation": alle Charaktere außer dem Avatar selbst.
+    try:
+        available = sorted(c for c in (list_available_characters() or [])
+                           if c and c != avatar)
+    except Exception:
+        available = []
+    return {"avatar": avatar, "conversations": convs, "available": available}
+
+
+@router.get("/play/messages/thread")
+async def play_messages_thread(partner: str, user=Depends(get_current_user)):
+    """1:1-Verlauf mit einem Partner. Markiert die Konversation als gelesen."""
+    from app.models.account import get_active_character
+    from app.models.chat import get_chat_history
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=404, detail="Kein aktiver Avatar")
+    partner = (partner or "").strip()
+    if not partner:
+        raise HTTPException(status_code=400, detail="partner erforderlich")
+    hist = [m for m in (get_chat_history(avatar, partner_name=partner) or [])
+            if (m.get("content") or "").strip()]
+    msgs = [{"mine": m.get("role") == "assistant",
+             "content": m.get("content") or "",
+             "ts": m.get("timestamp") or ""} for m in hist]
+    if hist:
+        _phone_set_read(avatar, partner, hist[-1].get("timestamp") or "")
+    return {"avatar": avatar, "partner": partner, "messages": msgs}
+
+
+@router.post("/play/messages/send")
+async def play_messages_send(request: Request, user=Depends(get_current_user)):
+    """Avatar sendet eine DM: symmetrisch speichern (Empfänger-Inbox + Avatar-
+    History) und den Charakter bumpen — er darf antworten oder ignorieren."""
+    from app.models.account import get_active_character
+    from app.models.chat import save_message
+    from app.core.timeutils import utc_now_iso
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=404, detail="Kein aktiver Avatar")
+    body = await request.json()
+    partner = (body.get("partner") or "").strip()
+    content = (body.get("content") or "").strip()
+    if not partner or not content:
+        raise HTTPException(status_code=400, detail="partner + content erforderlich")
+    if partner == avatar:
+        raise HTTPException(status_code=400, detail="Kein Selbstgespräch")
+    ts = utc_now_iso()
+    # Empfänger-Inbox: vom Avatar eingehend (role=user)
+    save_message({"role": "user", "content": content, "timestamp": ts,
+                  "speaker": avatar, "medium": "messaging"},
+                 character_name=partner, partner_name=avatar)
+    # Avatar-eigene History (role=assistant aus Avatar-Sicht)
+    save_message({"role": "assistant", "content": content, "timestamp": ts,
+                  "speaker": avatar, "medium": "messaging"},
+                 character_name=avatar, partner_name=partner)
+    _phone_set_read(avatar, partner, ts)
+    # Charakter bumpen (antwortet in eigener Zeit, darf ignorieren)
+    try:
+        from app.core.agent_loop import get_agent_loop
+        get_agent_loop().bump(
+            partner,
+            hint=f"{avatar} hat dir gerade eine Nachricht aufs Handy geschrieben "
+                 f"(Messaging, nicht persönlich): \"{content[:300]}\". Du kannst "
+                 f"{avatar} zurückschreiben (SendMessage) oder es lassen.")
+    except Exception as e:
+        logger.debug("bump after phone send failed: %s", e)
+    return {"ok": True, "ts": ts}
