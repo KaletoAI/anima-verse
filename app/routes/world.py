@@ -389,7 +389,8 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
                     image_prompt_day=image_prompt_day if image_prompt_day is not None else loc.get("image_prompt_day", ""),
                     image_prompt_night=image_prompt_night if image_prompt_night is not None else loc.get("image_prompt_night", ""),
                     image_prompt_map=image_prompt_map if image_prompt_map is not None else loc.get("image_prompt_map", ""),
-                    image_prompt_map_2d=image_prompt_map_2d if image_prompt_map_2d is not None else loc.get("image_prompt_map_2d", ""))
+                    image_prompt_map_2d=image_prompt_map_2d if image_prompt_map_2d is not None else loc.get("image_prompt_map_2d", ""),
+                    location_id=location_id)  # per ID updaten — eindeutig bei doppelten Namen
 
         # Extra-Felder (inkl. knowledge_item_id) direkt in der Location setzen
         _has_extra = (danger_level is not None or event_settings is not None
@@ -722,82 +723,107 @@ def get_location_background(
     )
 
 
-@router.head("/locations/{location_name}/map-icon")
-@router.get("/locations/{location_name}/map-icon")
-def get_location_map_icon(
-    location_name: str):
-    """Liefert das Karten-Icon eines Ortes (erstes als 'map' getaggtes Bild)."""
+_MAP_MEDIA_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
 
+
+def _serve_map_icon(location_name: str, image_type: str, override_field: str):
+    """Liefert das Karten-Icon eines Ortes fuer den gegebenen Galerie-Typ.
+
+    Per-Zellen-Wahl: ist auf dem (geklonten) Ort ``override_field`` gesetzt und
+    die Datei existiert in der owner-Galerie, wird GENAU dieses Bild geliefert —
+    so kann jeder Kartenabschnitt bei mehreren Bildern ein eigenes zeigen.
+    Sonst Fallback auf das erste als ``image_type`` getaggte Bild.
+    """
     loc = resolve_location(location_name)
     if not loc:
         raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-
     loc_id = loc.get("id", "")
     if not loc_id:
         raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
 
-    # Klone teilen das Map-Icon ihres Templates — Galerie liegt unter der
-    # Template-ID. resolve_location liefert das gemergte Dict, owner_id
-    # entscheidet wo das Bildmaterial wirklich liegt.
+    # Klone teilen die Galerie ihres Templates (owner_id = Template-ID).
     from app.models.world import _gallery_owner_id
     owner_id = _gallery_owner_id(location_name) or loc_id
+    gallery_dir = get_gallery_dir(owner_id)
 
+    # 1) Per-Ort/Klon explizit gewaehltes Bild (wenn vorhanden + Datei existiert).
+    chosen = (loc.get(override_field) or "").strip()
+    if chosen:
+        p = gallery_dir / chosen
+        if p.exists():
+            return FileResponse(str(p),
+                                media_type=_MAP_MEDIA_TYPES.get(p.suffix.lower(), 'image/png'),
+                                headers={"Cache-Control": "no-cache"})
+
+    # 2) Fallback: erstes als image_type getaggtes Bild.
     image_types = get_gallery_image_types(owner_id)
-    map_images = [img for img, t in image_types.items() if t == "map"]
+    map_images = [img for img, t in image_types.items() if t == image_type]
     if not map_images:
         raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
-
-    gallery_dir = get_gallery_dir(owner_id)
     for img_name in map_images:
         img_path = gallery_dir / img_name
         if img_path.exists():
-            suffix = img_path.suffix.lower()
-            media_types = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
-            return FileResponse(
-                str(img_path),
-                media_type=media_types.get(suffix, 'image/png'),
-                headers={"Cache-Control": "max-age=300"}
-            )
-
+            return FileResponse(str(img_path),
+                                media_type=_MAP_MEDIA_TYPES.get(img_path.suffix.lower(), 'image/png'),
+                                headers={"Cache-Control": "max-age=300"})
     raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
+
+
+@router.head("/locations/{location_name}/map-icon")
+@router.get("/locations/{location_name}/map-icon")
+def get_location_map_icon(location_name: str):
+    """Isometrisches Karten-Icon — per-Zelle waehlbar via map_image, sonst erstes 'map'."""
+    return _serve_map_icon(location_name, "map", "map_image")
 
 
 @router.head("/locations/{location_name}/map-icon-2d")
 @router.get("/locations/{location_name}/map-icon-2d")
-def get_location_map_icon_2d(
-    location_name: str):
-    """Liefert das flache 2D-Karten-Icon eines Ortes (erstes als 'map_2d' getaggtes Bild)."""
+def get_location_map_icon_2d(location_name: str):
+    """Flaches 2D-Karten-Icon — per-Zelle waehlbar via map_image_2d, sonst erstes 'map_2d'."""
+    return _serve_map_icon(location_name, "map_2d", "map_image_2d")
 
-    loc = resolve_location(location_name)
+
+@router.patch("/locations/{location_id}/map-image")
+async def set_location_map_image_route(location_id: str, request: Request) -> Dict[str, Any]:
+    """Setzt das pro Kartenabschnitt angezeigte Bild eines Ortes/Klons.
+
+    Body: ``{"type": "map"|"map_2d", "file": "<gallery-filename>"|""}``.
+    Leerer ``file`` entfernt die Wahl (Fallback auf first-match). Das Bild muss
+    in der Galerie des Owners (Template bei Klonen) liegen.
+    """
+    from app.models.world import set_location_map_image
+    data = await request.json()
+    image_type = (data.get("type") or "").strip()
+    filename = (data.get("file") or "").strip()
+    if image_type not in ("map", "map_2d"):
+        raise HTTPException(status_code=400, detail="type muss 'map' oder 'map_2d' sein")
+    field = "map_image" if image_type == "map" else "map_image_2d"
+    loc = set_location_map_image(location_id, field, filename)
     if not loc:
         raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    return {"status": "success", "location": loc}
 
-    loc_id = loc.get("id", "")
-    if not loc_id:
-        raise HTTPException(status_code=404, detail="Kein 2D-Karten-Bild vorhanden")
 
-    # Klone teilen das Map-Icon ihres Templates (Galerie unter der Template-ID).
-    from app.models.world import _gallery_owner_id
-    owner_id = _gallery_owner_id(location_name) or loc_id
+@router.patch("/locations/{location_id}/map-rotation")
+async def set_location_map_rotation_route(location_id: str, request: Request) -> Dict[str, Any]:
+    """Setzt die 90°-Drehung des 2D-Karten-Icons eines Ortes/Klons (Anzeige-Transform).
 
-    image_types = get_gallery_image_types(owner_id)
-    map_images = [img for img, t in image_types.items() if t == "map_2d"]
-    if not map_images:
-        raise HTTPException(status_code=404, detail="Kein 2D-Karten-Bild vorhanden")
-
-    gallery_dir = get_gallery_dir(owner_id)
-    for img_name in map_images:
-        img_path = gallery_dir / img_name
-        if img_path.exists():
-            suffix = img_path.suffix.lower()
-            media_types = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
-            return FileResponse(
-                str(img_path),
-                media_type=media_types.get(suffix, 'image/png'),
-                headers={"Cache-Control": "max-age=300"}
-            )
-
-    raise HTTPException(status_code=404, detail="Kein 2D-Karten-Bild vorhanden")
+    Body: ``{"rotation": 0|90|180|270}``. Nur Anzeige (CSS rotate), das Bild
+    selbst bleibt unveraendert.
+    """
+    from app.models.world import set_location_map_rotation
+    data = await request.json()
+    try:
+        rotation = int(data.get("rotation", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="rotation muss 0/90/180/270 sein")
+    if rotation % 360 not in (0, 90, 180, 270):
+        raise HTTPException(status_code=400, detail="rotation muss 0/90/180/270 sein")
+    loc = set_location_map_rotation(location_id, rotation)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    return {"status": "success", "location": loc}
 
 
 @router.post("/locations/{location_name}/background")
@@ -1290,51 +1316,24 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
 
         # Backend-Auswahl: explizit > Workflow > Auto (guenstigster)
         backend = None
+        active_wf = None  # via Match aufgeloester Workflow — unten fuer workflow_file wiederverwendet
         if workflow_name:
-            wf = next((w for w in img_skill.comfy_workflows if w.name == workflow_name), None)
-            if wf:
-                # Kompatiblen Backend fuer Workflow finden (nur ComfyUI, da Workflow)
-                compat = wf.compatible_backends or []
-                logger.info(
-                    "Workflow '%s': compatible_backends=%s, alle Backends: [%s]",
-                    workflow_name, compat or "alle",
-                    ", ".join(
-                        f"{b.name}(type={b.api_type}, available={b.available}, "
-                        f"enabled={b.instance_enabled})"
-                        for b in img_skill.backends
-                    ))
-                candidates = [b for b in img_skill.backends if b.available and b.instance_enabled
-                              and b.api_type == "comfyui"
-                              and (not compat or b.name in compat)]
-                backend = img_skill.pick_lowest_cost(
-                    candidates, rotation_key=f"world_image:{workflow_name}")
-                if not backend:
-                    # Detaillierte Diagnose welche Bedingung fehlschlaegt
-                    for b in img_skill.backends:
-                        if b.api_type == "comfyui":
-                            reasons = []
-                            if not b.available:
-                                reasons.append("not available")
-                            if not b.instance_enabled:
-                                reasons.append("not enabled")
-                            if compat and b.name not in compat:
-                                reasons.append(f"name '{b.name}' not in {compat}")
-                            logger.warning(
-                                "Workflow '%s': Backend '%s' ausgeschlossen: %s",
-                                workflow_name, b.name,
-                                ", ".join(reasons) if reasons else "unbekannt")
-                    raise HTTPException(
-                        status_code=503,
-                        detail=f"Kein ComfyUI-Backend fuer Workflow '{workflow_name}' verfuegbar"
-                    )
-                logger.info("Expliziter Workflow: %s -> Backend: %s", workflow_name, backend.name)
-            else:
+            # Match-Konzept: Glob + Verfuegbarkeit statt exaktem Workflow-Namen.
+            backend, active_wf = img_skill.resolve_imagegen_target(
+                workflow_name, rotation_prefix="world_image")
+            if active_wf and not backend:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Kein ComfyUI-Backend fuer Workflow '{active_wf.name}' verfuegbar")
+            if not active_wf:
                 logger.warning(
                     "Workflow '%s' nicht gefunden, verfuegbar: [%s]",
-                    workflow_name,
-                    ", ".join(wf.name for wf in img_skill.comfy_workflows))
+                    workflow_name, ", ".join(w.name for w in img_skill.comfy_workflows))
+            else:
+                logger.info("Workflow (match): %s -> %s -> Backend: %s",
+                            workflow_name, active_wf.name, backend.name if backend else "-")
         elif backend_name:
-            backend = next((b for b in img_skill.backends if b.name == backend_name and b.available), None)
+            backend = img_skill.match_backend(backend_name)  # Backend-Glob via Match-Konzept
             logger.debug("Explizites Backend: %s -> %s", backend_name, backend.name if backend else 'nicht verfuegbar')
 
         if not backend:
@@ -1353,23 +1352,19 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         params: Dict[str, Any] = {"width": _location_image_width(), "height": _location_image_height()}
         if prompt_type in ("map", "map_2d"):
             params["image_use_case"] = "map"
-        if prompt_type == "map_2d":
-            # Flat 2D tile fills the frame and is NOT rembg-cropped — generate
-            # square so the icon stays 1:1 (Flux-native 1024) instead of keeping
-            # the wide 16:9 location aspect ratio.
+            # Map-Icons quadratisch (1:1, Flux-native 1024) generieren statt im
+            # 16:9 Location-Format — gilt fuer iso (wird danach rembg-gecroppt)
+            # UND flach 2D (fuellt das Tile). Sonst sind die Icons im Querformat.
             params["width"] = 1024
             params["height"] = 1024
         # Workflow-File: expliziter Workflow hat Vorrang vor Default-Workflow
-        active_wf = None
-        if workflow_name:
-            active_wf = next((w for w in img_skill.comfy_workflows if w.name == workflow_name), None)
-            if active_wf and active_wf.workflow_file:
-                params["workflow_file"] = active_wf.workflow_file
-        else:
-            _default_wf = getattr(img_skill, '_default_workflow', None)
-            if _default_wf and _default_wf.workflow_file:
-                active_wf = _default_wf
-                params["workflow_file"] = _default_wf.workflow_file
+        # Workflow-File: den oben (Match) aufgeloesten active_wf wiederverwenden,
+        # damit Backend-Wahl und workflow_file denselben Workflow nutzen; ohne
+        # expliziten Workflow den Default-Workflow nehmen.
+        if not workflow_name:
+            active_wf = getattr(img_skill, '_default_workflow', None)
+        if active_wf and active_wf.workflow_file:
+            params["workflow_file"] = active_wf.workflow_file
         # Model-Override (input_unet Workflows brauchen "unet" statt "model")
         _model_key = "unet" if (active_wf and active_wf.has_input_unet) else "model"
         if model_override:
@@ -1753,16 +1748,11 @@ async def generate_time_variant(
         backend = None
         active_wf = None
         if workflow_name:
-            active_wf = next((w for w in img_skill.comfy_workflows if w.name == workflow_name), None)
-            if active_wf:
-                compat = active_wf.compatible_backends or []
-                candidates = [b for b in img_skill.backends if b.available and b.instance_enabled
-                              and b.api_type == "comfyui"
-                              and (not compat or b.name in compat)]
-                backend = img_skill.pick_lowest_cost(
-                    candidates, rotation_key=f"time_variant:{active_wf.name}")
+            # Match-Konzept: Glob + Verfuegbarkeit statt exaktem Namen.
+            backend, active_wf = img_skill.resolve_imagegen_target(
+                workflow_name, rotation_prefix="time_variant")
         elif backend_name:
-            backend = next((b for b in img_skill.backends if b.name == backend_name and b.available), None)
+            backend = img_skill.match_backend(backend_name)  # Backend-Glob via Match-Konzept
 
         if not backend:
             # Qwen-Workflow bevorzugen (unterstuetzt Referenzbilder)

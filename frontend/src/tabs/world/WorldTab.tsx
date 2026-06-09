@@ -130,7 +130,10 @@ export function WorldTab() {
       await apiPost('/world/locations', {
         name: newName.trim(),
         description: src.description || '',
-        rooms: (src.rooms || []).map((r) => ({ ...r })),
+        // Drop each room's id so the backend assigns FRESH ones — otherwise the
+        // copy keeps the source's room IDs and everything keyed by room id
+        // (gallery image_rooms, room items, image gen with room_id) collides.
+        rooms: (src.rooms || []).map(({ id: _id, ...rest }) => rest),
         image_prompt_day: src.image_prompt_day || '',
         image_prompt_night: src.image_prompt_night || '',
         image_prompt_map: src.image_prompt_map || '',
@@ -229,7 +232,7 @@ export function WorldTab() {
       <aside className="ga-world-gallery-col">
         {selectedLocation ? (
           <LocationGallery
-            locationName={selectedLocation.name}
+            locationId={selectedLocation.id}
             location={selectedLocation}
             room={selectedRoom || null}
             roomFilter={selectedRoom?.id || undefined}
@@ -848,12 +851,12 @@ function RoomEditor({ location, room, items, onChanged, onDeleted }: RoomEditorP
 // ── Gallery — list, type-change, night-variant, delete, enlarge. ───────────
 
 function LocationGallery({
-  locationName,
+  locationId,
   location,
   room,
   roomFilter,
 }: {
-  locationName: string
+  locationId: string
   location: Location
   room: Room | null
   /** When set, only images assigned to this room are shown. */
@@ -869,7 +872,7 @@ function LocationGallery({
   const reload = useCallback(async () => {
     try {
       const d = await apiGet<GalleryResponse>(
-        `/world/locations/${encodeURIComponent(locationName)}/gallery`,
+        `/world/locations/${encodeURIComponent(locationId)}/gallery`,
       )
       setData({
         images: d.images || [],
@@ -880,7 +883,7 @@ function LocationGallery({
     } catch {
       setData({ images: [] })
     }
-  }, [locationName])
+  }, [locationId])
 
   useEffect(() => {
     reload()
@@ -903,7 +906,7 @@ function LocationGallery({
       setBusy(image)
       try {
         await apiPost(
-          `/world/locations/${encodeURIComponent(locationName)}/gallery/${encodeURIComponent(image)}/type`,
+          `/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(image)}/type`,
           { type },
         )
         await reload()
@@ -913,7 +916,7 @@ function LocationGallery({
         setBusy(null)
       }
     },
-    [locationName, reload, t, toast],
+    [locationId, reload, t, toast],
   )
 
   const generateNight = useCallback(
@@ -921,7 +924,7 @@ function LocationGallery({
       setBusy(image)
       try {
         await apiPost(
-          `/world/locations/${encodeURIComponent(locationName)}/gallery/${encodeURIComponent(image)}/time-variant`,
+          `/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(image)}/time-variant`,
           { target_type: 'night' },
         )
         toast(t('Night variant queued'))
@@ -932,7 +935,7 @@ function LocationGallery({
         setBusy(null)
       }
     },
-    [locationName, reload, t, toast],
+    [locationId, reload, t, toast],
   )
 
   // Build the prompt that pre-fills the dialog. Mirrors the server's
@@ -985,7 +988,7 @@ function LocationGallery({
       // Detached: do NOT await. handleSubmit will see a resolved Promise
       // immediately and trigger onClose() in the next microtask.
       void apiPost(
-        `/world/locations/${encodeURIComponent(locationName)}/gallery`,
+        `/world/locations/${encodeURIComponent(locationId)}/gallery`,
         body,
       )
         .then(() => {
@@ -1003,7 +1006,7 @@ function LocationGallery({
           toast(t('Error') + ': ' + (e as Error).message, 'error')
         })
     },
-    [dialogType, locationName, roomFilter, reload, t, toast],
+    [dialogType, locationId, roomFilter, reload, t, toast],
   )
 
   const remove = useCallback(
@@ -1012,7 +1015,7 @@ function LocationGallery({
       setBusy(image)
       try {
         await apiDelete(
-          `/world/locations/${encodeURIComponent(locationName)}/gallery/${encodeURIComponent(image)}`,
+          `/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(image)}`,
         )
         await reload()
       } catch (e) {
@@ -1021,7 +1024,7 @@ function LocationGallery({
         setBusy(null)
       }
     },
-    [locationName, reload, t, toast],
+    [locationId, reload, t, toast],
   )
 
   const generatePanel = (
@@ -1070,12 +1073,12 @@ function LocationGallery({
       open
       title={
         dialogType === 'day'
-          ? t('Generate day image — {name}').replace('{name}', room?.name || locationName)
+          ? t('Generate day image — {name}').replace('{name}', room?.name || location.name)
           : dialogType === 'night'
-            ? t('Generate night image — {name}').replace('{name}', room?.name || locationName)
+            ? t('Generate night image — {name}').replace('{name}', room?.name || location.name)
             : dialogType === 'map_2d'
-              ? t('Generate 2D map icon — {name}').replace('{name}', locationName)
-              : t('Generate map icon — {name}').replace('{name}', locationName)
+              ? t('Generate 2D map icon — {name}').replace('{name}', location.name)
+              : t('Generate map icon — {name}').replace('{name}', location.name)
       }
       defaultPrompt={buildDefaultPrompt(dialogType)}
       onSubmit={submitGenerate}
@@ -1109,7 +1112,7 @@ function LocationGallery({
         {images.map((filename) => {
           const meta = metas[filename] || {}
           const type = types[filename] || ''
-          const url = `/world/locations/${encodeURIComponent(locationName)}/gallery/${encodeURIComponent(filename)}`
+          const url = `/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(filename)}`
           const isBusy = busy === filename
           return (
             <div key={filename} className="ga-gallery-card">

@@ -10,21 +10,24 @@ import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 
-interface Loc { id: string; name: string; grid_x?: number | null; grid_y?: number | null }
+interface Loc { id: string; name: string; grid_x?: number | null; grid_y?: number | null; map_rotation_2d?: number }
 
 const CELL = 64
 const GAP = 4
 
 // Flat 2D icon for the 2D map, with fallback to the iso map-icon, then hide.
+// The per-cell 90° rotation is a 2D-only display transform (not applied to the
+// iso fallback).
 function MapIcon({ loc }: { loc: Loc }) {
   const [stage, setStage] = useState(0) // 0 = 2D icon, 1 = iso icon, 2 = hidden
   if (stage >= 2) return null
   const src = stage === 0
     ? `/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d`
     : `/world/locations/${encodeURIComponent(loc.id)}/map-icon`
+  const rot = stage === 0 ? (loc.map_rotation_2d || 0) : 0
   return (
     <img src={src} alt={loc.name} onError={() => setStage((s) => s + 1)}
-      style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      style={{ width: '100%', height: '100%', objectFit: 'cover', transform: rot ? `rotate(${rot}deg)` : undefined }} />
   )
 }
 

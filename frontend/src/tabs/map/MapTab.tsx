@@ -25,11 +25,35 @@ interface Location {
   grid_x?: number | null
   grid_y?: number | null
   map_z_offset?: number
+  map_image?: string
+  map_image_2d?: string
+  map_rotation_2d?: number
+}
+
+interface GalleryResp {
+  images?: string[]
+  image_types?: Record<string, string>
 }
 
 const COLS = 10
 const ROWS = 10
 const CELL = 88
+
+// Flat 2D map icon with fallback to the iso icon, then hide. The Map tab is a
+// flat grid, so the 2D icons are the natural fit. `cacheKey` lets a caller force
+// a reload after the per-cell image was changed.
+function MapIcon({ locId, className, cacheKey, rotation }: { locId: string; className: string; cacheKey?: string; rotation?: number }) {
+  const [stage, setStage] = useState(0) // 0 = 2D, 1 = iso, 2 = hidden
+  useEffect(() => { setStage(0) }, [cacheKey, locId])
+  if (stage >= 2) return null
+  const base = stage === 0
+    ? `/world/locations/${encodeURIComponent(locId)}/map-icon-2d`
+    : `/world/locations/${encodeURIComponent(locId)}/map-icon`
+  const src = cacheKey ? `${base}?v=${encodeURIComponent(cacheKey)}` : base
+  // Rotation is a 2D-only display transform; the iso fallback is not rotated.
+  const style = stage === 0 && rotation ? { transform: `rotate(${rotation}deg)` } : undefined
+  return <img className={className} src={src} alt="" style={style} onError={() => setStage((s) => s + 1)} />
+}
 
 export function MapTab() {
   const { t } = useI18n()
@@ -39,6 +63,12 @@ export function MapTab() {
   const [dragOverCell, setDragOverCell] = useState<string | null>(null)
   const [trayDragOver, setTrayDragOver] = useState(false)
   const gridRef = useRef<HTMLDivElement | null>(null)
+
+  // Per-cell image picker: which placed location's picker is open, its gallery,
+  // and a per-location cache-buster so the icon reloads after a change.
+  const [picker, setPicker] = useState<Location | null>(null)
+  const [pickerGallery, setPickerGallery] = useState<GalleryResp | null>(null)
+  const [iconVer, setIconVer] = useState<Record<string, number>>({})
 
   const reload = useCallback(async () => {
     try {
@@ -52,6 +82,51 @@ export function MapTab() {
   useEffect(() => {
     reload()
   }, [reload])
+
+  // Clones share their template's gallery — load images from the owner
+  // (template_location_id when a clone, else the location itself). The chosen
+  // image is stored on the placed location/clone (loc.id) so each cell differs.
+  const ownerOf = (loc: Location) => (loc.template_location_id || '').trim() || loc.id
+
+  const openPicker = useCallback(async (loc: Location) => {
+    setPicker(loc)
+    setPickerGallery(null)
+    try {
+      const g = await apiGet<GalleryResp>(`/world/locations/${encodeURIComponent(ownerOf(loc))}/gallery`)
+      setPickerGallery(g)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setPickerGallery({ images: [], image_types: {} })
+    }
+  }, [t, toast])
+
+  const chooseImage = useCallback(
+    async (loc: Location, type: 'map' | 'map_2d', file: string) => {
+      try {
+        await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`, { type, file })
+        setIconVer((v) => ({ ...v, [loc.id]: (v[loc.id] || 0) + 1 }))
+        await reload()
+        setPicker(null)
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [reload, t, toast],
+  )
+
+  // Rotate the cell's 2D icon by +90° (0→90→180→270→0). Display-only.
+  const rotateCell = useCallback(
+    async (loc: Location) => {
+      const next = ((loc.map_rotation_2d || 0) + 90) % 360
+      try {
+        await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-rotation`, { rotation: next })
+        await reload()
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [reload, t, toast],
+  )
 
   const { placedByCell, unplaced, passableTemplates } = useMemo(() => {
     const byCell = new Map<string, Location>()
@@ -226,14 +301,7 @@ export function MapTab() {
                   onDragEnd={() => setDragPayload(null)}
                   title={loc.name}
                 >
-                  <img
-                    className="ga-map-tray-icon"
-                    src={`/world/locations/${encodeURIComponent(loc.id)}/map-icon`}
-                    alt=""
-                    onError={(e) => {
-                      ;(e.target as HTMLImageElement).style.display = 'none'
-                    }}
-                  />
+                  <MapIcon locId={loc.id} className="ga-map-tray-icon" />
                   <span className="ga-map-tray-name">{loc.name}</span>
                 </div>
               ))}
@@ -255,14 +323,7 @@ export function MapTab() {
                   onDragEnd={() => setDragPayload(null)}
                   title={t('Drag onto map to place a copy')}
                 >
-                  <img
-                    className="ga-map-tray-icon"
-                    src={`/world/locations/${encodeURIComponent(loc.id)}/map-icon`}
-                    alt=""
-                    onError={(e) => {
-                      ;(e.target as HTMLImageElement).style.display = 'none'
-                    }}
-                  />
+                  <MapIcon locId={loc.id} className="ga-map-tray-icon" />
                   <span className="ga-map-tray-name">{loc.name}</span>
                   <span className="ga-map-tray-stamp">∞</span>
                 </div>
@@ -319,16 +380,34 @@ export function MapTab() {
                       onDragEnd={() => setDragPayload(null)}
                       title={loc.name + (isClone ? ' (' + t('copy') + ')' : '')}
                     >
-                      <img
-                        className="ga-map-tile-bg"
-                        src={`/world/locations/${encodeURIComponent(loc.id)}/map-icon`}
-                        alt=""
-                        onError={(e) => {
-                          ;(e.target as HTMLImageElement).style.visibility =
-                            'hidden'
-                        }}
-                      />
+                      <MapIcon locId={loc.id} className="ga-map-tile-bg" cacheKey={String(iconVer[loc.id] || 0)} rotation={loc.map_rotation_2d || 0} />
                       <span className="ga-map-tile-name">{loc.name}</span>
+                      <button
+                        type="button"
+                        className="ga-map-tile-rotbtn"
+                        title={t('Rotate the 2D icon 90°')}
+                        draggable={false}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          rotateCell(loc)
+                        }}
+                      >
+                        ↻
+                      </button>
+                      <button
+                        type="button"
+                        className="ga-map-tile-imgbtn"
+                        title={t('Choose which image this cell shows')}
+                        draggable={false}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openPicker(loc)
+                        }}
+                      >
+                        🖼
+                      </button>
                     </div>
                   ) : (
                     <span className="ga-map-cell-coord">
@@ -341,6 +420,64 @@ export function MapTab() {
           )}
         </div>
       </div>
+
+      {picker ? (
+        <div className="ga-modal-backdrop" onMouseDown={() => setPicker(null)}>
+          <div className="ga-modal ga-map-imgpicker" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="ga-modal-header">
+              <span>{t('Cell image')} — {picker.name}</span>
+              <button className="ga-modal-close" onClick={() => setPicker(null)}>×</button>
+            </div>
+            <div className="ga-modal-body">
+              {pickerGallery == null ? (
+                <div className="ga-empty">{t('Loading…')}</div>
+              ) : (
+                ([
+                  { type: 'map_2d' as const, label: t('2D icon'), chosen: picker.map_image_2d || '' },
+                  { type: 'map' as const, label: t('Isometric icon'), chosen: picker.map_image || '' },
+                ]).map(({ type, label, chosen }) => {
+                  const imgs = (pickerGallery.images || []).filter(
+                    (f) => (pickerGallery.image_types || {})[f] === type,
+                  )
+                  return (
+                    <div key={type} className="ga-map-imgpicker-group">
+                      <div className="ga-map-imgpicker-label">{label}</div>
+                      {imgs.length === 0 ? (
+                        <div className="ga-map-tray-empty">{t('No images of this type.')}</div>
+                      ) : (
+                        <div className="ga-map-imgpicker-grid">
+                          <button
+                            type="button"
+                            className={'ga-map-imgpicker-item ga-map-imgpicker-none' + (chosen ? '' : ' selected')}
+                            title={t('Default (first match)')}
+                            onClick={() => chooseImage(picker, type, '')}
+                          >
+                            {t('Auto')}
+                          </button>
+                          {imgs.map((f) => (
+                            <button
+                              key={f}
+                              type="button"
+                              className={'ga-map-imgpicker-item' + (chosen === f ? ' selected' : '')}
+                              onClick={() => chooseImage(picker, type, f)}
+                              title={f}
+                            >
+                              <img
+                                src={`/world/locations/${encodeURIComponent(ownerOf(picker))}/gallery/${encodeURIComponent(f)}`}
+                                alt=""
+                              />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

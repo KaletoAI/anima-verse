@@ -1751,6 +1751,65 @@ html, * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Per-cell image picker button (top-right corner of an occupied tile). */
+.ga-map-tile-imgbtn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 4px;
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ga-map-tile:hover .ga-map-tile-imgbtn { opacity: 0.85; }
+.ga-map-tile-imgbtn:hover { opacity: 1; background: rgba(0, 0, 0, 0.8); }
+/* Rotate-90° button — top-left corner, mirrors the image button. */
+.ga-map-tile-rotbtn {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ga-map-tile:hover .ga-map-tile-rotbtn { opacity: 0.85; }
+.ga-map-tile-rotbtn:hover { opacity: 1; background: rgba(0, 0, 0, 0.8); }
+
+/* Per-cell image picker dialog. */
+.ga-map-imgpicker { max-width: 480px; }
+.ga-map-imgpicker-group { display: flex; flex-direction: column; gap: 6px; }
+.ga-map-imgpicker-group + .ga-map-imgpicker-group { margin-top: 10px; }
+.ga-map-imgpicker-label {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted, #8b949e);
+}
+.ga-map-imgpicker-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px;
+}
+.ga-map-imgpicker-item {
+  position: relative; padding: 0; border: 2px solid transparent; border-radius: 6px;
+  overflow: hidden; cursor: pointer; aspect-ratio: 1; background: rgba(255, 255, 255, 0.05);
+}
+.ga-map-imgpicker-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ga-map-imgpicker-item.selected { border-color: var(--accent, #6aa9ff); }
+.ga-map-imgpicker-none {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--text-muted, #8b949e);
+  border: 2px dashed var(--border, #30363d);
+}
+.ga-map-imgpicker-none.selected { border-style: solid; border-color: var(--accent, #6aa9ff); color: var(--text, #c9d1d9); }
 
 /* === Modal overlay (image-gen dialog, etc.) ============================= */
 .ga-modal-backdrop {

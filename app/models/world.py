@@ -826,7 +826,8 @@ def add_location(name: str, description: str,
                   image_prompt_day: str = None,
                   image_prompt_night: str = None,
                   image_prompt_map: str = None,
-                  image_prompt_map_2d: str = None) -> Dict[str, Any]:
+                  image_prompt_map_2d: str = None,
+                  location_id: str = None) -> Dict[str, Any]:
     """Fuegt einen neuen Ort hinzu oder aktualisiert einen bestehenden.
 
     Args:
@@ -836,6 +837,9 @@ def add_location(name: str, description: str,
         image_prompt_night: Prompt fuer Hintergrundbild bei Nacht (18-6 Uhr)
         image_prompt_map: Prompt fuer isometrisches Kartenbild
         image_prompt_map_2d: Prompt fuer flaches 2D-Kartenicon
+        location_id: Wenn gesetzt, wird der zu aktualisierende Ort per ID
+            gefunden (eindeutig) statt per Name. NOETIG bei doppelten Namen —
+            sonst trifft die Name-Suche den falschen Ort (z.B. einen Klon).
     """
     data = _load_world_data()
     locations = data.get("locations", [])
@@ -846,10 +850,16 @@ def add_location(name: str, description: str,
             if not room.get("id"):
                 room["id"] = _generate_room_id()
 
-    # Suche per Name (Update)
+    # Suche zum Updaten: per ID wenn gegeben (eindeutig), sonst per Name.
+    def _is_target(loc: Dict[str, Any]) -> bool:
+        return (loc.get("id") == location_id) if location_id else (loc.get("name") == name)
+
     for location in locations:
-        if location.get("name") == name:
+        if _is_target(location):
             location["description"] = description
+            # Bei ID-basiertem Update den (ggf. neuen) Namen mitschreiben.
+            if location_id and name:
+                location["name"] = name
             if rooms is not None:
                 # Alte Rooms als Lookup fuer prompt_changed-Vergleich UND
                 # Server-State-Erhalt (items, prompt_changed, etc.). Die FE
@@ -1065,6 +1075,48 @@ def update_location_position(location_id: str, grid_x: int, grid_y: int) -> Opti
             else:
                 loc["grid_x"] = grid_x
                 loc["grid_y"] = grid_y
+            _save_world_data(data)
+            return loc
+    return None
+
+
+def set_location_map_image(location_id: str, field: str, filename: str) -> Optional[Dict[str, Any]]:
+    """Setzt das pro Kartenabschnitt gewaehlte Map-Bild eines Ortes/Klons.
+
+    ``field`` ist ``map_image`` (iso) oder ``map_image_2d`` (flach), ``filename``
+    der Galerie-Dateiname (leer = Wahl entfernen → Fallback auf first-match).
+    Wird direkt auf dem (ggf. duennen Klon-)Dict gesetzt und ueberlebt damit den
+    Clone-Merge."""
+    if field not in ("map_image", "map_image_2d"):
+        return None
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") == location_id:
+            if filename:
+                loc[field] = filename
+            else:
+                loc.pop(field, None)
+            _save_world_data(data)
+            return loc
+    return None
+
+
+def set_location_map_rotation(location_id: str, rotation: int) -> Optional[Dict[str, Any]]:
+    """Setzt die 90°-Drehung des 2D-Karten-Icons eines Ortes/Klons.
+
+    ``rotation`` in {0, 90, 180, 270}; 0 entfernt das Feld (keine Drehung). Wird
+    nur als Anzeige-Transform genutzt (CSS rotate) — das Bild bleibt unveraendert.
+    Direkt auf dem (Klon-)Dict gesetzt, ueberlebt den Clone-Merge."""
+    rot = int(rotation) % 360
+    if rot not in (0, 90, 180, 270):
+        return None
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") == location_id:
+            if rot:
+                loc["map_rotation_2d"] = rot
+            else:
+                loc.pop("map_rotation_2d", None)
             _save_world_data(data)
             return loc
     return None
