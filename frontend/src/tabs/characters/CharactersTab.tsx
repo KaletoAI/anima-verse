@@ -124,6 +124,7 @@ export function CharactersTab() {
   // Config fields save immediately on change via /config; language via /profile.
   const [cfg, setCfg] = useState<Record<string, unknown>>({})
   const [language, setLanguage] = useState<string>('')
+  const [decencyPref, setDecencyPref] = useState<string>('')
   const [savingField, setSavingField] = useState<string>('')
   const [subTab, setSubTab] = useState<SubTabId>('general')
   // Dynamic TTS option lists (Others tab) — loaded once on mount.
@@ -210,6 +211,7 @@ export function CharactersTab() {
         setCfg(config)
         // /config injects the profile language as tts_language (see get_character_config)
         setLanguage(String(config.tts_language || ''))
+        setDecencyPref(String(config.decency_preference || ''))
         setDraft({
           locationId: loc.current_location_id || '',
           roomId: loc.current_room || '',
@@ -340,6 +342,25 @@ export function CharactersTab() {
       try {
         await apiPost(`/characters/${encodeURIComponent(selected)}/profile`, {
           fields: { language: value },
+        })
+        toast(t('Saved'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setSavingField('')
+      }
+    },
+    [selected, t, toast],
+  )
+
+  // decency_preference — free-text styling hint, profile field (saved via /profile).
+  const saveDecencyPref = useCallback(
+    async (value: string) => {
+      if (!selected) return
+      setSavingField('decency_preference')
+      try {
+        await apiPost(`/characters/${encodeURIComponent(selected)}/profile`, {
+          fields: { decency_preference: value },
         })
         toast(t('Saved'))
       } catch (e) {
@@ -653,6 +674,21 @@ export function CharactersTab() {
                       <option value="false">{t('Off (appears in own photos)')}</option>
                       <option value="true">{t('On (takes photos of others)')}</option>
                     </select>
+                  </Field>
+                </div>
+                <div className="ga-form-row">
+                  <Field
+                    label={t('Dressing preference')}
+                    hint={t('Free-text personal style hint used when generating outfits, e.g. "often barefoot, no underwear, shirtless at home". Coverage is still enforced by the room decency (public/private/nude_ok) — this only nudges style.')}
+                  >
+                    <textarea
+                      className="ga-textarea"
+                      rows={2}
+                      value={decencyPref}
+                      disabled={savingField === 'decency_preference'}
+                      onChange={(e) => setDecencyPref(e.target.value)}
+                      onBlur={(e) => saveDecencyPref(e.target.value)}
+                    />
                   </Field>
                 </div>
                 </FieldSet>

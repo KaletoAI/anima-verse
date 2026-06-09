@@ -850,6 +850,14 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
     if profile_lang:
         config["tts_language"] = profile_lang
 
+    # decency_preference (Profil-Feld) fuer den Character-Editor mitladen —
+    # free-text Stil-Hinweis fuer die Outfit-Erstellung (ersetzt outfit_exceptions).
+    try:
+        _prof = get_character_profile(character_name) or {}
+        config["decency_preference"] = _prof.get("decency_preference", "") or ""
+    except Exception:
+        config["decency_preference"] = ""
+
     return config
 
 
