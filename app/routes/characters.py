@@ -1164,6 +1164,15 @@ async def set_decency_preference(character_name: str, request: Request) -> Dict[
     return {"status": "ok", "character": character_name, "decency_preference": pref}
 
 
+@router.post("/{character_name}/clear-expression-cache")
+def clear_expression_cache_route(character_name: str) -> Dict[str, Any]:
+    """Loescht alle gecachten Expression-Bilder dieses Characters. Sie werden
+    bei Bedarf neu erzeugt (jetzt limitiert via Pose-Varianten + LRU)."""
+    from app.core.expression_regen import clear_expression_cache
+    count = clear_expression_cache(character_name)
+    return {"status": "ok", "character": character_name, "deleted": count}
+
+
 @router.get("/{character_name}/outfits")
 def get_character_outfits_route(character_name: str) -> Dict[str, Any]:
     """Gibt alle definierten Outfits zurueck"""
