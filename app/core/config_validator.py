@@ -237,20 +237,27 @@ def _check_comfyui_workflows(config: dict) -> list:
 
 
 def _check_imagegen_ref(val: str, workflows: dict, backends: list, section: str, label: str, issues: list):
-    """Validate a 'workflow:Name' or 'backend:Name' reference."""
+    """Validate a 'workflow:<glob>' or 'backend:<glob>' reference.
+
+    Match-Konzept: der Name-Teil ist ein Glob (z.B. "Qwen*"); gueltig, wenn er
+    auf mindestens einen Workflow- bzw. Backend-Namen passt (fnmatch, case-
+    insensitive). Ein exakter Name matcht sich selbst.
+    """
     if ":" not in val:
         return
+    import fnmatch
     ref_type, ref_name = val.split(":", 1)
+    pat = ref_name.strip().lower()
+    if not pat:
+        return
     if ref_type == "workflow":
-        # Check by name (not by key)
-        wf_names = {wf.get("name", k) for k, wf in workflows.items()}
-        wf_keys = set(workflows.keys())
-        if ref_name not in wf_names and ref_name not in wf_keys:
-            issues.append(_warn(section, f"{label} Default: Workflow '{ref_name}' existiert nicht"))
+        names = {wf.get("name", k) for k, wf in workflows.items()} | set(workflows.keys())
+        if not any(fnmatch.fnmatch(str(n).lower(), pat) for n in names):
+            issues.append(_warn(section, f"{label} Default: kein Workflow passt auf '{ref_name}'"))
     elif ref_type == "backend":
         be_names = {b.get("name", "") for b in backends}
-        if ref_name not in be_names:
-            issues.append(_warn(section, f"{label} Default: Backend '{ref_name}' existiert nicht"))
+        if not any(fnmatch.fnmatch(str(n).lower(), pat) for n in be_names):
+            issues.append(_warn(section, f"{label} Default: kein Backend passt auf '{ref_name}'"))
 
 
 # ── Animation Checks ──

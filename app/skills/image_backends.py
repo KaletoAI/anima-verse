@@ -677,14 +677,15 @@ class ComfyUIBackend(ImageBackend):
 
         Args:
             file_path: Lokaler Pfad zur Bilddatei.
-            slot_name: Slot-Identifier. Es wird ein eindeutiger Dateiname pro
-                       Upload erzeugt (Slot-Praefix + Microsekunden-Timestamp),
-                       sonst cached ComfyUI's Prompt-Executor das LoadImage-
-                       Tensor anhand des Filenames und liefert beim naechsten
-                       Run das alte Bild zurueck (selbst wenn die Datei
-                       ueberschrieben wurde).
-                       Wenn None, wird der Original-Dateiname verwendet
-                       (kollisionsfrei, da Source-Filenames eindeutig sind).
+            slot_name: Fertiger, DETERMINISTISCHER Zieldateiname auf dem ComfyUI-
+                       Server (z.B. ``<workflow>_slot_ref_1.png``). Wird per Run
+                       mit ``overwrite=true`` ueberschrieben. KEIN Timestamp:
+                       da ComfyUI nur EINE Generierung gleichzeitig macht
+                       (GPU-Lock), kann sich nichts in die Quere kommen, der
+                       input-Ordner bleibt klein (nur N Dateien pro Workflow),
+                       und es kann kein altes/fremdes Bild zufaellig als Referenz
+                       durchsickern. Wenn None, wird der Original-Dateiname
+                       verwendet (kollisionsfrei, da Source-Filenames eindeutig).
 
         Returns:
             Dateiname auf dem ComfyUI-Server, oder None bei Fehler.
@@ -694,15 +695,7 @@ class ComfyUIBackend(ImageBackend):
         if not path.exists():
             logger.error(f"Upload: Datei nicht gefunden: {file_path}")
             return None
-        if slot_name:
-            # Slot-Praefix vom .png trennen und Timestamp einfuegen
-            _stem, _, _ext = slot_name.rpartition(".")
-            if not _stem:
-                _stem, _ext = slot_name, "png"
-            _us = int(time.time() * 1_000_000)
-            upload_name = f"{_stem}_{_us}.{_ext}"
-        else:
-            upload_name = path.name
+        upload_name = slot_name if slot_name else path.name
         try:
             with open(file_path, "rb") as f:
                 files = {"image": (upload_name, f, "image/png")}
@@ -748,17 +741,33 @@ class ComfyUIBackend(ImageBackend):
             logger.error(f"Upload-Bytes Fehler: {e}")
             return None
 
-    def _reset_reference_slots(self) -> None:
+    def _wf_slot_prefix(self, params: Dict[str, Any]) -> str:
+        """Dateinamen-sicherer Praefix pro Workflow fuer die Referenz-Slot-Namen.
+
+        Aus dem Workflow-File-Basename abgeleitet (z.B. ``text2img_workflow_qwen``).
+        Deterministisch — zusammen mit dem festen Slot-Suffix ergibt das pro
+        (Workflow, Slot) IMMER denselben Dateinamen, der bei jedem Run sauber
+        ueberschrieben wird (keine Timestamp-Flut im input-Ordner, kein
+        Durchsickern alter Referenzbilder)."""
+        import os as _os
+        import re as _re
+        base = _os.path.splitext(_os.path.basename(params.get("workflow_file", "") or ""))[0]
+        token = _re.sub(r'[^A-Za-z0-9_-]', '_', base).strip('_')
+        return f"{token}_" if token else ""
+
+    def _reset_reference_slots(self, prefix: str = "") -> None:
         """Ueberschreibt alle Referenzbild-Slots auf dem ComfyUI-Server mit
         einem 8x8 schwarzen Placeholder-PNG.
 
         Muss vor jedem Workflow-Run aufgerufen werden, damit keine Bilder aus
-        vorherigen Generierungen in den LoadImage-Nodes landen.
+        vorherigen Generierungen in den LoadImage-Nodes landen. ``prefix`` ist
+        der Workflow-Praefix (s. :meth:`_wf_slot_prefix`), damit Reset und Upload
+        denselben deterministischen Dateinamen treffen.
         """
         placeholder = self._create_placeholder_png(size=8)
         for slot in self._REF_SLOT_NAMES:
-            self._upload_bytes(placeholder, slot)
-        logger.debug(f"Referenz-Slots zurueckgesetzt ({len(self._REF_SLOT_NAMES)} Slots)")
+            self._upload_bytes(placeholder, f"{prefix}{slot}")
+        logger.debug(f"Referenz-Slots zurueckgesetzt ({len(self._REF_SLOT_NAMES)} Slots, prefix='{prefix}')")
 
     def _free_comfyui_memory(self, signature: str = "") -> None:
         """Triggert ComfyUI's /free Endpoint: VRAM freigeben + Modelle unloaden.
@@ -1248,8 +1257,11 @@ class ComfyUIBackend(ImageBackend):
                 or params.get("gguf", "") or params.get("checkpoint", "") or ""),
         ])
         self._free_comfyui_memory(signature=_gen_sig)
+        # Deterministischer Slot-Praefix pro Workflow (kein Timestamp) — Reset,
+        # Upload und Legacy-Placeholder treffen denselben Dateinamen.
+        _slot_prefix = self._wf_slot_prefix(params)
         if ref_images or _has_ref_nodes:
-            self._reset_reference_slots()
+            self._reset_reference_slots(_slot_prefix)
 
         # Referenzbilder hochladen und in LoadImage-Nodes einsetzen.
         # Jeder Slot bekommt einen festen Dateinamen (_slot_ref_N.png),
@@ -1275,7 +1287,7 @@ class ComfyUIBackend(ImageBackend):
                         slot_idx = min(i, len(self._REF_SLOT_NAMES) - 1)
                 else:
                     slot_idx = min(i, len(self._REF_SLOT_NAMES) - 1)
-                slot_name = self._REF_SLOT_NAMES[slot_idx]
+                slot_name = f"{_slot_prefix}{self._REF_SLOT_NAMES[slot_idx]}"
                 _slot_map[node_title] = slot_name
                 uploaded = self._upload_image(file_path, slot_name=slot_name)
                 if uploaded:
@@ -1382,7 +1394,7 @@ class ComfyUIBackend(ImageBackend):
             if _ref1_node:
                 _ref1_image = workflow[_ref1_node]["inputs"].get("image", "")
                 if not _ref1_image:
-                    workflow[_ref1_node]["inputs"]["image"] = self._REF_SLOT_NAMES[0]
+                    workflow[_ref1_node]["inputs"]["image"] = f"{_slot_prefix}{self._REF_SLOT_NAMES[0]}"
                     # Width/Height auf Ziel-Dimensionen setzen (statt 8x8 vom Placeholder)
                     # damit Flux2Scheduler korrekte Dimensionen bekommt
                     if "width" in workflow[_ref1_node]["inputs"]:

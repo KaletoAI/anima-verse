@@ -272,29 +272,10 @@ class DescribeRoomSkill(BaseSkill):
                     return
 
                 # Backend+Workflow aus LOCATION_IMAGEGEN_DEFAULT aufloesen
-                backend = None
-                active_workflow = None
+                # (Match-Konzept: Glob + Verfuegbarkeit statt exaktem Namen).
                 loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
-                if loc_default:
-                    if loc_default.startswith("workflow:"):
-                        wf_name = loc_default[len("workflow:"):]
-                        active_workflow = next(
-                            (w for w in img_skill.comfy_workflows if w.name == wf_name), None)
-                        if active_workflow:
-                            compat = active_workflow.compatible_backends or []
-                            candidates = [
-                                b for b in img_skill.backends
-                                if b.available and b.instance_enabled
-                                and b.api_type == "comfyui"
-                                and (not compat or b.name in compat)
-                            ]
-                            backend = img_skill.pick_lowest_cost(
-                                candidates, rotation_key=f"describe_room:{active_workflow.name}")
-                    elif loc_default.startswith("backend:"):
-                        be_name = loc_default[len("backend:"):]
-                        backend = next(
-                            (b for b in img_skill.backends
-                             if b.name == be_name and b.available and b.instance_enabled), None)
+                backend, active_workflow = img_skill.resolve_imagegen_target(
+                    loc_default, rotation_prefix="describe_room")
                 if not backend:
                     backend = img_skill._select_backend()
                 if not backend:

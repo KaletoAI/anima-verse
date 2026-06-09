@@ -978,43 +978,21 @@ def generate_expression_image(character_name: str,
     try:
         img_result = image_skill.execute(json.dumps(payload))
 
-        # Workflow-Fallback bei Timeout: wenn das primaere ComfyUI-Backend
-        # nicht verfuegbar ist, pruefe ob der Workflow ein explizites
-        # fallback_specific-Backend definiert hat (Admin → Workflow →
-        # "Workflow-Fallback (override)") und nutze das. Wenn keins gesetzt,
-        # auf Auto-Backend ausweichen (irgendein verfuegbares Cloud-Backend).
+        # Workflow-Fallback bei Timeout: ist das primaere ComfyUI-Backend nicht
+        # verfuegbar, Workflow/Backend-Bindung loesen und execute() neu auf
+        # Auto-Backend laufen lassen — die Match-/Verfuegbarkeits-Logik IST der
+        # Fallback (der implizite Pfad weicht bei nicht verfuegbarem ComfyUI auch
+        # auf ein Cloud-Backend aus). model_override + loras zuruecksetzen, da der
+        # lokale ComfyUI-Modellname/LoRAs auf einem Cloud-Backend nicht gueltig sind.
         if isinstance(img_result, str) and "Timeout" in img_result and ("Workflow" in img_result or "verfuegbar" in img_result):
             payload_fb = dict(payload)
             payload_fb.pop("workflow", None)
             payload_fb.pop("backend", None)
-            # WICHTIG: Beim Wechsel auf ein anderes Backend das model_override
-            # und loras entfernen — der ComfyUI-Modellname (z.B.
-            # "Flux.2-9B-Q5_K_M.gguf") ist auf Cloud-Backends (Together)
-            # nicht gueltig. Cloud-Backend nutzt seinen konfigurierten
-            # Default-Modellnamen. LoRAs analog: Together unterstuetzt keine
-            # lokalen LoRAs (auch nicht das spezielle FLUX.1-dev-lora-Modell
-            # ohne explizit gesetzte huggingface-URLs).
             payload_fb.pop("model_override", None)
             payload_fb.pop("loras", None)
-            # Workflow-Override aus image_skill.comfy_workflows lesen
-            _wf_fallback = ""
-            if workflow_name:
-                try:
-                    _wf_obj = next((w for w in image_skill.comfy_workflows
-                                    if w.name == workflow_name), None)
-                    if _wf_obj and getattr(_wf_obj, "fallback_specific", ""):
-                        _wf_fallback = _wf_obj.fallback_specific.strip()
-                except Exception:
-                    pass
-            if _wf_fallback:
-                payload_fb["backend"] = _wf_fallback
-                logger.warning(
-                    "Expression-Regen: Workflow '%s' offline — Fallback auf konfiguriertes Backend '%s' (workflow.fallback_specific), model_override+loras zurueckgesetzt",
-                    workflow_name, _wf_fallback)
-            else:
-                logger.warning(
-                    "Expression-Regen: Workflow '%s' offline — kein workflow.fallback_specific gesetzt, nutze Auto-Backend",
-                    workflow_name or backend_name or "?")
+            logger.warning(
+                "Expression-Regen: Workflow '%s' offline — nutze Auto-Backend",
+                workflow_name or backend_name or "?")
             img_result = image_skill.execute(json.dumps(payload_fb))
 
         # Extract filename from result

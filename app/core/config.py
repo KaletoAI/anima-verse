@@ -495,7 +495,6 @@ def _flatten_to_env(config: dict) -> None:
                      "sampling_method", "schedule_type",
                      "checkpoint", "poll_interval", "max_wait", "disable_safety",
                      "scheduler", "clip_skip",
-                     "fallback_mode", "fallback_specific",
                      "max_concurrent", "beszel_system_id"]:
             val = be.get(key, "")
             _set(env, f"{p}{key.upper()}", val)
@@ -512,7 +511,7 @@ def _flatten_to_env(config: dict) -> None:
         for key in ["name", "filter", "skill", "workflow_file",
                      "model", "prompt_style", "prompt_negative", "image_model",
                      "prompt_instruction", "width", "height",
-                     "clip", "fallback_specific"]:
+                     "clip"]:
             val = wf.get(key, "")
             _set(env, f"{p}{key.upper()}", val)
         # LoRAs

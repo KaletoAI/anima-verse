@@ -219,10 +219,10 @@ SECTIONS = {
             },
 
             # --- Default-Backends ---
-            "comfy_default_workflow": {"type": "workflow_select", "label": "Default ComfyUI Workflow", "description": "Standard-Workflow fuer normale Bildgenerierung"},
-            "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Vorschau Default Backend", "description": "Backend fuer Garderobe-Vorschau + Outfit-Bilder"},
-            "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default Backend", "description": "Backend fuer Mood/Activity-basierte Varianten"},
-            "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default Backend"},
+            "comfy_default_workflow": {"type": "workflow_select", "label": "Default ComfyUI Workflow (Match)", "description": "Standard-Workflow als Match-Glob (z.B. 'Qwen*') — wird nach Verfuegbarkeit aufgeloest, keine feste Auswahl."},
+            "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Vorschau Default (Match)", "description": "Match-Glob 'workflow:Qwen*' oder 'backend:ComfyUI*' — nach Verfuegbarkeit aufgeloest (kein festes Backend)."},
+            "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Match-Glob 'workflow:Qwen*' oder 'backend:ComfyUI*' fuer Mood/Activity-Varianten — nach Verfuegbarkeit aufgeloest."},
+            "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Match-Glob 'workflow:Glob' oder 'backend:Glob' — nach Verfuegbarkeit aufgeloest."},
 
             # --- Prompt-Prefixes ---
             "profile_image_prompt_prefix": {"type": "str", "label": "Profil-Bild Prompt Prefix", "default": "photorealistic, portrait, only head,", "description": "Wird Profilbild-Prompts vorangestellt (z.B. 'photorealistic, portrait')"},

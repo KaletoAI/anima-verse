@@ -56,7 +56,6 @@ class ComfyWorkflow:
     height: int = 0             # Default-Hoehe (0 = Backend-Default nutzen)
     filter: str = ""            # Glob-Pattern fuer Model/LoRA-Filterung im Frontend (z.B. "Z-Image*")
     negative_prompt: str = ""   # Default-Negativ-Prompt (ueberschreibt Backend-Default)
-    fallback_specific: str = ""  # Workflow-Override fuer Backend-Fallback (leer = Backend-Default)
 
 import requests
 
@@ -363,7 +362,6 @@ class ImageGenerationSkill(BaseSkill):
             except Exception as _e:
                 logger.debug("Workflow-JSON Check fehlgeschlagen fuer %s: %s", wf_file, _e)
             wf_clip = os.environ.get(f"{prefix}CLIP", "").strip()
-            wf_fallback_specific = os.environ.get(f"{prefix}FALLBACK_SPECIFIC", "").strip()
             wf = ComfyWorkflow(
                 name=wf_name,
                 workflow_file=wf_file,
@@ -385,8 +383,7 @@ class ImageGenerationSkill(BaseSkill):
                 model_type=model_type,
                 width=wf_width,
                 height=wf_height,
-                filter=wf_filter,
-                fallback_specific=wf_fallback_specific)
+                filter=wf_filter)
             workflows.append(wf)
             _size_info = f", size={wf_width}x{wf_height}" if wf_width or wf_height else ""
             _filter_info = f", filter={wf_filter}" if wf_filter else ""
@@ -396,25 +393,21 @@ class ImageGenerationSkill(BaseSkill):
         return workflows
 
     def _resolve_default_workflow(self) -> Optional[ComfyWorkflow]:
-        """Liest COMFY_IMAGEGEN_DEFAULT aus .env und findet den passenden Workflow.
-        Fallback auf ersten Workflow wenn nicht gesetzt oder nicht gefunden."""
+        """Liest COMFY_IMAGEGEN_DEFAULT aus .env und loest ihn ueber das
+        Match-Konzept auf (Glob + Verfuegbarkeit; exakter/case-insensitiver Name
+        matcht sich selbst). Fallback auf ersten Workflow wenn nicht gesetzt oder
+        kein Treffer."""
         if not self.comfy_workflows:
             return None
         default_name = os.environ.get("COMFY_IMAGEGEN_DEFAULT", "").strip()
         if default_name:
-            # Exakter Match, dann case-insensitive Fallback
-            for wf in self.comfy_workflows:
-                if wf.name == default_name:
-                    logger.info("Default-Workflow: '%s'", default_name)
-                    return wf
-            default_lower = default_name.lower()
-            for wf in self.comfy_workflows:
-                if wf.name.lower() == default_lower:
-                    logger.info("Default-Workflow: '%s' (matched '%s')", wf.name, default_name)
-                    return wf
+            wf = self.match_workflow(default_name)
+            if wf:
+                logger.info("Default-Workflow: '%s' (matched '%s')", wf.name, default_name)
+                return wf
             logger.warning(
                 "COMFY_IMAGEGEN_DEFAULT='%s' nicht gefunden (verfuegbar: %s), nutze ersten Workflow",
-                default_name, ", ".join(wf.name for wf in self.comfy_workflows))
+                default_name, ", ".join(w.name for w in self.comfy_workflows))
         return self.comfy_workflows[0]
 
     def load_comfyui_model_cache(self) -> None:
@@ -805,6 +798,59 @@ class ImageGenerationSkill(BaseSkill):
                     best = wf
         return best or matches[0]
 
+    def resolve_imagegen_target(self, spec: str, character_name: str = "",
+                                rotation_prefix: str = "img"
+                                ) -> Tuple[Optional[ImageBackend], Optional[ComfyWorkflow]]:
+        """Loest einen Config-/Explizit-Workflow-Spec ueber das Match-Konzept auf.
+
+        Ein Spec ist eines von:
+          - ``"workflow:<glob>"`` → ``match_workflow`` (Glob + Verfuegbarkeit),
+            danach das guenstigste verfuegbare kompatible ComfyUI-Backend.
+          - ``"backend:<glob>"``  → ``match_backend`` (Glob ueber Backend-Namen,
+            guenstigstes verfuegbares; exakter Name matcht sich selbst).
+          - ``"<glob>"`` (bare)   → wird als Workflow-Glob behandelt.
+
+        Liefert ``(backend, workflow)`` — beide koennen ``None`` sein. Kein
+        exakter Hard-Fail mehr: beide Teile laufen durch das Match-Konzept.
+        Ersetzt die frueher mehrfach kopierte ``next(w.name == …)``-Logik.
+        """
+        s = (spec or "").strip()
+        if not s:
+            return None, None
+        if s.startswith("backend:"):
+            return self.match_backend(s[len("backend:"):].strip()), None
+        wf_pat = s[len("workflow:"):].strip() if s.startswith("workflow:") else s
+        workflow = self.match_workflow(wf_pat, character_name)
+        if not workflow:
+            return None, None
+        compat = workflow.compatible_backends or []
+        candidates = [b for b in self.backends
+                      if b.available and b.instance_enabled
+                      and b.api_type == "comfyui"
+                      and (not compat or b.name in compat)]
+        backend = self.pick_lowest_cost(
+            candidates, rotation_key=f"{rotation_prefix}:{workflow.name}")
+        return backend, workflow
+
+    def match_backend(self, pattern: str) -> Optional[ImageBackend]:
+        """Loest ein Backend-Glob (z.B. ``"ComfyUI*"``, ``"Together*"``, ``"*"``)
+        zu einem konkreten, verfuegbaren Backend auf — Auswahl unter mehreren
+        Treffern nach Kosten (wie ``match_workflow``, aber fuer Backends). Ein
+        exakter Name matcht sich selbst. ``None`` wenn leer / kein verfuegbarer
+        Treffer. So ist auch der Backend-Default ein Match statt fester Instanz.
+        """
+        import fnmatch
+        pat = (pattern or "").strip()
+        if not pat:
+            return None
+        pl = pat.lower()
+        matches = [b for b in self.backends
+                   if fnmatch.fnmatch(b.name.lower(), pl)
+                   and b.available and b.instance_enabled]
+        if not matches:
+            return None
+        return self.pick_lowest_cost(matches, rotation_key=f"backend_match:{pat}")
+
     def _select_backend_for_workflow(self, workflow: ComfyWorkflow, character_name: str) -> Optional[ImageBackend]:
         """Waehlt den guenstigsten verfuegbaren Backend fuer einen Workflow.
 
@@ -893,49 +939,14 @@ class ImageGenerationSkill(BaseSkill):
         character_name: str,
         exclude: Set[str],
     ) -> Optional[ImageBackend]:
-        """Pickt das naechste Backend nach failed.fallback_mode.
+        """Naechstes verfuegbares Backend — die Match-/Verfuegbarkeits-Logik IST
+        der Fallback (kein statisches fallback_mode/fallback_specific mehr).
 
-        - none: kein Fallback, returnt None
-        - specific: das in failed.fallback_specific eingetragene Backend
-          (auch wenn anderer api_type — Caller muss damit umgehen).
-          Workflow-Override (workflow.fallback_specific) gewinnt wenn gesetzt
-          — so kann z.B. Z-Image und Qwen auf demselben Backend
-          unterschiedliche Fallbacks haben.
-        - next_cheaper: naechst-billigeres kompatibles Backend (workflow-
-          aware wenn workflow gegeben)
+        Bei ComfyUI-Primary bleibt die Auswahl workflow-kompatibel; sonst sind
+        alle verfuegbaren Backends gleichwertig. Sind keine ComfyUI-Backends mehr
+        da, ist die Kette aus (kein Cross-Typ-Sprung auf Cloud) — bewusst, weil
+        ein ComfyUI-Workflow auf einem Nicht-ComfyUI-Backend nicht laeuft.
         """
-        mode = failed.fallback_mode
-
-        # Workflow-Override greift ZUERST (unabhaengig vom Backend-mode):
-        # wenn der aktive Workflow ein eigenes Fallback-Backend definiert,
-        # nehmen wir das — sonst Backend-Default.
-        wf_target = (workflow.fallback_specific.strip()
-                     if workflow and getattr(workflow, "fallback_specific", "")
-                     else "")
-        if wf_target:
-            target = next((b for b in self.backends if b.name == wf_target), None)
-            if target and target.name not in exclude and target.available and target.instance_enabled:
-                logger.info("Fallback via Workflow-Override '%s' -> %s",
-                            workflow.name, target.name)
-                return target
-            logger.warning("Workflow-Override '%s' -> '%s' nicht verfuegbar, nutze Backend-Default",
-                           workflow.name, wf_target)
-
-        if mode == "none":
-            return None
-
-        if mode == "specific":
-            target_name = failed.fallback_specific
-            if not target_name:
-                return None
-            target = next((b for b in self.backends if b.name == target_name), None)
-            if not target or target.name in exclude:
-                return None
-            if not target.available or not target.instance_enabled:
-                return None
-            return target
-
-        # next_cheaper (Default)
         # Workflow-Compat respektieren wenn primary ein ComfyUI war und
         # wir auf ComfyUI bleiben wollen. Bei anderen Backend-Typen
         # (CivitAI, Together) gibt's keinen Workflow -> alle gleichwertig.
@@ -960,13 +971,13 @@ class ImageGenerationSkill(BaseSkill):
         Strategie:
         - Versuche primary_backend
         - Bei Exception ODER leerer Liste: setze backend.available=False,
-          waehle Fallback per backend.fallback_mode (none/next_cheaper/specific)
-        - Wiederhole bis success, max_attempts erreicht oder Fallback-Kette aus
+          waehle dynamisch das naechste verfuegbare (kompatible) Backend
+          (_pick_fallback_backend) — die Verfuegbarkeits-Logik IST der Fallback
+        - Wiederhole bis success, max_attempts erreicht oder Kette aus
         - "NO_NEW_IMAGE" Sentinel-String wird durchgereicht (kein Fail)
 
         op(backend) -> List[bytes] | "NO_NEW_IMAGE" | [] | None
-        Caller ist dafuer zustaendig, params/Workflow pro Backend anzupassen
-        (z.B. unterschiedlicher api_type bei specific-Fallback).
+        Caller ist dafuer zustaendig, params/Workflow pro Backend anzupassen.
 
         Returns (result, used_backend) bei Erfolg.
         Raises RuntimeError nach Erschoepfung.
@@ -983,9 +994,8 @@ class ImageGenerationSkill(BaseSkill):
                 break
             tried.add(current.name)
 
-            logger.info("Fallback-Engine Versuch %d/%d: backend=%s (cost=%s, mode=%s)",
-                        attempt + 1, max_attempts, current.name,
-                        current.cost, current.fallback_mode)
+            logger.info("Fallback-Engine Versuch %d/%d: backend=%s (cost=%s)",
+                        attempt + 1, max_attempts, current.name, current.cost)
 
             try:
                 result = op(current)
@@ -1101,19 +1111,21 @@ class ImageGenerationSkill(BaseSkill):
         return None
 
     def _wait_for_explicit_backend(self, backend_name: str):
-        """Pruefe einmalig ob ein explizit gewaehltes Backend verfuegbar ist.
-
-        Frueher: 120s-Polling-Schleife. Jetzt: ein Check, fail-fast.
-        Recovery erkennt der Background-Poller (channel_health) alle 30s.
+        """Loest ein Backend-Glob (z.B. "ComfyUI*", "Together*") ueber das
+        Match-Konzept zu einem konkreten, verfuegbaren Backend auf. Ein exakter
+        Name matcht sich selbst. Fail-fast: kein Polling — Recovery erkennt der
+        Background-Poller (channel_health) alle 30s.
         """
-        target = next((b for b in self.backends if b.name == backend_name), None)
+        import fnmatch
+        pl = (backend_name or "").strip().lower()
+        # Frische Verfuegbarkeit der passenden Kandidaten pruefen, dann matchen.
+        for b in self.backends:
+            if b.instance_enabled and fnmatch.fnmatch(b.name.lower(), pl):
+                b.check_availability()
+        target = self.match_backend(backend_name)
         if not target:
-            return None
-        target.check_availability()
-        if target.available:
-            return target
-        logger.warning("Backend '%s' nicht verfuegbar — fail-fast", backend_name)
-        return None
+            logger.warning("Backend '%s' nicht verfuegbar/kein Treffer — fail-fast", backend_name)
+        return target
 
     def get_comfy_workflows(self, only_available: bool = False) -> List[Dict[str, Any]]:
         """Public: Gibt Liste aller definierten ComfyUI-Workflows zurueck (fuer API).
@@ -1748,15 +1760,24 @@ class ImageGenerationSkill(BaseSkill):
         backend = None
 
         if explicit_workflow:
-            # Expliziter Workflow — kein Fallback auf andere Backends
-            active_workflow = next((wf for wf in self.comfy_workflows if wf.name == explicit_workflow), None)
+            # Expliziten Workflow ueber das Match-Konzept aufloesen (Glob "Qwen*",
+            # Auswahl nach Backend-Verfuegbarkeit; ein exakter Name matcht sich
+            # selbst). Kein Hard-Fail mehr bei Nicht-Treffer: wie der implizite
+            # Pfad auf Render-Match/Default degradieren, statt den Aufruf (z.B.
+            # einen Instagram-Post) still zu killen.
+            active_workflow = self.match_workflow(explicit_workflow, character_name)
             if not active_workflow:
-                return f"Fehler: Workflow '{explicit_workflow}' nicht gefunden."
+                logger.warning(
+                    "Expliziter Workflow '%s' nicht gefunden — Fallback auf "
+                    "Render-Match/Default", explicit_workflow)
+                active_workflow = self._get_active_workflow(character_name)
+            if not active_workflow:
+                return f"Fehler: Workflow '{explicit_workflow}' nicht gefunden und kein Default verfuegbar."
             backend = self._wait_for_backend(
                 active_workflow, character_name, workflow_only=True)
             if not backend:
-                return f"Fehler: Kein ComfyUI-Backend fuer Workflow '{explicit_workflow}' verfuegbar (Timeout)."
-            logger.info("Expliziter Workflow: %s -> %s", explicit_workflow, backend.name)
+                return f"Fehler: Kein ComfyUI-Backend fuer Workflow '{active_workflow.name}' verfuegbar (Timeout)."
+            logger.info("Workflow (explizit→match): %s -> %s", active_workflow.name, backend.name)
         elif explicit_backend:
             # Explizites Backend — kein Fallback
             backend = self._wait_for_explicit_backend(explicit_backend)

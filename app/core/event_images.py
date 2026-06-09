@@ -80,27 +80,9 @@ def _resolve_backend_and_workflow():
 
     default = (os.environ.get("EVENT_IMAGEGEN_DEFAULT", "").strip()
                or os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip())
-    backend = None
-    workflow = None
-
-    if default.startswith("workflow:"):
-        wf_name = default[len("workflow:"):]
-        workflow = next((w for w in img_skill.comfy_workflows if w.name == wf_name), None)
-        if workflow:
-            compat = workflow.compatible_backends or []
-            candidates = [
-                b for b in img_skill.backends
-                if b.available and b.instance_enabled
-                and b.api_type == "comfyui"
-                and (not compat or b.name in compat)
-            ]
-            backend = img_skill.pick_lowest_cost(
-                candidates, rotation_key=f"event_image:{workflow.name}")
-    elif default.startswith("backend:"):
-        be_name = default[len("backend:"):]
-        backend = next(
-            (b for b in img_skill.backends
-             if b.name == be_name and b.available and b.instance_enabled), None)
+    # Match-Konzept: Glob + Verfuegbarkeit statt exaktem Workflow-Namen.
+    backend, workflow = img_skill.resolve_imagegen_target(
+        default, rotation_prefix="event_image")
 
     if not backend:
         backend = img_skill._select_backend()

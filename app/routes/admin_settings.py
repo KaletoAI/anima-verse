@@ -613,6 +613,7 @@ async def settings_llm_tasks(user=Depends(require_admin)):
             "label": t.get("label", tid),
             "category": t.get("category", ""),
             "category_label": CATEGORY_LABELS.get(str(t.get("category", "")), ""),
+            "thinking": bool(t.get("thinking")),
         }
         for tid, t in TASK_TYPES.items()
     ]
@@ -2301,38 +2302,34 @@ function renderModelSelect(val, path) {
 }
 
 function renderWorkflowSelect(val, path) {
+    // Default-MATCH statt fester Auswahl: Combobox mit Glob-Vorschlaegen
+    // (Workflow-filter, z.B. "Qwen*") + Freitext. Aufloesung: match_workflow.
     const workflows = CONFIG.image_generation?.comfyui_workflows || {};
-    let opts = '<option value="">— None —</option>';
+    const globs = new Set();
     for (const [wid, wf] of Object.entries(workflows)) {
-        const name = wf.name || wid;
-        opts += '<option value="' + esc(wid) + '"' + (wid === val ? ' selected' : '') + '>' + esc(name) + '</option>';
+        const g = ((wf.filter || '').trim()) || (wf.name || wid);
+        if (g) globs.add(g);
     }
-    return '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">' + opts + '</select>';
+    let opts = '';
+    for (const g of globs) opts += '<option value="' + esc(g) + '">';
+    return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="z.B. Qwen* (Match-Glob)" onchange="setVal(\\'' + path + '\\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
 }
 
 function renderImagegenSelect(val, path) {
+    // Default-MATCH: Combobox mit Glob-Vorschlaegen "workflow:<filter>" und
+    // "backend:<name>" + Freitext (z.B. "backend:ComfyUI*"). Aufloesung ueber
+    // resolve_imagegen_target -> match_workflow / match_backend (nach Verfuegbarkeit).
     const workflows = CONFIG.image_generation?.comfyui_workflows || {};
     const backends = CONFIG.image_generation?.backends || [];
-    let opts = '<option value="">— Auto —</option>';
-    // Workflow options
-    if (Object.keys(workflows).length) {
-        opts += '<optgroup label="Workflows">';
-        for (const [wid, wf] of Object.entries(workflows)) {
-            const v = 'workflow:' + (wf.name || wid);
-            opts += '<option value="' + esc(v) + '"' + (v === val ? ' selected' : '') + '>' + esc(wf.name || wid) + '</option>';
-        }
-        opts += '</optgroup>';
+    const sugg = new Set();
+    for (const [wid, wf] of Object.entries(workflows)) {
+        const g = ((wf.filter || '').trim()) || (wf.name || wid);
+        if (g) sugg.add('workflow:' + g);
     }
-    // Backend options
-    if (backends.length) {
-        opts += '<optgroup label="Backends">';
-        for (const be of backends) {
-            const v = 'backend:' + be.name;
-            opts += '<option value="' + esc(v) + '"' + (v === val ? ' selected' : '') + '>' + esc(be.name) + ' (' + esc(be.api_type || '') + ')</option>';
-        }
-        opts += '</optgroup>';
-    }
-    return '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">' + opts + '</select>';
+    for (const be of backends) sugg.add('backend:' + be.name);
+    let opts = '';
+    for (const s of sugg) opts += '<option value="' + esc(s) + '">';
+    return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="z.B. workflow:Qwen* oder backend:ComfyUI*" onchange="setVal(\\'' + path + '\\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
 }
 
 function renderComfyBackendSelect(val, path, multi) {
@@ -2748,6 +2745,8 @@ function renderTaskOrderList(items, path, f) {
     html += '<button class="btn btn-sm" title="Add all Large Chat Model tasks not yet assigned" onclick="addTaskGroup(\\'' + path + '\\', \\'chat\\')">+ All Chat</button>';
     html += '<button class="btn btn-sm" title="Add all Small Helper tasks not yet assigned" onclick="addTaskGroup(\\'' + path + '\\', \\'helper\\')">+ All Helper</button>';
     html += '<button class="btn btn-sm" title="Add all Embedding tasks not yet assigned" onclick="addTaskGroup(\\'' + path + '\\', \\'embedding\\')">+ All Embedding</button>';
+    html += '<button class="btn btn-sm" title="Add all Tool/Helper tasks that run WITHOUT thinking" onclick="addTaskGroupByThinking(\\'' + path + '\\', false)">+ All No-Thinking</button>';
+    html += '<button class="btn btn-sm" title="Add all Tool/Helper tasks that should run WITH thinking (🧠)" onclick="addTaskGroupByThinking(\\'' + path + '\\', true)">+ All Thinking 🧠</button>';
     html += '</div>';
     // Bulk-Action: alle Task-Orders dieses LLMs auf einen Wert setzen
     html += '<div style="margin-top:6px; display:flex; align-items:center; gap:6px;">';
@@ -2794,7 +2793,7 @@ async function populateTaskSelects(path) {
             opts += '<optgroup label="' + esc(groupLabel) + '">';
             for (const t of list) {
                 opts += '<option value="' + esc(t.id) + '"' + (t.id === current ? ' selected' : '') + '>'
-                     + esc(t.label) + ' — ' + esc(t.id) + '</option>';
+                     + esc(t.label) + (t.thinking ? ' 🧠' : '') + ' — ' + esc(t.id) + '</option>';
             }
             opts += '</optgroup>';
         }
@@ -2838,6 +2837,26 @@ async function addTaskGroup(path, category) {
     let added = 0;
     for (const t of tasks) {
         if (t.category !== category) continue;
+        if (existing.has(t.id)) continue;
+        obj.push({ task: t.id, order: 1 });
+        added++;
+    }
+    rerenderTaskOrderList(path);
+    if (added) toast('Added ' + added + ' task' + (added === 1 ? '' : 's'), 'success');
+    else toast('All tasks of this group are already assigned', 'success');
+}
+
+// Bulk-add tool/helper tasks by their thinking-group (gateway thinking vs
+// no-thinking alias). wantThinking=true → only tasks flagged thinking; false →
+// the rest of tool/helper. Chat/image/embedding tasks are never included here.
+async function addTaskGroupByThinking(path, wantThinking) {
+    const tasks = await loadLlmTasks();
+    const obj = _ensureContainer(path, 'array');
+    const existing = new Set((obj || []).map(it => it && it.task).filter(Boolean));
+    let added = 0;
+    for (const t of tasks) {
+        if (t.category !== 'tool' && t.category !== 'helper') continue;
+        if (!!t.thinking !== !!wantThinking) continue;
         if (existing.has(t.id)) continue;
         obj.push({ task: t.id, order: 1 });
         added++;
