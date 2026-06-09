@@ -1456,6 +1456,47 @@ def get_scene_position(character_name: str, room_id: str,
     return None
 
 
+def get_last_scene_position(character_name: str, room_id: str,
+                            bg_id: str = "") -> Optional[Dict[str, float]]:
+    """Letzte gespeicherte Position {x, y, scale} fuer (Character, Raum) — zum
+    Vererben, wenn ein NEUES Expression-Bild (neuer expr_version) noch keinen
+    eigenen Eintrag hat.
+
+    Bevorzugt denselben Hintergrund (bg_id, da x/y bg-relativ sind), faellt
+    sonst auf den zuletzt platzierten Hintergrund im Raum zurueck. Die Dict-
+    Insertion-Order ist LRU → der letzte Eintrag ist die neueste Platzierung.
+    """
+    if not character_name:
+        return None
+    rooms = _read_state_meta(character_name).get("scene_positions") or {}
+    bgs = rooms.get(room_id or "")
+    if not isinstance(bgs, dict) or not bgs:
+        return None
+
+    def _last_valid(bg_dict):
+        if not isinstance(bg_dict, dict):
+            return None
+        for v in reversed(list(bg_dict.values())):
+            if isinstance(v, dict) and "x" in v and "y" in v:
+                try:
+                    return {"x": float(v["x"]), "y": float(v["y"]),
+                            "scale": float(v.get("scale", 1.0))}
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    # 1) gleicher Hintergrund — genaueste x/y-Uebernahme
+    p = _last_valid(bgs.get(bg_id or ""))
+    if p:
+        return p
+    # 2) sonst der zuletzt platzierte Hintergrund im Raum
+    for bg_dict in reversed(list(bgs.values())):
+        p = _last_valid(bg_dict)
+        if p:
+            return p
+    return None
+
+
 def set_scene_position(character_name: str, room_id: str,
                        expr_version: str, bg_id: str,
                        x: float, y: float, scale: float = 1.0) -> None:

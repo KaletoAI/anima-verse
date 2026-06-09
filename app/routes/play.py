@@ -984,7 +984,8 @@ async def play_get_figures(bg: str = "", user=Depends(get_current_user)):
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        get_character_current_room,
-                                       get_scene_position)
+                                       get_scene_position,
+                                       get_last_scene_position)
     positions: dict = {}
     avatar = (get_active_character() or "").strip()
     if not avatar:
@@ -996,7 +997,10 @@ async def play_get_figures(bg: str = "", user=Depends(get_current_user)):
         names.append(avatar)
     for name in names:
         nroom = get_character_current_room(name) or ""
-        p = get_scene_position(name, nroom, _expr_version(name), bg)
+        # Exakter Eintrag fuer das aktuelle Bild — sonst die letzte Platzierung
+        # fuer (Character, Raum) erben (neues Expression-Bild ohne eigene Pos).
+        p = (get_scene_position(name, nroom, _expr_version(name), bg)
+             or get_last_scene_position(name, nroom, bg))
         if p:
             positions[name] = p
     return {"positions": positions}
