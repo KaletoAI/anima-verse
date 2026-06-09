@@ -7,9 +7,46 @@ Bietet:
 - LLMChunk: Streaming-Chunk mit .content
 - to_openai_messages(): Konvertiert Dicts/Legacy-Objekte in OpenAI-Format
 """
+import asyncio
+import time
 import openai
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+
+from app.core.log import get_logger
+
+logger = get_logger("llm_client")
+
+# --- 503 "busy" retry (gateway at its parallel-call limit) -------------------
+# A 503 means the backend is momentarily busy, not broken — so we wait and retry
+# the SAME model (config: llm_retry.*) instead of cooling the provider down and
+# switching the routing fallback. Other 5xx / connection errors are NOT busy and
+# keep the existing cooldown+fallback path in llm_router.
+_BUSY_TEXT_MARKERS = ("503", "service unavailable", "overloaded")
+
+
+def _is_busy_error(err: BaseException) -> bool:
+    """True only for a real 'busy' signal (HTTP 503 / Service Unavailable)."""
+    if getattr(err, "status_code", None) == 503:
+        return True
+    msg = str(err).lower()
+    return any(m in msg for m in _BUSY_TEXT_MARKERS)
+
+
+def _busy_retry_policy() -> Tuple[int, float]:
+    """(max_attempts, base_delay_seconds) from config, with safe defaults."""
+    try:
+        from app.core import config
+        attempts = int(config.get("llm_retry.busy_max_attempts", 3))
+        base = float(config.get("llm_retry.busy_base_delay_seconds", 10))
+        return max(0, attempts), max(0.0, base)
+    except Exception:
+        return 3, 10.0
+
+
+def _busy_delay(base: float, attempt: int) -> float:
+    """Exponential backoff, 1-based attempt (1→base, 2→2·base, …), capped 120s."""
+    return min(base * (2 ** (attempt - 1)), 120.0)
 
 
 @dataclass
@@ -77,6 +114,12 @@ class LLMClient:
             "api_key": api_key,
             "base_url": api_base,
             "timeout": float(request_timeout),
+            # The OpenAI SDK retries 2× internally by default — on a hung/slow
+            # backend that silently turns one request_timeout into THREE
+            # (e.g. 3×120s = 6min for a tiny call), and it fights our own
+            # busy-retry / routing-fallback layers. We do all retrying
+            # explicitly, so disable the SDK's hidden retries.
+            "max_retries": 0,
         }
         self._sync = openai.OpenAI(**client_kwargs)
         self._async = openai.AsyncOpenAI(**client_kwargs)
@@ -109,9 +152,23 @@ class LLMClient:
     def invoke(self, messages: List) -> LLMResponse:
         """Synchroner LLM-Call (fuer provider_queue.py Worker-Threads)."""
         openai_msgs = to_openai_messages(messages)
-        resp = self._sync.chat.completions.create(
-            messages=openai_msgs, **self._build_kwargs()
-        )
+        kwargs = self._build_kwargs()
+        max_attempts, base = _busy_retry_policy()
+        attempt = 0
+        while True:
+            try:
+                resp = self._sync.chat.completions.create(
+                    messages=openai_msgs, **kwargs)
+                break
+            except Exception as e:
+                if not _is_busy_error(e) or attempt >= max_attempts:
+                    raise
+                attempt += 1
+                delay = _busy_delay(base, attempt)
+                logger.warning(
+                    "LLM busy (503) on %s — retry %d/%d after %.0fs",
+                    self.model, attempt, max_attempts, delay)
+                time.sleep(delay)
         usage = None
         if resp.usage:
             usage = {
@@ -129,9 +186,25 @@ class LLMClient:
         Das Chat-LLM ist ein separates grosses Modell das kein Gemma/Qwen3 ist.
         """
         openai_msgs = to_openai_messages(messages)
-        stream = await self._async.chat.completions.create(
-            messages=openai_msgs, stream=True, **self._build_kwargs()
-        )
+        kwargs = self._build_kwargs()
+        max_attempts, base = _busy_retry_policy()
+        attempt = 0
+        # Busy-retry only around connection setup — once chunks start flowing a
+        # restart would duplicate output, so a mid-stream error is never retried.
+        while True:
+            try:
+                stream = await self._async.chat.completions.create(
+                    messages=openai_msgs, stream=True, **kwargs)
+                break
+            except Exception as e:
+                if not _is_busy_error(e) or attempt >= max_attempts:
+                    raise
+                attempt += 1
+                delay = _busy_delay(base, attempt)
+                logger.warning(
+                    "LLM busy (503, stream) on %s — retry %d/%d after %.0fs",
+                    self.model, attempt, max_attempts, delay)
+                await asyncio.sleep(delay)
         async for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield LLMChunk(content=chunk.choices[0].delta.content)

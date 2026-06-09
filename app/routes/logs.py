@@ -29,6 +29,7 @@ def llm_log_data(
     model: str = Query("", description="Filter by model"),
     character: str = Query("", description="Filter by character"),
     provider: str = Query("", description="Filter by provider"),
+    errors_only: bool = Query(False, description="Nur fehlgeschlagene Calls"),
     search: str = Query("", description="Volltextsuche")) -> Dict[str, Any]:
     """JSON-API fuer Log-Eintraege."""
     if not LOG_FILE.exists():
@@ -63,6 +64,8 @@ def llm_log_data(
                 if character and obj.get("service") != character:
                     continue
                 if provider and obj.get("provider", "") != provider:
+                    continue
+                if errors_only and not obj.get("error"):
                     continue
                 if search:
                     haystack = json.dumps(obj, ensure_ascii=False).lower()
@@ -106,6 +109,7 @@ def image_prompt_log_data(
     character: str = Query("", description="Filter by character"),
     backend: str = Query("", description="Filter by backend"),
     model: str = Query("", description="Filter by model"),
+    errors_only: bool = Query(False, description="Nur fehlgeschlagene Generierungen"),
     search: str = Query("", description="Volltextsuche")) -> Dict[str, Any]:
     """JSON-API fuer Image-Prompt Log-Eintraege."""
     if not IMAGE_LOG_FILE.exists():
@@ -138,6 +142,8 @@ def image_prompt_log_data(
                 if backend and (obj.get("backend") or {}).get("name") != backend:
                     continue
                 if model and obj.get("model") != model:
+                    continue
+                if errors_only and not obj.get("error"):
                     continue
                 if search:
                     haystack = json.dumps(obj, ensure_ascii=False).lower()
@@ -198,6 +204,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
     background: #161b22; border: 1px solid #30363d; border-radius: 8px;
     margin-bottom: 8px; overflow: hidden;
 }
+.entry.entry-error { border-left: 3px solid #b62324; }
 .entry-header {
     display: flex; align-items: center; gap: 10px; padding: 10px 14px;
     cursor: pointer; flex-wrap: wrap;
@@ -251,6 +258,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
     <select id="characterFilter"><option value="">Alle Characters</option></select>
     <select id="backendFilter"><option value="">Alle Backends</option></select>
     <select id="modelFilter"><option value="">Alle Models</option></select>
+    <label style="color:#c9d1d9;font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="errorsOnly" /> Errors only
+    </label>
     <input type="text" id="searchInput" placeholder="Suche..." />
     <button onclick="doSearch()">Suchen</button>
     <button onclick="resetFilters()">Reset</button>
@@ -275,10 +285,12 @@ async function loadData() {
     const backend = document.getElementById('backendFilter').value;
     const model = document.getElementById('modelFilter').value;
     const search = document.getElementById('searchInput').value;
+    const errorsOnly = document.getElementById('errorsOnly').checked;
 
     const params = new URLSearchParams({
         limit: PAGE_SIZE, offset: currentOffset,
-        character, backend, model, search
+        character, backend, model, search,
+        errors_only: errorsOnly
     });
 
     const resp = await fetch('/logs/image-prompts/data?' + params);
@@ -324,8 +336,10 @@ function renderEntries(entries, searchTerm) {
         const loraList = (e.loras || []).filter(l => l.name && l.name !== 'None');
         const loraBadge = loraList.length > 0 ? `<span class="badge badge-lora">LoRA: ${esc(loraList.map(l => l.name).join(', '))}</span>` : '';
 
+        const errBadge = e.error ? `<span class="badge" style="background:#b62324;color:#fff;" title="${esc(e.error)}">ERROR</span>` : '';
+
         const div = document.createElement('div');
-        div.className = 'entry';
+        div.className = e.error ? 'entry entry-error' : 'entry';
         div.innerHTML = `
             <div class="entry-header" onclick="toggleEntry(this)">
                 <span class="badge badge-number">#${entryNum}</span>
@@ -336,6 +350,7 @@ function renderEntries(entries, searchTerm) {
                 ${seedBadge}
                 ${enhanceBadge}
                 ${loraBadge}
+                ${errBadge}
                 <span class="badge badge-prompt">${esc(promptPreview)}</span>
             </div>
             <div class="entry-body" id="body-${globalIdx}">
@@ -350,6 +365,9 @@ function renderEntries(entries, searchTerm) {
 
 function buildSections(e, st) {
     let html = '';
+    if (e.error) {
+        html += buildSection('⚠ Error', '<pre style="color:#ff7b72;">' + esc(e.error) + '</pre>', true);
+    }
     if (e.original_prompt) {
         html += buildSection('Original Prompt', fmtText(e.original_prompt, st), true);
     }
@@ -434,6 +452,7 @@ function resetFilters() {
     document.getElementById('backendFilter').value = '';
     document.getElementById('modelFilter').value = '';
     document.getElementById('searchInput').value = '';
+    document.getElementById('errorsOnly').checked = false;
     currentOffset = 0; loadData();
 }
 function prevPage() { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadData(); window.scrollTo(0,0); }
@@ -452,6 +471,7 @@ document.getElementById('searchInput').addEventListener('keydown', e => { if (e.
 document.getElementById('characterFilter').addEventListener('change', () => { currentOffset = 0; loadData(); });
 document.getElementById('backendFilter').addEventListener('change', () => { currentOffset = 0; loadData(); });
 document.getElementById('modelFilter').addEventListener('change', () => { currentOffset = 0; loadData(); });
+document.getElementById('errorsOnly').addEventListener('change', () => { currentOffset = 0; loadData(); });
 
 loadData();
 </script>
@@ -494,6 +514,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
     background: #161b22; border: 1px solid #30363d; border-radius: 8px;
     margin-bottom: 8px; overflow: hidden;
 }
+.entry.entry-error { border-left: 3px solid #b62324; }
 .entry-header {
     display: flex; align-items: center; gap: 10px; padding: 10px 14px;
     cursor: pointer; flex-wrap: wrap;
@@ -568,6 +589,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
     <select id="providerFilter"><option value="">Alle Provider</option></select>
     <select id="modelFilter"><option value="">Alle Models</option></select>
     <select id="characterFilter"><option value="">Alle Characters</option></select>
+    <label style="color:#c9d1d9;font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="errorsOnly" /> Errors only
+    </label>
     <input type="text" id="searchInput" placeholder="Suche..." />
     <button onclick="doSearch()">Suchen</button>
     <button onclick="resetFilters()">Reset</button>
@@ -594,10 +618,12 @@ async function loadData() {
     const model = document.getElementById('modelFilter').value;
     const character = document.getElementById('characterFilter').value;
     const search = document.getElementById('searchInput').value;
+    const errorsOnly = document.getElementById('errorsOnly').checked;
 
     const params = new URLSearchParams({
         limit: PAGE_SIZE, offset: currentOffset,
-        task, provider, model, character, search
+        task, provider, model, character, search,
+        errors_only: errorsOnly
     });
 
     const resp = await fetch('/logs/llm/data?' + params);
@@ -657,6 +683,8 @@ function renderEntries(entries, searchTerm) {
         // ohne template-Feld faellt es auf e.task zurueck.
         const tplName = e.template || e.task || '?';
         const tplTitle = e.template ? 'Template: ' + e.template : 'Task: ' + (e.task || '?');
+        const errBadge = e.error ? `<span class="badge" style="background:#b62324;color:#fff;" title="${escapeHtml(e.error)}">ERROR</span>` : '';
+        if (e.error) div.classList.add('entry-error');
         div.innerHTML = `
             <div class="entry-header" onclick="toggleEntry(this)">
                 <span class="badge badge-number">#${entryNum}</span>
@@ -668,6 +696,7 @@ function renderEntries(entries, searchTerm) {
                 <span class="badge badge-model">${e.model || '?'}</span>
                 <span class="badge badge-tokens">${tokenStr} tok</span>
                 <span class="badge badge-duration">${duration}</span>
+                ${errBadge}
             </div>
             <div class="entry-body" id="body-${globalIdx}">
                 ${buildSections(e, searchTerm)}
@@ -683,6 +712,9 @@ function buildSections(e, searchTerm) {
     const prompt = e.prompt || {};
     let html = '';
 
+    if (e.error) {
+        html += buildSection('⚠ Error', '<pre style="color:#ff7b72;">' + escapeHtml(e.error) + '</pre>', true);
+    }
     if (prompt.system) {
         html += buildSection('System Prompt', formatText(prompt.system, searchTerm), true);
     }
@@ -775,6 +807,7 @@ function resetFilters() {
     document.getElementById('modelFilter').value = '';
     document.getElementById('characterFilter').value = '';
     document.getElementById('searchInput').value = '';
+    document.getElementById('errorsOnly').checked = false;
     currentOffset = 0;
     loadData();
 }
@@ -810,6 +843,8 @@ document.getElementById('searchInput').addEventListener('keydown', e => {
 document.getElementById('taskFilter').addEventListener('change', () => { currentOffset = 0; loadData(); });
 document.getElementById('modelFilter').addEventListener('change', () => { currentOffset = 0; loadData(); });
 document.getElementById('characterFilter').addEventListener('change', () => { currentOffset = 0; loadData(); });
+document.getElementById('providerFilter').addEventListener('change', () => { currentOffset = 0; loadData(); });
+document.getElementById('errorsOnly').addEventListener('change', () => { currentOffset = 0; loadData(); });
 
 // URL-Params -> Filter-Felder uebernehmen, damit Deep-Links (z.B. vom
 // Agent-Loop-Admin: /logs/llm?character=X&search=YYYY-MM-DD HH:MM)

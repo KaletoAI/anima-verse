@@ -604,6 +604,7 @@ class ProviderQueue:
                     task.duration_s = round(time.monotonic() - t0, 2)
                     logger.error("[%s] Task Timeout: %s (%s) nach %ds — Queue wird fortgesetzt",
                                  self._queue_name, task.task_id, task.task_type, task_timeout)
+                    _log_task_result(task, model_name, max_tokens, None, error=task.error)
                 except Exception as e:
                     if task._cancelled:
                         task.status = "cancelled"
@@ -616,6 +617,7 @@ class ProviderQueue:
                         task.error = str(e)
                         task.duration_s = round(time.monotonic() - t0, 2)
                         logger.error("[%s] Fehler: %s: %s", self._queue_name, task.task_id, e, exc_info=True)
+                        _log_task_result(task, model_name, max_tokens, None, error=task.error)
                         # Backend-side crash (5xx, process exit, conn drop):
                         # cooldown the provider so resolve_llm skips it and
                         # the routing chain falls through. Streaming consumers
@@ -685,15 +687,21 @@ def _get_max_tokens_safe(llm) -> int:
     return int(val) if val else 0
 
 
-def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response) -> None:
-    """Logs a completed LLM task result to the JSONL file."""
+def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
+                     error: str = "") -> None:
+    """Logs a completed OR FAILED LLM task to the JSONL file.
+
+    On failure (timeout / backend error) ``response`` is None and ``error``
+    carries the message — the full prompt is still logged so the exact failing
+    request can be inspected afterwards.
+    """
     try:
         from app.utils.llm_logger import log_llm_call, extract_token_info, estimate_tokens
 
-        token_info = extract_token_info(response)
+        token_info = extract_token_info(response) if response is not None else {}
         response_text = getattr(response, "content", None)
         if response_text is None:
-            response_text = str(response)
+            response_text = "" if (error or response is None) else str(response)
 
         # System-Prompt vom restlichen Prompt trennen damit der Logger
         # beide Felder sauber ausgibt (sonst landet system im user-Feld).
@@ -738,7 +746,8 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response) 
             duration_s=task.duration_s,
             tokens_input=tokens_in,
             tokens_output=tokens_out,
-            max_tokens=max_tokens)
+            max_tokens=max_tokens,
+            error=error)
     except Exception as e:
         logger.error("Logging-Fehler: %s", e, exc_info=True)
 

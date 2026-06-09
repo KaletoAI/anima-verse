@@ -39,6 +39,12 @@ export interface ImageGenSubmit {
   backend?: string
   model_override?: string
   loras?: LoraDefault[] | null
+  // Optional faithful-regenerate extras (Instagram/Gallery). Only emitted when
+  // the corresponding prop enables the field.
+  create_new?: boolean
+  improvement_request?: string
+  negative_prompt?: string
+  character_names?: string[]
 }
 
 interface Props {
@@ -47,6 +53,14 @@ interface Props {
   defaultPrompt: string
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
   onClose: () => void
+  /** Show an "add as new image" toggle (vs. replace in place). */
+  showCreateNew?: boolean
+  /** Show an "improvement request" free-text field. */
+  showImprovement?: boolean
+  /** Show a negative-prompt field. */
+  showNegative?: boolean
+  /** Show character checkboxes (detected pre-selected) to pin who is in the image. */
+  characterOptions?: { detected: string[]; available: string[] }
 }
 
 const LORA_SLOTS = 4
@@ -84,9 +98,16 @@ function filterByWorkflowName(items: string[], workflowName: string, filter: str
   return items
 }
 
-export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }: Props) {
+export function ImageGenDialog({
+  open, title, defaultPrompt, onSubmit, onClose,
+  showCreateNew, showImprovement, showNegative, characterOptions,
+}: Props) {
   const { t } = useI18n()
   const [prompt, setPrompt] = useState(defaultPrompt)
+  const [createNew, setCreateNew] = useState(false)
+  const [improvement, setImprovement] = useState('')
+  const [negative, setNegative] = useState('')
+  const [selectedChars, setSelectedChars] = useState<string[]>([])
   const [options, setOptions] = useState<ImagegenOption[] | null>(null)
   const [defaultLocationOpt, setDefaultLocationOpt] = useState<string>('')
   const [optionKey, setOptionKey] = useState<string>('') // "workflow:name" | "backend:name"
@@ -100,6 +121,17 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
   useEffect(() => {
     if (open) setPrompt(defaultPrompt)
   }, [open, defaultPrompt])
+
+  // Reset the regenerate extras when (re)opening; pre-select detected characters.
+  const detectedKey = (characterOptions?.detected || []).join('|')
+  useEffect(() => {
+    if (!open) return
+    setCreateNew(false)
+    setImprovement('')
+    setNegative('')
+    setSelectedChars(characterOptions?.detected || [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, detectedKey])
 
   // Load options + loras once when dialog first opens.
   useEffect(() => {
@@ -178,6 +210,10 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
       const active = loraSlots.filter((l) => l.name && l.name !== 'None')
       payload.loras = active.length ? active : null
     }
+    if (showCreateNew) payload.create_new = createNew
+    if (showImprovement && improvement.trim()) payload.improvement_request = improvement.trim()
+    if (showNegative && negative.trim()) payload.negative_prompt = negative.trim()
+    if (characterOptions) payload.character_names = selectedChars
     setSubmitting(true)
     try {
       await onSubmit(payload)
@@ -185,7 +221,9 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
     } finally {
       setSubmitting(false)
     }
-  }, [currentOption, prompt, loraSlots, onSubmit, onClose])
+  }, [currentOption, prompt, loraSlots, onSubmit, onClose,
+      showCreateNew, createNew, showImprovement, improvement,
+      showNegative, negative, characterOptions, selectedChars])
 
   if (!open) return null
 
@@ -292,6 +330,82 @@ export function ImageGenDialog({ open, title, defaultPrompt, onSubmit, onClose }
                 disabled={submitting}
                 onChange={(e) => setPrompt(e.target.value)}
               />
+
+              {characterOptions ? (
+                <>
+                  <label className="ga-imagegen-label">{t('Characters in the image')}</label>
+                  {(characterOptions.available.length
+                    ? characterOptions.available
+                    : characterOptions.detected
+                  ).length === 0 ? (
+                    <div className="ga-form-hint">{t('No characters detected.')}</div>
+                  ) : (
+                    <div className="ga-imagegen-chars">
+                      {(characterOptions.available.length
+                        ? characterOptions.available
+                        : characterOptions.detected
+                      ).map((name) => {
+                        const on = selectedChars.includes(name)
+                        return (
+                          <label key={name} className="ga-check-row">
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              disabled={submitting}
+                              onChange={() =>
+                                setSelectedChars((prev) =>
+                                  on ? prev.filter((x) => x !== name) : [...prev, name],
+                                )
+                              }
+                            />
+                            <span>{name}</span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </>
+              ) : null}
+
+              {showImprovement ? (
+                <>
+                  <label className="ga-imagegen-label">{t('Improvement request')}</label>
+                  <textarea
+                    className="ga-textarea"
+                    rows={2}
+                    placeholder={t('What to change (optional)')}
+                    value={improvement}
+                    disabled={submitting}
+                    onChange={(e) => setImprovement(e.target.value)}
+                  />
+                </>
+              ) : null}
+
+              {showNegative ? (
+                <>
+                  <label className="ga-imagegen-label">{t('Negative prompt')}</label>
+                  <textarea
+                    className="ga-textarea"
+                    rows={2}
+                    placeholder={t('What to avoid (optional)')}
+                    value={negative}
+                    disabled={submitting}
+                    onChange={(e) => setNegative(e.target.value)}
+                  />
+                </>
+              ) : null}
+
+              {showCreateNew ? (
+                <label className="ga-check-row" style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={createNew}
+                    disabled={submitting}
+                    onChange={(e) => setCreateNew(e.target.checked)}
+                  />
+                  <span>{t('Add as new image (keep the current one)')}</span>
+                </label>
+              ) : null}
             </>
           )}
         </div>

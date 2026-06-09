@@ -318,7 +318,8 @@ def _handle_instagram_post(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from app.core.dependencies import get_skill_manager
         sm = get_skill_manager()
-        skill = sm.get_skill("Instagram")
+        # get_skill matcht gegen SKILL_ID (klein "instagram"), nicht den Tool-Namen.
+        skill = sm.get_skill("instagram") or sm.get_skill_by_name("Instagram")
         if not skill:
             return {"success": False, "error": "Instagram Skill nicht geladen"}
         # execute() expects JSON string with input, agent_name, user_id

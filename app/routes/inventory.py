@@ -846,53 +846,10 @@ async def unequip_route(character_name: str, request: Request) -> Dict[str, Any]
 
 @router.get("/outfit-types")
 def list_outfit_types_route() -> Dict[str, Any]:
-    """Sammelt alle bekannten outfit_types.
-
-    Quellen:
-    1. shared/config/outfit_rules.json (authoritative Regeln-Config)
-    2. Items (outfit_piece.outfit_types)
-    3. Locations/Rooms (outfit_type)
-
-    Dient dem UI als Vorschlagsliste. Case-insensitive Dedup — Rules-Schreibweise
-    gewinnt.
+    """Deprecated: das outfit_types-Modell wurde durch Decency + style_hint
+    ersetzt (Variante A). Liefert leer, damit alte UI-Fetches kein 404 sehen.
     """
-    from app.models.world import list_locations
-    from app.core.outfit_rules import known_outfit_types
-
-    # Rules zuerst (authoritative Schreibweise)
-    ordered: List[str] = []
-    seen_lower: set = set()
-    for t in known_outfit_types():
-        if not t or not t.strip():
-            continue
-        key = t.strip().lower()
-        if key in seen_lower:
-            continue
-        seen_lower.add(key)
-        ordered.append(t.strip())
-
-    def _add(t: str) -> None:
-        if not t or not t.strip():
-            return
-        key = t.strip().lower()
-        if key in seen_lower:
-            return
-        seen_lower.add(key)
-        ordered.append(t.strip())
-
-    for it in list_items():
-        op = it.get("outfit_piece") or {}
-        for t in (op.get("outfit_types") or []):
-            _add(t)
-    try:
-        for loc in list_locations():
-            _add(loc.get("outfit_type") or "")
-            for r in (loc.get("rooms") or []):
-                _add(r.get("outfit_type") or "")
-    except Exception:
-        pass
-
-    return {"outfit_types": sorted(ordered, key=str.lower)}
+    return {"outfit_types": []}
 
 
 @router.post("/characters/{character_name}/apply-equipped")

@@ -1132,115 +1132,36 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
 
 @router.get("/outfit-rules")
 def get_outfit_rules_route() -> Dict[str, Any]:
-    """Liefert die outfit_rules.json fuer das UI (Slot-Matrix)."""
-    from app.core.outfit_rules import _load_rules
-    rules = _load_rules()
-    return {
-        "outfit_types": {
-            k: {"required": v.get("required", [])}
-            for k, v in (rules.get("outfit_types") or {}).items()
-            if not k.startswith("_")
-        },
-    }
+    """Deprecated: outfit_types-Regeln durch Decency ersetzt (Variante A).
+    Liefert leer, damit alte UI-Fetches kein 404 sehen."""
+    return {"outfit_types": {}}
 
 
-@router.get("/{character_name}/outfit-exceptions")
-def get_outfit_exceptions(character_name: str) -> Dict[str, Any]:
-    """Liefert die outfit_exceptions des Characters."""
+@router.get("/{character_name}/decency-preference")
+def get_decency_preference(character_name: str) -> Dict[str, Any]:
+    """Liefert die free-text decency_preference des Characters (Stil-Hinweis,
+    ersetzt das alte outfit_exceptions-Modell)."""
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name) or {}
-    return {"exceptions": profile.get("outfit_exceptions") or {}}
+    return {"character": character_name,
+            "decency_preference": profile.get("decency_preference", "") or ""}
 
 
-@router.put("/{character_name}/outfit-exceptions")
-async def set_outfit_exceptions(character_name: str, request: Request) -> Dict[str, Any]:
-    """Speichert outfit_exceptions — dict outfit_type -> {skip_required: [slots], reason: ""}."""
+@router.put("/{character_name}/decency-preference")
+async def set_decency_preference(character_name: str, request: Request) -> Dict[str, Any]:
+    """Speichert die free-text decency_preference (z.B. "often barefoot, no
+    underwear"). Reiner Stil-Hinweis fuer die Outfit-Erstellung — Bedeckung
+    entscheidet Decency."""
     from app.models.character import get_character_profile, save_character_profile
     body = await request.json()
-    exceptions = body.get("exceptions") or {}
-    # Nur gueltige Struktur speichern
-    cleaned = {}
-    for otype, entry in exceptions.items():
-        if not isinstance(entry, dict):
-            continue
-        skip = entry.get("skip_required") or []
-        if not isinstance(skip, list):
-            continue
-        if skip or (entry.get("reason") or "").strip():
-            cleaned[otype] = {
-                "skip_required": [s for s in skip if isinstance(s, str) and s],
-                "reason": (entry.get("reason") or "").strip(),
-            }
+    pref = str((body or {}).get("decency_preference") or "").strip()
     profile = get_character_profile(character_name) or {}
-    if cleaned:
-        profile["outfit_exceptions"] = cleaned
+    if pref:
+        profile["decency_preference"] = pref
     else:
-        profile.pop("outfit_exceptions", None)
+        profile.pop("decency_preference", None)
     save_character_profile(character_name, profile)
-    return {"status": "ok", "exceptions": cleaned}
-
-
-@router.get("/{character_name}/outfit-compliance")
-def get_outfit_compliance(character_name: str) -> Dict[str, Any]:
-    """Prueft das aktuelle Outfit des Characters gegen die outfit_type-Regeln.
-
-    Liefert: aktueller outfit_type (aus Location/Room), required_slots,
-    equipped_slots, missing (required - equipped), exceptions (aus Profil).
-    """
-    from app.core.outfit_rules import baseline_required_slots, resolve_required_slots
-    from app.models.inventory import get_equipped_pieces
-    from app.models.character import (
-        get_character_profile, get_character_current_location)
-    from app.models.world import resolve_location
-
-    profile = get_character_profile(character_name) or {}
-    equipped = get_equipped_pieces(character_name)
-
-    # Aktueller outfit_type: aus Location/Room ableiten
-    loc_id = get_character_current_location(character_name)
-    loc = resolve_location(loc_id) if loc_id else None
-    outfit_type = ""
-    room_name = ""
-    if loc:
-        # Falls Character in einem Raum ist, Raum-outfit_type bevorzugen
-        room_id = (profile.get("current_room") or "").strip()
-        for r in (loc.get("rooms") or []):
-            if r.get("id") == room_id:
-                outfit_type = (r.get("outfit_type") or "").strip()
-                room_name = r.get("name", "")
-                break
-        if not outfit_type:
-            outfit_type = (loc.get("outfit_type") or "").strip()
-
-    baseline = baseline_required_slots(outfit_type)
-    required = sorted(resolve_required_slots(outfit_type, character_name))
-    equipped_slots = sorted(s for s, iid in equipped.items() if iid)
-    # Gecoverte Slots (z.B. bottom via Kleid) zaehlen als belegt
-    from app.core.outfit_renderer import collect_covered_slots
-    covered_slots = collect_covered_slots(equipped)
-    covered_or_equipped = set(equipped_slots) | covered_slots
-    missing = sorted(set(required) - covered_or_equipped)
-    # Case-insensitive Lookup fuer Display
-    _exc_all = profile.get("outfit_exceptions") or {}
-    _key = (outfit_type or "").strip().lower()
-    exceptions = {}
-    for _k, _v in _exc_all.items():
-        if isinstance(_k, str) and _k.strip().lower() == _key:
-            exceptions = _v or {}
-            break
-
-    return {
-        "character": character_name,
-        "location": loc.get("name", "") if loc else "",
-        "room": room_name,
-        "outfit_type": outfit_type,
-        "baseline_required": sorted(baseline),
-        "required": required,
-        "equipped": equipped_slots,
-        "covered": sorted(covered_slots),
-        "missing": missing,
-        "exceptions": exceptions,
-    }
+    return {"status": "ok", "character": character_name, "decency_preference": pref}
 
 
 @router.get("/{character_name}/outfits")

@@ -133,20 +133,9 @@ def _format_generable_fields_for_templates(selected_template: str = "") -> str:
 
 
 def _format_existing_outfit_types() -> str:
-    """Liste aller in der Welt bekannten Outfit-Typen (aus Rules + Items + Locations).
-
-    World Dev darf keine neuen Outfit-Typen erfinden — nur die bestehende Liste
-    nutzen, damit Outfit-Auto-Swap und Rules konsistent bleiben.
-    """
-    try:
-        from app.core.outfit_rules import known_outfit_types
-        types = [t for t in (known_outfit_types() or []) if t and t.strip()]
-    except Exception:
-        types = []
-    if not types:
-        return "(noch keine Outfit-Typen definiert — leg KEINE neuen an, " \
-               "frage den Benutzer ob er ueber Admin-UI Outfit-Typen anlegen moechte)"
-    return ", ".join(f"`{t}`" for t in sorted(set(types), key=str.lower))
+    """Deprecated: outfit_types wurden durch Decency + style_hint ersetzt
+    (Variante A). World Dev vergibt keine outfit_types mehr."""
+    return ""
 
 
 def _format_context_locations(location_ids: list) -> str:
@@ -940,7 +929,6 @@ def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
                 prompt_fragment=fragment,
                 outfit_piece={
                     "slots": slots,
-                    "outfit_types": p.get("outfit_types") or [],
                     "covers": p.get("covers") or [],
                     "partially_covers": p.get("partially_covers") or [],
                 })

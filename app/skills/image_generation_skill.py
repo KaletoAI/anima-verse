@@ -93,6 +93,24 @@ from app.utils.image_prompt_logger import log_image_prompt
 logger = get_logger("image_gen")
 
 
+def _log_image_failure(lv: dict, error_msg: str) -> None:
+    """Schreibt eine fehlgeschlagene Bildgenerierung ins Image-Log (Errors-only
+    im Viewer sichtbar). ``lv`` = locals() der Aufrufstelle — Variablen werden
+    defensiv via .get() gelesen, da je nach Abbruchstelle nicht alle gesetzt sind."""
+    try:
+        _bk = lv.get("backend")
+        log_image_prompt(
+            agent_name=lv.get("character_name") or "",
+            original_prompt=lv.get("prompt_text") or "",
+            final_prompt=lv.get("enhanced_prompt") or "",
+            negative_prompt=lv.get("negative_prompt") or "",
+            backend_name=getattr(_bk, "name", "") or "",
+            backend_type=getattr(_bk, "api_type", "") or "",
+            error=error_msg)
+    except Exception as _le:
+        logger.debug("Fehler-Logging (Image) fehlgeschlagen: %s", _le)
+
+
 class ImageGenerationSkill(BaseSkill):
     """
     Multi-Instance Image Generation Skill.
@@ -2593,17 +2611,20 @@ class ImageGenerationSkill(BaseSkill):
             logger.error("Timeout: %s", error_msg)
             backend.available = False
             _tq.track_finish(_track_id, error=error_msg)
+            _log_image_failure(locals(), error_msg)
             return f"Fehler: {error_msg}"
         except requests.exceptions.ConnectionError:
             error_msg = f"Verbindung zu {backend.name} ({backend.api_url}) fehlgeschlagen"
             logger.error("ConnectionError: %s", error_msg)
             backend.available = False
             _tq.track_finish(_track_id, error=error_msg)
+            _log_image_failure(locals(), error_msg)
             return f"Fehler: {error_msg}"
         except Exception as e:
             error_msg = f"Bildgenerierung ({backend.name}): {e}"
             logger.error("Fehler bei %s", error_msg)
             _tq.track_finish(_track_id, error=error_msg)
+            _log_image_failure(locals(), error_msg)
             return f"Fehler bei {error_msg}"
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:

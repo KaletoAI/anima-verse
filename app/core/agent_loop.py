@@ -783,8 +783,8 @@ class AgentLoop:
                 content = (row.get("content") or "").strip()
                 if not content or (row.get("kind") or "") == "whisper_meta":
                     continue
-                if not sp or sp == character_name:
-                    continue
+                if not sp or sp == character_name or sp == "Erzähler":
+                    continue  # Narrator-Events sind Wahrnehmung, kein Gesprächspartner
                 # Frische prüfen
                 try:
                     age = (_now() - parse_iso(row.get("ts") or "")).total_seconds()

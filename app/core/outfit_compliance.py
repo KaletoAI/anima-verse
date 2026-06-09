@@ -175,16 +175,14 @@ def _find_inventory_piece_for_slot(
 ) -> Optional[str]:
     """Sucht im Inventar ein Outfit-Piece das den Slot belegt.
 
-    Bevorzugt Pieces deren outfit_types den style_hint enthalten
-    (case-insensitive). Multi-Slot-Pieces nur dann, wenn alle ihre Slots
-    leer (oder bereits zur Auswahl gewaehlt) sind — sonst wuerden sie
-    bestehende Pieces verdraengen.
+    Nimmt das erste passende Single-Slot-Piece. (Die fruehere outfit_types/
+    style_hint-Praeferenz entfaellt — outfit_types-Modell ist raus; style_hint
+    ist nur noch ein Creation-Hinweis, keine mechanische Auswahlregel.)
+    Multi-Slot-Pieces werden uebersprungen — die kommen ueber ChangeOutfit /
+    Garderobe, sonst wuerden sie bestehende Slots verdraengen.
     """
     exclude_ids = exclude_ids or set()
-    style = (style_hint or "").strip().lower()
     inv = _load_inventory(character_name).get("inventory", [])
-    style_match: Optional[str] = None
-    neutral_match: Optional[str] = None
     for entry in inv:
         iid = entry.get("item_id")
         if not iid or iid in exclude_ids:
@@ -193,21 +191,10 @@ def _find_inventory_piece_for_slot(
         if not item or item.get("category") != "outfit_piece":
             continue
         slots = _piece_slots(item)
-        if target_slot not in slots:
+        if target_slot not in slots or len(slots) > 1:
             continue
-        # Multi-Slot nur wenn singular — Compliance soll keine Multi-Slot
-        # Pieces verteilen (sonst werden ggf. andere Slots ueberschrieben).
-        # Echte Multi-Slot-Sachen kommen ueber ChangeOutfit / Garderobe.
-        if len(slots) > 1:
-            continue
-        op = item.get("outfit_piece") or {}
-        item_types = [t.strip().lower() for t in (op.get("outfit_types") or []) if t]
-        if style and style in item_types:
-            style_match = iid
-            break  # bester Treffer, fertig
-        if neutral_match is None:
-            neutral_match = iid
-    return style_match or neutral_match
+        return iid
+    return None
 
 
 def apply_outfit_compliance(

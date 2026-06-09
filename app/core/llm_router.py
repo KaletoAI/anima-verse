@@ -374,17 +374,19 @@ _UPSTREAM_FAIL_MARKERS = (
     "ConnectionError",
     "ReadTimeout",
     "BadGateway",
-    "ServiceUnavailable",
     "Bad gateway",
-    "Service unavailable",
     "ConnectionRefused",
     "Connection refused",
     "Remote end closed",
     " 500",
     " 502",
-    " 503",
     " 504",
 )
+# NOTE: 503 / "Service Unavailable" is deliberately NOT here. A 503 means the
+# provider is momentarily busy (gateway at its parallel-call limit), so the
+# LLMClient retries the SAME model with backoff (config: llm_retry.*). If those
+# retries are exhausted the call fails fast — we do NOT cool the provider down
+# for 5 minutes, since it is busy, not broken.
 
 _UPSTREAM_COOLDOWN_SECONDS = 300.0  # 5 min — survives ~1-2 health probes
 _LLM_CALL_MAX_ATTEMPTS = 3

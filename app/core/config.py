@@ -476,6 +476,12 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "EXPRESSION_IMAGEGEN_DEFAULT", ig.get("expression_imagegen_default", ""))
     _set(env, "LOCATION_IMAGEGEN_DEFAULT", ig.get("location_imagegen_default", ""))
     _set(env, "PROFILE_IMAGE_PROMPT_PREFIX", ig.get("profile_image_prompt_prefix", ""))
+    _set(env, "MAP_IMAGE_PROMPT_SUFFIX", ig.get(
+        "map_image_prompt_suffix",
+        "small icon, top-down view, miniature, game map tile, simple, clean, centered"))
+    _set(env, "MAP_2D_IMAGE_PROMPT_SUFFIX", ig.get(
+        "map_2d_image_prompt_suffix",
+        "top-down map tile, flat 2D illustration, bird's eye view, simple, clean, fills the frame"))
     _set(env, "U2NET_HOME", ig.get("u2net_home", "./models/u2net"))
     _set(env, "REBUILD_LLM_SYSTEM_TEMPLATE", ig.get("rebuild_llm_system_template", ""))
     _set(env, "IMAGE_ANALYSIS_PROMPT", ig.get("image_analysis_prompt", ""))

@@ -218,6 +218,8 @@ SECTIONS = {
             # --- Prompt-Prefixes ---
             "profile_image_prompt_prefix": {"type": "str", "label": "Profil-Bild Prompt Prefix", "default": "photorealistic, portrait, only head,", "description": "Wird Profilbild-Prompts vorangestellt (z.B. 'photorealistic, portrait')"},
             "outfit_image_prompt_prefix": {"type": "str", "label": "Outfit/Vorschau Prompt Prefix", "default": "full body view, green background", "description": "Wird Garderobe-Vorschau-Prompts vorangestellt (z.B. 'full body portrait, RAW photo'). Nur fuer Vorschau, nicht fuer Expression-Auto-Regen."},
+            "map_image_prompt_suffix": {"type": "str", "label": "Karten-Icon Prompt Suffix (isometrisch)", "default": "small icon, top-down view, miniature, game map tile, simple, clean, centered", "description": "Wird isometrischen Karten-Icon-Prompts angehaengt (nach dem Orts-Subjekt)."},
+            "map_2d_image_prompt_suffix": {"type": "str", "label": "2D-Karten-Icon Prompt Suffix (flach)", "default": "top-down map tile, flat 2D illustration, bird's eye view, simple, clean, fills the frame", "description": "Wird flachen 2D-Karten-Icon-Prompts angehaengt (nach dem Orts-Subjekt)."},
 
             # --- Outfit-Bild Groesse ---
             "outfit_image_width": {

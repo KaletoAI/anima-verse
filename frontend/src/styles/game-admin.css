@@ -1835,6 +1835,12 @@ html, * {
   gap: 4px;
 }
 
+.ga-imagegen-chars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
 .ga-imagegen-lora-row {
   display: flex;
   gap: 6px;

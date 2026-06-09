@@ -77,30 +77,9 @@ class OutfitChangeSkill(BaseSkill):
         forced: Dict[str, str] = dict(intent.get("forced_pieces") or {})
         forbidden: set = set(intent.get("forbidden_slots") or [])
 
-        # 1) outfit_type: Komplett-Umkleide auf den genannten Stil.
-        # Sucht pro Slot ein passendes Piece im Inventar und equipped es.
-        # Alle gewaehlten Pieces werden zu forced_pieces (so dass Compliance
-        # sie nicht ueberschreibt).
-        if spec.get("outfit_type"):
-            ttype = spec["outfit_type"].strip()
-            picks = self._pick_pieces_by_type(character_name, ttype)
-            for iid in dict.fromkeys(picks.values()):
-                r = equip_piece(character_name, iid)
-                if r.get("status") == "ok":
-                    nm = self._item_label(iid)
-                    slots_str = "+".join(r.get("slots") or [])
-                    results.append(f"'{nm}' angelegt (Slot {slots_str})")
-                    # forced_pieces fuer alle Slots des Pieces, forbidden weg
-                    for s in (r.get("slots") or []):
-                        forced[s] = iid
-                        forbidden.discard(s)
-                else:
-                    errors.append(f"'{self._item_label(iid)}': {r.get('reason', 'equip fehlgeschlagen')}")
-            if not picks:
-                errors.append(f"Keine passenden Pieces fuer Stil '{ttype}' im Inventar.")
-            # Stil-Hint als target_outfit_type merken — Compliance kann den
-            # als Auto-Fill-Praeferenz nutzen, falls noch Slots offen sind.
-            intent["target_outfit_type"] = ttype
+        # (Frueherer outfit_type-Pfad entfernt — das outfit_types-Tag-Modell ist
+        # raus, Variante A. Ein kompletter Stil-Wechsel laeuft jetzt ueber
+        # OutfitCreation/explizites Equip; Bedeckung regelt Decency.)
 
         # 2) Unequip Slots — Slot leeren + forbidden markieren.
         # Compliance/AutoFill respektiert forbidden_slots und fuellt nicht.
@@ -210,7 +189,6 @@ class OutfitChangeSkill(BaseSkill):
             "equip": [],
             "unequip_slots": [],
             "unequip_items": [],
-            "outfit_type": "",
         }
         for key in ("equip", "unequip_slots", "unequip_items"):
             val = ctx.get(key)
@@ -218,20 +196,13 @@ class OutfitChangeSkill(BaseSkill):
                 spec[key] = [str(x).strip() for x in val if str(x).strip()]
             elif isinstance(val, str) and val.strip():
                 spec[key] = [val.strip()]
-        if isinstance(ctx.get("outfit_type"), str):
-            spec["outfit_type"] = ctx["outfit_type"].strip()
 
-        # Freitext-Fallback (input-Feld) — Liste von Tokens, kommagetrennt.
-        # Einzelner Token ohne Komma -> als outfit_type interpretieren.
+        # Freitext-Fallback (input-Feld) — Liste von Tokens, kommagetrennt,
+        # als zu equippende Piece-Namen interpretiert (kein outfit_type mehr).
         text = (ctx.get("input") or "").strip()
         if text and not (spec["equip"] or spec["unequip_slots"]
-                          or spec["unequip_items"] or spec["outfit_type"]):
-            tokens = [t.strip() for t in re.split(r"[,;]+", text) if t.strip()]
-            if len(tokens) == 1 and " " not in tokens[0]:
-                # Kurzer Single-Token -> wahrscheinlich outfit_type (Casual, Sport, ...)
-                spec["outfit_type"] = tokens[0]
-            else:
-                spec["equip"] = tokens
+                          or spec["unequip_items"]):
+            spec["equip"] = [t.strip() for t in re.split(r"[,;]+", text) if t.strip()]
         return spec
 
     # ------------------------------------------------------------------
@@ -275,56 +246,6 @@ class OutfitChangeSkill(BaseSkill):
     def _item_label(item_id: str) -> str:
         it = get_item(item_id)
         return it.get("name") if it else item_id
-
-    # ------------------------------------------------------------------
-    # outfit_type → Pieces aus dem Inventar nach Style-Tag
-    # ------------------------------------------------------------------
-
-    def _pick_pieces_by_type(self, character_name: str,
-                              target_type: str) -> Dict[str, str]:
-        """Waehlt pro Slot ein Piece aus dem Inventar das zum target_type passt.
-
-        Prioritaet:
-        - Pieces, die target_type explizit in outfit_types haben (strikt)
-        - Falls nichts Striktes vorhanden: aktuell angelegtes Piece in diesem
-          Slot behalten (implizit, indem wir den Slot nicht anfassen)
-
-        Liefert {slot: item_id} nur fuer Slots wo ein strikt passender Kandidat
-        gefunden wurde — non-strikte Slots bleiben beim bestehenden Eintrag,
-        damit neutrale Schuhe/Guertel nicht unnoetig getauscht werden.
-        """
-        inv = self._inventory_item_index(character_name)
-        # Multi-Slot-Pieces zuerst behandeln, damit sie alle ihre Slots
-        # reservieren bevor Single-Slot-Kandidaten reinrutschen — sonst
-        # wuerde z.B. ein Skirt fuer 'bottom' gepickt, dann wuerde ein
-        # spaeter equippter Kleid (top+bottom) den Skirt verdraengen.
-        tlow = target_type.strip().lower()
-        candidates: List[tuple] = []  # (slot_count_desc, iid, slots_list)
-        for entry in inv:
-            if entry.get("item_category") != "outfit_piece":
-                continue
-            op = entry.get("outfit_piece") or {}
-            slots = [str(s or "").strip().lower() for s in (op.get("slots") or []) if s]
-            slots = [s for s in slots if s]
-            if not slots:
-                continue
-            types = [str(t).strip().lower() for t in (op.get("outfit_types") or [])]
-            if tlow not in types:
-                continue
-            iid = entry.get("item_id") or ""
-            if not iid:
-                continue
-            candidates.append((len(slots), iid, slots))
-        # Multi-Slot-Pieces (mehr Slots) zuerst, dann Single-Slot.
-        candidates.sort(key=lambda c: -c[0])
-        by_slot_strict: Dict[str, str] = {}
-        for _count, iid, slots in candidates:
-            # Nur uebernehmen wenn KEINER der Slots schon belegt ist.
-            if any(s in by_slot_strict for s in slots):
-                continue
-            for slot in slots:
-                by_slot_strict[slot] = iid
-        return by_slot_strict
 
     # ------------------------------------------------------------------
     # Tool-Spec

@@ -45,7 +45,8 @@ def log_image_prompt(
     prompt_location: str = "",
     actor_labels: Optional[List[str]] = None,
     workflow_type: str = "",
-    entry_point: str = ""):
+    entry_point: str = "",
+    error: str = ""):
     """Loggt einen Bildgenerierungs-Prompt als JSONL-Zeile.
 
     Args:
@@ -109,6 +110,8 @@ def log_image_prompt(
             "entry_point": entry_point,
         },
     }
+    if error:
+        entry["error"] = error
 
     # JSONL schreiben
     with _lock:
@@ -120,6 +123,11 @@ def log_image_prompt(
     app_names = ", ".join(p.get("name", "?") for p in (appearances or []))
     lora_names = ", ".join(l.get("name", "?") for l in (loras or []) if l.get("name") and l["name"] != "None")
     ref_summary = ", ".join(f"{s.split('_')[-1]}={Path(p).name}" for s, p in (reference_images or {}).items() if p) or "none"
-    logger.info(
-        "%s | %s | appearances=[%s] | refs=[%s] | loras=[%s] | prompt=%s...",
-        agent_name, backend_name, app_names or "none", ref_summary, lora_names or "none", original_prompt[:80])
+    if error:
+        logger.error(
+            "%s | %s | FEHLER: %s | prompt=%s...",
+            agent_name, backend_name or "?", error[:200], original_prompt[:80])
+    else:
+        logger.info(
+            "%s | %s | appearances=[%s] | refs=[%s] | loras=[%s] | prompt=%s...",
+            agent_name, backend_name, app_names or "none", ref_summary, lora_names or "none", original_prompt[:80])

@@ -581,4 +581,22 @@ def regenerate_image(character_name: str,
     except Exception as e:
         logger.error(f"Generierung fehlgeschlagen: {e}")
         logger.debug("Traceback:", exc_info=True)
+        # Fehlgeschlagene Generierung ebenfalls ins Image-Log schreiben, damit der
+        # fehlerhafte Request im Viewer (Errors-only) sichtbar ist. locals().get(),
+        # weil je nach Abbruchstelle noch nicht alle Variablen gesetzt sind.
+        try:
+            from app.utils.image_prompt_logger import log_image_prompt
+            _lv = locals()
+            _bk = _lv.get("backend")
+            log_image_prompt(
+                agent_name=_lv.get("character_name") or "",
+                original_prompt=_lv.get("original_prompt") or "",
+                final_prompt=_lv.get("final_prompt") or "",
+                negative_prompt=_lv.get("negative_prompt") or "",
+                backend_name=getattr(_bk, "name", "") or "",
+                backend_type=getattr(_bk, "api_type", "") or "",
+                duration_s=_lv.get("_gen_duration") or 0.0,
+                error=str(e))
+        except Exception as _le:
+            logger.debug("Fehler-Logging (Image) fehlgeschlagen: %s", _le)
         raise

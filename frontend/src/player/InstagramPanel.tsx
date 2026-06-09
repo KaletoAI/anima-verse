@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../lib/api'
 import { useToast } from '../lib/Toast'
+import { ImageGenDialog, type ImageGenSubmit } from '../components/ImageGenDialog'
 
 interface Reaction {
   emoji?: string
@@ -29,6 +30,7 @@ interface ImageMeta {
   postprocessed?: boolean
   duration_s?: number
   image_analysis?: string
+  prompt?: string
 }
 interface Post {
   id: string
@@ -84,6 +86,11 @@ export function InstagramPanel() {
   const [avatarFail, setAvatarFail] = useState<Record<string, boolean>>({})
   const [liked, setLiked] = useState<Record<string, boolean>>({})
   const [zoom, setZoom] = useState<string | null>(null)
+  // Regenerate: the post whose image-gen dialog is open, the detected/available
+  // characters for it, and the set of posts currently regenerating.
+  const [regenPost, setRegenPost] = useState<Post | null>(null)
+  const [charOpts, setCharOpts] = useState<{ detected: string[]; available: string[] } | null>(null)
+  const [regenerating, setRegenerating] = useState<Record<string, boolean>>({})
   const alive = useRef(true)
 
   const reload = useCallback(async () => {
@@ -161,6 +168,71 @@ export function InstagramPanel() {
       }
     },
     [reload, t, toast],
+  )
+
+  // Poll the queue for the regenerate task; reload the feed each tick so the
+  // new/replaced image lands, and stop once the task was seen and is gone.
+  const pollTrack = useCallback(
+    (postId: string, trackId: string) => {
+      let n = 0
+      let seen = false
+      const iv = window.setInterval(async () => {
+        n++
+        let active = false
+        try {
+          const q = await apiGet<{ active_tasks?: { task_id?: string }[] }>('/queue/status')
+          active = (q.active_tasks || []).some((tk) => tk.task_id === trackId)
+        } catch { /* keep polling */ }
+        if (active) seen = true
+        await reload()
+        if ((trackId && seen && !active) || n >= 40) {
+          window.clearInterval(iv)
+          setRegenerating((prev) => { const x = { ...prev }; delete x[postId]; return x })
+        }
+      }, 3000)
+    },
+    [reload],
+  )
+
+  // Open the regenerate dialog: detect characters first, prefill from the post.
+  const openRegen = useCallback(async (p: Post) => {
+    let opts = { detected: [] as string[], available: [] as string[] }
+    try {
+      const cd = await apiPost<{ detected?: string[]; available?: string[] }>(
+        `/instagram/post/${encodeURIComponent(p.id)}/detect-characters`, {},
+      )
+      opts = { detected: cd.detected || [], available: cd.available || [] }
+    } catch { /* proceed without character detection */ }
+    setCharOpts(opts)
+    setRegenPost(p)
+  }, [])
+
+  const submitRegen = useCallback(
+    async (payload: ImageGenSubmit) => {
+      const p = regenPost
+      if (!p) return
+      const body: Record<string, unknown> = {}
+      if (payload.prompt) body.custom_prompt = payload.prompt
+      if (payload.workflow) body.workflow = payload.workflow
+      if (payload.backend) body.backend = payload.backend
+      if (payload.model_override) body.model_override = payload.model_override
+      if (payload.loras) body.loras = payload.loras
+      if (payload.character_names) body.character_names = payload.character_names
+      if (payload.improvement_request) body.improvement_request = payload.improvement_request
+      if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
+      if (payload.create_new) body.create_new = true
+      try {
+        const r = await apiPost<{ track_id?: string }>(
+          `/instagram/post/${encodeURIComponent(p.id)}/regenerate`, body,
+        )
+        toast(t('Regenerating…'))
+        setRegenerating((prev) => ({ ...prev, [p.id]: true }))
+        pollTrack(p.id, r.track_id || '')
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [regenPost, pollTrack, t, toast],
   )
 
   if (posts === null) return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('Loading…')}</div>
@@ -255,6 +327,14 @@ export function InstagramPanel() {
                 ♥ <span>{p.likes || 0}</span>
               </button>
               <button className="ig-act">💬 {comments.length}</button>
+              <button
+                className="ig-act"
+                title={t('Regenerate image')}
+                disabled={!!regenerating[p.id]}
+                onClick={() => openRegen(p)}
+              >
+                {regenerating[p.id] ? '⏳' : '🔄'}
+              </button>
               <button className="ig-act ig-del" title={t('Delete post')} onClick={() => remove(p)}>
                 🗑️
               </button>
@@ -333,6 +413,20 @@ export function InstagramPanel() {
             <img src={zoom} alt="zoom" />
           )}
         </div>
+      ) : null}
+
+      {regenPost ? (
+        <ImageGenDialog
+          open
+          title={t('Regenerate image')}
+          defaultPrompt={regenPost.image_meta?.prompt || ''}
+          showCreateNew
+          showImprovement
+          showNegative
+          characterOptions={charOpts || { detected: [], available: [] }}
+          onSubmit={submitRegen}
+          onClose={() => { setRegenPost(null); setCharOpts(null) }}
+        />
       ) : null}
     </div>
   )

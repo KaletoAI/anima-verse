@@ -1250,21 +1250,26 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             if not description:
                 description = location.get("description", location.get("name", location_name))
 
-            if prompt_type == "map":
-                prompt = (
-                    f"{description}, small icon, top-down view, miniature, "
-                    f"game map tile, simple, clean, centered"
-                )
-            elif prompt_type == "map_2d":
-                prompt = (
-                    f"{description}, top-down map tile, flat 2D illustration, "
-                    f"bird's eye view, simple, clean, fills the frame"
-                )
+            if prompt_type in ("map", "map_2d"):
+                # Subject only — the admin-managed style suffix is appended below.
+                prompt = description
             else:
                 prompt = (
                     f"{description}, wide angle establishing shot, no people, "
                     f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
                 )
+
+        # Map-icon style suffix is admin-managed (Server Admin → Image Generation)
+        # and applied server-side for map/map_2d — also over custom prompts — so it
+        # lives in config, not hardcoded in code or duplicated in the UI.
+        if prompt_type == "map":
+            _sfx = (os.environ.get("MAP_IMAGE_PROMPT_SUFFIX") or "").strip()
+            if _sfx:
+                prompt = f"{prompt}, {_sfx}"
+        elif prompt_type == "map_2d":
+            _sfx = (os.environ.get("MAP_2D_IMAGE_PROMPT_SUFFIX") or "").strip()
+            if _sfx:
+                prompt = f"{prompt}, {_sfx}"
 
         from app.core.dependencies import get_skill_manager
 
@@ -1348,6 +1353,12 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         params: Dict[str, Any] = {"width": _location_image_width(), "height": _location_image_height()}
         if prompt_type in ("map", "map_2d"):
             params["image_use_case"] = "map"
+        if prompt_type == "map_2d":
+            # Flat 2D tile fills the frame and is NOT rembg-cropped — generate
+            # square so the icon stays 1:1 (Flux-native 1024) instead of keeping
+            # the wide 16:9 location aspect ratio.
+            params["width"] = 1024
+            params["height"] = 1024
         # Workflow-File: expliziter Workflow hat Vorrang vor Default-Workflow
         active_wf = None
         if workflow_name:

@@ -8,8 +8,8 @@ placeholders:
   context_block: Pre-formatted context (location, activity, mood, weather, etc.)
   hint_block: Optional pre-formatted "User hint: ..." line — empty if none
   existing_block: Pre-formatted existing wardrobe pieces with [EQUIPPED] markers
-  type_hint: Pre-formatted dress-code guidance (target_type or generic)
-  required_block: Pre-formatted required-slots block (empty if none)
+  type_hint: Pre-formatted style guidance (room style_hint + character decency_preference)
+  required_block: Pre-formatted decency coverage block (empty if none)
   max_pieces: Max number of pieces
   allowed_slots: Comma-separated list of valid slots
   language_hint: Optional "Use <lang> for the `name` field." — empty if English
@@ -44,7 +44,6 @@ Generate a COHERENT OUTFIT as a list of individual pieces. Rules:
 - prompt_fragment is the concrete visual description used for image generation
   (e.g. "black leather moto jacket, silver zippers"). NO character names, NO poses.
 - name is short, 2-4 words (e.g. "Black Leather Jacket"). {{ language_hint }}
-- outfit_types is an array of tags (e.g. ["Casual"], ["Business","Formal"]).
 
 SLOT semantics (MANDATORY — place each garment in the correct slot):
 - head: hats, caps, headbands, hairbands, fascinators.
@@ -78,7 +77,7 @@ Return ONLY valid JSON with this schema:
 {
   "pieces": [
     {"slots": ["top", "bottom"], "name": "...", "prompt_fragment": "...",
-      "outfit_types": ["..."], "covers": [], "partially_covers": []},
+      "covers": [], "partially_covers": []},
     ...
   ]
 }

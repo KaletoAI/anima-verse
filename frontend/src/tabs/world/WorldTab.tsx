@@ -14,9 +14,7 @@ interface Room {
   id?: string
   name?: string
   description?: string
-  // Legacy — wird in Schritt 8 entfernt, parallel zur neuen Decency-Achse
-  outfit_type?: string
-  // Schritt 1 (May 2026, plan-outfit-system-rethink.md §1.1)
+  // Decency (plan-outfit-system-rethink.md §1.1) — ersetzt das alte outfit_type-Modell
   decency?: '' | 'public' | 'private' | 'nude_ok'
   style_hint?: string
   swim_allowed?: boolean
@@ -41,8 +39,6 @@ interface Location {
   entry_room?: string
   danger_level?: number
   indoor?: string
-  // Legacy — siehe Room
-  outfit_type?: string
   decency?: '' | 'public' | 'private' | 'nude_ok'
   style_hint?: string
   swim_allowed?: boolean
@@ -141,7 +137,6 @@ export function WorldTab() {
         image_prompt_map_2d: src.image_prompt_map_2d || '',
         danger_level: src.danger_level,
         indoor: src.indoor || '',
-        outfit_type: src.outfit_type,
         decency: src.decency,
         style_hint: src.style_hint,
         swim_allowed: src.swim_allowed,
@@ -326,7 +321,6 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
         entry_room: draft.entry_room || '',
         danger_level: draft.danger_level,
         indoor: draft.indoor || '',
-        outfit_type: draft.outfit_type,
         decency: draft.decency,
         style_hint: draft.style_hint,
         swim_allowed: draft.swim_allowed,
@@ -961,11 +955,10 @@ function LocationGallery({
       if (!desc && promptType === 'map') desc = (location.image_prompt_map || '').trim()
       if (!desc && promptType === 'map_2d') desc = (location.image_prompt_map_2d || '').trim()
       if (!desc) desc = location.description || location.name || ''
-      if (promptType === 'map') {
-        return `${desc}, small icon, top-down view, miniature, game map tile, simple, clean, centered`
-      }
-      if (promptType === 'map_2d') {
-        return `${desc}, top-down map tile, flat 2D illustration, bird's eye view, simple, clean, fills the frame`
+      // Map icons: subject only. The style suffix is admin-managed (Server Admin →
+      // Image Generation) and appended server-side, so it isn't duplicated here.
+      if (isMap) {
+        return desc
       }
       return `${desc}, wide angle establishing shot, no people, atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio`
     },
@@ -997,10 +990,14 @@ function LocationGallery({
       )
         .then(() => {
           toast(t('Image queued'))
-          // Reload after a short delay so the new image has a chance to land.
-          window.setTimeout(() => {
+          // Image generation runs in the background and takes longer than a
+          // single tick — refresh repeatedly so the new image lands without
+          // having to navigate away and back.
+          let n = 0
+          const iv = window.setInterval(() => {
             reload().catch(() => {})
-          }, 2000)
+            if (++n >= 20) window.clearInterval(iv) // ~60s
+          }, 3000)
         })
         .catch((e) => {
           toast(t('Error') + ': ' + (e as Error).message, 'error')

@@ -126,24 +126,50 @@ class OutfitCreationSkill(BaseSkill):
     # Kontext — gewuenschter Outfit-Type aus Location/Room
     # ------------------------------------------------------------------
 
-    def _resolve_target_outfit_type(self, character_name: str) -> str:
-        """Delegiert an zentralen Helper (Activity > Raum > Location)."""
-        from app.core.outfit_rules import resolve_target_outfit_type
-        return resolve_target_outfit_type(character_name)
+    def _resolve_style_context(self, character_name: str):
+        """Liefert (style_hint, decency) aus dem aktuellen Raum (Fallback:
+        Location). Ersetzt das fruehere outfit_type-Modell — Decency ist die
+        harte Bedeckungsregel, style_hint die freie Stil-Richtung.
+        """
+        try:
+            from app.models.character import (get_character_current_location,
+                                              get_character_current_room)
+            from app.models.world import get_location_by_id
+            loc_id = get_character_current_location(character_name) or ""
+            if not loc_id:
+                return "", ""
+            loc = get_location_by_id(loc_id) or {}
+            room_id = get_character_current_room(character_name) or ""
+            style, decency = "", ""
+            if room_id:
+                for r in (loc.get("rooms") or []):
+                    if r.get("id") == room_id or r.get("name") == room_id:
+                        style = (r.get("style_hint") or "").strip()
+                        decency = (r.get("decency") or "").strip()
+                        break
+            if not style:
+                style = (loc.get("style_hint") or "").strip()
+            if not decency:
+                decency = (loc.get("decency") or "").strip()
+            return style, decency
+        except Exception:
+            return "", ""
 
     # ------------------------------------------------------------------
     # LLM-Call
     # ------------------------------------------------------------------
 
     def _generate_pieces_via_llm(self, character_name: str, personality: str, appearance: str,
-                                  context_block: str, target_type: str,
+                                  context_block: str, style_hint: str, decency: str,
+                                  decency_pref: str,
                                   existing_pieces: List[Dict[str, Any]],
                                   hint: str, language: str,
                                   max_pieces: int) -> Optional[List[Dict[str, Any]]]:
         """LLM produziert eine Liste von Piece-Entwuerfen.
 
-        Returns Liste von Dicts {slots, name, prompt_fragment, outfit_types,
-        covers, partially_covers} oder None bei Fehler.
+        Returns Liste von Dicts {slots, name, prompt_fragment, covers,
+        partially_covers} oder None bei Fehler. (Kein outfit_types mehr —
+        Stil kommt aus style_hint/decency_pref, Bedeckung aus decency.)
         """
         # Equipped-State laden: Slots die gerade belegt sind sollen im Prompt
         # markiert werden, damit der LLM weiss was aktuell getragen wird
@@ -158,79 +184,46 @@ class OutfitCreationSkill(BaseSkill):
             equipped_iids = set()
 
         # Bestehende Pieces als Kontext (der LLM soll Duplikate vermeiden).
-        # Zeigt jetzt outfit_types + [EQUIPPED]-Marker pro Piece, damit der
-        # LLM casual-Pieces erkennen kann ohne raten zu muessen.
+        # Slots + [EQUIPPED]-Marker pro Piece (kein outfit_types mehr).
         existing_lines = []
         for p in existing_pieces[-20:]:  # letzte 20 reichen als Kontext
             op = p.get("outfit_piece") or {}
             slot_list = op.get("slots") or []
             slot_str = "+".join(slot_list) if slot_list else "?"
-            types = op.get("outfit_types") or []
-            type_str = ", ".join(types) if types else "–"
             frag = (p.get("item_prompt_fragment") or "").strip()
             name = p.get("item_name") or p.get("item_id") or "?"
             equipped_marker = " [EQUIPPED]" if p.get("item_id") in equipped_iids else ""
-            line = f"- [{slot_str}] ({type_str}){equipped_marker} {name}"
+            line = f"- [{slot_str}]{equipped_marker} {name}"
             if frag:
                 line += f": {frag}"
             existing_lines.append(line)
         existing_block = "\n".join(existing_lines) if existing_lines else "(none)"
 
-        # Required-Slots-Block: Baseline aus outfit_rules.json + Character-
-        # Exceptions (z.B. Kira laesst underwear_top typischerweise weg).
-        # Wenn der LLM die Exceptions nicht sieht, generiert er jedes Mal
-        # den Standard-Satz Pieces und ignoriert den Character-Stil.
-        required_block = ""
-        if target_type:
-            try:
-                from app.core.outfit_rules import (
-                    baseline_required_slots, resolve_required_slots)
-                baseline = baseline_required_slots(target_type)
-                effective = sorted(resolve_required_slots(target_type, character_name))
-                lines = []
-                if baseline:
-                    lines.append(f"Baseline required slots for '{target_type}': {', '.join(baseline)}")
-                if effective and set(effective) != set(baseline):
-                    dropped = sorted(set(baseline) - set(effective))
-                    added = sorted(set(effective) - set(baseline))
-                    if dropped:
-                        lines.append(f"Character-specific: drop {', '.join(dropped)} (this character prefers to leave these out)")
-                    if added:
-                        lines.append(f"Character-specific: add {', '.join(added)}")
-                lines.append(f"Effective required slots for {character_name}: {', '.join(effective) if effective else '(none)'}")
-                required_block = "\n".join(lines)
-            except Exception as _rerr:
-                logger.debug("outfit_rules fuer Prompt nicht lesbar: %s", _rerr)
-                required_block = ""
+        # Bedeckungs-Block aus Decency (ersetzt die fruehere outfit_type-
+        # required-slots-Berechnung). Decency ist die harte Regel; alles
+        # Weitere entscheidet der LLM stilistisch.
+        if decency == "public":
+            required_block = ("Decency (public location): top AND bottom MUST be "
+                              "covered. Always include a top and a bottom piece "
+                              "(unless already [EQUIPPED]).")
+        elif decency == "private":
+            required_block = ("Decency (private location): coverage is optional — "
+                              "dress to the style/mood, partial or full nudity is fine.")
+        elif decency == "nude_ok":
+            required_block = "Decency (nude_ok): no coverage requirement at all."
+        else:
+            required_block = ""
 
-        # Dress-Code-Description aus outfit_rules.json (falls gesetzt) dem
-        # LLM als Stil-Leitlinie mitgeben — verhindert zu generische Auswahl.
-        type_description = ""
-        if target_type:
-            try:
-                from app.core.outfit_rules import _load_rules
-                rules = _load_rules()
-                _entry = (rules.get("outfit_types") or {}).get(target_type) or {}
-                if not _entry:
-                    # Case-insensitive Lookup
-                    _key = target_type.strip().lower()
-                    for k, v in (rules.get("outfit_types") or {}).items():
-                        if k.strip().lower() == _key:
-                            _entry = v
-                            break
-                type_description = (_entry.get("description") or "").strip() if isinstance(_entry, dict) else ""
-            except Exception:
-                type_description = ""
-
-        type_hint = (
-            f"The outfit must match the dress code '{target_type}'. "
-            f"Assign the outfit_types tag [\"{target_type}\"] to every piece."
-            + (f"\nStyle guide for '{target_type}': {type_description}" if type_description else "")
-        ) if target_type else (
-            "No specific dress code. Pick one coherent outfit style "
-            "(Casual, Sport, Sleepwear, Beachwear, Business, Formal, or Intimate) "
-            "and tag every piece with that style."
-        )
+        # Stil-Leitlinie: Raum-style_hint + persoenliche decency_preference des
+        # Characters (ersetzt outfit_types-Dresscode + outfit_exceptions).
+        _style_parts = []
+        if style_hint:
+            _style_parts.append(f"Match the location's style: '{style_hint}'.")
+        else:
+            _style_parts.append("Pick one coherent outfit style that fits the context.")
+        if decency_pref:
+            _style_parts.append(f"{character_name}'s personal dressing preference: {decency_pref}.")
+        type_hint = " ".join(_style_parts)
         lang_hint = f"Use {language} for the `name` field." if language and language != "en" else ""
 
         allowed_slots = ", ".join(VALID_PIECE_SLOTS)
@@ -335,13 +328,6 @@ class OutfitCreationSkill(BaseSkill):
                 if any(s in seen_slots for s in slots):
                     continue
 
-                types = p.get("outfit_types") or []
-                if not isinstance(types, list):
-                    types = [str(types)]
-                types = [str(t).strip() for t in types if str(t).strip()]
-                if target_type and target_type not in types:
-                    types.append(target_type)
-
                 # covers/partially_covers duerfen sich nicht mit slots ueberschneiden
                 # (slot ist physisch belegt → nichts zu verdecken).
                 covers = _clean_slot_list(p.get("covers"), exclude=set(slots))
@@ -350,7 +336,6 @@ class OutfitCreationSkill(BaseSkill):
                 cleaned.append({
                     "slots": slots, "name": name,
                     "prompt_fragment": frag,
-                    "outfit_types": types,
                     "covers": covers,
                     "partially_covers": partially,
                 })
@@ -426,7 +411,9 @@ class OutfitCreationSkill(BaseSkill):
             loc_id = get_character_current_location(character_name) or ""
             activity = get_effective_activity(character_name) or ""
             feeling = get_character_current_feeling(character_name) or ""
-            target_type = self._resolve_target_outfit_type(character_name)
+            style_hint, decency = self._resolve_style_context(character_name)
+            from app.models.character import get_character_profile as _gcp_pref
+            decency_pref = (_gcp_pref(character_name) or {}).get("decency_preference", "") or ""
 
             location_label = ""
             location_desc = ""
@@ -445,8 +432,10 @@ class OutfitCreationSkill(BaseSkill):
                                  + (f" ({activity_desc})" if activity_desc else ""))
             if feeling:
                 ctx_lines.append(f"Mood: {feeling}")
-            if target_type:
-                ctx_lines.append(f"Dress-code: {target_type}")
+            if style_hint:
+                ctx_lines.append(f"Style: {style_hint}")
+            if decency:
+                ctx_lines.append(f"Decency: {decency}")
             context_block = "\n".join(ctx_lines) or "(no specific context)"
 
             # Wieviele Pieces darf der LLM heute noch erzeugen?
@@ -467,7 +456,8 @@ class OutfitCreationSkill(BaseSkill):
             pieces = self._generate_pieces_via_llm(
                 character_name=character_name,
                 personality=personality, appearance=appearance,
-                context_block=context_block, target_type=target_type,
+                context_block=context_block, style_hint=style_hint,
+                decency=decency, decency_pref=decency_pref,
                 existing_pieces=existing, hint=hint, language=language,
                 max_pieces=max_pieces)
             if not pieces:
@@ -502,7 +492,6 @@ class OutfitCreationSkill(BaseSkill):
                             prompt_fragment=p["prompt_fragment"],
                             outfit_piece={
                                 "slots": slots_list,
-                                "outfit_types": p.get("outfit_types") or [],
                                 "covers": p.get("covers") or [],
                                 "partially_covers": p.get("partially_covers") or [],
                             })
@@ -534,7 +523,7 @@ class OutfitCreationSkill(BaseSkill):
                     piece_ids = [c["id"] for c in set_pieces]
                     # Set-Name: Outfit-Type + Kurzliste (z.B. "Business: Blazer, Heels")
                     short_names = ", ".join(c["name"] for c in set_pieces[:3])
-                    set_name = f"{target_type}: {short_names}" if target_type else short_names
+                    set_name = f"{style_hint}: {short_names}" if style_hint else short_names
                     if len(set_name) > 60:
                         set_name = set_name[:57] + "..."
                     # Outfit-Freitext aus Fragments (Backwards-Compat)
@@ -574,8 +563,8 @@ class OutfitCreationSkill(BaseSkill):
             parts = [head]
             if set_name:
                 parts[0] += f" als Set '{set_name}'"
-            elif target_type:
-                parts[0] += f" (Typ: {target_type})"
+            elif style_hint:
+                parts[0] += f" (Stil: {style_hint})"
             if equipped:
                 parts.append("Slots angezogen: " + ", ".join(equipped))
             if failed:
