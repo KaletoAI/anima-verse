@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 
@@ -227,7 +228,11 @@ export function ImageGenDialog({
 
   if (!open) return null
 
-  return (
+  // Render via portal to document.body so the fixed-position modal escapes any
+  // transformed ancestor (e.g. react-grid-layout panels in /play, which use CSS
+  // transform — a fixed child would otherwise be positioned relative to the
+  // panel and appear clipped/offscreen as an "empty window").
+  return createPortal(
     <div
       className="ga-modal-backdrop"
       onMouseDown={(e) => {
@@ -422,6 +427,7 @@ export function ImageGenDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
