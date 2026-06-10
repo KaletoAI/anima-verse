@@ -93,6 +93,15 @@ export function GalleryPanel() {
     setRegenImg(null); setCharOpts(null); setZoom(null)
   }, [regenImg, selected])
 
+  // Delete only the animation (video) of an image — the image stays.
+  const deleteAnimation = useCallback(async (img: Img) => {
+    if (!selected || !img.video) return
+    try {
+      await apiDelete(`/characters/${encodeURIComponent(selected)}/images/${encodeURIComponent(img.name)}/animation`)
+    } catch { /* gallery poll picks up the result */ }
+    setZoom(null)
+  }, [selected])
+
   // Group images by creation time: fixed buckets first (Today → This month),
   // then month-year buckets newest-first, "Older" last. Mirrors the old UI.
   const groups = useMemo<{ label: string; images: Img[] }[]>(() => {
@@ -244,6 +253,17 @@ export function GalleryPanel() {
                 <button onClick={() => openRegen(zoom)} title={t('Regenerate image')} aria-label={t('Regenerate image')}
                   style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer',
                     opacity: 0.7, display: 'inline-flex', alignItems: 'center', fontSize: '1em' }}>🔄</button>
+              ) : null}
+              {selected === self && zoom.video ? (
+                <button onClick={() => deleteAnimation(zoom)} title={t('Delete animation')} aria-label={t('Delete animation')}
+                  style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer',
+                    opacity: 0.7, display: 'inline-flex', alignItems: 'center', fontSize: '1em' }}>
+                  <span style={{ position: 'relative', display: 'inline-block', lineHeight: 1 }}>
+                    🎬
+                    <span style={{ position: 'absolute', left: -2, right: -2, top: '46%', height: 2,
+                      background: '#e05656', borderRadius: 2, transform: 'rotate(-20deg)', pointerEvents: 'none' }} />
+                  </span>
+                </button>
               ) : null}
               <button onClick={() => setConfirmDel(true)} title={t('Delete image')} aria-label={t('Delete image')}
                 style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer',

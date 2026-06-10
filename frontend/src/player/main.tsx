@@ -5,6 +5,7 @@ import { ErrorBoundary } from './ErrorBoundary.tsx'
 import { I18nProvider } from '../i18n/I18nProvider.tsx'
 import { ToastProvider } from '../lib/Toast.tsx'
 import { AuthGate } from '../lib/AuthGate.tsx'
+import { AvatarGate } from './AvatarGate.tsx'
 import '../styles/game-admin.css'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
@@ -15,9 +16,11 @@ createRoot(document.getElementById('root')!).render(
     <I18nProvider>
       <ToastProvider>
         <AuthGate>
-          <ErrorBoundary>
-            <PlayerApp />
-          </ErrorBoundary>
+          <AvatarGate>
+            <ErrorBoundary>
+              <PlayerApp />
+            </ErrorBoundary>
+          </AvatarGate>
         </AuthGate>
       </ToastProvider>
     </I18nProvider>

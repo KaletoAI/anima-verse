@@ -11,6 +11,7 @@ import { cloneElement, useCallback, useEffect, useRef, useState, type ReactEleme
 import GridLayout, { type Layout } from 'react-grid-layout'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAuth } from '../lib/AuthGate'
+import { useAvatarSwitch } from './AvatarGate'
 import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api'
 import { SceneView, type SceneLine } from '../components/SceneView'
 import { ScenesRecap } from './ScenesRecap'
@@ -112,6 +113,7 @@ interface SceneData {
 export function PlayerApp() {
   const { t } = useI18n()
   const { logout } = useAuth()
+  const { chooseAvatar } = useAvatarSwitch()
   const [data, setData] = useState<SceneData | null>(null)
   const [text, setText] = useState('')
   const [volume, setVolume] = useState('normal')
@@ -863,6 +865,9 @@ export function PlayerApp() {
           </>
         )}
       </div>
+      <button onClick={chooseAvatar} title={t('Switch avatar')} aria-label={t('Switch avatar')} className="play-tbtn">
+        <span style={{ fontSize: 14, lineHeight: 1 }}>⇄</span>
+      </button>
       <button onClick={() => { void logout() }} title={t('Logout')} aria-label={t('Logout')} className="play-tbtn">
         <span style={{ fontSize: 14, lineHeight: 1 }}>⎋</span>
       </button>

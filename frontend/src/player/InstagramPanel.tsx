@@ -181,6 +181,19 @@ export function InstagramPanel() {
     [reload, t, toast],
   )
 
+  const deleteAnimation = useCallback(
+    async (p: Post) => {
+      if (!window.confirm(t('Delete this animation? The image stays.'))) return
+      try {
+        await apiDelete(`/instagram/post/${encodeURIComponent(p.id)}/animation`)
+        await reload()
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [reload, t, toast],
+  )
+
   // Poll the queue for the regenerate task; reload the feed each tick so the
   // new/replaced image lands, and stop once the task was seen and is gone.
   const pollTrack = useCallback(
@@ -397,6 +410,15 @@ export function InstagramPanel() {
               >
                 {animating[p.id] ? '⏳' : '🎬'}
               </button>
+              {p.video_url ? (
+                <button className="ig-act" title={t('Delete animation')} onClick={() => deleteAnimation(p)}>
+                  <span style={{ position: 'relative', display: 'inline-block', lineHeight: 1 }}>
+                    🎬
+                    <span style={{ position: 'absolute', left: -2, right: -2, top: '46%', height: 2,
+                      background: '#e05656', borderRadius: 2, transform: 'rotate(-20deg)', pointerEvents: 'none' }} />
+                  </span>
+                </button>
+              ) : null}
               <button className="ig-act ig-del" title={t('Delete post')} onClick={() => remove(p)}>
                 🗑️
               </button>

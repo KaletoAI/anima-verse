@@ -524,3 +524,45 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
     import threading
     threading.Thread(target=_run_animate, daemon=True).start()
     return {"status": "started", "post_id": post_id, "track_id": _track_id}
+
+
+@router.delete("/post/{post_id}/animation")
+async def delete_instagram_animation(post_id: str) -> Dict[str, Any]:
+    """Loescht nur die Animation (Video) eines Posts, nicht das Bild/den Post."""
+    post = get_post(post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post nicht gefunden")
+    instagram_dir = get_instagram_dir()
+    video_name = (post.get("video_filename") or "").strip()
+    if not video_name:
+        from pathlib import Path as _Path
+        video_name = _Path(post.get("image_filename", "")).stem + ".mp4"
+    if ".." in video_name or "/" in video_name:
+        raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
+    video_path = instagram_dir / video_name
+    if not video_path.exists() and not post.get("video_filename"):
+        raise HTTPException(status_code=404, detail="Keine Animation vorhanden")
+    if video_path.exists():
+        video_path.unlink()
+        logger.info("Instagram-Animation geloescht: %s", video_name)
+
+    # video_filename aus dem Post entfernen
+    feed = load_feed()
+    for p in feed:
+        if p.get("id") == post_id:
+            p.pop("video_filename", None)
+            break
+    save_feed(feed)
+
+    # animate_prompt/animate_created_at aus Bild-Metadaten entfernen
+    image_filename = post.get("image_filename", "")
+    meta = load_image_meta(image_filename) or {}
+    changed = False
+    for key in ("animate_prompt", "animate_created_at"):
+        if key in meta:
+            del meta[key]
+            changed = True
+    if changed:
+        save_image_meta(image_filename, meta)
+
+    return {"status": "success", "deleted_video": video_name}

@@ -61,8 +61,14 @@ interface Props {
   /** Show a negative-prompt field. */
   showNegative?: boolean
   /** Show character checkboxes (detected pre-selected) to pin who is in the image. */
-  characterOptions?: { detected: string[]; available: string[] }
+  characterOptions?: { detected: CharOpt[]; available: CharOpt[] }
 }
+
+// Charakter-Eintrag: manche Endpunkte liefern Strings, andere {name, type}-Objekte
+// (z.B. /instagram/.../detect-characters). Immer auf den reinen Namen normalisieren,
+// sonst rendert React ein Objekt als Kind → Error #31.
+type CharOpt = string | { name: string; type?: string }
+const charName = (c: CharOpt): string => (typeof c === 'string' ? c : c?.name || '')
 
 const LORA_SLOTS = 4
 
@@ -124,13 +130,15 @@ export function ImageGenDialog({
   }, [open, defaultPrompt])
 
   // Reset the regenerate extras when (re)opening; pre-select detected characters.
-  const detectedKey = (characterOptions?.detected || []).join('|')
+  const detNames = (characterOptions?.detected || []).map(charName)
+  const availNames = (characterOptions?.available || []).map(charName)
+  const detectedKey = detNames.join('|')
   useEffect(() => {
     if (!open) return
     setCreateNew(false)
     setImprovement('')
     setNegative('')
-    setSelectedChars(characterOptions?.detected || [])
+    setSelectedChars(detNames)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, detectedKey])
 
@@ -339,17 +347,11 @@ export function ImageGenDialog({
               {characterOptions ? (
                 <>
                   <label className="ga-imagegen-label">{t('Characters in the image')}</label>
-                  {(characterOptions.available.length
-                    ? characterOptions.available
-                    : characterOptions.detected
-                  ).length === 0 ? (
+                  {(availNames.length ? availNames : detNames).length === 0 ? (
                     <div className="ga-form-hint">{t('No characters detected.')}</div>
                   ) : (
                     <div className="ga-imagegen-chars">
-                      {(characterOptions.available.length
-                        ? characterOptions.available
-                        : characterOptions.detected
-                      ).map((name) => {
+                      {(availNames.length ? availNames : detNames).map((name) => {
                         const on = selectedChars.includes(name)
                         return (
                           <label key={name} className="ga-check-row">
