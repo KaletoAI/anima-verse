@@ -56,6 +56,14 @@ def from_chat_message(message, character_name: str, partner: str) -> None:
         if role not in ("user", "assistant") or not content.strip():
             return
 
+        # Remote-DM (Phone/Telegram/Instagram) NICHT in den Raum-Wahrnehmungs-
+        # Stream schatten — das ist die Messaging-Saeule (Fernkommunikation),
+        # der Partner ist gar nicht im Raum. Sonst taucht eine Telefon-Nachricht
+        # an einen abwesenden NPC im Raum-Chat auf. Nur co-located (in_person /
+        # leeres Medium) wird gespiegelt.
+        if (getattr(message, "medium", "") or "") in ("messaging", "telegram", "instagram"):
+            return
+
         from app.core.perception import VOLUME_NORMAL, record_utterance
 
         if role == "assistant":
