@@ -611,8 +611,13 @@ def apply_hourly_status_tick(character_name: str):
         if not template:
             return
 
-        # bar_hourly Werte aus Stat-Feldern sammeln (store="status_effects")
-        stat_hourly = {}  # stat_key -> hourly_delta
+        # Pro Stat-Feld die Stunden-Rate sammeln: Wach (``bar_hourly``) UND
+        # optional Schlaf (``bar_hourly_sleeping``). Letzteres ERSETZT die mit den
+        # Activities abgeschaffte aktivitaets-basierte Schlaf-Auffuellung — jetzt
+        # ZUSTANDS-getrieben (is_sleeping), von Activities entkoppelt, aber weiter
+        # rein TEMPLATE-getrieben (kein Hardcoding). Stats mit nur einem Schlaf-Wert
+        # (bar_hourly=0) werden ebenfalls erfasst.
+        stat_rates = {}  # stat_key -> (awake, sleeping_or_None)
         for section in template.get("sections", []):
             for field in section.get("fields", []):
                 if field.get("store") != "status_effects":
@@ -620,26 +625,31 @@ def apply_hourly_status_tick(character_name: str):
                 stat_key = field.get("key", "")
                 if not stat_key:
                     continue
-                hourly = field.get("bar_hourly", 0)
-                if hourly:
-                    stat_hourly[stat_key] = hourly
+                awake = field.get("bar_hourly", 0)
+                sleeping = field.get("bar_hourly_sleeping", None)
+                if awake or sleeping is not None:
+                    stat_rates[stat_key] = (awake, sleeping)
 
-        if not stat_hourly:
+        if not stat_rates:
             return
 
+        is_sleeping = bool(profile.get("is_sleeping"))
         changed = False
-        for stat_key, template_hourly in stat_hourly.items():
+        for stat_key, (awake, sleeping) in stat_rates.items():
             if stat_key not in status:
                 continue
 
-            # Character-Override: config.{stat_key}_hourly ueberschreibt Template
-            override_key = f"{stat_key}_hourly"
+            # Im Schlaf den Schlaf-Wert nehmen (falls definiert), sonst Wach-Wert.
+            use_sleep = is_sleeping and sleeping is not None
+            base = sleeping if use_sleep else awake
+            # Character-Override: config.{stat}_hourly[_sleeping] ueberschreibt Template.
+            override_key = f"{stat_key}_hourly_sleeping" if use_sleep else f"{stat_key}_hourly"
             try:
-                hourly = int(config.get(override_key, template_hourly))
+                hourly = int(config.get(override_key, base))
             except (ValueError, TypeError):
-                hourly = template_hourly
+                hourly = base
 
-            if hourly == 0:
+            if not hourly:
                 continue
 
             current = status[stat_key]
@@ -647,8 +657,9 @@ def apply_hourly_status_tick(character_name: str):
             if new_val != current:
                 status[stat_key] = new_val
                 changed = True
-                logger.debug("Hourly tick %s: %s %d -> %d (%+d/h)",
-                             character_name, stat_key, current, new_val, hourly)
+                logger.debug("Hourly tick %s: %s %d -> %d (%+d/h%s)",
+                             character_name, stat_key, current, new_val, hourly,
+                             ", sleeping" if use_sleep else "")
 
         if changed:
             profile["status_effects"] = status
