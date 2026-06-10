@@ -4,7 +4,7 @@ Telegram Channel Implementation
 Implementiert die ChannelInterface für Telegram Bot Integration
 Ermöglicht bidirektionale Kommunikation mit dem Agenten via Telegram
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import os
 import asyncio
 import json
@@ -49,9 +49,11 @@ class TelegramChannel(ChannelInterface):
         self._is_available = False
         self._session: Optional[aiohttp.ClientSession] = None
         
-        # Mapping von Telegram Chat-IDs zu User-IDs (In DB in Produktion)
+        # Mapping Telegram Chat-ID → NPC (Bot-Character dieses Chats).
         self.chat_to_user_mapping: Dict[int, str] = {}
-        
+        # Option B: Chat-ID → gebundener Avatar (der Telegram-User IST ein Character).
+        self.chat_to_avatar: Dict[int, str] = {}
+
         # Queue für empfangene Nachrichten
         self.message_queue: asyncio.Queue = asyncio.Queue()
         
@@ -68,15 +70,18 @@ class TelegramChannel(ChannelInterface):
             from app.core.db import get_connection as _get_conn
             conn = _get_conn()
             rows = conn.execute(
-                "SELECT chat_id, character_name FROM telegram_mapping"
+                "SELECT chat_id, character_name, avatar FROM telegram_mapping"
             ).fetchall()
             if rows:
                 self.chat_to_user_mapping = {}
+                self.chat_to_avatar = {}
                 for r in rows:
                     try:
-                        self.chat_to_user_mapping[int(r[0])] = r[1]
+                        cid = int(r[0])
                     except (ValueError, TypeError):
-                        self.chat_to_user_mapping[r[0]] = r[1]
+                        cid = r[0]
+                    self.chat_to_user_mapping[cid] = r[1] or ""
+                    self.chat_to_avatar[cid] = (r[2] if len(r) > 2 else "") or ""
                 logger.info("%d Chat-ID Mappings geladen", len(self.chat_to_user_mapping))
                 return
         except Exception as e:
@@ -95,20 +100,48 @@ class TelegramChannel(ChannelInterface):
             logger.error("Konnte Mapping nicht laden: %s", e)
 
     def _save_chat_mapping(self) -> None:
-        """Speichern Chat-ID Mapping in DB."""
+        """Speichern Chat-ID Mapping in DB (NPC + gebundener Avatar)."""
         now = utc_now_iso()
         try:
             from app.core.db import transaction as _transaction
             with _transaction() as conn:
                 for chat_id, char_name in self.chat_to_user_mapping.items():
                     conn.execute("""
-                        INSERT INTO telegram_mapping (chat_id, character_name, created_at)
-                        VALUES (?, ?, ?)
+                        INSERT INTO telegram_mapping (chat_id, character_name, avatar, created_at)
+                        VALUES (?, ?, ?, ?)
                         ON CONFLICT(chat_id) DO UPDATE SET
-                            character_name=excluded.character_name
-                    """, (str(chat_id), char_name or "", now))
+                            character_name=excluded.character_name,
+                            avatar=excluded.avatar
+                    """, (str(chat_id), char_name or "",
+                          self.chat_to_avatar.get(chat_id, "") or "", now))
         except Exception as e:
             logger.error("Mapping DB-Speicher-Fehler: %s", e)
+
+    # --- Option B: Avatar-Bindung (Telegram-User = Character) ---------------
+
+    def get_bound_avatar(self, chat_id: int) -> str:
+        """Der für diesen Telegram-Chat gebundene Avatar (leer = noch keiner)."""
+        return (self.chat_to_avatar.get(chat_id) or "").strip()
+
+    def set_bound_avatar(self, chat_id: int, avatar: str, npc: str = "") -> None:
+        """Bindet einen Avatar an den Telegram-Chat. ``npc`` (Bot-Character) wird
+        mitgeschrieben, damit die Push-Bridge chat_id ↔ (NPC, Avatar) auflösen kann."""
+        self.chat_to_avatar[chat_id] = (avatar or "").strip()
+        if npc:
+            self.chat_to_user_mapping[chat_id] = npc
+        elif chat_id not in self.chat_to_user_mapping:
+            self.chat_to_user_mapping[chat_id] = ""
+        self._save_chat_mapping()
+
+    def chat_ids_for(self, npc: str, avatar: str) -> List[int]:
+        """Alle Telegram-Chats, in denen ``avatar`` mit ``npc`` spricht — für die
+        Push-Bridge (eine async/proaktive NPC→Avatar-Nachricht an Telegram zustellen)."""
+        out = []
+        for cid, bound in self.chat_to_avatar.items():
+            if (bound or "").strip() == (avatar or "").strip() and \
+               self.chat_to_user_mapping.get(cid, "") == npc:
+                out.append(cid)
+        return out
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Hole oder erstelle aiohttp Session"""
@@ -313,17 +346,15 @@ class TelegramChannel(ChannelInterface):
         
         logger.debug("Nachricht empfangen von %s: %s", text[:50])
     
-    def register_user(self, telegram_chat_id: int) -> None:
-        """
-        Registriere ein Mapping von Telegram Chat-ID zu User-ID
-        
-        Args:
-            telegram_chat_id: Telegram Chat ID
-            user_id: Eindeutige User ID im System
-        """
-        self.chat_to_user_mapping[telegram_chat_id] = ""
+    def register_user(self, telegram_chat_id: int, npc: str = "") -> None:
+        """Registriert einen Telegram-Chat. ``npc`` = der Bot-Character dieses
+        Chats (wird gespeichert, damit die Push-Bridge chat_id ↔ NPC auflösen
+        kann). Der gebundene Avatar wird separat via /avatar gesetzt."""
+        if npc or telegram_chat_id not in self.chat_to_user_mapping:
+            self.chat_to_user_mapping[telegram_chat_id] = npc or self.chat_to_user_mapping.get(telegram_chat_id, "")
+        self.chat_to_avatar.setdefault(telegram_chat_id, "")
         self._save_chat_mapping()
-        logger.info("User registriert: %s", telegram_chat_id)
+        logger.info("Telegram-Chat registriert: %s (npc=%s)", telegram_chat_id, npc or "?")
     
     async def on_message_received(
         self, content: str,

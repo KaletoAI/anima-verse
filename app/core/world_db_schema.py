@@ -439,7 +439,8 @@ SCHEMA_STATEMENTS = [
     # ── Telegram / Session / Account ───────────────────────────────────
     """CREATE TABLE IF NOT EXISTS telegram_mapping (
         chat_id        TEXT PRIMARY KEY,
-        character_name TEXT NOT NULL,
+        character_name TEXT NOT NULL,        -- NPC (Bot-Character) dieses Chats
+        avatar         TEXT NOT NULL DEFAULT '',  -- gebundener Avatar (Telegram-User = Character, Option B)
         created_at     TEXT NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS account (
@@ -550,6 +551,9 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations — laufen nach allen CREATEs idempotent durch.
 # Pattern: pro Tabelle die fehlenden Spalten hinzufuegen, OperationalError = existiert schon.
 ALTER_MIGRATIONS = [
+    # telegram_mapping: avatar-Spalte — der Telegram-User wird als Avatar-Character
+    # vertreten (Option B). character_name bleibt der NPC (Bot) des Chats.
+    ("telegram_mapping", "avatar", "TEXT NOT NULL DEFAULT ''"),
     # llm_call_stats: agent_name + max_tokens fuer Admin-Stats-Tab nachgezogen
     ("llm_call_stats", "agent_name", "TEXT DEFAULT ''"),
     ("llm_call_stats", "max_tokens", "INTEGER DEFAULT 0"),
