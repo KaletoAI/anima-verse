@@ -215,7 +215,12 @@ def build_chat_context(
 
     # Partner-Name fuer History-Dateinamen: bei C2C explizit; sonst active character
     _history_partner = partner_name if partner_name else (speaker if speaker != "user" else "")
-    full_chat_history = get_chat_history(character_name, partner_name=_history_partner)
+    # Im Raum-Modus wird die 1:1-History unten (s. ~Z.320) komplett durch den
+    # Wahrnehmungs-Stream ersetzt UND die history_summary im Prompt unterdrueckt —
+    # der Load + die Aufbereitung waeren reine Verschwendung. Daher hier ueber-
+    # springen (Anti-Rep nutzt im Raum-Modus ohnehin den room_stream).
+    full_chat_history = [] if room_stream else get_chat_history(
+        character_name, partner_name=_history_partner)
 
     # LLM bauen — Anti-Repetition aus chat-Section der Admin-Config:
     # frequency_penalty (Token-Penalty) + graduellem Temperature-Bump pro
