@@ -868,6 +868,14 @@ function LocationGallery({
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [dialogType, setDialogType] = useState<'day' | 'night' | 'map' | 'map_2d' | null>(null)
+  // Unabhängige Config-Suffixe für Karten-Icons (editierbar im Dialog statt
+  // serverseitig angehängt). Einmalig laden.
+  const [mapSuffix, setMapSuffix] = useState({ map: '', map_2d: '' })
+  useEffect(() => {
+    apiGet<{ map_image_prompt_suffix?: string; map_2d_image_prompt_suffix?: string }>('/world/imagegen-options')
+      .then((d) => setMapSuffix({ map: d.map_image_prompt_suffix || '', map_2d: d.map_2d_image_prompt_suffix || '' }))
+      .catch(() => { /* ignore */ })
+  }, [])
 
   const reload = useCallback(async () => {
     try {
@@ -984,6 +992,8 @@ function LocationGallery({
       if (payload.backend) body.backend = payload.backend
       if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras) body.loras = payload.loras
+      // Dialog hat den Karten-Icon-Suffix schon im Prompt → Server nicht doppeln.
+      if (payload.prompt_settings_applied) body.settings_applied = true
 
       // Detached: do NOT await. handleSubmit will see a resolved Promise
       // immediately and trigger onClose() in the next microtask.
@@ -1082,6 +1092,13 @@ function LocationGallery({
       }
       defaultPrompt={buildDefaultPrompt(dialogType)}
       hideNegative
+      settingsSuffix={
+        dialogType === 'map' && mapSuffix.map
+          ? { label: t('Map icon (isometric)'), text: mapSuffix.map }
+          : dialogType === 'map_2d' && mapSuffix.map_2d
+            ? { label: t('2D map icon'), text: mapSuffix.map_2d }
+            : undefined
+      }
       onSubmit={submitGenerate}
       onClose={() => setDialogType(null)}
     />

@@ -1062,6 +1062,10 @@ def get_imagegen_options() -> Dict[str, Any]:
     # Default-Vorauswahl fuer Location aus .env
     loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
     result = {"options": options}
+    # Unabhaengige Config-Prompt-Teile, damit der Dialog sie EDITIERBAR zeigen kann
+    # (statt sie serverseitig anzuhaengen): Karten-Icon-Suffixe.
+    result["map_image_prompt_suffix"] = (os.environ.get("MAP_IMAGE_PROMPT_SUFFIX") or "").strip()
+    result["map_2d_image_prompt_suffix"] = (os.environ.get("MAP_2D_IMAGE_PROMPT_SUFFIX") or "").strip()
     if loc_default:
         result["default_location"] = loc_default
     return result
@@ -1285,17 +1289,18 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                     f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
                 )
 
-        # Map-icon style suffix is admin-managed (Server Admin → Image Generation)
-        # and applied server-side for map/map_2d — also over custom prompts — so it
-        # lives in config, not hardcoded in code or duplicated in the UI.
-        if prompt_type == "map":
-            _sfx = (os.environ.get("MAP_IMAGE_PROMPT_SUFFIX") or "").strip()
-            if _sfx:
-                prompt = f"{prompt}, {_sfx}"
-        elif prompt_type == "map_2d":
-            _sfx = (os.environ.get("MAP_2D_IMAGE_PROMPT_SUFFIX") or "").strip()
-            if _sfx:
-                prompt = f"{prompt}, {_sfx}"
+        # Map-icon style suffix (config). Nur noch serverseitig anhaengen, wenn der
+        # Aufrufer ihn NICHT schon im Prompt mitliefert (``settings_applied`` =
+        # Dialog hat den editierbaren Suffix bereits eingebaut → kein Doppeln).
+        if not data.get("settings_applied"):
+            if prompt_type == "map":
+                _sfx = (os.environ.get("MAP_IMAGE_PROMPT_SUFFIX") or "").strip()
+                if _sfx:
+                    prompt = f"{prompt}, {_sfx}"
+            elif prompt_type == "map_2d":
+                _sfx = (os.environ.get("MAP_2D_IMAGE_PROMPT_SUFFIX") or "").strip()
+                if _sfx:
+                    prompt = f"{prompt}, {_sfx}"
 
         from app.core.dependencies import get_skill_manager
 

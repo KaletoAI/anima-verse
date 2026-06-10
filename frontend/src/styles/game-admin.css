@@ -1888,6 +1888,22 @@ html, * {
   margin-top: 4px;
 }
 
+/* Unabhängige Config-Prompt-Teile (Prefix/Suffix) — editierbar, aber sichtbar
+   als „aus den Einstellungen" markiert: Akzent-Rand + Akzent-Label. */
+.ga-imagegen-settings-part {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--accent, #2f81f7);
+  background: color-mix(in srgb, var(--accent, #2f81f7) 7%, transparent);
+  border-radius: 4px;
+}
+.ga-imagegen-settings-label {
+  margin-top: 0;
+  color: var(--accent, #2f81f7);
+}
+
 .ga-imagegen-loras {
   display: flex;
   flex-direction: column;

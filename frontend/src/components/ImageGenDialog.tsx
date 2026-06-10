@@ -46,6 +46,9 @@ export interface ImageGenSubmit {
   improvement_request?: string
   negative_prompt?: string
   character_names?: string[]
+  // True when the prompt already includes the independent config parts
+  // (prefix/suffix) from the dialog → the backend must NOT re-append them.
+  prompt_settings_applied?: boolean
 }
 
 interface Props {
@@ -54,6 +57,14 @@ interface Props {
   defaultPrompt: string
   /** Optional thumbnail of the current image (shown for recreate/regenerate). */
   sourceImageUrl?: string
+  /**
+   * Independent config prompt parts to show as EDITABLE, marked fields (instead of
+   * the backend appending them). Each: a label (shown as „from settings: <label>")
+   * and the prefilled text. On submit they are joined into the full prompt and
+   * `prompt_settings_applied` is set so the backend skips re-adding them.
+   */
+  settingsPrefix?: { label: string; text: string }
+  settingsSuffix?: { label: string; text: string }
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
   onClose: () => void
   /**
@@ -121,12 +132,15 @@ function filterByWorkflowName(items: string[], workflowName: string, filter: str
 }
 
 export function ImageGenDialog({
-  open, title, defaultPrompt, sourceImageUrl, onSubmit, onClose,
-  mode = 'create', hideNegative, characterOptions,
+  open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
+  onSubmit, onClose, mode = 'create', hideNegative, characterOptions,
 }: Props) {
   const isRegen = mode === 'regenerate'
   const { t } = useI18n()
   const [prompt, setPrompt] = useState(defaultPrompt)
+  // Editierbare, markierte unabhaengige Config-Teile (Prefix/Suffix).
+  const [prefixText, setPrefixText] = useState(settingsPrefix?.text || '')
+  const [suffixText, setSuffixText] = useState(settingsSuffix?.text || '')
   const [createNew, setCreateNew] = useState(false)
   const [improvement, setImprovement] = useState('')
   const [negative, setNegative] = useState('')
@@ -140,10 +154,17 @@ export function ImageGenDialog({
   )
   const [submitting, setSubmitting] = useState(false)
 
-  // Resync prompt when caller changes the default (e.g. day → night).
+  // Resync prompt + independent config parts when the caller changes them
+  // (e.g. day → night, or map → map_2d with a different suffix).
   useEffect(() => {
     if (open) setPrompt(defaultPrompt)
   }, [open, defaultPrompt])
+  useEffect(() => {
+    if (open) setPrefixText(settingsPrefix?.text || '')
+  }, [open, settingsPrefix?.text])
+  useEffect(() => {
+    if (open) setSuffixText(settingsSuffix?.text || '')
+  }, [open, settingsSuffix?.text])
 
   // Reset the regenerate extras when (re)opening; pre-select detected characters.
   const detNames = (characterOptions?.detected || []).map(charName)
@@ -237,7 +258,12 @@ export function ImageGenDialog({
 
   const handleSubmit = useCallback(async () => {
     if (!currentOption) return
-    const payload: ImageGenSubmit = { prompt: prompt.trim() }
+    // Vollen Prompt zusammensetzen: Prefix + Basis + Suffix (alle editierbar). Der
+    // Server haengt die unabhaengigen Config-Teile dann nicht erneut an.
+    const fullPrompt = [prefixText.trim(), prompt.trim(), suffixText.trim()]
+      .filter(Boolean).join(', ')
+    const payload: ImageGenSubmit = { prompt: fullPrompt }
+    if (settingsPrefix || settingsSuffix) payload.prompt_settings_applied = true
     // Match-Glob senden (workflow:<filter> / backend:<name>) — der Server löst ihn
     // nach Verfügbarkeit auf (match_workflow / match_backend), wie im Admin-Default.
     if (currentOption.type === 'workflow') payload.workflow = currentOption.filter || currentOption.name
@@ -257,9 +283,9 @@ export function ImageGenDialog({
     } finally {
       setSubmitting(false)
     }
-  }, [currentOption, prompt, loraSlots, onSubmit, onClose,
-      isRegen, createNew, improvement, hideNegative, negative,
-      characterOptions, selectedChars])
+  }, [currentOption, prompt, prefixText, suffixText, settingsPrefix, settingsSuffix,
+      loraSlots, onSubmit, onClose, isRegen, createNew, improvement, hideNegative,
+      negative, characterOptions, selectedChars])
 
   if (!open) return null
 
@@ -371,6 +397,17 @@ export function ImageGenDialog({
               {sourceImageUrl ? (
                 <img src={sourceImageUrl} alt="" style={{ maxHeight: 150, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
               ) : null}
+
+              {settingsPrefix ? (
+                <div className="ga-imagegen-settings-part">
+                  <label className="ga-imagegen-label ga-imagegen-settings-label">
+                    {t('From settings')}: {settingsPrefix.label}
+                  </label>
+                  <textarea className="ga-textarea" rows={2} value={prefixText}
+                    disabled={submitting} onChange={(e) => setPrefixText(e.target.value)} />
+                </div>
+              ) : null}
+
               <label className="ga-imagegen-label">{t('Prompt')}</label>
               <textarea
                 className="ga-textarea"
@@ -379,6 +416,16 @@ export function ImageGenDialog({
                 disabled={submitting}
                 onChange={(e) => setPrompt(e.target.value)}
               />
+
+              {settingsSuffix ? (
+                <div className="ga-imagegen-settings-part">
+                  <label className="ga-imagegen-label ga-imagegen-settings-label">
+                    {t('From settings')}: {settingsSuffix.label}
+                  </label>
+                  <textarea className="ga-textarea" rows={2} value={suffixText}
+                    disabled={submitting} onChange={(e) => setSuffixText(e.target.value)} />
+                </div>
+              ) : null}
 
               {characterOptions ? (
                 <>
