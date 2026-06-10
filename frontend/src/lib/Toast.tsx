@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 
-type ToastKind = 'info' | 'error'
+type ToastKind = 'info' | 'error' | 'success'
 
 interface ToastState {
   msg: string

@@ -496,9 +496,7 @@ export function InstagramPanel() {
           open
           title={t('Regenerate image')}
           defaultPrompt={regenPost.image_meta?.prompt || ''}
-          showCreateNew
-          showImprovement
-          showNegative
+          mode="regenerate"
           characterOptions={charOpts || { detected: [], available: [] }}
           onSubmit={submitRegen}
           onClose={() => { setRegenPost(null); setCharOpts(null) }}

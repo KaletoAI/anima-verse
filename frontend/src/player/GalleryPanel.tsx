@@ -315,9 +315,7 @@ export function GalleryPanel() {
           open
           title={t('Regenerate image')}
           defaultPrompt={regenImg.info?.prompt || ''}
-          showCreateNew
-          showImprovement
-          showNegative
+          mode="regenerate"
           characterOptions={charOpts || { detected: [], available: [] }}
           onSubmit={submitRegen}
           onClose={() => { setRegenImg(null); setCharOpts(null) }}

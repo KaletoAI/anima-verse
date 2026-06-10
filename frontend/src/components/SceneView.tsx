@@ -101,7 +101,6 @@ function SceneRow({ line }: { line: SceneLine }) {
   }
 
   let body: ReactNode
-  let marker = ''
 
   if (speaker === 'Erzähler') {
     // Erzähler-Narration (Act/Storyteller): farblich abgesetzt — gold + kursiv,
@@ -122,14 +121,22 @@ function SceneRow({ line }: { line: SceneLine }) {
       </span>
     )
   } else {
-    // spoken_self | in_room | objective utterance
-    if (line.volume === 'whisper') marker = addr.length ? `(${t('whisper to')} ${addr.join(', ')})` : `(${t('whisper')})`
-    else if (line.volume === 'shout') marker = `(${t('shout')})`
-    else if (addr.length) marker = `→ ${addr.join(', ')}`
+    // spoken_self | in_room | objective utterance — Lautstärke sichtbar machen:
+    // leise = grau/gedimmt + 🤫, schreien = fett + GROSSBUCHSTABEN + 📢.
+    // Der Adressat bleibt als kleiner Pfeil erhalten (separate Info zur Lautstärke).
+    const isWhisper = line.volume === 'whisper'
+    const isShout = line.volume === 'shout'
+    const icon = isWhisper ? '🤫 ' : isShout ? '📢 ' : ''
+    const toArrow = addr.length ? <span style={{ opacity: 0.5 }}> → {addr.join(', ')}</span> : null
+    const content = isShout ? (line.content || '').toUpperCase() : line.content
+    const volStyle = isWhisper
+      ? { opacity: 0.5 }                 // leise → gedimmt/grau
+      : isShout
+        ? { fontWeight: 700 as const }   // schreien → fett (+ Caps am Inhalt)
+        : {}
     body = (
-      <span>
-        <strong>{speaker}</strong>
-        {marker ? <span style={{ opacity: 0.6 }}> {marker}</span> : null}: {line.content}
+      <span style={volStyle}>
+        {icon}<strong>{speaker}</strong>{toArrow}: {content}
       </span>
     )
   }

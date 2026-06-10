@@ -54,12 +54,18 @@ interface Props {
   defaultPrompt: string
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
   onClose: () => void
-  /** Show an "add as new image" toggle (vs. replace in place). */
-  showCreateNew?: boolean
-  /** Show an "improvement request" free-text field. */
-  showImprovement?: boolean
-  /** Show a negative-prompt field. */
-  showNegative?: boolean
+  /**
+   * Field visibility is opt-OUT: generic fields (workflow, prompt, LoRAs, negative
+   * prompt) show by default so new generic features land in every caller. Only
+   * context-specific fields are gated:
+   *  - `mode='regenerate'` adds the "improvement request" field + the "add as new
+   *    image vs. replace" toggle (only meaningful when regenerating an existing image).
+   *  - `characterOptions` adds the character checkboxes (only for images with people).
+   *  - `hideNegative` hides the negative-prompt field for the rare backend that
+   *    ignores a custom negative (e.g. world backgrounds).
+   */
+  mode?: 'create' | 'regenerate'
+  hideNegative?: boolean
   /** Show character checkboxes (detected pre-selected) to pin who is in the image. */
   characterOptions?: { detected: CharOpt[]; available: CharOpt[] }
 }
@@ -107,8 +113,9 @@ function filterByWorkflowName(items: string[], workflowName: string, filter: str
 
 export function ImageGenDialog({
   open, title, defaultPrompt, onSubmit, onClose,
-  showCreateNew, showImprovement, showNegative, characterOptions,
+  mode = 'create', hideNegative, characterOptions,
 }: Props) {
+  const isRegen = mode === 'regenerate'
   const { t } = useI18n()
   const [prompt, setPrompt] = useState(defaultPrompt)
   const [createNew, setCreateNew] = useState(false)
@@ -219,9 +226,9 @@ export function ImageGenDialog({
       const active = loraSlots.filter((l) => l.name && l.name !== 'None')
       payload.loras = active.length ? active : null
     }
-    if (showCreateNew) payload.create_new = createNew
-    if (showImprovement && improvement.trim()) payload.improvement_request = improvement.trim()
-    if (showNegative && negative.trim()) payload.negative_prompt = negative.trim()
+    if (isRegen) payload.create_new = createNew
+    if (isRegen && improvement.trim()) payload.improvement_request = improvement.trim()
+    if (!hideNegative && negative.trim()) payload.negative_prompt = negative.trim()
     if (characterOptions) payload.character_names = selectedChars
     setSubmitting(true)
     try {
@@ -231,8 +238,8 @@ export function ImageGenDialog({
       setSubmitting(false)
     }
   }, [currentOption, prompt, loraSlots, onSubmit, onClose,
-      showCreateNew, createNew, showImprovement, improvement,
-      showNegative, negative, characterOptions, selectedChars])
+      isRegen, createNew, improvement, hideNegative, negative,
+      characterOptions, selectedChars])
 
   if (!open) return null
 
@@ -374,7 +381,7 @@ export function ImageGenDialog({
                 </>
               ) : null}
 
-              {showImprovement ? (
+              {isRegen ? (
                 <>
                   <label className="ga-imagegen-label">{t('Improvement request')}</label>
                   <textarea
@@ -388,7 +395,7 @@ export function ImageGenDialog({
                 </>
               ) : null}
 
-              {showNegative ? (
+              {!hideNegative ? (
                 <>
                   <label className="ga-imagegen-label">{t('Negative prompt')}</label>
                   <textarea
@@ -402,7 +409,7 @@ export function ImageGenDialog({
                 </>
               ) : null}
 
-              {showCreateNew ? (
+              {isRegen ? (
                 <label className="ga-check-row" style={{ marginTop: 8 }}>
                   <input
                     type="checkbox"

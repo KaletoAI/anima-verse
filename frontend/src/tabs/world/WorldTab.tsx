@@ -1081,6 +1081,7 @@ function LocationGallery({
               : t('Generate map icon — {name}').replace('{name}', location.name)
       }
       defaultPrompt={buildDefaultPrompt(dialogType)}
+      hideNegative
       onSubmit={submitGenerate}
       onClose={() => setDialogType(null)}
     />

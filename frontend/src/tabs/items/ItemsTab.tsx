@@ -522,6 +522,7 @@ export function ItemsTab() {
       if (payload.loras && payload.loras.length) {
         body.loras = payload.loras.map((l) => ({ file: l.name, strength: l.strength }))
       }
+      if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
       try {
         await apiPost(`/inventory/items/${encodeURIComponent(draft.id)}/generate-image`, body)
         toast(t('Image queued'))

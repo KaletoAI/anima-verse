@@ -107,8 +107,11 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     Player-Szenen-Ansicht). Join auf ``utterances`` nur fuer die Raum-Metadaten —
     nie fuer den Inhalt (der bleibt in ``perceptions`` schon gefiltert)."""
     conn = get_connection()
+    # u.volume mitliefern (whisper/normal/shout) — KEIN geheimer Inhalt, nur die
+    # Lautstärke; der Inhalt bleibt in p.content schon gefiltert (whisper_meta = leer).
     rows = conn.execute(
-        "SELECT p.* FROM perceptions p JOIN utterances u ON u.id = p.utterance_id "
+        "SELECT p.*, u.volume AS volume FROM perceptions p "
+        "JOIN utterances u ON u.id = p.utterance_id "
         "WHERE p.perceiver=? AND u.location_id=? AND u.room_id=? "
         "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
         (perceiver, location_id, room_id, limit)).fetchall()
