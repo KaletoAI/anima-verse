@@ -725,10 +725,16 @@ class AgentLoop:
         except Exception as e:
             logger.error("respond-turn %s: run_chat_turn failed: %s", character_name, e)
         if reply and reply.strip():
+            # Lautstärke SPIEGELN: wurde der NPC geflüstert/geschrien angesprochen,
+            # antwortet er in derselben Lautstärke (sonst normal). Gibt NPCs damit
+            # Flüstern/Schreien, ohne dass sie es selbst explizit „wählen" müssen —
+            # ein geflüsterter Austausch bleibt privat (nur der Adressat hört den
+            # Inhalt), ein Schrei-Wechsel bleibt laut.
+            _reply_vol = (respond.get("volume") or "normal").strip() or "normal"
             try:
-                from app.core.perception import VOLUME_NORMAL, record_utterance
+                from app.core.perception import record_utterance
                 record_utterance(speaker=character_name, content=reply,
-                                 volume=VOLUME_NORMAL,
+                                 volume=_reply_vol,
                                  addressees=[speaker] if speaker else [],
                                  source="loop")
             except Exception as e:
@@ -741,7 +747,7 @@ class AgentLoop:
                 key = self._room_key(_loc, _room)
                 self._room_ai_turns[key] = self._room_ai_turns.get(key, 0) + 1
                 self.dispatch_room_reactions(
-                    speaker=character_name, content=reply, volume="normal",
+                    speaker=character_name, content=reply, volume=_reply_vol,
                     location_id=_loc, room_id=_room,
                     addressees=[speaker] if speaker else [], is_avatar=False)
             except Exception as e:
