@@ -10,6 +10,7 @@
 import { cloneElement, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import GridLayout, { type Layout } from 'react-grid-layout'
 import { useI18n } from '../i18n/I18nProvider'
+import { useAuth } from '../lib/AuthGate'
 import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api'
 import { SceneView, type SceneLine } from '../components/SceneView'
 import { ScenesRecap } from './ScenesRecap'
@@ -110,6 +111,7 @@ interface SceneData {
 
 export function PlayerApp() {
   const { t } = useI18n()
+  const { logout } = useAuth()
   const [data, setData] = useState<SceneData | null>(null)
   const [text, setText] = useState('')
   const [volume, setVolume] = useState('normal')
@@ -124,6 +126,10 @@ export function PlayerApp() {
   const [frozen, setFrozen] = useState(false)                    // Layout einfrieren + mitskalieren
   const [frozenWidth, setFrozenWidth] = useState(0)              // Referenzbreite beim Einfrieren
   const [width, setWidth] = useState(1200)
+  // Badges „offene Themen": ungelesene Telefon-Nachrichten + neue IG-Posts.
+  const [phoneUnread, setPhoneUnread] = useState(0)
+  const [igNew, setIgNew] = useState(0)
+  const igSeenRef = useRef<string | null>(null)  // zuletzt gesehene IG-Post-id
   const rootRef = useRef<HTMLDivElement | null>(null)
   const layoutLoaded = useRef(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -204,6 +210,28 @@ export function PlayerApp() {
     setOpen(next)
     if (layoutLoaded.current) persist()
   }, [persist])
+  // Badges pollen: Telefon-Unread (Server-Summe) + neue IG-Posts seit der zuletzt
+  // gesehenen id (localStorage). Ist das IG-Panel offen oder beim allerersten Lauf,
+  // gilt alles als gesehen → kein Badge.
+  const refreshBadges = useCallback(async () => {
+    try {
+      const m = await apiGet<{ conversations?: Array<{ unread?: number }> }>('/play/messages')
+      setPhoneUnread((m.conversations || []).reduce((s, c) => s + (c.unread || 0), 0))
+    } catch { /* ignore */ }
+    try {
+      const f = await apiGet<{ posts?: Array<{ id: string }> }>('/instagram/feed?limit=50')
+      const posts = f.posts || []
+      const newest = posts[0]?.id || null
+      if (openRef.current.includes('instagram') || !igSeenRef.current) {
+        igSeenRef.current = newest
+        if (newest) { try { localStorage.setItem('play.ig.seen', newest) } catch { /* ignore */ } }
+        setIgNew(0)
+      } else {
+        const idx = posts.findIndex((p) => p.id === igSeenRef.current)
+        setIgNew(idx < 0 ? Math.min(posts.length, 99) : idx)
+      }
+    } catch { /* ignore */ }
+  }, [])
   const togglePanel = useCallback((id: string) => {
     const isOpen = openRef.current.includes(id)
     setOpenAnd(isOpen
@@ -211,7 +239,9 @@ export function PlayerApp() {
       : [...openRef.current, id])
     // Wieder-Aktivieren → in den Vordergrund holen (Z-Stacking ans Ende).
     if (!isOpen) setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
-  }, [setOpenAnd])
+    // IG öffnen → sofort als gesehen markieren (Badge weg), Stand nachziehen.
+    if (!isOpen && id === 'instagram') { setIgNew(0); refreshBadges() }
+  }, [setOpenAnd, refreshBadges])
   const closePanel = useCallback((id: string) => {
     setOpenAnd(openRef.current.filter((x) => x !== id))
   }, [setOpenAnd])
@@ -355,6 +385,14 @@ export function PlayerApp() {
     const id = setInterval(load, 5000)
     return () => clearInterval(id)
   }, [load])
+
+  // Badges: gemerkten IG-Stand laden, dann langsam pollen (offene Themen).
+  useEffect(() => {
+    try { igSeenRef.current = localStorage.getItem('play.ig.seen') } catch { /* ignore */ }
+    refreshBadges()
+    const id = setInterval(refreshBadges, 20000)
+    return () => clearInterval(id)
+  }, [refreshBadges])
 
   const toggleAddressee = useCallback((name: string) => {
     setAddressees((prev) =>
@@ -767,19 +805,23 @@ export function PlayerApp() {
   }, [autosizeKey, openKey, persist])
 
   // --- Toolbar (Launcher) -------------------------------------------------
-  const tbBtn = (id: string, label: string, icon: IconName, isOpen: boolean, onClick: () => void) => (
+  const tbBtn = (id: string, label: string, icon: IconName, isOpen: boolean, onClick: () => void, badge = 0) => (
     <button key={id} onClick={onClick} title={t(label)} aria-label={t(label)} aria-pressed={isOpen}
-      className={`play-tbtn${isOpen ? ' open' : ''}${iconMode === 'iconText' ? ' with-text' : ''}`}>
+      className={`play-tbtn${isOpen ? ' open' : ''}${iconMode === 'iconText' ? ' with-text' : ''}`}
+      style={{ position: 'relative' }}>
       <Icon name={icon} size={15} />
       {iconMode === 'iconText' && <span className="play-tbtn-label">{t(label)}</span>}
+      {badge > 0 && <span className="play-tbtn-badge">{badge > 99 ? '99+' : badge}</span>}
     </button>
   )
+  // Badge je Panel-id (offene Themen): Telefon-Unread, neue IG-Posts.
+  const badgeOf = (id: string) => (id === 'phone' ? phoneUnread : id === 'instagram' ? igNew : 0)
   // Panel-Umschalter folgen der Position/Label-Einstellung. 'layouts' nicht hier:
   // der Layouts-Button + Reset + Zahnrad bleiben fest rechts (Wunsch).
   const panelToggles = PANEL_META
     .filter((p) => p.kind !== 'dialog')
     .filter((p) => p.id !== 'others' || hasOthers)
-    .map((p) => tbBtn(p.id, p.label, p.icon, open.includes(p.id), () => togglePanel(p.id)))
+    .map((p) => tbBtn(p.id, p.label, p.icon, open.includes(p.id), () => togglePanel(p.id), badgeOf(p.id)))
   const layoutsMeta = PANEL_META.find((p) => p.id === 'layouts')!
   const fixedCluster = (
     <>
@@ -821,6 +863,9 @@ export function PlayerApp() {
           </>
         )}
       </div>
+      <button onClick={() => { void logout() }} title={t('Logout')} aria-label={t('Logout')} className="play-tbtn">
+        <span style={{ fontSize: 14, lineHeight: 1 }}>⎋</span>
+      </button>
     </>
   )
 

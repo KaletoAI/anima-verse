@@ -22,10 +22,10 @@ export class ApiError extends Error {
 }
 
 function redirectToLogin(): never {
-  const ret = encodeURIComponent(window.location.pathname + window.location.hash)
-  window.location.href = `/?return=${ret}`
-  // The redirect cancels execution; the throw is just for the type system.
-  throw new Error('redirecting to login')
+  // Inform the AuthGate (same page) to show its own login form instead of
+  // jumping to the legacy /-UI. The throw cancels the current call.
+  window.dispatchEvent(new CustomEvent('auth:required'))
+  throw new Error('auth required')
 }
 
 async function parseJsonOrThrow(res: Response): Promise<any> {

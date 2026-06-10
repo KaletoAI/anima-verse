@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from './icons'
 import { useI18n } from '../i18n/I18nProvider'
+import './Lightbox.css'
 
 export interface LightboxItem { src?: string; video?: string; alt?: string }
 

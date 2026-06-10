@@ -78,7 +78,13 @@ function RecentRow({ r }: { r: RecentTaskInfo }) {
   const color = failed ? '#e05656' : cancelled ? 'var(--text-muted, #8b949e)' : '#3fa45a'
   const title = r.label || (r.agent_name || r.task_type || t('Task'))
   const dur = r.duration_s != null ? fmtDur(Math.round(r.duration_s)) : ''
-  const meta = [dur, r.provider, r.model].filter(Boolean).join(' · ')
+  // Uhrzeit (lokal, HH:MM) des Eintrags — created_at ist UTC-ISO vom Server.
+  const clock = (() => {
+    if (!r.created_at) return ''
+    const d = new Date(r.created_at)
+    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  })()
+  const meta = [clock, dur, r.provider, r.model].filter(Boolean).join(' · ')
   return (
     <div title={r.error || ''}
       style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: '0.74em', opacity: 0.7 }}>

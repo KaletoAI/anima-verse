@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from './i18n/I18nProvider'
 import { TABS, isTabId, type TabId } from './tabs/registry'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { useAuth } from './lib/AuthGate'
 
 function readHashTab(): TabId {
   const raw = window.location.hash.replace(/^#\/?/, '').toLowerCase()
@@ -10,6 +11,7 @@ function readHashTab(): TabId {
 
 export default function App() {
   const { t } = useI18n()
+  const { user, logout } = useAuth()
   const [active, setActive] = useState<TabId>(readHashTab)
 
   useEffect(() => {
@@ -32,6 +34,10 @@ export default function App() {
           ← {t('Back to chat')}
         </a>
         <h1>{t('Game Admin')}</h1>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {user ? <span style={{ opacity: 0.7, fontSize: '0.85em' }}>{user.username}</span> : null}
+          <button className="ga-btn ga-btn-sm" onClick={() => { void logout() }}>{t('Logout')}</button>
+        </div>
       </header>
       <nav className="ga-tabs" role="tablist">
         {TABS.map((tab) => (

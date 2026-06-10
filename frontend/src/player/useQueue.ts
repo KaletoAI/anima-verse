@@ -52,6 +52,7 @@ export interface RecentTaskInfo {
   agent_name?: string
   status?: string
   duration_s?: number
+  created_at?: string
   error?: string
   provider?: string
   model?: string
@@ -166,14 +167,15 @@ function collectRecent(d: QueueStatus): RecentTaskInfo[] {
   for (const tk of d.recent || []) {
     out.push({
       task_id: tk.task_id, label: tk.label, task_type: tk.task_type, agent_name: tk.agent_name,
-      status: tk.status, duration_s: tk.duration_s, error: tk.error,
+      status: tk.status, duration_s: tk.duration_s, created_at: tk.created_at, error: tk.error,
       provider: tk.provider_name, model: tk.model,
     })
   }
   for (const tk of d.recent_tasks || []) {
     out.push({
       task_id: tk.task_id, label: tk.label, task_type: tk.task_type, agent_name: tk.agent_name,
-      status: tk.status, duration_s: tk.duration_s, error: tk.error, provider: tk.provider,
+      status: tk.status, duration_s: tk.duration_s, created_at: tk.created_at, error: tk.error,
+      provider: tk.provider,
     })
   }
   return out.slice(0, 25)
