@@ -103,8 +103,8 @@ def _format_catalog(catalog: List[Dict[str, Any]]) -> str:
 
 
 def detect_cast(avatar_name: str, target_name: str, message: str,
-                catalog: Optional[List[Dict[str, Any]]] = None
-                ) -> Optional[Dict[str, Any]]:
+                catalog: Optional[List[Dict[str, Any]]] = None,
+                volume: str = "normal") -> Optional[Dict[str, Any]]:
     """Tool-LLM-Detection: hat der Avatar einen Zauber gewirkt?
 
     Returns das Spell-Catalog-Dict bei Match (mit confidence), sonst None.
@@ -147,13 +147,22 @@ def detect_cast(avatar_name: str, target_name: str, message: str,
         from app.models.character import get_character_language, LANGUAGE_MAP
         lang_code = (get_character_language(avatar_name) or "en").strip()
         language_name = LANGUAGE_MAP.get(lang_code, "English")
+        vol = (volume or "normal").strip().lower()
+        volume_hint = {
+            "whisper": "The caster is WHISPERING — the cast is barely audible, "
+                       "murmured under the breath; bystanders can hardly hear it. "
+                       "Phrase the observation accordingly (quiet, hushed).",
+            "shout": "The caster is SHOUTING — the cast rings out loudly and "
+                     "forcefully. Phrase the observation accordingly (loud).",
+        }.get(vol, "The caster speaks at a normal, audible volume.")
         sys_prompt, user_prompt = render_task(
             "spell_detect",
             avatar_name=avatar_name,
             target_name=target_name or "(no target)",
             message=message,
             spell_catalog=_format_catalog(catalog),
-            language_name=language_name)
+            language_name=language_name,
+            volume_hint=volume_hint)
         response = llm_call(
             task="spell_detect",
             system_prompt=sys_prompt,
@@ -402,14 +411,17 @@ def execute_cast(avatar_name: str, target_name: str,
 
 
 def detect_and_cast(avatar_name: str, target_name: str,
-                    message: str) -> Optional[Dict[str, Any]]:
+                    message: str, volume: str = "normal") -> Optional[Dict[str, Any]]:
     """Bequeme Combo: wenn der Avatar einen Spell wirkt, sofort ausfuehren.
+
+    ``volume`` (whisper/normal/shout) fliesst in die Beschwoerungs-Narration
+    (chat_substitute) ein, damit Fluestern nicht als "deutlich" beschrieben wird.
 
     Returns das Result-Dict (siehe execute_cast) bei Match, sonst None.
     Aufrufer kann das ``hint``-Feld an den naechsten NPC-System-Prompt
     anhaengen, damit der Char narrativ darauf reagiert.
     """
-    detected = detect_cast(avatar_name, target_name, message)
+    detected = detect_cast(avatar_name, target_name, message, volume=volume)
     if not detected:
         return None
     return execute_cast(avatar_name, target_name, detected)

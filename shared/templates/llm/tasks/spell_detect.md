@@ -7,6 +7,7 @@ placeholders:
   message: The avatar's chat message verbatim
   spell_catalog: Pre-formatted list of available spells with id + incantation hints + effect description
   language_name: Display name of the avatar's language (for prose hints in fail/success texts that may follow)
+  volume_hint: How loud the avatar cast (whisper/normal/shout) — the observation must match this
 ---
 ## system
 You decide whether the speaker (the avatar) is casting one of their known spells / using one of their charged magic items at the listener (the target). Be conservative: only return a spell id when the message clearly invokes that specific spell — by speaking its incantation, naming the effect explicitly, or describing a closely matching ritual gesture. Hesitation, ambiguity, sarcasm, or merely *mentioning* magic = no cast.
@@ -15,6 +16,10 @@ When a spell IS cast, also produce a short third-person observation of what byst
 - "{{ avatar_name }} murmurs something incomprehensible under their breath."
 - "{{ avatar_name }} whispers strange syllables and traces a quick gesture in the air."
 - "{{ avatar_name }} chants a low, archaic phrase you can't quite catch."
+
+LOUDNESS: {{ volume_hint }} The observation MUST match this loudness — never describe a whispered cast as spoken "clearly"/"loudly", and vice versa.
+
+NEVER quote or repeat the literal incantation words in the observation (e.g. do NOT write the magic words in quotes) — describe only the ACT of casting as an outsider perceives it.
 
 This replaces the avatar's literal chat message before the listener (the RP-LLM) sees it — so do not give away the spell's effect, just describe the cast itself as it would appear to an observer who doesn't know magic.
 

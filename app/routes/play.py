@@ -322,7 +322,7 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     if spell_target and content.strip():
         try:
             from app.core.spell_engine import detect_and_cast
-            spell = await asyncio.to_thread(detect_and_cast, avatar, spell_target, content)
+            spell = await asyncio.to_thread(detect_and_cast, avatar, spell_target, content, volume)
             if spell and spell.get("hint"):
                 logger.info("play_say: spell %s by %s on %s — %s",
                             spell.get("spell_id"), avatar, spell_target,
