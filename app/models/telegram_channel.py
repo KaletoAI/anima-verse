@@ -390,3 +390,29 @@ def get_telegram_channel() -> TelegramChannel:
     return _telegram_channel
 
 
+# --- Push-Bridge (Option B): ausstehende NPC→Avatar-Nachrichten -------------
+# Der send_message-Skill (NPC schreibt async/proaktiv an einen Avatar) reiht hier
+# SYNC ein (nur Listen-Append). Der Telegram-Poller des jeweiligen NPC drained es
+# in seinem async Loop und stellt es an den Telegram-Chat zu. So überbrückt es den
+# sync→async-Graben ohne Loop-Scheduling.
+import threading as _threading
+_outbound_lock = _threading.Lock()
+_outbound_pending: List[Dict[str, Any]] = []  # {"chat_id", "npc", "text"}
+
+
+def enqueue_telegram_outbound(chat_id: int, npc: str, text: str) -> None:
+    if not (text and text.strip() and npc):
+        return
+    with _outbound_lock:
+        _outbound_pending.append({"chat_id": chat_id, "npc": npc, "text": text})
+
+
+def drain_telegram_outbound(npc: str) -> List[tuple]:
+    """(chat_id, text) aller ausstehenden Nachrichten dieses NPC — entfernt sie."""
+    with _outbound_lock:
+        mine = [(p["chat_id"], p["text"]) for p in _outbound_pending if p["npc"] == npc]
+        if mine:
+            _outbound_pending[:] = [p for p in _outbound_pending if p["npc"] != npc]
+    return mine
+
+

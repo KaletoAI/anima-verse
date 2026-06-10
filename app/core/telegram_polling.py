@@ -205,6 +205,17 @@ class CharacterBotPoller:
                     except Exception as e:
                         logger.error("[%s] Error handling update: %s", self.character_name, e, exc_info=True)
 
+                # Push-Bridge: ausstehende NPC→Avatar-Nachrichten dieses Bots
+                # zustellen (proaktive/async SendMessage an den Telegram-Avatar).
+                try:
+                    from app.models.telegram_channel import drain_telegram_outbound
+                    for cid, txt in drain_telegram_outbound(self.character_name):
+                        clean = self._clean_for_telegram(txt)
+                        if clean:
+                            await self.send_message(cid, clean, parse_mode="")
+                except Exception as _be:
+                    logger.debug("[%s] outbound drain failed: %s", self.character_name, _be)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

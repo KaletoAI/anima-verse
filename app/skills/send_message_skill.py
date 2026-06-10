@@ -116,6 +116,18 @@ class SendMessageSkill(BaseSkill):
         except Exception as e:
             logger.error("SendMessage: Chat-History speichern fehlgeschlagen: %s", e)
 
+        # Push-Bridge (Telegram Option B): ist das Ziel ein Telegram-gebundener
+        # Avatar dieses Senders (NPC), die Nachricht an den Telegram-Chat zustellen.
+        # Sync-Enqueue; der Poller des NPC stellt sie async zu.
+        try:
+            from app.models.telegram_channel import (
+                get_telegram_channel, enqueue_telegram_outbound)
+            tg = get_telegram_channel()
+            for cid in tg.chat_ids_for(npc=sender_name, avatar=target_name):
+                enqueue_telegram_outbound(cid, sender_name, message)
+        except Exception as _be:
+            logger.debug("telegram outbound enqueue failed: %s", _be)
+
         # Notification nur fuer Character→Character (System-Event-Feed bleibt
         # sauber von "X hat Y geschrieben"-Spam). Bei Avatar-Target reicht der
         # Chat-History-Eintrag — der Chat-Unread-Indikator pingt automatisch.
