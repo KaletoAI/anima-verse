@@ -419,7 +419,9 @@ export function InstagramPanel() {
                   </span>
                 </button>
               ) : null}
-              <button className="ig-act ig-del" title={t('Delete post')} onClick={() => remove(p)}>
+              <button className="ig-act ig-del"
+                title={hasCarousel ? t('Delete current image') : t('Delete post')}
+                onClick={() => (hasCarousel ? removeCarouselImage(p, filenames[idx] || '') : remove(p))}>
                 🗑️
               </button>
             </div>
