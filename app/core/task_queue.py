@@ -137,10 +137,14 @@ class TaskQueue:
         logger.info("DB initialisiert: %s", self._db_path)
 
     def _reset_stale_running(self) -> None:
-        """On startup: stale running tasks aufräumen.
+        """On startup: stale Tasks aufräumen.
 
-        Queued tasks → pending (haben Handler, werden erneut verarbeitet).
-        Tracked tasks → interrupted (extern gesteuert, kein Retry moeglich).
+        Queued tasks (running) → pending (haben Handler, werden erneut verarbeitet).
+        Tracked tasks (running ODER pending) → interrupted: extern gesteuert
+        (GPU/Bild/TTS), kein Retry möglich. Auch PENDING-tracked muss aufgeräumt
+        werden — ein extern getriggerter Task, der vor dem Neustart nie
+        ``track_activate`` bekam, hängt sonst für immer in der Queue (Bug:
+        „Bilderzeugung seit 700 Minuten").
         """
         now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
@@ -149,10 +153,11 @@ class TaskQueue:
                 "UPDATE tasks SET status='pending', started_at=NULL, error='Server-Neustart'"
                 " WHERE status='running' AND (task_origin='queued' OR task_origin IS NULL)"
             )
-            # Tracked tasks: als interrupted markieren
+            # Tracked tasks (running ODER pending): als interrupted markieren —
+            # der externe Prozess ist nach dem Neustart weg, kann nie zu Ende.
             c2 = conn.execute(
                 "UPDATE tasks SET status='interrupted', completed_at=?, error='Server-Neustart'"
-                " WHERE status='running' AND task_origin='tracked'",
+                " WHERE status IN ('running','pending') AND task_origin='tracked'",
                 (now,))
             conn.commit()
         if c1.rowcount:

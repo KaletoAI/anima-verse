@@ -77,18 +77,21 @@ export function MovePad({
 
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 8 }}>
-      {/* oben fest: Pfeile, zentriert */}
+      {/* oben fest: Pfeile, zentriert. Nicht am Ausgang → das (komplett
+          deaktivierte) D-Pad ganz ausblenden, nur der Hinweis bleibt (spart Platz). */}
       <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-        <div style={{
-          display: 'grid', gridTemplateColumns: `repeat(3, ${CW}px)`,
-          gridAutoRows: `${RH}px`, gap: 4, justifyContent: 'center',
-        }}>
-          {blank}{cell('north', '↑')}{blank}
-          {cell('west', '←')}
-          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.35 }}>◉</span>
-          {cell('east', '→')}
-          {blank}{cell('south', '↓')}{blank}
-        </div>
+        {!gated && (
+          <div style={{
+            display: 'grid', gridTemplateColumns: `repeat(3, ${CW}px)`,
+            gridAutoRows: `${RH}px`, gap: 4, justifyContent: 'center',
+          }}>
+            {blank}{cell('north', '↑')}{blank}
+            {cell('west', '←')}
+            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.35 }}>◉</span>
+            {cell('east', '→')}
+            {blank}{cell('south', '↓')}{blank}
+          </div>
+        )}
         {gated && (
           <div style={{ opacity: 0.6, fontSize: '0.78em', textAlign: 'center' }}>
             {t('To leave the place, go to the entry room:')} {entryRoomName}

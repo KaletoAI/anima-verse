@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { useQueue, elapsedSeconds, type LLMTaskInfo, type TrackedTaskInfo, type RecentTaskInfo } from './useQueue'
+import { EmptyState } from './EmptyState'
 
 function fmtDur(s: number): string {
   if (s < 60) return `${s}s`
@@ -194,7 +195,7 @@ export function TaskPanel() {
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }} />
       )}
       {!hasTasks && (
-        <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active tasks')}</div>
+        <EmptyState small icon="tasks" title={t('No active tasks')} />
       )}
       {llmTasks.length > 0 || pendingLLM.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

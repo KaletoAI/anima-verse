@@ -12,6 +12,9 @@ import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../lib/api'
 import { useToast } from '../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../components/ImageGenDialog'
+import { AnimateDialog, type AnimateSubmit } from '../components/AnimateDialog'
+import { useLightbox } from './Lightbox'
+import { Icon } from './icons'
 
 interface Reaction {
   emoji?: string
@@ -85,12 +88,20 @@ export function InstagramPanel() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [avatarFail, setAvatarFail] = useState<Record<string, boolean>>({})
   const [liked, setLiked] = useState<Record<string, boolean>>({})
-  const [zoom, setZoom] = useState<string | null>(null)
+  const lightbox = useLightbox()
+  // Bild/Video aus dem Feed in der gemeinsamen Lightbox öffnen (Video an der
+  // Endung erkennen → Lightbox zeigt Video mit Steuerung statt Zoom).
+  const openMedia = useCallback((url: string) => {
+    lightbox.open(/\.(mp4|webm)$/i.test(url) ? { video: url } : { src: url })
+  }, [lightbox])
   // Regenerate: the post whose image-gen dialog is open, the detected/available
   // characters for it, and the set of posts currently regenerating.
   const [regenPost, setRegenPost] = useState<Post | null>(null)
   const [charOpts, setCharOpts] = useState<{ detected: string[]; available: string[] } | null>(null)
   const [regenerating, setRegenerating] = useState<Record<string, boolean>>({})
+  // Animate: the post whose animate dialog is open, and posts currently animating.
+  const [animatePost, setAnimatePost] = useState<Post | null>(null)
+  const [animating, setAnimating] = useState<Record<string, boolean>>({})
   const alive = useRef(true)
 
   const reload = useCallback(async () => {
@@ -173,7 +184,7 @@ export function InstagramPanel() {
   // Poll the queue for the regenerate task; reload the feed each tick so the
   // new/replaced image lands, and stop once the task was seen and is gone.
   const pollTrack = useCallback(
-    (postId: string, trackId: string) => {
+    (postId: string, trackId: string, clear: (id: string) => void, maxTicks = 40) => {
       let n = 0
       let seen = false
       const iv = window.setInterval(async () => {
@@ -185,14 +196,16 @@ export function InstagramPanel() {
         } catch { /* keep polling */ }
         if (active) seen = true
         await reload()
-        if ((trackId && seen && !active) || n >= 40) {
+        if ((trackId && seen && !active) || n >= maxTicks) {
           window.clearInterval(iv)
-          setRegenerating((prev) => { const x = { ...prev }; delete x[postId]; return x })
+          clear(postId)
         }
       }, 3000)
     },
     [reload],
   )
+  const clearRegen = useCallback((id: string) => setRegenerating((p) => { const x = { ...p }; delete x[id]; return x }), [])
+  const clearAnimate = useCallback((id: string) => setAnimating((p) => { const x = { ...p }; delete x[id]; return x }), [])
 
   // Open the regenerate dialog: detect characters first, prefill from the post.
   const openRegen = useCallback(async (p: Post) => {
@@ -227,12 +240,49 @@ export function InstagramPanel() {
         )
         toast(t('Regenerating…'))
         setRegenerating((prev) => ({ ...prev, [p.id]: true }))
-        pollTrack(p.id, r.track_id || '')
+        pollTrack(p.id, r.track_id || '', clearRegen)
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [regenPost, pollTrack, t, toast],
+    [regenPost, pollTrack, clearRegen, t, toast],
+  )
+
+  // Animate: suggest the motion prompt for the open post, then fire the video job.
+  const suggestAnimate = useCallback(
+    async (opts: { system_prompt: string; llm_override: string }): Promise<string> => {
+      const p = animatePost
+      if (!p) return ''
+      try {
+        const r = await apiPost<{ prompt?: string }>(
+          `/instagram/post/${encodeURIComponent(p.id)}/suggest-animate-prompt`, opts,
+        )
+        return r.prompt || ''
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        return ''
+      }
+    },
+    [animatePost, t, toast],
+  )
+
+  const submitAnimate = useCallback(
+    async (payload: AnimateSubmit) => {
+      const p = animatePost
+      if (!p) return
+      try {
+        const r = await apiPost<{ track_id?: string }>(
+          `/instagram/post/${encodeURIComponent(p.id)}/animate`, payload,
+        )
+        toast(t('Animating…'))
+        setAnimating((prev) => ({ ...prev, [p.id]: true }))
+        // Video generation takes longer than image regen — allow ~10 min.
+        pollTrack(p.id, r.track_id || '', clearAnimate, 200)
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [animatePost, pollTrack, clearAnimate, t, toast],
   )
 
   if (posts === null) return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('Loading…')}</div>
@@ -273,15 +323,19 @@ export function InstagramPanel() {
             </div>
 
             <div className="ig-image">
+              <button className="ig-zoom-btn" title={t('Open fullscreen')} aria-label={t('Open fullscreen')}
+                onClick={() => openMedia(p.video_url || urls[idx])}>
+                <Icon name="maximize" size={16} />
+              </button>
               {p.video_url ? (
-                <video src={p.video_url} autoPlay loop muted playsInline onClick={() => setZoom(p.video_url!)} />
+                <video src={p.video_url} autoPlay loop muted playsInline onClick={() => openMedia(p.video_url!)} />
               ) : (
                 <>
                   <img
                     src={urls[idx]}
                     alt="post"
                     loading="lazy"
-                    onClick={() => setZoom(urls[idx])}
+                    onClick={() => openMedia(urls[idx])}
                   />
                   {hasCarousel ? (
                     <>
@@ -334,6 +388,14 @@ export function InstagramPanel() {
                 onClick={() => openRegen(p)}
               >
                 {regenerating[p.id] ? '⏳' : '🔄'}
+              </button>
+              <button
+                className="ig-act"
+                title={p.video_url ? t('Re-animate') : t('Animate image')}
+                disabled={!!animating[p.id]}
+                onClick={() => setAnimatePost(p)}
+              >
+                {animating[p.id] ? '⏳' : '🎬'}
               </button>
               <button className="ig-act ig-del" title={t('Delete post')} onClick={() => remove(p)}>
                 🗑️
@@ -405,16 +467,6 @@ export function InstagramPanel() {
         )
       })}
 
-      {zoom ? (
-        <div className="ig-lightbox" onClick={() => setZoom(null)}>
-          {zoom.endsWith('.mp4') || zoom.includes('/images/') && /\.(mp4|webm)$/.test(zoom) ? (
-            <video src={zoom} autoPlay loop controls />
-          ) : (
-            <img src={zoom} alt="zoom" />
-          )}
-        </div>
-      ) : null}
-
       {regenPost ? (
         <ImageGenDialog
           open
@@ -426,6 +478,19 @@ export function InstagramPanel() {
           characterOptions={charOpts || { detected: [], available: [] }}
           onSubmit={submitRegen}
           onClose={() => { setRegenPost(null); setCharOpts(null) }}
+        />
+      ) : null}
+
+      {animatePost ? (
+        <AnimateDialog
+          open
+          title={animatePost.video_url ? t('Re-animate') : t('Animate image')}
+          sourceImageUrl={animatePost.image_url || `/instagram/images/${animatePost.image_filename}`}
+          defaultPrompt={animatePost.image_meta?.image_analysis || ''}
+          characterName={animatePost.agent_name || ''}
+          onSuggest={suggestAnimate}
+          onSubmit={submitAnimate}
+          onClose={() => setAnimatePost(null)}
         />
       ) : null}
     </div>

@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
+import { EmptyState } from './EmptyState'
 
 interface Mem { content: string; type: string; importance: number; with: string; ts: string; tags: string[] }
 interface DiaryEntry { type: string; content: string; ts: string }
@@ -31,7 +32,7 @@ export function JournalPanel() {
   }, [])
 
   if (!data || !data.avatar) {
-    return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active avatar')}</div>
+    return <EmptyState icon="journal" title={t('No active avatar')} />
   }
 
   const chip = (active: boolean) => ({
@@ -49,7 +50,7 @@ export function JournalPanel() {
 
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {tab === 'memory' && (data.memories.length === 0
-          ? <div style={{ opacity: 0.5 }}>{t('No memories yet')}</div>
+          ? <EmptyState small icon="journal" title={t('No memories yet')} />
           : data.memories.map((m, i) => (
             <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
               <div style={{ lineHeight: 1.3 }}>{m.content}</div>
@@ -63,7 +64,7 @@ export function JournalPanel() {
           )))}
 
         {tab === 'diary' && (data.diary.length === 0
-          ? <div style={{ opacity: 0.5 }}>{t('No diary entries yet')}</div>
+          ? <EmptyState small icon="journal" title={t('No diary entries yet')} />
           : data.diary.map((e, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
               <span style={{ flex: '0 0 auto', opacity: 0.55, fontSize: '0.72em', width: 64, textTransform: 'capitalize' }}>{e.type}</span>

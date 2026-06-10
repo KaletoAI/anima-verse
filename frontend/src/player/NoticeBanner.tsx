@@ -10,15 +10,20 @@ import { apiGet, apiPost } from '../lib/api'
 
 interface NoticeEvent { id: string; category: string; text: string }
 interface NoticeItem { id: number; kind: string; body: string }
+interface ForceWarning {
+  rule_id: string; rule_name: string; message: string
+  go_to: string; go_to_location_id: string; go_to_room_id: string; set_activity: string
+}
 interface Notices {
   avatar: string
   events: NoticeEvent[]
   leave_blocked: string | null
+  force_warning: ForceWarning | null
   notifications: NoticeItem[]
   unread_count: number
 }
 
-const EMPTY: Notices = { avatar: '', events: [], leave_blocked: null, notifications: [], unread_count: 0 }
+const EMPTY: Notices = { avatar: '', events: [], leave_blocked: null, force_warning: null, notifications: [], unread_count: 0 }
 
 export function NoticeBanner() {
   const { t } = useI18n()
@@ -39,7 +44,24 @@ export function NoticeBanner() {
     setN((prev) => ({ ...prev, notifications: prev.notifications.filter((x) => x.id !== id) }))
   }, [])
 
-  const hasAny = n.events.length > 0 || !!n.leave_blocked || n.notifications.length > 0
+  // Apply the force rule manually (the avatar is never forced automatically):
+  // set the activity and, if the rule moves somewhere, the location.
+  const applyForce = useCallback(async (f: ForceWarning, avatar: string) => {
+    if (!avatar) return
+    try {
+      if (f.set_activity) {
+        await apiPost(`/characters/${encodeURIComponent(avatar)}/current-activity`,
+          { current_activity: f.set_activity })
+      }
+      if (f.go_to && f.go_to !== 'stay' && f.go_to_location_id) {
+        await apiPost(`/characters/${encodeURIComponent(avatar)}/current-location`,
+          { current_location: f.go_to_location_id, current_room: f.go_to_room_id || '' })
+      }
+    } catch { /* ignore — reload shows the real state */ }
+    load()
+  }, [load])
+
+  const hasAny = n.events.length > 0 || !!n.leave_blocked || !!n.force_warning || n.notifications.length > 0
   if (!hasAny) return null
 
   // Opaker Hintergrund + farbiger Rand-Streifen — damit die Szene-Schrift
@@ -53,14 +75,25 @@ export function NoticeBanner() {
 
   return (
     <div style={{
-      position: 'fixed', top: 6, left: 10, zIndex: 999,
       display: 'flex', flexDirection: 'column', gap: 4,
-      maxWidth: 'min(560px, 60vw)', pointerEvents: 'auto',
+      maxWidth: 'min(560px, 60vw)', margin: '0 0 6px', pointerEvents: 'auto',
     }}>
       {n.leave_blocked && (
         <div style={row('#e05656')}>
           <span>🚫</span>
           <span style={{ flex: 1 }}>{t('You cannot leave')}: {n.leave_blocked}</span>
+        </div>
+      )}
+      {n.force_warning && (
+        <div style={row('#e6b13c')}>
+          <span>⚠️</span>
+          <span style={{ flex: 1 }}>
+            <strong>{n.force_warning.rule_name || t('Forced rule')}:</strong> {n.force_warning.message}
+          </span>
+          <button onClick={() => applyForce(n.force_warning!, n.avatar)} title={t('Apply this rule')}
+            style={{ border: '1px solid rgba(230,177,60,0.6)', background: 'rgba(230,177,60,0.18)',
+                     color: 'inherit', cursor: 'pointer', borderRadius: 6, padding: '2px 8px',
+                     fontSize: '0.92em', flex: '0 0 auto' }}>{t('Apply')}</button>
         </div>
       )}
       {n.events.map((e) => (

@@ -103,20 +103,6 @@ def _bg_id(location_id: str, room: str) -> str:
     return ""
 
 
-def _spell_effect_narration(caster: str, target: str, spell: dict) -> str:
-    """Neutrale Erzähler-Narration eines Spell-Effekts. Bevorzugt das vom
-    spell_detect-LLM gelieferte ``chat_substitute`` (narrativer Ersatz der rohen
-    Beschwörung), sonst den success_/fail_text-Hint, sonst einen generischen Satz."""
-    sub = (spell.get("chat_substitute") or "").strip()
-    if sub:
-        return sub
-    hint = (spell.get("hint") or "").strip()
-    if hint:
-        return hint
-    name = spell.get("spell_name") or spell.get("spell_id") or "a spell"
-    return f"{caster} casts {name} on {target}."
-
-
 @router.get("/play", include_in_schema=False)
 async def play_page(user=Depends(get_current_user)):
     if not _SHELL.is_file():
@@ -344,42 +330,37 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         except Exception as e:  # noqa: BLE001
             logger.debug("play_say spell detect failed: %s", e)
 
-    # 1b) Spell-Cast: die Beschwörung wird NICHT als normale Rede behandelt —
-    #     die Anwesenden nehmen die Zauberworte nicht „voll" wahr, sondern spüren
-    #     die AUSWIRKUNG. Daher: Beschwörung markiert aufzeichnen (löst keine
-    #     Reaktion/Chime aus, s. agent_loop), und der EFFEKT kommt als Erzähler-
-    #     Zeile in den Stream (bevorzugt der vom spell_detect-LLM gelieferte
-    #     `chat_substitute`). KEINE Pflicht-Verbal-Antwort des Ziels.
-    if spell and spell.get("hint"):
-        record_utterance(speaker=avatar, content=content, volume=volume,
-                         addressees=addressees, source="play",
-                         perception_meta={"spell_incantation": True})
-        effect = _spell_effect_narration(avatar, spell_target, spell)
-        eid = record_utterance(speaker="Erzähler", content=effect,
-                               volume=VOLUME_NORMAL, source="spell")
-        return {"ok": eid is not None, "utterance_id": eid,
-                "bumped": [], "chimed": [],
-                "spell": {
-                    "spell_id": spell.get("spell_id") or "",
-                    "spell_name": spell.get("spell_name") or spell.get("spell_id") or "",
-                    "target": spell_target,
-                    "success": bool(spell.get("success")),
-                }}
+    # 1b) Spell-Cast (Port der alten chat.py-Logik): die ROHEN Zauberworte werden
+    #     NICHT gezeigt — `chat_substitute` (narrative Beschreibung des Wirkens)
+    #     ersetzt sie, damit das Ziel auf die WIRKUNG reagiert, nicht auf die
+    #     Worte (sonst „Was bedeutet das?"). Der `hint` (success_/fail_text) wird
+    #     als Erzähler-Ergebniszeile sichtbar gemacht UND dem Ziel beim Reagieren
+    #     mitgegeben. Die komplette Mechanik (Effekte, Anchor-Teleport, Item,
+    #     Modus, cast_activity) lief bereits in detect_and_cast→execute_cast.
+    _is_spell = bool(spell and spell.get("hint"))
+    say_content = ((spell.get("chat_substitute") or "").strip() or content) if _is_spell else content
 
-    # 2) Avatar-Äußerung in den Stream
-    uid = record_utterance(speaker=avatar, content=content, volume=volume,
+    # 2) Avatar-Äußerung in den Stream (bei Spell: Narration statt Beschwörung)
+    uid = record_utterance(speaker=avatar, content=say_content, volume=volume,
                            addressees=addressees, source="play")
 
+    # 2b) Spell-Ergebnis (success_/fail_text) als Erzähler-Zeile sichtbar machen.
+    #     location_id explizit — „Erzähler" hat keinen eigenen Ort.
+    if _is_spell:
+        _hint = (spell.get("hint") or "").strip()
+        if _hint:
+            record_utterance(speaker="Erzähler", content=_hint, volume=VOLUME_NORMAL,
+                             location_id=loc, room_id=room, source="spell")
+
     # 3) Reaktionen über den Loop verteilen: Adressierte → Pflicht-Antwort,
-    #    übrige Anwesende → Chime-Gelegenheit (Phase 3b). Avatar-Input lädt die
-    #    Raum-Energie neu auf (setzt den Kaskaden-Backstop zurück). Spell-Hint
-    #    geht gezielt an das Ziel.
+    #    übrige Anwesende → Chime. Bei Spell reagiert das Ziel auf die WIRKUNG
+    #    (Inhalt = chat_substitute + hint), nicht auf die rohen Zauberworte.
     reactions = {"obligatory": [], "chime": []}
     try:
         from app.core.agent_loop import get_agent_loop
-        hints = {spell_target: spell["hint"]} if (spell and spell.get("hint")) else None
+        hints = {spell_target: spell["hint"]} if (_is_spell and spell_target) else None
         reactions = get_agent_loop().dispatch_room_reactions(
-            speaker=avatar, content=content, volume=volume,
+            speaker=avatar, content=say_content, volume=volume,
             location_id=loc, room_id=room, addressees=addressees,
             is_avatar=True, hints=hints)
     except Exception as e:  # noqa: BLE001
@@ -402,7 +383,9 @@ async def play_say(request: Request, user=Depends(get_current_user)):
                 "spell_name": spell.get("spell_name") or spell.get("spell_id") or "",
                 "target": spell_target,
                 "success": bool(spell.get("success")),
-            } if (spell and spell.get("hint")) else None}
+                "delivered_item_name": spell.get("delivered_item_name") or "",
+                "teleport": spell.get("teleport") or {},
+            } if _is_spell else None}
 
 
 @router.get("/play/self")
@@ -522,11 +505,29 @@ async def play_notices(user=Depends(get_current_user)):
     Ort, aktive Bewegungs-Sperre (Block/Force), ungelesene Notifications."""
     from app.models.account import get_active_character
     out = {"avatar": "", "events": [], "leave_blocked": None,
-           "notifications": [], "unread_count": 0}
+           "force_warning": None, "notifications": [], "unread_count": 0}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return out
     out["avatar"] = avatar
+    # Aktive Force-Regel (z.B. "Erschöpfung: Bin erschöpft, gehe schlafen") —
+    # fuer den Avatar NICHT automatisch ausgefuehrt, nur als Hinweis + Apply.
+    try:
+        from app.models.rules import check_force_rules, resolve_force_destination
+        force = check_force_rules(avatar)
+        if force and force.get("message"):
+            go_loc, go_room = resolve_force_destination(avatar, force.get("go_to", "stay"))
+            out["force_warning"] = {
+                "rule_id": force.get("rule_id", ""),
+                "rule_name": force.get("rule_name", ""),
+                "message": force.get("message", ""),
+                "go_to": force.get("go_to", "stay"),
+                "go_to_location_id": go_loc,
+                "go_to_room_id": go_room,
+                "set_activity": force.get("set_activity", ""),
+            }
+    except Exception as ex:
+        logger.debug("play_notices force failed: %s", ex)
     from app.models.character import (get_character_current_location,
                                       get_character_current_room)
     loc = get_character_current_location(avatar) or ""
@@ -691,6 +692,21 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
     if not spell:
         raise HTTPException(status_code=404, detail="not a spell or not in inventory")
     res = execute_cast(avatar, avatar, spell)
+    # Effekt als Erzähler-Zeile sichtbar machen (location_id explizit — „Erzähler"
+    # hat keinen eigenen Ort, sonst läuft der Fan-Out ins Leere).
+    try:
+        from app.core.perception import record_utterance, VOLUME_NORMAL
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room)
+        _loc = get_character_current_location(avatar) or ""
+        _room = get_character_current_room(avatar) or ""
+        _hint = (res.get("hint") or "").strip()
+        if _loc and _hint:
+            record_utterance(speaker="Erzähler", content=_hint,
+                             volume=VOLUME_NORMAL, location_id=_loc, room_id=_room,
+                             source="spell")
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("self-cast narration failed: %s", _e)
     return {"ok": True, "spell_name": spell.get("name") or item_id,
             "success": bool(res.get("success")),
             "chance": int(res.get("chance") or 0), "roll": int(res.get("roll") or 0),
@@ -790,19 +806,17 @@ async def play_gallery_of(character: str, user=Depends(get_current_user)):
     return out
 
 
-@router.delete("/play/gallery/image/{filename}")
-async def play_gallery_delete_image(filename: str, user=Depends(get_current_user)):
-    """Loescht ein Bild aus der EIGENEN Avatar-Galerie. Fremde Galerien sind
-    bewusst read-only -> hier nur das eigene aktive Avatar zugelassen."""
-    from app.models.account import get_active_character
+@router.delete("/play/gallery/{character}/image/{filename}")
+async def play_gallery_delete_image(character: str, filename: str, user=Depends(get_current_user)):
+    """Loescht ein Bild aus einer Galerie. Berechtigungspruefung folgt spaeter —
+    vorerst sind alle sichtbaren Galerien loeschbar (nicht nur die eigene)."""
     from app.models.character import delete_character_image
 
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        raise HTTPException(status_code=400, detail="No active avatar")
-    if not delete_character_image(avatar, filename):
+    if not character.strip():
+        raise HTTPException(status_code=400, detail="character required")
+    if not delete_character_image(character, filename):
         raise HTTPException(status_code=404, detail="Image not found")
     return {"ok": True}
 

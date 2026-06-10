@@ -56,6 +56,8 @@ export function EnvironmentPanel({
     : ''
   const [bgOk, setBgOk] = useState(true)
   useEffect(() => { setBgOk(true) }, [bgUrl])
+  // Bedien-Hinweis nur bis zur ersten Interaktion (Ziehen/Skalieren) zeigen.
+  const [interacted, setInteracted] = useState(false)
 
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState<Record<string, Pos>>({})
@@ -106,6 +108,7 @@ export function EnvironmentPanel({
     dragRef.current = null
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('pointerup', onUp)
+    setInteracted(true)
     persist()
   }, [onMove, persist])
   const startDrag = useCallback((e: React.PointerEvent, name: string, p: Pos) => {
@@ -130,6 +133,7 @@ export function EnvironmentPanel({
       const el = (e.target as HTMLElement)?.closest('[data-fig]') as HTMLElement | null
       if (!el || !el.dataset.fig) return
       e.preventDefault()
+      setInteracted(true)
       const name = el.dataset.fig
       const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
       setPos((p) => {
@@ -174,6 +178,12 @@ export function EnvironmentPanel({
           opacity: 0.6, fontSize: '0.8em', background: 'rgba(0,0,0,0.45)', color: '#fff',
           padding: '2px 8px', borderRadius: 6,
         }}>{t('Nobody else here.')}</span>
+      )}
+
+      {!interacted && figures.length > 0 && (
+        <span className="player-hint-pill" style={{ top: 8, left: 8 }}>
+          {t('Drag to move · scroll to resize')}
+        </span>
       )}
 
       {figures.map((c, i) => {

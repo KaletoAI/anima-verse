@@ -6,6 +6,11 @@
   overflow: auto;
   box-sizing: border-box;
   padding: 8px;
+  /* Platz für die vertikale Scrollleiste IMMER reservieren. Sonst schrumpft die
+     Inhaltsbreite beim Ein-/Ausblenden der Leiste, der ResizeObserver misst eine
+     andere Breite → die Spaltenzahl ändert sich → rechte Panels springen um eine
+     Zelle nach links. Mit stabilem Gutter bleibt die gemessene Breite konstant. */
+  scrollbar-gutter: stable;
 }
 
 /* Eine Grid-Kachel = ein „Fenster" */
@@ -40,6 +45,51 @@
   font-weight: 400;
   font-size: 0.82em;
   opacity: 0.6;
+}
+
+/* Kopf-Steuerknöpfe (Autosize · nach hinten · schließen) als Icon-Buttons mit
+   dezenter Hover-Pille. marginRight hält Abstand zum RGL-Resize-Griff (ne). */
+.player-head-ctrls {
+  margin-left: auto;
+  margin-right: 14px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+  z-index: 2;
+}
+.player-ctrl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.player-ctrl-btn:hover { opacity: 1; background: rgba(255, 255, 255, 0.1); }
+.player-ctrl-btn.on { opacity: 1; color: var(--accent, #6aa9ff); }
+.player-ctrl-close:hover { background: rgba(224, 86, 86, 0.22); color: #ff7b7b; }
+
+/* Fokussiertes (vorderstes) Panel: stärkerer Schatten + Akzent-Streifen am Kopf. */
+.player-panel {
+  transition: box-shadow 0.15s ease;
+}
+.player-panel:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.player-panel-front {
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5);
+}
+.player-panel-front .player-panel-head {
+  box-shadow: inset 0 2px 0 var(--accent, #6aa9ff);
 }
 
 .player-panel-body {
@@ -78,6 +128,71 @@
   background: var(--bg-container, #161b22);
   padding: 10px 12px;
 }
+
+/* ---- Composer: vereinheitlichte Eingabe / Buttons / Chips ---- */
+.player-address-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.player-address-label { opacity: 0.6; font-size: 0.85em; }
+
+.player-composer-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 64px;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg, #0d1117);
+  color: inherit;
+  font: inherit;
+  transition: border-color 0.12s;
+}
+.player-composer-input:focus { outline: none; border-color: var(--accent, #6aa9ff); }
+.player-composer-input:disabled { opacity: 0.55; cursor: wait; }
+
+/* Pillen-Chips (Adressaten, Follow …) */
+.player-chip {
+  padding: 3px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.82em;
+  line-height: 1.4;
+  color: inherit;
+  border: 1px solid var(--border, #30363d);
+  background: transparent;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.player-chip:hover { background: var(--bg-hover, #1f2937); }
+.player-chip.on {
+  border-color: var(--accent, #6aa9ff);
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 26%, transparent);
+}
+.player-chip:disabled { opacity: 0.5; cursor: default; }
+.player-chip-follow {
+  border-color: #d6b06a;
+  background: rgba(214, 176, 106, 0.16);
+}
+.player-chip-follow:hover { background: rgba(214, 176, 106, 0.28); }
+
+/* Primärer Aktionsbutton (Send …) */
+.player-btn-primary {
+  padding: 6px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  border: 1px solid var(--accent, #6aa9ff);
+  background: var(--accent, #6aa9ff);
+  color: #fff;
+  transition: filter 0.12s, opacity 0.12s;
+}
+.player-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+.player-btn-primary:disabled { opacity: 0.5; cursor: default; }
 
 /* Dialog-Panels: zentriertes Overlay (kommt/geht) statt Grid-Kachel. */
 .player-modal-backdrop {
@@ -133,6 +248,107 @@
   background-clip: padding-box;
 }
 
+/* ---- Panel-Kopf-Icon ---- */
+.player-head-icon {
+  opacity: 0.7;
+  flex: 0 0 auto;
+}
+
+/* ---- Toolbar / Launcher ----
+   Echte Leiste im Fluss (sticky), KEIN Overlay: das Grid beginnt darunter,
+   nichts überlappt mehr. Bleed über die negativen Margins = volle Breite trotz
+   .player-root-Padding; beim Scrollen bleibt die Leiste oben angeheftet. */
+.play-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -8px -8px 6px;
+  padding: 8px 10px 7px;
+  background: var(--bg, #0d1117);
+  border-bottom: 1px solid var(--border, #30363d);
+}
+.play-toolbar-group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.play-toolbar-end { justify-content: flex-end; margin-left: auto; }
+.play-toolbar-start:empty { display: none; }
+
+.play-tbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 7px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border, #30363d);
+  background: transparent;
+  color: var(--text, #e6edf3);
+  opacity: 0.5;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s, transform 0.06s;
+}
+.play-tbtn.with-text { padding: 0 10px 0 8px; }
+.play-tbtn-label { font-size: 0.74em; line-height: 1; }
+.play-tbtn:hover { opacity: 1; background: var(--bg-hover, #1f2937); }
+.play-tbtn:active { transform: translateY(1px); }
+.play-tbtn.open {
+  opacity: 1;
+  background: var(--bg-hover, #1f2937);
+  border-color: var(--accent, #6aa9ff);
+  color: var(--accent, #6aa9ff);
+}
+
+/* ---- Toolbar-Einstellungen (Zahnrad-Popover) ---- */
+.play-pop-backdrop { position: fixed; inset: 0; z-index: 1500; }
+.play-appearance-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1600;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg-container, #161b22);
+  border: 1px solid var(--border, #30363d);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+.play-pop-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.play-pop-label { font-size: 0.78em; opacity: 0.7; }
+.play-seg {
+  display: inline-flex;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.play-seg button {
+  border: none;
+  background: transparent;
+  color: var(--text, #e6edf3);
+  font-size: 0.74em;
+  padding: 4px 9px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: background 0.12s, opacity 0.12s;
+}
+.play-seg button + button { border-left: 1px solid var(--border, #30363d); }
+.play-seg button:hover { opacity: 1; background: var(--bg-hover, #1f2937); }
+.play-seg button.on {
+  opacity: 1;
+  background: var(--accent, #6aa9ff);
+  color: #fff;
+}
+
 /* RGL: Platzhalter beim Ziehen an unser Theme angleichen */
 .react-grid-item.react-grid-placeholder {
   background: var(--accent, #6aa9ff);
@@ -169,6 +385,117 @@
   50% { opacity: 1; }
 }
 
+/* ---- Einheitlicher Leerzustand ---- */
+.player-empty {
+  height: 100%;
+  min-height: 90px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px 16px;
+  text-align: center;
+  opacity: 0.6;
+}
+.player-empty-icon { opacity: 0.45; }
+.player-empty-title { font-size: 0.9em; }
+.player-empty-hint { font-size: 0.78em; opacity: 0.85; max-width: 230px; line-height: 1.4; }
+.player-empty-sm {
+  height: auto;
+  min-height: 0;
+  padding: 10px 8px;
+  gap: 4px;
+}
+.player-empty-sm .player-empty-title { font-size: 0.85em; }
+
+/* Dezenter Bedien-Hinweis (z.B. „ziehen / Mausrad zoomt") als kleine Pille. */
+.player-hint-pill {
+  position: absolute;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72em;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ---- Gemeinsame Lightbox (Vollbild-Overlay) ---- */
+.lb-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  background: rgba(0, 0, 0, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+.lb-media {
+  max-width: 94vw;
+  max-height: 94vh;
+  object-fit: contain;
+  display: block;
+  will-change: transform;
+}
+.lb-close {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(20, 22, 28, 0.7);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.lb-close:hover { background: rgba(224, 86, 86, 0.7); }
+.lb-zoombar {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(20, 22, 28, 0.78);
+  backdrop-filter: blur(4px);
+}
+.lb-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.78em;
+  transition: background 0.12s;
+}
+.lb-zoom-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.lb-zoom-reset { font-variant-numeric: tabular-nums; opacity: 0.85; }
+
 /* ---- Instagram feed panel ---- */
 .ig-feed { display: flex; flex-direction: column; gap: 14px; }
 .ig-post { border: 1px solid var(--border, #30363d); border-radius: 8px; overflow: hidden; background: var(--bg-container, #161b22); }
@@ -180,6 +507,15 @@
 .ig-info { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border,#30363d); font-size: 10px; line-height: 15px; text-align: center; opacity: 0.6; cursor: help; }
 .ig-image { position: relative; }
 .ig-image img, .ig-image video { width: 100%; display: block; cursor: pointer; }
+.ig-zoom-btn {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 8px; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(20, 22, 28, 0.7); color: #fff;
+  opacity: 0; transition: opacity 0.15s, background 0.12s;
+}
+.ig-image:hover .ig-zoom-btn { opacity: 0.9; }
+.ig-zoom-btn:hover { opacity: 1; background: rgba(20, 22, 28, 0.92); }
 .ig-arrow { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,0.45); color: #fff; border: 0; width: 30px; height: 40px; cursor: pointer; font-size: 22px; }
 .ig-arrow-l { left: 0; } .ig-arrow-r { right: 0; }
 .ig-carousel-del { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.5); border: 0; color: #fff; border-radius: 4px; cursor: pointer; padding: 2px 6px; opacity: 0; transition: opacity 0.2s; }
@@ -207,5 +543,3 @@
 .ig-comment-form { display: flex; gap: 6px; padding: 6px 10px 10px; }
 .ig-comment-form input { flex: 1; background: var(--bg, #0d1117); color: var(--text, #e6edf3); border: 1px solid var(--border, #30363d); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
 .ig-comment-form button { background: var(--accent, #2f81f7); color: #fff; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
-.ig-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 4000; cursor: zoom-out; }
-.ig-lightbox img, .ig-lightbox video { max-width: 92vw; max-height: 92vh; }

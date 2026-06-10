@@ -6,9 +6,14 @@
  * Klick öffnet eine Lightbox INNERHALB des Panels mit Bild + Bild-Informationen.
  * Quellen: GET /play/galleries (Liste), GET /play/gallery[/{character}] (Bilder).
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
-import { apiGet } from '../lib/api'
+import { apiGet, apiPost, apiDelete } from '../lib/api'
+import { useLightbox } from './Lightbox'
+import { ImageGenDialog, type ImageGenSubmit } from '../components/ImageGenDialog'
+import { Icon } from './icons'
+import { EmptyState } from './EmptyState'
 
 interface ImgInfo {
   prompt: string; model: string; backend: string; from_character: string
@@ -26,11 +31,67 @@ function fmt(ts: string): string {
 
 export function GalleryPanel() {
   const { t, lang } = useI18n()
+  const lightbox = useLightbox()
   const [self, setSelf] = useState<string>('')
   const [galleries, setGalleries] = useState<GalleryRef[] | null>(null)
   const [selected, setSelected] = useState<string>('')
   const [data, setData] = useState<Gallery | null>(null)
   const [zoom, setZoom] = useState<Img | null>(null)
+  const [confirmDel, setConfirmDel] = useState(false)  // Inline-Bestätigung in der Detail-Box
+  const [deleting, setDeleting] = useState(false)
+
+  // Löschen aus der AKTUELL gewählten Galerie (vorerst für alle Bilder; eine
+  // Berechtigungsprüfung wird später nachgezogen). Optimistisch aus der Liste
+  // entfernen und die Detail-Box schließen. confirmDel zurücksetzen bei Bildwechsel.
+  const deleteImage = async (img: Img) => {
+    if (deleting || !selected) return
+    setDeleting(true)
+    try {
+      await apiDelete(`/play/gallery/${encodeURIComponent(selected)}/image/${encodeURIComponent(img.name)}`)
+      setData((d) => (d ? { ...d, images: d.images.filter((i) => i.name !== img.name) } : d))
+      setZoom(null)
+      setConfirmDel(false)
+    } catch { /* ignore – Poll holt den echten Stand nach */ } finally { setDeleting(false) }
+  }
+  // Bestätigung verwerfen, sobald ein anderes Bild geöffnet/geschlossen wird.
+  useEffect(() => { setConfirmDel(false) }, [zoom?.name])
+
+  // Regenerate (nur für die EIGENE Galerie): detect characters, open the shared
+  // ImageGenDialog, post to the character-image regenerate route. The 8s gallery
+  // poll picks up the replaced/new image — no separate task polling needed.
+  const [regenImg, setRegenImg] = useState<Img | null>(null)
+  const [charOpts, setCharOpts] = useState<{ detected: string[]; available: string[] } | null>(null)
+
+  const openRegen = useCallback(async (img: Img) => {
+    if (!selected) return
+    let opts = { detected: [] as string[], available: [] as string[] }
+    try {
+      const cd = await apiPost<{ detected?: string[]; available?: string[] }>(
+        `/characters/${encodeURIComponent(selected)}/images/${encodeURIComponent(img.name)}/detect-characters`, {})
+      opts = { detected: cd.detected || [], available: cd.available || [] }
+    } catch { /* proceed without detection */ }
+    setCharOpts(opts)
+    setRegenImg(img)
+  }, [selected])
+
+  const submitRegen = useCallback(async (payload: ImageGenSubmit) => {
+    const img = regenImg
+    if (!img || !selected) return
+    const body: Record<string, unknown> = {}
+    if (payload.prompt) body.custom_prompt = payload.prompt
+    if (payload.workflow) body.workflow = payload.workflow
+    if (payload.backend) body.backend = payload.backend
+    if (payload.model_override) body.model_override = payload.model_override
+    if (payload.loras) body.loras = payload.loras
+    if (payload.character_names) body.character_names = payload.character_names
+    if (payload.improvement_request) body.improvement_request = payload.improvement_request
+    if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
+    if (payload.create_new) body.create_new = true
+    try {
+      await apiPost(`/characters/${encodeURIComponent(selected)}/images/${encodeURIComponent(img.name)}/regenerate`, body)
+    } catch { /* gallery poll picks up the result */ }
+    setRegenImg(null); setCharOpts(null); setZoom(null)
+  }, [regenImg, selected])
 
   // Group images by creation time: fixed buckets first (Today → This month),
   // then month-year buckets newest-first, "Older" last. Mirrors the old UI.
@@ -95,7 +156,7 @@ export function GalleryPanel() {
   }, [selected, self])
 
   if (!self) {
-    return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active avatar')}</div>
+    return <EmptyState icon="self" title={t('No active avatar')} />
   }
 
   const hasPicker = (galleries?.length || 0) > 1
@@ -121,7 +182,7 @@ export function GalleryPanel() {
     return <div>{picker}<div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('Loading…')}</div></div>
   }
   if (!data.images.length) {
-    return <div>{picker}<div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No images yet')}</div></div>
+    return <div>{picker}<EmptyState icon="gallery" title={t('No images yet')} /></div>
   }
 
   return (
@@ -153,15 +214,23 @@ export function GalleryPanel() {
         ))}
       </div>
 
-      {zoom && (
+      {zoom && createPortal(
         <div onClick={() => setZoom(null)}
-          style={{ position: 'absolute', inset: 0, zIndex: 5, background: 'rgba(0,0,0,0.78)',
-            padding: 10, display: 'flex', gap: 10, borderRadius: 8 }}>
+          style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.82)',
+            padding: 24, display: 'flex', gap: 12 }}>
           {/* Bild */}
-          <div style={{ flex: 1, minWidth: 0, display: 'grid', placeItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'grid', placeItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => lightbox.open(zoom.video ? { video: zoom.video, alt: zoom.name } : { src: zoom.url, alt: zoom.name })}
+              title={t('Open fullscreen')} aria-label={t('Open fullscreen')}
+              style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, display: 'inline-flex',
+                alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8,
+                border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(20,22,28,0.7)', color: '#fff', cursor: 'pointer' }}>
+              <Icon name="maximize" size={16} />
+            </button>
             {zoom.video
               ? <video src={zoom.video} controls autoPlay style={{ maxWidth: '100%', maxHeight: '100%' }} />
-              : <img src={zoom.url} alt={zoom.name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 6 }} />}
+              : <img src={zoom.url} alt={zoom.name} onClick={() => lightbox.open({ src: zoom.url, alt: zoom.name })}
+                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }} />}
           </div>
           {/* Bild-Informationen */}
           <div onClick={(e) => e.stopPropagation()} style={{
@@ -171,9 +240,35 @@ export function GalleryPanel() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <strong style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t('Image info')}</strong>
+              {selected === self && !zoom.video ? (
+                <button onClick={() => openRegen(zoom)} title={t('Regenerate image')} aria-label={t('Regenerate image')}
+                  style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer',
+                    opacity: 0.7, display: 'inline-flex', alignItems: 'center', fontSize: '1em' }}>🔄</button>
+              ) : null}
+              <button onClick={() => setConfirmDel(true)} title={t('Delete image')} aria-label={t('Delete image')}
+                style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer',
+                  opacity: 0.7, display: 'inline-flex', alignItems: 'center' }}>
+                <Icon name="trash" size={16} />
+              </button>
               <button onClick={() => setZoom(null)} title={t('Close')}
                 style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: '1.2em', lineHeight: 1, opacity: 0.7 }}>×</button>
             </div>
+            {confirmDel && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6,
+                background: 'rgba(224,86,86,0.14)', border: '1px solid rgba(224,86,86,0.4)' }}>
+                <span style={{ flex: 1 }}>{t('Delete this image permanently?')}</span>
+                <button onClick={() => deleteImage(zoom)} disabled={deleting}
+                  style={{ border: '1px solid #e05656', background: '#e05656', color: '#fff',
+                    borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>
+                  {deleting ? t('Deleting…') : t('Delete')}
+                </button>
+                <button onClick={() => setConfirmDel(false)}
+                  style={{ border: '1px solid var(--border,#30363d)', background: 'transparent', color: 'inherit',
+                    borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>
+                  {t('Cancel')}
+                </button>
+              </div>
+            )}
             {zoom.postprocessed && (
               <div style={{ color: '#c79af0' }}>✎ {t('Edited externally')}{zoom.info.postprocessed_at ? ` (${fmt(zoom.info.postprocessed_at)})` : ''}</div>
             )}
@@ -191,8 +286,23 @@ export function GalleryPanel() {
               <div><div style={{ opacity: 0.55 }}>{t('Analysis')}</div><div style={{ opacity: 0.8 }}>{zoom.info.analysis}</div></div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
+
+      {regenImg ? (
+        <ImageGenDialog
+          open
+          title={t('Regenerate image')}
+          defaultPrompt={regenImg.info?.prompt || ''}
+          showCreateNew
+          showImprovement
+          showNegative
+          characterOptions={charOpts || { detected: [], available: [] }}
+          onSubmit={submitRegen}
+          onClose={() => { setRegenImg(null); setCharOpts(null) }}
+        />
+      ) : null}
     </div>
   )
 }

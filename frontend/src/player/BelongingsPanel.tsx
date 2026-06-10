@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { EmptyState } from './EmptyState'
 
 // Anker-Positionen (x%, y%) im KOORDINATENSYSTEM DES BILDES (silhouette.svg ist
 // 896×1216, die Figur liegt zentral). Hier werden die Symbole der getragenen
@@ -72,7 +73,7 @@ function catOf(it: Item): Cat {
 }
 const CAT_EMOJI: Record<Cat, string> = { all: '🎒', outfit: '👕', consumable: '🧪', spell: '✨', other: '📦' }
 
-export function BelongingsPanel() {
+export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
   const { t } = useI18n()
   const [data, setData] = useState<Belongings>(EMPTY)
   const [cat, setCat] = useState<Cat>('all')
@@ -103,11 +104,15 @@ export function BelongingsPanel() {
     return () => clearInterval(id)
   }, [load])
 
-  const act = useCallback(async (url: string, body: Record<string, unknown>) => {
+  const act = useCallback(async (url: string, body: Record<string, unknown>, closeAfter = false) => {
     if (busy) return
     setBusy(true)
-    try { await apiPost(url, body); await load() } catch { /* ignore */ } finally { setBusy(false) }
-  }, [busy, load])
+    try {
+      await apiPost(url, body)
+      await load()
+      if (closeAfter) onClose?.()  // z.B. Inventar nach Self-Cast schließen (wie alte UI)
+    } catch { /* ignore */ } finally { setBusy(false) }
+  }, [busy, load, onClose])
 
   const filtered = useMemo(() => {
     let list = data.items
@@ -124,7 +129,7 @@ export function BelongingsPanel() {
   }, [data.items, data.slot_order])
 
   if (!data.avatar) {
-    return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active avatar')}</div>
+    return <EmptyState icon="inventory" title={t('No active avatar')} />
   }
 
   const cats: Cat[] = ['all', 'outfit', 'consumable', 'spell', 'other']
@@ -156,7 +161,7 @@ export function BelongingsPanel() {
           </div>
         )}
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {filtered.length === 0 && <div style={{ opacity: 0.5 }}>{t('Nothing here')}</div>}
+          {filtered.length === 0 && <EmptyState small icon="inventory" title={t('Nothing here')} />}
           {filtered.map((it) => {
             // Zweite Zeile: bevorzugt die Beschreibung; sonst Slot/Spruch/Kategorie.
             const fallback = it.is_spell
@@ -189,7 +194,7 @@ export function BelongingsPanel() {
                 )}
                 {/* Spell: casten (execute_cast, respektiert copy_on_give) — NICHT consume. */}
                 {it.is_spell && (
-                  <button disabled={busy} style={btn()} onClick={() => act('/play/cast-self', { item_id: it.item_id })}>{t('Cast')}</button>
+                  <button disabled={busy} style={btn()} onClick={() => act('/play/cast-self', { item_id: it.item_id }, true)}>{t('Cast')}</button>
                 )}
                 {!it.is_spell && it.consumable && (
                   <button disabled={busy} style={btn()} onClick={() => act('/play/use-item', { item_id: it.item_id })}>{t('Use')}</button>

@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { EmptyState } from './EmptyState'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 interface SelfData {
@@ -65,7 +66,7 @@ export function SelfPanel() {
   }, [busy, moodDraft, load])
 
   if (!data || !data.avatar) {
-    return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No active avatar')}</div>
+    return <EmptyState icon="self" title={t('No active avatar')} />
   }
 
   const portraitUrl = data.profile_image

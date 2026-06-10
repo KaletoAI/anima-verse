@@ -19,6 +19,13 @@ from app.core.llm_queue import Priority
 #   "tool"   → reliable tool-calling / structured-output needed
 #   "chat"   → big chat / RP model (creative writing, streaming)
 #   "helper" → small/cheap helper model is enough
+#
+# `thinking` (tool/helper tasks only): True = the task benefits from a
+# reasoning/thinking pass, route it to the gateway's thinking alias; absent/False
+# = run WITHOUT thinking (the default — extraction/classification/tool-calling
+# only get slower and worse with thinking). Drives the "+ All No-Thinking" /
+# "+ All Thinking" bulk-assign buttons in the LLM-Routing admin UI. Chat/image/
+# embedding tasks ignore this flag (they route to their own models).
 TASK_TYPES: Dict[str, Dict[str, object]] = {
     # Streaming / RP
     "chat_stream":        {"label": "Chat (Stream)",            "priority": Priority.CHAT,   "category": "chat"},
@@ -35,9 +42,9 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # er nicht separat zugewiesen ist.
     "extraction_chat_state": {"label": "Chat State Extract (Outfit/Pose/Stats)", "priority": Priority.NORMAL, "category": "tool"},
     "social_reaction":    {"label": "Social Reaction (Thought)","priority": Priority.LOW,    "category": "tool",   "gate": "social_reactions.enabled"},
-    "random_event":       {"label": "Random Event",             "priority": Priority.LOW,    "category": "tool",   "gate": "random_events.enabled"},
-    "secret_generation":  {"label": "Secret Generation",        "priority": Priority.LOW,    "category": "tool"},
-    "outfit_generation":  {"label": "Outfit Generation",        "priority": Priority.NORMAL, "category": "tool",   "gate": "image_generation.enabled"},
+    "random_event":       {"label": "Random Event",             "priority": Priority.LOW,    "category": "tool",   "gate": "random_events.enabled", "thinking": True},
+    "secret_generation":  {"label": "Secret Generation",        "priority": Priority.LOW,    "category": "tool",   "thinking": True},
+    "outfit_generation":  {"label": "Outfit Generation",        "priority": Priority.NORMAL, "category": "tool",   "gate": "image_generation.enabled", "thinking": True},
     "send_message":       {"label": "Send Message",             "priority": Priority.NORMAL, "category": "chat",   "gate": "skills.send_message.enabled"},
     "talk_to":            {"label": "Talk-To (Char-to-Char)",   "priority": Priority.LOW,    "category": "chat",   "gate": "skills.talk_to.enabled"},
     "thought":            {"label": "Thought (Fallback)",       "priority": Priority.LOW,    "category": "chat"},

@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
+import { EmptyState } from './EmptyState'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 interface CharState {
@@ -84,9 +85,9 @@ export function OthersPanel() {
     return () => { alive = false; clearInterval(id) }
   }, [])
 
-  if (!data) return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>…</div>
+  if (!data) return <EmptyState small title={t('Loading…')} />
   if (!data.characters.length) {
-    return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('Nobody else is here.')}</div>
+    return <EmptyState icon="others" title={t('Nobody else is here.')} />
   }
 
   return (

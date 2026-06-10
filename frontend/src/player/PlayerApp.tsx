@@ -25,8 +25,11 @@ import { BelongingsPanel } from './BelongingsPanel'
 import { JournalPanel } from './JournalPanel'
 import { GalleryPanel } from './GalleryPanel'
 import { InstagramPanel } from './InstagramPanel'
+import { PhonePanel } from './PhonePanel'
 import { NoticeBanner } from './NoticeBanner'
 import { useQueue } from './useQueue'
+import { Icon, type IconName } from './icons'
+import { LightboxProvider } from './Lightbox'
 
 // Quadratische, browser-unabhängige Zellen: feste Zellgröße in px. Die
 // Spaltenzahl wird aus der gemessenen Breite berechnet, sodass die Spaltenbreite
@@ -45,6 +48,7 @@ const DEFAULT_LAYOUT: Layout[] = [
   { i: 'journal', x: 24, y: 37, w: 17, h: 14, minW: 8, minH: 6 },
   { i: 'gallery', x: 0, y: 54, w: 20, h: 14, minW: 8, minH: 6 },
   { i: 'instagram', x: 20, y: 54, w: 21, h: 18, minW: 10, minH: 8 },
+  { i: 'phone', x: 41, y: 38, w: 14, h: 22, minW: 10, minH: 12 },
   { i: 'isomap', x: 0, y: 72, w: 24, h: 18, minW: 8, minH: 8 },
   { i: 'tasks', x: 24, y: 27, w: 17, h: 10, minW: 6, minH: 4 },
   { i: 'layouts', x: 24, y: 37, w: 17, h: 14, minW: 6, minH: 6 },
@@ -56,24 +60,30 @@ const DEFAULT_BY_ID: Record<string, Layout> = Object.fromEntries(
 
 // Launcher-Labels + Art. kind:'dialog' → zentriertes Overlay (kommt/geht)
 // statt Grid-Kachel; generell für „Werkzeug"-Fenster nutzbar.
-const PANEL_META: { id: string; label: string; kind?: 'grid' | 'dialog' }[] = [
-  { id: 'scene', label: 'Chat' },
-  { id: 'env', label: 'Surroundings' },
-  { id: 'map', label: 'Move' },
-  { id: 'worldmap', label: 'Map' },
-  { id: 'isomap', label: '2.5D Map' },
-  { id: 'self', label: 'Self' },
-  { id: 'others', label: 'Others' },
-  { id: 'belongings', label: 'Inventory' },
-  { id: 'journal', label: 'Journal' },
-  { id: 'gallery', label: 'Gallery' },
-  { id: 'instagram', label: 'Instagram' },
-  { id: 'tasks', label: 'Tasks' },
-  { id: 'layouts', label: 'Layouts', kind: 'dialog' },
+const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | 'dialog' }[] = [
+  { id: 'scene', label: 'Chat', icon: 'chat' },
+  { id: 'env', label: 'Surroundings', icon: 'surroundings' },
+  { id: 'map', label: 'Move', icon: 'move' },
+  { id: 'worldmap', label: 'Map', icon: 'worldmap' },
+  { id: 'isomap', label: '2.5D Map', icon: 'isomap' },
+  { id: 'self', label: 'Self', icon: 'self' },
+  { id: 'others', label: 'Others', icon: 'others' },
+  { id: 'belongings', label: 'Inventory', icon: 'inventory' },
+  { id: 'journal', label: 'Journal', icon: 'journal' },
+  { id: 'gallery', label: 'Gallery', icon: 'gallery' },
+  { id: 'instagram', label: 'Instagram', icon: 'instagram' },
+  { id: 'phone', label: 'Phone', icon: 'phone' },
+  { id: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { id: 'layouts', label: 'Layouts', icon: 'layouts', kind: 'dialog' },
 ]
 const ALL_PANELS = PANEL_META.map((p) => p.id)
 const GRID_PANELS = PANEL_META.filter((p) => p.kind !== 'dialog').map((p) => p.id)
 const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((p) => p.id)
+const ICON_BY_ID: Record<string, IconName> = Object.fromEntries(
+  PANEL_META.map((p) => [p.id, p.icon]))
+
+type IconMode = 'icon' | 'iconText'
+type ToolbarAlign = 'left' | 'right'
 
 interface RoomInfo { id: string; name: string; is_entry: boolean }
 interface Neighbor { id: string; name: string }
@@ -108,6 +118,11 @@ export function PlayerApp() {
   const [layout, setLayout] = useState<Layout[]>(DEFAULT_LAYOUT)
   const [open, setOpen] = useState<string[]>(GRID_PANELS)  // Dialoge starten geschlossen
   const [autosize, setAutosize] = useState<string[]>([])  // Panels mit Höhen-Autosize
+  const [iconMode, setIconMode] = useState<IconMode>('icon')      // Launcher: nur Icon vs Icon+Text
+  const [toolbarAlign, setToolbarAlign] = useState<ToolbarAlign>('right')  // Launcher links/rechts
+  const [appearanceOpen, setAppearanceOpen] = useState(false)    // Zahnrad-Popover
+  const [frozen, setFrozen] = useState(false)                    // Layout einfrieren + mitskalieren
+  const [frozenWidth, setFrozenWidth] = useState(0)              // Referenzbreite beim Einfrieren
   const [width, setWidth] = useState(1200)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const layoutLoaded = useRef(false)
@@ -115,13 +130,26 @@ export function PlayerApp() {
   const layoutRef = useRef(layout)
   const openRef = useRef(open)
   const autosizeRef = useRef(autosize)
+  const iconModeRef = useRef(iconMode)
+  const toolbarAlignRef = useRef(toolbarAlign)
+  const frozenRef = useRef(frozen)
+  const frozenWidthRef = useRef(frozenWidth)
+  const widthRef = useRef(width)
   layoutRef.current = layout
   openRef.current = open
   autosizeRef.current = autosize
+  iconModeRef.current = iconMode
+  toolbarAlignRef.current = toolbarAlign
+  frozenRef.current = frozen
+  frozenWidthRef.current = frozenWidth
+  widthRef.current = width
 
   const persist = useCallback(() => {
-    apiPut('/play/layout', { layout: { grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current } })
-      .catch(() => { /* best-effort */ })
+    apiPut('/play/layout', { layout: {
+      grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current,
+      iconMode: iconModeRef.current, toolbarAlign: toolbarAlignRef.current,
+      frozen: frozenRef.current, frozenWidth: frozenWidthRef.current,
+    } }).catch(() => { /* best-effort */ })
   }, [])
 
   // Layout + offene Panels aus dem Profil laden (einmalig)
@@ -136,6 +164,10 @@ export function PlayerApp() {
           if (Array.isArray(v.grid) && v.grid.length) setLayout(v.grid)
           if (Array.isArray(v.open)) setOpen(v.open)
           if (Array.isArray(v.autosize)) setAutosize(v.autosize)
+          if (v.iconMode === 'icon' || v.iconMode === 'iconText') setIconMode(v.iconMode)
+          if (v.toolbarAlign === 'left' || v.toolbarAlign === 'right') setToolbarAlign(v.toolbarAlign)
+          if (typeof v.frozenWidth === 'number' && v.frozenWidth > 0) setFrozenWidth(v.frozenWidth)
+          if (v.frozen === true) setFrozen(true)
         }
       })
       .catch(() => { /* Default behalten */ })
@@ -192,13 +224,42 @@ export function PlayerApp() {
     if (layoutLoaded.current) persist()
   }, [persist])
 
+  const chooseIconMode = useCallback((m: IconMode) => {
+    iconModeRef.current = m
+    setIconMode(m)
+    if (layoutLoaded.current) persist()
+  }, [persist])
+  const chooseToolbarAlign = useCallback((a: ToolbarAlign) => {
+    toolbarAlignRef.current = a
+    setToolbarAlign(a)
+    if (layoutLoaded.current) persist()
+  }, [persist])
+  // Einfrieren: aktuelle Breite als Referenz festhalten → das Grid skaliert
+  // fortan proportional mit der Fenstergröße (wie der Browser-Zoom), statt die
+  // Spaltenzahl zu ändern. Aufheben → wieder responsives Spalten-Verhalten.
+  const toggleFreeze = useCallback(() => {
+    if (frozenRef.current) {
+      frozenRef.current = false
+      setFrozen(false)
+    } else {
+      const ref = Math.round(widthRef.current) || 1200
+      frozenRef.current = true
+      frozenWidthRef.current = ref
+      setFrozenWidth(ref)
+      setFrozen(true)
+    }
+    if (layoutLoaded.current) persist()
+  }, [persist])
+
   const resetLayout = useCallback(() => {
     layoutRef.current = DEFAULT_LAYOUT
     openRef.current = GRID_PANELS
     autosizeRef.current = []
+    frozenRef.current = false
     setLayout(DEFAULT_LAYOUT)
     setOpen(GRID_PANELS)
     setAutosize([])
+    setFrozen(false)  // zurück in den responsiven Modus
     persist()
   }, [persist])
 
@@ -246,30 +307,37 @@ export function PlayerApp() {
     } catch { /* ignore */ }
   }, [refreshPresets])
 
-  const ctrlBtn: React.CSSProperties = {
-    cursor: 'pointer', background: 'transparent', border: 'none', color: 'inherit',
-    opacity: 0.55, lineHeight: 1, padding: '0 2px',
-  }
-  // Kopf-Steuerung: optional „in den Hintergrund" + Schließen, rechtsbündig.
+  // Panel-Icon links im Kopf (dezent, erbt die Kopf-Textfarbe).
+  const headIcon = (id: string) =>
+    ICON_BY_ID[id]
+      ? <Icon name={ICON_BY_ID[id]} size={15} className="player-head-icon" />
+      : null
+  // Kopf-Steuerung: Autosize · in den Hintergrund · schließen — rechtsbündig.
+  // marginRight (CSS) rückt die Buttons aus der Ecke, damit der RGL-Resize-Griff
+  // (ne) nicht den Klick auf × abfängt.
   const headerControls = (id: string, withBack: boolean, withClose = true) => (
-    // marginRight rückt die Buttons aus der oberen-rechten Ecke, damit der
-    // RGL-Resize-Griff (ne) nicht den Klick auf × abfängt.
-    <span style={{ marginLeft: 'auto', marginRight: 14, flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, position: 'relative', zIndex: 2 }}>
+    <span className="player-head-ctrls">
       {withBack && (
-        <button onClick={() => toggleAutosize(id)} onMouseDown={(e) => e.stopPropagation()}
+        <button className={`player-ctrl-btn${autosize.includes(id) ? ' on' : ''}`}
+          onClick={() => toggleAutosize(id)} onMouseDown={(e) => e.stopPropagation()}
           title={t('Autosize height to content')} aria-label={t('Autosize height to content')}
-          aria-pressed={autosize.includes(id)}
-          style={{ ...ctrlBtn, fontSize: '0.95em', opacity: autosize.includes(id) ? 1 : 0.55 }}>⇕</button>
+          aria-pressed={autosize.includes(id)}>
+          <Icon name="autosize" size={14} />
+        </button>
       )}
       {withBack && (
-        <button onClick={() => sendToBack(id)} onMouseDown={(e) => e.stopPropagation()}
-          title={t('Send to back')} aria-label={t('Send to back')}
-          style={{ ...ctrlBtn, fontSize: '0.95em' }}>⌄</button>
+        <button className="player-ctrl-btn"
+          onClick={() => sendToBack(id)} onMouseDown={(e) => e.stopPropagation()}
+          title={t('Send to back')} aria-label={t('Send to back')}>
+          <Icon name="sendBack" size={14} />
+        </button>
       )}
       {withClose && (
-        <button onClick={() => closePanel(id)} onMouseDown={(e) => e.stopPropagation()}
-          title={t('Close')} aria-label={t('Close')}
-          style={{ ...ctrlBtn, fontSize: '1.15em' }}>×</button>
+        <button className="player-ctrl-btn player-ctrl-close"
+          onClick={() => closePanel(id)} onMouseDown={(e) => e.stopPropagation()}
+          title={t('Close')} aria-label={t('Close')}>
+          <Icon name="close" size={15} />
+        </button>
       )}
     </span>
   )
@@ -374,7 +442,7 @@ export function PlayerApp() {
 
   // Z-Stacking für überlappende Fenster: zuletzt angefasstes Panel steht zuletzt
   // im DOM → vorderstes. Klick/Drag auf ein Panel holt es nach vorn.
-  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'isomap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'layouts'])
+  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'isomap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'layouts'])
   const bringToFront = useCallback((id: string) => {
     setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
   }, [])
@@ -388,6 +456,7 @@ export function PlayerApp() {
   const scenePanel = (
     <div key="scene" className="player-panel" style={{ zIndex: zOf('scene') }} onMouseDownCapture={() => bringToFront('scene')}>
           <div className="player-panel-head">
+            {headIcon('scene')}
             {data?.avatar || '—'}
             <span className="sub">
               {present.length ? `· ${present.join(', ')}` : `· ${t('You are alone here.')}`}
@@ -412,10 +481,7 @@ export function PlayerApp() {
                       {f.character} {t('went to')} {f.room_name}.
                     </span>
                     <button onClick={() => handleEnterRoom(f.room_id)} disabled={moving}
-                      style={{
-                        padding: '2px 10px', borderRadius: 12, cursor: 'pointer',
-                        border: '1px solid #d6b06a', background: 'rgba(214,176,106,0.18)', color: 'inherit',
-                      }}>
+                      className="player-chip player-chip-follow">
                       {t('Follow')}
                     </button>
                   </span>
@@ -425,37 +491,23 @@ export function PlayerApp() {
 
             <div className="player-composer">
               {present.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                  <span style={{ opacity: 0.6, fontSize: '0.85em', alignSelf: 'center' }}>{t('Address')}:</span>
+                <div className="player-address-row">
+                  <span className="player-address-label">{t('Address')}:</span>
                   {present.map((name) => {
                     const on = addressees.includes(name)
                     return (
                       <button key={name} onClick={() => toggleAddressee(name)}
-                        style={{
-                          padding: '2px 10px', borderRadius: 12, cursor: 'pointer',
-                          border: '1px solid rgba(255,255,255,0.25)',
-                          background: on ? 'rgba(120,170,255,0.35)' : 'transparent',
-                          color: 'inherit',
-                        }}>
+                        className={`player-chip${on ? ' on' : ''}`}>
                         {name}
                       </button>
                     )
                   })}
                 </div>
               )}
-              <textarea rows={3} value={text} disabled={sending}
+              <textarea className="player-composer-input" rows={3} value={text} disabled={sending}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-                placeholder={sending ? t('Waiting for a reply…') : t('Say something…')}
-                style={{
-                  display: 'block', width: '100%', boxSizing: 'border-box',
-                  minHeight: 64, resize: 'vertical',
-                  padding: '8px 10px', borderRadius: 6,
-                  border: '1px solid rgba(255,255,255,0.35)',
-                  background: 'rgba(255,255,255,0.06)', color: 'inherit',
-                  font: 'inherit',
-                  opacity: sending ? 0.55 : 1, cursor: sending ? 'wait' : 'auto',
-                }} />
+                placeholder={sending ? t('Waiting for a reply…') : t('Say something…')} />
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
                 <select className="ga-input" value={volume} onChange={(e) => setVolume(e.target.value)}
                   style={{ flex: '0 0 auto', width: 'auto' }}>
@@ -464,7 +516,7 @@ export function PlayerApp() {
                   <option value="shout">{t('shout')}</option>
                 </select>
                 <span style={{ flex: 1 }} />
-                <button onClick={send} disabled={sending || !text.trim()}>
+                <button className="player-btn-primary" onClick={send} disabled={sending || !text.trim()}>
                   {sending ? t('Sending…') : t('Send')}
                 </button>
               </div>
@@ -481,6 +533,7 @@ export function PlayerApp() {
   const mapPanel = (
     <div key="map" className="player-panel" style={{ zIndex: zOf('map') }} onMouseDownCapture={() => bringToFront('map')}>
       <div className="player-panel-head">
+        {headIcon('map')}
         {data?.room_name || data?.location_name || t('Move')}
         {data?.location_name && data?.room_name
           ? <span className="sub">· {data.location_name}</span> : null}
@@ -503,7 +556,7 @@ export function PlayerApp() {
 
   const envPanel = (
     <div key="env" className="player-panel" style={{ zIndex: zOf('env') }} onMouseDownCapture={() => bringToFront('env')}>
-      <div className="player-panel-head">{t('Surroundings')}{headerControls('env', true)}</div>
+      <div className="player-panel-head">{headIcon('env')}{t('Surroundings')}{headerControls('env', true)}</div>
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden' }}>
         <EnvironmentPanel
           locationId={data?.location_id || ''}
@@ -522,7 +575,7 @@ export function PlayerApp() {
 
   const worldMapPanel = (
     <div key="worldmap" className="player-panel" style={{ zIndex: zOf('worldmap') }} onMouseDownCapture={() => bringToFront('worldmap')}>
-      <div className="player-panel-head">{t('Map')}{headerControls('worldmap', true)}</div>
+      <div className="player-panel-head">{headIcon('worldmap')}{t('Map')}{headerControls('worldmap', true)}</div>
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden', padding: 4 }}>
         <MapPanel currentLocationId={data?.location_id || ''} />
       </div>
@@ -531,7 +584,7 @@ export function PlayerApp() {
 
   const isoMapPanel = (
     <div key="isomap" className="player-panel" style={{ zIndex: zOf('isomap') }} onMouseDownCapture={() => bringToFront('isomap')}>
-      <div className="player-panel-head">{t('2.5D Map')}{headerControls('isomap', true)}</div>
+      <div className="player-panel-head">{headIcon('isomap')}{t('2.5D Map')}{headerControls('isomap', true)}</div>
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden', padding: 4 }}>
         <IsoMapPanel currentLocationId={data?.location_id || ''} />
       </div>
@@ -540,7 +593,7 @@ export function PlayerApp() {
 
   const tasksPanel = (
     <div key="tasks" className="player-panel" style={{ zIndex: zOf('tasks') }} onMouseDownCapture={() => bringToFront('tasks')}>
-      <div className="player-panel-head">{t('Tasks')}{headerControls('tasks', true)}</div>
+      <div className="player-panel-head">{headIcon('tasks')}{t('Tasks')}{headerControls('tasks', true)}</div>
       <div className="player-panel-body">
         <TaskPanel />
       </div>
@@ -549,7 +602,7 @@ export function PlayerApp() {
 
   const selfPanel = (
     <div key="self" className="player-panel" style={{ zIndex: zOf('self') }} onMouseDownCapture={() => bringToFront('self')}>
-      <div className="player-panel-head">{data?.avatar || t('Self')}{headerControls('self', true)}</div>
+      <div className="player-panel-head">{headIcon('self')}{data?.avatar || t('Self')}{headerControls('self', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'auto' }}>
         <SelfPanel />
       </div>
@@ -558,16 +611,16 @@ export function PlayerApp() {
 
   const belongingsPanel = (
     <div key="belongings" className="player-panel" style={{ zIndex: zOf('belongings') }} onMouseDownCapture={() => bringToFront('belongings')}>
-      <div className="player-panel-head">{t('Inventory')}{headerControls('belongings', true)}</div>
+      <div className="player-panel-head">{headIcon('belongings')}{t('Inventory')}{headerControls('belongings', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'hidden' }}>
-        <BelongingsPanel />
+        <BelongingsPanel onClose={() => closePanel('belongings')} />
       </div>
     </div>
   )
 
   const journalPanel = (
     <div key="journal" className="player-panel" style={{ zIndex: zOf('journal') }} onMouseDownCapture={() => bringToFront('journal')}>
-      <div className="player-panel-head">{t('Journal')}{headerControls('journal', true)}</div>
+      <div className="player-panel-head">{headIcon('journal')}{t('Journal')}{headerControls('journal', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'hidden' }}>
         <JournalPanel />
       </div>
@@ -576,7 +629,7 @@ export function PlayerApp() {
 
   const galleryPanel = (
     <div key="gallery" className="player-panel" style={{ zIndex: zOf('gallery') }} onMouseDownCapture={() => bringToFront('gallery')}>
-      <div className="player-panel-head">{t('Gallery')}{headerControls('gallery', true)}</div>
+      <div className="player-panel-head">{headIcon('gallery')}{t('Gallery')}{headerControls('gallery', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'hidden' }}>
         <GalleryPanel />
       </div>
@@ -585,7 +638,7 @@ export function PlayerApp() {
 
   const instagramPanel = (
     <div key="instagram" className="player-panel" style={{ zIndex: zOf('instagram') }} onMouseDownCapture={() => bringToFront('instagram')}>
-      <div className="player-panel-head">{t('Instagram')}{headerControls('instagram', true)}</div>
+      <div className="player-panel-head">{headIcon('instagram')}{t('Instagram')}{headerControls('instagram', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'auto' }}>
         <InstagramPanel />
       </div>
@@ -594,9 +647,18 @@ export function PlayerApp() {
 
   const othersPanel = (
     <div key="others" className="player-panel" style={{ zIndex: zOf('others') }} onMouseDownCapture={() => bringToFront('others')}>
-      <div className="player-panel-head">{t('Others')}{headerControls('others', true)}</div>
+      <div className="player-panel-head">{headIcon('others')}{t('Others')}{headerControls('others', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'hidden' }}>
         <OthersPanel />
+      </div>
+    </div>
+  )
+
+  const phonePanel = (
+    <div key="phone" className="player-panel" style={{ zIndex: zOf('phone') }} onMouseDownCapture={() => bringToFront('phone')}>
+      <div className="player-panel-head">{headIcon('phone')}{t('Phone')}{headerControls('phone', true)}</div>
+      <div className="player-panel-body" style={{ padding: 0, overflow: 'hidden' }}>
+        <PhonePanel />
       </div>
     </div>
   )
@@ -604,7 +666,7 @@ export function PlayerApp() {
   const byId: Record<string, ReactNode> = {
     scene: scenePanel, env: envPanel, map: mapPanel, worldmap: worldMapPanel, isomap: isoMapPanel,
     tasks: tasksPanel, self: selfPanel, others: othersPanel, belongings: belongingsPanel,
-    journal: journalPanel, gallery: galleryPanel, instagram: instagramPanel,
+    journal: journalPanel, gallery: galleryPanel, instagram: instagramPanel, phone: phonePanel,
   }
 
   // Spaltenzahl aus gemessener Breite: colWidth ≈ CELL → quadratische Zellen.
@@ -633,6 +695,25 @@ export function PlayerApp() {
   // Location-Wechsel; verschwindet wenn man allein ist).
   const renderedIds = GRID_PANELS.filter(
     (id) => byId[id] && open.includes(id) && (id !== 'others' || hasOthers))
+  // Vorderstes Panel (höchster z-index) = aktiv → bekommt einen dezenten
+  // Akzent-Streifen am Kopf + stärkeren Schatten, damit klar ist welches vorn liegt.
+  const frontId = renderedIds.reduce<string | undefined>(
+    (a, b) => (a == null || zOf(b) >= zOf(a) ? b : a), undefined)
+  // Eingefroren: Grid in fixer Referenzbreite/-Spaltenzahl rendern und per
+  // CSS-transform an die echte Breite skalieren (Browser-Zoom-Verhalten). Der
+  // Wrapper bekommt die *skalierte* Höhe, damit der Scrollbereich stimmt; RGL
+  // erhält `transformScale`, sodass Ziehen/Resize trotz CSS-Skalierung korrekt
+  // rechnen. Nicht eingefroren = unverändertes responsives Spalten-Verhalten.
+  const frozenActive = frozen && frozenWidth > 0
+  const activeCols = frozenActive
+    ? Math.max(1, Math.floor((frozenWidth + MARGIN) / (CELL + MARGIN)))
+    : cols
+  const renderWidth = frozenActive ? frozenWidth : width
+  const fitScale = frozenActive ? width / frozenWidth : 1
+  const renderedBottom = sizedLayout
+    .filter((l) => renderedIds.includes(l.i))
+    .reduce((m, l) => Math.max(m, (l.y || 0) + (l.h || 0)), 0)
+  const gridContentH = renderedBottom * (CELL + MARGIN) + MARGIN
   // Beim Öffnen/Schließen den GridLayout neu mounten, damit RGL seinen internen
   // State frisch aus dem layout-Prop ableitet (sonst erscheint ein wieder-
   // geöffnetes Panel als 1×1). Ziehen/Bring-to-front ändern `open` NICHT → kein
@@ -685,63 +766,114 @@ export function PlayerApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autosizeKey, openKey, persist])
 
-  return (
-    <div className="player-root" ref={rootRef}>
-      <NoticeBanner />
-      <div style={{
-        position: 'fixed', top: 6, right: 10, zIndex: 1000,
-        display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap',
-        justifyContent: 'flex-end', maxWidth: '72vw',
-      }}>
-        {PANEL_META.filter((p) => p.id !== 'others' || hasOthers).map((p) => {
-          const isOpen = open.includes(p.id)
-          return (
-            <button key={p.id} onClick={() => togglePanel(p.id)} title={t(p.label)}
-              style={{
-                fontSize: '0.72em', padding: '2px 8px', borderRadius: 10, cursor: 'pointer',
-                border: '1px solid var(--border, #30363d)',
-                background: isOpen ? 'var(--bg-hover, #1f2937)' : 'transparent',
-                color: 'inherit', opacity: isOpen ? 1 : 0.4,
-              }}>
-              {t(p.label)}
-            </button>
-          )
-        })}
-        <button onClick={resetLayout} title={t('Reset layout')}
-          style={{
-            fontSize: '0.72em', padding: '2px 8px', borderRadius: 10, cursor: 'pointer',
-            border: '1px solid var(--border, #30363d)',
-            background: 'var(--bg-container, #161b22)', color: 'inherit', opacity: 0.7,
-          }}>↺</button>
+  // --- Toolbar (Launcher) -------------------------------------------------
+  const tbBtn = (id: string, label: string, icon: IconName, isOpen: boolean, onClick: () => void) => (
+    <button key={id} onClick={onClick} title={t(label)} aria-label={t(label)} aria-pressed={isOpen}
+      className={`play-tbtn${isOpen ? ' open' : ''}${iconMode === 'iconText' ? ' with-text' : ''}`}>
+      <Icon name={icon} size={15} />
+      {iconMode === 'iconText' && <span className="play-tbtn-label">{t(label)}</span>}
+    </button>
+  )
+  // Panel-Umschalter folgen der Position/Label-Einstellung. 'layouts' nicht hier:
+  // der Layouts-Button + Reset + Zahnrad bleiben fest rechts (Wunsch).
+  const panelToggles = PANEL_META
+    .filter((p) => p.kind !== 'dialog')
+    .filter((p) => p.id !== 'others' || hasOthers)
+    .map((p) => tbBtn(p.id, p.label, p.icon, open.includes(p.id), () => togglePanel(p.id)))
+  const layoutsMeta = PANEL_META.find((p) => p.id === 'layouts')!
+  const fixedCluster = (
+    <>
+      {tbBtn('layouts', layoutsMeta.label, layoutsMeta.icon, open.includes('layouts'), () => togglePanel('layouts'))}
+      <button onClick={toggleFreeze} aria-pressed={frozen}
+        title={frozen ? t('Unfreeze layout (responsive columns)') : t('Freeze layout (scale with window)')}
+        aria-label={frozen ? t('Unfreeze layout') : t('Freeze layout')}
+        className={`play-tbtn${frozen ? ' open' : ''}`}>
+        <Icon name={frozen ? 'lock' : 'unlock'} size={15} />
+      </button>
+      <button onClick={resetLayout} title={t('Reset layout')} aria-label={t('Reset layout')} className="play-tbtn">
+        <Icon name="reset" size={15} />
+      </button>
+      <div style={{ position: 'relative' }}>
+        <button onClick={() => setAppearanceOpen((o) => !o)} title={t('Toolbar settings')}
+          aria-label={t('Toolbar settings')} aria-pressed={appearanceOpen}
+          className={`play-tbtn${appearanceOpen ? ' open' : ''}`}>
+          <Icon name="settings" size={15} />
+        </button>
+        {appearanceOpen && (
+          <>
+            <div className="play-pop-backdrop" onMouseDown={() => setAppearanceOpen(false)} />
+            <div className="play-appearance-pop" onMouseDown={(e) => e.stopPropagation()}>
+              <div className="play-pop-row">
+                <span className="play-pop-label">{t('Labels')}</span>
+                <div className="play-seg">
+                  <button className={iconMode === 'icon' ? 'on' : ''} onClick={() => chooseIconMode('icon')}>{t('Icon')}</button>
+                  <button className={iconMode === 'iconText' ? 'on' : ''} onClick={() => chooseIconMode('iconText')}>{t('Icon + text')}</button>
+                </div>
+              </div>
+              <div className="play-pop-row">
+                <span className="play-pop-label">{t('Position')}</span>
+                <div className="play-seg">
+                  <button className={toolbarAlign === 'left' ? 'on' : ''} onClick={() => chooseToolbarAlign('left')}>{t('Left')}</button>
+                  <button className={toolbarAlign === 'right' ? 'on' : ''} onClick={() => chooseToolbarAlign('right')}>{t('Right')}</button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
-      <GridLayout
-        key={openKey}
-        className="layout"
-        layout={sizedLayout}
-        onLayoutChange={onLayoutChange}
-        onDragStart={(_l, item) => bringToFront(item.i)}
-        onResizeStart={(_l, item) => bringToFront(item.i)}
-        cols={cols}
-        width={width}
-        rowHeight={CELL}
-        margin={[MARGIN, MARGIN]}
-        draggableHandle=".player-panel-head"
-        resizeHandles={['s', 'w', 'e', 'n', 'sw', 'nw', 'se', 'ne']}
-        allowOverlap
-        compactType={null}
-        preventCollision={false}
-      >
-        {renderedIds.map((id) => cloneElement(byId[id] as ReactElement, {
-          'data-panel-id': id,
-          'data-autosize': autosize.includes(id) ? '1' : undefined,
-        }))}
-      </GridLayout>
+    </>
+  )
+
+  return (
+    <LightboxProvider>
+    <div className="player-root" ref={rootRef}>
+      <div className="play-toolbar">
+        <div className="play-toolbar-group play-toolbar-start">
+          {toolbarAlign === 'left' && panelToggles}
+        </div>
+        <div className="play-toolbar-group play-toolbar-end">
+          {toolbarAlign === 'right' && panelToggles}
+          {fixedCluster}
+        </div>
+      </div>
+      <NoticeBanner />
+      <div style={frozenActive ? { width, height: gridContentH * fitScale, overflow: 'hidden' } : undefined}>
+        <div style={frozenActive
+          ? { width: renderWidth, transform: `scale(${fitScale})`, transformOrigin: 'top left' }
+          : undefined}>
+          <GridLayout
+            key={openKey}
+            className="layout"
+            layout={sizedLayout}
+            onLayoutChange={onLayoutChange}
+            onDragStart={(_l, item) => bringToFront(item.i)}
+            onResizeStart={(_l, item) => bringToFront(item.i)}
+            cols={activeCols}
+            width={renderWidth}
+            transformScale={fitScale}
+            rowHeight={CELL}
+            margin={[MARGIN, MARGIN]}
+            draggableHandle=".player-panel-head"
+            resizeHandles={['s', 'w', 'e', 'n', 'sw', 'nw', 'se', 'ne']}
+            allowOverlap
+            compactType={null}
+            preventCollision={false}
+          >
+            {renderedIds.map((id) => cloneElement(byId[id] as ReactElement, {
+              'data-panel-id': id,
+              'data-autosize': autosize.includes(id) ? '1' : undefined,
+              className: `player-panel${id === frontId ? ' player-panel-front' : ''}`,
+            }))}
+          </GridLayout>
+        </div>
+      </div>
 
       {/* Dialog-Panels als zentriertes Overlay */}
       {DIALOG_PANELS.filter((id) => open.includes(id)).map((id) => (
         <div key={id} className="player-modal-backdrop" onMouseDown={() => closePanel(id)}>
           <div className="player-modal" onMouseDown={(e) => e.stopPropagation()}>
             <div className="player-panel-head">
+              {headIcon(id)}
               {t(PANEL_META.find((p) => p.id === id)?.label || '')}
               {headerControls(id, false)}
             </div>
@@ -754,5 +886,6 @@ export function PlayerApp() {
         </div>
       ))}
     </div>
+    </LightboxProvider>
   )
 }
