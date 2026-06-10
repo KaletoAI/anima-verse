@@ -773,18 +773,27 @@ class CharacterBotPoller:
 
     async def _process_chat_message(self, chat_id: int, text: str, from_user: Dict[str, Any]) -> None:
         """Process an incoming message: send to LLM, return response via Telegram."""
-        # Register if not yet mapped — always map to character owner
+        # Register if not yet mapped — chat_id → dieser NPC (Bot)
         from app.models.telegram_channel import get_telegram_channel
         telegram = get_telegram_channel()
         if chat_id not in telegram.chat_to_user_mapping:
-            telegram.register_user(chat_id)
+            telegram.register_user(chat_id, npc=self.character_name)
+
+        # Option B: der Telegram-User tritt als Avatar-Character auf. Ohne Bindung
+        # erst /avatar anbieten (sonst wüsste der NPC nicht, wer schreibt).
+        avatar = telegram.get_bound_avatar(chat_id)
+        if not avatar:
+            await self.send_message(chat_id,
+                "Bevor wir schreiben: wähle bitte, als <b>wer</b> du auftrittst.")
+            await self._handle_avatar(chat_id)
+            return
 
         # Show typing indicator
         await self.send_typing(chat_id)
 
         tool_image_urls = []
         try:
-            response_text, tool_image_urls = await self._generate_response(text)
+            response_text, tool_image_urls = await self._generate_response(text, avatar)
         except Exception as e:
             logger.error("[%s] Response generation failed: %s", self.character_name, e, exc_info=True)
             response_text = "Entschuldigung, da ist etwas schiefgelaufen. Versuche es nochmal."
@@ -810,8 +819,12 @@ class CharacterBotPoller:
             if clean:
                 self._save_chat_history(text, clean)
 
-    async def _generate_response(self, user_input: str) -> tuple:
+    async def _generate_response(self, user_input: str, avatar: str = "") -> tuple:
         """Generate agent response using the shared chat engine.
+
+        ``avatar`` (Option B): der Character, als den der Telegram-User auftritt —
+        wird als Sprecher übergeben, sodass der NPC weiß, wer schreibt, und die
+        History Avatar↔NPC gekeyt wird (uniform mit Phone/Web).
 
         Returns (response_text, tool_image_urls) where tool_image_urls are
         markdown image references extracted from ToolResultEvent.
@@ -821,7 +834,7 @@ class CharacterBotPoller:
         from app.core.llm_queue import get_llm_queue
 
         ctx = build_chat_context("", self.character_name, user_input, channel="telegram",
-            speaker="user", medium="telegram")
+            speaker=(avatar or "user"), medium="telegram")
 
         if ctx["llm"] is None:
             return "LLM nicht verfügbar. Bitte Konfiguration prüfen.", []

@@ -64,6 +64,7 @@ export function GalleryPanel() {
 
   const openRegen = useCallback(async (img: Img) => {
     if (!selected) return
+    setZoom(null)  // Detail-/Zoom-Box schließen, sonst liegt sie über dem Dialog
     let opts = { detected: [] as string[], available: [] as string[] }
     try {
       const cd = await apiPost<{ detected?: string[]; available?: string[] }>(
@@ -315,6 +316,7 @@ export function GalleryPanel() {
           open
           title={t('Regenerate image')}
           defaultPrompt={regenImg.info?.prompt || ''}
+          sourceImageUrl={regenImg.url}
           mode="regenerate"
           characterOptions={charOpts || { detected: [], available: [] }}
           onSubmit={submitRegen}

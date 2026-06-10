@@ -52,6 +52,8 @@ interface Props {
   open: boolean
   title: string
   defaultPrompt: string
+  /** Optional thumbnail of the current image (shown for recreate/regenerate). */
+  sourceImageUrl?: string
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
   onClose: () => void
   /**
@@ -119,7 +121,7 @@ function filterByWorkflowName(items: string[], workflowName: string, filter: str
 }
 
 export function ImageGenDialog({
-  open, title, defaultPrompt, onSubmit, onClose,
+  open, title, defaultPrompt, sourceImageUrl, onSubmit, onClose,
   mode = 'create', hideNegative, characterOptions,
 }: Props) {
   const isRegen = mode === 'regenerate'
@@ -161,7 +163,16 @@ export function ImageGenDialog({
     if (!open || options !== null) return
     apiGet<ImagegenOptionsResponse>('/world/imagegen-options')
       .then((d) => {
-        setOptions(d.options || [])
+        // Nach Match-Wert deduplizieren — mehrere Workflows teilen sich oft
+        // denselben filter-Glob (z.B. zwei „Qwen*"). Pro Match nur ein Eintrag.
+        const seen = new Set<string>()
+        const deduped = (d.options || []).filter((o) => {
+          const m = optMatch(o)
+          if (seen.has(m)) return false
+          seen.add(m)
+          return true
+        })
+        setOptions(deduped)
         setDefaultLocationOpt(d.default_location || '')
       })
       .catch(() => setOptions([]))
@@ -263,7 +274,7 @@ export function ImageGenDialog({
         if (e.target === e.currentTarget && !submitting) onClose()
       }}
     >
-      <div className="ga-modal" role="dialog" aria-label={title}>
+      <div className="ga-modal" role="dialog" aria-label={title} style={{ maxWidth: 820 }}>
         <div className="ga-modal-header">
           <span>{title}</span>
           <button
@@ -281,7 +292,11 @@ export function ImageGenDialog({
           ) : !options.length ? (
             <div className="ga-form-hint">{t('No image generation backends available.')}</div>
           ) : (
-            <>
+            // Zwei Spalten (wie der Animate-Dialog): links Service + LoRAs,
+            // rechts (aktuelles) Bild + Prompt + Optionen. Bricht auf schmalem
+            // Dialog via flex-wrap auf eine Spalte um.
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <label className="ga-imagegen-label">{t('Service (match)')}</label>
               <select
                 className="ga-input"
@@ -350,7 +365,12 @@ export function ImageGenDialog({
                   </div>
                 </>
               ) : null}
+              </div>
 
+              <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {sourceImageUrl ? (
+                <img src={sourceImageUrl} alt="" style={{ maxHeight: 150, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
+              ) : null}
               <label className="ga-imagegen-label">{t('Prompt')}</label>
               <textarea
                 className="ga-textarea"
@@ -429,7 +449,8 @@ export function ImageGenDialog({
                   <span>{t('Add as new image (keep the current one)')}</span>
                 </label>
               ) : null}
-            </>
+              </div>
+            </div>
           )}
         </div>
         <div className="ga-modal-footer">
