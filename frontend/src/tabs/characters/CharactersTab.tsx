@@ -19,6 +19,7 @@ import { DailyScheduleGrid } from './DailyScheduleGrid'
 import { ImageOverrides } from './ImageOverrides'
 import { GalleryTab } from './GalleryTab'
 import { SecretsEditor } from './SecretsEditor'
+import { NewCharacterDialog } from './NewCharacterDialog'
 
 /**
  * Game-Admin "Characters" tab — list-detail like Activities / Rules /
@@ -142,6 +143,8 @@ export function CharactersTab() {
     slots: [],
   })
   const [homeLoading, setHomeLoading] = useState(false)
+  // "New character" dialog — open state only; the dialog manages its own form.
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -419,6 +422,9 @@ export function CharactersTab() {
         <div className="ga-twocol-header">
           <h3>{t('Characters')}</h3>
           <div className="ga-twocol-header-actions">
+            <button type="button" className="ga-btn ga-btn-primary" onClick={() => setCreating(true)}>
+              {t('New character')}
+            </button>
             <ImportButton
               endpoint="/characters/import"
               overwriteSupported
@@ -998,6 +1004,21 @@ export function CharactersTab() {
           </>
         )}
       </section>
+      {creating && (
+        <NewCharacterDialog
+          existing={characters.map((c) => c.name)}
+          onClose={() => setCreating(false)}
+          onCreated={(name) => {
+            setCreating(false)
+            loadCharacters()
+              .then((list) => {
+                setCharacters(list)
+                onSelect(name)
+              })
+              .catch(() => onSelect(name))
+          }}
+        />
+      )}
     </div>
   )
 }
