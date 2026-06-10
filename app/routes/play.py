@@ -278,7 +278,12 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be a JSON object")
     content = str(body.get("content") or "")
-    if not content.strip():
+    # Attached image (uploaded id or character-library url). An image alone is a
+    # valid message — the avatar can "show" something without saying a word.
+    image_id = str(body.get("image_id") or "")
+    image_url = str(body.get("image_url") or "")
+    has_image = bool(image_id or image_url)
+    if not content.strip() and not has_image:
         raise HTTPException(status_code=400, detail="content is required")
 
     avatar = (get_active_character() or "").strip()
@@ -312,6 +317,37 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         logger.info("play_say: abwesende Adressaten verworfen: %s", _dropped)
     addressees = [a for a in addressees if a in present and a != avatar]
 
+    # 0) Bild-Anhang auflösen + (nur dann) synchron analysieren. Die Beschreibung
+    #    muss VOR dem Fan-Out feststehen, damit die wahrnehmenden Agents das Bild
+    #    „sehen". Die sichtbare Avatar-Zeile bleibt sauber (nur der Text); das Bild
+    #    reist als Thumbnail über perception_meta mit, die Beschreibung nur in die
+    #    Reaktions-Wahrnehmung (wie im alten /chat: Bild im UI, Beschreibung im
+    #    Prompt). Nur bei tatsächlichem Bild blockiert der POST.
+    import asyncio
+    img_display_url = ""
+    img_block = ""
+    if has_image:
+        from app.routes.chat import resolve_chat_image, analyze_chat_image_blocking
+        img_path, img_display_url = resolve_chat_image(image_id, image_url)
+        if img_path:
+            _vision_agent = next((a for a in addressees if a and a != avatar), "") or avatar
+            try:
+                _desc = await asyncio.wait_for(
+                    asyncio.to_thread(analyze_chat_image_blocking,
+                                      img_path, _vision_agent, content),
+                    timeout=15) or ""
+            except asyncio.TimeoutError:
+                logger.warning("play_say: Bild-Analyse Timeout (15s) — fahre ohne Beschreibung fort")
+                _desc = ""
+            except Exception as _ie:  # noqa: BLE001
+                logger.error("play_say: Bild-Analyse fehlgeschlagen: %s", _ie)
+                _desc = ""
+            img_block = (f"[Bildbeschreibung: {_desc.strip()}]" if _desc.strip()
+                         else "[Der Avatar zeigt ein Bild.]")
+        else:
+            logger.info("play_say: Bild-Anhang nicht auflösbar (id=%s url=%s)", image_id, image_url)
+            img_display_url = ""
+
     # 1) Spell-Cast-Detection (wie der alte Chat-Pfad): wirkt die Äußerung einen
     #    Zauber auf das (erste) adressierte Ziel? Wenn ja, führt detect_and_cast
     #    den Cast sofort aus (Effekt-Item ans Ziel etc.) und liefert einen Hint,
@@ -340,9 +376,13 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     _is_spell = bool(spell and spell.get("hint"))
     say_content = ((spell.get("chat_substitute") or "").strip() or content) if _is_spell else content
 
-    # 2) Avatar-Äußerung in den Stream (bei Spell: Narration statt Beschwörung)
+    # 2) Avatar-Äußerung in den Stream (bei Spell: Narration statt Beschwörung).
+    #    Bei Bild-Anhang reist die Display-URL als perception_meta mit, damit die
+    #    Scene-Zeile ein Thumbnail zeigt — der sichtbare Text bleibt unverändert.
+    _pmeta = {"image_url": img_display_url} if img_display_url else None
     uid = record_utterance(speaker=avatar, content=say_content, volume=volume,
-                           addressees=addressees, source="play")
+                           addressees=addressees, source="play",
+                           perception_meta=_pmeta)
 
     # 2b) Spell-Ergebnis (success_/fail_text) als Erzähler-Zeile sichtbar machen.
     #     location_id explizit — „Erzähler" hat keinen eigenen Ort.
@@ -359,8 +399,12 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     try:
         from app.core.agent_loop import get_agent_loop
         hints = {spell_target: spell["hint"]} if (_is_spell and spell_target) else None
+        # Den Agents die Bildbeschreibung mitgeben (vor den Text gestellt), damit
+        # sie auf das gezeigte Bild reagieren — die aufgezeichnete Zeile bleibt
+        # davon unberührt (clean text + Thumbnail).
+        _react_content = f"{img_block}\n\n{say_content}".strip() if img_block else say_content
         reactions = get_agent_loop().dispatch_room_reactions(
-            speaker=avatar, content=say_content, volume=volume,
+            speaker=avatar, content=_react_content, volume=volume,
             location_id=loc, room_id=room, addressees=addressees,
             is_avatar=True, hints=hints)
     except Exception as e:  # noqa: BLE001

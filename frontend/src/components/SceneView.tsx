@@ -43,7 +43,13 @@ export interface ThinkingInfo {
   responding?: boolean
 }
 
-export function SceneView({ lines, emptyHint, thinking }: { lines: SceneLine[]; emptyHint?: string; thinking?: ThinkingInfo[] }) {
+export function SceneView({ lines, emptyHint, thinking, onOpenImage }: {
+  lines: SceneLine[]
+  emptyHint?: string
+  thinking?: ThinkingInfo[]
+  /** Optional: open an attached scene image (e.g. in a Lightbox). */
+  onOpenImage?: (url: string) => void
+}) {
   const { t } = useI18n()
   const thinkers = thinking || []
   if (!lines.length && !thinkers.length) {
@@ -52,7 +58,7 @@ export function SceneView({ lines, emptyHint, thinking }: { lines: SceneLine[]; 
   return (
     <div className="ga-list" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {lines.map((line, i) => (
-        <SceneRow key={i} line={line} />
+        <SceneRow key={i} line={line} onOpenImage={onOpenImage} />
       ))}
       {thinkers.map((info) => (
         <div key={`thinking-${info.name}`} className="ga-list-row" style={{ display: 'flex', gap: 8, alignItems: 'baseline', opacity: 0.75 }}>
@@ -74,11 +80,14 @@ export function SceneView({ lines, emptyHint, thinking }: { lines: SceneLine[]; 
   )
 }
 
-function SceneRow({ line }: { line: SceneLine }) {
+function SceneRow({ line, onOpenImage }: { line: SceneLine; onOpenImage?: (url: string) => void }) {
   const { t } = useI18n()
   const speaker = speakerOf(line)
   const addr = addresseesOf(line)
   const time = clockOf(line.ts)
+  // Attached image (avatar showed something): rendered as a small thumbnail
+  // under the line. Click opens it via onOpenImage (Lightbox) or in a new tab.
+  const imageUrl = (line.meta?.image_url as string) || ''
 
   // Event-Verdikt (gelöst/ungelöst) — eigener farbiger Block unter dem Erzähler.
   const verdict = line.meta?.event_verdict as string | undefined
@@ -146,7 +155,22 @@ function SceneRow({ line }: { line: SceneLine }) {
       <span className="ga-list-row-sub" style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.5, fontSize: '0.75em' }}>
         {time}
       </span>
-      <span className="ga-list-row-main" style={{ flex: 1 }}>{body}</span>
+      <span className="ga-list-row-main" style={{ flex: 1 }}>
+        {body}
+        {imageUrl && (
+          <span style={{ display: 'block', marginTop: 4 }}>
+            <img
+              src={imageUrl}
+              alt={t('Attached image')}
+              onClick={() => (onOpenImage ? onOpenImage(imageUrl) : window.open(imageUrl, '_blank'))}
+              style={{
+                maxWidth: 180, maxHeight: 180, borderRadius: 6, cursor: 'pointer',
+                border: '1px solid var(--border, #30363d)', display: 'block',
+              }}
+            />
+          </span>
+        )}
+      </span>
       <span className="ga-list-row-sub" style={{ opacity: 0.35, fontSize: '0.7em' }}>{line.kind}</span>
     </div>
   )

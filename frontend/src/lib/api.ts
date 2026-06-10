@@ -94,3 +94,19 @@ export async function apiDelete<T = any>(path: string): Promise<T> {
   const res = await fetch(path, { ...COMMON, method: 'DELETE' })
   return parseJsonOrThrow(res)
 }
+
+/**
+ * Multipart upload. The browser sets the multipart Content-Type (with the
+ * boundary) itself, so we must NOT set it manually. Field name defaults to
+ * "file" to match the FastAPI upload routes.
+ */
+export async function apiUpload<T = any>(
+  path: string,
+  file: File,
+  field = 'file',
+): Promise<T> {
+  const fd = new FormData()
+  fd.append(field, file)
+  const res = await fetch(path, { ...COMMON, method: 'POST', body: fd })
+  return parseJsonOrThrow(res)
+}

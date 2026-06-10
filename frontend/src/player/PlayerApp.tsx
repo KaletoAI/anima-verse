@@ -7,12 +7,15 @@
  * (wahrgenommene Raum-Szene + Composer) und ein Platzhalter (z.B. Karte).
  * Layout-Persistenz ins User-Profil + weitere Panels folgen als nächste Schritte.
  */
-import { cloneElement, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { cloneElement, useCallback, useEffect, useRef, useState,
+  type ReactElement, type ReactNode,
+  type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent } from 'react'
 import GridLayout, { type Layout } from 'react-grid-layout'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAuth } from '../lib/AuthGate'
 import { useAvatarSwitch } from './AvatarGate'
-import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api'
+import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../lib/api'
+import { ChatGalleryPicker } from './ChatGalleryPicker'
 import { SceneView, type SceneLine } from '../components/SceneView'
 import { ScenesRecap } from './ScenesRecap'
 import { MovePad } from './MovePad'
@@ -31,7 +34,7 @@ import { PhonePanel } from './PhonePanel'
 import { NoticeBanner } from './NoticeBanner'
 import { useQueue } from './useQueue'
 import { Icon, type IconName } from './icons'
-import { LightboxProvider } from './Lightbox'
+import { LightboxProvider, useLightbox } from './Lightbox'
 
 // Quadratische, browser-unabhängige Zellen: feste Zellgröße in px. Die
 // Spaltenzahl wird aus der gemessenen Breite berechnet, sodass die Spaltenbreite
@@ -119,6 +122,15 @@ export function PlayerApp() {
   const [volume, setVolume] = useState('normal')
   const [addressees, setAddressees] = useState<string[]>([])
   const [sending, setSending] = useState(false)
+  // Chat image attachment (#5 upload / #6 gallery). Exactly one source is set:
+  // `image_id` for an upload, `image_url` for a library pick. `preview` is the
+  // URL shown in the composer thumbnail. `uploading` gates send during upload.
+  const [attach, setAttach] = useState<
+    { image_id?: string; image_url?: string; preview: string; uploading?: boolean } | null
+  >(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const lightbox = useLightbox()
   const [layout, setLayout] = useState<Layout[]>(DEFAULT_LAYOUT)
   const [open, setOpen] = useState<string[]>(GRID_PANELS)  // Dialoge starten geschlossen
   const [autosize, setAutosize] = useState<string[]>([])  // Panels mit Höhen-Autosize
@@ -402,19 +414,54 @@ export function PlayerApp() {
   }, [])
 
   const send = useCallback(async () => {
-    if (!text.trim() || sending) return
+    // An attached image alone is a valid message; an upload still in flight is not.
+    const hasImage = !!(attach && (attach.image_id || attach.image_url))
+    if ((!text.trim() && !hasImage) || sending || attach?.uploading) return
     setSending(true)
     try {
       const addr = volume === 'whisper' ? addressees.slice(0, 1) : addressees
-      await apiPost('/play/say', { content: text, volume, addressees: addr })
+      await apiPost('/play/say', {
+        content: text, volume, addressees: addr,
+        ...(attach?.image_id ? { image_id: attach.image_id } : {}),
+        ...(attach?.image_url ? { image_url: attach.image_url } : {}),
+      })
       setText('')
+      setAttach(null)
       await load()
     } catch {
       /* swallow for the scaffold; api handles auth redirect */
     } finally {
       setSending(false)
     }
-  }, [text, volume, addressees, sending, load])
+  }, [text, volume, addressees, sending, attach, load])
+
+  // Upload a picked/pasted/dropped file → attach by image_id. A local object URL
+  // is shown immediately as the preview while the upload resolves.
+  const uploadImage = useCallback(async (file: File) => {
+    if (!file.type.startsWith('image/')) return
+    const localPreview = URL.createObjectURL(file)
+    setAttach({ preview: localPreview, uploading: true })
+    try {
+      const r = await apiUpload<{ image_id: string }>('/chat/me/upload-image', file)
+      setAttach({ image_id: r.image_id, preview: localPreview, uploading: false })
+    } catch {
+      setAttach(null)
+      URL.revokeObjectURL(localPreview)
+    }
+  }, [])
+
+  const onComposerPaste = useCallback((e: ReactClipboardEvent) => {
+    const item = Array.from(e.clipboardData.items).find((it) => it.type.startsWith('image/'))
+    if (item) {
+      const f = item.getAsFile()
+      if (f) { e.preventDefault(); uploadImage(f) }
+    }
+  }, [uploadImage])
+
+  const onComposerDrop = useCallback((e: ReactDragEvent) => {
+    const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'))
+    if (f) { e.preventDefault(); uploadImage(f) }
+  }, [uploadImage])
 
   const [moving, setMoving] = useState(false)
   const handleStep = useCallback(async (dir: Dir) => {
@@ -506,7 +553,8 @@ export function PlayerApp() {
           <div className="player-scene-body">
             <ScenesRecap />
             <div className="player-scene-scroll" ref={sceneScrollRef} onScroll={onSceneScroll}>
-              <SceneView lines={lines} emptyHint={t('Nothing here yet.')} thinking={thinkingHere} />
+              <SceneView lines={lines} emptyHint={t('Nothing here yet.')} thinking={thinkingHere}
+                onOpenImage={(u) => lightbox.open({ src: u })} />
             </div>
 
             {(data?.follow_suggestions?.length ?? 0) > 0 && (
@@ -529,7 +577,9 @@ export function PlayerApp() {
               </div>
             )}
 
-            <div className="player-composer">
+            <div className="player-composer"
+              onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault() }}
+              onDrop={onComposerDrop}>
               {present.length > 0 && (
                 <div className="player-address-row">
                   <span className="player-address-label">{t('Address')}:</span>
@@ -544,10 +594,35 @@ export function PlayerApp() {
                   })}
                 </div>
               )}
+              {attach && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <div style={{ position: 'relative', flex: '0 0 auto' }}>
+                    <img src={attach.preview} alt={t('Attached image')}
+                      style={{
+                        width: 56, height: 56, objectFit: 'cover', borderRadius: 6,
+                        border: '1px solid var(--border, #30363d)',
+                        opacity: attach.uploading ? 0.5 : 1,
+                      }} />
+                    <button type="button" onClick={() => setAttach(null)} title={t('Remove')}
+                      style={{
+                        position: 'absolute', top: -6, right: -6, width: 18, height: 18,
+                        borderRadius: '50%', border: 'none', cursor: 'pointer',
+                        background: 'var(--danger, #da3633)', color: '#fff', fontSize: 11,
+                        lineHeight: '18px', padding: 0,
+                      }}>×</button>
+                  </div>
+                  <span style={{ fontSize: '0.8em', opacity: 0.7 }}>
+                    {attach.uploading ? t('Uploading…') : t('Image attached')}
+                  </span>
+                </div>
+              )}
               <textarea className="player-composer-input" rows={3} value={text} disabled={sending}
                 onChange={(e) => setText(e.target.value)}
+                onPaste={onComposerPaste}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
                 placeholder={sending ? t('Waiting for a reply…') : t('Say something…')} />
+              <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadImage(f); e.target.value = '' }} />
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
                 <select className="ga-input" value={volume} onChange={(e) => setVolume(e.target.value)}
                   style={{ flex: '0 0 auto', width: 'auto' }}>
@@ -555,8 +630,13 @@ export function PlayerApp() {
                   <option value="normal">{t('normal')}</option>
                   <option value="shout">{t('shout')}</option>
                 </select>
+                <button type="button" className="player-chip" title={t('Upload image')}
+                  onClick={() => fileInputRef.current?.click()} disabled={sending}>📎</button>
+                <button type="button" className="player-chip" title={t('Pick from gallery')}
+                  onClick={() => setPickerOpen(true)} disabled={sending}>🖼</button>
                 <span style={{ flex: 1 }} />
-                <button className="player-btn-primary" onClick={send} disabled={sending || !text.trim()}>
+                <button className="player-btn-primary" onClick={send}
+                  disabled={sending || attach?.uploading || (!text.trim() && !attach)}>
                   {sending ? t('Sending…') : t('Send')}
                 </button>
               </div>
@@ -567,6 +647,12 @@ export function PlayerApp() {
               )}
             </div>
           </div>
+          {pickerOpen && (
+            <ChatGalleryPicker
+              onClose={() => setPickerOpen(false)}
+              onPick={(url) => { setAttach({ image_url: url, preview: url }); setPickerOpen(false) }}
+            />
+          )}
         </div>
   )
 

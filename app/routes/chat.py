@@ -1081,6 +1081,49 @@ def _analyze_chat_image(image_path: str, agent_name: str, user_text: str = "") -
         return None
 
 
+def resolve_chat_image(image_id: str = "", image_url: str = "") -> tuple[str, str]:
+    """Resolve an attached chat image to (filesystem_path, display_url).
+
+    Shared by the legacy /chat endpoint and the room-based /play/say flow.
+    ``image_id`` points at an upload (chat_uploads), ``image_url`` at a
+    character-library image (/characters/{name}/images/{file}). Returns
+    ("", "") when nothing resolves (missing/invalid path).
+    """
+    if image_id:
+        if ".." in image_id or "/" in image_id:
+            return "", ""
+        path = _get_chat_upload_dir() / image_id
+        if path.exists():
+            # The serve route is /chat/{user_id}/upload-image/{id}; user_id is
+            # ignored, so a fixed segment is fine for the display URL.
+            return str(path), f"/chat/me/upload-image/{image_id}"
+        return "", ""
+    if image_url:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(image_url)
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) >= 4 and parts[0] == "characters" and parts[2] == "images":
+            char_name = parts[1]
+            img_file = "/".join(parts[3:])
+            if ".." in img_file or ".." in char_name:
+                return "", ""
+            resolved = get_character_images_dir(char_name) / img_file
+            if resolved.exists():
+                return str(resolved), image_url
+    return "", ""
+
+
+def analyze_chat_image_blocking(image_path: str, agent_name: str = "",
+                                user_text: str = "") -> Optional[str]:
+    """Synchronous wrapper around _analyze_chat_image for non-streaming callers.
+
+    /play/say resolves and analyses the image inline (only when one is
+    attached) so the description is part of the utterance BEFORE the
+    perceiving agents are bumped.
+    """
+    return _analyze_chat_image(image_path, agent_name, user_text)
+
+
 # --- Chat Endpoint ---
 
 @router.post("/{user_id}")
