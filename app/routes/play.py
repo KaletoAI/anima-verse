@@ -808,14 +808,20 @@ async def play_gallery_of(character: str, user=Depends(get_current_user)):
 
 @router.delete("/play/gallery/{character}/image/{filename}")
 async def play_gallery_delete_image(character: str, filename: str, user=Depends(get_current_user)):
-    """Loescht ein Bild aus einer Galerie. Berechtigungspruefung folgt spaeter —
-    vorerst sind alle sichtbaren Galerien loeschbar (nicht nur die eigene)."""
+    """Loescht ein Bild aus der Galerie des EIGENEN aktiven Avatars.
+
+    IDOR-Schutz: nur die eigene Galerie ist loeschbar — sonst koennte jeder
+    eingeloggte User fremde Character-Bilder loeschen."""
+    from app.models.account import get_active_character
     from app.models.character import delete_character_image
 
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
     if not character.strip():
         raise HTTPException(status_code=400, detail="character required")
+    avatar = (get_active_character() or "").strip()
+    if not avatar or character.strip() != avatar:
+        raise HTTPException(status_code=403, detail="Forbidden")
     if not delete_character_image(character, filename):
         raise HTTPException(status_code=404, detail="Image not found")
     return {"ok": True}
