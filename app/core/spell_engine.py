@@ -309,16 +309,19 @@ def execute_cast(avatar_name: str, target_name: str,
                 remove_from_inventory(avatar_name, spell_id, quantity=1, force=True)
             except Exception as e:
                 logger.debug("spell consume failed: %s", e)
-        # Self-cast mit Self-Clone (clone_item_id leer/== spell_id):
-        # give_item wuerde hier korrupt arbeiten, weil das Inventar-Schema
-        # UNIQUE(character_name, item_id) enforct — add_to_inventory + danach
-        # consume_item collabieren zu einem Net-Minus-1, d.h. der Caster
-        # verliert sein Item trotz copy_on_give=True. Stattdessen Effekte
-        # direkt auf den Avatar anwenden, ohne das Inventar anzufassen.
-        is_self_clone = (avatar_name == target_name and clone_id == spell_id)
+        # Direkt-Effekt-Spruch: KEIN separates Clone-Item (clone_item_id leer →
+        # clone_id == spell_id). Dann wirkt der Spruch seine EIGENEN effects
+        # DIREKT auf das Ziel — egal ob Self- oder Fremd-Cast. Sonst bekäme das
+        # Ziel eine castbare Kopie des Spruchs (sinnlos für einen Buff/Debuff),
+        # und die Stat-Effekte (stamina_change etc.) griffen gar nicht, weil
+        # add_to_inventory beim give nur apply_condition feuert. Zusätzlich
+        # korrumpiert give_item zu sich selbst das UNIQUE(character,item)-Schema.
+        # Nur wenn ein eigenes Effekt-Item existiert (clone_id != spell_id) wird
+        # es per give_item ans Ziel übergeben (Trank/Schriftrolle/Verwandlung).
+        is_direct_effect = (clone_id == spell_id)
         try:
             from app.models.inventory import give_item, get_item, apply_item_effects
-            if is_self_clone:
+            if is_direct_effect:
                 apply_item_effects(target_name, clone_id)
                 _eff_item = get_item(clone_id) or {}
                 delivered_item_id = clone_id

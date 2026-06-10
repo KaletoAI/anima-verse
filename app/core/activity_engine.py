@@ -496,6 +496,68 @@ def is_character_interruptible(character_name: str) -> Tuple[bool, str]:
 # 7. STUNDENTIMER — Decay/Regen fuer alle Status-Werte
 # ============================================================
 
+def apply_effects(character_name: str,
+    effects: Dict[str, Any],
+    source: str = "") -> Dict[str, Any]:
+    """Zentrale Funktion: Wendet ein Effects-Dict auf einen Character an.
+
+    Verarbeitet ``mood_influence`` (sofort) + alle ``*_change``-Keys als
+    Stat-Deltas (geclamped 0-100). ``apply_condition``/``condition_duration_hours``
+    werden hier NICHT verarbeitet — der Aufrufer (z.B. apply_item_effects) macht
+    das. Status-Werte liegen in ``character_state.meta.status_effects`` und werden
+    transparent ueber get_/save_character_profile gelesen/geschrieben.
+
+    War in ff1f7d1 (Activity-Library-Entfernung) versehentlich geloescht worden,
+    obwohl apply_item_effects + danger_system sie noch importieren — der
+    ImportError wurde im try/except verschluckt, sodass Item-/Spell-Effekte und
+    Danger-Drain still NICHTS bewirkten.
+
+    Returns dict with applied changes: {"stamina": {"old": 80, "new": 65}, ...}
+    """
+    if not effects or not isinstance(effects, dict):
+        return {}
+
+    log_prefix = f"[{source}] " if source else ""
+
+    # Mood-Einfluss (sofort wirksam)
+    mood = effects.get("mood_influence")
+    if mood:
+        try:
+            from app.models.character import save_character_current_feeling
+            save_character_current_feeling(character_name, mood)
+            logger.info("%sMood gesetzt: %s -> %s", log_prefix, character_name, mood)
+        except Exception as e:
+            logger.warning("Mood setzen fehlgeschlagen: %s", e)
+
+    # Generische Status-Effects: Jeder Key mit "_change" Suffix wird angewendet
+    from app.models.character import get_character_profile, save_character_profile
+    changes: Dict[str, Any] = {}
+    try:
+        profile = get_character_profile(character_name)
+        status = profile.get("status_effects", {}) or {}
+        changed = False
+
+        for key, delta in effects.items():
+            if not key.endswith("_change") or not delta:
+                continue
+            stat_key = key[:-7]  # "stamina_change" -> "stamina"
+            current = status.get(stat_key, 100)
+            new_val = max(0, min(100, current + int(delta)))
+            if new_val != current:
+                status[stat_key] = new_val
+                changes[stat_key] = {"old": current, "new": new_val}
+                changed = True
+                logger.info("%s%s: %s %d -> %d", log_prefix, character_name, stat_key, current, new_val)
+
+        if changed:
+            profile["status_effects"] = status
+            save_character_profile(character_name, profile)
+    except Exception as e:
+        logger.warning("Effects anwenden fehlgeschlagen: %s", e)
+
+    return changes
+
+
 _LAST_HOURLY_TICK: Dict[str, str] = {}  # key: "character_name" -> ISO timestamp
 
 def apply_hourly_status_tick(character_name: str):
