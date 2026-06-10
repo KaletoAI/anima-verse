@@ -19,6 +19,7 @@ import { DailyScheduleGrid } from './DailyScheduleGrid'
 import { ImageOverrides } from './ImageOverrides'
 import { GalleryTab } from './GalleryTab'
 import { SecretsEditor } from './SecretsEditor'
+import { SkillsTab } from './SkillsTab'
 import { NewCharacterDialog } from './NewCharacterDialog'
 
 /**
@@ -63,7 +64,7 @@ const MOODS: Array<{ id: string; label: string }> = [
   { id: 'sweating', label: 'sweating' },
 ]
 
-type SubTabId = 'general' | 'soul' | 'behavior' | 'image' | 'gallery' | 'home' | 'secrets' | 'others'
+type SubTabId = 'general' | 'soul' | 'behavior' | 'image' | 'gallery' | 'home' | 'skills' | 'secrets' | 'others'
 
 interface ScheduleSlot {
   hour: number
@@ -82,6 +83,7 @@ const SUB_TABS: Array<{ id: SubTabId; label: string }> = [
   { id: 'image', label: 'Image' },
   { id: 'gallery', label: 'Gallery' },
   { id: 'home', label: 'Activity & Home' },
+  { id: 'skills', label: 'Skills' },
   { id: 'secrets', label: 'Secrets' },
   { id: 'others', label: 'Others' },
 ]
@@ -989,6 +991,8 @@ export function CharactersTab() {
               <ImageOverrides character={selected} />
             ) : subTab === 'gallery' ? (
               <GalleryTab character={selected} />
+            ) : subTab === 'skills' ? (
+              <SkillsTab character={selected} />
             ) : subTab === 'secrets' ? (
               <SecretsEditor character={selected} />
             ) : (
