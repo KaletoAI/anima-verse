@@ -10,7 +10,7 @@
  * (Drag); Doppelklick wechselt zwischen Einpassen und 2.5×. Videos werden groß mit
  * Steuerung gezeigt. Schließen: ×, Esc oder Klick auf den dunklen Rand.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from './icons'
 import { useI18n } from '../i18n/I18nProvider'

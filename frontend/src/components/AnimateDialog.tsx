@@ -215,67 +215,70 @@ export function AnimateDialog({
 
   return createPortal(
     <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !submitting) onClose() }}>
-      <div className="ga-modal" role="dialog" aria-label={title}>
+      <div className="ga-modal" role="dialog" aria-label={title} style={{ maxWidth: 820 }}>
         <div className="ga-modal-header">
           <span>{title}</span>
           <button className="ga-modal-close" onClick={onClose} disabled={submitting} aria-label={t('Close')}>×</button>
         </div>
         <div className="ga-modal-body">
-          {sourceImageUrl ? (
-            <img src={sourceImageUrl} alt="" style={{ maxHeight: 160, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
-          ) : null}
-
           {!services ? (
             <div className="ga-loading">{t('Loading…')}</div>
           ) : !services.length ? (
             <div className="ga-form-hint">{t('No animation services available.')}</div>
           ) : (
-            <>
-              <label className="ga-imagegen-label">{t('Animation service')}</label>
-              <select className="ga-input" value={serviceId} disabled={submitting}
-                onChange={(e) => setServiceId(e.target.value)}>
-                {services.map((s) => (
-                  <option key={s.id} value={s.id} disabled={s.enabled === false}>
-                    {s.label}{s.enabled === false ? ` (${t('disabled')})` : ''}
-                  </option>
-                ))}
-              </select>
-
-              <label className="ga-imagegen-label">{t('Animation prompt')}</label>
-              <textarea className="ga-textarea" rows={5} value={prompt} disabled={submitting}
-                onChange={(e) => setPrompt(e.target.value)} />
-              <div className="ga-form-row" style={{ gap: 8 }}>
-                <button type="button" className="ga-btn ga-btn-sm" disabled={suggesting || submitting} onClick={doSuggest}>
-                  {suggesting ? t('Suggesting…') : '✨ ' + t('Suggest prompt')}
-                </button>
-                <button type="button" className="ga-btn ga-btn-sm" onClick={() => setShowAdvanced((v) => !v)}>
-                  {showAdvanced ? '▾' : '▸'} {t('Advanced')}
-                </button>
+            // Two columns: left = service + LoRAs, right = image + prompt.
+            // flex-wrap collapses to one column on a narrow dialog.
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label className="ga-imagegen-label">{t('Animation service')}</label>
+                <select className="ga-input" value={serviceId} disabled={submitting}
+                  onChange={(e) => setServiceId(e.target.value)}>
+                  {services.map((s) => (
+                    <option key={s.id} value={s.id} disabled={s.enabled === false}>
+                      {s.label}{s.enabled === false ? ` (${t('disabled')})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {currentService?.has_loras ? (
+                  <>
+                    {renderLoraGroup(t('LoRAs — High Noise'), lorasHigh, setLorasHigh)}
+                    {renderLoraGroup(t('LoRAs — Low Noise'), lorasLow, setLorasLow)}
+                  </>
+                ) : null}
               </div>
 
-              {showAdvanced ? (
-                <>
-                  <label className="ga-imagegen-label">{t('Suggest LLM (optional)')}</label>
-                  <select className="ga-input" value={llmOverride} disabled={submitting}
-                    onChange={(e) => setLlmOverride(e.target.value)}>
-                    <option value="">— {t('default')} —</option>
-                    {llmModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                  <label className="ga-imagegen-label">{t('Suggest system prompt (optional)')}</label>
-                  <textarea className="ga-textarea" rows={3}
-                    placeholder={t('Empty = backend default')}
-                    value={systemPrompt} disabled={submitting}
-                    onChange={(e) => setSystemPrompt(e.target.value)} />
-                </>
-              ) : null}
-
-              {currentService?.has_loras ? (
-                <>
-                  {renderLoraGroup(t('LoRAs — High Noise'), lorasHigh, setLorasHigh)}
-                  {renderLoraGroup(t('LoRAs — Low Noise'), lorasLow, setLorasLow)}
-                </>
-              ) : null}
-            </>
+              <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {sourceImageUrl ? (
+                  <img src={sourceImageUrl} alt="" style={{ maxHeight: 170, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
+                ) : null}
+                <label className="ga-imagegen-label">{t('Animation prompt')}</label>
+                <textarea className="ga-textarea" rows={5} value={prompt} disabled={submitting}
+                  onChange={(e) => setPrompt(e.target.value)} />
+                <div className="ga-form-row" style={{ gap: 8 }}>
+                  <button type="button" className="ga-btn ga-btn-sm" disabled={suggesting || submitting} onClick={doSuggest}>
+                    {suggesting ? t('Suggesting…') : '✨ ' + t('Suggest prompt')}
+                  </button>
+                  <button type="button" className="ga-btn ga-btn-sm" onClick={() => setShowAdvanced((v) => !v)}>
+                    {showAdvanced ? '▾' : '▸'} {t('Advanced')}
+                  </button>
+                </div>
+                {showAdvanced ? (
+                  <>
+                    <label className="ga-imagegen-label">{t('Suggest LLM (optional)')}</label>
+                    <select className="ga-input" value={llmOverride} disabled={submitting}
+                      onChange={(e) => setLlmOverride(e.target.value)}>
+                      <option value="">— {t('default')} —</option>
+                      {llmModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                    <label className="ga-imagegen-label">{t('Suggest system prompt (optional)')}</label>
+                    <textarea className="ga-textarea" rows={3}
+                      placeholder={t('Empty = backend default')}
+                      value={systemPrompt} disabled={submitting}
+                      onChange={(e) => setSystemPrompt(e.target.value)} />
+                  </>
+                ) : null}
+              </div>
+            </div>
           )}
         </div>
         <div className="ga-modal-footer">
