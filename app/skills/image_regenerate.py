@@ -161,20 +161,15 @@ def regenerate_image(character_name: str,
     backend = None
 
     if backend_name:
-        # Direkte Backend-Auswahl (nicht-ComfyUI)
-        for b in skill.backends:
-            if b.name == backend_name and b.available:
-                backend = b
-                break
+        # Provider-Auswahl via Match-Glob (z.B. "Together.ai" / "Together*"),
+        # nach Verfuegbarkeit aufgeloest — wie das Admin-Default-Match.
+        backend = skill.match_backend(backend_name)
         if not backend:
             raise RuntimeError(f"Backend '{backend_name}' nicht verfuegbar")
     else:
-        # Workflow-basierte Auswahl (ComfyUI)
+        # Workflow-Auswahl via Match-Glob (z.B. "Flux*"), nach Verfuegbarkeit.
         if workflow_name and skill.comfy_workflows:
-            for wf in skill.comfy_workflows:
-                if wf.name == workflow_name:
-                    active_workflow = wf
-                    break
+            active_workflow = skill.match_workflow(workflow_name, character_name)
         if not active_workflow and skill.comfy_workflows:
             active_workflow = skill._get_active_workflow(character_name) if character_name else skill.comfy_workflows[0]
 

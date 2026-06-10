@@ -145,6 +145,7 @@ class CharacterBotPoller:
             {"command": "info", "description": "Character-Profil anzeigen"},
             {"command": "gallery", "description": "Bildergalerie anzeigen"},
             {"command": "outfits", "description": "Outfits anzeigen & wechseln"},
+            {"command": "avatar", "description": "Charakter wählen (als wen du schreibst)"},
         ]
         await self._api("setMyCommands", {"commands": commands})
         logger.info("[%s] Bot commands registered", self.character_name)
@@ -247,6 +248,9 @@ class CharacterBotPoller:
         if cmd == "/outfits":
             await self._handle_outfits(chat_id)
             return
+        if cmd == "/avatar":
+            await self._handle_avatar(chat_id)
+            return
 
         if not text:
             return
@@ -260,10 +264,10 @@ class CharacterBotPoller:
         if from_user.get("last_name"):
             display_name += f" {from_user['last_name']}"
 
-        # Register mapping: chat_id → character owner ()
+        # Register mapping: chat_id → NPC (dieser Bot-Character)
         from app.models.telegram_channel import get_telegram_channel
         telegram = get_telegram_channel()
-        telegram.register_user(chat_id)
+        telegram.register_user(chat_id, npc=self.character_name)
 
         welcome = (
             f"Hallo {display_name}! 👋\n\n"
@@ -273,6 +277,45 @@ class CharacterBotPoller:
         )
         await self.send_message(chat_id, welcome)
         logger.info("[%s] /start from %s (chat_id=%s)", self.character_name, display_name, chat_id)
+
+    async def _handle_avatar(self, chat_id: int, edit_message_id: int = None) -> None:
+        """Handle /avatar — Option B: den Charakter wählen, als den der Telegram-
+        User mit diesem NPC spricht. Bindet chat_id → Avatar."""
+        from app.models.telegram_channel import get_telegram_channel
+        from app.models.account import get_all_avatars
+        telegram = get_telegram_channel()
+        current = telegram.get_bound_avatar(chat_id)
+        avatars = sorted(a for a in (get_all_avatars() or set())
+                         if a and a != self.character_name)
+        if not avatars:
+            await self.send_message(chat_id, "Keine Avatare verfügbar.")
+            return
+        lines = [f"<b>🎭 Wer bist du?</b>\nWähle den Charakter, als den du mit "
+                 f"<b>{self.character_name}</b> schreibst:"]
+        if current:
+            lines.append(f"\nAktuell: <b>{current}</b>")
+        buttons = [[{"text": f"{'✅ ' if a == current else ''}{a}",
+                     "callback_data": f"avatar_bind:{a}"}] for a in avatars]
+        text = "\n".join(lines)
+        if edit_message_id:
+            await self.edit_message_text(chat_id, edit_message_id, text, buttons)
+        else:
+            await self.send_message_with_buttons(chat_id, text, buttons)
+
+    async def _cb_avatar_bind(self, chat_id: int, message_id: int,
+                              callback_id: str, name: str) -> None:
+        from app.models.telegram_channel import get_telegram_channel
+        from app.models.account import get_all_avatars
+        if name not in (get_all_avatars() or set()):
+            await self.answer_callback(callback_id, "Unbekannter Avatar")
+            return
+        telegram = get_telegram_channel()
+        telegram.set_bound_avatar(chat_id, name, npc=self.character_name)
+        await self.answer_callback(callback_id, f"Du bist jetzt {name}")
+        await self.edit_message_text(
+            chat_id, message_id,
+            f"✅ Du schreibst jetzt als <b>{name}</b> mit <b>{self.character_name}</b>.", [])
+        logger.info("[%s] avatar bound: chat_id=%s → %s", self.character_name, chat_id, name)
 
     async def _handle_info(self, chat_id: int) -> None:
         """Handle /info — show character profile."""
@@ -486,6 +529,8 @@ class CharacterBotPoller:
             elif data == "outfit_back":
                 await self.answer_callback(callback_id)
                 await self._handle_outfits(chat_id, edit_message_id=message_id)
+            elif data.startswith("avatar_bind:"):
+                await self._cb_avatar_bind(chat_id, message_id, callback_id, data.split(":", 1)[1])
             else:
                 await self.answer_callback(callback_id)
         except Exception as e:

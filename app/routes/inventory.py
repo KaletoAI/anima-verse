@@ -345,28 +345,22 @@ def generate_item_image_sync(
         logger.warning("Item-Bild [%s]: ImageGeneration Skill nicht verfuegbar", item_id)
         return False
 
-    # Workflow-Override: aus overrides oder Default
+    # Workflow-Override: Match-Glob (z.B. "Flux*") nach Verfuegbarkeit, sonst Default.
     active_wf = None
     wf_name = (overrides.get("workflow") or "").strip()
     if wf_name:
-        for wf in (img_skill.comfy_workflows or []):
-            if wf.name == wf_name:
-                active_wf = wf
-                break
+        active_wf = img_skill.match_workflow(wf_name)
         if not active_wf:
             logger.warning("Item-Bild [%s]: Override-Workflow '%s' nicht gefunden — Default",
                            item_id, wf_name)
     if not active_wf:
         active_wf = getattr(img_skill, '_default_workflow', None)
 
-    # Backend-Override: aus overrides oder Auto-Auswahl
+    # Backend-Override: Match-Glob (z.B. "Together.ai" / "Together*"), sonst Auto-Auswahl.
     backend = None
     backend_name = (overrides.get("backend") or "").strip()
     if backend_name:
-        for b in (img_skill.backends or []):
-            if b.name == backend_name and getattr(b, "available", True):
-                backend = b
-                break
+        backend = img_skill.match_backend(backend_name)
         if not backend:
             logger.warning("Item-Bild [%s]: Override-Backend '%s' nicht verfuegbar — Auto",
                            item_id, backend_name)

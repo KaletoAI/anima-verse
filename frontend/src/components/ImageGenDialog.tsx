@@ -76,6 +76,13 @@ interface Props {
 type CharOpt = string | { name: string; type?: string }
 const charName = (c: CharOpt): string => (typeof c === 'string' ? c : c?.name || '')
 
+// Match-Wert einer Option wie das Admin-Feld „…/Vorschau Default (Match)":
+//   workflow:<glob>  (Glob aus dem Workflow-filter, sonst Name)
+//   backend:<name>   (Provider, exakter Name matcht sich selbst)
+// Wird nach Verfügbarkeit serverseitig aufgelöst (resolve_imagegen_target).
+const optMatch = (o: ImagegenOption): string =>
+  o.type === 'workflow' ? `workflow:${o.filter || o.name}` : `backend:${o.name}`
+
 const LORA_SLOTS = 4
 
 function globToRegex(glob: string): RegExp {
@@ -220,7 +227,9 @@ export function ImageGenDialog({
   const handleSubmit = useCallback(async () => {
     if (!currentOption) return
     const payload: ImageGenSubmit = { prompt: prompt.trim() }
-    if (currentOption.type === 'workflow') payload.workflow = currentOption.name
+    // Match-Glob senden (workflow:<filter> / backend:<name>) — der Server löst ihn
+    // nach Verfügbarkeit auf (match_workflow / match_backend), wie im Admin-Default.
+    if (currentOption.type === 'workflow') payload.workflow = currentOption.filter || currentOption.name
     else payload.backend = currentOption.name
     if (currentOption.has_loras) {
       const active = loraSlots.filter((l) => l.name && l.name !== 'None')
@@ -273,7 +282,7 @@ export function ImageGenDialog({
             <div className="ga-form-hint">{t('No image generation backends available.')}</div>
           ) : (
             <>
-              <label className="ga-imagegen-label">{t('Service / Workflow')}</label>
+              <label className="ga-imagegen-label">{t('Service (match)')}</label>
               <select
                 className="ga-input"
                 value={optionKey}
@@ -282,7 +291,7 @@ export function ImageGenDialog({
               >
                 {options.map((o) => (
                   <option key={`${o.type}:${o.name}`} value={`${o.type}:${o.name}`}>
-                    {o.label}
+                    {optMatch(o)}
                   </option>
                 ))}
               </select>
