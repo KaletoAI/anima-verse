@@ -131,8 +131,10 @@ export function PlayerApp() {
     { image_id?: string; image_url?: string; preview: string; uploading?: boolean } | null
   >(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [giftOpen, setGiftOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lightbox = useLightbox()
+  const { toast } = useToast()
   const [layout, setLayout] = useState<Layout[]>(DEFAULT_LAYOUT)
   const [open, setOpen] = useState<string[]>(GRID_PANELS)  // Dialoge starten geschlossen
   const [autosize, setAutosize] = useState<string[]>([])  // Panels mit Höhen-Autosize
@@ -636,6 +638,8 @@ export function PlayerApp() {
                   onClick={() => fileInputRef.current?.click()} disabled={sending}>📎</button>
                 <button type="button" className="player-chip" title={t('Pick from gallery')}
                   onClick={() => setPickerOpen(true)} disabled={sending}>🖼</button>
+                <button type="button" className="player-chip" title={t('Give a gift')}
+                  onClick={() => setGiftOpen(true)} disabled={sending || present.length === 0}>🎁</button>
                 <span style={{ flex: 1 }} />
                 <button className="player-btn-primary" onClick={send}
                   disabled={sending || attach?.uploading || (!text.trim() && !attach)}>
@@ -653,6 +657,23 @@ export function PlayerApp() {
             <ChatGalleryPicker
               onClose={() => setPickerOpen(false)}
               onPick={(url) => { setAttach({ image_url: url, preview: url }); setPickerOpen(false) }}
+            />
+          )}
+          {giftOpen && (
+            <GiftPicker
+              avatar={data?.avatar || ''}
+              recipients={present}
+              defaultRecipient={addressees.length === 1 ? addressees[0] : undefined}
+              onClose={() => setGiftOpen(false)}
+              onGifted={(r: GiftResult) => {
+                setGiftOpen(false)
+                toast(
+                  `${t('Gift sent')}: ${r.item_name} → ${r.to_character}` +
+                    (r.boost ? ` (+${r.boost} ${t('relationship')})` : ''),
+                  'success',
+                )
+                load()
+              }}
             />
           )}
         </div>
