@@ -26,6 +26,10 @@ build/run commands and the cross-file architecture.
 # Python deps (no .venv activation needed if you call the interpreter directly)
 pip install -e .            # inside an activated .venv
 
+# Task queue inspection — works WITHOUT the server, reads the SQLite DB directly
+python queue_cli.py list|info|cancel|retry|move|priority|pause|resume|clear|stats
+# (docstring in queue_cli.py has full usage; DB path via TASK_QUEUE_DB in legacy .env)
+
 # Tests — plain pytest, no config; tests also run standalone as scripts
 ./.venv/bin/python -m pytest tests/
 ./.venv/bin/python tests/test_perception_earshot.py   # single test, direct
@@ -43,8 +47,9 @@ task. Building + committing is the deliverable. Note that admin pages rendered s
 
 ## Configuration model — no `.env`
 
-There is **no `.env` file** and config is **not** read from environment variables. Each world is
-self-contained under `worlds/<world>/`:
+The app does **not** read config from a `.env` file or environment variables — do not introduce
+either. (Two legacy exceptions still read a root `.env`: `queue_cli.py` for `TASK_QUEUE_DB`, and the
+`docker/` setup.) Each world is self-contained under `worlds/<world>/`:
 
 - `config.json` — LLM providers, image backends, TTS, routing. Edited through the Admin UI at `/admin/settings`, not by hand.
 - `secrets.json` — API keys / JWT secret / passwords (gitignored, overlaid onto `config.json` at load).
@@ -83,8 +88,9 @@ per-character data (`load_prompt_data`); the actual composition is in the templa
 - `rp_first` — chat LLM answers in-character prose first, then a separate **Tool LLM** (`thoughts.py` context) translates that prose into skill calls. Use this for RP fine-tunes. Symptom of the wrong mode: character "promises" to move but `current_location` never changes.
 
 **Skills** (`app/skills/`) are tool calls characters invoke. `BaseSkill` (`skills/base.py`) defines the
-contract; `skill_manager.py` registers built-ins by explicit import and auto-loads `plugins/` via
-`app/plugins/loader.py`. Flags on a skill class: `ALWAYS_LOAD` (loaded always, enabled per-character),
+contract; `skill_manager.py` registers built-ins by explicit import and auto-loads the **top-level
+`plugins/`** directory (`searx/`, `n8n/`, `knowledge/` — each a folder with `plugin.yaml` + `skill.py`)
+via `app/plugins/loader.py`; see `docs/plugins.md`. Flags on a skill class: `ALWAYS_LOAD` (loaded always, enabled per-character),
 `DEFERRED` (intent detected during chat, executed after the response), `CONTENT_TOOL` (result must flow
 back into the RP, triggers a retry in `rp_first`). `intent_engine.py` picks which skills to surface.
 
@@ -138,3 +144,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 `development_instructions/` holds the living plan/design docs — read the relevant one before changing a
 subsystem (e.g. `image-creation.md`, `plan-room-conversation*`, `plan-temporary-npcs.md`, `plan-missing-ui-features.md`).
 `shared/world_dev_schemas/` holds the JSON Schemas the world-dev UI validates against.
+
+`docs/` is the technical reference (config defaults, LLM task mapping/templates, movement model, plugins).
+`CHAT_PROMPTS.md` documents the chat system/user prompt layout and caching behavior. `documentation/` is
+an older Telegram/channel-era doc set — prefer `docs/` and `development_instructions/` when they conflict.

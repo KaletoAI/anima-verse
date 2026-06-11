@@ -784,6 +784,80 @@ def get_location_map_icon_2d(location_name: str):
     return _serve_map_icon(location_name, "map_2d", "map_image_2d")
 
 
+def _resolve_map_icon_path(loc: Dict[str, Any], field: str = "map_image_2d",
+                           image_type: str = "map_2d"):
+    """Pfad des per-Zelle gewaehlten 2D-Karten-Tiles (sonst erstes getaggtes).
+    Wiederverwendete Logik aus :func:`_serve_map_icon`, ohne FileResponse."""
+    from app.models.world import _gallery_owner_id, get_gallery_image_types
+    loc_id = loc.get("id", "")
+    if not loc_id:
+        return None
+    owner_id = _gallery_owner_id(loc_id) or loc_id
+    gallery_dir = get_gallery_dir(owner_id)
+    chosen = (loc.get(field) or "").strip()
+    if chosen and (gallery_dir / chosen).exists():
+        return gallery_dir / chosen
+    for fn, tp in (get_gallery_image_types(owner_id) or {}).items():
+        if tp == image_type and (gallery_dir / fn).exists():
+            return gallery_dir / fn
+    return None
+
+
+def _compose_neighbor_canvas(location: Dict[str, Any]):
+    """Phase-1-Nachbar-Kontext: baut einen 3x3-Canvas aus den ORTHOGONALEN
+    Nachbar-2D-Tiles (N/S/O/W, jeweils mit ihrer Anzeige-Rotation) + eine Maske
+    (Mitte weiss = inpainten). Der Inpaint-Workflow fuellt nur die Mitte, sodass
+    die Kanten die Nachbarn fortsetzen. Gibt ``(canvas_png, mask_png, tile)``
+    (Pfade + Kachelgroesse) zurueck — oder ``None`` wenn keine Grid-Position.
+
+    Erwartet im ComfyUI-Inpaint-Workflow LoadImage-Nodes mit Titel ``input_image``
+    (Canvas) und ``input_mask`` (Maske) — wie die uebrigen ``input_*``-Slots."""
+    import tempfile
+    from PIL import Image, ImageDraw
+    from app.models.world import list_locations
+
+    gx, gy = location.get("grid_x"), location.get("grid_y")
+    if gx is None or gy is None:
+        return None
+    by_pos = {}
+    for loc in list_locations():
+        lx, ly = loc.get("grid_x"), loc.get("grid_y")
+        if lx is not None and ly is not None:
+            by_pos[(lx, ly)] = loc
+
+    tile = 1024
+    canvas = Image.new("RGB", (tile * 3, tile * 3), (128, 128, 128))
+    # (dx, dy) -> (Spalte, Zeile) im 3x3-Raster (Mitte = 1,1).
+    dirs = {(0, -1): (1, 0), (0, 1): (1, 2), (-1, 0): (0, 1), (1, 0): (2, 1)}
+    placed = 0
+    for (dx, dy), (col, row) in dirs.items():
+        nb = by_pos.get((gx + dx, gy + dy))
+        if not nb:
+            continue
+        p = _resolve_map_icon_path(nb)
+        if not p:
+            continue
+        try:
+            img = Image.open(p).convert("RGB").resize((tile, tile))
+            rot = int(nb.get("map_rotation_2d") or 0)
+            if rot:
+                img = img.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
+            canvas.paste(img, (col * tile, row * tile))
+            placed += 1
+        except Exception as _e:
+            logger.warning("Nachbar-Tile %s nicht ladbar: %s", p, _e)
+    if not placed:
+        return None
+    # Maske: nur die Mitte regenerieren.
+    mask = Image.new("L", (tile * 3, tile * 3), 0)
+    ImageDraw.Draw(mask).rectangle([tile, tile, tile * 2 - 1, tile * 2 - 1], fill=255)
+    cpath = tempfile.NamedTemporaryFile(suffix="_mapfit_canvas.png", delete=False).name
+    mpath = tempfile.NamedTemporaryFile(suffix="_mapfit_mask.png", delete=False).name
+    canvas.save(cpath)
+    mask.save(mpath)
+    return cpath, mpath, tile
+
+
 @router.patch("/locations/{location_id}/map-image")
 async def set_location_map_image_route(location_id: str, request: Request) -> Dict[str, Any]:
     """Setzt das pro Kartenabschnitt angezeigte Bild eines Ortes/Klons.
@@ -1250,6 +1324,7 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         loras_override = data.get("loras")
         model_override = data.get("model_override", "").strip()
         batch_track_id = data.get("_batch_track_id", "")
+        fit_neighbors = bool(data.get("fit_neighbors"))
 
         location = resolve_location(location_name)
         if not location:
@@ -1415,6 +1490,20 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                     params["reference_images"] = {"input_reference_image_1": str(_ref_path)}
                     logger.info("Map-Selbst-Referenz in Slot 1: %s", _ref_name)
 
+        # Nachbar-Kontext-Inpainting (Phase 1): 3x3-Canvas + Maske bauen und als
+        # input_image/input_mask injizieren; nach der Generierung die Mitte croppen.
+        _fit_comp = None
+        if fit_neighbors:
+            _fit_comp = _compose_neighbor_canvas(location)
+            if _fit_comp:
+                _cpath, _mpath, _ctile = _fit_comp
+                params["reference_images"] = {"input_image": _cpath, "input_mask": _mpath}
+                params["width"] = _ctile * 3
+                params["height"] = _ctile * 3
+                logger.info("Map-Fit: 3x3-Canvas %dpx + Maske injiziert", _ctile * 3)
+            else:
+                logger.info("Map-Fit: keine Nachbarn/Grid-Position — normaler Lauf")
+
         from app.core.task_queue import get_task_queue
         _tq = get_task_queue()
         if batch_track_id:
@@ -1455,6 +1544,29 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             if not images:
                 _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")
                 raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
+
+            # Map-Fit: aus dem inpainteten 3x3-Ergebnis die Mitte (das neue Tile)
+            # herausschneiden — proportional, falls das Backend skaliert hat.
+            if _fit_comp:
+                try:
+                    import io as _io
+                    from PIL import Image as _Img
+                    _full = _Img.open(_io.BytesIO(images[0])).convert("RGB")
+                    _w, _h = _full.size
+                    _tx, _ty = _w // 3, _h // 3
+                    _crop = _full.crop((_tx, _ty, _tx * 2, _ty * 2))
+                    _buf = _io.BytesIO()
+                    _crop.save(_buf, format="PNG")
+                    images = [_buf.getvalue()]
+                    logger.info("Map-Fit: Mitte %dx%d herausgeschnitten", _tx, _ty)
+                except Exception as _ce:
+                    logger.warning("Map-Fit Crop fehlgeschlagen: %s", _ce)
+                finally:
+                    for _tmp in (_fit_comp[0], _fit_comp[1]):
+                        try:
+                            os.remove(_tmp)
+                        except Exception:
+                            pass
 
             loc_id = location.get("id", location_name)
             gallery_dir = get_gallery_dir(loc_id)

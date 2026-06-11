@@ -869,7 +869,7 @@ function LocationGallery({
   const [busy, setBusy] = useState<string | null>(null)
   const [dialogType, setDialogType] = useState<'day' | 'night' | 'map' | 'map_2d' | null>(null)
   // „Regenerate"-Ziel: ein bestehendes Karten-Bild als Referenz neu erzeugen.
-  const [regenTarget, setRegenTarget] = useState<{ filename: string; type: 'map' | 'map_2d' } | null>(null)
+  const [regenTarget, setRegenTarget] = useState<{ filename: string; type: 'map' | 'map_2d'; fit?: boolean } | null>(null)
   // Unabhängige Config-Suffixe für Karten-Icons (editierbar im Dialog statt
   // serverseitig angehängt). Einmalig laden.
   const [mapSuffix, setMapSuffix] = useState({ map: '', map_2d: '' })
@@ -1024,7 +1024,7 @@ function LocationGallery({
   // Regenerate eines bestehenden Karten-Bilds — mit ihm selbst als Referenz.
   // Landet immer als NEUES Gallery-Bild (per Zelle wählbar).
   const submitRegenRef = useCallback(
-    async (payload: ImageGenSubmit, target: { filename: string; type: 'map' | 'map_2d' }) => {
+    async (payload: ImageGenSubmit, target: { filename: string; type: 'map' | 'map_2d'; fit?: boolean }) => {
       const body: Record<string, unknown> = {
         prompt_type: target.type,
         prompt: payload.prompt,
@@ -1035,7 +1035,10 @@ function LocationGallery({
       if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras) body.loras = payload.loras
       if (payload.prompt_settings_applied) body.settings_applied = true
-      if (payload.use_source_as_reference) body.use_source_as_reference = true
+      // Fit-Modus: Nachbar-Kontext-Inpainting (Canvas+Maske serverseitig);
+      // sonst die Selbst-Referenz.
+      if (target.fit) body.fit_neighbors = true
+      else if (payload.use_source_as_reference) body.use_source_as_reference = true
       void apiPost(`/world/locations/${encodeURIComponent(locationId)}/gallery`, body)
         .then(() => {
           toast(t('Image queued'))
@@ -1138,13 +1141,15 @@ function LocationGallery({
   const regenDialog = regenTarget ? (
     <ImageGenDialog
       open
-      title={(regenTarget.type === 'map_2d'
-        ? t('Regenerate 2D map icon — {name}')
-        : t('Regenerate map icon — {name}')).replace('{name}', location.name)}
+      title={(regenTarget.fit
+        ? t('Fit to neighbors — {name}')
+        : regenTarget.type === 'map_2d'
+          ? t('Regenerate 2D map icon — {name}')
+          : t('Regenerate map icon — {name}')).replace('{name}', location.name)}
       defaultPrompt={buildDefaultPrompt(regenTarget.type)}
       hideNegative
       sourceImageUrl={`/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(regenTarget.filename)}`}
-      defaultUseSource
+      defaultUseSource={!regenTarget.fit}
       settingsSuffix={
         regenTarget.type === 'map' && mapSuffix.map
           ? { label: t('Map icon (isometric)'), text: mapSuffix.map }
@@ -1240,6 +1245,16 @@ function LocationGallery({
                       title={t('Regenerate using this image as reference (saved as a new image)')}
                     >
                       ♻
+                    </button>
+                  ) : null}
+                  {type === 'map_2d' ? (
+                    <button
+                      className="ga-btn ga-btn-sm"
+                      disabled={isBusy}
+                      onClick={() => setRegenTarget({ filename, type: 'map_2d', fit: true })}
+                      title={t('Fit to neighbors: inpaint the tile so its edges continue the adjacent map cells (needs an inpaint workflow)')}
+                    >
+                      ⊞
                     </button>
                   ) : null}
                   <button
