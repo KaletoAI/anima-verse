@@ -247,6 +247,8 @@ export function InstagramPanel() {
       if (payload.improvement_request) body.improvement_request = payload.improvement_request
       if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
       if (payload.create_new) body.create_new = true
+      if (payload.use_room === false) body.use_room = false
+      if (payload.use_source_as_reference) body.use_source_as_reference = true
       try {
         const r = await apiPost<{ track_id?: string }>(
           `/instagram/post/${encodeURIComponent(p.id)}/regenerate`, body,
@@ -498,6 +500,7 @@ export function InstagramPanel() {
           defaultPrompt={regenPost.image_meta?.prompt || ''}
           sourceImageUrl={regenPost.image_urls?.[0] || regenPost.image_url || (regenPost.image_filename ? `/instagram/images/${regenPost.image_filename}` : '')}
           mode="regenerate"
+          showRoomReference
           characterOptions={charOpts || { detected: [], available: [] }}
           onSubmit={submitRegen}
           onClose={() => { setRegenPost(null); setCharOpts(null) }}

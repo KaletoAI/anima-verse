@@ -103,7 +103,10 @@ def regenerate_image(character_name: str,
     location_id: str = "",
     negative_prompt_override: str = "",
     track_id: str = "",
-    create_new: bool = False) -> Tuple[bool, str, str]:
+    create_new: bool = False,
+    use_room: bool = True,
+    use_source_as_reference: bool = False,
+    source_image_path: str = "") -> Tuple[bool, str, str]:
     """Generiert ein Bild neu. Bei create_new=True wird eine neue Datei angelegt statt zu ueberschreiben.
 
     Returns:
@@ -317,10 +320,34 @@ def regenerate_image(character_name: str,
                                     "kommt aus dem Text-Prompt)",
                                     character_name, room_id)
 
+            # Raum-Referenz nur wenn im Dialog angewaehlt — sonst Slot freigeben
+            # (z.B. damit die Selbst-Referenz oder eine weitere Person reinpasst).
+            if not use_room:
+                _regen_pv.ref_image_room = ""
+
             from app.skills.image_generation_skill import WorkflowKind
             _wf_kind = active_workflow.kind.value if active_workflow else None
             _wf_slots = active_workflow.ref_slot_count if active_workflow and active_workflow.ref_slot_count else 4
             face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_wf_slots, kind=_wf_kind)
+
+            # Selbst-Referenz (aktuelles Bild) in den ersten freien Slot — der
+            # Dialog deckelt die Auswahl bereits aufs Slot-Budget, hier nur noch
+            # einsetzen wenn tatsaechlich Platz ist.
+            if use_source_as_reference and source_image_path:
+                import re as _re
+                if Path(source_image_path).exists():
+                    _refs = face_refs.get("reference_images") or {}
+                    _used = {int(_m.group(1)) for _k in _refs
+                             if (_m := _re.match(r"input_reference_image_(\d+)$", _k))}
+                    for _n in range(1, _wf_slots + 1):
+                        if _n not in _used:
+                            _refs[f"input_reference_image_{_n}"] = source_image_path
+                            face_refs["reference_images"] = _refs
+                            face_refs["has_reference_slots"] = True
+                            logger.info("Selbst-Referenz in Slot %d: %s", _n, Path(source_image_path).name)
+                            break
+                    else:
+                        logger.info("Selbst-Referenz: kein freier Ref-Slot (max %d)", _wf_slots)
 
             if active_workflow.kind == WorkflowKind.QWEN_STYLE:
                 # Style-Conditioning: Referenzen direkt in die Generierung injizieren

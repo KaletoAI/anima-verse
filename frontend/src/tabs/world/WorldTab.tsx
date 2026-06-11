@@ -868,6 +868,8 @@ function LocationGallery({
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [dialogType, setDialogType] = useState<'day' | 'night' | 'map' | 'map_2d' | null>(null)
+  // „Regenerate"-Ziel: ein bestehendes Karten-Bild als Referenz neu erzeugen.
+  const [regenTarget, setRegenTarget] = useState<{ filename: string; type: 'map' | 'map_2d' } | null>(null)
   // Unabhängige Config-Suffixe für Karten-Icons (editierbar im Dialog statt
   // serverseitig angehängt). Einmalig laden.
   const [mapSuffix, setMapSuffix] = useState({ map: '', map_2d: '' })
@@ -1019,6 +1021,35 @@ function LocationGallery({
     [dialogType, locationId, roomFilter, reload, t, toast],
   )
 
+  // Regenerate eines bestehenden Karten-Bilds — mit ihm selbst als Referenz.
+  // Landet immer als NEUES Gallery-Bild (per Zelle wählbar).
+  const submitRegenRef = useCallback(
+    async (payload: ImageGenSubmit, target: { filename: string; type: 'map' | 'map_2d' }) => {
+      const body: Record<string, unknown> = {
+        prompt_type: target.type,
+        prompt: payload.prompt,
+        reference_image: target.filename,
+      }
+      if (payload.workflow) body.workflow = payload.workflow
+      if (payload.backend) body.backend = payload.backend
+      if (payload.model_override) body.model_override = payload.model_override
+      if (payload.loras) body.loras = payload.loras
+      if (payload.prompt_settings_applied) body.settings_applied = true
+      if (payload.use_source_as_reference) body.use_source_as_reference = true
+      void apiPost(`/world/locations/${encodeURIComponent(locationId)}/gallery`, body)
+        .then(() => {
+          toast(t('Image queued'))
+          let n = 0
+          const iv = window.setInterval(() => {
+            reload().catch(() => {})
+            if (++n >= 20) window.clearInterval(iv)
+          }, 3000)
+        })
+        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+    },
+    [locationId, reload, t, toast],
+  )
+
   const remove = useCallback(
     async (image: string) => {
       if (!window.confirm(t('Delete image "{name}"?').replace('{name}', image))) return
@@ -1104,12 +1135,35 @@ function LocationGallery({
     />
   ) : null
 
+  const regenDialog = regenTarget ? (
+    <ImageGenDialog
+      open
+      title={(regenTarget.type === 'map_2d'
+        ? t('Regenerate 2D map icon — {name}')
+        : t('Regenerate map icon — {name}')).replace('{name}', location.name)}
+      defaultPrompt={buildDefaultPrompt(regenTarget.type)}
+      hideNegative
+      sourceImageUrl={`/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(regenTarget.filename)}`}
+      defaultUseSource
+      settingsSuffix={
+        regenTarget.type === 'map' && mapSuffix.map
+          ? { label: t('Map icon (isometric)'), text: mapSuffix.map }
+          : regenTarget.type === 'map_2d' && mapSuffix.map_2d
+            ? { label: t('2D map icon'), text: mapSuffix.map_2d }
+            : undefined
+      }
+      onSubmit={(payload) => submitRegenRef(payload, regenTarget)}
+      onClose={() => setRegenTarget(null)}
+    />
+  ) : null
+
   if (!data) return <div className="ga-loading">{t('Loading…')}</div>
   if (!images.length) {
     return (
       <>
         {generatePanel}
         {dialog}
+        {regenDialog}
         <div className="ga-form-hint" style={{ padding: 8 }}>
           {roomFilter
             ? t('No gallery images for this room yet.')
@@ -1178,6 +1232,16 @@ function LocationGallery({
                   >
                     🌙
                   </button>
+                  {(type === 'map' || type === 'map_2d') ? (
+                    <button
+                      className="ga-btn ga-btn-sm"
+                      disabled={isBusy}
+                      onClick={() => setRegenTarget({ filename, type: type as 'map' | 'map_2d' })}
+                      title={t('Regenerate using this image as reference (saved as a new image)')}
+                    >
+                      ♻
+                    </button>
+                  ) : null}
                   <button
                     className="ga-btn ga-btn-sm ga-btn-danger"
                     disabled={isBusy}

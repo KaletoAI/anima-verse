@@ -27,6 +27,7 @@ interface ImagegenOption {
   default_model?: string
   filter?: string
   models?: string[] // for non-comfy backends with their own model list
+  ref_slot_count?: number // number of reference-image slots (0 = none)
 }
 
 interface ImagegenOptionsResponse {
@@ -49,6 +50,9 @@ export interface ImageGenSubmit {
   // True when the prompt already includes the independent config parts
   // (prefix/suffix) from the dialog → the backend must NOT re-append them.
   prompt_settings_applied?: boolean
+  // Reference-slot toggles (managed against the workflow's ref_slot_count budget).
+  use_room?: boolean
+  use_source_as_reference?: boolean
 }
 
 interface Props {
@@ -65,6 +69,10 @@ interface Props {
    */
   settingsPrefix?: { label: string; text: string }
   settingsSuffix?: { label: string; text: string }
+  /** Show a "Room / background" reference toggle (counts against the slot budget). */
+  showRoomReference?: boolean
+  /** Initial state of the "use current image as reference" toggle. */
+  defaultUseSource?: boolean
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
   onClose: () => void
   /**
@@ -133,7 +141,8 @@ function filterByWorkflowName(items: string[], workflowName: string, filter: str
 
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
-  onSubmit, onClose, mode = 'create', hideNegative, characterOptions,
+  showRoomReference, defaultUseSource, onSubmit, onClose,
+  mode = 'create', hideNegative, characterOptions,
 }: Props) {
   const isRegen = mode === 'regenerate'
   const { t } = useI18n()
@@ -142,6 +151,9 @@ export function ImageGenDialog({
   const [prefixText, setPrefixText] = useState(settingsPrefix?.text || '')
   const [suffixText, setSuffixText] = useState(settingsSuffix?.text || '')
   const [createNew, setCreateNew] = useState(false)
+  // Referenz-Slot-Toggles (gegen das ref_slot_count-Budget des Workflows gemanagt).
+  const [useRoom, setUseRoom] = useState(true)
+  const [useSource, setUseSource] = useState(!!defaultUseSource)
   const [improvement, setImprovement] = useState('')
   const [negative, setNegative] = useState('')
   const [selectedChars, setSelectedChars] = useState<string[]>([])
@@ -165,6 +177,9 @@ export function ImageGenDialog({
   useEffect(() => {
     if (open) setSuffixText(settingsSuffix?.text || '')
   }, [open, settingsSuffix?.text])
+  useEffect(() => {
+    if (open) { setUseRoom(true); setUseSource(!!defaultUseSource) }
+  }, [open, defaultUseSource])
 
   // Reset the regenerate extras when (re)opening; pre-select detected characters.
   const detNames = (characterOptions?.detected || []).map(charName)
@@ -276,6 +291,8 @@ export function ImageGenDialog({
     if (isRegen && improvement.trim()) payload.improvement_request = improvement.trim()
     if (!hideNegative && negative.trim()) payload.negative_prompt = negative.trim()
     if (characterOptions) payload.character_names = selectedChars
+    if (showRoomReference) payload.use_room = useRoom
+    if (sourceImageUrl) payload.use_source_as_reference = useSource
     setSubmitting(true)
     try {
       await onSubmit(payload)
@@ -285,7 +302,16 @@ export function ImageGenDialog({
     }
   }, [currentOption, prompt, prefixText, suffixText, settingsPrefix, settingsSuffix,
       loraSlots, onSubmit, onClose, isRegen, createNew, improvement, hideNegative,
-      negative, characterOptions, selectedChars])
+      negative, characterOptions, selectedChars, showRoomReference, useRoom,
+      sourceImageUrl, useSource])
+
+  // Reference-slot budget: how many ref images may be used (workflow ref_slot_count).
+  // Persons + room + current-image each consume one slot.
+  const slotBudget = currentOption?.ref_slot_count || 0
+  const usedSlots = selectedChars.length
+    + (showRoomReference && useRoom ? 1 : 0)
+    + (sourceImageUrl && useSource ? 1 : 0)
+  const atBudget = slotBudget > 0 && usedSlots >= slotBudget
 
   if (!open) return null
 
@@ -427,12 +453,15 @@ export function ImageGenDialog({
                 </div>
               ) : null}
 
-              {characterOptions ? (
+              {(characterOptions || (slotBudget > 0 && (showRoomReference || sourceImageUrl))) ? (
                 <>
-                  <label className="ga-imagegen-label">{t('Characters in the image')}</label>
-                  {(availNames.length ? availNames : detNames).length === 0 ? (
+                  <label className="ga-imagegen-label">
+                    {slotBudget > 0 ? t('Reference images') : t('Characters in the image')}
+                    {slotBudget > 0 ? ` (${usedSlots}/${slotBudget})` : ''}
+                  </label>
+                  {characterOptions && (availNames.length ? availNames : detNames).length === 0 ? (
                     <div className="ga-form-hint">{t('No characters detected.')}</div>
-                  ) : (
+                  ) : characterOptions ? (
                     <div className="ga-imagegen-chars">
                       {(availNames.length ? availNames : detNames).map((name) => {
                         const on = selectedChars.includes(name)
@@ -441,7 +470,7 @@ export function ImageGenDialog({
                             <input
                               type="checkbox"
                               checked={on}
-                              disabled={submitting}
+                              disabled={submitting || (!on && atBudget)}
                               onChange={() =>
                                 setSelectedChars((prev) =>
                                   on ? prev.filter((x) => x !== name) : [...prev, name],
@@ -453,7 +482,23 @@ export function ImageGenDialog({
                         )
                       })}
                     </div>
-                  )}
+                  ) : null}
+                  {slotBudget > 0 && showRoomReference ? (
+                    <label className="ga-check-row">
+                      <input type="checkbox" checked={useRoom}
+                        disabled={submitting || (!useRoom && atBudget)}
+                        onChange={(e) => setUseRoom(e.target.checked)} />
+                      <span>{t('Room / background')}</span>
+                    </label>
+                  ) : null}
+                  {slotBudget > 0 && sourceImageUrl ? (
+                    <label className="ga-check-row">
+                      <input type="checkbox" checked={useSource}
+                        disabled={submitting || (!useSource && atBudget)}
+                        onChange={(e) => setUseSource(e.target.checked)} />
+                      <span>{t('Current image as reference')}</span>
+                    </label>
+                  ) : null}
                 </>
               ) : null}
 

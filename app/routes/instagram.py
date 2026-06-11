@@ -303,6 +303,8 @@ async def regenerate_post_image(post_id: str, request: Request):
     room_id = data.get("room_id", "").strip()
     negative_prompt_override = data.get("negative_prompt", "").strip()
     create_new = data.get("create_new", False)
+    use_room = data.get("use_room", True)
+    use_source_as_reference = bool(data.get("use_source_as_reference", False))
     # Originale Location aus Bild-Metadaten
     original_location_id = (img_meta or {}).get("location", "")
     agent_config = get_character_config(character_name)
@@ -327,7 +329,10 @@ async def regenerate_post_image(post_id: str, request: Request):
                 location_id=original_location_id,
                 negative_prompt_override=negative_prompt_override,
                 track_id=_track_id,
-                create_new=bool(create_new))
+                create_new=bool(create_new),
+                use_room=bool(use_room),
+                use_source_as_reference=use_source_as_reference,
+                source_image_path=str(image_path))
             from pathlib import Path as _Path
             _actual_filename = _Path(actual_path).name
             if final_prompt != image_prompt:

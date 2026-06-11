@@ -3123,6 +3123,8 @@ async def regenerate_character_image(character_name: str, image_name: str, reque
     room_id = body.get("room_id", "").strip()  # Optional: Raum-Override
     negative_prompt_override = body.get("negative_prompt", "").strip()  # Optional: Negativ-Prompt aus Dialog
     create_new = body.get("create_new", False)
+    use_room = body.get("use_room", True)
+    use_source_as_reference = bool(body.get("use_source_as_reference", False))
     # Originale Location aus Bild-Metadaten (nicht aktuelle Character-Position)
     from app.models.character import get_single_image_meta
     _img_meta = get_single_image_meta(character_name, image_name) or {}
@@ -3150,7 +3152,10 @@ async def regenerate_character_image(character_name: str, image_name: str, reque
                 location_id=original_location_id,
                 negative_prompt_override=negative_prompt_override,
                 track_id=_track_id,
-                create_new=bool(create_new))
+                create_new=bool(create_new),
+                use_room=bool(use_room),
+                use_source_as_reference=use_source_as_reference,
+                source_image_path=str(image_path))
             _actual_filename = Path(actual_path).name
             if final_prompt != prompt:
                 add_character_image_prompt(character_name, _actual_filename, final_prompt)

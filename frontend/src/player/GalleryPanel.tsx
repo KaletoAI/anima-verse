@@ -88,6 +88,8 @@ export function GalleryPanel() {
     if (payload.improvement_request) body.improvement_request = payload.improvement_request
     if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
     if (payload.create_new) body.create_new = true
+    if (payload.use_room === false) body.use_room = false
+    if (payload.use_source_as_reference) body.use_source_as_reference = true
     try {
       await apiPost(`/characters/${encodeURIComponent(selected)}/images/${encodeURIComponent(img.name)}/regenerate`, body)
     } catch { /* gallery poll picks up the result */ }
@@ -318,6 +320,7 @@ export function GalleryPanel() {
           defaultPrompt={regenImg.info?.prompt || ''}
           sourceImageUrl={regenImg.url}
           mode="regenerate"
+          showRoomReference
           characterOptions={charOpts || { detected: [], available: [] }}
           onSubmit={submitRegen}
           onClose={() => { setRegenImg(null); setCharOpts(null) }}

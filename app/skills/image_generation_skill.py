@@ -1153,6 +1153,7 @@ class ImageGenerationSkill(BaseSkill):
                 "width": wf.width,
                 "height": wf.height,
                 "filter": wf.filter,
+                "ref_slot_count": wf.ref_slot_count,
                 "available": wf_available,
             })
         return result

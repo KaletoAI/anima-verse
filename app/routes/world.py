@@ -1041,6 +1041,7 @@ def get_imagegen_options() -> Dict[str, Any]:
             "model_type": wf.get("model_type", ""),
             "default_model": wf.get("model", ""),
             "filter": wf.get("filter", ""),
+            "ref_slot_count": wf.get("ref_slot_count", 0),
         })
     # Nicht-ComfyUI Backends
     for b in imagegen.backends:
@@ -1400,6 +1401,19 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         if active_wf and active_wf.has_seed:
             import random as _rnd
             params["seed"] = _rnd.randint(1, 2**31 - 1)
+
+        # Selbst-Referenz: das bestehende (Karten-)Bild als Referenz in Slot 1 —
+        # fuer „Regenerate mit aktuellem Bild" (z.B. damit 2D-Tiles besser
+        # zusammenpassen). Nur wenn der Workflow Ref-Slots hat.
+        if (data.get("use_source_as_reference") and data.get("reference_image")
+                and active_wf and active_wf.ref_slot_count):
+            _ref_name = (data.get("reference_image") or "").strip()
+            if _ref_name and "/" not in _ref_name and ".." not in _ref_name:
+                from app.models.world import get_gallery_dir
+                _ref_path = get_gallery_dir(location_name) / _ref_name
+                if _ref_path.exists():
+                    params["reference_images"] = {"input_reference_image_1": str(_ref_path)}
+                    logger.info("Map-Selbst-Referenz in Slot 1: %s", _ref_name)
 
         from app.core.task_queue import get_task_queue
         _tq = get_task_queue()
