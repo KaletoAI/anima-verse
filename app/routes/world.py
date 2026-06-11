@@ -858,6 +858,34 @@ def _compose_neighbor_canvas(location: Dict[str, Any]):
     return cpath, mpath, tile
 
 
+def _neighbor_terrain_hint(location: Dict[str, Any]) -> str:
+    """Auto-Richtungs-Hinweis fuer Map-Fit: leitet aus den 4 orthogonalen Nachbarn
+    ab, welches Terrain zu welcher Seite gehoert — damit das Inpaint nicht nur die
+    auffaelligste Kante fortsetzt. Pro Seite kurzer Begriff (eigener map-Prompt,
+    sonst Beschreibung, sonst Name). Kein User-Tippen noetig."""
+    from app.models.world import list_locations
+    gx, gy = location.get("grid_x"), location.get("grid_y")
+    if gx is None or gy is None:
+        return ""
+    by_pos = {(l.get("grid_x"), l.get("grid_y")): l for l in list_locations()
+              if l.get("grid_x") is not None and l.get("grid_y") is not None}
+    parts = []
+    for label, dx, dy in (("north", 0, -1), ("south", 0, 1), ("east", 1, 0), ("west", -1, 0)):
+        nb = by_pos.get((gx + dx, gy + dy))
+        if not nb:
+            continue
+        term = " ".join((nb.get("image_prompt_map_2d") or nb.get("description")
+                          or nb.get("name") or "").split())
+        if len(term) > 64:  # auf Wortgrenze kappen (kein Mitten-im-Wort)
+            term = term[:64].rsplit(" ", 1)[0]
+        term = term.rstrip(",. ")
+        if term:
+            parts.append(f"{label}: {term}")
+    if not parts:
+        return ""
+    return "adjacent terrain — " + ", ".join(parts) + "; blend seamlessly toward each side, no hard seams"
+
+
 @router.patch("/locations/{location_id}/map-image")
 async def set_location_map_image_route(location_id: str, request: Request) -> Dict[str, Any]:
     """Setzt das pro Kartenabschnitt angezeigte Bild eines Ortes/Klons.
@@ -1421,6 +1449,14 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             backend = img_skill._select_backend()
         if not backend:
             raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
+
+        # Fit: automatischer Richtungs-Hinweis aus den Nachbarn (kein Hand-Tippen) —
+        # damit das Inpaint alle Seiten aufnimmt statt nur die auffaelligste.
+        if fit_neighbors:
+            _hint = _neighbor_terrain_hint(location)
+            if _hint:
+                prompt = f"{prompt}, {_hint}"
+                logger.info("Map-Fit Auto-Hinweis: %s", _hint)
 
         full_prompt = prompt
         if backend.prompt_prefix:
