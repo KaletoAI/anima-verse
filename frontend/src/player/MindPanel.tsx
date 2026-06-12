@@ -55,6 +55,22 @@ interface MemoryListResponse {
   limit: number; offset: number; items: MemoryItem[]; facets: MemoryFacets
 }
 
+interface BondEvent { timestamp: string; type: string; initiator: string; summary: string; sentiment_delta: number }
+interface BondItem {
+  partner: string; type: string; strength: number
+  sentiment_self_to_other: number; sentiment_other_to_self: number
+  romantic_tension: number; interaction_count: number; last_interaction: string
+  memories_count: number; history_recent: BondEvent[]
+}
+
+type HistoryKind = 'daily' | 'weekly' | 'monthly' | 'history' | 'evolution'
+interface HistoryDailyItem { date: string; partner: string; content: string }
+interface HistoryPeriodItem { week?: string; month?: string; content: string }
+interface EvolutionItem {
+  ts: string; trigger: string; beliefs: string; lessons: string; goals: string
+  diff: null | Record<'beliefs' | 'lessons' | 'goals', { removed: string[]; added: string[] }>
+}
+
 // ---------------------------------------------------------------------------
 // Format-Helfer
 // ---------------------------------------------------------------------------
@@ -76,6 +92,15 @@ function sinceOf(ts: string | null | undefined): string {
 }
 function stars(n: number): string {
   return '★'.repeat(Math.max(0, Math.min(5, Math.round(n))))
+}
+/** Vorzeichenbehaftete Sentiment-Zahl mit Ampelfarbe. */
+function SignedNum({ v }: { v: number }) {
+  const color = v > 0.02 ? '#3fa45a' : v < -0.02 ? '#e05656' : 'inherit'
+  return (
+    <span style={{ color, fontVariantNumeric: 'tabular-nums' }}>
+      {(v > 0 ? '+' : '') + v.toFixed(2)}
+    </span>
+  )
 }
 
 // Kompakt-Overrides zur Klasse ga-input (liefert soliden dunklen Hintergrund —
@@ -357,7 +382,7 @@ function DiaryView({ avatar }: { avatar: string }) {
 // ---------------------------------------------------------------------------
 // Sektion „Erinnerungen“ — Facetten-Suche über memory/list
 // ---------------------------------------------------------------------------
-function MemoriesView({ avatar }: { avatar: string }) {
+function MemoriesView({ avatar, initialRelated = '' }: { avatar: string; initialRelated?: string }) {
   const { t } = useI18n()
   const enc = encodeURIComponent(avatar)
   const LIMIT = 50
@@ -365,7 +390,7 @@ function MemoriesView({ avatar }: { avatar: string }) {
   const [qDebounced, setQDebounced] = useState('')
   const [tier, setTier] = useState('')
   const [source, setSource] = useState('')
-  const [related, setRelated] = useState('')
+  const [related, setRelated] = useState(initialRelated)
   const [sort, setSort] = useState('recent')
   const [resp, setResp] = useState<MemoryListResponse | null>(null)
   const [items, setItems] = useState<MemoryItem[]>([])
@@ -416,6 +441,9 @@ function MemoriesView({ avatar }: { avatar: string }) {
         </select>
         <select className="ga-input" style={inputStyle} value={related} onChange={(e) => setRelated(e.target.value)}>
           <option value="">{t('Anyone')}</option>
+          {related && !(facets?.related_characters || []).some((r) => r.name === related) && (
+            <option value={related}>{related}</option>
+          )}
           {(facets?.related_characters || []).map((r) => (
             <option key={r.name} value={r.name}>{r.name} ({r.count})</option>
           ))}
@@ -464,9 +492,211 @@ function MemoriesView({ avatar }: { avatar: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Sektion „Beziehungen“ — Sentiment/Tension/Interaktionen je Partner
+// ---------------------------------------------------------------------------
+function BondsView({ avatar, onOpenMemories }: {
+  avatar: string; onOpenMemories?: (partner: string) => void
+}) {
+  const { t } = useI18n()
+  const enc = encodeURIComponent(avatar)
+  const [items, setItems] = useState<BondItem[] | null>(null)
+  const [open, setOpen] = useState<string>('')   // Partner mit ausgeklappter Historie
+
+  useEffect(() => {
+    let alive = true
+    apiGet<{ items: BondItem[] }>(`/characters/${enc}/memory/relationships?history_limit=10`)
+      .then((d) => { if (alive) setItems(d.items || []) })
+      .catch(() => { if (alive) setItems([]) })
+    return () => { alive = false }
+  }, [enc])
+
+  if (items === null) return <EmptyState small icon="journal" title={t('Loading…')} />
+  if (items.length === 0) return <EmptyState small icon="journal" title={t('No bonds yet')} />
+
+  return (
+    <div style={{ height: '100%', minHeight: 0, overflow: 'auto',
+                  display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {items.map((b) => {
+        const expanded = open === b.partner
+        return (
+          <div key={b.partner} style={{ padding: '5px 7px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', cursor: 'pointer' }}
+                 onClick={() => setOpen(expanded ? '' : b.partner)}>
+              <span style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden',
+                             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.partner}</span>
+              <span style={{ fontSize: '0.72em', opacity: 0.55, border: '1px solid rgba(255,255,255,0.2)',
+                             borderRadius: 8, padding: '0 6px', flex: '0 0 auto' }}>{b.type}</span>
+              <span style={{ marginLeft: 'auto', flex: '0 0 auto', fontSize: '0.72em', opacity: 0.5 }}>
+                {b.interaction_count}× {b.last_interaction ? '· ' + sinceOf(b.last_interaction) : ''}
+              </span>
+              <span style={{ flex: '0 0 auto', opacity: 0.5, fontSize: '0.8em' }}>{expanded ? '▾' : '▸'}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: '0.76em', opacity: 0.8, marginTop: 2 }}>
+              <span title={t('my sentiment toward them')}>→ <SignedNum v={b.sentiment_self_to_other} /></span>
+              <span title={t('their sentiment toward me')}>← <SignedNum v={b.sentiment_other_to_self} /></span>
+              {b.romantic_tension > 0 && (
+                <span title={t('romantic tension')} style={{ color: '#d77bae' }}>
+                  ♥ {b.romantic_tension.toFixed(2)}
+                </span>
+              )}
+              <span title={t('bond strength')} style={{ opacity: 0.7 }}>⚡ {b.strength}</span>
+              {b.memories_count > 0 && onOpenMemories && (
+                <button onClick={(ev) => { ev.stopPropagation(); onOpenMemories(b.partner) }}
+                  style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer',
+                           color: 'var(--accent, #6aa9ff)', fontSize: '1em' }}>
+                  {t('{n} memories').replace('{n}', String(b.memories_count))} →
+                </button>
+              )}
+            </div>
+            {expanded && b.history_recent.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 5,
+                            paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                {b.history_recent.map((ev, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'baseline', fontSize: '0.78em' }}>
+                    <span style={{ flex: '0 0 auto', opacity: 0.45, fontVariantNumeric: 'tabular-nums' }}>
+                      {sinceOf(ev.timestamp)}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0, opacity: 0.85, lineHeight: 1.3 }}>{ev.summary || ev.type}</span>
+                    {typeof ev.sentiment_delta === 'number' && ev.sentiment_delta !== 0 && (
+                      <span style={{ flex: '0 0 auto' }}><SignedNum v={ev.sentiment_delta} /></span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sektion „Verlauf“ — daily/weekly/monthly-Summaries, Gesamt, Evolution-Diffs
+// ---------------------------------------------------------------------------
+function HistoryView({ avatar }: { avatar: string }) {
+  const { t } = useI18n()
+  const enc = encodeURIComponent(avatar)
+  const LIMIT = 30
+  const [kind, setKind] = useState<HistoryKind>('daily')
+  const [resp, setResp] = useState<any>(null)
+  const [items, setItems] = useState<any[]>([])
+  const [offset, setOffset] = useState(0)
+
+  const load = async (newOffset: number, append: boolean) => {
+    const params = new URLSearchParams({ kind, limit: String(LIMIT), offset: String(newOffset) })
+    try {
+      const d = await apiGet<any>(`/characters/${enc}/memory/history?${params.toString()}`)
+      setResp(d)
+      setItems((prev) => append ? [...prev, ...(d.items || [])] : (d.items || []))
+      setOffset(newOffset)
+    } catch { /* offline/auth */ }
+  }
+  useEffect(() => { setResp(null); load(0, false) }, [enc, kind]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const kinds: Array<{ id: HistoryKind; label: string }> = [
+    { id: 'daily', label: t('Daily') },
+    { id: 'weekly', label: t('Weekly') },
+    { id: 'monthly', label: t('Monthly') },
+    { id: 'history', label: t('Overall') },
+    { id: 'evolution', label: t('Evolution') },
+  ]
+  const total: number = resp?.total ?? 0
+  const paged = kind === 'daily'   // nur daily ist serverseitig paginiert
+
+  const evoDiffRows = (label: string, d?: { removed: string[]; added: string[] }) => {
+    if (!d || (d.added.length === 0 && d.removed.length === 0)) return null
+    return (
+      <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <div style={{ fontSize: '0.72em', opacity: 0.5, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
+        {d.added.map((line, i) => (
+          <div key={`a${i}`} style={{ color: '#3fa45a', fontSize: '0.82em', lineHeight: 1.3 }}>+ {line}</div>
+        ))}
+        {d.removed.map((line, i) => (
+          <div key={`r${i}`} style={{ color: '#e05656', fontSize: '0.82em', lineHeight: 1.3,
+                                      textDecoration: 'line-through', opacity: 0.75 }}>− {line}</div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', minHeight: 0 }}>
+      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', flex: '0 0 auto' }}>
+        {kinds.map((k) => (
+          <button key={k.id} className={'player-chip' + (kind === k.id ? ' on' : '')}
+                  style={{ ...chipBtnStyle, ...(kind === k.id ? {
+                    borderColor: 'var(--accent, #6aa9ff)', background: 'rgba(120,170,255,0.18)',
+                  } : {}) }}
+                  onClick={() => setKind(k.id)}>
+            {k.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {resp === null ? (
+          <EmptyState small icon="journal" title={t('Loading…')} />
+        ) : kind === 'history' ? (
+          (resp.content || '').trim()
+            ? <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{resp.content}</div>
+            : <EmptyState small icon="journal" title={t('No summary yet')} />
+        ) : items.length === 0 ? (
+          <EmptyState small icon="journal" title={t('No entries')} />
+        ) : kind === 'evolution' ? (
+          (items as EvolutionItem[]).map((s, i) => (
+            <div key={i} style={{ padding: '5px 7px', borderRadius: 6, background: 'rgba(255,255,255,0.04)',
+                                  display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                <span style={{ fontSize: '0.74em', opacity: 0.5, fontVariantNumeric: 'tabular-nums' }}>{sinceOf(s.ts)}</span>
+                {s.trigger ? <span style={{ fontSize: '0.78em', opacity: 0.7 }}>{s.trigger}</span> : null}
+              </div>
+              {s.diff ? (
+                [evoDiffRows(t('Beliefs'), s.diff.beliefs),
+                 evoDiffRows(t('Lessons'), s.diff.lessons),
+                 evoDiffRows(t('Goals'), s.diff.goals)].filter(Boolean).length > 0
+                  ? <>
+                      {evoDiffRows(t('Beliefs'), s.diff.beliefs)}
+                      {evoDiffRows(t('Lessons'), s.diff.lessons)}
+                      {evoDiffRows(t('Goals'), s.diff.goals)}
+                    </>
+                  : <div style={{ fontSize: '0.78em', opacity: 0.5 }}>{t('no changes')}</div>
+              ) : (
+                <div style={{ fontSize: '0.82em', opacity: 0.8, lineHeight: 1.35 }}>
+                  {[s.beliefs, s.lessons, s.goals].filter(Boolean).join(' · ')}
+                </div>
+              )}
+            </div>
+          ))
+        ) : (
+          <>
+            {items.map((it: HistoryDailyItem & HistoryPeriodItem, i: number) => (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2,
+                                    padding: '4px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
+                <div style={{ display: 'flex', gap: 8, fontSize: '0.74em', opacity: 0.55 }}>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{it.date || it.week || it.month}</span>
+                  {it.partner ? <span>· {it.partner}</span> : null}
+                </div>
+                <div style={{ lineHeight: 1.35 }}>{it.content}</div>
+              </div>
+            ))}
+            {paged && items.length < total && (
+              <button className="player-chip" style={{ ...chipBtnStyle, alignSelf: 'flex-start' }}
+                      onClick={() => load(offset + LIMIT, true)}>
+                {t('Load more')} ({items.length}/{total})
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Haupt-Panel: Navi links (schmal → nur Icons) + Sektions-Inhalt rechts
 // ---------------------------------------------------------------------------
-type SectionId = 'today' | 'diary' | 'memories'
+type SectionId = 'today' | 'diary' | 'memories' | 'bonds' | 'history'
 
 export function MindPanel({ avatar }: { avatar: string }) {
   const { t } = useI18n()
@@ -486,10 +716,16 @@ export function MindPanel({ avatar }: { avatar: string }) {
     return () => ro.disconnect()
   }, [])
 
+  // Vorbelegter Bezugsperson-Filter beim Sprung Beziehungen → Erinnerungen.
+  const [memRelated, setMemRelated] = useState('')
+  const openMemories = (partner = '') => { setMemRelated(partner); setSection('memories') }
+
   const sections = useMemo(() => ([
     { id: 'today' as SectionId, icon: '☀️', label: t('Today') },
     { id: 'diary' as SectionId, icon: '📔', label: t('Diary') },
     { id: 'memories' as SectionId, icon: '🧠', label: t('Memories') },
+    { id: 'bonds' as SectionId, icon: '🤝', label: t('Bonds') },
+    { id: 'history' as SectionId, icon: '🕰️', label: t('History') },
   ]), [t])
 
   if (!avatar) {
@@ -503,7 +739,8 @@ export function MindPanel({ avatar }: { avatar: string }) {
         {sections.map((sec) => {
           const active = section === sec.id
           return (
-            <button key={sec.id} onClick={() => setSection(sec.id)} title={sec.label}
+            <button key={sec.id} title={sec.label}
+              onClick={() => (sec.id === 'memories' ? openMemories('') : setSection(sec.id))}
               style={{
                 display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
                 padding: narrow ? '4px 6px' : '4px 9px', borderRadius: 7, textAlign: 'left',
@@ -518,9 +755,11 @@ export function MindPanel({ avatar }: { avatar: string }) {
         })}
       </div>
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: section === 'today' ? 'auto' : 'hidden' }}>
-        {section === 'today' && <TodayView avatar={avatar} onOpenMemories={() => setSection('memories')} />}
+        {section === 'today' && <TodayView avatar={avatar} onOpenMemories={() => openMemories('')} />}
         {section === 'diary' && <DiaryView avatar={avatar} />}
-        {section === 'memories' && <MemoriesView avatar={avatar} />}
+        {section === 'memories' && <MemoriesView avatar={avatar} initialRelated={memRelated} />}
+        {section === 'bonds' && <BondsView avatar={avatar} onOpenMemories={openMemories} />}
+        {section === 'history' && <HistoryView avatar={avatar} />}
       </div>
     </div>
   )
