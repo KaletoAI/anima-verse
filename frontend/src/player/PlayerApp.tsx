@@ -29,7 +29,7 @@ import { LayoutsPanel } from './LayoutsPanel'
 import { SelfPanel } from './SelfPanel'
 import { OthersPanel } from './OthersPanel'
 import { BelongingsPanel } from './BelongingsPanel'
-import { JournalPanel } from './JournalPanel'
+import { MindPanel } from './MindPanel'
 import { GalleryPanel } from './GalleryPanel'
 import { InstagramPanel } from './InstagramPanel'
 import { PhonePanel } from './PhonePanel'
@@ -76,7 +76,7 @@ const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | '
   { id: 'self', label: 'Self', icon: 'self' },
   { id: 'others', label: 'Others', icon: 'others' },
   { id: 'belongings', label: 'Inventory', icon: 'inventory' },
-  { id: 'journal', label: 'Journal', icon: 'journal' },
+  { id: 'journal', label: 'Mind', icon: 'journal' },
   { id: 'gallery', label: 'Gallery', icon: 'gallery' },
   { id: 'instagram', label: 'Instagram', icon: 'instagram' },
   { id: 'phone', label: 'Phone', icon: 'phone' },
@@ -769,9 +769,9 @@ export function PlayerApp() {
 
   const journalPanel = (
     <div key="journal" className="player-panel" style={{ zIndex: zOf('journal') }} onMouseDownCapture={() => bringToFront('journal')}>
-      <div className="player-panel-head">{headIcon('journal')}{t('Journal')}{headerControls('journal', true)}</div>
+      <div className="player-panel-head">{headIcon('journal')}{t('Mind')}{headerControls('journal', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'hidden' }}>
-        <JournalPanel />
+        <MindPanel avatar={data?.avatar || ''} />
       </div>
     </div>
   )
