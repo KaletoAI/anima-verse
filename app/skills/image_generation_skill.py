@@ -1851,11 +1851,14 @@ class ImageGenerationSkill(BaseSkill):
         else:
             negative_prompt = cfg.get("negative_prompt", backend.negative_prompt)
 
-        # Task im Queue-System registrieren fuer einheitliche Sichtbarkeit
+        # Task im Queue-System registrieren fuer einheitliche Sichtbarkeit.
+        # start_running=False: Prompt-Build (LLM-Calls) + GPU-Kanal-Wartezeit
+        # zaehlen nicht als running — track_activate() erfolgt im GPU-Callable,
+        # wenn der Channel-Worker die Generierung tatsaechlich startet.
         _tq = get_task_queue()
         _track_id = _tq.track_start(
             "image_generation", "Bild generieren", agent_name=character_name,
-            provider=backend.name)
+            provider=backend.name, start_running=False)
 
         try:
             logger.info("=" * 80)
@@ -2351,16 +2354,31 @@ class ImageGenerationSkill(BaseSkill):
             def _op(b):
                 _p, _n = _prepare_for_backend(b)
                 _is_local = b.api_type in ("comfyui", "a1111")
+
+                def _gen():
+                    # Tracker erst hier aktivieren: laeuft im Channel-Worker,
+                    # d.h. exakt wenn die GPU-Arbeit beginnt — Warteschlangen-
+                    # Zeit erscheint im Panel als pending, nicht als running.
+                    try:
+                        from app.core.task_router import match_queue_name
+                        _tq.track_activate(
+                            _track_id,
+                            queue_name=match_queue_name(b.name) or "",
+                            provider=b.name)
+                    except Exception:
+                        pass
+                    return b.generate(_p, _n, params)
+
                 if _is_local:
                     from app.core.llm_queue import get_llm_queue, Priority as _P
                     return get_llm_queue().submit_gpu_task(
                         provider_name=b.name,
                         task_type="image_generation",
                         priority=_P.IMAGE_GEN,
-                        callable_fn=lambda: b.generate(_p, _n, params),
+                        callable_fn=_gen,
                         agent_name=character_name, label=b.name,
                         gpu_type="comfyui")
-                return b.generate(_p, _n, params)
+                return _gen()
 
             # Re-Check anderer Backends, falls sie beim Start unavailable waren
             for b in self.backends:

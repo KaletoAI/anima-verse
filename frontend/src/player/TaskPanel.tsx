@@ -85,15 +85,23 @@ function RecentRow({ r }: { r: RecentTaskInfo }) {
     return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   })()
   const meta = [clock, dur, r.provider, r.model].filter(Boolean).join(' · ')
+  // Zwei Zeilen wie LLMRow/TrackedRow: Titel mit Ellipsis, Meta darunter mit
+  // wordBreak — bei schmaler Panel-Breite bricht die Meta-Zeile um, statt
+  // sich mit dem Titel zu ueberlagern.
   return (
     <div title={r.error || ''}
-      style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: '0.74em', opacity: 0.7 }}>
-      <span style={{ color, flex: '0 0 auto' }}>{icon}</span>
-      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {title}
-      </span>
+      style={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: '0.74em', opacity: 0.7 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+        <span style={{ color, flex: '0 0 auto' }}>{icon}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {title}
+        </span>
+      </div>
       {meta ? (
-        <span style={{ flex: '0 0 auto', opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>{meta}</span>
+        <div style={{ paddingLeft: 14, fontSize: '0.94em', opacity: 0.8, lineHeight: 1.3,
+                      fontVariantNumeric: 'tabular-nums', wordBreak: 'break-word' }}>
+          {meta}
+        </div>
       ) : null}
     </div>
   )
@@ -166,14 +174,21 @@ export function TaskPanel() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {channels.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+        // Mehrspaltige Tabelle: auto-fill Grid — so viele Spalten wie in die
+        // Panel-Breite passen; pro Zelle Status-Punkt | Name (Ellipsis) |
+        // Zaehler rechtsbuendig, damit die Spalten tabellarisch fluchten.
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
+          gap: '3px 16px',
+        }}>
           {channels.map((ch) => {
             const state = ch.healthy ? (ch.busy ? t('busy') : t('available')) : t('unavailable')
             const kindLabel = ch.kind === 'image' ? t('Image backend') : t('LLM provider')
             const color = !ch.healthy ? '#e05656' : ch.busy ? 'var(--accent, #6aa9ff)' : '#3fa45a'
             return (
               <span key={ch.key} title={`${kindLabel} · ${state}`}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8em' }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8em', minWidth: 0 }}>
                 {/* Image-Backends: eckiger Marker (mit Rahmen) — LLM-Provider: runder Punkt. */}
                 <span style={{
                   width: 8, height: 8, flex: '0 0 auto', background: color,
@@ -182,11 +197,13 @@ export function TaskPanel() {
                   outlineOffset: ch.kind === 'image' ? 1 : 0,
                 }} />
                 <span style={{
+                  flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                   opacity: ch.healthy ? 0.85 : 0.55,
                   fontStyle: ch.kind === 'image' ? 'italic' : 'normal',
                 }}>{ch.name}</span>
                 {ch.running > 0 || ch.waiting > 0 ? (
-                  <span style={{ opacity: 0.55, fontVariantNumeric: 'tabular-nums' }}>
+                  <span style={{ flex: '0 0 auto', opacity: 0.55, fontVariantNumeric: 'tabular-nums' }}>
                     {ch.running > 0 ? `▶${ch.running}` : ''}
                     {ch.running > 0 && ch.waiting > 0 ? ' ' : ''}
                     {ch.waiting > 0 ? `⏳${ch.waiting}` : ''}
