@@ -137,7 +137,7 @@ function Timeline({ entries, icons, withDays }: {
 // ---------------------------------------------------------------------------
 // Sektion „Heute“ — Status + Tages-Zeitstrahl + aktive Erinnerungen
 // ---------------------------------------------------------------------------
-function TodayView({ avatar }: { avatar: string }) {
+function TodayView({ avatar, onOpenMemories }: { avatar: string; onOpenMemories?: () => void }) {
   const { t } = useI18n()
   const [today, setToday] = useState<TodayResponse | null>(null)
   const [diary, setDiary] = useState<DiaryResponse | null>(null)
@@ -187,21 +187,24 @@ function TodayView({ avatar }: { avatar: string }) {
         ) : null}
       </div>
 
-      <div>
-        <div style={sepStyle}>{t('Today')}</div>
-        {diary && diary.entries.length > 0
-          ? <Timeline entries={diary.entries} icons={diary.icons || {}} withDays={false} />
-          : <EmptyState small icon="journal" title={t('No entries yet')} />}
-      </div>
-
+      {/* „Im Kopf“ direkt beim Status (beides = aktueller Zustand), kompakt
+          auf Top 6 — das volle Archiv ist einen Klick entfernt. Der Tages-
+          Zeitstrahl bekommt dadurch das untere, wachsende Ende. */}
       {today.active_memories && today.active_memories.length > 0 && (
         <div>
-          <div style={sepStyle}
+          <div style={{ ...sepStyle, display: 'flex', alignItems: 'baseline' }}
                title={t('What is on their mind right now — top memories ranked by importance, decay and recency. The Memories section is the full searchable archive.')}>
-            {t('Active memories')}
+            <span>{t('Active memories')}</span>
+            {onOpenMemories && (
+              <button onClick={onOpenMemories}
+                style={{ marginLeft: 'auto', background: 'none', border: 0, padding: 0,
+                         cursor: 'pointer', color: 'var(--accent, #6aa9ff)', fontSize: '1em' }}>
+                {t('all')} →
+              </button>
+            )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {today.active_memories.map((m) => (
+            {today.active_memories.slice(0, 6).map((m) => (
               <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 1,
                                        padding: '3px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
                 <div style={{ lineHeight: 1.3 }}>{m.content}</div>
@@ -216,6 +219,13 @@ function TodayView({ avatar }: { avatar: string }) {
           </div>
         </div>
       )}
+
+      <div>
+        <div style={sepStyle}>{t('Today')}</div>
+        {diary && diary.entries.length > 0
+          ? <Timeline entries={diary.entries} icons={diary.icons || {}} withDays={false} />
+          : <EmptyState small icon="journal" title={t('No entries yet')} />}
+      </div>
     </div>
   )
 }
@@ -508,7 +518,7 @@ export function MindPanel({ avatar }: { avatar: string }) {
         })}
       </div>
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: section === 'today' ? 'auto' : 'hidden' }}>
-        {section === 'today' && <TodayView avatar={avatar} />}
+        {section === 'today' && <TodayView avatar={avatar} onOpenMemories={() => setSection('memories')} />}
         {section === 'diary' && <DiaryView avatar={avatar} />}
         {section === 'memories' && <MemoriesView avatar={avatar} />}
       </div>
