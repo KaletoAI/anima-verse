@@ -78,9 +78,13 @@ function stars(n: number): string {
   return '★'.repeat(Math.max(0, Math.min(5, Math.round(n))))
 }
 
+// Kompakt-Overrides zur Klasse ga-input (liefert soliden dunklen Hintergrund —
+// wichtig fuer native <option>-Listen, die sonst weiss aufklappen).
 const inputStyle: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)',
-  borderRadius: 6, color: 'inherit', padding: '3px 8px', fontSize: '0.82em', minWidth: 0,
+  padding: '3px 8px', fontSize: '0.82em', minWidth: 0,
+}
+const chipBtnStyle: React.CSSProperties = {
+  fontSize: '0.82em', cursor: 'pointer',
 }
 const sepStyle: React.CSSProperties = {
   margin: '6px 0 2px', fontSize: '0.74em', opacity: 0.55, letterSpacing: 0.4,
@@ -192,7 +196,10 @@ function TodayView({ avatar }: { avatar: string }) {
 
       {today.active_memories && today.active_memories.length > 0 && (
         <div>
-          <div style={sepStyle}>{t('Active memories')}</div>
+          <div style={sepStyle}
+               title={t('What is on their mind right now — top memories ranked by importance, decay and recency. The Memories section is the full searchable archive.')}>
+            {t('Active memories')}
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             {today.active_memories.map((m) => (
               <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 1,
@@ -294,18 +301,18 @@ function DiaryView({ avatar }: { avatar: string }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flex: '0 0 auto', alignItems: 'center' }}>
-        <select style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)}>
+        <select className="ga-input" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)}>
           <option value="">{t('Today')}</option>
           <option value="all">{t('All days')}</option>
           {dates.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
-        <select style={inputStyle} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+        <select className="ga-input" style={inputStyle} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
           <option value="">{t('All types')}</option>
           {Object.keys(types).map((k) => (
             <option key={k} value={k}>{(icons[k] ? icons[k] + ' ' : '') + (types[k] || k)}</option>
           ))}
         </select>
-        <input style={{ ...inputStyle, flex: 1, minWidth: 70 }} placeholder={t('Search…')}
+        <input className="ga-input" style={{ ...inputStyle, flex: 1, minWidth: 70 }} placeholder={t('Search…')}
                value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
 
@@ -314,7 +321,8 @@ function DiaryView({ avatar }: { avatar: string }) {
           <button
             onClick={generateSummary}
             disabled={genState === 'generating'}
-            style={{ ...inputStyle, cursor: genState === 'generating' ? 'wait' : 'pointer' }}>
+            className="player-chip"
+            style={{ ...chipBtnStyle, cursor: genState === 'generating' ? 'wait' : 'pointer' }}>
             📔 {t('Generate day summary')}
           </button>
           {genState ? <span style={{ fontSize: '0.76em', opacity: 0.6 }}>{genLabel[genState] || ''}</span> : null}
@@ -326,7 +334,7 @@ function DiaryView({ avatar }: { avatar: string }) {
           ? <EmptyState small icon="journal" title={t('No entries')} />
           : <Timeline entries={visible} icons={icons} withDays={date === 'all'} />}
         {mayHaveMore && !needle && (
-          <button style={{ ...inputStyle, cursor: 'pointer', marginTop: 8 }}
+          <button className="player-chip" style={{ ...chipBtnStyle, marginTop: 8 }}
                   onClick={() => load(offset + LIMIT, true)}>
             {t('Load more')}
           </button>
@@ -386,23 +394,23 @@ function MemoriesView({ avatar }: { avatar: string }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flex: '0 0 auto' }}>
-        <input style={{ ...inputStyle, flex: '1 1 100%', minWidth: 90 }} placeholder={t('Search…')}
+        <input className="ga-input" style={{ ...inputStyle, flex: '1 1 100%', minWidth: 90 }} placeholder={t('Search…')}
                value={q} onChange={(e) => setQ(e.target.value)} />
-        <select style={inputStyle} value={tier} onChange={(e) => setTier(e.target.value)}>
+        <select className="ga-input" style={inputStyle} value={tier} onChange={(e) => setTier(e.target.value)}>
           <option value="">{t('All tiers')}</option>
           {optionList(facets?.tiers)}
         </select>
-        <select style={inputStyle} value={source} onChange={(e) => setSource(e.target.value)}>
+        <select className="ga-input" style={inputStyle} value={source} onChange={(e) => setSource(e.target.value)}>
           <option value="">{t('All sources')}</option>
           {optionList(facets?.sources)}
         </select>
-        <select style={inputStyle} value={related} onChange={(e) => setRelated(e.target.value)}>
+        <select className="ga-input" style={inputStyle} value={related} onChange={(e) => setRelated(e.target.value)}>
           <option value="">{t('Anyone')}</option>
           {(facets?.related_characters || []).map((r) => (
             <option key={r.name} value={r.name}>{r.name} ({r.count})</option>
           ))}
         </select>
-        <select style={inputStyle} value={sort} onChange={(e) => setSort(e.target.value)}>
+        <select className="ga-input" style={inputStyle} value={sort} onChange={(e) => setSort(e.target.value)}>
           <option value="recent">{t('Recent')}</option>
           <option value="importance">{t('Importance')}</option>
           <option value="access">{t('Most accessed')}</option>
@@ -435,7 +443,7 @@ function MemoriesView({ avatar }: { avatar: string }) {
             </div>
           ))}
         {items.length < total && (
-          <button style={{ ...inputStyle, cursor: 'pointer', alignSelf: 'flex-start' }}
+          <button className="player-chip" style={{ ...chipBtnStyle, alignSelf: 'flex-start' }}
                   onClick={() => load(offset + LIMIT, true)}>
             {t('Load more')} ({items.length}/{total})
           </button>
