@@ -2531,7 +2531,12 @@ def _extract_context_from_last_chat(agent_name: str,
                 source_text=avatar_source, is_avatar=True)
 
     import asyncio
-    asyncio.get_event_loop().run_in_executor(None, _do_extraction)
+    try:
+        asyncio.get_event_loop().run_in_executor(None, _do_extraction)
+    except RuntimeError:
+        # Kein Event-Loop (Daemon-/Worker-Thread, z.B. run_chat_turn _bg_post)
+        # — synchron ausführen statt die Extraktion komplett zu verlieren.
+        _do_extraction()
 
 
 def _build_full_system_prompt(character_name: str,

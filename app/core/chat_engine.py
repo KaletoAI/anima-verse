@@ -570,13 +570,17 @@ def run_chat_turn(
     # narrative Aktionen im RP-Text ("zieht sich Shorts an", "los zum Waldrand")
     # und führt die Tools aus (ChangeOutfit/SetLocation/SetActivity/…). Plus
     # Fallback-Marker (Mood/Location/Activity), die ins Post-Processing fließen.
-    # Bild/Video/Search-Tools (deferred/content) werden hier ausgelassen.
+    # Klassifikation wie streaming._stream_rp_first: Seiteneffekt-Tools laufen
+    # sofort, DEFERRED-Tools (ImageGenerator/Instagram/Video) nach der Antwort
+    # im Hintergrund mit RP-Kontext-Injektion. CONTENT_TOOLs bräuchten einen
+    # Chat-Retry (Ergebnis fließt zurück ins RP) — den gibt es in diesem Pfad
+    # (noch) nicht, daher werden sie geloggt und ausgelassen.
     _markers = ""
     if (ctx.get("mode") == "rp_first" and ctx.get("tool_system_content")
             and ctx.get("tool_llm") is not None and ctx.get("tools_dict")):
         try:
             from app.core.tool_formats import find_tool_calls
-            from app.core.streaming import _extract_markers
+            from app.core.streaming import _extract_markers, _inject_rp_context
             _tool_msgs = [
                 {"role": "system", "content": ctx["tool_system_content"]},
                 {"role": "user", "content": _rp_tool_decision_input(incoming_message, clean)},
@@ -587,12 +591,19 @@ def run_chat_turn(
                 label=f"Tool: {speaker} → {responder}")
             _ttext = getattr(_tresp, "content", "") or ""
             _matches = find_tool_calls(ctx.get("tool_format", "tag"), _ttext, ctx["tools_dict"])
-            _skip_tools = (ctx.get("deferred_tools") or set()) | (ctx.get("content_tools") or set())
+            _deferred_set = ctx.get("deferred_tools") or set()
+            _content_set = ctx.get("content_tools") or set()
+            _deferred_matches: List[tuple] = []
             for _name, _inp in _matches:
-                if _name in _skip_tools:
-                    continue
                 _fn = ctx["tools_dict"].get(_name)
                 if not _fn:
+                    continue
+                if _name in _content_set:
+                    logger.info("run_chat_turn[%s]: Content-Tool %s übersprungen "
+                                "(kein Retry-Pfad in run_chat_turn)", responder, _name)
+                    continue
+                if _name in _deferred_set:
+                    _deferred_matches.append((_name, _inp))
                     continue
                 try:
                     _fn(_inp)
@@ -600,9 +611,28 @@ def run_chat_turn(
                 except Exception as _te:
                     logger.warning("run_chat_turn[%s]: Tool %s fehlgeschlagen: %s",
                                    responder, _name, _te)
+            if _deferred_matches:
+                # Nach-RP-Ausführung im Daemon-Thread: blockiert die Chat-
+                # Antwort nicht (Skill-execute kann LLM-Calls für den Prompt-
+                # Build enthalten); die Skills enqueuen selbst in die Task-Queue.
+                _tools_dict = ctx["tools_dict"]
+
+                def _run_deferred(matches=_deferred_matches, rp=clean,
+                                  ui=incoming_message, who=responder):
+                    for _dname, _dinp in matches:
+                        try:
+                            _tools_dict[_dname](_inject_rp_context(_dinp, rp, ui))
+                            logger.info("run_chat_turn[%s]: Deferred Tool ausgeführt → %s",
+                                        who, _dname)
+                        except Exception as _de:
+                            logger.error("run_chat_turn[%s]: Deferred Tool %s fehlgeschlagen: %s",
+                                         who, _dname, _de)
+
+                import threading
+                threading.Thread(target=_run_deferred, daemon=True).start()
             _markers = _extract_markers(_ttext, clean) or ""
         except Exception as _e:
-            logger.debug("run_chat_turn rp_first tool-phase failed: %s", _e)
+            logger.warning("run_chat_turn rp_first tool-phase failed: %s", _e)
 
     ts = utc_now_iso()
 
@@ -950,11 +980,16 @@ def post_process_response(
         if old_messages is None and history_window and len(full_chat_history) > history_window:
             old_messages = full_chat_history[:-history_window]
         if old_messages:
-            loop = asyncio.get_event_loop()
-            loop.run_in_executor(
-                None, update_summary_background, character_name, old_messages,
-                _extract_partner
-            )
+            try:
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(
+                    None, update_summary_background, character_name, old_messages,
+                    _extract_partner
+                )
+            except RuntimeError:
+                # Kein Event-Loop (Daemon-/Worker-Thread) — synchron ausführen
+                update_summary_background(character_name, old_messages,
+                                          _extract_partner)
     except Exception as e:
         logger.error("[%s] History summary error: %s", character_name, e)
 
