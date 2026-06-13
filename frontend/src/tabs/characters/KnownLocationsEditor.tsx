@@ -111,7 +111,6 @@ export function KnownLocationsEditor({ character }: { character: string }) {
 
   if (loading) return <div className="ga-loading">{t('Loading…')}</div>
 
-  const unplaced = items.filter((l) => !isPlaced(l))
   const knownCount = items.filter((l) => known.has(l.id)).length
 
   return (
@@ -142,18 +141,7 @@ export function KnownLocationsEditor({ character }: { character: string }) {
         </div>
       ) : null}
 
-      {unplaced.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: '0.78em', opacity: 0.5, marginBottom: 6 }}>{t('Without coordinates')}</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: GAP }}>
-            {unplaced.map((l) => (
-              <MapCell key={l.id} loc={l} isKnown={known.has(l.id)} onClick={() => toggle(l.id)} t={t} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!grid && unplaced.length === 0 && <div className="ga-placeholder">{t('No places')}</div>}
+      {!grid && <div className="ga-placeholder">{t('No places')}</div>}
     </div>
   )
 }
