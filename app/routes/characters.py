@@ -2011,6 +2011,44 @@ async def clear_expression_cache_route(character_name: str, request: Request) ->
     return {"status": "success", "cleared": count}
 
 
+@router.get("/{character_name}/expressions")
+async def list_expressions_route(character_name: str) -> Dict[str, Any]:
+    """Lists all cached expression variants of a character with their
+    parameters (mood, activity, equipped, model, seed, backend, workflow, …).
+    """
+    from app.core.expression_regen import list_expressions
+    items = list_expressions(character_name)
+    return {"character": character_name, "expressions": items}
+
+
+@router.get("/{character_name}/expressions/{filename}")
+async def serve_expression_route(character_name: str, filename: str):
+    """Serves a single expression variant image by filename."""
+    from app.core.expression_regen import _get_expressions_dir
+    expr_dir = _get_expressions_dir(character_name)
+    if not filename or filename != os.path.basename(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    path = expr_dir / filename
+    try:
+        if path.resolve().parent != expr_dir.resolve() or not path.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+    except OSError:
+        raise HTTPException(status_code=404, detail="Not found")
+    media_type = mimetypes.guess_type(str(path))[0] or "image/png"
+    return FileResponse(path=str(path), media_type=media_type,
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.delete("/{character_name}/expressions/{filename}")
+async def delete_expression_route(character_name: str, filename: str) -> Dict[str, Any]:
+    """Deletes a single expression variant image + its JSON sidecar."""
+    from app.core.expression_regen import delete_expression
+    ok = delete_expression(character_name, filename)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Expression not found")
+    return {"status": "success", "deleted": filename}
+
+
 @router.get("/{character_name}/outfit-imagegen")
 async def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
     """Liefert die per-Character Overrides fuer den Outfit-/Variant-Image-
@@ -4281,6 +4319,7 @@ def memory_locations(character_name: str) -> Dict[str, Any]:
             "name": loc.get("name", ""),
             "grid_x": loc.get("grid_x"),
             "grid_y": loc.get("grid_y"),
+            "map_rotation_2d": loc.get("map_rotation_2d", 0),
             "passable": bool(loc.get("passable")),
             "danger_level": loc.get("danger_level"),
             "is_known": is_known,
