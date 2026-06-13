@@ -38,7 +38,13 @@ interface ActiveMemory {
   id: number; memory_type: string; ts: string; content: string
   importance: number; related_character: string; score: number; tags: string[]
 }
-interface TodayResponse { character: string; now: string; status: TodayStatus; active_memories: ActiveMemory[] }
+interface LanePoint { ts: string; value: string; count?: number }
+interface Lane { bucketed: boolean; points: LanePoint[] }
+interface Lanes24h { activity: Lane; location: Lane; mood: Lane; effects: Lane }
+interface TodayResponse {
+  character: string; now: string; status: TodayStatus
+  lanes_24h?: Lanes24h; active_memories: ActiveMemory[]
+}
 
 interface MemoryItem {
   id: number; timestamp: string; memory_type: string; content: string
@@ -160,7 +166,75 @@ function Timeline({ entries, icons, withDays }: {
 }
 
 // ---------------------------------------------------------------------------
-// Sektion „Heute“ — Status + Tages-Zeitstrahl + aktive Erinnerungen
+// 24h-Lanes — Zustands-Verlauf (Aktivität/Ort/Stimmung/Effekte) als Bänder
+// ---------------------------------------------------------------------------
+/** Stabile Farbe pro Zustandswert (Hash → HSL). Leer = neutrales Grau. */
+function laneColor(value: string): string {
+  if (!value) return 'rgba(255,255,255,0.06)'
+  let h = 0
+  for (let i = 0; i < value.length; i++) h = (h * 31 + value.charCodeAt(i)) % 360
+  return `hsl(${h} 42% 44%)`
+}
+
+function LaneBand({ icon, label, lane, startMs, endMs }: {
+  icon: string; label: string; lane?: Lane; startMs: number; endMs: number
+}) {
+  const span = Math.max(1, endMs - startMs)
+  const pts = lane?.points || []
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ flex: '0 0 16px', textAlign: 'center' }} title={label}>{icon}</span>
+      <div style={{ flex: 1, position: 'relative', height: 13, borderRadius: 4,
+                    background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+        {pts.map((p, i) => {
+          const t0 = Date.parse(p.ts)
+          if (isNaN(t0)) return null
+          const tNext = i + 1 < pts.length ? Date.parse(pts[i + 1].ts) : endMs
+          const segStart = Math.max(startMs, t0)
+          const segEnd = Math.min(endMs, isNaN(tNext) ? endMs : tNext)
+          if (segEnd <= segStart) return null
+          const left = ((segStart - startMs) / span) * 100
+          const width = ((segEnd - segStart) / span) * 100
+          return (
+            <div key={i}
+              title={`${p.value || '—'} · ${clockOf(p.ts)}${p.count ? ` ×${p.count}` : ''}`}
+              style={{ position: 'absolute', top: 0, bottom: 0, left: `${left}%`,
+                       width: `${Math.max(0.7, width)}%`, background: laneColor(p.value) }} />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function Lanes24h({ lanes, nowIso }: { lanes?: Lanes24h; nowIso: string }) {
+  const { t } = useI18n()
+  if (!lanes) return null
+  const hasData = ['activity', 'location', 'mood', 'effects']
+    .some((k) => ((lanes as any)[k]?.points || []).length > 0)
+  if (!hasData) return null
+  const endMs = Date.parse(nowIso) || Date.now()
+  const startMs = endMs - 24 * 3600 * 1000
+  return (
+    <div>
+      <div style={sepStyle}>{t('Last 24h')}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <LaneBand icon="🎭" label={t('Activity')} lane={lanes.activity} startMs={startMs} endMs={endMs} />
+        <LaneBand icon="📍" label={t('Location')} lane={lanes.location} startMs={startMs} endMs={endMs} />
+        <LaneBand icon="🙂" label={t('Mood')} lane={lanes.mood} startMs={startMs} endMs={endMs} />
+        <LaneBand icon="✨" label={t('Effects')} lane={lanes.effects} startMs={startMs} endMs={endMs} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', paddingLeft: 22,
+                      fontSize: '0.66em', opacity: 0.4, fontVariantNumeric: 'tabular-nums' }}>
+          <span>{clockOf(new Date(startMs).toISOString())}</span>
+          <span>{t('now')}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sektion „Heute“ — Status + 24h-Lanes + aktive Erinnerungen + Zeitstrahl
 // ---------------------------------------------------------------------------
 function TodayView({ avatar, onOpenMemories }: { avatar: string; onOpenMemories?: () => void }) {
   const { t } = useI18n()
@@ -211,6 +285,8 @@ function TodayView({ avatar, onOpenMemories }: { avatar: string; onOpenMemories?
           <div style={{ fontSize: '0.78em', color: '#e0a356' }}>⚠ {s.last_warning}</div>
         ) : null}
       </div>
+
+      <Lanes24h lanes={today.lanes_24h} nowIso={today.now} />
 
       {/* „Im Kopf“ direkt beim Status (beides = aktueller Zustand), kompakt
           auf Top 6 — das volle Archiv ist einen Klick entfernt. Der Tages-
