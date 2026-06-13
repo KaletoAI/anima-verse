@@ -195,16 +195,20 @@ def _check_comfyui_workflows(config: dict) -> list:
     backends = ig.get("backends", [])
     comfy_backend_names = {b.get("name", "") for b in backends if b.get("api_type") == "comfyui"}
 
-    # Check default workflow exists (case-insensitive match against workflow IDs and names)
+    # Das Feld ist ein Match-Glob (z.B. "Flux2*"), zur Laufzeit via fnmatch in
+    # match_workflow aufgeloest — also auch hier als Glob pruefen, nicht exakt.
+    # Ein Name ohne Wildcard ist ein Glob der sich selbst matcht.
     default_wf = ig.get("comfy_default_workflow", "")
     if default_wf:
+        import fnmatch
         wf_names = {wid: wf.get("name", wid) for wid, wf in workflows.items()}
+        pat = default_wf.lower()
         match = default_wf in workflows or any(
-            default_wf.lower() == n.lower() for n in wf_names.values()
+            fnmatch.fnmatch(n.lower(), pat) for n in wf_names.values()
         )
         if not match:
             available = ", ".join(wf_names.values()) if wf_names else "keine"
-            issues.append(_warn("image_generation", f"Default ComfyUI Workflow '{default_wf}' existiert nicht (verfuegbar: {available})"))
+            issues.append(_warn("image_generation", f"Default ComfyUI Workflow-Glob '{default_wf}' matcht keinen Workflow (verfuegbar: {available})"))
 
     for wid, wf in workflows.items():
         name = wf.get("name", wid)
