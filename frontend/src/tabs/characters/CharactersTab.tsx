@@ -21,6 +21,7 @@ import { GalleryTab } from './GalleryTab'
 import { SecretsEditor } from './SecretsEditor'
 import { SkillsTab } from './SkillsTab'
 import { WardrobeTab } from './WardrobeTab'
+import { KnownLocationsEditor } from './KnownLocationsEditor'
 import { NewCharacterDialog } from './NewCharacterDialog'
 
 /**
@@ -986,6 +987,10 @@ export function CharactersTab() {
                     initialEnabled={schedule.enabled}
                     initialSlots={schedule.slots}
                   />
+                  </FieldSet>
+
+                  <FieldSet title={t('Known locations')}>
+                  <KnownLocationsEditor character={selected} />
                   </FieldSet>
                 </div>
               )

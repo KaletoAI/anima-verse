@@ -4295,6 +4295,22 @@ def memory_locations(character_name: str) -> Dict[str, Any]:
     }
 
 
+@router.put("/{character_name}/known-locations")
+async def set_known_locations_route(character_name: str, request: Request) -> Dict[str, Any]:
+    """Setzt die known_locations-Liste eines Characters (Editor, voller Soll-State).
+
+    Body: {"known_locations": ["loc_id", ...]}. Leere Liste = kennt nichts
+    (strict mode bleibt aktiv). Auto-Discovery beim Betreten ergaenzt spaeter.
+    """
+    from app.models.character import set_known_locations
+    data = await request.json()
+    ids = data.get("known_locations")
+    if not isinstance(ids, list):
+        raise HTTPException(status_code=400, detail="known_locations must be a list")
+    known = set_known_locations(character_name, ids)
+    return {"status": "success", "character": character_name, "known_locations": known}
+
+
 @router.get("/{character_name}/memory/list")
 def memory_list(character_name: str,
                 limit: int = 50,

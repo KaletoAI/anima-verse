@@ -1007,6 +1007,28 @@ def add_known_location(character_name: str, location_id: str) -> List[str]:
     return known
 
 
+def set_known_locations(character_name: str, location_ids: List[str]) -> List[str]:
+    """Setzt die komplette known_locations-Liste (Soll-Zustand, Editor).
+
+    Im Gegensatz zu add_known_location ueberschreibt das die Liste vollstaendig
+    — auch Entfernen. Leere Liste = "kennt nichts" (strict mode bleibt aktiv,
+    da das Feld vorhanden ist). Dedupliziert unter Beibehaltung der Reihenfolge.
+    """
+    if not character_name:
+        return []
+    cfg = get_character_config(character_name) or {}
+    seen: set = set()
+    known: List[str] = []
+    for v in (location_ids or []):
+        s = str(v).strip()
+        if s and s not in seen:
+            seen.add(s)
+            known.append(s)
+    cfg["known_locations"] = known
+    save_character_config(character_name, cfg)
+    return known
+
+
 def _schedule_background_variant(character_name: str) -> None:
     """Triggert Expression-Variant fuer aktuelle Mood/Activity/Equipped im
     Hintergrund — damit beim naechsten Character-Wechsel bereits ein
