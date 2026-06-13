@@ -36,6 +36,16 @@ interface LocationOpt {
   name: string
 }
 
+// Gegensatz-Paare: im UI EIN gekoppelter Schalter statt zwei (sonst liesse sich
+// z.B. Sleep ohne WakeUp aktivieren — unlogisch). Der LLM sieht weiter beide
+// Verben; nur das per-Character-Enable wird gemeinsam geschaltet.
+const SKILL_PAIRS: Record<string, { partner: string; label: string }> = {
+  sleep: { partner: 'wakeup', label: 'Sleep / Wake up' },
+  enter_water: { partner: 'dry_off', label: 'Enter / leave water' },
+  start_intimate: { partner: 'end_intimate', label: 'Start / end intimacy' },
+}
+const PAIR_SECONDARY = new Set(Object.values(SKILL_PAIRS).map((p) => p.partner))
+
 export function SkillsTab({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -84,6 +94,28 @@ export function SkillsTab({ character }: { character: string }) {
     [character, t, toast],
   )
 
+  // Gekoppeltes Paar: beide Verben gemeinsam an/aus (optimistisch + beide PUTs).
+  const togglePair = useCallback(
+    async (primaryId: string, partnerId: string, enabled: boolean) => {
+      setSkills((prev) =>
+        prev.map((s) =>
+          s.skill_id === primaryId || s.skill_id === partnerId ? { ...s, enabled } : s,
+        ),
+      )
+      try {
+        const base = `/characters/${encodeURIComponent(character)}/skills`
+        await Promise.all([
+          apiPut(`${base}/${encodeURIComponent(primaryId)}/enabled`, { enabled }),
+          apiPut(`${base}/${encodeURIComponent(partnerId)}/enabled`, { enabled }),
+        ])
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        reload()
+      }
+    },
+    [character, reload, t, toast],
+  )
+
   // Update the field value locally (so inputs stay controlled), then persist
   // the single field via the merge endpoint.
   const setFieldValue = useCallback((skillId: string, field: string, value: unknown) => {
@@ -125,8 +157,13 @@ export function SkillsTab({ character }: { character: string }) {
 
   return (
     <div className="ga-form" style={{ gap: 12 }}>
-      {skills.map((skill) => {
+      {skills.filter((s) => !PAIR_SECONDARY.has(s.skill_id)).map((skill) => {
         const fields = skill.config_fields ? Object.entries(skill.config_fields) : []
+        const pair = SKILL_PAIRS[skill.skill_id]
+        const displayName = pair ? t(pair.label) : (skill.name || skill.skill_id)
+        const idHint = pair ? `${skill.skill_id} + ${pair.partner}` : skill.skill_id
+        const onToggle = (checked: boolean) =>
+          pair ? togglePair(skill.skill_id, pair.partner, checked) : toggleEnabled(skill, checked)
         return (
           <div
             key={skill.skill_id}
@@ -144,11 +181,11 @@ export function SkillsTab({ character }: { character: string }) {
               <input
                 type="checkbox"
                 checked={skill.enabled}
-                onChange={(e) => toggleEnabled(skill, e.target.checked)}
+                onChange={(e) => onToggle(e.target.checked)}
               />
-              <span>{skill.name || skill.skill_id}</span>
+              <span>{displayName}</span>
               <code style={{ opacity: 0.4, fontWeight: 400, fontSize: '0.8em' }}>
-                {skill.skill_id}
+                {idHint}
               </code>
             </label>
             {skill.description && (
