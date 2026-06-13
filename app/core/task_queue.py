@@ -668,6 +668,27 @@ class TaskQueue:
             return True
         return False
 
+    def track_discard(self, task_id: str) -> bool:
+        """Remove a tracked placeholder entry entirely (no history row).
+
+        Fuer Platzhalter-Tasks (z.B. expression_regen waehrend des Mutex-Waits),
+        die nach getaner Sichtbarkeits-Arbeit verschwinden sollen — im Gegensatz
+        zu track_cancel ('Manuell abgebrochen'), das einen echten User-Abbruch
+        in der Historie dokumentiert. Returns True if a row was deleted.
+        """
+        self._track_start_times.pop(task_id, None)
+        with self._write_lock, self._connect() as conn:
+            cur = conn.execute(
+                """DELETE FROM tasks
+                   WHERE task_id=? AND status IN ('running', 'pending')
+                     AND task_origin='tracked'""",
+                (task_id,))
+            conn.commit()
+        if cur.rowcount:
+            logger.debug("Track discarded: %s", task_id)
+            return True
+        return False
+
     def get_tracked_active(self) -> List[Dict[str, Any]]:
         """Returns currently running and pending tracked tasks (for UI)."""
         conn = self._connect()

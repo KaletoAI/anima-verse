@@ -687,8 +687,10 @@ def _do_trigger_expression_generation(character_name: str,
             # verteilt werden).
             with _get_char_mutex(character_name):
                 if _pending_track_id:
+                    # Platzhalter loeschen statt canceln — sonst landet jeder
+                    # Expression-Trigger als "Manuell abgebrochen" in Recently.
                     try:
-                        get_task_queue().track_cancel(_pending_track_id)
+                        get_task_queue().track_discard(_pending_track_id)
                     except Exception:
                         pass
                     _pending_track_id = None
@@ -701,7 +703,7 @@ def _do_trigger_expression_generation(character_name: str,
         finally:
             if _pending_track_id:
                 try:
-                    get_task_queue().track_cancel(_pending_track_id)
+                    get_task_queue().track_discard(_pending_track_id)
                 except Exception:
                     pass
             with _generating_lock:
