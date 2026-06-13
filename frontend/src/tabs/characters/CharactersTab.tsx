@@ -66,7 +66,7 @@ const MOODS: Array<{ id: string; label: string }> = [
   { id: 'sweating', label: 'sweating' },
 ]
 
-type SubTabId = 'general' | 'soul' | 'behavior' | 'image' | 'gallery' | 'home' | 'skills' | 'wardrobe' | 'secrets' | 'others'
+type SubTabId = 'general' | 'soul' | 'behavior' | 'image' | 'gallery' | 'home' | 'locations' | 'skills' | 'wardrobe' | 'secrets' | 'others'
 
 interface ScheduleSlot {
   hour: number
@@ -85,6 +85,7 @@ const SUB_TABS: Array<{ id: SubTabId; label: string }> = [
   { id: 'image', label: 'Image' },
   { id: 'gallery', label: 'Gallery' },
   { id: 'home', label: 'Activity & Home' },
+  { id: 'locations', label: 'Locations' },
   { id: 'skills', label: 'Skills' },
   { id: 'wardrobe', label: 'Wardrobe' },
   { id: 'secrets', label: 'Secrets' },
@@ -988,12 +989,10 @@ export function CharactersTab() {
                     initialSlots={schedule.slots}
                   />
                   </FieldSet>
-
-                  <FieldSet title={t('Known locations')}>
-                  <KnownLocationsEditor character={selected} />
-                  </FieldSet>
                 </div>
               )
+            ) : subTab === 'locations' ? (
+              <KnownLocationsEditor character={selected} />
             ) : subTab === 'image' ? (
               <ImageOverrides character={selected} />
             ) : subTab === 'gallery' ? (
