@@ -24,9 +24,22 @@ from .video_generation_skill import VideoGenerationSkill
 from .markdown_writer_skill import MarkdownWriterSkill
 from .retrospect_skill import RetrospectSkill
 from .state_flag_skills import (
-    SleepSkill, WakeUpSkill, EnterWaterSkill, DryOffSkill,
-    StartIntimateSkill, EndIntimateSkill, SetPoseSkill,
+    SleepWakeSkill, WetSkill, IntimateSkill, SetPoseSkill,
 )
+
+
+class _Verb:
+    """Registry-Binding: laesst EINE parameterisierte Skill-Klasse mehrere Verben
+    (eigene SKILL_IDs/Tools) bedienen. Traegt ALWAYS_LOAD durch, damit
+    _load_skill den Wert schon vor der Instanziierung lesen kann."""
+
+    def __init__(self, cls, **kwargs):
+        self._cls = cls
+        self._kwargs = kwargs
+        self.ALWAYS_LOAD = getattr(cls, "ALWAYS_LOAD", False)
+
+    def __call__(self, config):
+        return self._cls(config, **self._kwargs)
 
 
 class SkillManager:
@@ -57,13 +70,13 @@ class SkillManager:
         'videogen': VideoGenerationSkill,
         'markdown_writer': MarkdownWriterSkill,
         'retrospect': RetrospectSkill,
-        # State-Flag-Skills (Schritt 6, May 2026)
-        'sleep': SleepSkill,
-        'wakeup': WakeUpSkill,
-        'enter_water': EnterWaterSkill,
-        'dry_off': DryOffSkill,
-        'start_intimate': StartIntimateSkill,
-        'end_intimate': EndIntimateSkill,
+        # State-Flag-Skills — je Paar EINE Klasse, zwei Verben (via _Verb).
+        'sleep': _Verb(SleepWakeSkill, asleep=True),
+        'wakeup': _Verb(SleepWakeSkill, asleep=False),
+        'enter_water': _Verb(WetSkill, wet=True),
+        'dry_off': _Verb(WetSkill, wet=False),
+        'start_intimate': _Verb(IntimateSkill, active=True),
+        'end_intimate': _Verb(IntimateSkill, active=False),
         'set_pose': SetPoseSkill,
     }
 
