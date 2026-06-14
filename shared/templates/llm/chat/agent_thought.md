@@ -144,5 +144,9 @@ Use SetLocation to travel to one of these named places (the system walks you the
 
 {{ tools_hint }}
 {% endif %}
+{% if lang_instruction %}
+
+{{ lang_instruction }} Any spoken words, messages or narration you produce must be in that language.
+{% endif %}
 
 Decide what you want to do next. Pick ONE meaningful action and execute the corresponding tool. If nothing relevant, reply only with: SKIP.

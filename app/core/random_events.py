@@ -403,10 +403,11 @@ def _try_generate_secret_hint_event(loc_id: str,
     weights = [max(1, int(s.get("severity", 2))) for s in target_secrets]
     secret = random.choices(target_secrets, weights=weights, k=1)[0]
 
-    # Prompt fuer subtilen Hinweis
+    # Prompt fuer subtilen Hinweis — Sprache des betroffenen Characters
+    # (Welt-Narration, nicht die User-UI-Sprache).
     from app.core.llm_router import llm_call
-    from app.models.account import get_user_profile as _get_prof
-    _lang = (_get_prof().get("system_language", "de") or "de")
+    from app.models.character import get_character_language
+    _lang = (get_character_language(target_char) or "de")
     LANG_NAMES = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian"}
     lang_name = LANG_NAMES.get(_lang, _lang)
 
@@ -866,11 +867,14 @@ def try_resolve_events():
 def _generate_solution_rp(actor: str, event: Dict[str, Any],
     joint: Optional[List[str]] = None) -> str:
     """Laesst den Character (RP-LLM) beschreiben wie er das Event loest. Kurze Antwort."""
-    from app.models.character import get_character_personality
+    from app.models.character import get_character_personality, get_character_language
     from app.core.llm_router import llm_call
 
     personality = get_character_personality(actor) or ""
     joint_txt = f" You are with {', '.join(joint)}." if joint else ""
+    _lang = (get_character_language(actor) or "de")
+    LANG_NAMES = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ja": "Japanese"}
+    lang_name = LANG_NAMES.get(_lang, _lang)
 
     from app.core.prompt_templates import render_task
     sys_prompt, user_prompt = render_task(
@@ -878,7 +882,8 @@ def _generate_solution_rp(actor: str, event: Dict[str, Any],
         actor=actor,
         personality=personality,
         event_text=event.get("text", ""),
-        joint_block=joint_txt)
+        joint_block=joint_txt,
+        language_name=lang_name)
 
     try:
         response = llm_call(

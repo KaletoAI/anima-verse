@@ -223,11 +223,12 @@ SECTIONS = {
             "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Vorschau Default (Match)", "description": "Match-Glob 'workflow:Qwen*' oder 'backend:ComfyUI*' — nach Verfuegbarkeit aufgeloest (kein festes Backend)."},
             "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Match-Glob 'workflow:Qwen*' oder 'backend:ComfyUI*' fuer Mood/Activity-Varianten — nach Verfuegbarkeit aufgeloest."},
             "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Match-Glob 'workflow:Glob' oder 'backend:Glob' — nach Verfuegbarkeit aufgeloest."},
+            "mapfit_imagegen_default": {"type": "imagegen_select", "label": "Map Fit/Match-edges target", "default": "workflow:Flux Inpaint*", "description": "Imagegen-Target (Match-Spec, z.B. 'workflow:Flux Inpaint*') fuer 'Fit to neighbors' und 'Match edges'. Loest sich ueber das normale ComfyUI-Workflow-Matching auf — der gewaehlte Workflow muss die Inpaint-Nodes haben (input_reference_image = 3x3-Canvas, input_mask, input_crop, output_final = gecroppte Mitte)."},
+            "map_tile_vision_analysis": {"type": "bool", "label": "Analyze neighbor tiles for map prompts", "default": False, "description": "For Fit/Match-edges: run a short vision-LLM analysis of each neighbour's ACTUAL 2D tile to build the north/south/east/west prompt (instead of the stored description, which drifts after regeneration). Cached per tile — re-analysed only when a tile changes. Costs one vision call per new tile."},
 
             # --- Prompt-Prefixes ---
             "profile_image_prompt_prefix": {"type": "str", "label": "Profil-Bild Prompt Prefix", "default": "photorealistic, portrait, only head,", "description": "Wird Profilbild-Prompts vorangestellt (z.B. 'photorealistic, portrait')"},
             "outfit_image_prompt_prefix": {"type": "str", "label": "Outfit/Vorschau Prompt Prefix", "default": "full body view, green background", "description": "Wird Garderobe-Vorschau-Prompts vorangestellt (z.B. 'full body portrait, RAW photo'). Nur fuer Vorschau, nicht fuer Expression-Auto-Regen."},
-            "map_image_prompt_suffix": {"type": "str", "label": "Karten-Icon Prompt Suffix (isometrisch)", "default": "small icon, top-down view, miniature, game map tile, simple, clean, centered", "description": "Wird isometrischen Karten-Icon-Prompts angehaengt (nach dem Orts-Subjekt)."},
             "map_2d_image_prompt_suffix": {"type": "str", "label": "2D-Karten-Icon Prompt Suffix (flach)", "default": "top-down map tile, flat 2D illustration, bird's eye view, simple, clean, fills the frame", "description": "Wird flachen 2D-Karten-Icon-Prompts angehaengt (nach dem Orts-Subjekt)."},
 
             # --- Outfit-Bild Groesse ---
@@ -411,6 +412,7 @@ SECTIONS = {
                     "workflow_file": {"type": "str", "label": "Workflow Datei", "required": True},
                     "model": {"type": "comfyui_model_select", "label": "Model"},
                     "clip": {"type": "comfyui_clip_select", "label": "CLIP Model"},
+                    "clip2": {"type": "comfyui_clip_select", "label": "CLIP Model 2", "description": "Nur fuer DualCLIPLoader-Workflows (z.B. Flux Inpaint): clip_name2."},
                     "prompt_style": {"type": "text", "label": "Prompt Style", "default": "photorealistic", "description": "Stil-Adjektiv / Style-Keywords. Erscheint im Summary ('A {erstes Wort} group photo of...') und komplett in der Style-Zeile. Default: photorealistic."},
                     "prompt_negative": {"type": "text", "label": "Negative Prompt"},
                     "image_model": {"type": "select", "label": "Target Prompt Stil", "choices": ["", "z_image", "qwen", "flux"], "description": "Bestimmt den Prompt-Adapter (z_image=Komma-Keywords, qwen=natuerliche Saetze, flux=Fotografie-Stil). Leer = Fallback ueber Workflow-Dateiname."},
@@ -465,6 +467,7 @@ SECTIONS = {
                     "unet_high": {"type": "comfyui_model_select", "label": "UNet High Lighting"},
                     "unet_low": {"type": "comfyui_model_select", "label": "UNet Low Lighting"},
                     "clip": {"type": "comfyui_clip_select", "label": "CLIP Model"},
+                    "clip2": {"type": "comfyui_clip_select", "label": "CLIP Model 2", "description": "Nur fuer DualCLIPLoader-Workflows (z.B. Flux Inpaint): clip_name2."},
                     "width": {"type": "int", "label": "Breite", "default": 640, "min": 64, "max": 4096},
                     "height": {"type": "int", "label": "Höhe", "default": 640, "min": 64, "max": 4096},
                     "poll_interval": {"type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5},

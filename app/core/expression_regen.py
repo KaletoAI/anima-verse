@@ -456,6 +456,114 @@ def clear_expression_cache(character_name: str) -> int:
     return count
 
 
+# Bildendungen, unter denen ein Variant-Bild neben seinem .json-Sidecar liegt.
+_VARIANT_IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def list_expressions(character_name: str) -> list:
+    """Listet alle gecachten Expression-Variants eines Characters mit ihren
+    Parametern (aus dem .json-Sidecar). Neueste zuerst.
+
+    Jeder Eintrag: ``{file, mood, activity, equipped_pieces, equipped_items,
+    model, seed, provider, service, workflow, prompt, created_at, use_count,
+    last_used_at}``. Bilder ohne Sidecar oder Sidecars ohne Bild werden
+    uebersprungen (nur vollstaendige Paare sind anzeigbar).
+    """
+    expr_dir = _get_expressions_dir(character_name)
+    if not expr_dir.exists():
+        return []
+    # Item-IDs -> lesbare Namen aufloesen (Sidecar speichert nur IDs wie
+    # "item_936518eb"). Pro Aufruf gecacht, damit nicht jedes Bild dieselbe
+    # ID neu aus der DB zieht. Unbekannte IDs fallen auf die ID zurueck.
+    from app.models.inventory import get_item
+    _name_cache: Dict[str, str] = {}
+
+    def _item_name(item_id: str) -> str:
+        iid = (item_id or "").strip()
+        if not iid:
+            return ""
+        if iid not in _name_cache:
+            try:
+                it = get_item(iid)
+            except Exception:
+                it = None
+            _name_cache[iid] = (it or {}).get("name", "") or iid
+        return _name_cache[iid]
+
+    out = []
+    for sidecar in expr_dir.glob("*.json"):
+        img = next((sidecar.with_suffix(ext) for ext in _VARIANT_IMG_EXTS
+                    if sidecar.with_suffix(ext).exists()), None)
+        if not img:
+            continue
+        try:
+            meta = json.loads(sidecar.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                meta = {}
+        except Exception:
+            meta = {}
+        try:
+            mtime = sidecar.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        _pieces = meta.get("equipped_pieces", {}) or {}
+        _items = meta.get("equipped_items", []) or []
+        out.append({
+            "file": img.name,
+            "mood": meta.get("mood", "") or "",
+            "activity": meta.get("activity", "") or "",
+            # slot -> Item-NAME (statt roher ID); Liste der Item-Namen.
+            "equipped_pieces": {slot: _item_name(iid)
+                                for slot, iid in _pieces.items()} if isinstance(_pieces, dict) else {},
+            "equipped_items": [_item_name(i) for i in _items] if isinstance(_items, list) else [],
+            "model": meta.get("model", "") or "",
+            "seed": meta.get("seed"),
+            "provider": meta.get("provider", "") or "",
+            "service": meta.get("service", "") or "",
+            "workflow": meta.get("workflow", "") or "",
+            "prompt": meta.get("prompt", "") or "",
+            "created_at": meta.get("created_at", "") or "",
+            "use_count": meta.get("use_count", 0) or 0,
+            "last_used_at": meta.get("last_used_at") or 0.0,
+            "_sort": meta.get("created_at", "") or mtime,
+        })
+    # Neueste zuerst: created_at (ISO-String sortiert lexikografisch korrekt)
+    # bzw. mtime als Fallback. Gemischte Typen -> auf String normalisieren.
+    out.sort(key=lambda e: str(e.pop("_sort")), reverse=True)
+    return out
+
+
+def delete_expression(character_name: str, filename: str) -> bool:
+    """Loescht ein einzelnes Variant-Bild + sein .json-Sidecar.
+
+    Path-Traversal-sicher: ``filename`` muss ein reiner Dateiname im
+    Expressions-Verzeichnis sein. Returns True wenn mindestens eine Datei
+    entfernt wurde.
+    """
+    expr_dir = _get_expressions_dir(character_name)
+    # Nur den Basisnamen zulassen — keine Pfadanteile.
+    if not filename or filename != Path(filename).name:
+        return False
+    img = expr_dir / filename
+    try:
+        # Aufgeloester Pfad MUSS im Expressions-Dir liegen (Symlink-/.. -Schutz).
+        if img.resolve().parent != expr_dir.resolve():
+            return False
+    except OSError:
+        return False
+    removed = False
+    for p in (img, img.with_suffix(".json")):
+        try:
+            if p.exists():
+                p.unlink()
+                removed = True
+        except OSError as e:
+            logger.debug("delete_expression %s failed: %s", p.name, e)
+    if removed:
+        logger.info("Expression geloescht: %s (%s)", filename, character_name)
+    return removed
+
+
 _EXPRESSION_COOLDOWN = 300  # Sekunden zwischen Expression-Generierungen pro Character
 _last_expression_time: Dict[str, float] = {}  # character_name -> timestamp
 

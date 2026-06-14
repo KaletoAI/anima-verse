@@ -288,8 +288,10 @@ async def _run_storyteller_agent(
                           in (cfg.get("enabled_skills") or {}).items() if on}
 
     # ── Sprache ────────────────────────────────────────────────────────
-    from app.models.account import get_user_profile
-    _lang = (get_user_profile().get("system_language", "de") or "de")
+    # Sprache des handelnden Characters (NICHT die User-UI-Sprache) — die
+    # Narration spricht aus der Welt heraus, nicht aus dem Admin-Interface.
+    from app.models.character import get_character_language
+    _lang = (get_character_language(actor) or "de")
     LANG_NAMES = {"de": "German", "en": "English", "fr": "French",
                   "es": "Spanish", "it": "Italian", "ja": "Japanese"}
     lang_name = LANG_NAMES.get(_lang, _lang)

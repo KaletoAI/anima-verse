@@ -28,6 +28,13 @@ from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 
 logger = get_logger("instagram_skill")
 
+# Sprachcode -> englischer Sprachname fuer Caption-/Bildanalyse-Prompts.
+# Frueher binaer ("de"->Deutsch, sonst English) — jede andere Sprache landete
+# faelschlich auf Englisch. Jetzt vollstaendig + konsistent.
+_LANG_NAMES = {"de": "German", "en": "English", "fr": "French",
+               "es": "Spanish", "it": "Italian", "ja": "Japanese",
+               "pt": "Portuguese", "nl": "Dutch", "ru": "Russian"}
+
 # Note: get_location(name) and get_activity(name)
 # are now User-Level (no character_name parameter)
 
@@ -187,7 +194,7 @@ class InstagramSkill(BaseSkill):
         hashtag_count = cfg.get("hashtag_count", 5)
         caption_language = cfg.get("caption_language", "de")
 
-        lang_name = "Deutsch" if caption_language == "de" else "English"
+        lang_name = _LANG_NAMES.get(caption_language, caption_language)
 
         # Build context-aware prompt with location, activity, situation and persons
         context_info = ""
@@ -320,7 +327,7 @@ class InstagramSkill(BaseSkill):
         # Detect language from caption config for this agent
         cfg = self._get_effective_config(character_name)
         caption_language = cfg.get("caption_language", "de")
-        lang_name = "German" if caption_language == "de" else "English"
+        lang_name = _LANG_NAMES.get(caption_language, caption_language)
 
         from app.core.prompt_templates import render_task
         analysis_system, prompt_text = render_task(

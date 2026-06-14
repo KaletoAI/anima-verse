@@ -214,6 +214,14 @@ def _check_comfyui_workflows(config: dict) -> list:
         name = wf.get("name", wid)
         wf_file = wf.get("workflow_file", "")
 
+        # Punkte im Key brechen den Admin-Editor (Felder werden per Dot-Notation
+        # adressiert, ..comfyui_workflows.<KEY>.<feld>, und split('.') zerlegt).
+        # Keys werden beim Load auto-migriert; Namen muss der Admin selbst aendern.
+        if "." in wid:
+            issues.append(_err("image_generation", f"Workflow-Key '{wid}' enthaelt einen Punkt — das bricht den Admin-Editor. Bitte ohne Punkt benennen."))
+        if "." in name:
+            issues.append(_err("image_generation", f"Workflow '{name}': Der Name enthaelt einen Punkt — bitte ohne Punkt benennen (z.B. 'Flux 1 Dev' statt 'Flux.1 Dev')."))
+
         # Workflow file exists?
         if wf_file and not Path(wf_file).exists():
             issues.append(_err("image_generation", f"Workflow '{name}': Datei '{wf_file}' nicht gefunden"))

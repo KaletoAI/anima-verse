@@ -18,6 +18,7 @@ import { SoulEditor } from './SoulEditor'
 import { DailyScheduleGrid } from './DailyScheduleGrid'
 import { ImageOverrides } from './ImageOverrides'
 import { GalleryTab } from './GalleryTab'
+import { ExpressionsTab } from './ExpressionsTab'
 import { SecretsEditor } from './SecretsEditor'
 import { SkillsTab } from './SkillsTab'
 import { WardrobeTab } from './WardrobeTab'
@@ -66,7 +67,7 @@ const MOODS: Array<{ id: string; label: string }> = [
   { id: 'sweating', label: 'sweating' },
 ]
 
-type SubTabId = 'general' | 'soul' | 'behavior' | 'image' | 'gallery' | 'home' | 'locations' | 'skills' | 'wardrobe' | 'secrets' | 'others'
+type SubTabId = 'general' | 'soul' | 'behavior' | 'image' | 'gallery' | 'expressions' | 'home' | 'locations' | 'skills' | 'wardrobe' | 'secrets' | 'others'
 
 interface ScheduleSlot {
   hour: number
@@ -84,6 +85,7 @@ const SUB_TABS: Array<{ id: SubTabId; label: string }> = [
   { id: 'behavior', label: 'Behavior' },
   { id: 'image', label: 'Image' },
   { id: 'gallery', label: 'Gallery' },
+  { id: 'expressions', label: 'Expressions' },
   { id: 'home', label: 'Activity & Home' },
   { id: 'locations', label: 'Locations' },
   { id: 'skills', label: 'Skills' },
@@ -382,22 +384,6 @@ export function CharactersTab() {
     },
     [selected, t, toast],
   )
-
-  // Expression-Cache dieses Characters löschen (regeneriert bei Bedarf neu).
-  const clearExprCache = useCallback(async () => {
-    if (!selected) return
-    setSavingField('clear_expr_cache')
-    try {
-      const r = await apiPost<{ deleted?: number }>(
-        `/characters/${encodeURIComponent(selected)}/clear-expression-cache`, {})
-      const n = typeof r?.deleted === 'number' ? r.deleted : 0
-      toast(t('Expression cache cleared') + ` (${n})`)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      setSavingField('')
-    }
-  }, [selected, t, toast])
 
   // Home/sleep location — saved immediately via /home-location.
   const saveHome = useCallback(
@@ -721,21 +707,6 @@ export function CharactersTab() {
                     />
                   </Field>
                 </div>
-                <div className="ga-form-row">
-                  <Field
-                    label={t('Expression cache')}
-                    hint={t('Delete all cached expression images for this character. They regenerate on demand (now limited via pose variants + LRU).')}
-                  >
-                    <button
-                      type="button"
-                      className="ga-btn ga-btn-sm ga-btn-danger"
-                      disabled={savingField === 'clear_expr_cache'}
-                      onClick={clearExprCache}
-                    >
-                      {t('Clear expression cache')}
-                    </button>
-                  </Field>
-                </div>
                 </FieldSet>
               </div>
             ) : subTab === 'soul' ? (
@@ -997,6 +968,8 @@ export function CharactersTab() {
               <ImageOverrides character={selected} />
             ) : subTab === 'gallery' ? (
               <GalleryTab character={selected} />
+            ) : subTab === 'expressions' ? (
+              <ExpressionsTab character={selected} />
             ) : subTab === 'skills' ? (
               <SkillsTab character={selected} />
             ) : subTab === 'wardrobe' ? (

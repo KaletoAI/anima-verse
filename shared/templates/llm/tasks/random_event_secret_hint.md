@@ -11,6 +11,8 @@ placeholders:
 ## system
 You generate subtle event hints that suggest a secret without revealing it. Output only the event text.
 
+LANGUAGE: Write the event text in {{ language_name }}. Use no other language under any circumstances.
+
 ## user
 Generate a subtle event hint about a secret.
 Location: {{ location_name }}
@@ -21,5 +23,5 @@ Rules:
 - Do NOT reveal the secret directly.
 - Write a 1-2 sentence event that could make {{ observers_list }} suspicious.
 - Subtle clue, ambiguous sign — leaves room for interpretation.
-- Write in {{ language_name }}, max 140 characters.
+- Write the event text in {{ language_name }} — no other language. Max 140 characters.
 - Reply with ONLY the event text, nothing else.

@@ -3089,17 +3089,23 @@ function addArrayItem(path, type) {
     if (type === 'dict') {
         const id = prompt('Workflow ID (e.g. FLUX, QWEN, Z-IMAGE):');
         if (!id) return;
+        // Key punktfrei halten: der Editor adressiert Felder per Dot-Notation
+        // (..comfyui_workflows.<KEY>.<feld>) und split('.') zerbricht an einem
+        // Punkt IM Key. Der Anzeige-Name behaelt die Original-Eingabe.
+        const key = id.replace(/[.\\[\\]]/g, ' ').replace(/\\s+/g, ' ').trim();
+        if (!key) { toast('Ungueltige Workflow ID', 'error'); return; }
+        if (obj[key] !== undefined) { toast('Workflow existiert bereits: ' + key, 'error'); return; }
         // Modell-Type aus ID raten und Defaults uebernehmen.
         const detectedModel = _detectImageModelFromId(id);
         const defaults = WORKFLOW_DEFAULTS[detectedModel] || {};
-        obj[id] = {
+        obj[key] = {
             name: id,
             loras: [{file:'',strength:1},{file:'',strength:1},{file:'',strength:1},{file:'',strength:1}],
             ...(detectedModel ? { image_model: detectedModel } : {}),
             ...defaults,
         };
         // Neuen Eintrag im Master-Detail direkt selektieren (no-op fuer Accordion).
-        SELECTED_ITEM[path] = path + '.' + id;
+        SELECTED_ITEM[path] = path + '.' + key;
     } else {
         if (path === 'llm_routing') {
             obj.push({ name: '', enabled: true, preload_on_startup: false, provider: '', model: '', temperature: 0.7, tasks: [] });
@@ -3159,9 +3165,12 @@ function duplicateItem(path) {
         const arrPath = path.replace(/\\[\\d+\\]$/, '');
         SELECTED_ITEM[arrPath] = arrPath + '[' + (last + 1) + ']';
     } else {
-        // Dict: neuen Key vom User abfragen
-        const newKey = prompt('Neuer Schluessel fuer den Klon:', String(last) + '_copy');
-        if (!newKey) return;
+        // Dict: neuen Key vom User abfragen — punktfrei halten (Dot-Notation
+        // im Editor zerbricht sonst, s. addArrayItem).
+        const rawKey = prompt('Neuer Schluessel fuer den Klon:', String(last) + '_copy');
+        if (!rawKey) return;
+        const newKey = rawKey.replace(/[.\\[\\]]/g, ' ').replace(/\\s+/g, ' ').trim();
+        if (!newKey) { toast('Ungueltiger Schluessel', 'error'); return; }
         if (parent[newKey] !== undefined) { toast('Schluessel existiert bereits: ' + newKey, 'error'); return; }
         parent[newKey] = copy;
         const arrPath = path.replace(/\\.[^.\\[\\]]+$/, '');

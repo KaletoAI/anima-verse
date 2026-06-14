@@ -55,7 +55,7 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     from app.core.outfit_renderer import render_outfit
     from app.models.character import (get_character_appearance,
                                        get_character_current_location,
-                                       get_character_language)
+                                       get_character_language_instruction)
     from app.models.character_template import is_roleplay_character
     from app.models.world import list_locations
     from app.models.account import get_active_character
@@ -95,9 +95,12 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     else:
         header = f"Character: {character_name}.\n"
         warn = ""
+    lang = get_character_language_instruction(character_name)
+    lang_block = (f"\n{lang} Every message, caption or free-text tool argument "
+                  f"you write MUST be in that language.\n") if lang else ""
     return (f"{header}{instr}\n\nAvailable tools: {', '.join(names)}\n"
             f"Decide which tools to call based on the conversation. "
-            f"If no tools are needed, respond with: NONE\n{warn}"
+            f"If no tools are needed, respond with: NONE\n{warn}{lang_block}"
             f"\nKnown locations: {loc_list}\n"
             + (f"What people typically do here: {act_list}\n" if act_list else "")
             + outfit_block)

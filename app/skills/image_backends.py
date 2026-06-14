@@ -672,6 +672,12 @@ class ComfyUIBackend(ImageBackend):
         "_slot_target.png",
     ]
 
+    # ComfyUI-Standard-Platzhalter, den LoadImage/LoadAndResizeImage-Nodes ohne
+    # ausgewaehltes Bild tragen. Existiert auf dem Server nicht -> wie ein leerer
+    # Slot behandeln, damit ungefuellte Referenz-Slots entfernt/deaktiviert
+    # werden (sonst validiert ComfyUI "example.png" und faellt mit HTTP 400).
+    _PLACEHOLDER_IMAGE_NAMES = ("example.png",)
+
     def _upload_image(self, file_path: str, slot_name: Optional[str] = None) -> Optional[str]:
         """Laedt ein Bild zu ComfyUI hoch (fuer LoadImage-Nodes).
 
@@ -753,7 +759,15 @@ class ComfyUIBackend(ImageBackend):
         import re as _re
         base = _os.path.splitext(_os.path.basename(params.get("workflow_file", "") or ""))[0]
         token = _re.sub(r'[^A-Za-z0-9_-]', '_', base).strip('_')
-        return f"{token}_" if token else ""
+        # A/B-Wechsel pro Generierung: zwei aufeinanderfolgende Laeufe nutzen
+        # UNTERSCHIEDLICHE Slot-Dateinamen — so ueberschreibt der zweite nicht den
+        # Input des ersten, und ComfyUI liefert nicht den gecachten alten
+        # Dateinamen. Bleibt bounded (nur Satz A + B, keine Timestamp-Flut).
+        # Aufruf erfolgt unter gehaltenem _slot_lock -> kein Race auf den Zaehler.
+        self._slot_ab = getattr(self, "_slot_ab", 0) + 1
+        ab = "A" if self._slot_ab % 2 else "B"
+        token = f"{token}_{ab}" if token else ab
+        return f"{token}_"
 
     def _reset_reference_slots(self, prefix: str = "") -> None:
         """Ueberschreibt alle Referenzbild-Slots auf dem ComfyUI-Server mit
@@ -842,10 +856,10 @@ class ComfyUIBackend(ImageBackend):
             if node.get("class_type") not in ("LoadImage", "LoadAndResizeImage"):
                 continue
             img_val = node.get("inputs", {}).get("image", "")
-            if not img_val:
+            if not img_val or img_val in self._PLACEHOLDER_IMAGE_NAMES:
                 title = node.get("_meta", {}).get("title", node_id)
                 empty_node_ids.add(node_id)
-                logger.debug(f"Leerer LoadImage-Node '{title}' (Node {node_id}) wird entfernt")
+                logger.debug(f"Leerer/Platzhalter-LoadImage-Node '{title}' (Node {node_id}, image={img_val!r}) wird entfernt")
 
         if not empty_node_ids:
             return
@@ -1218,13 +1232,23 @@ class ComfyUIBackend(ImageBackend):
                             f"safetensors_gguf Switch: boolean={_is_gguf} "
                             f"({'gguf' if _is_gguf else 'safetensors'}) — model={_model_for_loader}")
 
-        # CLIP in input_clip Node setzen (z.B. Flux2 CLIPLoader)
+        # CLIP setzen — single (CLIPLoader, input_clip) oder dual (DualCLIPLoader,
+        # input_dual_cliploader). Bei Dual: clip_name1=clip_name, clip_name2=clip_name2.
         clip_name = params.get("clip_name", "")
+        clip_name2 = params.get("clip_name2", "")
         if clip_name:
-            clip_node = self._find_node_by_title(workflow, "input_clip")
+            clip_node = (self._find_node_by_title(workflow, "input_clip")
+                         or self._find_node_by_title(workflow, "input_dual_cliploader"))
             if clip_node:
-                workflow[clip_node]["inputs"]["clip_name"] = clip_name
-                logger.debug(f"CLIP: {clip_name}")
+                _cin = workflow[clip_node]["inputs"]
+                if "clip_name1" in _cin:  # DualCLIPLoader
+                    _cin["clip_name1"] = clip_name
+                    if clip_name2:
+                        _cin["clip_name2"] = clip_name2
+                    logger.debug(f"CLIP (dual): {clip_name} + {clip_name2}")
+                else:
+                    _cin["clip_name"] = clip_name
+                    logger.debug(f"CLIP: {clip_name}")
 
         # Seed in input_seed Node setzen (PrimitiveInt)
         seed_value = params.get("seed")

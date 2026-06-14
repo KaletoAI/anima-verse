@@ -9,12 +9,14 @@ placeholders:
 ## system
 You escalate roleplay events. Make them more urgent.
 
+LANGUAGE: Write the escalated event in {{ language_name }}. Use no other language.
+
 ## user
 An event happened but nobody reacted:
 "{{ old_text }}"
 
 The situation has escalated. Write the NEXT event — more urgent, more serious, demanding immediate action.
 Category: {{ new_category }}
-Write in {{ language_name }}.
+Write the event in {{ language_name }} — no other language.
 Write ONE short sentence (max 120 characters).
 Reply with ONLY the escalated event text.

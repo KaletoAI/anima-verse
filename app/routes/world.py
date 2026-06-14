@@ -3,7 +3,7 @@ import asyncio
 import io
 import os
 from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from pathlib import Path
 from typing import Any, Dict, Optional
 from app.core.log import get_logger
@@ -770,18 +770,23 @@ def _serve_map_icon(location_name: str, image_type: str, override_field: str):
     raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
 
 
-@router.head("/locations/{location_name}/map-icon")
-@router.get("/locations/{location_name}/map-icon")
-def get_location_map_icon(location_name: str):
-    """Isometrisches Karten-Icon — per-Zelle waehlbar via map_image, sonst erstes 'map'."""
-    return _serve_map_icon(location_name, "map", "map_image")
-
-
 @router.head("/locations/{location_name}/map-icon-2d")
 @router.get("/locations/{location_name}/map-icon-2d")
 def get_location_map_icon_2d(location_name: str):
     """Flaches 2D-Karten-Icon — per-Zelle waehlbar via map_image_2d, sonst erstes 'map_2d'."""
     return _serve_map_icon(location_name, "map_2d", "map_image_2d")
+
+
+# Map-Fit (Nachbar-Inpaint): Generier-Canvas-Groesse (16-GB-tauglich) + Ziel-
+# Kachelgroesse, auf die die ausgeschnittene Mitte hochskaliert wird.
+MAP_FIT_GEN_SIZE = 1024
+MAP_FIT_OUT_TILE = 1024
+# Wenn True: der ComfyUI-Workflow schneidet die Mitte selbst aus UND skaliert
+# hoch (z.B. per Modell-Upscaler — besser als LANCZOS); das Backend speichert
+# das Ergebnis dann unveraendert. False: Backend croppt+skaliert (LANCZOS).
+# Der produktive Flux.1-Fill-Fit-Workflow (output_final = gecroppte, modell-
+# hochskalierte Mitte) macht das selbst -> True.
+MAP_FIT_WORKFLOW_HANDLES_CROP = True
 
 
 def _resolve_map_icon_path(loc: Dict[str, Any], field: str = "map_image_2d",
@@ -803,19 +808,33 @@ def _resolve_map_icon_path(loc: Dict[str, Any], field: str = "map_image_2d",
     return None
 
 
-def _compose_neighbor_canvas(location: Dict[str, Any]):
-    """Phase-1-Nachbar-Kontext: baut einen 3x3-Canvas aus den ORTHOGONALEN
-    Nachbar-2D-Tiles (N/S/O/W, jeweils mit ihrer Anzeige-Rotation) + eine Maske
-    (Mitte weiss = inpainten). Der Inpaint-Workflow fuellt nur die Mitte, sodass
-    die Kanten die Nachbarn fortsetzen. Gibt ``(canvas_png, mask_png, tile)``
-    (Pfade + Kachelgroesse) zurueck — oder ``None`` wenn keine Grid-Position.
+def _save_canvas_with_alpha(canvas, mask, path: str) -> None:
+    """Speichert den Canvas als RGBA mit der Maske im ALPHA-Kanal: Inpaint-Region
+    (Maske weiss) -> transparent (alpha 0), Rest opak. Passt zu ComfyUI-LoadImage
+    (``MASK = 1 - alpha``). Der RGB-Teil bleibt unveraendert (non-breaking)."""
+    from PIL import ImageOps
+    rgba = canvas.convert("RGBA")
+    rgba.putalpha(ImageOps.invert(mask.convert("L")))
+    rgba.save(path)
 
-    Erwartet im ComfyUI-Inpaint-Workflow LoadImage-Nodes mit Titel ``input_image``
-    (Canvas) und ``input_mask`` (Maske) — wie die uebrigen ``input_*``-Slots."""
-    import tempfile
-    from PIL import Image, ImageDraw
+
+def _save_rgba_mask(mask, path: str) -> None:
+    """RGBA-Maskenbild (gleiche Dimension wie der Canvas): weisse Flaeche, die
+    markierte Region (``mask`` weiss) liegt im ALPHA-Kanal als transparent — wie
+    beim Canvas. ComfyUI ``MASK = 1 - alpha`` ergibt genau diese Region (z.B. die
+    Center-Zelle fuer den Crop, unabhaengig von der Inpaint-Maske)."""
+    from PIL import Image, ImageOps
+    rgba = Image.new("RGBA", mask.size, (255, 255, 255, 255))
+    rgba.putalpha(ImageOps.invert(mask.convert("L")))
+    rgba.save(path)
+
+
+def _place_neighbors(location: Dict[str, Any]):
+    """Baut den 3x3-Canvas (grau, Mitte=(1,1)) mit allen 8 Nachbar-Tiles
+    (orthogonal + diagonal, je mit Anzeige-Rotation). Rueckgabe
+    ``(canvas, tile, placed_imgs)`` oder ``None`` (keine Grid-Position/kein Nachbar)."""
+    from PIL import Image
     from app.models.world import list_locations
-
     gx, gy = location.get("grid_x"), location.get("grid_y")
     if gx is None or gy is None:
         return None
@@ -824,17 +843,17 @@ def _compose_neighbor_canvas(location: Dict[str, Any]):
         lx, ly = loc.get("grid_x"), loc.get("grid_y")
         if lx is not None and ly is not None:
             by_pos[(lx, ly)] = loc
-
-    tile = 1024
+    tile = MAP_FIT_GEN_SIZE // 3
     canvas = Image.new("RGB", (tile * 3, tile * 3), (128, 128, 128))
-    # (dx, dy) -> (Spalte, Zeile) im 3x3-Raster (Mitte = 1,1).
-    dirs = {(0, -1): (1, 0), (0, 1): (1, 2), (-1, 0): (0, 1), (1, 0): (2, 1)}
-    placed = 0
+    dirs = {
+        (-1, -1): (0, 0), (0, -1): (1, 0), (1, -1): (2, 0),
+        (-1, 0): (0, 1),                   (1, 0): (2, 1),
+        (-1, 1): (0, 2), (0, 1): (1, 2), (1, 1): (2, 2),
+    }
+    placed_imgs = {}
     for (dx, dy), (col, row) in dirs.items():
         nb = by_pos.get((gx + dx, gy + dy))
-        if not nb:
-            continue
-        p = _resolve_map_icon_path(nb)
+        p = _resolve_map_icon_path(nb) if nb else None
         if not p:
             continue
         try:
@@ -843,54 +862,220 @@ def _compose_neighbor_canvas(location: Dict[str, Any]):
             if rot:
                 img = img.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
             canvas.paste(img, (col * tile, row * tile))
-            placed += 1
+            placed_imgs[(dx, dy)] = img
         except Exception as _e:
             logger.warning("Nachbar-Tile %s nicht ladbar: %s", p, _e)
+    if not placed_imgs:
+        return None
+    return canvas, tile, placed_imgs
+
+
+def _finalize_blend(canvas, inpaint_mask, tile, placed_imgs, crop_empty: bool):
+    """Gemeinsamer Abschluss fuer Fit/Edge. Erzeugt zusaetzlich eine CROP-Maske
+    (immer die Center-Zelle, unabhaengig von der Inpaint-Maske), schneidet bei
+    ``crop_empty`` KOMPLETT leere Aussen-Zeilen/-Spalten weg (auch fuer Edge am
+    Kartenrand) und speichert:
+      - Canvas als RGBA (Inpaint-Maske im Alpha)   -> cpath
+      - Inpaint-Maske als L                        -> mpath
+      - Crop-Maske als RGBA (Center-Zelle im Alpha) -> crop_path
+    Rueckgabe ``(cpath, mpath, tile, crop_path)``."""
+    import tempfile
+    from PIL import Image, ImageDraw
+    crop_mask = Image.new("L", canvas.size, 0)
+    ImageDraw.Draw(crop_mask).rectangle([tile, tile, tile * 2 - 1, tile * 2 - 1], fill=255)
+    if crop_empty:
+        # Aussen-Zeile/-Spalte nur abschneiden, wenn sie KOMPLETT leer ist
+        # (auch keine Ecke) — sonst blieben Ecken-Tiles erhalten.
+        left = 0 if any(d in placed_imgs for d in ((-1, -1), (-1, 0), (-1, 1))) else tile
+        right = tile * 3 if any(d in placed_imgs for d in ((1, -1), (1, 0), (1, 1))) else tile * 2
+        top = 0 if any(d in placed_imgs for d in ((-1, -1), (0, -1), (1, -1))) else tile
+        bottom = tile * 3 if any(d in placed_imgs for d in ((-1, 1), (0, 1), (1, 1))) else tile * 2
+        if (left, top, right, bottom) != (0, 0, tile * 3, tile * 3):
+            canvas = canvas.crop((left, top, right, bottom))
+            inpaint_mask = inpaint_mask.crop((left, top, right, bottom))
+            crop_mask = crop_mask.crop((left, top, right, bottom))
+            logger.info("Map-Blend: leere Kanten abgeschnitten -> Canvas %dx%d",
+                        right - left, bottom - top)
+    cpath = tempfile.NamedTemporaryFile(suffix="_mapblend_canvas.png", delete=False).name
+    mpath = tempfile.NamedTemporaryFile(suffix="_mapblend_mask.png", delete=False).name
+    crop_path = tempfile.NamedTemporaryFile(suffix="_mapblend_crop.png", delete=False).name
+    # Canvas OHNE Alpha-Maske (reines RGB) — die Inpaint-Maske wird separat als
+    # input_mask ausgegeben (Verdacht: Alpha-im-Bild macht Probleme).
+    canvas.convert("RGB").save(cpath)
+    inpaint_mask.save(mpath)
+    _save_rgba_mask(crop_mask, crop_path)
+    return cpath, mpath, tile, crop_path
+
+
+def _compose_neighbor_canvas(location: Dict[str, Any], crop_empty: bool = False):
+    """Fit: 3x3-Canvas (8 Nachbarn, graue Mitte) + Inpaint-Maske = Mitte. Schneidet
+    bei ``crop_empty`` leere Aussenkanten weg. Canvas traegt die Maske im Alpha,
+    zusaetzlich eine separate Crop-Maske (Center-Zelle, RGBA). Rueckgabe
+    ``(canvas, mask, tile, crop_mask)`` (Pfade) oder ``None``."""
+    from PIL import Image, ImageDraw
+    placed = _place_neighbors(location)
     if not placed:
         return None
-    # Maske: nur die Mitte regenerieren.
-    mask = Image.new("L", (tile * 3, tile * 3), 0)
+    canvas, tile, placed_imgs = placed
+    mask = Image.new("L", canvas.size, 0)
     ImageDraw.Draw(mask).rectangle([tile, tile, tile * 2 - 1, tile * 2 - 1], fill=255)
-    cpath = tempfile.NamedTemporaryFile(suffix="_mapfit_canvas.png", delete=False).name
-    mpath = tempfile.NamedTemporaryFile(suffix="_mapfit_mask.png", delete=False).name
-    canvas.save(cpath)
-    mask.save(mpath)
-    return cpath, mpath, tile
+    return _finalize_blend(canvas, mask, tile, placed_imgs, crop_empty)
 
 
-def _neighbor_terrain_hint(location: Dict[str, Any]) -> str:
-    """Auto-Richtungs-Hinweis fuer Map-Fit: leitet aus den 4 orthogonalen Nachbarn
-    ab, welches Terrain zu welcher Seite gehoert — damit das Inpaint nicht nur die
-    auffaelligste Kante fortsetzt. Pro Seite kurzer Begriff (eigener map-Prompt,
-    sonst Beschreibung, sonst Name). Kein User-Tippen noetig."""
+# Edge-Match (Kanten angleichen): Rahmen-Maskenbreite + solider Kern an der Kante.
+MAP_EDGE_BLEND_FRAC = 0.45
+MAP_EDGE_CORE_FRAC = 0.30
+_EDGE_DIRS = (("north", 0, -1), ("south", 0, 1), ("east", 1, 0), ("west", -1, 0))
+
+
+def _analyze_tile_terrain(loc: Dict[str, Any]):
+    """Vision-Terrain-Phrase des AKTUELLEN 2D-Tiles, gecached pro Tile-Dateiname
+    in der Galerie-Meta. ``None`` wenn Vision aus / kein Tile / Fehler. So
+    beschreiben north/south/east/west das echte Bild, nicht die evtl. veraltete
+    Textbeschreibung. Re-Analyse nur bei neuem Tile (anderer Dateiname)."""
+    if str(os.environ.get("MAP_TILE_VISION_ANALYSIS", "")).strip().lower() not in ("1", "true", "yes", "on"):
+        return None
+    tp = _resolve_map_icon_path(loc)
+    if not tp:
+        return None
+    from app.models.world import (_gallery_owner_id, get_gallery_image_metas,
+                                  set_gallery_image_meta)
+    owner_id = _gallery_owner_id(loc.get("id", "")) or loc.get("id", "")
+    fname = tp.name
+    metas = get_gallery_image_metas(owner_id) or {}
+    cached = (metas.get(fname) or {}).get("terrain")
+    if cached:
+        return cached
+    from app.core.dependencies import get_skill_manager
+    skill = get_skill_manager().get_skill("image_generation")
+    if not skill:
+        return None
+    term = skill.describe_map_tile(str(tp))
+    if term:
+        _m = dict(metas.get(fname) or {})
+        _m["terrain"] = term
+        set_gallery_image_meta(owner_id, fname, _m)
+        logger.info("Map-Tile-Vision: %s -> %s", fname, term)
+    return term
+
+
+def _terrain_term(loc: Dict[str, Any]) -> str:
+    """Kurzer Terrain-Begriff eines Tiles: Vision-Analyse des AKTUELLEN Tiles
+    (wenn aktiviert), sonst eigener 2D-Map-Prompt, sonst Beschreibung, sonst Name
+    — erste Aussage, ~80 Zeichen an Wortgrenze, ohne haengende Funktionswoerter."""
+    term = " ".join((_analyze_tile_terrain(loc) or loc.get("image_prompt_map_2d")
+                     or loc.get("description") or loc.get("name") or "").split())
+    for _sep in (".", ";"):
+        if _sep in term:
+            term = term.split(_sep)[0]
+    if len(term) > 80:
+        _head = term[:80]
+        term = _head.rsplit(",", 1)[0] if "," in _head else _head.rsplit(" ", 1)[0]
+    term = term.rstrip(",.; ")
+    _fw = {"with", "on", "in", "a", "an", "the", "of", "and", "to", "at",
+           "for", "from", "by", "as", "or"}
+    _words = term.split()
+    while _words and _words[-1].lower() in _fw:
+        _words.pop()
+    return " ".join(_words)
+
+
+def _neighbor_sides(location: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """{seite: nachbar-loc} fuer die 4 orthogonalen Seiten mit Nachbar, der ein
+    2D-Tile hat (sonst kein Eintrag)."""
     from app.models.world import list_locations
     gx, gy = location.get("grid_x"), location.get("grid_y")
     if gx is None or gy is None:
-        return ""
+        return {}
     by_pos = {(l.get("grid_x"), l.get("grid_y")): l for l in list_locations()
               if l.get("grid_x") is not None and l.get("grid_y") is not None}
-    parts = []
-    for label, dx, dy in (("north", 0, -1), ("south", 0, 1), ("east", 1, 0), ("west", -1, 0)):
+    out: Dict[str, Dict[str, Any]] = {}
+    for side, dx, dy in _EDGE_DIRS:
         nb = by_pos.get((gx + dx, gy + dy))
-        if not nb:
-            continue
-        term = " ".join((nb.get("image_prompt_map_2d") or nb.get("description")
-                          or nb.get("name") or "").split())
-        if len(term) > 64:  # auf Wortgrenze kappen (kein Mitten-im-Wort)
-            term = term[:64].rsplit(" ", 1)[0]
-        term = term.rstrip(",. ")
-        if term:
-            parts.append(f"{label}: {term}")
+        if nb and _resolve_map_icon_path(nb):
+            out[side] = nb
+    return out
+
+
+def _neighbor_terrain_hint(location: Dict[str, Any]) -> str:
+    """Auto-Prompt fuer Map-Fit (graue Mitte NEU erzeugen): ein Tile, das alle
+    Nachbar-Terrains verschmilzt — gleiche Qualitaets-Sprache wie der Edge-Prompt
+    (Farb-/Ton-/Stil-Angleich), nur aufs ganze Tile statt nur die Kanten."""
+    parts = [f"{_terrain_term(nb)} to the {side}" for side, nb in _neighbor_sides(location).items()
+             if _terrain_term(nb)]
     if not parts:
         return ""
-    return "adjacent terrain — " + ", ".join(parts) + "; blend seamlessly toward each side, no hard seams"
+    return ("top-down orthographic map tile blending together the surrounding "
+            "terrain — " + ", ".join(parts) + "; colors, tones and art style merge "
+            "smoothly across the whole tile, cohesive unified palette and lighting, "
+            "no hard seams")
+
+
+def _edge_transition_prompt(location: Dict[str, Any], sides=None) -> str:
+    """Prompt fuer „Kanten angleichen": das bestehende Mittel-Tile, dessen Raender
+    in die gewaehlten Nachbar-Terrains uebergehen (Farbe/Ton/Stil verschmelzen)."""
+    avail = _neighbor_sides(location)
+    use = [s for s in (sides or list(avail)) if s in avail]
+    if not use:
+        return ""
+    parts = [f"{_terrain_term(avail[s])} to the {s}" for s in use if _terrain_term(avail[s])]
+    return ("top-down orthographic map tile; its edges blend into the adjacent "
+            "terrain — " + ", ".join(parts) + "; colors, tones and art style merge "
+            "smoothly across the edges, cohesive unified palette and lighting, no hard seams")
+
+
+def _compose_edge_canvas(location: Dict[str, Any], sides=None):
+    """Wie :func:`_compose_neighbor_canvas` (3x3, echte Nachbarn rundum), ABER die
+    Mitte ist das ECHTE Tile und die Maske ist ein RAHMEN (Distanz-Transform) nur
+    fuer die gewaehlten Seiten mit Nachbar: an der Kante solide, gleichmaessig zur
+    Mitte hin auf 0. Rueckgabe (canvas_path, mask_path, tile) oder None."""
+    import numpy as np
+    from PIL import Image
+    avail = _neighbor_sides(location)
+    use = [s for s in (sides or list(avail)) if s in avail]
+    placed = _place_neighbors(location)
+    if not placed or not use:
+        return None
+    canvas, tile, placed_imgs = placed
+    # Mitte mit dem echten Tile fuellen (statt grau).
+    tp = _resolve_map_icon_path(location)
+    if tp:
+        t_img = Image.open(tp).convert("RGB").resize((tile, tile))
+        rot = int(location.get("map_rotation_2d") or 0)
+        if rot:
+            t_img = t_img.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
+        canvas.paste(t_img, (tile, tile))
+    # Rahmen-Maske via Distanz-Transform.
+    W, H = canvas.size
+    cx0, cy0, cx1, cy1 = tile, tile, 2 * tile, 2 * tile
+    blend = max(1, int(tile * MAP_EDGE_BLEND_FRAC))
+    core = max(0, int(blend * MAP_EDGE_CORE_FRAC))
+    ys, xs = np.mgrid[0:H, 0:W]
+    dist = np.full((H, W), float(blend + 1))
+    if "west" in use:
+        dist = np.minimum(dist, xs - cx0)
+    if "east" in use:
+        dist = np.minimum(dist, (cx1 - 1) - xs)
+    if "north" in use:
+        dist = np.minimum(dist, ys - cy0)
+    if "south" in use:
+        dist = np.minimum(dist, (cy1 - 1) - ys)
+    inside = (xs >= cx0) & (xs < cx1) & (ys >= cy0) & (ys < cy1)
+    dist = np.where(inside, dist, float(blend + 1))
+    f = np.clip((dist - core) / max(1, blend - core), 0.0, 1.0)
+    sm = f * f * (3 - 2 * f)
+    val = np.where(dist < core, 255.0, 255.0 * (1.0 - sm))
+    val = np.where((dist >= blend) | (~inside), 0.0, val)
+    mask = Image.fromarray(val.astype("uint8"), "L")
+    # Auch Edge schneidet leere Kanten weg (z.B. am Kartenrand).
+    return _finalize_blend(canvas, mask, tile, placed_imgs, crop_empty=True)
 
 
 @router.patch("/locations/{location_id}/map-image")
 async def set_location_map_image_route(location_id: str, request: Request) -> Dict[str, Any]:
-    """Setzt das pro Kartenabschnitt angezeigte Bild eines Ortes/Klons.
+    """Setzt das pro Kartenabschnitt angezeigte 2D-Tile eines Ortes/Klons.
 
-    Body: ``{"type": "map"|"map_2d", "file": "<gallery-filename>"|""}``.
+    Body: ``{"type": "map_2d", "file": "<gallery-filename>"|""}``.
     Leerer ``file`` entfernt die Wahl (Fallback auf first-match). Das Bild muss
     in der Galerie des Owners (Template bei Klonen) liegen.
     """
@@ -898,13 +1083,70 @@ async def set_location_map_image_route(location_id: str, request: Request) -> Di
     data = await request.json()
     image_type = (data.get("type") or "").strip()
     filename = (data.get("file") or "").strip()
-    if image_type not in ("map", "map_2d"):
-        raise HTTPException(status_code=400, detail="type muss 'map' oder 'map_2d' sein")
-    field = "map_image" if image_type == "map" else "map_image_2d"
-    loc = set_location_map_image(location_id, field, filename)
+    if image_type != "map_2d":
+        raise HTTPException(status_code=400, detail="type muss 'map_2d' sein")
+    loc = set_location_map_image(location_id, "map_image_2d", filename)
     if not loc:
         raise HTTPException(status_code=404, detail="Ort nicht gefunden")
     return {"status": "success", "location": loc}
+
+
+@router.get("/locations/{location_name}/fit-prompt")
+def get_location_fit_prompt(location_name: str) -> Dict[str, Any]:
+    """Auto-Prompt fuer „Fit to neighbors": der Richtungs-Hinweis aus den 4
+    orthogonalen Nachbarn (north/south/east/west; „blend seamlessly…"). Leerer
+    String, wenn keine Nachbarn/Grid-Position. Der Dialog zeigt ihn als
+    editierbaren Prompt — beim Submit zaehlt er als custom_prompt, der Server
+    haengt ihn dann NICHT erneut an."""
+    loc = resolve_location(location_name)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    return {"prompt": _neighbor_terrain_hint(loc)}
+
+
+@router.get("/locations/{location_name}/fit-canvas")
+def get_location_fit_canvas(location_name: str):
+    """Vorschau des 3×3-Nachbar-Canvas, der bei „Fit to neighbors" als
+    input_reference_image in den Workflow geht (Mitte grau = wird inpaintet).
+    404 wenn keine Nachbarn mit Tile / keine Grid-Position."""
+    loc = resolve_location(location_name)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    comp = _compose_neighbor_canvas(loc)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Keine Nachbarn mit Tile")
+    cpath = comp[0]
+    try:
+        data = Path(cpath).read_bytes()
+    finally:
+        for _p in comp[:2] + comp[3:]:  # cpath, mpath, crop_path (Pfade)
+            try:
+                os.remove(_p)
+            except Exception:
+                pass
+    return Response(content=data, media_type="image/png",
+                    headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/locations/{location_name}/edges")
+def get_location_edges(location_name: str) -> Dict[str, Any]:
+    """Welche der 4 Seiten haben einen Nachbarn mit 2D-Tile (fuer den Kanten-
+    Angleich-Dialog): {sides: {north: "<name>", east: "<name>", ...}}."""
+    loc = resolve_location(location_name)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    return {"sides": {s: nb.get("name", "") for s, nb in _neighbor_sides(loc).items()}}
+
+
+@router.get("/locations/{location_name}/edge-prompt")
+def get_location_edge_prompt(location_name: str, sides: str = Query("")) -> Dict[str, Any]:
+    """Dynamischer Uebergangs-Prompt fuer „Kanten angleichen" — aus den gewaehlten
+    Seiten (kommagetrennt; leer = alle vorhandenen). Im Dialog editierbar."""
+    loc = resolve_location(location_name)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    _sides = [s.strip() for s in sides.split(",") if s.strip()] or None
+    return {"prompt": _edge_transition_prompt(loc, _sides)}
 
 
 @router.patch("/locations/{location_id}/map-rotation")
@@ -1167,8 +1409,9 @@ def get_imagegen_options() -> Dict[str, Any]:
     result = {"options": options}
     # Unabhaengige Config-Prompt-Teile, damit der Dialog sie EDITIERBAR zeigen kann
     # (statt sie serverseitig anzuhaengen): Karten-Icon-Suffixe.
-    result["map_image_prompt_suffix"] = (os.environ.get("MAP_IMAGE_PROMPT_SUFFIX") or "").strip()
     result["map_2d_image_prompt_suffix"] = (os.environ.get("MAP_2D_IMAGE_PROMPT_SUFFIX") or "").strip()
+    # Fit/Match-edges: imagegen-Target (Match-Spec, read-only im Fit-Dialog).
+    result["mapfit_imagegen_default"] = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip()
     if loc_default:
         result["default_location"] = loc_default
     return result
@@ -1353,6 +1596,11 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         model_override = data.get("model_override", "").strip()
         batch_track_id = data.get("_batch_track_id", "")
         fit_neighbors = bool(data.get("fit_neighbors"))
+        # Kanten angleichen: gleicher mapfit-Workflow wie Fit, nur Maske (Rahmen)
+        # + Prompt (Uebergang) unterscheiden sich. edge_sides = gewaehlte Seiten.
+        edge_match = bool(data.get("edge_match"))
+        edge_sides = data.get("edge_sides") or None
+        _map_blend = fit_neighbors or edge_match
 
         location = resolve_location(location_name)
         if not location:
@@ -1377,14 +1625,12 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 description = location.get("image_prompt_day", "").strip()
             elif not description and prompt_type == "night":
                 description = location.get("image_prompt_night", "").strip()
-            elif not description and prompt_type == "map":
-                description = location.get("image_prompt_map", "").strip()
             elif not description and prompt_type == "map_2d":
                 description = location.get("image_prompt_map_2d", "").strip()
             if not description:
                 description = location.get("description", location.get("name", location_name))
 
-            if prompt_type in ("map", "map_2d"):
+            if prompt_type == "map_2d":
                 # Subject only — the admin-managed style suffix is appended below.
                 prompt = description
             else:
@@ -1397,11 +1643,7 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         # Aufrufer ihn NICHT schon im Prompt mitliefert (``settings_applied`` =
         # Dialog hat den editierbaren Suffix bereits eingebaut → kein Doppeln).
         if not data.get("settings_applied"):
-            if prompt_type == "map":
-                _sfx = (os.environ.get("MAP_IMAGE_PROMPT_SUFFIX") or "").strip()
-                if _sfx:
-                    prompt = f"{prompt}, {_sfx}"
-            elif prompt_type == "map_2d":
+            if prompt_type == "map_2d":
                 _sfx = (os.environ.get("MAP_2D_IMAGE_PROMPT_SUFFIX") or "").strip()
                 if _sfx:
                     prompt = f"{prompt}, {_sfx}"
@@ -1418,15 +1660,33 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         if not img_skill:
             raise HTTPException(status_code=503, detail="ImageGeneration Skill nicht verfuegbar")
 
-        # Verfuegbarkeit aller Backends frisch pruefen
-        for b in img_skill.backends:
-            if b.instance_enabled:
-                b.check_availability()
+        # Verfuegbarkeit aller Backends frisch pruefen — Netzwerk-Calls in einen
+        # Thread, sonst blockieren sie die Event-Loop (Watchdog schlaegt an).
+        await asyncio.to_thread(
+            lambda: [b.check_availability()
+                     for b in img_skill.backends if b.instance_enabled])
 
         # Backend-Auswahl: explizit > Workflow > Auto (guenstigster)
         backend = None
         active_wf = None  # via Match aufgeloester Workflow — unten fuer workflow_file wiederverwendet
-        if workflow_name:
+        _fit_file = ""    # roher Fit-Workflow-Pfad (festverdrahtete Funktion)
+        if _map_blend:
+            # Fit UND Kanten-Angleich nutzen das normale ComfyUI-Workflow-Matching
+            # (Default: "workflow:Flux Inpaint*"). Der gewaehlte Workflow muss die
+            # Inpaint-Nodes haben (input_reference_image=Canvas, input_mask,
+            # input_crop, output_final). Model/Clip/Clip2/LoRA werden normal injiziert.
+            _fit_spec = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip()
+            backend, active_wf = img_skill.resolve_imagegen_target(
+                _fit_spec, rotation_prefix="mapfit")
+            if active_wf and not backend:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Kein ComfyUI-Backend fuer Map-Fit-Workflow '{active_wf.name}' verfuegbar")
+            logger.info("Map-Blend (%s): spec=%s -> Workflow=%s Backend=%s",
+                        "edge" if edge_match else "fit", _fit_spec,
+                        active_wf.name if active_wf else "-",
+                        backend.name if backend else "-")
+        elif workflow_name:
             # Match-Konzept: Glob + Verfuegbarkeit statt exaktem Workflow-Namen.
             backend, active_wf = img_skill.resolve_imagegen_target(
                 workflow_name, rotation_prefix="world_image")
@@ -1450,13 +1710,22 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         if not backend:
             raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
 
-        # Fit: automatischer Richtungs-Hinweis aus den Nachbarn (kein Hand-Tippen) —
-        # damit das Inpaint alle Seiten aufnimmt statt nur die auffaelligste.
-        if fit_neighbors:
-            _hint = _neighbor_terrain_hint(location)
-            if _hint:
-                prompt = f"{prompt}, {_hint}"
-                logger.info("Map-Fit Auto-Hinweis: %s", _hint)
+        # Map-Blend: Auto-Prompt nur als Fallback, wenn KEIN Prompt mitkam (der
+        # Dialog liefert ihn bereits editierbar via .../fit-prompt bzw. .../edge-prompt).
+        if _map_blend and not custom_prompt:
+            # Terrain-Analyse macht blockierende LLM-Submits (describe_map_tile,
+            # bis zu einer pro Nachbarseite) → in einen Thread, damit die
+            # Event-Loop frei bleibt. War die Ursache des Watchdog-Blocks.
+            if edge_match:
+                _ep = await asyncio.to_thread(_edge_transition_prompt, location, edge_sides)
+                if _ep:
+                    prompt = _ep
+                    logger.info("Edge-Match Auto-Prompt: %s", _ep)
+            else:
+                _hint = await asyncio.to_thread(_neighbor_terrain_hint, location)
+                if _hint:
+                    prompt = _hint
+                    logger.info("Map-Fit Auto-Prompt: %s", _hint)
 
         full_prompt = prompt
         if backend.prompt_prefix:
@@ -1467,51 +1736,59 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         # runtergerechnet. Day/Night/Description bleiben in voller Aufloesung
         # als Hintergrund-Bilder.
         params: Dict[str, Any] = {"width": _location_image_width(), "height": _location_image_height()}
-        if prompt_type in ("map", "map_2d"):
+        if prompt_type == "map_2d":
             params["image_use_case"] = "map"
-            # Map-Icons quadratisch (1:1, Flux-native 1024) generieren statt im
-            # 16:9 Location-Format — gilt fuer iso (wird danach rembg-gecroppt)
-            # UND flach 2D (fuellt das Tile). Sonst sind die Icons im Querformat.
+            # 2D-Map-Tiles quadratisch (1:1, Flux-native 1024) generieren statt
+            # im 16:9 Location-Format — fuellt das Tile. Sonst Querformat.
             params["width"] = 1024
             params["height"] = 1024
-        # Workflow-File: expliziter Workflow hat Vorrang vor Default-Workflow
-        # Workflow-File: den oben (Match) aufgeloesten active_wf wiederverwenden,
-        # damit Backend-Wahl und workflow_file denselben Workflow nutzen; ohne
-        # expliziten Workflow den Default-Workflow nehmen.
-        if not workflow_name:
-            active_wf = getattr(img_skill, '_default_workflow', None)
-        if active_wf and active_wf.workflow_file:
-            params["workflow_file"] = active_wf.workflow_file
-        # Model-Override (input_unet Workflows brauchen "unet" statt "model")
-        _model_key = "unet" if (active_wf and active_wf.has_input_unet) else "model"
-        if model_override:
-            params[_model_key] = model_override
-        elif active_wf and active_wf.model:
-            params[_model_key] = active_wf.model
-        # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
-        _current_model = params.get(_model_key, "")
-        if _current_model and backend.api_type == "comfyui" and img_skill:
-            _resolved = img_skill.resolve_model_for_backend(
-                _current_model, backend, active_wf.model_type if active_wf else "")
-            if _resolved and _resolved != _current_model:
-                logger.info("Model-Resolve: %s -> %s (Backend: %s)", _current_model, _resolved, backend.name)
-                params[_model_key] = _resolved
-        # CLIP-Pairing fuer Flux2-Workflows
-        if active_wf and active_wf.clip:
-            params["clip_name"] = active_wf.clip
-        # LoRA-Inputs
-        if active_wf and active_wf.has_loras:
-            if loras_override is not None:
-                params["lora_inputs"] = loras_override
-            elif active_wf.default_loras:
-                params["lora_inputs"] = active_wf.default_loras
-
-        # Frischer Seed pro Aufruf — sonst gibt ComfyUI bei identischem
-        # Prompt+Seed den NO_NEW_IMAGE-Sentinel und das Bild wird nie
-        # neu erzeugt (Memory feedback_no_new_image_sentinel).
-        if active_wf and active_wf.has_seed:
+        if _map_blend:
+            # Festverdrahtet: roher Workflow-File direkt, kein active_wf, KEIN
+            # Model/Clip/LoRA-Override — alles ist im File. Frischer Seed gegen
+            # den NO_NEW_IMAGE-Cache-Hit (input_seed-Node im File).
+            if _fit_file:
+                params["workflow_file"] = _fit_file
             import random as _rnd
             params["seed"] = _rnd.randint(1, 2**31 - 1)
+        else:
+            # Workflow-File: expliziter Workflow hat Vorrang vor Default-Workflow
+            # Workflow-File: den oben (Match) aufgeloesten active_wf wiederverwenden,
+            # damit Backend-Wahl und workflow_file denselben Workflow nutzen; ohne
+            # expliziten Workflow den Default-Workflow nehmen.
+            if not workflow_name:
+                active_wf = getattr(img_skill, '_default_workflow', None)
+            if active_wf and active_wf.workflow_file:
+                params["workflow_file"] = active_wf.workflow_file
+            # Model-Override (input_unet Workflows brauchen "unet" statt "model")
+            _model_key = "unet" if (active_wf and active_wf.has_input_unet) else "model"
+            if model_override:
+                params[_model_key] = model_override
+            elif active_wf and active_wf.model:
+                params[_model_key] = active_wf.model
+            # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
+            _current_model = params.get(_model_key, "")
+            if _current_model and backend.api_type == "comfyui" and img_skill:
+                _resolved = img_skill.resolve_model_for_backend(
+                    _current_model, backend, active_wf.model_type if active_wf else "")
+                if _resolved and _resolved != _current_model:
+                    logger.info("Model-Resolve: %s -> %s (Backend: %s)", _current_model, _resolved, backend.name)
+                    params[_model_key] = _resolved
+            # CLIP-Pairing fuer Flux2-Workflows
+            if active_wf and active_wf.clip:
+                params["clip_name"] = active_wf.clip
+            # LoRA-Inputs
+            if active_wf and active_wf.has_loras:
+                if loras_override is not None:
+                    params["lora_inputs"] = loras_override
+                elif active_wf.default_loras:
+                    params["lora_inputs"] = active_wf.default_loras
+
+            # Frischer Seed pro Aufruf — sonst gibt ComfyUI bei identischem
+            # Prompt+Seed den NO_NEW_IMAGE-Sentinel und das Bild wird nie
+            # neu erzeugt (Memory feedback_no_new_image_sentinel).
+            if active_wf and active_wf.has_seed:
+                import random as _rnd
+                params["seed"] = _rnd.randint(1, 2**31 - 1)
 
         # Selbst-Referenz: das bestehende (Karten-)Bild als Referenz in Slot 1 —
         # fuer „Regenerate mit aktuellem Bild" (z.B. damit 2D-Tiles besser
@@ -1520,23 +1797,53 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 and active_wf and active_wf.ref_slot_count):
             _ref_name = (data.get("reference_image") or "").strip()
             if _ref_name and "/" not in _ref_name and ".." not in _ref_name:
-                from app.models.world import get_gallery_dir
+                # get_gallery_dir ist modulweit importiert (oben). KEIN lokaler
+                # Import hier — der wuerde get_gallery_dir funktionsweit zur
+                # lokalen Variable machen und den Save-Pfad (unten) mit
+                # UnboundLocalError sprengen, sobald dieser Block nicht laeuft.
                 _ref_path = get_gallery_dir(location_name) / _ref_name
                 if _ref_path.exists():
                     params["reference_images"] = {"input_reference_image_1": str(_ref_path)}
                     logger.info("Map-Selbst-Referenz in Slot 1: %s", _ref_name)
 
-        # Nachbar-Kontext-Inpainting (Phase 1): 3x3-Canvas + Maske bauen und als
-        # input_image/input_mask injizieren; nach der Generierung die Mitte croppen.
+        # Nachbar-Kontext-Inpainting: 3x3-Canvas + Maske bauen und als
+        # input_reference_image/input_mask injizieren. Fit = graue Mitte (ganzes
+        # Tile neu); Edge = echtes Tile + Rahmen-Maske der gewaehlten Seiten.
         _fit_comp = None
-        if fit_neighbors:
-            _fit_comp = _compose_neighbor_canvas(location)
+        if _map_blend:
+            _fit_comp = (_compose_edge_canvas(location, edge_sides) if edge_match
+                         else _compose_neighbor_canvas(location, crop_empty=True))
             if _fit_comp:
-                _cpath, _mpath, _ctile = _fit_comp
-                params["reference_images"] = {"input_image": _cpath, "input_mask": _mpath}
-                params["width"] = _ctile * 3
-                params["height"] = _ctile * 3
-                logger.info("Map-Fit: 3x3-Canvas %dpx + Maske injiziert", _ctile * 3)
+                _cpath, _mpath, _ctile, _crop = _fit_comp
+                # Canvas (reines RGB) -> input_reference_image, Inpaint-Maske
+                # SEPARAT -> input_mask, Crop-Maske (Center-Zelle) -> input_crop.
+                params["reference_images"] = {
+                    "input_reference_image": _cpath, "input_mask": _mpath,
+                    "input_crop": _crop}
+                params["width"] = MAP_FIT_OUT_TILE
+                params["height"] = MAP_FIT_OUT_TILE
+                logger.info("Map-Blend: Canvas + Inpaint-/Crop-Maske injiziert, Ziel %dpx",
+                            MAP_FIT_OUT_TILE)
+                # Debug: das, was REAL in den Workflow geht, zum Inspizieren ablegen
+                # (letzter Lauf). So vergleichbar mit dem manuellen ComfyUI-Test.
+                try:
+                    import shutil as _sh
+                    from app.core.paths import get_storage_dir as _gsd
+                    _dbg = _gsd() / "mapblend_debug"
+                    _dbg.mkdir(parents=True, exist_ok=True)
+                    _sh.copy(_cpath, _dbg / "last_canvas.png")
+                    _sh.copy(_mpath, _dbg / "last_mask.png")
+                    _sh.copy(_crop, _dbg / "last_crop_mask.png")
+                    (_dbg / "last_prompt.txt").write_text(
+                        f"mode: {'edge' if edge_match else 'fit'}\n"
+                        f"location: {location.get('name', '')} ({location.get('id', '')})\n"
+                        f"edge_sides: {edge_sides}\n\n"
+                        f"PROMPT:\n{full_prompt}\n\nNEGATIVE:\n{negative}\n",
+                        encoding="utf-8")
+                    logger.info("Map-Blend Debug (%s): %s",
+                                "edge" if edge_match else "fit", _dbg)
+                except Exception as _de:
+                    logger.debug("Map-Blend Debug-Copy fehlgeschlagen: %s", _de)
             else:
                 logger.info("Map-Fit: keine Nachbarn/Grid-Position — normaler Lauf")
 
@@ -1582,8 +1889,9 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
 
             # Map-Fit: aus dem inpainteten 3x3-Ergebnis die Mitte (das neue Tile)
-            # herausschneiden — proportional, falls das Backend skaliert hat.
-            if _fit_comp:
+            # herausschneiden + hochskalieren — ausser der Workflow macht das selbst
+            # (MAP_FIT_WORKFLOW_HANDLES_CROP, z.B. mit Modell-Upscaler).
+            if _fit_comp and not MAP_FIT_WORKFLOW_HANDLES_CROP:
                 try:
                     import io as _io
                     from PIL import Image as _Img
@@ -1591,10 +1899,13 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                     _w, _h = _full.size
                     _tx, _ty = _w // 3, _h // 3
                     _crop = _full.crop((_tx, _ty, _tx * 2, _ty * 2))
+                    # Mitte auf Ziel-Kachelgroesse hochskalieren (Gen lief kleiner).
+                    if _crop.size != (MAP_FIT_OUT_TILE, MAP_FIT_OUT_TILE):
+                        _crop = _crop.resize((MAP_FIT_OUT_TILE, MAP_FIT_OUT_TILE), _Img.LANCZOS)
                     _buf = _io.BytesIO()
                     _crop.save(_buf, format="PNG")
                     images = [_buf.getvalue()]
-                    logger.info("Map-Fit: Mitte %dx%d herausgeschnitten", _tx, _ty)
+                    logger.info("Map-Fit: Mitte %dx%d -> %dpx", _tx, _ty, MAP_FIT_OUT_TILE)
                 except Exception as _ce:
                     logger.warning("Map-Fit Crop fehlgeschlagen: %s", _ce)
                 finally:
@@ -1603,6 +1914,23 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                             os.remove(_tmp)
                         except Exception:
                             pass
+
+            # Map-Blend: Canvas wird in DISPLAY-Orientierung gebaut (Center + Nachbarn
+            # je um ihre map_rotation_2d gedreht). Das Ergebnis-Tile muss daher VOR
+            # dem Speichern um genau diese Drehung ZURUECK nach Norden, sonst dreht
+            # die Anzeige (map_rotation_2d) es ein zweites Mal -> doppelt verdreht.
+            _rot = int(location.get("map_rotation_2d") or 0) if _map_blend else 0
+            if _rot:
+                try:
+                    import io as _io3
+                    from PIL import Image as _Img3
+                    _im = _Img3.open(_io3.BytesIO(images[0])).rotate(_rot, expand=False)
+                    _b = _io3.BytesIO()
+                    _im.save(_b, format="PNG")
+                    images = [_b.getvalue()]
+                    logger.info("Map-Blend: Ergebnis um %d° nach Norden zurueckgedreht", _rot)
+                except Exception as _re:
+                    logger.warning("Map-Blend Rueckdrehung fehlgeschlagen: %s", _re)
 
             loc_id = location.get("id", location_name)
             gallery_dir = get_gallery_dir(loc_id)
@@ -1638,34 +1966,9 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 "model": _model_used,
             })
 
-            # Bild-Typ setzen wenn prompt_type angegeben (day/night/map/map_2d)
-            if prompt_type in ("day", "night", "map", "map_2d"):
+            # Bild-Typ setzen wenn prompt_type angegeben (day/night/map_2d)
+            if prompt_type in ("day", "night", "map_2d"):
                 set_gallery_image_type(loc_id, image_name, prompt_type)
-
-            # Karten-Bilder: Hintergrund entfernen (transparent)
-            if prompt_type == "map":
-                try:
-                    import asyncio as _asyncio
-                    from app.models.character import postprocess_outfit_image
-                    # rembg/ONNX-Inferenz ist CPU-bound → im Threadpool, sonst
-                    # blockiert der Event-Loop ~1s pro Map-Bild.
-                    processed = await _asyncio.to_thread(
-                        postprocess_outfit_image, image_path)
-                    if processed != image_path:
-                        # Dateiname hat sich geaendert (.png)
-                        new_name = processed.name
-                        if new_name != image_name:
-                            # Metadaten unter neuem Namen uebertragen
-                            save_gallery_prompt(loc_id, new_name, full_prompt)
-                            set_gallery_image_type(loc_id, new_name, "map")
-                            toggle_background_image(loc_id, new_name)
-                            # Alte Metadaten entfernen
-                            remove_background_image(loc_id, image_name)
-                            remove_gallery_image_type(loc_id, image_name)
-                            image_name = new_name
-                    logger.info("Karten-Bild Hintergrund entfernt: %s", image_name)
-                except Exception as _rembg_err:
-                    logger.warning("Hintergrundentfernung fuer Karten-Bild fehlgeschlagen: %s", _rembg_err)
 
             _tq.track_finish(_track_id)
             _gen_duration = time.time() - _gen_start
@@ -1728,8 +2031,33 @@ async def delete_gallery_image(
     remove_background_image(loc_id, image_name)
     remove_gallery_image_room(loc_id, image_name)
     remove_gallery_image_type(loc_id, image_name)
+    # Haengende map_image/map_image_2d-Wahl auf dieses Bild aus allen Zellen loesen
+    # (sonst zeigt die Zelle danach das erste statt des gewollten Tiles).
+    from app.models.world import clear_map_image_references
+    clear_map_image_references(image_name)
 
     return {"status": "success", "deleted": image_name}
+
+
+@router.post("/locations/{location_name}/gallery/{image_name}/move")
+async def move_gallery_image_route(
+    location_name: str, image_name: str, request: Request) -> Dict[str, Any]:
+    """Verschiebt ein Galerie-Bild in eine andere Location (Datei + Prompt/Typ/Meta)."""
+    if ".." in image_name or "/" in image_name:
+        raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
+    body = await request.json()
+    target = (body.get("target") or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="target (Ziel-Location) fehlt")
+    if not resolve_location(location_name):
+        raise HTTPException(status_code=404, detail="Quell-Ort nicht gefunden")
+    if not resolve_location(target):
+        raise HTTPException(status_code=404, detail="Ziel-Ort nicht gefunden")
+    from app.models.world import move_gallery_image
+    new_name = move_gallery_image(location_name, target, image_name)
+    if not new_name:
+        raise HTTPException(status_code=404, detail="Bild nicht gefunden / Verschieben fehlgeschlagen")
+    return {"status": "success", "image": new_name, "target": target}
 
 
 @router.post("/locations/{location_name}/gallery/{image_name}/toggle-background")
@@ -1791,8 +2119,8 @@ async def set_gallery_image_type_route(
     image_type = body.get("type", "").strip()
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-    if image_type and image_type not in ("day", "night", "map"):
-        raise HTTPException(status_code=400, detail="Typ muss 'day', 'night', 'map' oder leer sein")
+    if image_type and image_type not in ("day", "night", "map_2d"):
+        raise HTTPException(status_code=400, detail="Typ muss 'day', 'night', 'map_2d' oder leer sein")
 
     loc = resolve_location(location_name)
     loc_id = loc["id"] if loc and loc.get("id") else location_name
@@ -1906,10 +2234,11 @@ async def generate_time_variant(
         if not img_skill:
             raise HTTPException(status_code=503, detail="ImageGeneration Skill nicht verfuegbar")
 
-        # Verfuegbarkeit pruefen
-        for b in img_skill.backends:
-            if b.instance_enabled:
-                b.check_availability()
+        # Verfuegbarkeit pruefen — Netzwerk-Calls in einen Thread, sonst
+        # blockieren sie die Event-Loop (Watchdog schlaegt an).
+        await asyncio.to_thread(
+            lambda: [b.check_availability()
+                     for b in img_skill.backends if b.instance_enabled])
 
         # Backend-Auswahl: explizit > Workflow > Qwen-faehig > Auto
         backend = None

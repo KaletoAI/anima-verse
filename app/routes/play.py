@@ -899,6 +899,7 @@ async def play_worldmap(user=Depends(get_current_user)):
             "passable": bool(loc.get("passable")),
             "template_location_id": (loc.get("template_location_id") or ""),
             "map_z_offset": int(loc.get("map_z_offset") or 0),
+            "map_rotation_2d": int(loc.get("map_rotation_2d") or 0),
         })
 
     characters = []

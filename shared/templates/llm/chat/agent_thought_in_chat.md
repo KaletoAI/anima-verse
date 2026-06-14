@@ -84,6 +84,10 @@ Current situation:
 
 {{ tools_hint }}
 {% endif %}
+{% if lang_instruction %}
+
+{{ lang_instruction }} Any spoken words, messages or narration you produce must be in that language.
+{% endif %}
 
 You're mid-conversation. Default action: SKIP.
 Only act if you have a concrete, conversation-relevant reason — e.g.

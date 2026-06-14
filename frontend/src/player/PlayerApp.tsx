@@ -23,7 +23,6 @@ import { ScenesRecap } from './ScenesRecap'
 import { MovePad } from './MovePad'
 import { EnvironmentPanel } from './EnvironmentPanel'
 import { MapPanel } from './MapPanel'
-import { IsoMapPanel } from './IsoMapPanel'
 import { TaskPanel } from './TaskPanel'
 import { LayoutsPanel } from './LayoutsPanel'
 import { SelfPanel } from './SelfPanel'
@@ -56,7 +55,6 @@ const DEFAULT_LAYOUT: Layout[] = [
   { i: 'gallery', x: 0, y: 54, w: 20, h: 14, minW: 8, minH: 6 },
   { i: 'instagram', x: 20, y: 54, w: 21, h: 18, minW: 10, minH: 8 },
   { i: 'phone', x: 41, y: 38, w: 14, h: 22, minW: 10, minH: 12 },
-  { i: 'isomap', x: 0, y: 72, w: 24, h: 18, minW: 8, minH: 8 },
   { i: 'tasks', x: 24, y: 27, w: 17, h: 10, minW: 6, minH: 4 },
   { i: 'layouts', x: 24, y: 37, w: 17, h: 14, minW: 6, minH: 6 },
 ]
@@ -72,7 +70,6 @@ const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | '
   { id: 'env', label: 'Surroundings', icon: 'surroundings' },
   { id: 'map', label: 'Move', icon: 'move' },
   { id: 'worldmap', label: 'Map', icon: 'worldmap' },
-  { id: 'isomap', label: '2.5D Map', icon: 'isomap' },
   { id: 'self', label: 'Self', icon: 'self' },
   { id: 'others', label: 'Others', icon: 'others' },
   { id: 'belongings', label: 'Inventory', icon: 'inventory' },
@@ -533,7 +530,7 @@ export function PlayerApp() {
 
   // Z-Stacking für überlappende Fenster: zuletzt angefasstes Panel steht zuletzt
   // im DOM → vorderstes. Klick/Drag auf ein Panel holt es nach vorn.
-  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'isomap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'layouts'])
+  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'layouts'])
   const bringToFront = useCallback((id: string) => {
     setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
   }, [])
@@ -731,15 +728,6 @@ export function PlayerApp() {
     </div>
   )
 
-  const isoMapPanel = (
-    <div key="isomap" className="player-panel" style={{ zIndex: zOf('isomap') }} onMouseDownCapture={() => bringToFront('isomap')}>
-      <div className="player-panel-head">{headIcon('isomap')}{t('2.5D Map')}{headerControls('isomap', true)}</div>
-      <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden', padding: 4 }}>
-        <IsoMapPanel currentLocationId={data?.location_id || ''} />
-      </div>
-    </div>
-  )
-
   const tasksPanel = (
     <div key="tasks" className="player-panel" style={{ zIndex: zOf('tasks') }} onMouseDownCapture={() => bringToFront('tasks')}>
       <div className="player-panel-head">{headIcon('tasks')}{t('Tasks')}{headerControls('tasks', true)}</div>
@@ -813,7 +801,7 @@ export function PlayerApp() {
   )
 
   const byId: Record<string, ReactNode> = {
-    scene: scenePanel, env: envPanel, map: mapPanel, worldmap: worldMapPanel, isomap: isoMapPanel,
+    scene: scenePanel, env: envPanel, map: mapPanel, worldmap: worldMapPanel,
     tasks: tasksPanel, self: selfPanel, others: othersPanel, belongings: belongingsPanel,
     journal: journalPanel, gallery: galleryPanel, instagram: instagramPanel, phone: phonePanel,
   }

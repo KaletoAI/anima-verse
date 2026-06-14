@@ -255,6 +255,70 @@
             "strength": 1
           }
         ]
+      },
+      "Flux Inpaint": {
+        "name": "Flux Inpaint",
+        "image_model": "flux",
+        "filter": "Flux Inpaint*",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/img2img_workflow_flux1_inpaint_api.json",
+        "model": "Flux1-DevFill-Onereward_fp8.safetensors",
+        "clip": "clip_l.safetensors",
+        "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        "prompt_style": "top-down orthographic map tile, ",
+        "prompt_negative": "people, characters, text, watermark, signature, logo, blurry, low quality, harsh seams, hard edges",
+        "prompt_instruction": "Write a short natural-language description of the terrain to blend. Describe colors, tones and how the surrounding terrain merges together. No characters or people.",
+        "loras": [
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          }
+        ]
+      },
+      "Flux 1 Dev": {
+        "name": "Flux 1 Dev",
+        "image_model": "flux",
+        "filter": "Flux*1*",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/text2img_workflow_flux1_api.json",
+        "model": "flux1-dev.safetensors",
+        "clip": "clip_l.safetensors",
+        "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        "prompt_style": "a candid photograph taken with a 35mm lens, natural light, skin with visible pores and texture, detailed anatomy, 8k, high detail, ",
+        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
+        "prompt_instruction": "Write a natural-language descriptive prompt for a Flux.1 dev model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.",
+        "loras": [
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          }
+        ]
       }
     }
   },

@@ -1101,6 +1101,24 @@ def set_location_map_image(location_id: str, field: str, filename: str) -> Optio
     return None
 
 
+def clear_map_image_references(image_name: str) -> int:
+    """Entfernt haengende ``map_image``/``map_image_2d``-Pointer auf ein
+    (geloeschtes) Galerie-Bild aus ALLEN Locations/Klonen — sonst zeigt die Zelle
+    danach das erste statt des gewollten Tiles. Rueckgabe: Anzahl bereinigter Pointer."""
+    if not image_name:
+        return 0
+    data = _load_world_data()
+    n = 0
+    for loc in data.get("locations", []):
+        for field in ("map_image", "map_image_2d"):
+            if loc.get(field) == image_name:
+                loc.pop(field, None)
+                n += 1
+    if n:
+        _save_world_data(data)
+    return n
+
+
 def set_location_map_rotation(location_id: str, rotation: int) -> Optional[Dict[str, Any]]:
     """Setzt die 90°-Drehung des 2D-Karten-Icons eines Ortes/Klons.
 
@@ -1152,22 +1170,29 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
     touched_locs = 0
     touched_meta_files = 0
 
-    # DB-Eintraege: background_images pruunen.
+    # DB-Eintraege: background_images + tote map_image/map_image_2d-Wahl pruunen.
+    pruned_mapchoice = 0
     for loc in locations:
         loc_id = loc.get("id") or ""
         if not loc_id:
             continue
-        bgs = loc.get("background_images", [])
-        if not bgs:
-            continue
         owner_id = (loc.get("template_location_id") or "").strip() or loc_id
         gallery_dir = gallery_root / owner_id
-        valid = [img for img in bgs if (gallery_dir / img).exists()]
-        if len(valid) != len(bgs):
-            removed = len(bgs) - len(valid)
-            loc["background_images"] = valid
-            pruned_bgs += removed
-            touched_locs += 1
+        bgs = loc.get("background_images", [])
+        if bgs:
+            valid = [img for img in bgs if (gallery_dir / img).exists()]
+            if len(valid) != len(bgs):
+                loc["background_images"] = valid
+                pruned_bgs += len(bgs) - len(valid)
+                touched_locs += 1
+        # Haengende Tile-Wahl (zeigt auf geloeschte Datei) entfernen -> sonst
+        # zeigt die Zelle / Edge-Match das erste statt des gewollten Tiles.
+        for field in ("map_image", "map_image_2d"):
+            choice = (loc.get(field) or "").strip()
+            if choice and not (gallery_dir / choice).exists():
+                loc.pop(field, None)
+                pruned_mapchoice += 1
+                touched_locs += 1
 
     if touched_locs:
         _save_world_data(data)
@@ -1227,13 +1252,14 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
                         touched_meta_files += 1
 
     logger.info(
-        "cleanup_orphan_backgrounds: pruned_bgs=%d (locations=%d), pruned_meta=%d (files=%d)",
-        pruned_bgs, touched_locs, pruned_meta, touched_meta_files)
+        "cleanup_orphan_backgrounds: pruned_bgs=%d (locations=%d), pruned_meta=%d (files=%d), pruned_mapchoice=%d",
+        pruned_bgs, touched_locs, pruned_meta, touched_meta_files, pruned_mapchoice)
     return {
         "pruned_bgs": pruned_bgs,
         "touched_locations": touched_locs,
         "pruned_meta": pruned_meta,
         "touched_meta_files": touched_meta_files,
+        "pruned_mapchoice": pruned_mapchoice,
     }
 
 
@@ -1891,6 +1917,77 @@ def get_gallery_image_metas(location_name: str) -> Dict[str, dict]:
     """Gibt alle Bild-Metadaten zurueck: {image_name: {backend: ..., model: ...}}."""
     meta = _load_gallery_meta(location_name)
     return meta.get("image_metas", {})
+
+
+def move_gallery_image(src_location: str, target_location: str, image_name: str) -> Optional[str]:
+    """Verschiebt ein Galerie-Bild von einer Location in eine andere.
+
+    Die Datei wandert in die Ziel-Galerie (Owner-aufgeloest); Prompt, Typ und
+    Erzeugungs-Metadaten werden uebertragen. Raum-Zuordnung + Hintergrund-Flag
+    der Quelle werden geloescht (gelten nur dort). Rueckgabe: der (ggf.
+    kollisionssicher umbenannte) Ziel-Dateiname, sonst None.
+    """
+    import shutil
+    if not image_name or "/" in image_name or ".." in image_name:
+        return None
+    src = resolve_location(src_location)
+    target = resolve_location(target_location)
+    if not src or not target:
+        return None
+    src_id = src.get("id", src_location)
+    target_id = target.get("id", target_location)
+    src_dir = get_gallery_dir(src_id)
+    target_dir = get_gallery_dir(target_id)
+    src_file = src_dir / image_name
+    if not src_file.exists():
+        return None
+
+    # Metadaten der Quelle einsammeln (vor dem Verschieben).
+    prompt = get_all_gallery_prompts(src_id).get(image_name, "")
+    itype = get_gallery_image_types(src_id).get(image_name, "")
+    imeta = get_gallery_image_metas(src_id).get(image_name, {})
+
+    # Quell-spezifische Zuordnungen loesen (gelten nur in der Quell-Location).
+    remove_background_image(src_id, image_name)
+    remove_gallery_image_room(src_id, image_name)
+
+    # Geteilte Galerie (Klone desselben Templates) -> Datei bleibt, nichts zu tun.
+    if src_dir.resolve() == target_dir.resolve():
+        return image_name
+
+    # Datei kollisionssicher verschieben.
+    target_dir.mkdir(parents=True, exist_ok=True)
+    new_name = image_name
+    if (target_dir / new_name).exists():
+        import time as _t
+        new_name = f"{Path(image_name).stem}_{int(_t.time())}{Path(image_name).suffix or '.png'}"
+    shutil.move(str(src_file), str(target_dir / new_name))
+
+    # Metadaten in die Ziel-Galerie uebertragen.
+    if prompt:
+        save_gallery_prompt(target_id, new_name, prompt)
+    if itype:
+        set_gallery_image_type(target_id, new_name, itype)
+    if imeta:
+        set_gallery_image_meta(target_id, new_name, imeta)
+
+    # Quell-Metadaten aufraeumen (Typ + Prompt + Meta-Eintrag).
+    remove_gallery_image_type(src_id, image_name)
+    _pf = src_dir / "prompts.json"
+    if _pf.exists():
+        try:
+            _pp = json.loads(_pf.read_text(encoding="utf-8"))
+            if _pp.pop(image_name, None) is not None:
+                _pf.write_text(json.dumps(_pp, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+    _m = _load_gallery_meta(src_id)
+    _im = _m.get("image_metas", {})
+    if _im.pop(image_name, None) is not None:
+        _m["image_metas"] = _im
+        _save_gallery_meta(src_id, _m)
+
+    return new_name
 
 
 def list_all_activities() -> List[Dict[str, str]]:

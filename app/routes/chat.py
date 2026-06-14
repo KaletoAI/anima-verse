@@ -1589,6 +1589,11 @@ async def chat(request: Request) -> StreamingResponse:
             _partner_header = f"Character: {current_agent}.\n"
             _partner_talk_warn = ""
 
+        from app.models.character import get_character_language_instruction
+        _tool_lang = get_character_language_instruction(current_agent)
+        _lang_block = (f"\n{_tool_lang} Every message, caption or free-text tool "
+                       f"argument you write MUST be in that language.\n") if _tool_lang else ""
+
         tool_system_content = (
             f"{_partner_header}"
             f"{tool_instr_block}\n\n"
@@ -1596,6 +1601,7 @@ async def chat(request: Request) -> StreamingResponse:
             f"Decide which tools to call based on the conversation. "
             f"If no tools are needed, respond with: NONE\n"
             f"{_partner_talk_warn}"
+            f"{_lang_block}"
             f"\nKnown locations: {_tool_loc_list}\n"
             + (f"What people typically do here: {_tool_act_list}" if _tool_act_list else "")
             + f"{_outfit_block}"

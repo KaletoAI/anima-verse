@@ -49,5 +49,5 @@ Location: {{ location_description }}
 {%- if blacklist_block %}{{ blacklist_block }}
 {% endif %}
 
-Write the event text in {{ language_name }} from a neutral narrator perspective. The image_prompt is always English.
+Write the "text" field entirely in {{ language_name }} from a neutral narrator perspective — use no other language for it. Only the "image_prompt" field is always English.
 Reply with ONLY the JSON object, nothing else.

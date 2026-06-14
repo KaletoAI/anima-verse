@@ -34,7 +34,8 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     when it has content. The template renders nothing for empty blocks.
     """
     from app.models.character import (
-        get_character_profile, get_character_current_location)
+        get_character_profile, get_character_current_location,
+        get_character_language_instruction)
     from app.models.world import get_location_name
 
     profile = get_character_profile(character_name)
@@ -44,6 +45,9 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
 
     ctx: Dict[str, Any] = {
         "character_name": character_name,
+        # Sprach-Instruktion des Characters (z.B. "Always respond in German.")
+        # — sonst erzeugt der Thought-Turn englische Spontan-Aeusserungen.
+        "lang_instruction": get_character_language_instruction(character_name),
         "personality": (profile.get("character_personality", "") or "").strip(),
         "location_name": location_name,
         "activity": ("Sleeping" if profile.get("is_sleeping")

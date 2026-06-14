@@ -80,6 +80,49 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "prompt_instruction": "Write a natural-language descriptive prompt for a Flux 2 Klein model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
+    "Flux 1 Dev": {
+        "name": "Flux 1 Dev",
+        "image_model": "flux",
+        "filter": "Flux*1*",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/text2img_workflow_flux1_api.json",
+        "model": "flux1-dev.safetensors",
+        "clip": "clip_l.safetensors",
+        "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        "prompt_style": "a candid photograph taken with a 35mm lens, natural light, skin with visible pores and texture, detailed anatomy, 8k, high detail, ",
+        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
+        "prompt_instruction": "Write a natural-language descriptive prompt for a Flux.1 dev model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.",
+        "loras": [{"file": "", "strength": 1} for _ in range(4)],
+    },
+    "Flux Inpaint": {
+        "name": "Flux Inpaint",
+        "image_model": "flux",
+        "filter": "Flux Inpaint*",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/img2img_workflow_flux1_inpaint_api.json",
+        "model": "Flux1-DevFill-Onereward_fp8.safetensors",
+        "clip": "clip_l.safetensors",
+        "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        "prompt_style": "top-down orthographic map tile, ",
+        "prompt_negative": "people, characters, text, watermark, signature, logo, blurry, low quality, harsh seams, hard edges",
+        "prompt_instruction": "Write a short natural-language description of the terrain to blend. Describe colors, tones and how the surrounding terrain merges together. No characters or people.",
+        "loras": [{"file": "", "strength": 1} for _ in range(4)],
+    },
+    "SD15": {
+        "name": "SD15",
+        "image_model": "z_image",
+        "filter": "SD15*",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/text2img_workflow_sd15_api.json",
+        "model": "SD15-Cyberrealistic-fp32.safetensors",
+        "prompt_style": "RAW photo, amateur photograph, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail, \n",
+        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
+        "prompt_instruction": "Write a tag-based prompt with comma-separated keywords. Use quality tags like \"masterpiece, best quality\". Describe pose, lighting, and setting as short tags.",
+        "loras": [{"file": "", "strength": 1} for _ in range(4)],
+    },
 }
 
 
@@ -115,6 +158,47 @@ def _seed_default_marketplace_catalogs(config: dict, config_path: Path) -> bool:
         return False
 
 
+def _fix_dotted_workflow_keys(config: dict, config_path: Path) -> bool:
+    """Repariert ComfyUI-Workflow-Keys, die einen Punkt enthalten.
+
+    Der Admin-Settings-Editor adressiert Felder per Dot-Notation
+    (image_generation.comfyui_workflows.<KEY>.<feld>) und zerlegt sie mit
+    split('.'). Ein Punkt IM Key (z.B. "Flux.1 Dev") zersplittert den Pfad,
+    wodurch der Workflow nicht mehr editier-/speicherbar ist. Der Anzeige-Name
+    darf den Punkt behalten — nur der Dict-Key wird punktfrei gemacht.
+    Idempotent. Returns True wenn etwas umbenannt wurde.
+    """
+    ig = config.get("image_generation", {})
+    workflows = ig.get("comfyui_workflows", {})
+    if not isinstance(workflows, dict):
+        return False
+    dotted = [k for k in workflows if "." in k or "[" in k or "]" in k]
+    if not dotted:
+        return False
+    for old_key in dotted:
+        wf = workflows[old_key]
+        new_key = old_key.replace(".", " ").replace("[", "").replace("]", "")
+        # Anzeige-Name behaelt den Original-Key (mit Punkt), falls nicht gesetzt.
+        if isinstance(wf, dict) and not wf.get("name"):
+            wf["name"] = old_key
+        # Kollision vermeiden: Suffix anhaengen bis frei.
+        base = new_key
+        n = 2
+        while new_key in workflows and new_key != old_key:
+            new_key = f"{base} {n}"
+            n += 1
+        del workflows[old_key]
+        workflows[new_key] = wf
+        logger.info("ComfyUI-Workflow-Key '%s' -> '%s' (Punkt im Key zerbricht Admin-Editor)", old_key, new_key)
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError as e:
+        logger.error("Failed to write dotted-key fix to %s: %s", config_path, e)
+        return False
+
+
 def _seed_default_workflows(config: dict, config_path: Path) -> bool:
     """Seedet bei einer neuen Welt die drei Default-Workflows (Qwen/Z-Image/Flux).
 
@@ -122,15 +206,25 @@ def _seed_default_workflows(config: dict, config_path: Path) -> bool:
     Wenn der User die Workflows absichtlich auf {} geleert hat, bleibt es leer.
     Returns True wenn etwas geschrieben wurde.
     """
-    ig = config.setdefault("image_generation", {})
-    if "comfyui_workflows" in ig:
-        return False
     import copy
-    ig["comfyui_workflows"] = copy.deepcopy(_DEFAULT_COMFYUI_WORKFLOWS)
+    ig = config.setdefault("image_generation", {})
+    if "comfyui_workflows" not in ig:
+        ig["comfyui_workflows"] = copy.deepcopy(_DEFAULT_COMFYUI_WORKFLOWS)
+        log_msg = "Default ComfyUI workflows (Qwen/Z-Image/Flux/Flux.1 Dev/Flux Inpaint) seeded"
+    else:
+        # Backfill: feature-kritische Default-Workflows, die nach ihrer Einfuehrung
+        # dazukamen, in bestehende Welten nachziehen (nur wenn der Key fehlt).
+        backfill = ["Flux Inpaint", "Flux 1 Dev"]
+        added = [k for k in backfill if k not in ig["comfyui_workflows"]]
+        if not added:
+            return False
+        for k in added:
+            ig["comfyui_workflows"][k] = copy.deepcopy(_DEFAULT_COMFYUI_WORKFLOWS[k])
+        log_msg = f"Backfilled ComfyUI workflow(s): {', '.join(added)}"
     try:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Default ComfyUI workflows (Qwen/Z-Image/Flux) seeded -> %s", config_path)
+        logger.info("%s -> %s", log_msg, config_path)
         return True
     except OSError as e:
         logger.error("Failed to seed default workflows to %s: %s", config_path, e)
@@ -161,6 +255,10 @@ def load(config_path: Optional[Path] = None) -> dict:
         except (json.JSONDecodeError, IOError) as e:
             logger.error("Failed to load config from %s: %s", path, e)
             _CONFIG = {}
+
+    # Punkt-Keys in comfyui_workflows reparieren (zerbrechen den Admin-Editor)
+    # — VOR dem Seeding/Backfill, damit die Key-Praesenz korrekt geprueft wird.
+    _fix_dotted_workflow_keys(_CONFIG, path)
 
     # Bei einer neuen/leeren Welt: Default-Workflows fuer Qwen/Z-Image/Flux
     # automatisch eintragen, damit der Admin nicht alles von Hand anlegen muss.
@@ -475,10 +573,11 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "OUTFIT_IMAGEGEN_DEFAULT", ig.get("outfit_imagegen_default", ""))
     _set(env, "EXPRESSION_IMAGEGEN_DEFAULT", ig.get("expression_imagegen_default", ""))
     _set(env, "LOCATION_IMAGEGEN_DEFAULT", ig.get("location_imagegen_default", ""))
+    # Map Fit/Edge: imagegen-Target (Match-Spec, z.B. "workflow:Flux Inpaint*")
+    _set(env, "MAPFIT_IMAGEGEN_DEFAULT", ig.get(
+        "mapfit_imagegen_default", "workflow:Flux Inpaint*"))
+    _set(env, "MAP_TILE_VISION_ANALYSIS", ig.get("map_tile_vision_analysis", False))
     _set(env, "PROFILE_IMAGE_PROMPT_PREFIX", ig.get("profile_image_prompt_prefix", ""))
-    _set(env, "MAP_IMAGE_PROMPT_SUFFIX", ig.get(
-        "map_image_prompt_suffix",
-        "small icon, top-down view, miniature, game map tile, simple, clean, centered"))
     _set(env, "MAP_2D_IMAGE_PROMPT_SUFFIX", ig.get(
         "map_2d_image_prompt_suffix",
         "top-down map tile, flat 2D illustration, bird's eye view, simple, clean, fills the frame"))
@@ -511,7 +610,7 @@ def _flatten_to_env(config: dict) -> None:
         for key in ["name", "filter", "skill", "workflow_file",
                      "model", "prompt_style", "prompt_negative", "image_model",
                      "prompt_instruction", "width", "height",
-                     "clip"]:
+                     "clip", "clip2"]:
             val = wf.get(key, "")
             _set(env, f"{p}{key.upper()}", val)
         # LoRAs

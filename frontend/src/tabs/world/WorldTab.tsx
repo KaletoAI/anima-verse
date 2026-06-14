@@ -48,7 +48,6 @@ interface Location {
   map_z_offset?: number
   image_prompt_day?: string
   image_prompt_night?: string
-  image_prompt_map?: string
   image_prompt_map_2d?: string
   image_count?: number
   is_template?: boolean
@@ -65,7 +64,7 @@ interface GalleryResponse {
   image_metas?: Record<string, { backend?: string; model?: string }>
 }
 
-const IMAGE_TYPES = ['', 'day', 'night', 'map', 'map_2d'] as const
+const IMAGE_TYPES = ['', 'day', 'night', 'map_2d'] as const
 
 type Selection =
   | { kind: 'location'; locationId: string }
@@ -136,7 +135,6 @@ export function WorldTab() {
         rooms: (src.rooms || []).map(({ id: _id, ...rest }) => rest),
         image_prompt_day: src.image_prompt_day || '',
         image_prompt_night: src.image_prompt_night || '',
-        image_prompt_map: src.image_prompt_map || '',
         image_prompt_map_2d: src.image_prompt_map_2d || '',
         danger_level: src.danger_level,
         indoor: src.indoor || '',
@@ -236,6 +234,7 @@ export function WorldTab() {
             location={selectedLocation}
             room={selectedRoom || null}
             roomFilter={selectedRoom?.id || undefined}
+            allLocations={locations}
           />
         ) : (
           <div className="ga-placeholder">{t('Select a place to view its gallery.')}</div>
@@ -333,7 +332,6 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
         map_z_offset: draft.map_z_offset,
         image_prompt_day: draft.image_prompt_day,
         image_prompt_night: draft.image_prompt_night,
-        image_prompt_map: draft.image_prompt_map,
         image_prompt_map_2d: draft.image_prompt_map_2d,
         event_settings: draft.event_settings,
       })
@@ -543,14 +541,6 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
                   rows={2}
                   value={draft.image_prompt_night || ''}
                   onChange={(e) => upd('image_prompt_night', e.target.value)}
-                />
-              </Field>
-              <Field label={t('Map icon prompt')}>
-                <textarea
-                  className="ga-textarea"
-                  rows={2}
-                  value={draft.image_prompt_map || ''}
-                  onChange={(e) => upd('image_prompt_map', e.target.value)}
                 />
               </Field>
               <Field label={t('2D map icon prompt')}>
@@ -855,27 +845,33 @@ function LocationGallery({
   location,
   room,
   roomFilter,
+  allLocations,
 }: {
   locationId: string
   location: Location
   room: Room | null
   /** When set, only images assigned to this room are shown. */
   roomFilter?: string
+  /** All places (for the "move image to another location" picker). */
+  allLocations: Location[]
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [data, setData] = useState<GalleryResponse | null>(null)
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map' | 'map_2d' | null>(null)
+  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | null>(null)
   // „Regenerate"-Ziel: ein bestehendes Karten-Bild als Referenz neu erzeugen.
-  const [regenTarget, setRegenTarget] = useState<{ filename: string; type: 'map' | 'map_2d'; fit?: boolean } | null>(null)
+  const [regenTarget, setRegenTarget] = useState<{ filename: string; type: 'map_2d' } | null>(null)
   // Unabhängige Config-Suffixe für Karten-Icons (editierbar im Dialog statt
   // serverseitig angehängt). Einmalig laden.
-  const [mapSuffix, setMapSuffix] = useState({ map: '', map_2d: '' })
+  const [mapSuffix, setMapSuffix] = useState({ map_2d: '' })
+  // „Bild verschieben": offenes Bild + gewählte Ziel-Location.
+  const [moveImage, setMoveImage] = useState<string | null>(null)
+  const [moveTarget, setMoveTarget] = useState('')
   useEffect(() => {
-    apiGet<{ map_image_prompt_suffix?: string; map_2d_image_prompt_suffix?: string }>('/world/imagegen-options')
-      .then((d) => setMapSuffix({ map: d.map_image_prompt_suffix || '', map_2d: d.map_2d_image_prompt_suffix || '' }))
+    apiGet<{ map_2d_image_prompt_suffix?: string }>('/world/imagegen-options')
+      .then((d) => setMapSuffix({ map_2d: d.map_2d_image_prompt_suffix || '' }))
       .catch(() => { /* ignore */ })
   }, [])
 
@@ -898,6 +894,23 @@ function LocationGallery({
   useEffect(() => {
     reload()
   }, [reload])
+
+  // Bild in eine andere Location verschieben (Datei + Prompt/Typ/Meta).
+  const submitMove = useCallback(async () => {
+    if (!moveImage || !moveTarget) return
+    try {
+      await apiPost(
+        `/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(moveImage)}/move`,
+        { target: moveTarget },
+      )
+      toast(t('Image moved'))
+      setMoveImage(null)
+      setMoveTarget('')
+      await reload()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [moveImage, moveTarget, locationId, reload, t, toast])
 
   const allImages = data?.images || []
   const rooms = data?.image_rooms || {}
@@ -953,10 +966,10 @@ function LocationGallery({
   // first, then location, falling back to description. The user can
   // edit it before submitting; edits are not persisted.
   const buildDefaultPrompt = useCallback(
-    (promptType: 'day' | 'night' | 'map' | 'map_2d'): string => {
+    (promptType: 'day' | 'night' | 'map_2d'): string => {
       const fromRoom = (key: 'image_prompt_day' | 'image_prompt_night') =>
         (room && (room as Record<string, unknown>)[key]) as string | undefined
-      const isMap = promptType === 'map' || promptType === 'map_2d'
+      const isMap = promptType === 'map_2d'
       let desc = ''
       if (room && !isMap) {
         if (promptType === 'day') desc = (fromRoom('image_prompt_day') || '').trim()
@@ -965,10 +978,9 @@ function LocationGallery({
       }
       if (!desc && promptType === 'day') desc = (location.image_prompt_day || '').trim()
       if (!desc && promptType === 'night') desc = (location.image_prompt_night || '').trim()
-      if (!desc && promptType === 'map') desc = (location.image_prompt_map || '').trim()
       if (!desc && promptType === 'map_2d') desc = (location.image_prompt_map_2d || '').trim()
       if (!desc) desc = location.description || location.name || ''
-      // Map icons: subject only. The style suffix is admin-managed (Server Admin →
+      // 2D map icon: subject only. The style suffix is admin-managed (Server Admin →
       // Image Generation) and appended server-side, so it isn't duplicated here.
       if (isMap) {
         return desc
@@ -989,7 +1001,7 @@ function LocationGallery({
         prompt_type: dialogType,
         prompt: payload.prompt,
       }
-      if (roomFilter && dialogType !== 'map' && dialogType !== 'map_2d') body.room_id = roomFilter
+      if (roomFilter && dialogType !== 'map_2d') body.room_id = roomFilter
       if (payload.workflow) body.workflow = payload.workflow
       if (payload.backend) body.backend = payload.backend
       if (payload.model_override) body.model_override = payload.model_override
@@ -1003,28 +1015,20 @@ function LocationGallery({
         `/world/locations/${encodeURIComponent(locationId)}/gallery`,
         body,
       )
-        .then(() => {
-          toast(t('Image queued'))
-          // Image generation runs in the background and takes longer than a
-          // single tick — refresh repeatedly so the new image lands without
-          // having to navigate away and back.
-          let n = 0
-          const iv = window.setInterval(() => {
-            reload().catch(() => {})
-            if (++n >= 20) window.clearInterval(iv) // ~60s
-          }, 3000)
-        })
+        // Kein Auto-Refresh: die periodischen Reloads stören, wenn man parallel
+        // etwas anderes editiert. Neues Bild erscheint beim nächsten Galerie-Reload.
+        .then(() => toast(t('Image queued')))
         .catch((e) => {
           toast(t('Error') + ': ' + (e as Error).message, 'error')
         })
     },
-    [dialogType, locationId, roomFilter, reload, t, toast],
+    [dialogType, locationId, roomFilter, t, toast],
   )
 
   // Regenerate eines bestehenden Karten-Bilds — mit ihm selbst als Referenz.
   // Landet immer als NEUES Gallery-Bild (per Zelle wählbar).
   const submitRegenRef = useCallback(
-    async (payload: ImageGenSubmit, target: { filename: string; type: 'map' | 'map_2d'; fit?: boolean }) => {
+    async (payload: ImageGenSubmit, target: { filename: string; type: 'map_2d' }) => {
       const body: Record<string, unknown> = {
         prompt_type: target.type,
         prompt: payload.prompt,
@@ -1035,22 +1039,13 @@ function LocationGallery({
       if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras) body.loras = payload.loras
       if (payload.prompt_settings_applied) body.settings_applied = true
-      // Fit-Modus: Nachbar-Kontext-Inpainting (Canvas+Maske serverseitig);
-      // sonst die Selbst-Referenz.
-      if (target.fit) body.fit_neighbors = true
-      else if (payload.use_source_as_reference) body.use_source_as_reference = true
+      // Regenerate mit dem bestehenden Bild als Selbst-Referenz.
+      if (payload.use_source_as_reference) body.use_source_as_reference = true
       void apiPost(`/world/locations/${encodeURIComponent(locationId)}/gallery`, body)
-        .then(() => {
-          toast(t('Image queued'))
-          let n = 0
-          const iv = window.setInterval(() => {
-            reload().catch(() => {})
-            if (++n >= 20) window.clearInterval(iv)
-          }, 3000)
-        })
+        .then(() => toast(t('Image queued')))
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
     },
-    [locationId, reload, t, toast],
+    [locationId, t, toast],
   )
 
   const remove = useCallback(
@@ -1093,16 +1088,6 @@ function LocationGallery({
         <button
           className="ga-btn ga-btn-sm"
           disabled={!!busy}
-          onClick={() => setDialogType('map')}
-          title={t('Open the image generation dialog for the map icon.')}
-        >
-          🗺️ {t('Generate map icon')}
-        </button>
-      ) : null}
-      {!roomFilter ? (
-        <button
-          className="ga-btn ga-btn-sm"
-          disabled={!!busy}
           onClick={() => setDialogType('map_2d')}
           title={t('Open the image generation dialog for the flat 2D map icon.')}
         >
@@ -1120,18 +1105,14 @@ function LocationGallery({
           ? t('Generate day image — {name}').replace('{name}', room?.name || location.name)
           : dialogType === 'night'
             ? t('Generate night image — {name}').replace('{name}', room?.name || location.name)
-            : dialogType === 'map_2d'
-              ? t('Generate 2D map icon — {name}').replace('{name}', location.name)
-              : t('Generate map icon — {name}').replace('{name}', location.name)
+            : t('Generate 2D map icon — {name}').replace('{name}', location.name)
       }
       defaultPrompt={buildDefaultPrompt(dialogType)}
       hideNegative
       settingsSuffix={
-        dialogType === 'map' && mapSuffix.map
-          ? { label: t('Map icon (isometric)'), text: mapSuffix.map }
-          : dialogType === 'map_2d' && mapSuffix.map_2d
-            ? { label: t('2D map icon'), text: mapSuffix.map_2d }
-            : undefined
+        dialogType === 'map_2d' && mapSuffix.map_2d
+          ? { label: t('2D map icon'), text: mapSuffix.map_2d }
+          : undefined
       }
       onSubmit={submitGenerate}
       onClose={() => setDialogType(null)}
@@ -1141,21 +1122,13 @@ function LocationGallery({
   const regenDialog = regenTarget ? (
     <ImageGenDialog
       open
-      title={(regenTarget.fit
-        ? t('Fit to neighbors — {name}')
-        : regenTarget.type === 'map_2d'
-          ? t('Regenerate 2D map icon — {name}')
-          : t('Regenerate map icon — {name}')).replace('{name}', location.name)}
+      title={t('Regenerate 2D map icon — {name}').replace('{name}', location.name)}
       defaultPrompt={buildDefaultPrompt(regenTarget.type)}
       hideNegative
       sourceImageUrl={`/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(regenTarget.filename)}`}
-      defaultUseSource={!regenTarget.fit}
+      defaultUseSource
       settingsSuffix={
-        regenTarget.type === 'map' && mapSuffix.map
-          ? { label: t('Map icon (isometric)'), text: mapSuffix.map }
-          : regenTarget.type === 'map_2d' && mapSuffix.map_2d
-            ? { label: t('2D map icon'), text: mapSuffix.map_2d }
-            : undefined
+        mapSuffix.map_2d ? { label: t('2D map icon'), text: mapSuffix.map_2d } : undefined
       }
       onSubmit={(payload) => submitRegenRef(payload, regenTarget)}
       onClose={() => setRegenTarget(null)}
@@ -1237,26 +1210,24 @@ function LocationGallery({
                   >
                     🌙
                   </button>
-                  {(type === 'map' || type === 'map_2d') ? (
+                  {type === 'map_2d' ? (
                     <button
                       className="ga-btn ga-btn-sm"
                       disabled={isBusy}
-                      onClick={() => setRegenTarget({ filename, type: type as 'map' | 'map_2d' })}
+                      onClick={() => setRegenTarget({ filename, type: 'map_2d' })}
                       title={t('Regenerate using this image as reference (saved as a new image)')}
                     >
                       ♻
                     </button>
                   ) : null}
-                  {type === 'map_2d' ? (
-                    <button
-                      className="ga-btn ga-btn-sm"
-                      disabled={isBusy}
-                      onClick={() => setRegenTarget({ filename, type: 'map_2d', fit: true })}
-                      title={t('Fit to neighbors: inpaint the tile so its edges continue the adjacent map cells (needs an inpaint workflow)')}
-                    >
-                      ⊞
-                    </button>
-                  ) : null}
+                  <button
+                    className="ga-btn ga-btn-sm"
+                    disabled={isBusy}
+                    onClick={() => { setMoveImage(filename); setMoveTarget('') }}
+                    title={t('Move this image to another location')}
+                  >
+                    ⇄
+                  </button>
                   <button
                     className="ga-btn ga-btn-sm ga-btn-danger"
                     disabled={isBusy}
@@ -1282,6 +1253,44 @@ function LocationGallery({
           >
             ×
           </button>
+        </div>
+      ) : null}
+
+      {moveImage ? (
+        <div className="ga-modal-backdrop" onMouseDown={() => setMoveImage(null)}>
+          <div className="ga-modal" style={{ maxWidth: 460 }} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="ga-modal-header">
+              <span>{t('Move image to…')}</span>
+              <button className="ga-modal-close" onClick={() => setMoveImage(null)}>×</button>
+            </div>
+            <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <img
+                src={`/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(moveImage)}`}
+                alt=""
+                style={{ display: 'block', width: '100%', maxHeight: 220, objectFit: 'contain', borderRadius: 6, background: 'var(--bg, #0d1117)' }}
+              />
+              <label style={{ fontSize: '0.85em' }}>
+                {t('Target location')}
+                <select
+                  className="ga-input"
+                  value={moveTarget}
+                  onChange={(e) => setMoveTarget(e.target.value)}
+                  style={{ width: '100%', marginTop: 4 }}
+                >
+                  <option value="">— {t('select')} —</option>
+                  {allLocations.filter((l) => l.id !== locationId).map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="ga-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="ga-btn" onClick={() => setMoveImage(null)}>{t('Cancel')}</button>
+              <button className="ga-btn ga-btn-primary" disabled={!moveTarget} onClick={submitMove}>
+                {t('Move')}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </>

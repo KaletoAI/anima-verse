@@ -3,6 +3,9 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ExportButton, ImportButton } from '../../components/ImportExport'
+import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { FitDialog } from './FitDialog'
+import { EdgeDialog } from './EdgeDialog'
 
 /**
  * Map tab — replaces the placement UI that used to live on the main
@@ -25,9 +28,10 @@ interface Location {
   grid_x?: number | null
   grid_y?: number | null
   map_z_offset?: number
-  map_image?: string
   map_image_2d?: string
   map_rotation_2d?: number
+  description?: string
+  image_prompt_map_2d?: string
 }
 
 interface GalleryResp {
@@ -39,20 +43,17 @@ const COLS = 10
 const ROWS = 10
 const CELL = 88
 
-// Flat 2D map icon with fallback to the iso icon, then hide. The Map tab is a
-// flat grid, so the 2D icons are the natural fit. `cacheKey` lets a caller force
-// a reload after the per-cell image was changed.
+// Flat 2D map tile, hidden if none exists. The Map tab is a flat grid, so the 2D
+// tiles are the natural fit. `cacheKey` lets a caller force a reload after the
+// per-cell image was changed. Rotation is a display-only transform.
 function MapIcon({ locId, className, cacheKey, rotation }: { locId: string; className: string; cacheKey?: string; rotation?: number }) {
-  const [stage, setStage] = useState(0) // 0 = 2D, 1 = iso, 2 = hidden
-  useEffect(() => { setStage(0) }, [cacheKey, locId])
-  if (stage >= 2) return null
-  const base = stage === 0
-    ? `/world/locations/${encodeURIComponent(locId)}/map-icon-2d`
-    : `/world/locations/${encodeURIComponent(locId)}/map-icon`
+  const [hidden, setHidden] = useState(false)
+  useEffect(() => { setHidden(false) }, [cacheKey, locId])
+  if (hidden) return null
+  const base = `/world/locations/${encodeURIComponent(locId)}/map-icon-2d`
   const src = cacheKey ? `${base}?v=${encodeURIComponent(cacheKey)}` : base
-  // Rotation is a 2D-only display transform; the iso fallback is not rotated.
-  const style = stage === 0 && rotation ? { transform: `rotate(${rotation}deg)` } : undefined
-  return <img className={className} src={src} alt="" style={style} onError={() => setStage((s) => s + 1)} />
+  const style = rotation ? { transform: `rotate(${rotation}deg)` } : undefined
+  return <img className={className} src={src} alt="" style={style} onError={() => setHidden(true)} />
 }
 
 export function MapTab() {
@@ -69,6 +70,22 @@ export function MapTab() {
   const [picker, setPicker] = useState<Location | null>(null)
   const [pickerGallery, setPickerGallery] = useState<GalleryResp | null>(null)
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
+
+  // Bild-Generierung aus dem Cell-image-Dialog: ✨ = normaler ImageGenDialog,
+  // ⊞ = festverdrahteter FitDialog (Workflow/Backend aus der Config).
+  const [gen, setGen] = useState<{ loc: Location; type: 'map_2d' } | null>(null)
+  const [fit, setFit] = useState<{ loc: Location; prompt: string } | null>(null)
+  const [edge, setEdge] = useState<{ loc: Location; available: Record<string, string> } | null>(null)
+  const [mapSuffix, setMapSuffix] = useState({ map_2d: '' })
+  const [mapfit, setMapfit] = useState({ target: '' })
+  useEffect(() => {
+    apiGet<{ map_2d_image_prompt_suffix?: string; mapfit_imagegen_default?: string }>('/world/imagegen-options')
+      .then((d) => {
+        setMapSuffix({ map_2d: d.map_2d_image_prompt_suffix || '' })
+        setMapfit({ target: d.mapfit_imagegen_default || '' })
+      })
+      .catch(() => { /* ignore */ })
+  }, [])
 
   const reload = useCallback(async () => {
     try {
@@ -101,7 +118,7 @@ export function MapTab() {
   }, [t, toast])
 
   const chooseImage = useCallback(
-    async (loc: Location, type: 'map' | 'map_2d', file: string) => {
+    async (loc: Location, type: 'map_2d', file: string) => {
       try {
         await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`, { type, file })
         setIconVer((v) => ({ ...v, [loc.id]: (v[loc.id] || 0) + 1 }))
@@ -112,6 +129,60 @@ export function MapTab() {
       }
     },
     [reload, t, toast],
+  )
+
+  // Default-Prompt fuer Map-Icons: nur der Subjekt-Teil (Stil-Suffix haengt der
+  // Dialog/Server an). Subjekt aus image_prompt_map_2d, sonst Beschreibung/Name.
+  const buildDefaultPrompt = useCallback((loc: Location): string => {
+    return (loc.image_prompt_map_2d || '').trim() || (loc.description || loc.name || '').trim()
+  }, [])
+
+  // Kein Auto-Refresh nach der Generierung — die periodischen Reloads bringen die
+  // Admin-UI durcheinander, während man parallel etwas anderes editiert. Der
+  // Picker zeigt das neue Tile beim erneuten Öffnen (frischer Galerie-Fetch).
+
+  // ✨ Normale Generierung aus dem Cell-image-Dialog. POST an die ZELLE (loc.id),
+  // Klone speichern ins geteilte Template, die Auswahl bleibt pro Zelle.
+  const submitGen = useCallback(
+    async (payload: ImageGenSubmit, target: { loc: Location; type: 'map_2d' }) => {
+      const body: Record<string, unknown> = { prompt_type: target.type, prompt: payload.prompt }
+      if (payload.workflow) body.workflow = payload.workflow
+      if (payload.backend) body.backend = payload.backend
+      if (payload.model_override) body.model_override = payload.model_override
+      if (payload.loras) body.loras = payload.loras
+      if (payload.prompt_settings_applied) body.settings_applied = true
+      void apiPost(`/world/locations/${encodeURIComponent(target.loc.id)}/gallery`, body)
+        .then(() => toast(t('Image queued')))
+        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+    },
+    [t, toast],
+  )
+
+  // ⊞ Fit to neighbors — festverdrahtet: Workflow + Backend kommen serverseitig
+  // aus der Config; hier nur prompt_type/fit + der editierte Richtungs-Prompt.
+  // settings_applied=true: Server hängt weder Stil-Suffix noch Hinweis erneut an.
+  const submitFit = useCallback(
+    async (prompt: string, loc: Location) => {
+      const body = { prompt_type: 'map_2d', prompt, fit_neighbors: true, settings_applied: true }
+      void apiPost(`/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
+        .then(() => toast(t('Image queued')))
+        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+    },
+    [t, toast],
+  )
+
+  // ⧉ Kanten angleichen — gleicher mapfit-Workflow, aber Rahmen-Maske + Übergangs-
+  // Prompt nur für die gewählten Seiten. Mitte = bestehendes Tile.
+  const submitEdge = useCallback(
+    async (sides: string[], prompt: string, loc: Location) => {
+      const body = {
+        prompt_type: 'map_2d', prompt, edge_match: true, edge_sides: sides, settings_applied: true,
+      }
+      void apiPost(`/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
+        .then(() => toast(t('Image queued')))
+        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+    },
+    [t, toast],
   )
 
   // Rotate the cell's 2D icon by +90° (0→90→180→270→0). Display-only.
@@ -434,14 +505,69 @@ export function MapTab() {
               ) : (
                 ([
                   { type: 'map_2d' as const, label: t('2D icon'), chosen: picker.map_image_2d || '' },
-                  { type: 'map' as const, label: t('Isometric icon'), chosen: picker.map_image || '' },
                 ]).map(({ type, label, chosen }) => {
                   const imgs = (pickerGallery.images || []).filter(
                     (f) => (pickerGallery.image_types || {})[f] === type,
                   )
                   return (
                     <div key={type} className="ga-map-imgpicker-group">
-                      <div className="ga-map-imgpicker-label">{label}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+                        <div className="ga-map-imgpicker-label" style={{ marginBottom: 0 }}>{label}</div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            type="button"
+                            className="ga-btn ga-btn-sm"
+                            onClick={() => setGen({ loc: picker, type })}
+                            title={t('Generate a new image for this cell')}
+                          >
+                            ✨ {t('Generate')}
+                          </button>
+                          {type === 'map_2d' ? (
+                            <button
+                              type="button"
+                              className="ga-btn ga-btn-sm"
+                              onClick={async () => {
+                                // Nachbar-Hinweis serverseitig holen (north/south/…),
+                                // als editierbaren Prompt in den Fit-Dialog.
+                                let p = ''
+                                try {
+                                  const r = await apiGet<{ prompt?: string }>(
+                                    `/world/locations/${encodeURIComponent(picker.id)}/fit-prompt`)
+                                  p = r.prompt || ''
+                                } catch { /* ignore */ }
+                                setFit({ loc: picker, prompt: p })
+                              }}
+                              title={t('Fit to neighbors: inpaint the tile so its edges continue the adjacent map cells')}
+                            >
+                              ⊞ {t('Fit to neighbors')}
+                            </button>
+                          ) : null}
+                          {type === 'map_2d' ? (
+                            <button
+                              type="button"
+                              className="ga-btn ga-btn-sm"
+                              onClick={async () => {
+                                // Verfügbare Nachbar-Seiten holen → Edge-Dialog (Seiten klickbar).
+                                try {
+                                  const r = await apiGet<{ sides?: Record<string, string> }>(
+                                    `/world/locations/${encodeURIComponent(picker.id)}/edges`)
+                                  const sides = r.sides || {}
+                                  if (!Object.keys(sides).length) {
+                                    toast(t('No neighbors with a tile.'), 'error')
+                                    return
+                                  }
+                                  setEdge({ loc: picker, available: sides })
+                                } catch (e) {
+                                  toast(t('Error') + ': ' + (e as Error).message, 'error')
+                                }
+                              }}
+                              title={t('Match edges: blend the tile edges into selected neighbors')}
+                            >
+                              ⧉ {t('Match edges')}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
                       {imgs.length === 0 ? (
                         <div className="ga-map-tray-empty">{t('No images of this type.')}</div>
                       ) : (
@@ -477,6 +603,43 @@ export function MapTab() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {gen ? (
+        <ImageGenDialog
+          open
+          title={t('Generate 2D icon — {name}').replace('{name}', gen.loc.name)}
+          defaultPrompt={buildDefaultPrompt(gen.loc)}
+          hideNegative
+          settingsSuffix={
+            mapSuffix.map_2d ? { label: t('2D map icon'), text: mapSuffix.map_2d } : undefined
+          }
+          onSubmit={(payload) => submitGen(payload, gen)}
+          onClose={() => setGen(null)}
+        />
+      ) : null}
+
+      {fit ? (
+        <FitDialog
+          title={t('Fit to neighbors — {name}').replace('{name}', fit.loc.name)}
+          info={`${t('Target')}: ${mapfit.target || t('auto')}`}
+          canvasUrl={`/world/locations/${encodeURIComponent(fit.loc.id)}/fit-canvas`}
+          defaultPrompt={fit.prompt}
+          onSubmit={(prompt) => submitFit(prompt, fit.loc)}
+          onClose={() => setFit(null)}
+        />
+      ) : null}
+
+      {edge ? (
+        <EdgeDialog
+          locId={edge.loc.id}
+          locName={edge.loc.name}
+          available={edge.available}
+          rotation={edge.loc.map_rotation_2d || 0}
+          info={`${t('Target')}: ${mapfit.target || t('auto')}`}
+          onSubmit={(sides, prompt) => submitEdge(sides, prompt, edge.loc)}
+          onClose={() => setEdge(null)}
+        />
       ) : null}
     </div>
   )

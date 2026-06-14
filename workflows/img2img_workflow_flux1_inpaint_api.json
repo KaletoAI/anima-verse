@@ -1,0 +1,383 @@
+{
+  "10": {
+    "inputs": {
+      "images": [
+        "333",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "output_final"
+    }
+  },
+  "61": {
+    "inputs": {
+      "value": "top-down orthographic map tile blending together the surrounding terrain — aerial top-down view of a coastline to the north, aerial top-down view of a coastline to the south, top-down orthographic view of a lush green forest of leafy trees to the east, a small peaceful village with cottages around a central square to the west; colors, tones and art style merge smoothly across the whole tile, cohesive unified palette and lighting, no hard seams\n\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "input_prompt_positiv"
+    }
+  },
+  "63": {
+    "inputs": {
+      "value": "blurry, low resolution, bad anatomy, deformed, distorted, ugly,"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "input_prompt_negativ"
+    }
+  },
+  "69": {
+    "inputs": {
+      "value": 4545435351
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "input_seed"
+    }
+  },
+  "107": {
+    "inputs": {
+      "image": "last_canvas (8).png",
+      "resize": false,
+      "width": 1024,
+      "height": 1024,
+      "repeat": 1,
+      "keep_proportion": true,
+      "divisible_by": 32,
+      "mask_channel": "alpha",
+      "background_color": ""
+    },
+    "class_type": "LoadAndResizeImage",
+    "_meta": {
+      "title": "input_reference_image"
+    }
+  },
+  "122": {
+    "inputs": {
+      "sampler_name": "dpmpp_2m"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "123": {
+    "inputs": {
+      "noise": [
+        "125",
+        0
+      ],
+      "guider": [
+        "134",
+        0
+      ],
+      "sampler": [
+        "122",
+        0
+      ],
+      "sigmas": [
+        "135",
+        0
+      ],
+      "latent_image": [
+        "311",
+        2
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "124": {
+    "inputs": {
+      "samples": [
+        "123",
+        0
+      ],
+      "vae": [
+        "138",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "125": {
+    "inputs": {
+      "noise_seed": [
+        "69",
+        0
+      ]
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "128": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 1,
+      "resolution_steps": 1,
+      "image": [
+        "107",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    }
+  },
+  "132": {
+    "inputs": {
+      "text": [
+        "61",
+        0
+      ],
+      "clip": [
+        "317",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "input_prompt_positive"
+    }
+  },
+  "133": {
+    "inputs": {
+      "text": [
+        "63",
+        0
+      ],
+      "clip": [
+        "317",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "input_prompt_negavtive"
+    }
+  },
+  "134": {
+    "inputs": {
+      "cfg": 1.5,
+      "model": [
+        "305",
+        0
+      ],
+      "positive": [
+        "311",
+        0
+      ],
+      "negative": [
+        "311",
+        1
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFGGuider"
+    }
+  },
+  "135": {
+    "inputs": {
+      "steps": 20,
+      "width": [
+        "107",
+        2
+      ],
+      "height": [
+        "107",
+        3
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2Scheduler"
+    }
+  },
+  "138": {
+    "inputs": {
+      "vae_name": "flux1-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "305": {
+    "inputs": {
+      "unet_name": "Flux1-DevFill-Onereward_fp8.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "input_safetensors"
+    }
+  },
+  "311": {
+    "inputs": {
+      "noise_mask": true,
+      "positive": [
+        "132",
+        0
+      ],
+      "negative": [
+        "133",
+        0
+      ],
+      "vae": [
+        "138",
+        0
+      ],
+      "pixels": [
+        "128",
+        0
+      ],
+      "mask": [
+        "377",
+        0
+      ]
+    },
+    "class_type": "InpaintModelConditioning",
+    "_meta": {
+      "title": "InpaintModelConditioning"
+    }
+  },
+  "317": {
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "flux",
+      "device": "default"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "input_dual_cliploader"
+    }
+  },
+  "332": {
+    "inputs": {
+      "model_name": "RealESRGAN_x2plus.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "Load Upscale Model"
+    }
+  },
+  "333": {
+    "inputs": {
+      "upscale_model": [
+        "332",
+        0
+      ],
+      "image": [
+        "367",
+        0
+      ]
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "_meta": {
+      "title": "Upscale Image (using Model)"
+    }
+  },
+  "356": {
+    "inputs": {
+      "image": [
+        "124",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "362": {
+    "inputs": {
+      "resize_type": "scale dimensions",
+      "resize_type.width": [
+        "356",
+        0
+      ],
+      "resize_type.height": [
+        "356",
+        1
+      ],
+      "resize_type.crop": "center",
+      "scale_method": "nearest-exact",
+      "input": [
+        "371",
+        1
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Resize Image/Mask"
+    }
+  },
+  "367": {
+    "inputs": {
+      "image": [
+        "124",
+        0
+      ],
+      "mask": [
+        "362",
+        0
+      ]
+    },
+    "class_type": "ImageCropByMask",
+    "_meta": {
+      "title": "Image Crop By Mask"
+    }
+  },
+  "371": {
+    "inputs": {
+      "image": "last_crop_mask.png",
+      "resize": false,
+      "width": 1024,
+      "height": 1024,
+      "repeat": 1,
+      "keep_proportion": true,
+      "divisible_by": 32,
+      "mask_channel": "alpha",
+      "background_color": ""
+    },
+    "class_type": "LoadAndResizeImage",
+    "_meta": {
+      "title": "input_crop"
+    }
+  },
+  "372": {
+    "inputs": {
+      "images": [
+        "124",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "377": {
+    "inputs": {
+      "image": "last_mask (2).png",
+      "channel": "red"
+    },
+    "class_type": "LoadImageMask",
+    "_meta": {
+      "title": "input_mask"
+    }
+  }
+}

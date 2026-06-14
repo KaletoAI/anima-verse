@@ -46,7 +46,8 @@ class ComfyWorkflow:
     prompt_instruction: str = ""
     has_input_unet: bool = False  # Workflow hat eigenen input_unet Node (nicht input_model)
     has_input_safetensors: bool = False  # Workflow hat input_safetensors Node (z.B. Flux2 UNETLoader)
-    clip: str = ""              # CLIP-Modell fuer den Workflow
+    clip: str = ""              # CLIP-Modell fuer den Workflow (clip_name1 bei DualCLIPLoader)
+    clip2: str = ""             # 2. CLIP-Modell (clip_name2) fuer DualCLIPLoader-Nodes
     has_loras: bool = False     # Workflow hat input_loras/input_lora Node
     default_loras: list = field(default_factory=list)  # [{name, strength}, ...] aus .env
     model_type: str = ""        # "unet" | "checkpoint" | "" — erkannt aus input_model/input_unet Node
@@ -362,6 +363,7 @@ class ImageGenerationSkill(BaseSkill):
             except Exception as _e:
                 logger.debug("Workflow-JSON Check fehlgeschlagen fuer %s: %s", wf_file, _e)
             wf_clip = os.environ.get(f"{prefix}CLIP", "").strip()
+            wf_clip2 = os.environ.get(f"{prefix}CLIP2", "").strip()
             wf = ComfyWorkflow(
                 name=wf_name,
                 workflow_file=wf_file,
@@ -371,6 +373,7 @@ class ImageGenerationSkill(BaseSkill):
                 has_input_unet=has_input_unet,
                 has_input_safetensors=has_input_safetensors,
                 clip=wf_clip,
+                clip2=wf_clip2,
                 compatible_backends=compatible,
                 prompt_style=wf_prompt_style,
                 negative_prompt=wf_negative_prompt,
@@ -1505,6 +1508,45 @@ class ImageGenerationSkill(BaseSkill):
             logger.error("Objektive Bildanalyse fehlgeschlagen: %s", e)
             return None
 
+    def describe_map_tile(self, image_path: str) -> Optional[str]:
+        """Kurze Terrain-Phrase eines 2D-Karten-Tiles via Vision-LLM (Task
+        image_recognition). Fuer Fit/Edge-Prompts, damit north/south/east/west das
+        TATSAECHLICHE Tile beschreiben (nicht die evtl. veraltete Textbeschreibung).
+        Englisch, 3-8 Woerter, nur die Phrase. ``None`` bei Fehler/Vision aus."""
+        from app.core.llm_client import LLMClient
+        if not os.path.exists(image_path):
+            return None
+        try:
+            with open(image_path, 'rb') as f:
+                b64 = base64.b64encode(f.read()).decode('utf-8')
+            vcfg = self._get_vision_llm_config("")
+            if not vcfg:
+                return None
+            llm = LLMClient(
+                model=vcfg["model"], api_key=vcfg["api_key"], api_base=vcfg["api_base"],
+                temperature=0.2, max_tokens=40,
+                request_timeout=int(os.environ.get("LLM_REQUEST_TIMEOUT", "120")))
+            prompt_text = (
+                "This is a top-down 2D map tile. Describe its terrain in a short "
+                "English phrase of 3-8 words (e.g. 'dense dark green pine forest', "
+                "'rocky coastline with open water', 'grassy plain with a dirt road'). "
+                "Only the terrain phrase — no sentence, no punctuation, no quotes.")
+            messages = [
+                {"role": "user", "content": [
+                    {"type": "text", "text": prompt_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ]},
+            ]
+            from app.core.llm_queue import get_llm_queue, Priority
+            response = get_llm_queue().submit(
+                task_type="image_recognition", priority=Priority.NORMAL,
+                llm=llm, messages_or_prompt=messages, agent_name="")
+            term = " ".join((response.content or "").split()).strip().strip('"\'.,;')
+            return term or None
+        except Exception as e:
+            logger.warning("Map-Tile-Analyse fehlgeschlagen: %s", e)
+            return None
+
     def _generate_comment(self, character_name: str, rp_context: str = "",
                           photographer_subjects: Optional[List[str]] = None) -> Optional[str]:
         """Erzeugt eine kurze Situations-Beschreibung als Galerie-Caption.
@@ -2165,11 +2207,16 @@ class ImageGenerationSkill(BaseSkill):
             if active_workflow and active_workflow.clip:
                 params["clip_name"] = active_workflow.clip
                 logger.info("CLIP: %s (Workflow: %s)", active_workflow.clip, active_workflow.name)
+            if active_workflow and active_workflow.clip2:
+                params["clip_name2"] = active_workflow.clip2
+                logger.info("CLIP2: %s (Workflow: %s)", active_workflow.clip2, active_workflow.name)
 
             # weight_dtype fuer den Safetensors/UNET-Loader (global konfigurierbar).
             # Leer = Workflow-Wert unveraendert. fp8-Modelle brauchen fp8_e4m3fn,
             # sonst crasht UNETLoader beim state_dict-Laden. Gilt nicht fuer GGUF.
-            if active_workflow and (active_workflow.has_input_unet or active_workflow.has_input_safetensors):
+            # Am model_type haengen (nicht an has_input_*), damit auch ein
+            # input_model-Node mit class_type UNETLoader die Automatik bekommt.
+            if active_workflow and active_workflow.model_type == "unet":
                 try:
                     from app.core import config as _cfg_mod
                     _wdt = (_cfg_mod.get("image_generation.unet_weight_dtype") or "").strip()
