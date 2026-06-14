@@ -200,6 +200,19 @@ async def llm_stats_data(
     }
 
 
+# Prompt-Block-Keys, die ein Filter gezielt unterdruecken kann — entspricht den
+# *_block ctx-Keys in app/core/thought_context.py.
+_PROMPT_FILTER_BLOCK_KEYS = [
+    "inbox_block", "events_block", "assignments_block", "general_task",
+    "commitments_block", "outfit_decision_block", "arc_block",
+    "retrospective_block", "instagram_pending_block", "effects_block",
+    "recent_chat_block", "outfit_self_block", "outfit_avatar_block",
+    "room_items_block", "inventory_block", "present_people_block",
+    "known_locations_block", "travel_block", "available_activities_block",
+    "daily_schedule_block",
+]
+
+
 @router.get("/prompt-filters/data")
 async def prompt_filters_data(user=Depends(require_admin)):
     """Liste der gemergten Prompt-Filter (shared baseline + world overlay).
