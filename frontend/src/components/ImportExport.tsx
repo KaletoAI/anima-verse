@@ -300,20 +300,25 @@ export function PublishButton({
   )
 }
 
+interface PreviewElement { kind: string; id: string; name: string; exists: boolean }
+interface PreviewResult { type: string; multi: boolean; elements: PreviewElement[] }
+
 /**
- * File-picker button for ZIP imports. Posts the file as `multipart/form-data`
- * to `endpoint`. If the server returns 409 and `overwriteSupported` is set,
- * prompts the user and retries with `?overwrite=true`.
+ * File-picker button for ZIP imports. Opens a generic preview dialog: every
+ * importable element is listed with a checkbox, and elements that would
+ * overwrite an existing one are flagged. Works for ALL export types via the
+ * generic /api/content/preview + /api/content/import endpoints.
+ *
+ * `endpoint`/`overwriteSupported` are kept for API compatibility but no longer
+ * used — the generic endpoints dispatch by the ZIP's manifest type.
  */
 export function ImportButton({
-  endpoint,
   accept = '.zip',
   onImported,
-  overwriteSupported,
   label,
   title,
 }: {
-  endpoint: string
+  endpoint?: string
   accept?: string
   onImported?: (result: unknown) => void
   overwriteSupported?: boolean
@@ -323,36 +328,59 @@ export function ImportButton({
   const { t } = useI18n()
   const { toast } = useToast()
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [preview, setPreview] = useState<PreviewResult | null>(null)
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
 
-  const upload = async (file: File, overwrite = false) => {
-    const url = overwrite ? `${endpoint}?overwrite=true` : endpoint
-    const fd = new FormData()
-    fd.append('file', file)
+  const close = () => { setFile(null); setPreview(null); setPicked({}) }
+
+  const onFile = async (f: File) => {
+    setFile(f); setPreview(null); setLoading(true)
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        credentials: 'same-origin',
-        body: fd,
-      })
-      if (res.status === 409 && overwriteSupported && !overwrite) {
-        const body = await res.json().catch(() => ({}))
-        const msg = body.detail || t('Already exists — overwrite?')
-        if (window.confirm(msg + '\n\n' + t('Overwrite?'))) {
-          await upload(file, true)
-        }
-        return
-      }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.detail || `HTTP ${res.status}`)
-      }
-      const result = await res.json().catch(() => ({}))
-      toast(t('Imported'))
-      onImported?.(result)
+      const fd = new FormData(); fd.append('file', f)
+      const res = await fetch('/api/content/preview', { method: 'POST', credentials: 'same-origin', body: fd })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`)
+      const p = body as PreviewResult
+      setPreview(p)
+      setPicked(Object.fromEntries(p.elements.map((e) => [e.id, true])))
     } catch (e) {
       toast(t('Import failed') + ': ' + (e as Error).message, 'error')
+      close()
+    } finally {
+      setLoading(false)
     }
   }
+
+  const doImport = async () => {
+    if (!file || !preview) return
+    const selected = preview.elements.filter((e) => picked[e.id])
+    const overwrite = selected.some((e) => e.exists)
+    setBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      // Only send selected_ids for multi-element bundles; single-element types
+      // import as a whole.
+      if (preview.multi) fd.append('selected_ids', selected.map((e) => e.id).join(','))
+      fd.append('overwrite', overwrite ? 'true' : 'false')
+      const res = await fetch('/api/content/import', { method: 'POST', credentials: 'same-origin', body: fd })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`)
+      toast(t('Imported'))
+      onImported?.(body)
+      close()
+    } catch (e) {
+      toast(t('Import failed') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const selCount = preview ? preview.elements.filter((e) => picked[e.id]).length : 0
+  const overwriteCount = preview ? preview.elements.filter((e) => picked[e.id] && e.exists).length : 0
 
   return (
     <>
@@ -370,11 +398,88 @@ export function ImportButton({
         style={{ display: 'none' }}
         onChange={(e) => {
           const f = e.target.files?.[0]
-          // Reset so picking the same file twice fires onChange again.
           e.target.value = ''
-          if (f) upload(f)
+          if (f) onFile(f)
         }}
       />
+
+      {(loading || preview) && (
+        <div onClick={close} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            background: 'var(--bg-container, #161b22)', border: '1px solid var(--border, #30363d)',
+            borderRadius: 10, width: 'min(560px, 92vw)', maxHeight: '82vh',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          }}>
+            <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border, #30363d)',
+                          display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <strong>{t('Import')}</strong>
+              {preview ? <span style={{ opacity: 0.55, fontSize: '0.85em' }}>{preview.type}</span> : null}
+            </div>
+
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
+              {loading && <div className="ga-loading">{t('Loading…')}</div>}
+              {preview && preview.elements.length === 0 && (
+                <div className="ga-placeholder">{t('No importable elements in this file.')}</div>
+              )}
+              {preview && preview.elements.length > 0 && (
+                <>
+                  {preview.multi && (
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 8, fontSize: '0.8em' }}>
+                      <button className="ga-btn ga-btn-sm"
+                        onClick={() => setPicked(Object.fromEntries(preview.elements.map((e) => [e.id, true])))}>
+                        {t('Select all')}
+                      </button>
+                      <button className="ga-btn ga-btn-sm"
+                        onClick={() => setPicked({})}>
+                        {t('Select none')}
+                      </button>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {preview.elements.map((el) => (
+                      <label key={el.id} className="ga-form-check"
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 4px',
+                                 borderRadius: 6, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={!!picked[el.id]}
+                          onChange={(e) => setPicked((p) => ({ ...p, [el.id]: e.target.checked }))} />
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {el.name}
+                        </span>
+                        <code style={{ opacity: 0.4, fontSize: '0.75em' }}>{el.kind}</code>
+                        {el.exists && (
+                          <span style={{ flex: '0 0 auto', color: '#e0a356', fontSize: '0.75em',
+                                         border: '1px solid #e0a356', borderRadius: 8, padding: '0 6px' }}>
+                            {t('will overwrite')}
+                          </span>
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border, #30363d)',
+                          display: 'flex', alignItems: 'center', gap: 10 }}>
+              {preview && overwriteCount > 0 && (
+                <span style={{ fontSize: '0.78em', color: '#e0a356' }}>
+                  {t('{n} will be overwritten').replace('{n}', String(overwriteCount))}
+                </span>
+              )}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                <button className="ga-btn ga-btn-sm" onClick={close} disabled={busy}>{t('Cancel')}</button>
+                <button className="ga-btn ga-btn-sm ga-btn-primary" onClick={doImport}
+                  disabled={busy || !preview || selCount === 0}>
+                  {busy ? t('Importing…') : t('Import {n}').replace('{n}', String(selCount))}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }

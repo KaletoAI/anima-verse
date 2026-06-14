@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse, quote
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Query
 
 from app.core import config
 from app.core.auth_dependency import require_admin
@@ -599,6 +599,81 @@ async def install_pack_upload(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "success", "pack_type": pack_type, "result": result}
+
+
+def _manifest_type(content: bytes) -> str:
+    import io as _io, json as _json, zipfile as _zip
+    zf = _zip.ZipFile(_io.BytesIO(content))
+    try:
+        m = _json.loads(zf.read("manifest.json"))
+        return m.get("type") or ("character" if m.get("character_name") else "")
+    finally:
+        zf.close()
+
+
+def _dispatch_install_selected(content: bytes, *, selected_ids, overwrite: bool) -> Dict[str, Any]:
+    """Generic import that honours a per-element selection + overwrite flag.
+    Multi-element types (item_bundle, states) respect selected_ids; single-element
+    types import as a whole."""
+    mtype = _manifest_type(content)
+    if mtype == "character":
+        from app.core.character_io import import_character_from_zip
+        return import_character_from_zip(content, overwrite=overwrite)
+    if mtype == "item":
+        from app.core.content_io import import_item_from_zip
+        return import_item_from_zip(content, target="world", overwrite=overwrite)
+    if mtype == "item_bundle":
+        from app.core.content_io import import_bundle_from_zip
+        return import_bundle_from_zip(content, target="world", overwrite=overwrite,
+                                      selected_ids=selected_ids)
+    if mtype == "rule":
+        from app.core.content_io import import_rule_from_zip
+        return import_rule_from_zip(content, target="world", overwrite=overwrite)
+    if mtype == "states":
+        from app.core.content_io import import_states_from_zip
+        return import_states_from_zip(content, replace_all=False, selected_ids=selected_ids)
+    if mtype == "location":
+        from app.core.content_io import import_location_from_zip
+        return import_location_from_zip(content)
+    if mtype == "map_layout":
+        from app.core.content_io import import_map_layout_from_zip
+        return import_map_layout_from_zip(content)
+    raise ValueError(f"unsupported export type: {mtype!r}")
+
+
+@router.post("/preview")
+async def preview_import(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Inspect an export ZIP and list its importable elements (with clash flags),
+    without importing. Generic across all export types."""
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+    from app.core.content_io import preview_import_zip
+    try:
+        return preview_import_zip(content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/import")
+async def import_selected(
+    file: UploadFile = File(...),
+    selected_ids: str = Form("", description="comma-separated element ids; empty = all"),
+    overwrite: bool = Form(False),
+) -> Dict[str, Any]:
+    """Generic import for any export ZIP. `selected_ids` (multi-element types) and
+    `overwrite` are honoured per element."""
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+    sel = {s.strip() for s in selected_ids.split(",") if s.strip()} or None
+    try:
+        result = _dispatch_install_selected(content, selected_ids=sel, overwrite=overwrite)
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "result": result}
 
 
 @router.get("/types")

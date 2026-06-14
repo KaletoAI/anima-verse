@@ -22,7 +22,7 @@ from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 
@@ -641,11 +641,13 @@ def import_states_from_zip(
     content: bytes,
     *,
     replace_all: bool = False,
+    selected_ids: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Import a states pack.
 
     `replace_all=False` (default): upsert each filter (merge with existing).
     `replace_all=True`: wipe the world-level prompt_filters table first.
+    `selected_ids`: if given, only import filters whose id is in the set.
     """
     from app.core.db import transaction
 
@@ -666,6 +668,8 @@ def import_states_from_zip(
             conn.execute("DELETE FROM prompt_filters")
         for entry in rows:
             if not isinstance(entry, dict) or not (entry.get("id") or "").strip():
+                continue
+            if selected_ids is not None and entry["id"] not in selected_ids:
                 continue
             _upsert_prompt_filter(conn, entry)
             count += 1
@@ -785,8 +789,13 @@ def import_bundle_from_zip(
     *,
     target: str = "auto",
     overwrite: bool = False,
+    selected_ids: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
-    """Import an item bundle ZIP (multiple items)."""
+    """Import an item bundle ZIP (multiple items).
+
+    `selected_ids`: if given, only items whose id is in the set are imported
+    (the rest are skipped); selecting an existing item implies overwrite.
+    """
     try:
         zf = zipfile.ZipFile(io.BytesIO(content))
     except zipfile.BadZipFile as e:
@@ -796,6 +805,10 @@ def import_bundle_from_zip(
     rows = json.loads(zf.read("db/items.json"))
     if not isinstance(rows, list) or not rows:
         raise ValueError("db/items.json must be a non-empty list")
+
+    if selected_ids is not None:
+        rows = [r for r in rows if r.get("id") in selected_ids]
+        overwrite = True  # explicit per-element selection = overwrite the chosen
 
     if overwrite is False:
         existing = _existing_item_ids()
@@ -838,3 +851,92 @@ def import_bundle_from_zip(
         "imported": results,
         "count": len(results),
     }
+
+
+# ---------------------------------------------------------------------------
+# Generic import preview (cross-type element listing + clash flags)
+# ---------------------------------------------------------------------------
+
+def _character_exists(name: str) -> bool:
+    from app.core.db import get_connection
+    try:
+        conn = get_connection()
+        return bool(conn.execute("SELECT 1 FROM characters WHERE name=?", (name,)).fetchone())
+    except Exception:
+        return False
+
+
+def _existing_prompt_filter_ids() -> set:
+    from app.core.db import get_connection
+    try:
+        conn = get_connection()
+        return {r[0] for r in conn.execute("SELECT id FROM prompt_filters").fetchall()}
+    except Exception:
+        return set()
+
+
+def preview_import_zip(content: bytes) -> Dict[str, Any]:
+    """Inspect ANY project export ZIP and list its importable elements without
+    importing anything. Generic across all export types.
+
+    Returns ``{type, multi, elements: [{kind, id, name, exists}]}`` where
+    ``exists`` flags an element that would overwrite an existing one.
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile as e:
+        raise ValueError(f"invalid ZIP: {e}")
+    try:
+        if "manifest.json" not in zf.namelist():
+            raise ValueError("manifest.json missing — not a project export")
+        manifest = json.loads(zf.read("manifest.json"))
+        mtype = manifest.get("type") or ("character" if manifest.get("character_name") else "")
+        elements: List[Dict[str, Any]] = []
+
+        def _rows(path: str) -> List[Dict[str, Any]]:
+            if path not in zf.namelist():
+                return []
+            data = json.loads(zf.read(path))
+            return data if isinstance(data, list) else []
+
+        if mtype == "character" or manifest.get("character_name"):
+            mtype = "character"
+            name = (manifest.get("character_name") or "").strip()
+            elements.append({"kind": "character", "id": name, "name": name,
+                             "exists": _character_exists(name)})
+        elif mtype in ("item", "item_bundle"):
+            existing = _existing_item_ids()
+            for r in _rows("db/items.json"):
+                iid = (r.get("id") or "").strip()
+                if iid:
+                    elements.append({"kind": "item", "id": iid, "name": r.get("name") or iid,
+                                     "exists": iid in existing})
+        elif mtype == "rule":
+            existing = _existing_rule_ids()
+            for r in _rows("db/rules.json"):
+                rid = (r.get("id") or "").strip()
+                if rid:
+                    elements.append({"kind": "rule", "id": rid,
+                                     "name": r.get("label") or r.get("name") or rid,
+                                     "exists": rid in existing})
+        elif mtype == "states":
+            existing = _existing_prompt_filter_ids()
+            for r in _rows("db/prompt_filters.json"):
+                fid = (r.get("id") or "").strip()
+                if fid:
+                    elements.append({"kind": "state", "id": fid, "name": r.get("label") or fid,
+                                     "exists": fid in existing})
+        elif mtype == "location":
+            # Location import always creates a NEW location (new UUID) — never overwrites.
+            elements.append({"kind": "location", "id": manifest.get("location_id") or "location",
+                             "name": manifest.get("location_name") or "Location", "exists": False})
+        elif mtype == "map_layout":
+            elements.append({"kind": "map_layout", "id": "map_layout",
+                             "name": f"Map layout ({manifest.get('count', '?')} positions)",
+                             "exists": False})
+        else:
+            raise ValueError(f"unsupported export type: {mtype!r}")
+
+        return {"type": mtype, "multi": len(elements) > 1, "elements": elements}
+    finally:
+        zf.close()
