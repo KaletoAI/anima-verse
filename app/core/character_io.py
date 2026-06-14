@@ -190,6 +190,48 @@ def export_character_to_zip(
                 json.dumps(rows, ensure_ascii=False, indent=2),
             )
 
+        # Referenced world items (definitions + image files) — equipped/inventory/
+        # outfit rows only hold item_id references; the items themselves live in
+        # the world-level `items` table and would otherwise be missing on import.
+        # Stored separately (db/items.json + item_files/) so the character import
+        # can restore them WITHOUT overwriting existing world items.
+        embedded_item_ids: List[str] = []
+        try:
+            from app.models.inventory import get_item
+            from app.core.content_io import _strip_runtime_keys, _item_dir_for
+            ref_ids: set = set()
+            for r in db_dump.get("inventory_items", []):
+                ref_ids.add((r.get("item_id") or "").strip())
+            for r in db_dump.get("equipped_items", []):
+                ref_ids.add((r.get("item_id") or "").strip())
+            for r in db_dump.get("equipped_pieces", []):
+                ref_ids.add((r.get("item_id") or "").strip())
+            for r in db_dump.get("outfits_sets", []):
+                try:
+                    for iid in json.loads(r.get("pieces") or "[]"):
+                        if isinstance(iid, str):
+                            ref_ids.add(iid.strip())
+                except Exception:
+                    pass
+            ref_ids.discard("")
+            item_rows: List[Dict[str, Any]] = []
+            for iid in sorted(ref_ids):
+                it = get_item(iid)
+                if not it or it.get("_shared"):
+                    continue  # shared-library items ship with every world
+                item_rows.append(_strip_runtime_keys(it))
+                src = _item_dir_for(iid, shared=False)
+                if src.exists():
+                    for fp in sorted(src.rglob("*")):
+                        if fp.is_file():
+                            zf.write(fp, f"item_files/{iid}/{fp.relative_to(src).as_posix()}")
+            if item_rows:
+                zf.writestr("db/items.json",
+                            json.dumps(item_rows, ensure_ascii=False, indent=2))
+                embedded_item_ids = [it["id"] for it in item_rows]
+        except Exception as e:
+            logger.warning("export: embedding items for %s failed: %s", character_name, e)
+
         # Manifest last so it sees the final list of entries
         manifest = {
             "version": MANIFEST_VERSION,
@@ -200,6 +242,7 @@ def export_character_to_zip(
                 "include_stories": include_stories,
             },
             "db_tables": sorted(db_dump.keys()),
+            "embedded_items": sorted(embedded_item_ids),
             "files": sorted(file_entries),
         }
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -352,6 +395,42 @@ def import_character_from_zip(
         if table == "characters":
             continue
         _restore_named(table)
+
+    # Embedded world items: restore ONLY those missing in the target world —
+    # never overwrite existing items (a character import must not mutate the
+    # world's item library). `items` is intentionally NOT in db_tables.
+    if "db/items.json" in zf.namelist():
+        try:
+            item_rows = json.loads(zf.read("db/items.json"))
+        except Exception as e:
+            logger.warning("import: items.json invalid JSON: %s", e)
+            item_rows = []
+        if isinstance(item_rows, list) and item_rows:
+            from app.core.content_io import _existing_item_ids, _item_dir_for
+            existing = _existing_item_ids()
+            new_ids: List[str] = []
+            with transaction() as t_conn:
+                for it in item_rows:
+                    iid = (it.get("id") or "").strip()
+                    if not iid or iid in existing:
+                        continue
+                    if _restore_table(t_conn, "items", [it]):
+                        new_ids.append(iid)
+            for iid in new_ids:
+                dest = _item_dir_for(iid, shared=False)
+                prefix = f"item_files/{iid}/"
+                for member in zf.namelist():
+                    if not member.startswith(prefix):
+                        continue
+                    safe = _safe_relpath(member[len(prefix):])
+                    if not safe:
+                        continue
+                    fp = dest / safe
+                    fp.parent.mkdir(parents=True, exist_ok=True)
+                    fp.write_bytes(zf.read(member))
+            if new_ids:
+                db_stats["items"] = len(new_ids)
+            logger.info("Import: %s — %d new world item(s) restored", character_name, len(new_ids))
 
     zf.close()
     logger.info(
