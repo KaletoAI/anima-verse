@@ -10,6 +10,7 @@
 import { cloneElement, useCallback, useEffect, useRef, useState,
   type ReactElement, type ReactNode,
   type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent } from 'react'
+import { createPortal } from 'react-dom'
 import GridLayout, { type Layout } from 'react-grid-layout'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAuth } from '../lib/AuthGate'
@@ -85,6 +86,10 @@ const GRID_PANELS = PANEL_META.filter((p) => p.kind !== 'dialog').map((p) => p.i
 const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((p) => p.id)
 const ICON_BY_ID: Record<string, IconName> = Object.fromEntries(
   PANEL_META.map((p) => [p.id, p.icon]))
+const LABEL_BY_ID: Record<string, string> = Object.fromEntries(
+  PANEL_META.map((p) => [p.id, p.label]))
+// Panels die sich vergrößert (view-only Overlay) anzeigen lassen. Erweiterbar.
+const EXPANDABLE = new Set<string>(['worldmap'])
 
 type IconMode = 'icon' | 'iconText'
 type ToolbarAlign = 'left' | 'right'
@@ -144,6 +149,7 @@ export function PlayerApp() {
   // Badges „offene Themen": ungelesene Telefon-Nachrichten + neue IG-Posts.
   const [phoneUnread, setPhoneUnread] = useState(0)
   const [igNew, setIgNew] = useState(0)
+  const [expanded, setExpanded] = useState<string | null>(null)  // Panel im View-only-Overlay vergrößert
   const igSeenRef = useRef<string | null>(null)  // zuletzt gesehene IG-Post-id
   const rootRef = useRef<HTMLDivElement | null>(null)
   const layoutLoaded = useRef(false)
@@ -377,6 +383,13 @@ export function PlayerApp() {
           <Icon name="sendBack" size={14} />
         </button>
       )}
+      {EXPANDABLE.has(id) && (
+        <button className="player-ctrl-btn"
+          onClick={() => setExpanded(id)} onMouseDown={(e) => e.stopPropagation()}
+          title={t('Enlarge')} aria-label={t('Enlarge')}>
+          <Icon name="maximize" size={14} />
+        </button>
+      )}
       {withClose && (
         <button className="player-ctrl-btn player-ctrl-close"
           onClick={() => closePanel(id)} onMouseDown={(e) => e.stopPropagation()}
@@ -386,6 +399,21 @@ export function PlayerApp() {
       )}
     </span>
   )
+
+  // Esc schließt das vergrößerte Panel-Overlay.
+  useEffect(() => {
+    if (!expanded) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExpanded(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [expanded])
+
+  // View-only-Inhalt eines Panels für die vergrößerte Anzeige. Erweiterbar:
+  // hier pro EXPANDABLE-Panel den (read-only) Inhalt zurückgeben.
+  const expandedContent = (id: string): ReactNode => {
+    if (id === 'worldmap') return <MapPanel currentLocationId={data?.location_id || ''} />
+    return null
+  }
 
   const load = useCallback(async () => {
     try {
@@ -1033,6 +1061,31 @@ export function PlayerApp() {
         </div>
       ))}
     </div>
+
+    {/* Vergrößertes Panel (view-only) — Portal an document.body, damit das
+        position:fixed-Overlay dem react-grid-layout-Transform entkommt. */}
+    {expanded && createPortal(
+      <div onClick={() => setExpanded(null)}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)', zIndex: 2000,
+                 display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3vh 3vw' }}>
+        <div onClick={(e) => e.stopPropagation()} className="player-panel"
+          style={{ width: '94vw', height: '94vh', display: 'flex', flexDirection: 'column' }}>
+          <div className="player-panel-head">
+            {headIcon(expanded)}{t(LABEL_BY_ID[expanded] || 'Map')}
+            <span className="player-head-ctrls">
+              <button className="player-ctrl-btn player-ctrl-close"
+                onClick={() => setExpanded(null)} title={t('Close')} aria-label={t('Close')}>
+                <Icon name="close" size={15} />
+              </button>
+            </span>
+          </div>
+          <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden', padding: 6 }}>
+            {expandedContent(expanded)}
+          </div>
+        </div>
+      </div>,
+      document.body,
+    )}
     </LightboxProvider>
   )
 }
