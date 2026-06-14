@@ -163,3 +163,4 @@ node_modules/
 # Test-/Runtime-Daten enthalten echte Welt-Prompts — NIE einchecken (auch nicht in demo)
 worlds/*/suitability_cases.json
 worlds/*/model_capabilities.json
+exports/
