@@ -411,7 +411,7 @@ export function PlayerApp() {
   // View-only-Inhalt eines Panels für die vergrößerte Anzeige. Erweiterbar:
   // hier pro EXPANDABLE-Panel den (read-only) Inhalt zurückgeben.
   const expandedContent = (id: string): ReactNode => {
-    if (id === 'worldmap') return <MapPanel currentLocationId={data?.location_id || ''} />
+    if (id === 'worldmap') return <MapPanel currentLocationId={data?.location_id || ''} autoFit />
     return null
   }
 

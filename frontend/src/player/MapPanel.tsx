@@ -120,10 +120,13 @@ function Cell({ loc, isActive, chars, events, travellingTo }: {
   )
 }
 
-export function MapPanel({ currentLocationId }: { currentLocationId: string }) {
+export function MapPanel({ currentLocationId, autoFit = false }:
+  { currentLocationId: string; autoFit?: boolean }) {
   const { t } = useI18n()
   const [data, setData] = useState<WorldMap | null>(null)
-  const savedRef = useRef<View | null>(loadView())
+  // autoFit (vergrößertes Overlay): gespeicherte Ansicht ignorieren, stattdessen
+  // die Karte in den Container einpassen — und NICHT zurückschreiben.
+  const savedRef = useRef<View | null>(autoFit ? null : loadView())
   const [zoom, setZoom] = useState(savedRef.current?.zoom ?? 1)
   const zoomRef = useRef(zoom)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -132,12 +135,13 @@ export function MapPanel({ currentLocationId }: { currentLocationId: string }) {
 
   // Persist zoom + scroll offset so the view is restored next time.
   const persist = useCallback(() => {
+    if (autoFit) return  // Overlay-Instanz darf die gespeicherte Panel-Ansicht nicht überschreiben
     const c = containerRef.current
     if (!c) return
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify({ zoom: zoomRef.current, sx: c.scrollLeft, sy: c.scrollTop }))
     } catch { /* ignore */ }
-  }, [])
+  }, [autoFit])
 
   useEffect(() => {
     let alive = true
@@ -285,6 +289,29 @@ export function MapPanel({ currentLocationId }: { currentLocationId: string }) {
       }
     })
   }, [data, gridW])
+
+  // autoFit: Karte in den Container einpassen (und bei Resize nachführen), damit
+  // sie im vergrößerten Overlay wirklich größer wird statt nur mehr Leerraum.
+  useEffect(() => {
+    if (!autoFit || !gridW || !gridH) return
+    const fit = () => {
+      const c = containerRef.current
+      if (!c || !c.clientWidth || !c.clientHeight) return
+      const z = Math.min(c.clientWidth / gridW, c.clientHeight / gridH)
+      if (!isFinite(z) || z <= 0) return
+      setZoom(Math.max(0.2, Math.min(z * 0.98, 6)))
+      requestAnimationFrame(() => {
+        const cc = containerRef.current
+        if (!cc) return
+        cc.scrollLeft = (cc.scrollWidth - cc.clientWidth) / 2
+        cc.scrollTop = (cc.scrollHeight - cc.clientHeight) / 2
+      })
+    }
+    fit()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fit) : null
+    if (ro && containerRef.current) ro.observe(containerRef.current)
+    return () => ro?.disconnect()
+  }, [autoFit, gridW, gridH])
 
   if (!data) return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('Loading…')}</div>
   if (!gridW && !data.characters.length) {
