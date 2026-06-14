@@ -52,6 +52,7 @@ export function SkillsTab({ character }: { character: string }) {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [locations, setLocations] = useState<LocationOpt[]>([])
   const [loading, setLoading] = useState(false)
+  const [selected, setSelected] = useState<string>('')  // skill_id im Detail-Pane
 
   const reload = useCallback(async () => {
     if (!character) return
@@ -155,61 +156,100 @@ export function SkillsTab({ character }: { character: string }) {
     return <div className="ga-placeholder">{t('No skills available.')}</div>
   }
 
+  const visible = skills.filter((s) => !PAIR_SECONDARY.has(s.skill_id))
+  const current = visible.find((s) => s.skill_id === selected) || visible[0]
+  const nameOf = (s: SkillInfo) =>
+    SKILL_PAIRS[s.skill_id] ? t(SKILL_PAIRS[s.skill_id].label) : (s.name || s.skill_id)
+  const onToggle = (s: SkillInfo, checked: boolean) => {
+    const pair = SKILL_PAIRS[s.skill_id]
+    return pair ? togglePair(s.skill_id, pair.partner, checked) : toggleEnabled(s, checked)
+  }
+
+  const fields = current?.config_fields ? Object.entries(current.config_fields) : []
+  const idHint = current
+    ? (SKILL_PAIRS[current.skill_id]
+        ? `${current.skill_id} + ${SKILL_PAIRS[current.skill_id].partner}`
+        : current.skill_id)
+    : ''
+
   return (
-    <div className="ga-form" style={{ gap: 12 }}>
-      {skills.filter((s) => !PAIR_SECONDARY.has(s.skill_id)).map((skill) => {
-        const fields = skill.config_fields ? Object.entries(skill.config_fields) : []
-        const pair = SKILL_PAIRS[skill.skill_id]
-        const displayName = pair ? t(pair.label) : (skill.name || skill.skill_id)
-        const idHint = pair ? `${skill.skill_id} + ${pair.partner}` : skill.skill_id
-        const onToggle = (checked: boolean) =>
-          pair ? togglePair(skill.skill_id, pair.partner, checked) : toggleEnabled(skill, checked)
-        return (
-          <div
-            key={skill.skill_id}
-            style={{
-              border: '1px solid var(--border, #30363d)',
-              borderRadius: 8,
-              padding: '10px 12px',
-              background: 'var(--bg-alt, #0d1117)',
-            }}
-          >
-            <label
-              className="ga-form-check"
-              style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontWeight: 600 }}
-            >
-              <input
-                type="checkbox"
-                checked={skill.enabled}
-                onChange={(e) => onToggle(e.target.checked)}
-              />
-              <span>{displayName}</span>
-              <code style={{ opacity: 0.4, fontWeight: 400, fontSize: '0.8em' }}>
-                {idHint}
-              </code>
+    <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+      {/* Liste: Aktivierung + Auswahl */}
+      <div style={{
+        flex: '0 0 230px', maxWidth: 280, display: 'flex', flexDirection: 'column', gap: 1,
+        border: '1px solid var(--border, #30363d)', borderRadius: 8, padding: 4,
+        maxHeight: '70vh', overflow: 'auto',
+      }}>
+        {visible.map((s) => {
+          const active = current?.skill_id === s.skill_id
+          return (
+            <div key={s.skill_id} onClick={() => setSelected(s.skill_id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                borderRadius: 6, cursor: 'pointer',
+                background: active ? 'rgba(120,170,255,0.16)' : 'transparent',
+                border: '1px solid ' + (active ? 'var(--accent, #6aa9ff)' : 'transparent'),
+              }}>
+              <input type="checkbox" checked={s.enabled}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => onToggle(s, e.target.checked)} />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                             whiteSpace: 'nowrap', fontSize: '0.9em', opacity: s.enabled ? 1 : 0.6 }}>
+                {nameOf(s)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Detail des gewählten Skills */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {!current ? (
+          <div className="ga-placeholder">{t('Select a skill.')}</div>
+        ) : (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <strong style={{ fontSize: '1.02em' }}>{nameOf(current)}</strong>
+              <code style={{ opacity: 0.4, fontSize: '0.8em' }}>{idHint}</code>
+            </div>
+            <label className="ga-form-check"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: '0.9em' }}>
+              <input type="checkbox" checked={current.enabled}
+                onChange={(e) => onToggle(current, e.target.checked)} />
+              {current.enabled ? t('Enabled') : t('Disabled')}
             </label>
-            {skill.description && (
-              <div style={{ opacity: 0.7, fontSize: '0.85em', margin: '4px 0 0 24px' }}>
-                {skill.description}
+            {current.description && (
+              <div style={{ opacity: 0.7, fontSize: '0.88em', marginTop: 8, lineHeight: 1.4 }}>
+                {current.description}
               </div>
             )}
-            {skill.enabled && fields.length > 0 && (
-              <div className="ga-form" style={{ marginTop: 10, marginLeft: 24, gap: 8 }}>
+            {current.enabled && fields.length > 0 && (
+              <div className="ga-form" style={{ marginTop: 14, gap: 8 }}>
                 {fields.map(([fieldName, field]) => (
                   <SkillField
                     key={fieldName}
                     field={field}
                     label={field.label || fieldName}
                     locations={locations}
-                    onChangeLocal={(v) => setFieldValue(skill.skill_id, fieldName, v)}
-                    onCommit={(v) => saveField(skill.skill_id, fieldName, v)}
+                    onChangeLocal={(v) => setFieldValue(current.skill_id, fieldName, v)}
+                    onCommit={(v) => saveField(current.skill_id, fieldName, v)}
                   />
                 ))}
               </div>
             )}
+            {current.enabled && fields.length === 0 && (
+              <div style={{ opacity: 0.45, fontSize: '0.85em', marginTop: 12 }}>
+                {t('No settings for this skill.')}
+              </div>
+            )}
+            {!current.enabled && (
+              <div style={{ opacity: 0.45, fontSize: '0.85em', marginTop: 12 }}>
+                {t('Enable this skill to configure it.')}
+              </div>
+            )}
           </div>
-        )
-      })}
+        )}
+      </div>
     </div>
   )
 }
