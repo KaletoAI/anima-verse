@@ -873,7 +873,7 @@ async def play_gallery_delete_image(character: str, filename: str, user=Depends(
 
 @router.get("/play/worldmap")
 async def play_worldmap(user=Depends(get_current_user)):
-    """Aggregierte 2.5D-Weltkarte: Orte (Grid/Passable/Z-Offset), Character-
+    """Aggregierte 2D-Weltkarte: Orte (Grid/Passable/Rotation), Character-
     Positionen (+Avatar/Aktivitaet/Reiseziel) und aktive disruption/danger-Events.
     Eine Anfrage statt N×Fetch — read-only fuer das Player-Karten-Panel."""
     from app.models.account import get_active_character
@@ -898,7 +898,6 @@ async def play_worldmap(user=Depends(get_current_user)):
             "grid_y": loc.get("grid_y"),
             "passable": bool(loc.get("passable")),
             "template_location_id": (loc.get("template_location_id") or ""),
-            "map_z_offset": int(loc.get("map_z_offset") or 0),
             "map_rotation_2d": int(loc.get("map_rotation_2d") or 0),
         })
 

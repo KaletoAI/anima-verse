@@ -45,7 +45,6 @@ interface Location {
   activity_hint?: string
   knowledge_item_id?: string
   passable?: boolean
-  map_z_offset?: number
   image_prompt_day?: string
   image_prompt_night?: string
   image_prompt_map_2d?: string
@@ -155,7 +154,6 @@ export function WorldTab() {
         activity_hint: src.activity_hint,
         knowledge_item_id: src.knowledge_item_id,
         passable: src.passable,
-        map_z_offset: src.map_z_offset,
       })
       toast(t('Location copied'))
       await reload()
@@ -340,7 +338,6 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
         activity_hint: draft.activity_hint,
         knowledge_item_id: draft.knowledge_item_id,
         passable: draft.passable,
-        map_z_offset: draft.map_z_offset,
         image_prompt_day: draft.image_prompt_day,
         image_prompt_night: draft.image_prompt_night,
         image_prompt_map_2d: draft.image_prompt_map_2d,
@@ -422,17 +419,6 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
                 </option>
               ))}
             </select>
-          </Field>
-          <Field label={t('Map Z offset')}>
-            <input
-              type="number"
-              className="ga-input"
-              style={{ width: 80 }}
-              min={-10}
-              max={10}
-              value={draft.map_z_offset ?? 0}
-              onChange={(e) => upd('map_z_offset', parseInt(e.target.value, 10) || 0)}
-            />
           </Field>
         </div>
 

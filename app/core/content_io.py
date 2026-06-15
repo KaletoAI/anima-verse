@@ -687,7 +687,7 @@ def import_states_from_zip(
 
 def export_map_layout_to_zip() -> bytes:
     """Snapshot every location's grid position. Locations themselves are NOT
-    included — only id/name/grid_x/grid_y/map_z_offset."""
+    included — only id/name/grid_x/grid_y."""
     from app.models.world import list_locations
     rows: List[Dict[str, Any]] = []
     for loc in list_locations():
@@ -696,7 +696,6 @@ def export_map_layout_to_zip() -> bytes:
             "name": loc.get("name"),
             "grid_x": loc.get("grid_x"),
             "grid_y": loc.get("grid_y"),
-            "map_z_offset": loc.get("map_z_offset"),
         })
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -769,8 +768,6 @@ def import_map_layout_from_zip(
             target["grid_x"] = int(entry["grid_x"])
         if entry.get("grid_y") is not None:
             target["grid_y"] = int(entry["grid_y"])
-        if "map_z_offset" in entry:
-            target["map_z_offset"] = entry.get("map_z_offset")
         applied.append(target.get("name") or target.get("id") or "?")
 
     _save_world_data(data)

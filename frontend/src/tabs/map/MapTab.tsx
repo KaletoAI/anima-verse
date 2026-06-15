@@ -27,7 +27,6 @@ interface Location {
   template_location_id?: string
   grid_x?: number | null
   grid_y?: number | null
-  map_z_offset?: number
   map_image_2d?: string
   map_rotation_2d?: number
   description?: string

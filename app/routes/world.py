@@ -276,7 +276,6 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
         activity_hint = data.get("activity_hint")
         knowledge_item_id = data.get("knowledge_item_id")
         passable = data.get("passable")
-        map_z_offset = data.get("map_z_offset")
         entry_room = data.get("entry_room")
         indoor = data.get("indoor")
         if not location_name:
@@ -293,7 +292,7 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
         # Extra-Felder direkt in der Location setzen
         _has_extra = (danger_level is not None or event_settings is not None
                       or outfit_type is not None or knowledge_item_id is not None
-                      or passable is not None or map_z_offset is not None
+                      or passable is not None
                       or entry_room is not None or indoor is not None
                       or decency is not None or style_hint is not None
                       or swim_allowed is not None or activity_hint is not None)
@@ -324,11 +323,6 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
                         _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
                     if passable is not None:
                         _l["passable"] = bool(passable)
-                    if map_z_offset is not None:
-                        try:
-                            _l["map_z_offset"] = max(-10, min(10, int(map_z_offset)))
-                        except (TypeError, ValueError):
-                            pass
                     if entry_room is not None:
                         _l["entry_room"] = (entry_room or "").strip()
                     if indoor is not None:
@@ -367,7 +361,6 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
         activity_hint = data.get("activity_hint")
         knowledge_item_id = data.get("knowledge_item_id")
         passable = data.get("passable")
-        map_z_offset = data.get("map_z_offset")
         entry_room = data.get("entry_room")
         indoor = data.get("indoor")
 
@@ -395,7 +388,7 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
         # Extra-Felder (inkl. knowledge_item_id) direkt in der Location setzen
         _has_extra = (danger_level is not None or event_settings is not None
                       or outfit_type is not None or knowledge_item_id is not None
-                      or passable is not None or map_z_offset is not None
+                      or passable is not None
                       or entry_room is not None or indoor is not None
                       or decency is not None or style_hint is not None
                       or swim_allowed is not None or activity_hint is not None)
@@ -426,11 +419,6 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
                         _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
                     if passable is not None:
                         _l["passable"] = bool(passable)
-                    if map_z_offset is not None:
-                        try:
-                            _l["map_z_offset"] = max(-10, min(10, int(map_z_offset)))
-                        except (TypeError, ValueError):
-                            pass
                     if entry_room is not None:
                         _l["entry_room"] = (entry_room or "").strip()
                     if indoor is not None:
