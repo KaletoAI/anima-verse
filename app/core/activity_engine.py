@@ -86,6 +86,11 @@ def _evaluate_single_condition_inner(
     location_id: str, room_id: str = "") -> Tuple[bool, str]:
     """Wertet eine einzelne Condition aus (ohne NOT-Handling)."""
 
+    # --- always / true: bedingungslos wahr (z.B. fuer eine harte Block-Regel,
+    # die einen Ort generell unbetretbar macht). ---
+    if cond in ("always", "true"):
+        return True, ""
+
     # --- alone ---
     if cond == "alone":
         return _check_alone(character_name, location_id)

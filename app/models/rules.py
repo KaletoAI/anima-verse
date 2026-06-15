@@ -426,6 +426,18 @@ def check_access(character_name: str,
     # Danger-Level des Ziels ermitteln
     target_danger = _get_target_danger_level(location_id, room_id)
 
+    # Template-ID des Ziels: bei geklontem Terrain (z.B. "Meer", als Template
+    # auf viele Tiles geklont) soll eine Regel auf das TEMPLATE alle Klone
+    # treffen. Wir matchen scope=location daher auch gegen die template_location_id.
+    target_template_id = ""
+    try:
+        from app.models.world import get_location_by_id
+        _tl = get_location_by_id(location_id)
+        if _tl:
+            target_template_id = (_tl.get("template_location_id") or "").strip()
+    except Exception:
+        target_template_id = ""
+
     for rule in load_rules():
         if rule.get("type") != "block":
             continue
@@ -437,14 +449,19 @@ def check_access(character_name: str,
         if rule_char and rule_char != character_name:
             continue
 
-        # Ziel-Match pruefen
+        # Ziel-Match pruefen. Feldnamen tolerant lesen: die RulesTab speichert
+        # location/rooms/min_danger_level, der Event-Pfad location_id/room_ids/
+        # min_danger — beide Schemata muessen greifen (sonst sind UI-Regeln
+        # wirkungslos).
         target = rule.get("target", {})
         scope = target.get("scope", "")
+        t_loc = (target.get("location_id") or target.get("location") or "").strip()
+        t_rooms = target.get("room_ids") or target.get("rooms") or []
 
         matched = False
-        if scope == "location" and target.get("location_id") == location_id:
+        if scope == "location" and t_loc and t_loc in (location_id, target_template_id):
             matched = True
-        elif scope == "room" and target.get("location_id") == location_id and room_id in (target.get("room_ids") or []):
+        elif scope == "room" and t_loc == location_id and room_id in t_rooms:
             matched = True
         elif scope == "any_room":
             # Gilt fuer jeden Raum. Zwei Faelle:
@@ -482,7 +499,7 @@ def check_access(character_name: str,
                     # Keine Condition → any_room blockt grundsaetzlich
                     matched = True
         elif scope == "danger_level":
-            min_danger = int(target.get("min_danger", 0))
+            min_danger = int(target.get("min_danger", target.get("min_danger_level", 0)) or 0)
             if target_danger >= min_danger:
                 matched = True
 

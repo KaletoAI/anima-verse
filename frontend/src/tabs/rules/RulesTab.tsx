@@ -574,6 +574,7 @@ function RuleForm({ draft, locations, characters, activities, onUpdate }: RuleFo
         label={t('Condition')}
         hint={
           <>
+            <strong>{t('Always')}</strong> always (hard block) · {' '}
             <strong>{t('Status')}</strong> stamina&gt;N, courage&lt;N, stress&gt;N, lust&gt;N · {' '}
             <strong>{t('Time / presence')}</strong> alone, night, day · {' '}
             <strong>{t('Relationship')}</strong> relationship:Name&gt;N, romantic:Name&gt;N · {' '}
