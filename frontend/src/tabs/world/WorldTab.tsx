@@ -57,6 +57,17 @@ interface Location {
 
 const EVENT_CATEGORIES = ['ambient', 'social', 'disruption', 'danger'] as const
 
+// Danger level scale (0–5). Drives hourly stamina/stat drain (danger_system.py)
+// and danger-based block rules. Labels describe what each step means.
+const DANGER_LEVELS: Array<{ value: number; label: string }> = [
+  { value: 0, label: 'Safe' },
+  { value: 1, label: 'Low' },
+  { value: 2, label: 'Moderate' },
+  { value: 3, label: 'High' },
+  { value: 4, label: 'Severe' },
+  { value: 5, label: 'Extreme' },
+]
+
 interface GalleryResponse {
   images: string[]
   image_rooms?: Record<string, string>
@@ -433,16 +444,17 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
               onChange={(e) => upd('passable', e.target.checked)}
             />
           </Field>
-          <Field label={t('Danger level')}>
-            <input
-              type="number"
+          <Field label={t('Danger level')}
+            hint={t('Drives hourly stamina/stat drain and danger-based rules; higher = more dangerous.')}>
+            <select
               className="ga-input"
-              style={{ width: 80 }}
-              min={0}
-              max={5}
               value={draft.danger_level ?? 0}
               onChange={(e) => upd('danger_level', parseInt(e.target.value, 10) || 0)}
-            />
+            >
+              {DANGER_LEVELS.map((d) => (
+                <option key={d.value} value={d.value}>{d.value} — {t(d.label)}</option>
+              ))}
+            </select>
           </Field>
         </div>
 
