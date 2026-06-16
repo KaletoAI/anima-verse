@@ -600,6 +600,14 @@ def run_chat_turn(
             for _name, _inp in _matches:
                 _fn = ctx["tools_dict"].get(_name)
                 if not _fn:
+                    # Tool-LLM hat ein Tool aufgerufen, das dieser Character gar
+                    # nicht hat (Name-Mismatch oder nicht aktiviert) → still
+                    # verworfen war als "Tool-Call im Log, aber nie ausgeführt"
+                    # sichtbar. Jetzt geloggt, damit der Grund auftaucht.
+                    logger.warning("run_chat_turn[%s]: Tool-Call '%s' ohne Executor "
+                                   "(nicht verfügbar/Name-Mismatch) — übersprungen "
+                                   "(verfügbar: %s)", responder, _name,
+                                   ", ".join(sorted(ctx["tools_dict"].keys())))
                     continue
                 if _name in _content_set:
                     logger.info("run_chat_turn[%s]: Content-Tool %s übersprungen "
