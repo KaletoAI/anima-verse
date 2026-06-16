@@ -104,7 +104,7 @@
    PlayerApp spielt diese Höhe als Grid-Rows zurück → Fenster passt sich an. */
 .player-panel[data-autosize="1"] > :not(.player-panel-head) {
   /* !important, damit die Regel auch Panels mit INLINE-gesetztem flex/overflow
-     greift (z.B. Map/Compass, Surroundings, 2.5D) — sonst gewinnt der Inline-Style
+     greift (z.B. Map/Compass, Surroundings) — sonst gewinnt der Inline-Style
      und Autosize misst die Inhaltshöhe nicht. */
   flex: 0 0 auto !important;
   overflow: visible !important;

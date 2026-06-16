@@ -1,7 +1,7 @@
 /**
- * MapPanel — flache 2D-Weltkarte (read-only) im Player-UI. Einziges Karten-
- * Panel: die frühere 2.5D-Iso-Karte wurde hierher zusammengeführt. Zeigt das
- * flache Grid (2D-Tile + Per-Zell-Rotation, Highlight des aktuellen Orts) und
+ * MapPanel — flache 2D-Weltkarte (read-only) im Player-UI, das einzige
+ * Karten-Panel. Zeigt das flache Grid (2D-Tile + Per-Zell-Rotation, Highlight
+ * des aktuellen Orts) und
  * darüber die Live-Infos aus /play/worldmap: Character-Avatare am Ort (inkl.
  * „unterwegs"-Badge), Event-Pins (disruption/danger) und ein Tray für heimat-
  * lose + schlafende Characters. Pan (Ziehen auf leerer Fläche) + Zoom (Mausrad
