@@ -389,6 +389,20 @@ def find_tool_calls(format_name: str, text: str,
                 logger.debug("Fallback-Pattern hat Tool erkannt: %s", matches)
                 raw_matches = [(name, inp.strip()) for name, inp in matches]
 
+    # Offenes End-Tag: LLMs lassen beim LETZTEN <tool name="X"> oft das
+    # schliessende </tool> weg (besonders bei einem JSON-lastigen letzten Tag).
+    # Der closed-Pattern oben verliert es dann komplett. Hier das letzte
+    # unverschlossene Tag bis Textende nachziehen.
+    _last_open = None
+    for _m in re.finditer(r'<tool\s+name="(\w+)">', text, re.IGNORECASE):
+        _last_open = _m
+    if _last_open and "</tool>" not in text[_last_open.end():]:
+        _nm = _last_open.group(1)
+        _inp = text[_last_open.end():].strip()
+        if _inp and not any(n == _nm and i.strip() == _inp for n, i in raw_matches):
+            raw_matches.append((_nm, _inp))
+            logger.debug("Offenes End-Tag nachgezogen: %s", _nm)
+
     if not raw_matches:
         return []
 
