@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from './i18n/I18nProvider'
 import { TABS, isTabId, type TabId } from './tabs/registry'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { GenerationIndicator } from './components/GenerationIndicator'
 import { useAuth } from './lib/AuthGate'
 
 function readHashTab(): TabId {
@@ -35,6 +36,7 @@ export default function App() {
         </a>
         <h1>{t('Game Admin')}</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <GenerationIndicator />
           {user ? <span style={{ opacity: 0.7, fontSize: '0.85em' }}>{user.username}</span> : null}
           <button className="ga-btn ga-btn-sm" onClick={() => { void logout() }}>{t('Logout')}</button>
         </div>
