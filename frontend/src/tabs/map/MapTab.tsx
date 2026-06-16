@@ -75,12 +75,10 @@ export function MapTab() {
   const [gen, setGen] = useState<{ loc: Location; type: 'map_2d' } | null>(null)
   const [fit, setFit] = useState<{ loc: Location; prompt: string } | null>(null)
   const [edge, setEdge] = useState<{ loc: Location; available: Record<string, string> } | null>(null)
-  const [mapSuffix, setMapSuffix] = useState({ map_2d: '' })
   const [mapfit, setMapfit] = useState({ target: '' })
   useEffect(() => {
-    apiGet<{ map_2d_image_prompt_suffix?: string; mapfit_imagegen_default?: string }>('/world/imagegen-options')
+    apiGet<{ mapfit_imagegen_default?: string }>('/world/imagegen-options')
       .then((d) => {
-        setMapSuffix({ map_2d: d.map_2d_image_prompt_suffix || '' })
         setMapfit({ target: d.mapfit_imagegen_default || '' })
       })
       .catch(() => { /* ignore */ })
@@ -610,9 +608,6 @@ export function MapTab() {
           title={t('Generate 2D icon — {name}').replace('{name}', gen.loc.name)}
           defaultPrompt={buildDefaultPrompt(gen.loc)}
           hideNegative
-          settingsSuffix={
-            mapSuffix.map_2d ? { label: t('2D map icon'), text: mapSuffix.map_2d } : undefined
-          }
           onSubmit={(payload) => submitGen(payload, gen)}
           onClose={() => setGen(null)}
         />

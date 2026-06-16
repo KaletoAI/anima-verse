@@ -30,6 +30,7 @@ import { SelfPanel } from './SelfPanel'
 import { OthersPanel } from './OthersPanel'
 import { BelongingsPanel } from './BelongingsPanel'
 import { MindPanel } from './MindPanel'
+import { AvatarSettingsPanel } from './AvatarSettingsPanel'
 import { GalleryPanel } from './GalleryPanel'
 import { InstagramPanel } from './InstagramPanel'
 import { PhonePanel } from './PhonePanel'
@@ -79,6 +80,7 @@ const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | '
   { id: 'instagram', label: 'Instagram', icon: 'instagram' },
   { id: 'phone', label: 'Phone', icon: 'phone' },
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { id: 'settings', label: 'Avatar', icon: 'sliders', kind: 'dialog' },
   { id: 'layouts', label: 'Layouts', icon: 'layouts', kind: 'dialog' },
 ]
 const ALL_PANELS = PANEL_META.map((p) => p.id)
@@ -952,6 +954,7 @@ export function PlayerApp() {
   const layoutsMeta = PANEL_META.find((p) => p.id === 'layouts')!
   const fixedCluster = (
     <>
+      {tbBtn('settings', t('Avatar'), 'sliders', open.includes('settings'), () => togglePanel('settings'))}
       {tbBtn('layouts', layoutsMeta.label, layoutsMeta.icon, open.includes('layouts'), () => togglePanel('layouts'))}
       <button onClick={toggleFreeze} aria-pressed={frozen}
         title={frozen ? t('Unfreeze layout (responsive columns)') : t('Freeze layout (scale with window)')}
@@ -1056,6 +1059,7 @@ export function PlayerApp() {
               {id === 'layouts' && (
                 <LayoutsPanel presets={presets} onSave={savePreset} onLoad={loadPreset} onDelete={deletePreset} />
               )}
+              {id === 'settings' && <AvatarSettingsPanel avatar={data?.avatar || ''} />}
             </div>
           </div>
         </div>

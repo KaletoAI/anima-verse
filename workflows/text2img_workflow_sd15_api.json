@@ -13,7 +13,7 @@
   },
   "61": {
     "inputs": {
-      "value": "top-down orthographic map tile; its edges blend into the adjacent terrain — ocean with wavy blue water, grassy shore, small wooden house with a roof to the east; colors, tones and art style merge smoothly across the edges, cohesive unified palette and lighting, no hard seams"
+      "value": ""
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -196,7 +196,7 @@
   },
   "312": {
     "inputs": {
-      "ckpt_name": "SD15-Cyberrealistic-fp32.safetensors"
+      "ckpt_name": ""
     },
     "class_type": "CheckpointLoaderSimple",
     "_meta": {

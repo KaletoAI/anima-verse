@@ -370,9 +370,15 @@ def generate_item_image_sync(
         logger.warning("Item-Bild [%s]: Kein Backend verfuegbar", item_id)
         return False
 
-    if backend.prompt_prefix and not custom_prompt:
-        prompt_text = f"{backend.prompt_prefix}, {prompt_text}"
-    negative = (overrides.get("negative_prompt") or "").strip() or (backend.negative_prompt or "")
+    from app.core import config as _cfg
+    _ucp = _cfg.resolve_use_case_style(
+        "item",
+        getattr(active_wf, "image_family", "") if active_wf else "",
+        getattr(active_wf, "workflow_file", "") if active_wf else "",
+        getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+    if _ucp.get("prompt_style") and not custom_prompt:
+        prompt_text = f"{_ucp['prompt_style']}, {prompt_text}"
+    negative = (overrides.get("negative_prompt") or "").strip() or _ucp.get("prompt_negative", "")
 
     # Items werden mit der Default-Aufloesung des Workflows generiert
     # (kleinere Sizes crashen ComfyUI). Die spaetere Downscale-Pipeline
@@ -381,7 +387,7 @@ def generate_item_image_sync(
     if backend.api_type == "comfyui" and active_wf:
         if active_wf.workflow_file:
             params["workflow_file"] = active_wf.workflow_file
-        _model_key = "unet" if active_wf.has_input_unet else "model"
+        _model_key = "unet" if (active_wf.has_input_unet or active_wf.has_input_safetensors) else "model"
         # Model-Override: aus overrides oder Workflow-Default
         _model_val = (overrides.get("model_override") or "").strip() or active_wf.model
         if _model_val:

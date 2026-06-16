@@ -261,15 +261,16 @@ def _do_generate(event_id: str,
         logger.warning("Event-Bild [%s]: kein Backend verfuegbar", event_id)
         return None
 
+    from app.core import config as _cfg
+    _ucp = _cfg.resolve_use_case_style(
+        "event",
+        getattr(active_workflow, "image_family", "") if active_workflow else "",
+        getattr(active_workflow, "workflow_file", "") if active_workflow else "",
+        getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
     full_prompt = image_prompt.strip()
-    if active_workflow and active_workflow.prompt_style:
-        full_prompt = f"{active_workflow.prompt_style}, {full_prompt}"
-    elif getattr(backend, "prompt_prefix", ""):
-        full_prompt = f"{backend.prompt_prefix}, {full_prompt}"
-
-    negative = getattr(backend, "negative_prompt", "") or ""
-    if active_workflow and getattr(active_workflow, "negative_prompt", ""):
-        negative = active_workflow.negative_prompt
+    if _ucp.get("prompt_style"):
+        full_prompt = f"{_ucp['prompt_style']}, {full_prompt}"
+    negative = _ucp.get("prompt_negative", "")
 
     try:
         denoise = float(os.environ.get("EVENT_IMAGE_DENOISE_STRENGTH", "0.7"))
@@ -286,7 +287,7 @@ def _do_generate(event_id: str,
     if active_workflow and active_workflow.workflow_file:
         params["workflow_file"] = active_workflow.workflow_file
         if active_workflow.model:
-            _model_key = "unet" if active_workflow.has_input_unet else "model"
+            _model_key = "unet" if (active_workflow.has_input_unet or active_workflow.has_input_safetensors) else "model"
             params[_model_key] = active_workflow.model
         if active_workflow.clip:
             params["clip_name"] = active_workflow.clip

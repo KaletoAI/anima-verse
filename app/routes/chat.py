@@ -447,8 +447,9 @@ async def visualize(request: Request) -> Dict[str, Any]:
             if skill.__class__.__name__ == "ImageGenerationSkill":
                 for wf in getattr(skill, "comfy_workflows", []):
                     if wf.name == workflow:
-                        workflow_image_model = wf.image_model
-                        workflow_instruction = wf.prompt_instruction
+                        workflow_image_model = wf.image_family
+                        from app.core.config import get_use_case_prompts as _gucp
+                        workflow_instruction = _gucp("character", wf.image_family).get("prompt_instruction", "")
                 break
 
     # Image-Prompt via LLM generieren (mit Szenen-Kontext)
@@ -1635,7 +1636,11 @@ async def chat(request: Request) -> StreamingResponse:
         log_task="chat_stream",
         deferred_tools=_deferred_tools,
         content_tools=_content_tools,
-        mode=mode)
+        mode=mode,
+        # A (plan-follow-room-conversation-bug): im in-person-Gespräch keinen
+        # Move/SetLocation im selben Antwort-Turn — man geht nicht weg, während
+        # man spricht. Remote (messaging/phone) bleibt unberührt.
+        suppress_move_in_conversation=(medium == "in_person"))
 
     async def generate():
         # Queue-Tracking: Chat als aktiv registrieren (pausiert nur Provider-Queue)

@@ -41,9 +41,7 @@ class ComfyWorkflow:
     kind: WorkflowKind = WorkflowKind.Z_IMAGE  # erkannt aus Workflow-JSON-Nodes
     ref_slot_count: int = 0     # hoechster input_reference_image_N Slot (QWEN_STYLE) — Slot N = Location, 1..N-1 = Personen
     compatible_backends: list = field(default_factory=list)  # Backend-Namen, leer = alle ComfyUI
-    prompt_style: str = "photorealistic"  # Stil-Adjektiv / Style-Keywords (Summary + Style-Zeile)
-    image_model: str = ""
-    prompt_instruction: str = ""
+    image_family: str = ""      # natural/keywords — wie das Modell Prompts will
     has_input_unet: bool = False  # Workflow hat eigenen input_unet Node (nicht input_model)
     has_input_safetensors: bool = False  # Workflow hat input_safetensors Node (z.B. Flux2 UNETLoader)
     clip: str = ""              # CLIP-Modell fuer den Workflow (clip_name1 bei DualCLIPLoader)
@@ -56,7 +54,6 @@ class ComfyWorkflow:
     width: int = 0              # Default-Breite (0 = Backend-Default nutzen)
     height: int = 0             # Default-Hoehe (0 = Backend-Default nutzen)
     filter: str = ""            # Glob-Pattern fuer Model/LoRA-Filterung im Frontend (z.B. "Z-Image*")
-    negative_prompt: str = ""   # Default-Negativ-Prompt (ueberschreibt Backend-Default)
 
 import requests
 
@@ -265,10 +262,7 @@ class ImageGenerationSkill(BaseSkill):
                 logger.warning("ComfyWorkflow %s (%s): Kein WORKFLOW_FILE, ueberspringe", wf_id, wf_name)
                 continue
             wf_model = os.environ.get(f"{prefix}MODEL", "").strip()
-            wf_prompt_style = os.environ.get(f"{prefix}PROMPT_STYLE", "").strip() or "photorealistic"
-            wf_negative_prompt = os.environ.get(f"{prefix}PROMPT_NEGATIVE", "").strip()
-            wf_image_model = os.environ.get(f"{prefix}IMAGE_MODEL", "").strip()
-            wf_prompt_instruction = os.environ.get(f"{prefix}PROMPT_INSTRUCTION", "").strip()
+            wf_image_family = os.environ.get(f"{prefix}IMAGE_FAMILY", "").strip()
             # Kompatible Backends (kommasepariert), leer = alle ComfyUI-Backends
             raw_skills = os.environ.get(f"{prefix}SKILL", "").strip()
             compatible = [s.strip() for s in raw_skills.split(",") if s.strip()] if raw_skills else []
@@ -375,10 +369,7 @@ class ImageGenerationSkill(BaseSkill):
                 clip=wf_clip,
                 clip2=wf_clip2,
                 compatible_backends=compatible,
-                prompt_style=wf_prompt_style,
-                negative_prompt=wf_negative_prompt,
-                image_model=wf_image_model,
-                prompt_instruction=wf_prompt_instruction,
+                image_family=wf_image_family,
                 has_loras=has_loras,
                 has_seed=has_seed,
                 has_separated_prompt=has_separated_prompt,
@@ -1146,8 +1137,6 @@ class ImageGenerationSkill(BaseSkill):
                 "workflow_file": wf.workflow_file,
                 "model": wf.model,
                 "compatible_backends": wf.compatible_backends,
-                "prompt_style": wf.prompt_style,
-                "negative_prompt": wf.negative_prompt,
                 "has_loras": wf.has_loras,
                 "has_seed": wf.has_seed,
                 "default_loras": wf.default_loras,
@@ -1184,8 +1173,6 @@ class ImageGenerationSkill(BaseSkill):
         """
         defaults = {
             "enabled": backend.instance_enabled,
-            "prompt_prefix": backend.prompt_prefix,
-            "negative_prompt": backend.negative_prompt,
         }
         if hasattr(backend, 'width'):
             defaults["width"] = backend.width
@@ -1761,6 +1748,7 @@ class ImageGenerationSkill(BaseSkill):
             "user_input": ctx.get("user_input", ""),
             "profile_only": ctx.get("profile_only", False),
             "to_avatar_gallery": ctx.get("to_avatar_gallery", False),
+            "image_use_case": ctx.get("image_use_case", ""),
         }
 
         if isinstance(data.get("prompt"), str):
@@ -1882,16 +1870,19 @@ class ImageGenerationSkill(BaseSkill):
         # Lade per-Agent per-Instanz Config
         cfg = self._get_instance_config(character_name, backend)
 
-        # Prompt Style: Workflow hat Prioritaet, dann Backend-Prefix (externe Provider)
-        if active_workflow and active_workflow.prompt_style:
-            prompt_style = active_workflow.prompt_style
-        else:
-            prompt_style = backend.prompt_prefix or "photorealistic"
-        # Negative Prompt: Workflow hat Prioritaet, dann per-Agent Config, dann Backend-Default
-        if active_workflow and active_workflow.negative_prompt:
-            negative_prompt = active_workflow.negative_prompt
-        else:
-            negative_prompt = cfg.get("negative_prompt", backend.negative_prompt)
+        # Style/Negative/Instruction kommen AUSSCHLIESSLICH aus dem Use-Case
+        # (Admin-Override oder eingebauter Default). Kein Workflow-/Backend-
+        # Fallback mehr — der Style gehoert zum FALL der Generierung, nicht zum
+        # Modell. Familie (natural/keywords) wird aus dem "Target Prompt Stil"
+        # (image_model) des aufgeloesten Workflows abgeleitet.
+        # Default-Use-Case "character" — un-verdrahtete Gen-Pfade bekommen so den
+        # photoreal Character-Style statt eines leeren Styles.
+        from app.core import config as _cfg_mod
+        _uc_name = (input_data.get("image_use_case") or "character").strip()
+        _uc_img_model = getattr(active_workflow, "image_family", "") if active_workflow else ""
+        _ucp = _cfg_mod.get_use_case_prompts(_uc_name, _uc_img_model)
+        prompt_style = _ucp.get("prompt_style", "")
+        negative_prompt = _ucp.get("prompt_negative", "")
 
         # Task im Queue-System registrieren fuer einheitliche Sichtbarkeit.
         # start_running=False: Prompt-Build (LLM-Calls) + GPU-Kanal-Wartezeit
@@ -1982,13 +1973,15 @@ class ImageGenerationSkill(BaseSkill):
                     set_profile=set_profile,
                     item_ids=_item_ids)
 
-                # Ausschlussregeln per WorkflowKind:
-                #   QWEN_STYLE -> Outfit/Activity/Location aus Text strippen
-                #                 (Style-Conditioning macht das visuell)
-                #   FLUX_BG/Z_IMAGE -> alles im Text behalten (Charaktere kommen
-                #                 ueber Post-Processing, Outfit muss im Prompt sein)
+                # Ausschlussregeln per WorkflowKind: bei QWEN_STYLE entfaellt nur
+                # die Location, und auch nur wenn ein Raum-Ref tatsaechlich einen
+                # Slot bekommt (Prio-Plan, max_slots). Outfit + Aktivitaet bleiben
+                # immer im Text. FLUX_BG/Z_IMAGE -> alles im Text.
                 _excl_kind = active_workflow.kind.value if active_workflow else None
-                builder.apply_exclusion_rules(pv, kind=_excl_kind)
+                _excl_slots = (active_workflow.ref_slot_count
+                               if (active_workflow and active_workflow.ref_slot_count)
+                               else None)
+                builder.apply_exclusion_rules(pv, kind=_excl_kind, max_slots=_excl_slots)
 
                 # RP-Szene-Kontext als Scene-Prompt anhaengen
                 pv.scene_prompt = prompt_text
@@ -2026,7 +2019,7 @@ class ImageGenerationSkill(BaseSkill):
                 from app.core.prompt_adapters import (
                     get_target_model, render as adapter_render,
                     canonical_to_dict, maybe_enhance_via_llm)
-                _wf_image_model = getattr(active_workflow, "image_model", "") if active_workflow else ""
+                _wf_image_model = getattr(active_workflow, "image_family", "") if active_workflow else ""
                 _wf_file = getattr(active_workflow, "workflow_file", "") if active_workflow else ""
                 _backend_model = getattr(backend, "model", "") if backend else ""
                 _target_model = get_target_model(_wf_image_model, _wf_file, _backend_model)
@@ -2034,8 +2027,9 @@ class ImageGenerationSkill(BaseSkill):
                 template_prompt = assembled["input_prompt_positiv"]
                 prompt_without_style = assembled["prompt_without_style"]
 
-                # Optional LLM-Enhancement ueber Workflow-Config (zentral, nicht per-Character)
-                _wf_instruction = getattr(active_workflow, "prompt_instruction", "") if active_workflow else ""
+                # Optional LLM-Enhancement: Use-Case-Instruction hat Vorrang vor
+                # (zentral, nicht per-Character) — kommt aus dem Use-Case.
+                _wf_instruction = _ucp.get("prompt_instruction", "")
                 enhanced_prompt, _prompt_method = maybe_enhance_via_llm(
                     template_prompt, pv,
                     target_model=_target_model,
@@ -2093,7 +2087,7 @@ class ImageGenerationSkill(BaseSkill):
                 # mit Adapter rendern kann.
                 from app.core.prompt_adapters import (
                     get_target_model, canonical_to_dict)
-                _wf_image_model = getattr(active_workflow, "image_model", "") if active_workflow else ""
+                _wf_image_model = getattr(active_workflow, "image_family", "") if active_workflow else ""
                 _wf_file = getattr(active_workflow, "workflow_file", "") if active_workflow else ""
                 _backend_model = getattr(backend, "model", "") if backend else ""
                 _target_model = get_target_model(_wf_image_model, _wf_file, _backend_model)
@@ -2378,25 +2372,28 @@ class ImageGenerationSkill(BaseSkill):
                         logger.info("Model-Resolve: %s -> %s (Backend: %s)",
                                     _cur_model, _resolved, b.name)
                         params[_model_key] = _resolved
-                elif _cur_model and b.api_type != "comfyui":
-                    # Cross-Type-Fallback: ComfyUI-Modellnamen (z.B.
-                    # "Flux.2-9B-Q5_K_M.gguf") sind auf Cloud-Backends
-                    # (Together/CivitAI/Mammouth) ungueltig. Modell raus,
-                    # Backend nutzt seinen konfigurierten Default.
-                    if _cur_model != getattr(b, "model", ""):
+                elif b.api_type != "comfyui":
+                    # Cross-Type-Fallback: lokale ComfyUI-Modellnamen (z.B.
+                    # "Flux2-9B-nvfp4.safetensors") sind auf Cloud-Backends
+                    # (Together/CivitAI/Mammouth) ungueltig. ALLE lokalen
+                    # Modell-/LoRA-Keys raus — egal unter welchem Key sie stehen
+                    # (model/unet/checkpoint/gguf) — der Cloud-Backend nutzt
+                    # seinen eigenen self.model. (Frueher nur an _model_key
+                    # gekoppelt; das wich zwischen world.py und run_with_fallback
+                    # ab → Modell durchgesickert.)
+                    _local = [k for k in ("model", "unet", "checkpoint", "gguf")
+                              if params.get(k)]
+                    if _local:
                         logger.info(
-                            "Cross-Type-Fallback: ComfyUI-Modell '%s' inkompatibel mit %s, "
+                            "Cross-Type-Fallback: lokale Modelle %s inkompatibel mit %s, "
                             "nutze Backend-Default '%s'",
-                            _cur_model, b.api_type, getattr(b, "model", "?"))
-                        params.pop("model", None)
-                        params.pop("unet", None)
-                        # LoRAs ebenfalls entfernen — Cloud-Backends akzeptieren
-                        # keine lokalen LoRA-Dateinamen.
-                        params.pop("lora_inputs", None)
-                        params.pop("loras", None)
-                _b_cfg = self._get_instance_config(character_name, b)
-                _neg = _b_cfg.get("negative_prompt", b.negative_prompt) or negative_prompt
-                return enhanced_prompt, _neg
+                            _local, b.api_type, getattr(b, "model", "?"))
+                        for _k in ("model", "unet", "checkpoint", "gguf",
+                                   "lora_inputs", "loras"):
+                            params.pop(_k, None)
+                # Negative kommt aus dem Use-Case (oben aufgeloest) — kein
+                # Backend-Default mehr.
+                return enhanced_prompt, negative_prompt
 
             def _op(b):
                 _p, _n = _prepare_for_backend(b)

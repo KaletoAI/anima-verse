@@ -685,8 +685,8 @@ class CharacterBotPoller:
             outfit_text = resolve_outfit_placeholders(
                 outfit.get("outfit", ""), self.character_name
             )
-            prefix = os.environ.get("OUTFIT_IMAGE_PROMPT_PREFIX", "full body portrait").strip()
-            parts = [prefix, appearance, f"wearing {outfit_text}"]
+            # Style/Framing kommen aus dem "outfit"-Use-Case.
+            parts = [appearance, f"wearing {outfit_text}"]
             prompt_text = ", ".join(p for p in parts if p)
 
             # Skills expect JSON string with agent_name, user_id
@@ -694,6 +694,7 @@ class CharacterBotPoller:
                 "prompt": prompt_text,
                 "agent_name": self.character_name,
                 "user_id": self.user_id,
+                "image_use_case": "outfit",
             })
 
             # Generate image

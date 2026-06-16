@@ -643,12 +643,24 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
             continue
         existing = existing_daily.get(day_str, "")
 
+        # Tages-Summary in der Sprache des Characters (sonst defaultet das LLM
+        # auf Englisch). LANGUAGE_MAP wandelt den Code in den Klarnamen.
+        lang_instruction = ""
+        try:
+            from app.models.character import get_character_profile, LANGUAGE_MAP
+            _lang = (get_character_profile(character_name) or {}).get("language", "")
+            if _lang and _lang != "en":
+                lang_instruction = f"\nWrite the summary in {LANGUAGE_MAP.get(_lang, _lang)}."
+        except Exception:
+            pass
+
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
             "consolidation_daily",
             day_str=day_str,
             character_name=character_name,
             existing=existing,
+            lang_instruction=lang_instruction,
             contents=contents)
 
         summary = _llm_summarize(sys_prompt, user_prompt, character_name)

@@ -1172,6 +1172,14 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # einen passenden Raum am neuen Ort explizit setzen.
     if location and location != old_location and profile.get("current_room"):
         profile["current_room"] = ""
+    # Aktivitaet (pose_intent) bei echtem Location-Wechsel leeren — sie gilt fuer
+    # den alten Ort und wird sonst stale ("casting a spell" bleibt nach dem
+    # Weggehen haengen). Greift fuer ALLE Bewegungswege zentral: Move-Skill,
+    # SetLocation, Teleport-Spell, Scheduler, Drag&Drop. Teleport bewusst NICHT
+    # auf "walking" setzen — man ist nicht gelaufen, also einfach leeren.
+    if location_changed:
+        profile["pose_intent"] = ""
+        profile.pop("pose_variant_id", None)
     # Intent.forbidden_slots zuruecksetzen bei echtem Location-Wechsel: die
     # absichtlich-leeren Slots aus dem Chat ("zieht sich aus") galten fuer
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.

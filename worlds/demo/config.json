@@ -176,9 +176,6 @@
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_qwen_api.json",
-        "prompt_style": "photograph, shot on iPhone 15 Pro, natural window light, skin texture, unedited, detailed anatomy, 8k, high detail, \n",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a natural-language descriptive prompt (not tags). Describe the scene as a flowing sentence with rich detail about the setting, characters, poses, and mood. Avoid comma-separated tag lists.",
         "loras": [
           {
             "file": "",
@@ -205,9 +202,6 @@
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_z-image_api.json",
-        "prompt_style": "RAW photo, amateur photograph, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail, \n",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a tag-based prompt with comma-separated keywords. Use quality tags like \"masterpiece, best quality\". Describe pose, lighting, and setting as short tags.",
         "loras": [
           {
             "file": "",
@@ -234,9 +228,6 @@
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_flux2_api.json",
-        "prompt_style": "a candid photograph taken with a 35mm lens, natural indoor lighting, skin with visible pores and texture, detailed anatomy, 8k, high detail, ",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a natural-language descriptive prompt for a Flux 2 Klein model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.",
         "loras": [
           {
             "file": "",
@@ -266,9 +257,6 @@
         "model": "Flux1-DevFill-Onereward_fp8.safetensors",
         "clip": "clip_l.safetensors",
         "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
-        "prompt_style": "top-down orthographic map tile, ",
-        "prompt_negative": "people, characters, text, watermark, signature, logo, blurry, low quality, harsh seams, hard edges",
-        "prompt_instruction": "Write a short natural-language description of the terrain to blend. Describe colors, tones and how the surrounding terrain merges together. No characters or people.",
         "loras": [
           {
             "file": "",
@@ -298,9 +286,6 @@
         "model": "flux1-dev.safetensors",
         "clip": "clip_l.safetensors",
         "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
-        "prompt_style": "a candid photograph taken with a 35mm lens, natural light, skin with visible pores and texture, detailed anatomy, 8k, high detail, ",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a natural-language descriptive prompt for a Flux.1 dev model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.",
         "loras": [
           {
             "file": "",
@@ -319,6 +304,148 @@
             "strength": 1
           }
         ]
+      }
+    },
+    "use_cases": {
+      "map": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "item": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "character": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "outfit": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "expression": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "instagram": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "event": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "story": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "profile": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "location": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
       }
     }
   },

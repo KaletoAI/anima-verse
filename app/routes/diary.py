@@ -99,11 +99,21 @@ def _generate_summary_sync(character_name: str, date: str, day_text: str):
     char_name = profile.get("character_name", character_name)
     personality = profile.get("character_personality", "")
 
+    # Tagebuch in der Sprache des Characters schreiben (sonst defaultet das LLM
+    # oft auf Englisch). Gleiches Muster wie history_manager.
+    lang_instruction = ""
+    lang_code = profile.get("language", "")
+    if lang_code and lang_code != "en":
+        from app.models.character import LANGUAGE_MAP
+        lang_name = LANGUAGE_MAP.get(lang_code, lang_code)
+        lang_instruction = f"\nWrite the diary entry in {lang_name}."
+
     from app.core.prompt_templates import render_task
     system_prompt, user_prompt = render_task(
         "consolidation_daily_diary",
         character_name=char_name,
         personality=personality,
+        lang_instruction=lang_instruction,
         day_text=day_text)
 
     try:

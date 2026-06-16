@@ -36,7 +36,7 @@
       },
       "lora_1": {
         "on": false,
-        "lora": "Flux.1-Dev-RPGmaps_v5.safetensors",
+        "lora": "",
         "strength": 1
       },
       "lora_2": {

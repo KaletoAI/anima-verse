@@ -73,6 +73,22 @@ interface Props {
   showRoomReference?: boolean
   /** Initial state of the "use current image as reference" toggle. */
   defaultUseSource?: boolean
+  /**
+   * Require the source image to actually be used as a reference: the chosen
+   * workflow must expose a reference slot (ref_slot_count > 0) and the
+   * "current image as reference" toggle must be on. Otherwise the Generate
+   * button is blocked with a hint to pick a reference-capable workflow
+   * (e.g. Flux2/Qwen). Use for "adjust this image"-style regenerate, where a
+   * non-reference workflow would silently produce a fresh image instead.
+   */
+  requireSourceReference?: boolean
+  /**
+   * Show the "add as new image vs. replace the current one" checkbox even
+   * outside `mode='regenerate'` (e.g. the location gallery regenerate). Emits
+   * `create_new` in the payload. `defaultCreateNew` sets its initial state.
+   */
+  showCreateNew?: boolean
+  defaultCreateNew?: boolean
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
   onClose: () => void
   /**
@@ -141,7 +157,8 @@ function filterByWorkflowName(items: string[], workflowName: string, filter: str
 
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
-  showRoomReference, defaultUseSource, onSubmit, onClose,
+  showRoomReference, defaultUseSource, requireSourceReference,
+  showCreateNew, defaultCreateNew, onSubmit, onClose,
   mode = 'create', hideNegative, characterOptions,
 }: Props) {
   const isRegen = mode === 'regenerate'
@@ -150,7 +167,7 @@ export function ImageGenDialog({
   // Editierbare, markierte unabhaengige Config-Teile (Prefix/Suffix).
   const [prefixText, setPrefixText] = useState(settingsPrefix?.text || '')
   const [suffixText, setSuffixText] = useState(settingsSuffix?.text || '')
-  const [createNew, setCreateNew] = useState(false)
+  const [createNew, setCreateNew] = useState(!!defaultCreateNew)
   // Referenz-Slot-Toggles (gegen das ref_slot_count-Budget des Workflows gemanagt).
   const [useRoom, setUseRoom] = useState(true)
   const [useSource, setUseSource] = useState(!!defaultUseSource)
@@ -187,7 +204,7 @@ export function ImageGenDialog({
   const detectedKey = detNames.join('|')
   useEffect(() => {
     if (!open) return
-    setCreateNew(false)
+    setCreateNew(!!defaultCreateNew)
     setImprovement('')
     setNegative('')
     setSelectedChars(detNames)
@@ -287,7 +304,7 @@ export function ImageGenDialog({
       const active = loraSlots.filter((l) => l.name && l.name !== 'None')
       payload.loras = active.length ? active : null
     }
-    if (isRegen) payload.create_new = createNew
+    if (isRegen || showCreateNew) payload.create_new = createNew
     if (isRegen && improvement.trim()) payload.improvement_request = improvement.trim()
     if (!hideNegative && negative.trim()) payload.negative_prompt = negative.trim()
     if (characterOptions) payload.character_names = selectedChars
@@ -301,9 +318,9 @@ export function ImageGenDialog({
       setSubmitting(false)
     }
   }, [currentOption, prompt, prefixText, suffixText, settingsPrefix, settingsSuffix,
-      loraSlots, onSubmit, onClose, isRegen, createNew, improvement, hideNegative,
-      negative, characterOptions, selectedChars, showRoomReference, useRoom,
-      sourceImageUrl, useSource])
+      loraSlots, onSubmit, onClose, isRegen, showCreateNew, createNew, improvement,
+      hideNegative, negative, characterOptions, selectedChars, showRoomReference,
+      useRoom, sourceImageUrl, useSource])
 
   // Reference-slot budget: how many ref images may be used (workflow ref_slot_count).
   // Persons + room + current-image each consume one slot.
@@ -312,6 +329,10 @@ export function ImageGenDialog({
     + (showRoomReference && useRoom ? 1 : 0)
     + (sourceImageUrl && useSource ? 1 : 0)
   const atBudget = slotBudget > 0 && usedSlots >= slotBudget
+  // Regenerate-as-edit: the source image MUST land in a reference slot. Block
+  // submit (and explain) when the chosen workflow has no slot or the toggle is off.
+  const sourceRefBlocked = !!requireSourceReference
+    && (!currentOption || slotBudget === 0 || !useSource)
 
   if (!open) return null
 
@@ -502,6 +523,17 @@ export function ImageGenDialog({
                 </>
               ) : null}
 
+              {requireSourceReference && currentOption && slotBudget === 0 ? (
+                <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
+                  {t('This workflow has no reference-image slot — pick a reference-capable workflow (e.g. Flux2/Qwen) so the current image can be adjusted instead of recreated.')}
+                </div>
+              ) : null}
+              {requireSourceReference && currentOption && slotBudget > 0 && !useSource ? (
+                <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
+                  {t('Enable "Current image as reference" to adjust this image.')}
+                </div>
+              ) : null}
+
               {isRegen ? (
                 <>
                   <label className="ga-imagegen-label">{t('Improvement request')}</label>
@@ -530,7 +562,7 @@ export function ImageGenDialog({
                 </>
               ) : null}
 
-              {isRegen ? (
+              {(isRegen || showCreateNew) ? (
                 <label className="ga-check-row" style={{ marginTop: 8 }}>
                   <input
                     type="checkbox"
@@ -552,7 +584,7 @@ export function ImageGenDialog({
           <button
             className="ga-btn ga-btn-primary"
             onClick={handleSubmit}
-            disabled={submitting || !currentOption}
+            disabled={submitting || !currentOption || sourceRefBlocked}
           >
             {submitting ? '…' : t('Generate')}
           </button>

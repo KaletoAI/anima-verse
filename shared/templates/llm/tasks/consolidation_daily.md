@@ -5,6 +5,7 @@ placeholders:
   day_str: Date string "YYYY-MM-DD"
   character_name: Character whose day is being summarized
   existing: Existing daily summary text (empty if none)
+  lang_instruction: Optional language instruction (empty for English)
   contents: Bullet list of that day's episodic memories
 ---
 ## system
@@ -22,4 +23,4 @@ Individual memories from this day:
 
 Write 3-5 compact sentences from {{ character_name }}'s perspective (third person).
 Focus on: key moments, people involved, emotions, decisions.
-Reply with ONLY the summary.
+Reply with ONLY the summary.{{ lang_instruction }}

@@ -199,7 +199,11 @@ class ProviderManager:
             if not enabled:
                 continue
             api_type = os.environ.get(f"{prefix}API_TYPE", "").strip().lower()
-            if api_type not in ("comfyui", "a1111"):
+            # ALLE Image-Backend-Typen bekommen einen Channel — auch Cloud
+            # (civitai/together/mammouth), sonst sind sie im Queue-Panel
+            # unsichtbar UND die Channel-Auswahl (find_channel) faellt fuer
+            # einen Cloud-Backend-Job faelschlich auf einen ComfyUI-Channel.
+            if api_type not in ("comfyui", "a1111", "civitai", "together", "mammouth"):
                 continue
             api_url = os.environ.get(f"{prefix}API_URL", "").strip()
             if not api_url:

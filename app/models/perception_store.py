@@ -118,6 +118,52 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     return [_row_to_dict(r) for r in reversed(rows)]
 
 
+def get_followed_conversation_tail(perceiver: str, partner: str,
+                                   cur_location_id: str, cur_room_id: str,
+                                   limit: int = 20,
+                                   max_age_min: int = 15) -> List[Dict[str, Any]]:
+    """Gespräch beim DIREKTEN Folgen mitnehmen (plan-follow-room-conversation-bug B).
+
+    Liefert den Tail der Runde aus dem Raum, in dem ``perceiver`` UNMITTELBAR
+    vor dem aktuellen war — aber nur, wenn ``partner`` dort beteiligt war
+    (= direkter Follow ohne andere Location dazwischen). Sonst ``[]``.
+
+    Rückgabe identisch zu ``get_character_room_stream`` (älteste zuerst), damit
+    der Aufrufer beide Streams nahtlos verketten kann.
+    """
+    if not (perceiver and partner and cur_location_id is not None):
+        return []
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT u.location_id AS loc, u.room_id AS room, u.speaker AS speaker, p.ts AS ts "
+        "FROM perceptions p JOIN utterances u ON u.id = p.utterance_id "
+        "WHERE p.perceiver=? ORDER BY p.ts DESC, p.id DESC LIMIT 120",
+        (perceiver,)).fetchall()
+    cur = (cur_location_id or "", cur_room_id or "")
+    prior = None          # (loc, room) der unmittelbar vorherigen Runde
+    newest_ts = ""
+    for r in rows:
+        key = (r["loc"] or "", r["room"] or "")
+        if key != cur:
+            prior = key
+            newest_ts = r["ts"] or ""
+            break
+    if not prior or not prior[0]:
+        return []
+    # Partner muss in genau dieser vorherigen Runde gesprochen haben.
+    block = [r for r in rows if (r["loc"] or "", r["room"] or "") == prior]
+    if not any((r["speaker"] or "") == partner for r in block):
+        return []
+    # Aktualitäts-Cap: die vorherige Runde darf nicht uralt sein.
+    try:
+        from app.core.timeutils import utc_now, parse_iso
+        if newest_ts and (utc_now() - parse_iso(newest_ts)).total_seconds() > max_age_min * 60:
+            return []
+    except Exception:
+        pass
+    return get_character_room_stream(perceiver, prior[0], prior[1], limit=limit)
+
+
 def get_character_stream(perceiver: str, limit: int = 100,
                          before: Optional[str] = None) -> List[Dict[str, Any]]:
     """Subjektiver Wahrnehmungs-Stream eines Characters, aelteste zuerst.

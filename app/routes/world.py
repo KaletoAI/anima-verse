@@ -1199,12 +1199,12 @@ async def generate_location_background(location_name: str, request: Request) -> 
         if not backend:
             raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
 
-        # Bild generieren (blockierend in Thread)
-        full_prompt = prompt
-        if backend.prompt_prefix:
-            full_prompt = f"{backend.prompt_prefix}, {full_prompt}"
-
-        negative = backend.negative_prompt or ""
+        # Bild generieren (blockierend in Thread) — Style/Negative aus Use-Case.
+        from app.core import config as _cfg
+        _ucp = _cfg.resolve_use_case_style(
+            "location", "", "", getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+        full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
+        negative = _ucp.get("prompt_negative", "")
         # Location-Background: volle Aufloesung — wird als Hintergrund-Szenenbild
         # genutzt, kein Downscale.
         params = {"width": _location_image_width(), "height": _location_image_height()}
@@ -1214,7 +1214,7 @@ async def generate_location_background(location_name: str, request: Request) -> 
             params["workflow_file"] = active_wf.workflow_file
         # Model setzen (input_unet vs input_model)
         if active_wf and active_wf.model:
-            _model_key = "unet" if active_wf.has_input_unet else "model"
+            _model_key = "unet" if (active_wf.has_input_unet or active_wf.has_input_safetensors) else "model"
             params[_model_key] = active_wf.model
             # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
             _resolved = img_skill.resolve_model_for_backend(
@@ -1233,8 +1233,15 @@ async def generate_location_background(location_name: str, request: Request) -> 
             params["seed"] = _rnd.randint(1, 2**31 - 1)
 
         # Backend-Fallback-Engine: probiert primary, faellt bei Fehler auf
-        # backend.fallback_mode (none/next_cheaper/specific) zurueck.
+        # backend.fallback_mode (none/next_cheaper/specific) zurueck. Lokale
+        # Backends ueber die GPU-Provider-Queue → nie zwei parallel pro Backend.
         def _op(b):
+            if getattr(b, "api_type", "") in ("comfyui", "a1111"):
+                from app.core.llm_queue import get_llm_queue, Priority as _P
+                return get_llm_queue().submit_gpu_task(
+                    provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
+                    callable_fn=lambda: b.generate(full_prompt, negative, params),
+                    agent_name=location.get("name", location_name), gpu_type="comfyui")
             return b.generate(full_prompt, negative, params)
         try:
             images, backend = await asyncio.to_thread(
@@ -1375,16 +1382,21 @@ def get_imagegen_options() -> Dict[str, Any]:
             "filter": wf.get("filter", ""),
             "ref_slot_count": wf.get("ref_slot_count", 0),
         })
-    # Nicht-ComfyUI Backends
+    # Nicht-ComfyUI Backends (CivitAI, Together, …). Symmetrisch zu den Workflows
+    # oben: angeboten wird jedes AKTIVIERTE Backend — die Verfuegbarkeit loest der
+    # Server beim Generieren via match_backend (Match) auf. NICHT auf b.available
+    # vorfiltern, sonst verschwindet ein frisch konfiguriertes/noch nicht
+    # geprobtes Cloud-Backend aus der "Service (match)"-Auswahl.
     for b in imagegen.backends:
         if b.api_type == "comfyui":
             continue
-        if not b.available or not b.instance_enabled:
+        if not b.instance_enabled:
             continue
         opt = {
             "type": "backend",
             "name": b.name,
-            "label": b.name,
+            "label": b.name if b.available else f"{b.name} (offline?)",
+            "available": b.available,
         }
         # Backend mit Modellliste (z.B. Together.ai) — direkt als Auswahl anbieten
         backend_models = getattr(b, 'available_models', [])
@@ -1395,9 +1407,6 @@ def get_imagegen_options() -> Dict[str, Any]:
     # Default-Vorauswahl fuer Location aus .env
     loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
     result = {"options": options}
-    # Unabhaengige Config-Prompt-Teile, damit der Dialog sie EDITIERBAR zeigen kann
-    # (statt sie serverseitig anzuhaengen): Karten-Icon-Suffixe.
-    result["map_2d_image_prompt_suffix"] = (os.environ.get("MAP_2D_IMAGE_PROMPT_SUFFIX") or "").strip()
     # Fit/Match-edges: imagegen-Target (Match-Spec, read-only im Fit-Dialog).
     result["mapfit_imagegen_default"] = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip()
     if loc_default:
@@ -1618,24 +1627,11 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             if not description:
                 description = location.get("description", location.get("name", location_name))
 
-            if prompt_type == "map_2d":
-                # Subject only — the admin-managed style suffix is appended below.
-                prompt = description
-            else:
-                prompt = (
-                    f"{description}, wide angle establishing shot, no people, "
-                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
-                )
+            # Subject only — Framing/Style kommen aus dem Use-Case (map/location).
+            prompt = description
 
-        # Map-icon style suffix (config). Nur noch serverseitig anhaengen, wenn der
-        # Aufrufer ihn NICHT schon im Prompt mitliefert (``settings_applied`` =
-        # Dialog hat den editierbaren Suffix bereits eingebaut → kein Doppeln).
-        if not data.get("settings_applied"):
-            if prompt_type == "map_2d":
-                _sfx = (os.environ.get("MAP_2D_IMAGE_PROMPT_SUFFIX") or "").strip()
-                if _sfx:
-                    prompt = f"{prompt}, {_sfx}"
-
+        # Map-/Location-Style kommt jetzt aus dem Use-Case (unten via
+        # resolve_use_case_style angewandt) — kein separater Suffix mehr.
         from app.core.dependencies import get_skill_manager
 
         skill_manager = get_skill_manager()
@@ -1690,8 +1686,19 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 logger.info("Workflow (match): %s -> %s -> Backend: %s",
                             workflow_name, active_wf.name, backend.name if backend else "-")
         elif backend_name:
-            backend = img_skill.match_backend(backend_name)  # Backend-Glob via Match-Konzept
+            # Backend-Glob via Match-Konzept. _wait_for_explicit_backend probt die
+            # passenden Backends FRISCH (statt auf stale b.available zu vertrauen) —
+            # noetig fuer frisch konfigurierte Cloud-Backends (CivitAI/Together).
+            backend = (img_skill._wait_for_explicit_backend(backend_name)
+                       or img_skill.match_backend(backend_name))
             logger.debug("Explizites Backend: %s -> %s", backend_name, backend.name if backend else 'nicht verfuegbar')
+            # Explizite Wahl + nicht verfuegbar -> KLARER Fehler statt stillem
+            # ComfyUI-Fallback (sonst denkt der User, CivitAI sei genutzt worden).
+            if not backend:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Gewaehltes Backend '{backend_name}' ist nicht verfuegbar "
+                           f"(z.B. ungueltiger API-Key / offline). Kein automatischer Fallback.")
 
         if not backend:
             backend = img_skill._select_backend()
@@ -1715,11 +1722,16 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                     prompt = _hint
                     logger.info("Map-Fit Auto-Prompt: %s", _hint)
 
-        full_prompt = prompt
-        if backend.prompt_prefix:
-            full_prompt = f"{backend.prompt_prefix}, {full_prompt}"
-
-        negative = backend.negative_prompt or ""
+        # Use-Case-Style/Negative: map_2d -> "map", sonst Location-Background.
+        from app.core import config as _cfg
+        _uc_name = "map" if prompt_type == "map_2d" else "location"
+        _ucp = _cfg.resolve_use_case_style(
+            _uc_name,
+            getattr(active_wf, "image_family", "") if active_wf else "",
+            getattr(active_wf, "workflow_file", "") if active_wf else "",
+            getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+        full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
+        negative = _ucp.get("prompt_negative", "")
         # Map-Icons sind kleine Thumbnails fuer die Welt-Uebersicht und werden
         # runtergerechnet. Day/Night/Description bleiben in voller Aufloesung
         # als Hintergrund-Bilder.
@@ -1748,7 +1760,7 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             if active_wf and active_wf.workflow_file:
                 params["workflow_file"] = active_wf.workflow_file
             # Model-Override (input_unet Workflows brauchen "unet" statt "model")
-            _model_key = "unet" if (active_wf and active_wf.has_input_unet) else "model"
+            _model_key = "unet" if (active_wf and (active_wf.has_input_unet or active_wf.has_input_safetensors)) else "model"
             if model_override:
                 params[_model_key] = model_override
             elif active_wf and active_wf.model:
@@ -1838,21 +1850,32 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         from app.core.task_queue import get_task_queue
         _tq = get_task_queue()
         if batch_track_id:
-            # Batch-Modus: vorregistrierten pending Track aktivieren
             _track_id = batch_track_id
-            from app.core.task_router import match_queue_name
-            _queue = match_queue_name(backend.name) or "default"
-            _tq.track_activate(_track_id, queue_name=_queue, provider=backend.name)
         else:
             _track_id = _tq.track_start(
                 "image_gen", "Ort-Bild", agent_name=location.get("name", location_name),
-                provider=backend.name)
+                provider=backend.name, start_running=False)
 
         _gen_start = time.time()
         try:
-            # Backend-Fallback-Engine: bei Fehler auf backend.fallback_mode wechseln
+            # Ueber die GPU-Provider-Queue generieren — serialisiert pro Backend
+            # (nie zwei parallel) und aktiviert den Track erst, wenn der Kanal die
+            # Arbeit aufnimmt; wartende World-Gens bleiben so korrekt "pending".
             def _op(b):
-                return b.generate(full_prompt, negative, params)
+                def _gen():
+                    try:
+                        from app.core.task_router import match_queue_name
+                        _tq.track_activate(_track_id, queue_name=match_queue_name(b.name) or "", provider=b.name)
+                    except Exception:
+                        pass
+                    return b.generate(full_prompt, negative, params)
+                if getattr(b, "api_type", "") in ("comfyui", "a1111"):
+                    from app.core.llm_queue import get_llm_queue, Priority as _P
+                    return get_llm_queue().submit_gpu_task(
+                        provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
+                        callable_fn=_gen, agent_name=location.get("name", location_name),
+                        gpu_type="comfyui")
+                return _gen()
             try:
                 images, backend = await asyncio.to_thread(
                     lambda: img_skill.run_with_fallback(
@@ -1923,15 +1946,24 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             loc_id = location.get("id", location_name)
             gallery_dir = get_gallery_dir(loc_id)
             gallery_dir.mkdir(parents=True, exist_ok=True)
-            image_name = f"{int(time.time())}.png"
+            # Replace (Haken "neues Bild" aus): das Quellbild in-place ueber-
+            # schreiben — behaelt Dateiname und damit Raum-/Typ-/Map-Zuordnung
+            # und das Hintergrund-Flag. Sonst neues Bild mit Timestamp.
+            _replace_src = (data.get("reference_image") or "").strip() if data.get("replace_source") else ""
+            _is_replace = bool(
+                _replace_src and "/" not in _replace_src and ".." not in _replace_src
+                and (gallery_dir / _replace_src).exists())
+            image_name = _replace_src if _is_replace else f"{int(time.time())}.png"
             image_path = gallery_dir / image_name
             image_path.write_bytes(images[0])
 
             # Prompt speichern fuer spaeteres Upgrade
             save_gallery_prompt(loc_id, image_name, full_prompt)
 
-            # Neues Bild standardmaessig als Hintergrund markieren
-            toggle_background_image(loc_id, image_name)
+            # Neues Bild standardmaessig als Hintergrund markieren — beim In-Place-
+            # Replace NICHT togglen (sonst kippt ein bereits gesetztes Flag um).
+            if not _is_replace:
+                toggle_background_image(loc_id, image_name)
 
             # Raum-Zuordnung setzen wenn room_id angegeben
             if room_id:
@@ -1944,14 +1976,19 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 from app.models.world import clear_location_prompt_changed
                 clear_location_prompt_changed(loc_id)
 
-            # Erzeugungs-Metadaten speichern (Service + Model)
+            # Erzeugungs-Metadaten speichern (Service + Model + LoRAs)
             _model_used = (getattr(backend, 'last_used_checkpoint', '')
                            or getattr(backend, 'model', '')
                            or getattr(backend, 'checkpoint', '') or '')
+            _loras_used = [str(l.get("name")).strip()
+                           for l in (params.get("lora_inputs") or params.get("loras") or [])
+                           if isinstance(l, dict) and (l.get("name") or "").strip()
+                           and l.get("name") != "None"]
             set_gallery_image_meta(loc_id, image_name, {
                 "backend": backend.name,
                 "backend_type": backend.api_type,
                 "model": _model_used,
+                "loras": _loras_used,
             })
 
             # Bild-Typ setzen wenn prompt_type angegeben (day/night/map_2d)
@@ -2263,11 +2300,14 @@ async def generate_time_variant(
                 detail="Kein ComfyUI-Backend mit Referenzbild-Support verfuegbar "
                        "(z.B. Qwen-Workflow). Bitte ComfyUI-Backend starten.")
 
-        full_prompt = prompt
-        if backend.prompt_prefix:
-            full_prompt = f"{backend.prompt_prefix}, {full_prompt}"
-
-        negative = backend.negative_prompt or ""
+        from app.core import config as _cfg
+        _ucp = _cfg.resolve_use_case_style(
+            "location",
+            getattr(active_wf, "image_family", "") if active_wf else "",
+            getattr(active_wf, "workflow_file", "") if active_wf else "",
+            getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+        full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
+        negative = _ucp.get("prompt_negative", "")
         # Day/Night-Variants sind Hintergrund-Bilder — voll, kein Downscale.
         params = {"width": _location_image_width(), "height": _location_image_height()}
 
@@ -2281,7 +2321,7 @@ async def generate_time_variant(
                 params["workflow_file"] = _default_wf.workflow_file
 
         # Model (input_unet Workflows brauchen "unet" statt "model")
-        _model_key = "unet" if (active_wf and active_wf.has_input_unet) else "model"
+        _model_key = "unet" if (active_wf and (active_wf.has_input_unet or active_wf.has_input_safetensors)) else "model"
         if active_wf and active_wf.model:
             params[_model_key] = active_wf.model
         # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
@@ -2323,12 +2363,27 @@ async def generate_time_variant(
         _variant_label = "Nachtansicht" if target_type == "night" else "Tagansicht"
         _track_id = _tq.track_start(
             "image_gen", _variant_label, agent_name=location.get("name", location_name),
-            provider=backend.name)
+            provider=backend.name, start_running=False)
 
         _gen_start = time.time()
         try:
+            # GPU-Provider-Queue: serialisiert pro Backend + Track erst aktiv,
+            # wenn der Kanal die Arbeit aufnimmt (wartende stehen "pending").
             def _op(b):
-                return b.generate(full_prompt, negative, params)
+                def _gen():
+                    try:
+                        from app.core.task_router import match_queue_name
+                        _tq.track_activate(_track_id, queue_name=match_queue_name(b.name) or "", provider=b.name)
+                    except Exception:
+                        pass
+                    return b.generate(full_prompt, negative, params)
+                if getattr(b, "api_type", "") in ("comfyui", "a1111"):
+                    from app.core.llm_queue import get_llm_queue, Priority as _P
+                    return get_llm_queue().submit_gpu_task(
+                        provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
+                        callable_fn=_gen, agent_name=location.get("name", location_name),
+                        gpu_type="comfyui")
+                return _gen()
             try:
                 images, backend = await asyncio.to_thread(
                     lambda: img_skill.run_with_fallback(
@@ -2376,10 +2431,15 @@ async def generate_time_variant(
             _model_used = (getattr(backend, 'last_used_checkpoint', '')
                            or getattr(backend, 'model', '')
                            or getattr(backend, 'checkpoint', '') or '')
+            _loras_used = [str(l.get("name")).strip()
+                           for l in (params.get("lora_inputs") or params.get("loras") or [])
+                           if isinstance(l, dict) and (l.get("name") or "").strip()
+                           and l.get("name") != "None"]
             set_gallery_image_meta(loc_id, new_image_name, {
                 "backend": backend.name,
                 "backend_type": backend.api_type,
                 "model": _model_used,
+                "loras": _loras_used,
                 "source": image_name,
             })
 

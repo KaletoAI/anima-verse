@@ -708,6 +708,16 @@ class AgentLoop:
             if _loc:
                 room_stream = perception_store.get_character_room_stream(
                     character_name, _loc, _room, limit=40)
+                # B (plan-follow-room-conversation-bug): direkter Follow → die
+                # vorherige Raumrunde mit dem Gesprächspartner voranstellen, damit
+                # das Gespräch beim Raum-/Ortswechsel nicht abreißt.
+                if speaker:
+                    carried = perception_store.get_followed_conversation_tail(
+                        character_name, speaker, _loc, _room, limit=20)
+                    if carried:
+                        _seen = {r.get("utterance_id") for r in room_stream}
+                        carried = [c for c in carried if c.get("utterance_id") not in _seen]
+                        room_stream = carried + room_stream
         except Exception as e:
             logger.debug("respond-turn %s: room_stream fetch failed: %s", character_name, e)
 

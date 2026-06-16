@@ -6,14 +6,23 @@
   "features": {},
   "tabs": [
     {
-      "id": "character",
-      "label": "Character",
-      "label_de": "Charakter",
+      "id": "general",
+      "label": "General",
+      "label_de": "Allgemein",
       "columns": [
         1,
         2,
-        3,
-        4
+        3
+      ]
+    },
+    {
+      "id": "aussehen",
+      "label": "Appearance",
+      "label_de": "Aussehen",
+      "columns": [
+        4,
+        5,
+        6
       ]
     },
     {
@@ -199,7 +208,8 @@
       "id": "state",
       "label": "Current state",
       "label_de": "Aktueller Zustand",
-      "column": 2,
+      "special": "placement",
+      "column": 3,
       "row": 1,
       "fields": [
         {

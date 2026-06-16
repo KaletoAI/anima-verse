@@ -71,7 +71,7 @@ interface GalleryResponse {
   images: string[]
   image_rooms?: Record<string, string>
   image_types?: Record<string, string>
-  image_metas?: Record<string, { backend?: string; model?: string }>
+  image_metas?: Record<string, { backend?: string; model?: string; loras?: string[] }>
 }
 
 const IMAGE_TYPES = ['', 'day', 'night', 'map_2d'] as const
@@ -860,7 +860,7 @@ function LocationGallery({
   const [busy, setBusy] = useState<string | null>(null)
   const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | null>(null)
   // „Regenerate"-Ziel: ein bestehendes Karten-Bild als Referenz neu erzeugen.
-  const [regenTarget, setRegenTarget] = useState<{ filename: string; type: 'map_2d' } | null>(null)
+  const [regenTarget, setRegenTarget] = useState<{ filename: string; type: string } | null>(null)
   // Unabhängige Config-Suffixe für Karten-Icons (editierbar im Dialog statt
   // serverseitig angehängt). Einmalig laden.
   const [mapSuffix, setMapSuffix] = useState({ map_2d: '' })
@@ -964,7 +964,7 @@ function LocationGallery({
   // first, then location, falling back to description. The user can
   // edit it before submitting; edits are not persisted.
   const buildDefaultPrompt = useCallback(
-    (promptType: 'day' | 'night' | 'map_2d'): string => {
+    (promptType: string): string => {
       const fromRoom = (key: 'image_prompt_day' | 'image_prompt_night') =>
         (room && (room as Record<string, unknown>)[key]) as string | undefined
       const isMap = promptType === 'map_2d'
@@ -1026,7 +1026,7 @@ function LocationGallery({
   // Regenerate eines bestehenden Karten-Bilds — mit ihm selbst als Referenz.
   // Landet immer als NEUES Gallery-Bild (per Zelle wählbar).
   const submitRegenRef = useCallback(
-    async (payload: ImageGenSubmit, target: { filename: string; type: 'map_2d' }) => {
+    async (payload: ImageGenSubmit, target: { filename: string; type: string }) => {
       const body: Record<string, unknown> = {
         prompt_type: target.type,
         prompt: payload.prompt,
@@ -1039,6 +1039,8 @@ function LocationGallery({
       if (payload.prompt_settings_applied) body.settings_applied = true
       // Regenerate mit dem bestehenden Bild als Selbst-Referenz.
       if (payload.use_source_as_reference) body.use_source_as_reference = true
+      // Haken aus: das bestehende Bild in-place ersetzen statt ein neues anzulegen.
+      if (payload.create_new === false) body.replace_source = true
       void apiPost(`/world/locations/${encodeURIComponent(locationId)}/gallery`, body)
         .then(() => toast(t('Image queued')))
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
@@ -1120,13 +1122,18 @@ function LocationGallery({
   const regenDialog = regenTarget ? (
     <ImageGenDialog
       open
-      title={t('Regenerate 2D map icon — {name}').replace('{name}', location.name)}
+      title={t('Adjust image — {name}').replace('{name}', room?.name || location.name)}
       defaultPrompt={buildDefaultPrompt(regenTarget.type)}
       hideNegative
       sourceImageUrl={`/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(regenTarget.filename)}`}
       defaultUseSource
+      requireSourceReference
+      showCreateNew
+      defaultCreateNew
       settingsSuffix={
-        mapSuffix.map_2d ? { label: t('2D map icon'), text: mapSuffix.map_2d } : undefined
+        regenTarget.type === 'map_2d' && mapSuffix.map_2d
+          ? { label: t('2D map icon'), text: mapSuffix.map_2d }
+          : undefined
       }
       onSubmit={(payload) => submitRegenRef(payload, regenTarget)}
       onClose={() => setRegenTarget(null)}
@@ -1153,6 +1160,7 @@ function LocationGallery({
     <>
       {generatePanel}
       {dialog}
+      {regenDialog}
       <div className="ga-form-section-label">
         {t('Gallery')} ({images.length})
       </div>
@@ -1177,6 +1185,11 @@ function LocationGallery({
                   {meta.model ? (
                     <div>
                       <strong>{t('Model')}</strong> {meta.model}
+                    </div>
+                  ) : null}
+                  {meta.loras && meta.loras.length > 0 ? (
+                    <div>
+                      <strong>{t('LoRAs')}</strong> {meta.loras.join(', ')}
                     </div>
                   ) : null}
                   {meta.backend ? (
@@ -1208,16 +1221,14 @@ function LocationGallery({
                   >
                     🌙
                   </button>
-                  {type === 'map_2d' ? (
-                    <button
-                      className="ga-btn ga-btn-sm"
-                      disabled={isBusy}
-                      onClick={() => setRegenTarget({ filename, type: 'map_2d' })}
-                      title={t('Regenerate using this image as reference (saved as a new image)')}
-                    >
-                      ♻
-                    </button>
-                  ) : null}
+                  <button
+                    className="ga-btn ga-btn-sm"
+                    disabled={isBusy}
+                    onClick={() => setRegenTarget({ filename, type })}
+                    title={t('Adjust this image via a reference workflow + prompt (saved as a new image)')}
+                  >
+                    ♻
+                  </button>
                   <button
                     className="ga-btn ga-btn-sm"
                     disabled={isBusy}

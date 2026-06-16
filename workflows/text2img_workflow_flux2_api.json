@@ -13,7 +13,7 @@
   },
   "61": {
     "inputs": {
-      "value": ""
+      "value": "a candid photograph taken with a 35mm lens, natural indoor lighting, skin with visible pores and texture, detailed anatomy, 8k, high detail, photorealistic, portrait, only head, young woman, 23 years old, petite build, fair skin, long ash blonde hair, green eyes, large breasts, red lips, innocent yet seductive expression, slightly dumbfounded look"
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -98,7 +98,7 @@
     },
     "class_type": "LoadAndResizeImage",
     "_meta": {
-      "title": "input_reference_image_background"
+      "title": "input_reference_image_1"
     }
   },
   "122": {

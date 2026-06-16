@@ -109,6 +109,27 @@ function SignedNum({ v }: { v: number }) {
   )
 }
 
+/** Gerichtete Zuneigung als farbiger Balken (-1..1 → 0..100%), mit Richtungs-
+ *  Label und Zahl — wie die alte UI (deutlich lesbarer als reine Zahlen). */
+function SentBar({ v, label }: { v: number; label: string }) {
+  const pct = Math.round((Math.max(-1, Math.min(1, v)) + 1) * 50)
+  const color = v > 0.2 ? '#3fa45a' : v < -0.2 ? '#e05656' : '#eab308'
+  return (
+    <div title={`${label}: ${v.toFixed(2)}`} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+      <span style={{ flex: '1 1 0', minWidth: 0, fontSize: '0.74em', opacity: 0.7,
+                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <div style={{ flex: '0 0 86px', height: 7, borderRadius: 4,
+                    background: 'rgba(255,255,255,0.12)', overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: color }} />
+      </div>
+      <span style={{ flex: '0 0 auto', width: 36, textAlign: 'right', fontSize: '0.72em',
+                     opacity: 0.65, fontVariantNumeric: 'tabular-nums' }}>
+        {(v > 0 ? '+' : '') + v.toFixed(2)}
+      </span>
+    </div>
+  )
+}
+
 // Kompakt-Overrides zur Klasse ga-input (liefert soliden dunklen Hintergrund —
 // wichtig fuer native <option>-Listen, die sonst weiss aufklappen).
 const inputStyle: React.CSSProperties = {
@@ -587,7 +608,7 @@ function BondsView({ avatar, onOpenMemories }: {
   }, [enc])
 
   if (items === null) return <EmptyState small icon="journal" title={t('Loading…')} />
-  if (items.length === 0) return <EmptyState small icon="journal" title={t('No bonds yet')} />
+  if (items.length === 0) return <EmptyState small icon="journal" title={t('No relationships')} />
 
   return (
     <div style={{ height: '100%', minHeight: 0, overflow: 'auto',
@@ -602,23 +623,26 @@ function BondsView({ avatar, onOpenMemories }: {
                              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.partner}</span>
               <span style={{ fontSize: '0.72em', opacity: 0.55, border: '1px solid rgba(255,255,255,0.2)',
                              borderRadius: 8, padding: '0 6px', flex: '0 0 auto' }}>{b.type}</span>
-              <span style={{ marginLeft: 'auto', flex: '0 0 auto', fontSize: '0.72em', opacity: 0.5 }}>
-                {b.interaction_count}× {b.last_interaction ? '· ' + sinceOf(b.last_interaction) : ''}
-              </span>
-              <span style={{ flex: '0 0 auto', opacity: 0.5, fontSize: '0.8em' }}>{expanded ? '▾' : '▸'}</span>
-            </div>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: '0.76em', opacity: 0.8, marginTop: 2 }}>
-              <span title={t('my sentiment toward them')}>→ <SignedNum v={b.sentiment_self_to_other} /></span>
-              <span title={t('their sentiment toward me')}>← <SignedNum v={b.sentiment_other_to_self} /></span>
+              <span title={t('bond strength')} style={{ fontSize: '0.72em', opacity: 0.6, flex: '0 0 auto' }}>⚡ {b.strength}</span>
               {b.romantic_tension > 0 && (
-                <span title={t('romantic tension')} style={{ color: '#d77bae' }}>
+                <span title={t('romantic tension')} style={{ fontSize: '0.72em', flex: '0 0 auto', color: '#d77bae' }}>
                   ♥ {b.romantic_tension.toFixed(2)}
                 </span>
               )}
-              <span title={t('bond strength')} style={{ opacity: 0.7 }}>⚡ {b.strength}</span>
+              <span style={{ marginLeft: 'auto', flex: '0 0 auto', opacity: 0.5, fontSize: '0.8em' }}>{expanded ? '▾' : '▸'}</span>
+            </div>
+            {/* Gerichtete Zuneigung als Balken (alte-UI-Darstellung) */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 5 }}>
+              <SentBar v={b.sentiment_self_to_other} label={`${avatar} → ${b.partner}`} />
+              <SentBar v={b.sentiment_other_to_self} label={`${b.partner} → ${avatar}`} />
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'baseline',
+                          fontSize: '0.74em', opacity: 0.6, marginTop: 4 }}>
+              <span>{t('{n}×').replace('{n}', String(b.interaction_count))}</span>
+              {b.last_interaction ? <span>· {sinceOf(b.last_interaction)}</span> : null}
               {b.memories_count > 0 && onOpenMemories && (
                 <button onClick={(ev) => { ev.stopPropagation(); onOpenMemories(b.partner) }}
-                  style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer',
+                  style={{ marginLeft: 'auto', background: 'none', border: 0, padding: 0, cursor: 'pointer',
                            color: 'var(--accent, #6aa9ff)', fontSize: '1em' }}>
                   {t('{n} memories').replace('{n}', String(b.memories_count))} →
                 </button>
@@ -800,7 +824,7 @@ export function MindPanel({ avatar }: { avatar: string }) {
     { id: 'today' as SectionId, icon: '☀️', label: t('Today') },
     { id: 'diary' as SectionId, icon: '📔', label: t('Diary') },
     { id: 'memories' as SectionId, icon: '🧠', label: t('Memories') },
-    { id: 'bonds' as SectionId, icon: '🤝', label: t('Bonds') },
+    { id: 'bonds' as SectionId, icon: '🤝', label: t('Relationships') },
     { id: 'history' as SectionId, icon: '🕰️', label: t('History') },
   ]), [t])
 

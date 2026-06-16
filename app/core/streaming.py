@@ -315,7 +315,8 @@ class StreamingAgent:
         content_tools: Optional[set] = None,
         mode: str = "no_tools",
         constrained_tools: bool = False,
-        chat_task_id: str = ""):
+        chat_task_id: str = "",
+        suppress_move_in_conversation: bool = False):
         self.llm = llm
         self.tool_llm = tool_llm or llm  # Fallback auf Chat-LLM wenn kein Tool-LLM konfiguriert
         self.tool_system_content = tool_system_content  # Minimaler System-Prompt fuer Tool-LLM
@@ -337,6 +338,11 @@ class StreamingAgent:
         self.deferred_tools = deferred_tools or set()
         self.content_tools = content_tools or set()
         self.mode = mode
+        # A (plan-follow-room-conversation-bug): True → Move/SetLocation aus
+        # diesem (in-person-)Gesprächs-Turn unterdrücken. Wer antwortet, geht
+        # nicht im selben Turn weg. Nur für in-person-Chat gesetzt, NICHT für
+        # autonome Thought-Turns (legitime Bewegung).
+        self.suppress_move_in_conversation = suppress_move_in_conversation
 
     # Mapping: Tool-Name → Action-Trigger-Beschreibung (fuer constrained Mode).
     _TOOL_ACTION_HINTS = {
@@ -1013,6 +1019,14 @@ class StreamingAgent:
             if tool_name in self.deferred_tools:
                 pending_deferred.append((tool_name, tool_input_text))
                 logger.info("Tool DEFERRED: %s (wird nach Chat-Antwort ausgefuehrt)", tool_name)
+                continue
+
+            # A: Wer in einem in-person-Gespräch gerade geantwortet hat, geht
+            # nicht im selben Turn weg (Move/SetLocation aus der RP-Prosa). Teleport
+            # (Spell) ist davon NICHT betroffen.
+            if self.suppress_move_in_conversation and tool_name in ("Move", "SetLocation"):
+                logger.info("%s unterdrueckt — Antwort im selben in-person-Turn "
+                            "(man geht nicht weg, waehrend man spricht)", tool_name)
                 continue
 
             logger.info("Tool ausfuehrt: %s", tool_name)

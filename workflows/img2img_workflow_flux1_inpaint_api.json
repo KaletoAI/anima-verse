@@ -13,7 +13,7 @@
   },
   "61": {
     "inputs": {
-      "value": "top-down orthographic map tile blending together the surrounding terrain — aerial top-down view of a coastline to the north, aerial top-down view of a coastline to the south, top-down orthographic view of a lush green forest of leafy trees to the east, a small peaceful village with cottages around a central square to the west; colors, tones and art style merge smoothly across the whole tile, cohesive unified palette and lighting, no hard seams\n\n"
+      "value": ""
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -40,7 +40,7 @@
   },
   "107": {
     "inputs": {
-      "image": "last_canvas (8).png",
+      "image": "",
       "resize": false,
       "width": 1024,
       "height": 1024,
@@ -343,7 +343,7 @@
   },
   "371": {
     "inputs": {
-      "image": "last_crop_mask.png",
+      "image": "",
       "resize": false,
       "width": 1024,
       "height": 1024,
@@ -372,7 +372,7 @@
   },
   "377": {
     "inputs": {
-      "image": "last_mask (2).png",
+      "image": "",
       "channel": "red"
     },
     "class_type": "LoadImageMask",

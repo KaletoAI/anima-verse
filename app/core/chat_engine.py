@@ -616,6 +616,16 @@ def run_chat_turn(
                 if _name in _deferred_set:
                     _deferred_matches.append((_name, _inp))
                     continue
+                # A (plan-follow-room-conversation-bug): Wer gerade in einem
+                # in-person-Gespräch ANTWORTET, geht nicht im selben Turn weg.
+                # Der Tool-LLM leitet aus RP-Prosa ("steht auf, Move east") sonst
+                # einen Move/SetLocation ab, während die Figur eben noch sprach.
+                # Teleport (Spell) ist ein bewusster Akt und NICHT betroffen.
+                if _name in ("Move", "SetLocation") and ctx.get("medium") == "in_person":
+                    logger.info("run_chat_turn[%s]: %s unterdrückt — Antwort im selben "
+                                "in-person-Turn (man geht nicht weg, während man spricht)",
+                                responder, _name)
+                    continue
                 try:
                     _fn(_inp)
                     logger.info("run_chat_turn[%s]: Tool ausgeführt → %s", responder, _name)

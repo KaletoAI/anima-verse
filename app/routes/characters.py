@@ -1260,14 +1260,8 @@ async def generate_profile_image_route(character_name: str, request: Request) ->
     if appearance and "{" in appearance:
         appearance = resolve_profile_tokens(appearance, profile, template=tmpl, target_key="character_appearance")
 
-    # Prompt aus Dialog oder Standard-Prefix + Appearance
-    prompt_text = data.get("prompt", "").strip()
-    if not prompt_text:
-        prefix = os.environ.get("PROFILE_IMAGE_PROMPT_PREFIX", "photorealistic, portrait, only head,")
-        parts = [prefix]
-        if appearance:
-            parts.append(appearance)
-        prompt_text = ", ".join(p.strip(", ") for p in parts if p.strip())
+    # Prompt aus Dialog oder Appearance (Style kommt aus dem "profile"-Use-Case).
+    prompt_text = data.get("prompt", "").strip() or (appearance or "").strip()
 
     # ImageGenerationSkill holen
     try:
@@ -1290,6 +1284,7 @@ async def generate_profile_image_route(character_name: str, request: Request) ->
         "user_id": "",
         "auto_enhance": False,
         "set_profile": True,
+        "image_use_case": "profile",
         "workflow": workflow_name,
         "backend": backend_name,
     }
@@ -1331,11 +1326,11 @@ def _build_outfit_image_prompt(character_name: str, outfit_description: str) -> 
     _actor = _persons[0].actor_label if _persons else character_name
     _appearance = _persons[0].appearance if _persons else ""
 
-    prefix = os.environ.get("OUTFIT_IMAGE_PROMPT_PREFIX", "full body portrait")
+    # Style/Framing kommen aus dem "outfit"-Use-Case — hier nur der Inhalt.
     character_prompt = f"{_actor}, {_appearance}"
     outfit_prompt = f"{_actor} is wearing {outfit_description}"
     return ", ".join(p for p in [
-        prefix, character_prompt, outfit_prompt, DEFAULT_POSE, DEFAULT_EXPRESSION,
+        character_prompt, outfit_prompt, DEFAULT_POSE, DEFAULT_EXPRESSION,
     ] if p)
 
 
@@ -1452,6 +1447,7 @@ async def generate_outfit_image_route(character_name: str, outfit_id: str, reque
         "user_id": "",
         "auto_enhance": False,
         "skip_gallery": True,
+        "image_use_case": "outfit",
         "workflow": workflow_name,
         "backend": backend_name,
         "appearances": [{"name": character_name, "appearance": appearance or ""}],
@@ -2252,6 +2248,24 @@ def get_profile_route(character_name: str) -> Dict[str, Any]:
         except Exception:
             pass
     return {"character": character_name, "profile": profile}
+
+
+@router.post("/{character_name}/resolve-tokens")
+async def resolve_tokens_route(character_name: str, request: Request) -> Dict[str, Any]:
+    """Live-Vorschau der Token-Ersetzungen ({hair_color} → "blonde", …).
+
+    Nimmt einen Draft-Text (z.B. der gerade getippte Aussehen-Prompt) + den
+    target_key (z.B. "character_appearance") und löst die Tokens gegen das
+    aktuelle Profil + Template auf — kein Frontend-Nachbau, eine Backend-Quelle.
+    """
+    from app.models.character_template import resolve_profile_tokens, get_template
+    data = await request.json()
+    text = str(data.get("text", "") or "")
+    target_key = str(data.get("target_key", "") or "character_appearance")
+    profile = get_character_profile(character_name)
+    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
+    resolved = resolve_profile_tokens(text, profile, template=tmpl, target_key=target_key)
+    return {"character": character_name, "resolved": resolved}
 
 
 @router.get("/{character_name}/active-conditions")
@@ -3298,19 +3312,15 @@ async def rebuild_image_prompt(character_name: str, request: Request) -> Dict[st
             get_target_model, render as adapter_render,
             maybe_enhance_via_llm, dict_to_canonical)
 
-        wf_image_model = getattr(active_wf, "image_model", "") if active_wf else ""
+        wf_image_family = getattr(active_wf, "image_family", "") if active_wf else ""
         wf_file = getattr(active_wf, "workflow_file", "") if active_wf else ""
         target_model = get_target_model(wf_image_model, wf_file)
 
         # 1) PRIMAERE Quelle: gespeichertes canonical
         if saved_canonical and isinstance(saved_canonical, dict):
             pv = dict_to_canonical(saved_canonical)
-            # Style/Negative aus Workflow-Config bevorzugen falls Workflow gewechselt wurde,
-            # sonst gespeicherte Werte beibehalten
-            if active_wf and active_wf.prompt_style:
-                pv.prompt_style = active_wf.prompt_style
-            if active_wf and active_wf.negative_prompt:
-                pv.negative_prompt = active_wf.negative_prompt
+            # Style/Negative bleiben wie gespeichert; der finale Style kommt beim
+            # echten Generieren aus dem Use-Case (image_generation_skill).
 
             # sanitize_scene_prompt auch beim Rebuild ausfuehren — damit der
             # neue Outfit-Extraction-Filter (wearing/posing/dressed) auch fuer
@@ -3679,7 +3689,7 @@ def get_imagegen_workflows(character_name: str) -> Dict[str, Any]:
         try:
             from app.core.prompt_adapters import get_target_model as _gtm
             _target_style = _gtm(
-                getattr(wf_obj, "image_model", "") if wf_obj else "",
+                getattr(wf_obj, "image_family", "") if wf_obj else "",
                 wf.get("workflow_file", "") if isinstance(wf, dict) else getattr(wf_obj, "workflow_file", ""),
                 "")
         except Exception:

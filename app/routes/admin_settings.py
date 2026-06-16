@@ -723,6 +723,18 @@ async def settings_schema(user=Depends(require_admin)):
     return get_schema()
 
 
+@router.get("/settings/use-case-defaults")
+async def settings_use_case_defaults(user=Depends(require_admin)):
+    """Eingebaute Use-Case-Style-Defaults (pro use_case × Familie) — dienen in
+    der Admin-UI als grauer Placeholder bei leerem Feld."""
+    from app.core.config import _DEFAULT_IMAGE_USE_CASES, _PROMPT_STYLE_FAMILIES
+    return {
+        "use_cases": list(_DEFAULT_IMAGE_USE_CASES.keys()),
+        "families": _PROMPT_STYLE_FAMILIES,
+        "defaults": _DEFAULT_IMAGE_USE_CASES,
+    }
+
+
 @router.get("/settings/imagegen-targets")
 async def imagegen_targets(user=Depends(require_admin)):
     """Liefert die kombinierte Liste der Image-Gen-Targets fuer Admin-Selects:
@@ -1644,6 +1656,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .md-empty-detail { color: #8b949e; padding: 28px 12px; text-align: center; }
 @media (max-width: 900px) { .md-grid { grid-template-columns: 1fr; } }
 
+/* ── LoRA-Trigger Editor: dark searchable combobox ── */
+.lora-row input[type="text"] {
+    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 6px 10px; border-radius: 6px; font-size: 13px; font-family: inherit;
+}
+.lora-row input[type="text"]:focus { border-color: #58a6ff; outline: none; }
+.lt-combo { position: relative; }
+.lt-dd {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 50;
+    margin-top: 2px; max-height: 240px; overflow-y: auto;
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.lt-opt { padding: 6px 10px; font-size: 13px; color: #c9d1d9; cursor: pointer; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+.lt-opt:hover, .lt-opt.active { background: rgba(31,111,235,0.18); }
+.lt-dd-empty { padding: 6px 10px; font-size: 12px; color: #6e7681; }
+
 /* LoRA rows */
 .lora-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
 .lora-row input:first-child { flex: 3; }
@@ -1732,6 +1762,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 <script>
 let CONFIG = {};
 let SCHEMA = {};
+let USE_CASE_DEFAULTS = { use_cases: [], families: [], defaults: {} };
 let PROVIDERS_CACHE = {};
 let PROVIDERS_VISION = {};  // provName -> Set(vision model names)
 let ACTIVE_SECTION = null;
@@ -1761,6 +1792,10 @@ async function init() {
         }
         CONFIG = await dataResp.json();
         SCHEMA = await schemaResp.json();
+        try {
+            const ucResp = await fetch('/admin/settings/use-case-defaults', { credentials: 'same-origin' });
+            if (ucResp.ok) USE_CASE_DEFAULTS = await ucResp.json();
+        } catch (e) { /* defaults bleiben leer */ }
         buildNav();
         // Activate first section
         const first = Object.keys(SCHEMA)[0];
@@ -1844,6 +1879,178 @@ fetch('/admin/world-name', { credentials: 'same-origin', cache: 'no-store' })
   .catch(() => {});
 
 // ── Render Section ──
+// Master-Detail-Editor fuer image_generation.use_cases (links Use-Case-Liste,
+// rechts Familien × Style/Negative/Instruction). Leeres Feld zeigt den
+// eingebauten Default als grauen Placeholder.
+function renderUseCasesMasterDetail(path) {
+    const D = USE_CASE_DEFAULTS || { use_cases: [], families: [], defaults: {} };
+    const ucs = D.use_cases || [];
+    let sel = SELECTED_ITEM[path];
+    if (ucs.indexOf(sel) === -1) sel = ucs.length ? ucs[0] : null;
+    SELECTED_ITEM[path] = sel;
+    let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
+          + 'Style / Negative / Instruction pro Use-Case × Familie. Leeres Feld = eingebauter Default (grau). '
+          + 'Welche Familie greift, bestimmt die <b>Image Family</b> des Workflows/Backends.</p>';
+    html += '<div class="md-grid"><div class="md-list"><table class="md-table"><thead><tr><th>Use-Case</th></tr></thead><tbody>';
+    for (const uc of ucs) {
+        const active = (uc === sel) ? ' active' : '';
+        html += '<tr class="md-row' + active + '" onclick="selectMasterItem(\\'' + path + '\\', \\'' + uc + '\\')"><td>' + esc(uc) + '</td></tr>';
+    }
+    html += '</tbody></table></div>';
+    html += '<div class="md-detail">' + renderUseCaseDetail(sel) + '</div></div>';
+    return html;
+}
+
+function renderUseCaseDetail(uc) {
+    if (!uc) return '<div class="md-empty-detail">Use-Case links auswaehlen.</div>';
+    const D = USE_CASE_DEFAULTS || { families: [], defaults: {} };
+    const FIELDS = [['prompt_style', 'Style'], ['prompt_negative', 'Negative'], ['prompt_instruction', 'Instruction']];
+    let html = '<div class="md-detail-head"><span class="md-detail-title">' + esc(uc) + '</span></div>';
+    for (const fam of (D.families || [])) {
+        html += '<div style="margin:4px 0 16px 0;padding-left:8px;border-left:2px solid var(--border,#30363d)">';
+        html += '<div style="opacity:.6;font-size:.8em;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">' + esc(fam) + '</div>';
+        for (const fp of FIELDS) {
+            const fld = fp[0], lbl = fp[1];
+            const p = 'image_generation.use_cases.' + uc + '.styles.' + fam + '.' + fld;
+            const val = getVal(p) || '';
+            const def = (((D.defaults || {})[uc] || {})[fam] || {})[fld] || '';
+            html += '<div class="field" style="margin-bottom:8px"><label style="font-size:.8em;opacity:.8">' + esc(lbl) + '</label>';
+            html += '<textarea rows="2" style="width:100%;font-family:inherit;resize:vertical" '
+                  + 'placeholder="' + esc(def) + '" '
+                  + 'onchange="setVal(\\'' + p + '\\', this.value)">' + esc(val) + '</textarea></div>';
+        }
+        html += '</div>';
+    }
+    return html;
+}
+
+// Repository: LoRA -> Aktivierungs-Wort. Liste von {lora, word}; wird vom
+// Image-Creation-Code automatisch in den Prompt aufgenommen, sobald das LoRA
+// genutzt wird. Speicherung in image_generation.lora_triggers (per Welt).
+function renderLoraTriggersEditor(path) {
+    const items = getVal(path) || [];
+    let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
+             + 'Pro LoRA ein Aktivierungs-Wort. Sobald ein Bild dieses LoRA nutzt, wird das Wort '
+             + 'automatisch dem Prompt vorangestellt — fuer alle Generierungen (Map, Character, …).</p>';
+    html += '<div style="margin-bottom:12px">'
+          + '<button class="btn btn-sm" onclick="addLoraTrigger(\\'' + path + '\\')">+ Add</button>'
+          + ' <button class="btn btn-sm" onclick="loadLoraTriggerOptions(\\'' + path + '\\')">Load LoRAs</button></div>';
+    if (!items.length) {
+        html += '<div class="md-empty">Noch keine Eintraege. „+ Add", dann LoRA-Namen tippen/suchen.</div>';
+    }
+    for (let i = 0; i < items.length; i++) {
+        const it = items[i] || {};
+        const ip = path + '[' + i + ']';
+        html += '<div class="lora-row" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">';
+        // Eigene dunkle Such-Combobox statt nativem <select> (das rendert die
+        // Optionsliste OS-seitig weiss und ist nicht dunkel stylebar). Freitext
+        // erlaubt: Namen notieren, waehrend das LoRA noch laedt.
+        html += '<div class="lt-combo" style="flex:3;min-width:0">';
+        html += '<input type="text" class="lt-lora-input" autocomplete="off" value="' + esc(it.lora || '') + '" '
+              + 'placeholder="LoRA-Name — tippen zum Suchen oder frei notieren" style="width:100%" '
+              + 'oninput="ltFilter(this, \\'' + ip + '\\')" '
+              + 'onfocus="ltFilter(this, \\'' + ip + '\\')" '
+              + 'onkeydown="ltKey(event, this, \\'' + ip + '\\')" '
+              + 'onblur="ltBlur(this)">';
+        html += '<div class="lt-dd"></div>';
+        html += '</div>';
+        html += '<input type="text" value="' + esc(it.word || '') + '" placeholder="Aktivierungs-Wort" '
+              + 'style="flex:2;min-width:0" onchange="setVal(\\'' + ip + '.word\\', this.value)">';
+        html += '<button class="btn btn-sm btn-danger" title="Loeschen" onclick="removeItem(\\'' + ip + '\\')">✕</button>';
+        html += '</div>';
+    }
+    // LoRA-Liste im Hintergrund laden, damit die Suche sofort Vorschlaege hat.
+    setTimeout(function () { ltEnsureLoaded(); }, 0);
+    return html;
+}
+
+function addLoraTrigger(path) {
+    const arr = _ensureContainer(path, 'array');
+    arr.push({ lora: '', word: '' });
+    renderSection(ACTIVE_SECTION);
+}
+
+// Cache der verfuegbaren LoRA-Namen (vom ComfyUI-Server). Wird einmal geladen
+// und client-seitig fuer die Suche gefiltert.
+window.LORA_OPTS = window.LORA_OPTS || [];
+
+async function ltEnsureLoaded(force) {
+    if (!force && window.LORA_OPTS && window.LORA_OPTS.length) return;
+    try {
+        const cache = await loadComfyModels();
+        window.LORA_OPTS = (cache && cache.loras) || [];
+    } catch (e) { window.LORA_OPTS = []; }
+}
+
+// Manuell (Button): neu laden + Rueckmeldung.
+async function loadLoraTriggerOptions(path) {
+    await ltEnsureLoaded(true);
+    const n = (window.LORA_OPTS || []).length;
+    if (!n) { toast('No LoRAs found. Server running?', 'error'); return; }
+    toast(n + ' LoRAs loaded', 'success');
+}
+
+// Dropdown unter dem Input fuellen, gefiltert nach dem getippten Text.
+function ltFilter(inp, ip) {
+    setVal(ip + '.lora', inp.value);  // Freitext sofort uebernehmen
+    const dd = inp.nextElementSibling;
+    if (!dd) return;
+    const q = (inp.value || '').toLowerCase();
+    const all = window.LORA_OPTS || [];
+    const opts = q ? all.filter(function (m) { return m.toLowerCase().indexOf(q) !== -1; }) : all;
+    if (!all.length) {
+        dd.innerHTML = '<div class="lt-dd-empty">LoRAs laden… (Button „Load LoRAs") — frei tippen geht trotzdem</div>';
+        dd.style.display = 'block';
+        return;
+    }
+    if (!opts.length) {
+        dd.innerHTML = '<div class="lt-dd-empty">Kein Treffer — Eingabe wird als Freitext gespeichert</div>';
+        dd.style.display = 'block';
+        return;
+    }
+    let h = '';
+    for (let i = 0; i < opts.length && i < 80; i++) {
+        h += '<div class="lt-opt" data-v="' + esc(opts[i]) + '" '
+           + 'onmousedown="ltPick(this, \\'' + ip + '\\')">' + esc(opts[i]) + '</div>';
+    }
+    dd.innerHTML = h;
+    dd.style.display = 'block';
+}
+
+// Auswahl per Maus (onmousedown feuert vor onblur, daher kein Race).
+function ltPick(el, ip) {
+    const v = el.getAttribute('data-v');
+    const dd = el.parentElement;
+    const inp = dd.previousElementSibling;
+    inp.value = v;
+    setVal(ip + '.lora', v);
+    dd.style.display = 'none';
+}
+
+// Tastatur: Pfeil hoch/runter markiert, Enter uebernimmt, Esc schliesst.
+function ltKey(ev, inp, ip) {
+    const dd = inp.nextElementSibling;
+    if (!dd || dd.style.display === 'none') return;
+    const opts = dd.querySelectorAll('.lt-opt');
+    if (!opts.length) return;
+    let idx = -1;
+    for (let i = 0; i < opts.length; i++) { if (opts[i].classList.contains('active')) { idx = i; break; } }
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); idx = Math.min(idx + 1, opts.length - 1); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); idx = Math.max(idx - 1, 0); }
+    else if (ev.key === 'Enter') {
+        if (idx >= 0) { ev.preventDefault(); ltPick(opts[idx], ip); }
+        return;
+    } else if (ev.key === 'Escape') { dd.style.display = 'none'; return; }
+    else { return; }
+    for (let i = 0; i < opts.length; i++) opts[i].classList.toggle('active', i === idx);
+    opts[idx].scrollIntoView({ block: 'nearest' });
+}
+
+function ltBlur(inp) {
+    // Verzoegert schliessen, damit ein Klick auf eine Option noch ankommt.
+    setTimeout(function () { const dd = inp.nextElementSibling; if (dd) dd.style.display = 'none'; }, 150);
+}
+
 function renderSection(key) {
     // Compound-Key "<section>::<subArray>" -> eigene Sub-Array-Seite.
     if (key.indexOf('::') !== -1) { renderSubArrayPage(key); return; }
@@ -1925,7 +2132,11 @@ function renderSubArrayPage(key) {
 
     let html = '<div class="section active">';
     html += '<h1 class="section-title">' + (sec.icon || '') + ' ' + sec.label + ' — ' + arrDef.label + '</h1>';
-    if (arrDef.master_detail) {
+    if (arrDef.use_cases_editor) {
+        html += renderUseCasesMasterDetail(path);
+    } else if (arrDef.lora_triggers_editor) {
+        html += renderLoraTriggersEditor(path);
+    } else if (arrDef.master_detail) {
         html += renderMasterDetail(arrDef, items, path);
     } else {
         html += '<div style="margin-bottom:12px;"><button class="btn btn-sm" onclick="addArrayItem(\\'' + path + '\\', \\'' + (arrDef.is_dict ? 'dict' : 'array') + '\\')">+ Add</button></div>';
@@ -3068,32 +3279,12 @@ function _ensureContainer(path, leafType) {
 }
 
 // ── Actions ──
-// Defaults pro image_model fuer neue ComfyUI-Workflows. Werte 1:1 aus den
-// produktiv erprobten Hotopia-Workflows uebernommen — der Admin muss nicht
-// jedes Mal Negative Prompt / Style / Enhancer-Instruction von Hand setzen.
-const WORKFLOW_DEFAULTS = {
-    qwen: {
-        prompt_style: 'photograph, shot on iPhone 15 Pro, natural window light, skin texture, unedited, detailed anatomy, 8k, high detail, \\n',
-        prompt_negative: 'illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\\n',
-        prompt_instruction: 'Write a natural-language descriptive prompt (not tags). Describe the scene as a flowing sentence with rich detail about the setting, characters, poses, and mood. Avoid comma-separated tag lists.',
-    },
-    z_image: {
-        prompt_style: 'RAW photo, amateur photograph, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail, \\n',
-        prompt_negative: 'illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\\n',
-        prompt_instruction: 'Write a tag-based prompt with comma-separated keywords. Use quality tags like "masterpiece, best quality". Describe pose, lighting, and setting as short tags.',
-    },
-    flux: {
-        prompt_style: 'a candid photograph taken with a 35mm lens, natural indoor lighting, skin with visible pores and texture, detailed anatomy, 8k, high detail, ',
-        prompt_negative: 'illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\\n',
-        prompt_instruction: 'Write a natural-language descriptive prompt for a Flux 2 Klein model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.',
-    },
-};
-
 function _detectImageModelFromId(id) {
+    // Image Family aus der Workflow-ID raten: keywords = Komma-Tags (Z-Image/SD),
+    // natural = Fliesstext (Flux/Qwen).
     const u = String(id || '').toUpperCase();
-    if (u.includes('QWEN')) return 'qwen';
-    if (u.includes('Z-IMAGE') || u.includes('Z_IMAGE') || u.includes('ZIMAGE')) return 'z_image';
-    if (u.includes('FLUX')) return 'flux';
+    if (u.includes('Z-IMAGE') || u.includes('Z_IMAGE') || u.includes('ZIMAGE') || u.includes('SD')) return 'keywords';
+    if (u.includes('QWEN') || u.includes('FLUX')) return 'natural';
     return '';
 }
 
@@ -3108,14 +3299,12 @@ function addArrayItem(path, type) {
         const key = id.replace(/[.\\[\\]]/g, ' ').replace(/\\s+/g, ' ').trim();
         if (!key) { toast('Ungueltige Workflow ID', 'error'); return; }
         if (obj[key] !== undefined) { toast('Workflow existiert bereits: ' + key, 'error'); return; }
-        // Modell-Type aus ID raten und Defaults uebernehmen.
+        // Target Prompt Stil (image_model) aus der ID raten.
         const detectedModel = _detectImageModelFromId(id);
-        const defaults = WORKFLOW_DEFAULTS[detectedModel] || {};
         obj[key] = {
             name: id,
             loras: [{file:'',strength:1},{file:'',strength:1},{file:'',strength:1},{file:'',strength:1}],
-            ...(detectedModel ? { image_model: detectedModel } : {}),
-            ...defaults,
+            ...(detectedModel ? { image_family: detectedModel } : {}),
         };
         // Neuen Eintrag im Master-Detail direkt selektieren (no-op fuer Accordion).
         SELECTED_ITEM[path] = path + '.' + key;

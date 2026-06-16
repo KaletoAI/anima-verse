@@ -75,9 +75,15 @@ export interface ChannelStatus {
   healthy: boolean
   busy: boolean
   kind: 'llm' | 'image'
+  /** Roher Backend-/Provider-Typ (comfyui/civitai/together/mammouth/a1111/…)
+   *  fuer typ-spezifische Symbole im Panel. */
+  type: string
   running: number
   waiting: number
 }
+
+// Alle Image-Backend-Typen (kind='image'). Alles andere = LLM-Provider.
+const IMAGE_BACKEND_TYPES = new Set(['comfyui', 'civitai', 'together', 'mammouth', 'a1111'])
 
 // Nicht-LLM-Tasks, die ebenfalls über Provider-Channels laufen (ComfyUI/TTS) —
 // sie gehören ins getrackte active_tasks-Panel, NICHT zu den Chat-LLM-Calls.
@@ -184,16 +190,32 @@ function collectRecent(d: QueueStatus): RecentTaskInfo[] {
 /** Alle Backends (Channels) aus dem providers-Payload: LLM-Provider UND
  * Image-Generation-Backends (ComfyUI), per `kind` unterscheidbar. healthy/busy
  * kommen vom Server (get_combined_status; ComfyUI inkl. Backend-Ping). */
-function collectChannels(providers: Record<string, ProviderChannel> | undefined): ChannelStatus[] {
+function collectChannels(providers: Record<string, ProviderChannel> | undefined,
+                         tracked: TrackedTaskInfo[] = []): ChannelStatus[] {
+  // task_ids, die bereits als Channel-Task (chat_active/current_tasks) zaehlen —
+  // damit channel-submitted getrackte Tasks (z.B. Animate) nicht doppelt zaehlen.
+  const channelIds = new Set<string>()
+  for (const ch of Object.values(providers || {})) {
+    const ca = ch?.chat_active
+    const cas = Array.isArray(ca) ? ca : ca ? [ca] : []
+    for (const tk of [...cas, ...(ch?.current_tasks || [])]) if (tk?.task_id) channelIds.add(tk.task_id)
+  }
   const out: ChannelStatus[] = []
   for (const [key, ch] of Object.entries(providers || {})) {
-    const isImage = (ch?.type || '') === 'comfyui'
+    const type = (ch?.type || '').toLowerCase()
+    const isImage = IMAGE_BACKEND_TYPES.has(type)
     const ca = ch?.chat_active
     const nChat = Array.isArray(ca) ? ca.length : ca ? 1 : 0
-    const running = nChat + (ch?.current_tasks?.length || 0)
-    const waiting = ch?.pending?.length || 0
-    out.push({ key, name: ch?.provider || key, healthy: !!ch?.healthy,
-               busy: running > 0, kind: isImage ? 'image' : 'llm', running, waiting })
+    const name = ch?.provider || key
+    // Getrackte Image-/TTS-Tasks (NICHT channel-submitted, z.B. Ort-Bild) per
+    // provider-Name diesem Channel zuordnen, damit die Zahl oben erscheint.
+    const tr = tracked.filter(tk => (tk.provider || '') === name && !channelIds.has(tk.task_id || ''))
+    const trackedWaiting = tr.filter(tk => (tk.status || '') === 'pending').length
+    const trackedRunning = tr.length - trackedWaiting
+    const running = nChat + (ch?.current_tasks?.length || 0) + trackedRunning
+    const waiting = (ch?.pending?.length || 0) + trackedWaiting
+    out.push({ key, name, healthy: !!ch?.healthy,
+               busy: running > 0, kind: isImage ? 'image' : 'llm', type, running, waiting })
   }
   // LLM-Provider zuerst, dann Image-Backends; innerhalb der Gruppe alphabetisch.
   out.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name)
@@ -223,7 +245,7 @@ export function useQueue(intervalMs = 2000): QueueSnapshot {
         }
         setSnap({ llmTasks, pendingLLM: collectPendingLLM(d.providers),
                   trackedTasks: d.active_tasks || [], recent: collectRecent(d), agentActivity,
-                  channels: collectChannels(d.providers) })
+                  channels: collectChannels(d.providers, d.active_tasks || []) })
       } catch {
         /* ignore poll errors (api.ts handles auth redirect) */
       }

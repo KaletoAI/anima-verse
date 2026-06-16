@@ -122,9 +122,18 @@
       "id": "characteristics",
       "label": "Characteristics",
       "label_de": "Eigenschaften",
-      "column": 3,
+      "column": 2,
       "row": 0,
       "fields": [
+        {
+          "key": "decency_preference",
+          "label": "Dressing preference",
+          "label_de": "Kleidungs-Präferenz",
+          "type": "text",
+          "multiline": true,
+          "hint": "Free-text personal style hint used when generating outfits, e.g. \"often barefoot, no underwear, shirtless at home\". Room decency still enforces coverage — this only nudges style.",
+          "hint_de": "Freitext-Stilhinweis für die Outfit-Erstellung, z.B. \"oft barfuß, keine Unterwäsche, zuhause oben ohne\". Die Raum-Decency erzwingt weiterhin die Bedeckung — das nudged nur den Stil."
+        },
         {
           "key": "popularity",
           "label": "Popularity",
@@ -185,7 +194,7 @@
       "id": "appearance",
       "label": "Appearance",
       "label_de": "Aussehen",
-      "column": 4,
+      "column": 5,
       "row": 0,
       "fields": [
         {

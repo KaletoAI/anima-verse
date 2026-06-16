@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { useQueue, elapsedSeconds, type LLMTaskInfo, type TrackedTaskInfo, type RecentTaskInfo } from './useQueue'
 import { EmptyState } from './EmptyState'
+import { Icon, type IconName } from './icons'
 
 function fmtDur(s: number): string {
   if (s < 60) return `${s}s`
@@ -184,18 +185,26 @@ export function TaskPanel() {
         }}>
           {channels.map((ch) => {
             const state = ch.healthy ? (ch.busy ? t('busy') : t('available')) : t('unavailable')
-            const kindLabel = ch.kind === 'image' ? t('Image backend') : t('LLM provider')
+            // Icon = Typ, Farbe = Status (wie die Panel-Leisten-Icons).
             const color = !ch.healthy ? '#e05656' : ch.busy ? 'var(--accent, #6aa9ff)' : '#3fa45a'
+            const icon: IconName = ch.kind === 'llm' ? 'brain'
+              : ch.type === 'comfyui' ? 'cpu'
+              : ch.type === 'a1111' ? 'sliders'
+              : 'cloud'  // civitai / together / mammouth (Cloud-APIs)
+            const typeName = ch.kind === 'llm' ? t('LLM provider')
+              : ch.type === 'comfyui' ? 'ComfyUI'
+              : ch.type === 'civitai' ? 'CivitAI'
+              : ch.type === 'together' ? 'Together.ai'
+              : ch.type === 'mammouth' ? 'Mammouth'
+              : ch.type === 'a1111' ? 'Automatic1111'
+              : t('Image backend')
             return (
-              <span key={ch.key} title={`${kindLabel} · ${state}`}
+              <span key={ch.key} title={`${typeName} · ${state}`}
                 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8em', minWidth: 0 }}>
-                {/* Image-Backends: eckiger Marker (mit Rahmen) — LLM-Provider: runder Punkt. */}
-                <span style={{
-                  width: 8, height: 8, flex: '0 0 auto', background: color,
-                  borderRadius: ch.kind === 'image' ? 2 : '50%',
-                  outline: ch.kind === 'image' ? '1px solid rgba(255,255,255,0.55)' : 'none',
-                  outlineOffset: ch.kind === 'image' ? 1 : 0,
-                }} />
+                {/* Icon codiert den Typ, color (via currentColor) den Status. */}
+                <span style={{ flex: '0 0 auto', color, display: 'flex' }}>
+                  <Icon name={icon} size={14} />
+                </span>
                 <span style={{
                   flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',

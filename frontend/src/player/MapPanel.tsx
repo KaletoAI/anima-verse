@@ -221,8 +221,8 @@ export function MapPanel({ currentLocationId, autoFit = false }:
   const current = currentLocationId || data?.current_location_id || ''
   const travellingTo = t('travelling to')
 
-  const { cells, gridW, gridH, homeless, sleeping } = useMemo(() => {
-    const empty = { cells: null as React.ReactNode, gridW: 0, gridH: 0, homeless: [] as WChar[], sleeping: [] as WChar[] }
+  const { cells, gridW, gridH } = useMemo(() => {
+    const empty = { cells: null as React.ReactNode, gridW: 0, gridH: 0 }
     if (!data) return empty
     // Placed = echte Orte + platzierte Klone passierbarer Templates (keine
     // unplatzierten Terrain-Definitionen).
@@ -263,13 +263,7 @@ export function MapPanel({ currentLocationId, autoFit = false }:
     const gW = cols * CELL + (cols - 1) * GAP + PAD * 2
     const gH = rows * CELL + (rows - 1) * GAP + PAD * 2
 
-    const locIds = new Set(data.locations.map((l) => l.id))
-    const isSleeping = (c: WChar) => !c.location_id && (c.activity || '').toLowerCase() === 'sleeping'
-    const sleepingChars = data.characters.filter(isSleeping)
-    const homelessChars = data.characters.filter(
-      (c) => !isSleeping(c) && (!c.location_id || !locIds.has(c.location_id)),
-    )
-    return { cells: grid, gridW: gW, gridH: gH, homeless: homelessChars, sleeping: sleepingChars }
+    return { cells: grid, gridW: gW, gridH: gH }
   }, [data, current, travellingTo])
 
   // Restore saved scroll once after first load, else center the grid.
@@ -337,34 +331,6 @@ export function MapPanel({ currentLocationId, autoFit = false }:
         </div>
       </div>
 
-      {homeless.length > 0 || sleeping.length > 0 ? (
-        <div className="worldmap-tray">
-          {homeless.length > 0 ? (
-            <div className="worldmap-homeless">
-              <div className="worldmap-homeless-title">{t('No location')}</div>
-              <div className="worldmap-homeless-list">
-                {homeless.map((c) => (
-                  <div key={c.name} className="worldmap-homeless-btn" title={c.name}>
-                    <Avatar c={c} /><span>{c.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {sleeping.length > 0 ? (
-            <div className="worldmap-homeless worldmap-sleeping">
-              <div className="worldmap-homeless-title">🌙 {t('Sleeping (off-map)')}</div>
-              <div className="worldmap-homeless-list">
-                {sleeping.map((c) => (
-                  <div key={c.name} className="worldmap-homeless-btn worldmap-sleeping-btn" title={c.name}>
-                    <Avatar c={c} /><span>{c.name}</span><span className="worldmap-sleep-badge">💤</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   )
 }

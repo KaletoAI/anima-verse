@@ -227,9 +227,6 @@ SECTIONS = {
             "map_tile_vision_analysis": {"type": "bool", "label": "Analyze neighbor tiles for map prompts", "default": False, "description": "For Fit/Match-edges: run a short vision-LLM analysis of each neighbour's ACTUAL 2D tile to build the north/south/east/west prompt (instead of the stored description, which drifts after regeneration). Cached per tile — re-analysed only when a tile changes. Costs one vision call per new tile."},
 
             # --- Prompt-Prefixes ---
-            "profile_image_prompt_prefix": {"type": "str", "label": "Profil-Bild Prompt Prefix", "default": "photorealistic, portrait, only head,", "description": "Wird Profilbild-Prompts vorangestellt (z.B. 'photorealistic, portrait')"},
-            "outfit_image_prompt_prefix": {"type": "str", "label": "Outfit/Vorschau Prompt Prefix", "default": "full body view, green background", "description": "Wird Garderobe-Vorschau-Prompts vorangestellt (z.B. 'full body portrait, RAW photo'). Nur fuer Vorschau, nicht fuer Expression-Auto-Regen."},
-            "map_2d_image_prompt_suffix": {"type": "str", "label": "2D-Karten-Icon Prompt Suffix (flach)", "default": "top-down map tile, flat 2D illustration, bird's eye view, simple, clean, fills the frame", "description": "Wird flachen 2D-Karten-Icon-Prompts angehaengt (nach dem Orts-Subjekt)."},
 
             # --- Outfit-Bild Groesse ---
             "outfit_image_width": {
@@ -321,6 +318,14 @@ SECTIONS = {
             },
         },
         "sub_arrays": {
+            "use_cases": {
+                "label": "Use-Cases (Styles)",
+                "use_cases_editor": True,
+            },
+            "lora_triggers": {
+                "label": "LoRA Trigger Words",
+                "lora_triggers_editor": True,
+            },
             "backends": {
                 "label": "Backends",
                 "item_label_field": "name",
@@ -372,8 +377,7 @@ SECTIONS = {
                         "max": 4096,
                         "description": "Siehe Breite fuer empfohlene Bucket-Kombinationen.",
                     },
-                    "prompt_prefix": {"type": "str", "label": "Prompt Prefix"},
-                    "negative_prompt": {"type": "str", "label": "Negative Prompt"},
+                    "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "Fuer Cloud-Backends ohne Workflow (CivitAI/Together/Replicate): wie das Modell Prompts will (keywords/natural). Leer = Fallback ueber Backend-Modellnamen."},
                     "guidance_scale": {"type": "float", "label": "Guidance Scale", "min": 0, "max": 50, "step": 0.5, "applicable_for": ["a1111", "comfyui"]},
                     "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200, "applicable_for": ["a1111", "comfyui", "together"]},
                     "disable_safety": {"type": "bool", "label": "Safety deaktivieren", "default": False, "description": "Schickt disable_safety_checker=true mit (Together.ai-spezifisch).", "applicable_for": ["together"]},
@@ -402,7 +406,7 @@ SECTIONS = {
                 "master_detail": True,
                 "list_columns": [
                     {"field": "name", "label": "Name"},
-                    {"field": "image_model", "label": "Target"},
+                    {"field": "image_family", "label": "Family"},
                     {"field": "skill", "label": "Backend"},
                 ],
                 "fields": {
@@ -413,10 +417,7 @@ SECTIONS = {
                     "model": {"type": "comfyui_model_select", "label": "Model"},
                     "clip": {"type": "comfyui_clip_select", "label": "CLIP Model"},
                     "clip2": {"type": "comfyui_clip_select", "label": "CLIP Model 2", "description": "Nur fuer DualCLIPLoader-Workflows (z.B. Flux Inpaint): clip_name2."},
-                    "prompt_style": {"type": "text", "label": "Prompt Style", "default": "photorealistic", "description": "Stil-Adjektiv / Style-Keywords. Erscheint im Summary ('A {erstes Wort} group photo of...') und komplett in der Style-Zeile. Default: photorealistic."},
-                    "prompt_negative": {"type": "text", "label": "Negative Prompt"},
-                    "image_model": {"type": "select", "label": "Target Prompt Stil", "choices": ["", "z_image", "qwen", "flux"], "description": "Bestimmt den Prompt-Adapter (z_image=Komma-Keywords, qwen=natuerliche Saetze, flux=Fotografie-Stil). Leer = Fallback ueber Workflow-Dateiname."},
-                    "prompt_instruction": {"type": "text", "label": "Prompt Instruction (Enhancer)", "description": "Optional: Anweisung fuer den Enhancer-LLM (task=image_prompt). Leer = Template-Output wird direkt verwendet (schnell, deterministisch)."},
+                    "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "Wie das Modell Prompts will: keywords = Komma-Tags (Z-Image/SD), natural = Fliesstext (Flux/Qwen). Bestimmt Prompt-Adapter + welche Use-Case-Style-Familie greift. Leer = Fallback ueber Workflow-Dateiname."},
                     "width": {
                         "type": "int",
                         "label": "Breite",

@@ -284,13 +284,15 @@ class DescribeRoomSkill(BaseSkill):
                 if not active_workflow:
                     active_workflow = getattr(img_skill, '_default_workflow', None)
 
-                full_prompt = prompt
-                if active_workflow and active_workflow.prompt_style:
-                    full_prompt = f"{active_workflow.prompt_style}, {full_prompt}"
-                elif backend.prompt_prefix:
-                    full_prompt = f"{backend.prompt_prefix}, {full_prompt}"
-
-                negative = backend.negative_prompt or ""
+                from app.core import config as _cfg
+                _ucp = _cfg.resolve_use_case_style(
+                    "location",
+                    getattr(active_workflow, "image_family", "") if active_workflow else "",
+                    getattr(active_workflow, "workflow_file", "") if active_workflow else "",
+                    getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+                full_prompt = (f"{_ucp['prompt_style']}, {prompt}"
+                               if _ucp.get("prompt_style") else prompt)
+                negative = _ucp.get("prompt_negative", "")
                 # Raum-Szenenbild ist ein Hintergrund — voll, kein Downscale.
                 try:
                     _bg_w = int(os.environ.get("LOCATION_IMAGE_WIDTH", "1280"))
@@ -304,7 +306,7 @@ class DescribeRoomSkill(BaseSkill):
                 if active_workflow and active_workflow.workflow_file:
                     params["workflow_file"] = active_workflow.workflow_file
                     if active_workflow.model:
-                        _model_key = "unet" if active_workflow.has_input_unet else "model"
+                        _model_key = "unet" if (active_workflow.has_input_unet or active_workflow.has_input_safetensors) else "model"
                         params[_model_key] = active_workflow.model
                     # CLIP aus Workflow-Config
                     if active_workflow.clip:

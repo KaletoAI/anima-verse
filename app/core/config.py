@@ -46,43 +46,34 @@ def _is_sensitive(key: str) -> bool:
 _DEFAULT_COMFYUI_WORKFLOWS = {
     "Qwen": {
         "name": "Qwen",
-        "image_model": "qwen",
+        "image_family": "natural",
         "filter": "Qwen*",
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_qwen_api.json",
-        "prompt_style": "photograph, shot on iPhone 15 Pro, natural window light, skin texture, unedited, detailed anatomy, 8k, high detail, \n",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a natural-language descriptive prompt (not tags). Describe the scene as a flowing sentence with rich detail about the setting, characters, poses, and mood. Avoid comma-separated tag lists.",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
     "Z-Image": {
         "name": "Z-Image",
-        "image_model": "z_image",
+        "image_family": "keywords",
         "filter": "Z-Image*",
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_z-image_api.json",
-        "prompt_style": "RAW photo, amateur photograph, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail, \n",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a tag-based prompt with comma-separated keywords. Use quality tags like \"masterpiece, best quality\". Describe pose, lighting, and setting as short tags.",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
     "Flux": {
         "name": "Flux",
-        "image_model": "flux",
+        "image_family": "natural",
         "filter": "Flux.2-9B*",
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_flux2_api.json",
-        "prompt_style": "a candid photograph taken with a 35mm lens, natural indoor lighting, skin with visible pores and texture, detailed anatomy, 8k, high detail, ",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a natural-language descriptive prompt for a Flux 2 Klein model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
     "Flux 1 Dev": {
         "name": "Flux 1 Dev",
-        "image_model": "flux",
+        "image_family": "natural",
         "filter": "Flux*1*",
         "width": 1024,
         "height": 1024,
@@ -90,14 +81,11 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "model": "flux1-dev.safetensors",
         "clip": "clip_l.safetensors",
         "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
-        "prompt_style": "a candid photograph taken with a 35mm lens, natural light, skin with visible pores and texture, detailed anatomy, 8k, high detail, ",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a natural-language descriptive prompt for a Flux.1 dev model. Describe the scene in flowing detail — subject, pose, environment, lighting, mood. Flux understands natural language well, so be descriptive and avoid tag lists.",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
     "Flux Inpaint": {
         "name": "Flux Inpaint",
-        "image_model": "flux",
+        "image_family": "natural",
         "filter": "Flux Inpaint*",
         "width": 1024,
         "height": 1024,
@@ -105,25 +93,244 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "model": "Flux1-DevFill-Onereward_fp8.safetensors",
         "clip": "clip_l.safetensors",
         "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
-        "prompt_style": "top-down orthographic map tile, ",
-        "prompt_negative": "people, characters, text, watermark, signature, logo, blurry, low quality, harsh seams, hard edges",
-        "prompt_instruction": "Write a short natural-language description of the terrain to blend. Describe colors, tones and how the surrounding terrain merges together. No characters or people.",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
     "SD15": {
         "name": "SD15",
-        "image_model": "z_image",
+        "image_family": "keywords",
         "filter": "SD15*",
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_sd15_api.json",
         "model": "SD15-Cyberrealistic-fp32.safetensors",
-        "prompt_style": "RAW photo, amateur photograph, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail, \n",
-        "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality\n",
-        "prompt_instruction": "Write a tag-based prompt with comma-separated keywords. Use quality tags like \"masterpiece, best quality\". Describe pose, lighting, and setting as short tags.",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
 }
+
+
+# ── Use-Case-spezifische Prompt-Styles ──────────────────────────────────────
+# Style/Negative/Instruction gehoeren zum FALL der Generierung (Map-Tile vs
+# Character-Foto vs Item), nicht zum Workflow. Sie haengen an zwei Dimensionen:
+#   use_case (map/character/item/…)  ×  Style-FAMILIE (Formulierung).
+# Es gibt zwei generelle Familien (NICHT an Modellnamen gebunden, pro Use-Case
+# erweiterbar): 'natural' (Fliesstext) und 'keywords' (Komma-Tags). Das
+# "Target Prompt Stil"-Feld (image_model) eines Workflows wird ueber
+# _IMAGE_MODEL_FAMILY in eine Familie uebersetzt.
+_PROMPT_STYLE_FAMILIES = ["natural", "keywords"]
+
+# image_family / Render-Target -> Style-Familie. Akzeptiert die neuen Familien
+# (natural/keywords) direkt UND die Render-Targets (z_image/qwen/flux), die
+# get_target_model aus Datei-/Backend-Namen ableitet. Default: keywords.
+_IMAGE_MODEL_FAMILY = {
+    "": "keywords",
+    "keywords": "keywords",
+    "natural": "natural",
+    "z_image": "keywords",
+    "qwen": "natural",
+    "flux": "natural",
+}
+
+# Gemeinsamer Foto-Negativ-Prompt fuer die photoreal-orientierten Use-Cases.
+_NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
+              "plastic skin, smooth flawless skin, overexposed, glossy, fantasy, "
+              "studio lighting, posed, cartoon, drawing, sketch, watermark, "
+              "signature, text, logo, deformed, blurry, low quality")
+
+# Eingebaute Defaults pro use_case × Familie. Diese Werte werden NICHT in die
+# config.json geseedet — sie sind Resolver-Default UND grauer Placeholder in der
+# Admin-UI (leeres Feld = dieser Default greift). Ohne Backend-Fallback braucht
+# JEDER Use-Case einen Default fuer beide Familien.
+_DEFAULT_IMAGE_USE_CASES = {
+    "map": {
+        "keywords": {
+            "prompt_style": "fantasy game map tile, hand-painted cartography, oblique top-down angle with a slight tilt for depth, single close-up map tile, subject fills the entire frame edge to edge, cohesive palette, highly detailed, full-bleed, no border, no frame, borderless",
+            "prompt_negative": "people, person, characters, faces, text, words, letters, watermark, signature, logo, frame, border, framed, vignette, grid lines, map pins, icons, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, lowres, jpeg artifacts, low quality",
+            "prompt_instruction": "Write comma-separated keywords for a single close-up fantasy game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, hand-painted cartography style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject fills the entire frame edge to edge, closely framed, no border or frame. No people, no text, no camera or style talk.",
+        },
+        "natural": {
+            "prompt_style": "a single close-up fantasy game map tile of the place, hand-painted, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, cohesive palette, highly detailed",
+            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, framed, vignette, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, low quality",
+            "prompt_instruction": "Describe a single close-up fantasy game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, hand-painted style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject is closely framed and fills the entire frame edge to edge with no border or frame. No people, no text.",
+        },
+    },
+    "location": {
+        "keywords": {
+            "prompt_style": "wide establishing shot, environment, atmospheric, detailed, no people",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write comma-separated tags for an establishing shot of the place — environment, architecture, lighting, mood. No people.",
+        },
+        "natural": {
+            "prompt_style": "a wide establishing shot of the place, atmospheric, detailed environment, no people",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Describe an establishing shot of the place — environment, architecture, lighting, mood. No people.",
+        },
+    },
+    "item": {
+        "keywords": {
+            "prompt_style": "product photo, single object, isolated on a plain neutral background, soft studio lighting, sharp focus, highly detailed",
+            "prompt_negative": "people, person, hands, characters, text, watermark, logo, clutter, busy background, blurry, low quality",
+            "prompt_instruction": "Write comma-separated keywords for the single item only, isolated on a plain background. No people, no scene.",
+        },
+        "natural": {
+            "prompt_style": "a clean product photo of a single object isolated on a plain neutral background, soft studio lighting, sharp focus",
+            "prompt_negative": "people, person, hands, characters, text, watermark, logo, clutter, busy background, blurry, low quality",
+            "prompt_instruction": "Write a short natural-language description of the single item only, isolated on a plain background. No people, no scene.",
+        },
+    },
+    "character": {
+        "keywords": {
+            "prompt_style": "RAW photo, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write comma-separated tags for the scene — subject, pose, expression, setting, lighting, mood.",
+        },
+        "natural": {
+            "prompt_style": "a candid photograph taken with a 35mm lens, natural light, skin with visible pores and texture, detailed anatomy, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write a natural-language description of the scene — subject, pose, environment, lighting, mood.",
+        },
+    },
+    "profile": {
+        "keywords": {
+            "prompt_style": "photorealistic, portrait, head and shoulders, only head, looking at camera, neutral background, sharp focus, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write comma-separated tags for a head-and-shoulders portrait — face, hair, expression. Neutral background, no full body.",
+        },
+        "natural": {
+            "prompt_style": "a photorealistic head-and-shoulders portrait looking at the camera, neutral background, sharp focus",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Describe a head-and-shoulders portrait — face, hair, expression. Neutral background, no full body.",
+        },
+    },
+    "outfit": {
+        "keywords": {
+            "prompt_style": "full body view, standing, plain neutral background, even lighting, sharp focus, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write comma-separated tags describing the full outfit head-to-toe on a standing figure, plain background.",
+        },
+        "natural": {
+            "prompt_style": "a full-body photo of the character standing against a plain neutral background, even lighting, sharp focus",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Describe the full outfit head-to-toe on a standing figure against a plain background.",
+        },
+    },
+    "expression": {
+        "keywords": {
+            "prompt_style": "RAW photo, natural light, skin texture, detailed face, expressive, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write comma-separated tags emphasizing the character's facial expression and pose.",
+        },
+        "natural": {
+            "prompt_style": "a candid photo emphasizing the character's facial expression and pose, natural light, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Describe the character emphasizing facial expression and pose.",
+        },
+    },
+    "instagram": {
+        "keywords": {
+            "prompt_style": "candid smartphone photo, natural light, lifestyle, vibrant, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write comma-separated tags for a casual lifestyle photo as if posted on Instagram.",
+        },
+        "natural": {
+            "prompt_style": "a casual candid lifestyle photo as if posted on Instagram, natural light",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Describe a casual lifestyle photo as if posted on Instagram.",
+        },
+    },
+    "event": {
+        "keywords": {
+            "prompt_style": "atmospheric scene, dynamic, cinematic lighting, detailed environment, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write comma-separated tags for an atmospheric scene depicting the event. Focus on the environment.",
+        },
+        "natural": {
+            "prompt_style": "an atmospheric cinematic scene depicting the event, detailed environment, dramatic lighting",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Describe an atmospheric scene depicting the event. Focus on the environment.",
+        },
+    },
+    "story": {
+        "keywords": {
+            "prompt_style": "cinematic scene, dramatic composition, detailed environment, high detail",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Write comma-separated tags for a cinematic story scene — subject, action, setting, mood.",
+        },
+        "natural": {
+            "prompt_style": "a cinematic story scene with dramatic composition and detailed environment",
+            "prompt_negative": _NEG_PHOTO,
+            "prompt_instruction": "Describe a cinematic story scene — subject, action, setting, mood.",
+        },
+    },
+}
+
+
+def image_model_to_family(image_model: str) -> str:
+    """Uebersetzt ein 'Target Prompt Stil' (image_model) in eine Style-Familie."""
+    return _IMAGE_MODEL_FAMILY.get((image_model or "").strip(), "keywords")
+
+
+def get_use_case_prompts(use_case: str, image_model: str = "") -> dict:
+    """Loest Style/Negative/Instruction fuer einen Use-Case + Target-Style auf.
+
+    Prioritaet pro Feld: Admin-Override (config) -> eingebauter Default
+    (_DEFAULT_IMAGE_USE_CASES[use_case][familie]) -> "" (Aufrufer faellt dann
+    auf den Workflow-Style zurueck). Gibt immer ein Dict mit den drei Keys
+    zurueck (Werte koennen leer sein).
+    """
+    uc = (use_case or "").strip() or "character"
+    family = image_model_to_family(image_model)
+    fields = ("prompt_style", "prompt_negative", "prompt_instruction")
+    builtin = (_DEFAULT_IMAGE_USE_CASES.get(uc, {}) or {}).get(family, {}) or {}
+    out = {}
+    for f in fields:
+        override = get(f"image_generation.use_cases.{uc}.styles.{family}.{f}", "")
+        out[f] = (override or "").strip() or (builtin.get(f, "") or "")
+    return out
+
+
+def get_lora_trigger_words(lora_names) -> list:
+    """Aktivierungs-Woerter fuer die aktiven LoRAs (aus dem per-Welt-Repository
+    ``image_generation.lora_triggers`` = [{lora, word}, …]). Matcht per Dateiname
+    (auch Basename, falls Pfad/Endung leicht abweicht). Reihenfolge wie im Repo,
+    Duplikate entfernt.
+    """
+    if not lora_names:
+        return []
+    triggers = get("image_generation.lora_triggers", []) or []
+    if not isinstance(triggers, list):
+        return []
+    want = set()
+    for n in lora_names:
+        n = (n or "").strip()
+        if n:
+            want.add(n)
+            want.add(os.path.basename(n))
+    out, seen = [], set()
+    for e in triggers:
+        if not isinstance(e, dict):
+            continue
+        lora = (e.get("lora") or "").strip()
+        word = (e.get("word") or "").strip()
+        if not (lora and word):
+            continue
+        if (lora in want or os.path.basename(lora) in want) and word not in seen:
+            seen.add(word)
+            out.append(word)
+    return out
+
+
+def resolve_use_case_style(use_case: str, image_family: str = "",
+                           workflow_file: str = "", backend_model: str = "",
+                           backend_family: str = "") -> dict:
+    """Bequemer Wrapper fuer alle Generate-Pfade. Familie-Prioritaet:
+    Workflow-``image_family`` → Backend-``image_family`` → Heuristik aus
+    Workflow-Dateiname/Backend-Modellname (get_target_model). Liefert
+    {prompt_style, prompt_negative, prompt_instruction} fuer den Use-Case.
+    """
+    from app.core.prompt_adapters import get_target_model
+    fam = (image_family or "").strip() or (backend_family or "").strip()
+    target = get_target_model(fam, workflow_file or "", backend_model or "")
+    return get_use_case_prompts(use_case, target)
 
 
 _DEFAULT_MARKETPLACE_CATALOGS = [
@@ -155,6 +362,82 @@ def _seed_default_marketplace_catalogs(config: dict, config_path: Path) -> bool:
         return True
     except OSError as e:
         logger.error("Failed to seed default marketplace catalog to %s: %s", config_path, e)
+        return False
+
+
+def _seed_default_use_cases(config: dict, config_path: Path) -> bool:
+    """Legt die Use-Case-Prompt-Struktur an (leere Felder, 2 Familien je Use-Case).
+
+    Die Felder bleiben LEER — die eingebauten Defaults (_DEFAULT_IMAGE_USE_CASES)
+    greifen als Resolver-Fallback und werden in der Admin-UI als grauer
+    Placeholder gezeigt. Geseedet wird nur die Struktur, damit der Admin die
+    Eintraege sieht/editieren/erweitern kann. Idempotent + Backfill fehlender
+    Use-Cases. Returns True wenn etwas geschrieben wurde.
+    """
+    import copy
+    ig = config.setdefault("image_generation", {})
+    uc_cfg = ig.setdefault("use_cases", {})
+    empty_fields = {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""}
+    changed = False
+    for uc in _DEFAULT_IMAGE_USE_CASES:
+        entry = uc_cfg.setdefault(uc, {})
+        styles = entry.setdefault("styles", {})
+        for fam in _PROMPT_STYLE_FAMILIES:
+            if fam not in styles:
+                styles[fam] = copy.deepcopy(empty_fields)
+                changed = True
+    if not changed:
+        return False
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        logger.info("Use-Case-Prompt-Struktur geseedet/ergaenzt -> %s", config_path)
+        return True
+    except OSError as e:
+        logger.error("Failed to seed use_cases to %s: %s", config_path, e)
+        return False
+
+
+def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> bool:
+    """Entfernt die alten Style-Felder, die jetzt in den Use-Cases leben.
+
+    - Workflows: prompt_style / prompt_negative / prompt_instruction
+    - Backends:  prompt_prefix / negative_prompt
+    Funktional sind sie bereits tot (kein Env-Mirror/Leser mehr) — das hier
+    raeumt nur die config.json auf. Idempotent.
+    """
+    ig = config.get("image_generation", {})
+    changed = False
+    _fam_map = {"z_image": "keywords", "qwen": "natural", "flux": "natural"}
+    for wf in (ig.get("comfyui_workflows", {}) or {}).values():
+        if isinstance(wf, dict):
+            for k in ("prompt_style", "prompt_negative", "prompt_instruction"):
+                if k in wf:
+                    del wf[k]; changed = True
+            # image_model ("Target Prompt Stil") -> image_family (natural/keywords)
+            if "image_model" in wf:
+                _old = (wf.pop("image_model") or "").strip()
+                wf["image_family"] = _fam_map.get(_old, _old if _old in ("natural", "keywords") else "")
+                changed = True
+    for be in (ig.get("backends", []) or []):
+        if isinstance(be, dict):
+            for k in ("prompt_prefix", "negative_prompt"):
+                if k in be:
+                    del be[k]; changed = True
+    # Verstreute Prefix/Suffix-Felder -> jetzt in den Use-Cases.
+    for k in ("profile_image_prompt_prefix", "outfit_image_prompt_prefix",
+              "map_2d_image_prompt_suffix"):
+        if k in ig:
+            del ig[k]; changed = True
+    if not changed:
+        return False
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        logger.info("Legacy Image-Gen Style-Felder entfernt (Workflow/Backend) -> %s", config_path)
+        return True
+    except OSError as e:
+        logger.error("Failed to strip legacy imagegen fields from %s: %s", config_path, e)
         return False
 
 
@@ -263,6 +546,8 @@ def load(config_path: Optional[Path] = None) -> dict:
     # Bei einer neuen/leeren Welt: Default-Workflows fuer Qwen/Z-Image/Flux
     # automatisch eintragen, damit der Admin nicht alles von Hand anlegen muss.
     _seed_default_workflows(_CONFIG, path)
+    _seed_default_use_cases(_CONFIG, path)
+    _strip_legacy_imagegen_prompt_fields(_CONFIG, path)
     _seed_default_marketplace_catalogs(_CONFIG, path)
 
     # Overlay secrets.json (gitignored — holds api keys / passwords)
@@ -565,7 +850,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_IMAGEGEN_NAME", ig.get("name", "ImageGenerator"))
     _set(env, "SKILL_IMAGEGEN_DESCRIPTION", ig.get("description", ""))
     _set(env, "COMFY_IMAGEGEN_DEFAULT", ig.get("comfy_default_workflow", ""))
-    _set(env, "OUTFIT_IMAGE_PROMPT_PREFIX", ig.get("outfit_image_prompt_prefix", ""))
     _set(env, "OUTFIT_IMAGE_WIDTH", ig.get("outfit_image_width", 832))
     _set(env, "OUTFIT_IMAGE_HEIGHT", ig.get("outfit_image_height", 1216))
     _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", 1280))
@@ -577,10 +861,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "MAPFIT_IMAGEGEN_DEFAULT", ig.get(
         "mapfit_imagegen_default", "workflow:Flux Inpaint*"))
     _set(env, "MAP_TILE_VISION_ANALYSIS", ig.get("map_tile_vision_analysis", False))
-    _set(env, "PROFILE_IMAGE_PROMPT_PREFIX", ig.get("profile_image_prompt_prefix", ""))
-    _set(env, "MAP_2D_IMAGE_PROMPT_SUFFIX", ig.get(
-        "map_2d_image_prompt_suffix",
-        "top-down map tile, flat 2D illustration, bird's eye view, simple, clean, fills the frame"))
     _set(env, "U2NET_HOME", ig.get("u2net_home", "./models/u2net"))
     _set(env, "REBUILD_LLM_SYSTEM_TEMPLATE", ig.get("rebuild_llm_system_template", ""))
     _set(env, "IMAGE_ANALYSIS_PROMPT", ig.get("image_analysis_prompt", ""))
@@ -589,11 +869,11 @@ def _flatten_to_env(config: dict) -> None:
     for i, be in enumerate(ig.get("backends", []), start=1):
         p = f"SKILL_IMAGEGEN_{i}_"
         for key in ["name", "enabled", "api_type", "api_url", "api_key", "model",
-                     "cost", "width", "height", "prompt_prefix",
-                     "negative_prompt", "guidance_scale", "num_inference_steps",
+                     "cost", "width", "height",
+                     "guidance_scale", "num_inference_steps",
                      "sampling_method", "schedule_type",
                      "checkpoint", "poll_interval", "max_wait", "disable_safety",
-                     "scheduler", "clip_skip",
+                     "scheduler", "clip_skip", "image_family",
                      "max_concurrent", "beszel_system_id"]:
             val = be.get(key, "")
             _set(env, f"{p}{key.upper()}", val)
@@ -608,8 +888,8 @@ def _flatten_to_env(config: dict) -> None:
     for wid, wf in ig.get("comfyui_workflows", {}).items():
         p = f"COMFY_IMAGEGEN_{wid}_"
         for key in ["name", "filter", "skill", "workflow_file",
-                     "model", "prompt_style", "prompt_negative", "image_model",
-                     "prompt_instruction", "width", "height",
+                     "model", "image_family",
+                     "width", "height",
                      "clip", "clip2"]:
             val = wf.get(key, "")
             _set(env, f"{p}{key.upper()}", val)

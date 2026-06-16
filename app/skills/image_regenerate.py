@@ -366,12 +366,16 @@ def regenerate_image(character_name: str,
         except Exception as e:
             logger.warning(f"Referenz-Aufloesung Fehler: {e}")
 
-    # 6b. Prompt Prefix/Suffix vom Workflow anwenden (Prompt wird ohne Affixe gespeichert)
+    # 6b. Use-Case-Style anwenden (Prompt wird ohne Affixe gespeichert).
+    from app.core import config as _cfg
+    _ucp = _cfg.resolve_use_case_style(
+        "character",
+        getattr(active_workflow, "image_family", "") if active_workflow else "",
+        getattr(active_workflow, "workflow_file", "") if active_workflow else "",
+        getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
     generation_prompt = final_prompt
-    if active_workflow and active_workflow.prompt_style:
-        generation_prompt = f"{active_workflow.prompt_style} {generation_prompt}"
-    elif hasattr(backend, "prompt_prefix") and backend.prompt_prefix:
-        generation_prompt = f"{backend.prompt_prefix} {generation_prompt}"
+    if _ucp.get("prompt_style"):
+        generation_prompt = f"{_ucp['prompt_style']} {generation_prompt}"
 
     logger.info(f"Backend={backend.name}, Workflow={active_workflow.name if active_workflow else 'default'}")
     logger.info(f"Prompt (clean): {final_prompt[:120]}...")
@@ -401,15 +405,18 @@ def regenerate_image(character_name: str,
     def _build_op(_orig_prompt: str, _orig_neg: str, _orig_params: dict, _orig_wf):
         def _op(b):
             _activate_track(getattr(b, "name", ""))
-            # Prompt-Style anpassen pro Backend (Workflow hat Prio)
+            # Use-Case-Style pro Backend (Familie aus Workflow/Backend-Modell).
+            from app.core import config as _cfg
+            _bucp = _cfg.resolve_use_case_style(
+                "character",
+                getattr(_orig_wf, "image_family", "") if _orig_wf else "",
+                getattr(_orig_wf, "workflow_file", "") if _orig_wf else "",
+                getattr(b, "model", "") or "", getattr(b, "image_family", ""))
             _gen_prompt = _orig_prompt
-            if _orig_wf and _orig_wf.prompt_style:
-                _gen_prompt = f"{_orig_wf.prompt_style} {_gen_prompt}"
-            elif hasattr(b, "prompt_prefix") and b.prompt_prefix:
-                _gen_prompt = f"{b.prompt_prefix} {_gen_prompt}"
-            # Negative-Prompt: per-Backend aus dessen cfg, falls dieser Aufruf
-            # ein Override hat bleibt _orig_neg gewinnt
-            _gen_neg = _orig_neg or getattr(b, "negative_prompt", "")
+            if _bucp.get("prompt_style"):
+                _gen_prompt = f"{_bucp['prompt_style']} {_gen_prompt}"
+            # Negative: Aufruf-Override gewinnt, sonst Use-Case
+            _gen_neg = _orig_neg or _bucp.get("prompt_negative", "")
             # Params: Modell-Resolve fuer dieses Backend
             _bp = dict(_orig_params)
             _model_key = "unet" if (_orig_wf and (_orig_wf.has_input_unet or _orig_wf.has_input_safetensors)) else "model"

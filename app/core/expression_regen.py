@@ -644,8 +644,9 @@ def trigger_expression_generation(character_name: str,
 
     Returns True wenn ein Trigger (oder pending Trigger) registriert wurde.
     """
+    # Style/Framing kommen aus dem "expression"-Use-Case (kein Env-Prefix mehr).
     if prompt_prefix is None:
-        prompt_prefix = os.environ.get("OUTFIT_IMAGE_PROMPT_PREFIX", "full body portrait").strip()
+        prompt_prefix = ""
 
     if not ignore_feature_gate:
         try:
@@ -1084,6 +1085,7 @@ def generate_expression_image(character_name: str,
         payload["model_override"] = model_override
     if loras_override is not None:
         payload["loras"] = loras_override
+    payload["image_use_case"] = "expression"
 
     try:
         img_result = image_skill.execute(json.dumps(payload))

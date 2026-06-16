@@ -101,9 +101,9 @@ class ImageBackend(ABC):
         # Instanz-Enabled aus .env (globaler Default)
         self.instance_enabled = os.environ.get(f"{env_prefix}ENABLED", "true").strip().lower() in ("true", "1", "yes")
 
-        # Prompt-Konfiguration pro Instanz aus .env
-        self.prompt_prefix = os.environ.get(f"{env_prefix}PROMPT_PREFIX", "").strip()
-        self.negative_prompt = os.environ.get(f"{env_prefix}NEGATIVE_PROMPT", "").strip()
+        # Image Family (natural/keywords) — fuer Cloud-Backends ohne Workflow.
+        # Style/Negative gehoeren in die Use-Cases, nicht ans Backend.
+        self.image_family = os.environ.get(f"{env_prefix}IMAGE_FAMILY", "").strip()
 
         # Statische Fallback-Konfiguration (fallback_mode/fallback_specific)
         # entfernt: bei Ausfall waehlt run_with_fallback dynamisch das naechste
@@ -205,6 +205,27 @@ class ImageBackend(ABC):
         """Prueft ob die API erreichbar ist. Setzt self.available."""
         pass
 
+    def _inject_lora_triggers(self, prompt: str, params: Dict[str, Any]) -> str:
+        """Stellt dem Prompt die Aktivierungs-Woerter der aktiven LoRAs voran
+        (aus dem per-Welt-Repository image_generation.lora_triggers). Cloud-
+        Backends ohne LoRAs (lora_inputs gepoppt) bekommen nichts."""
+        try:
+            names = [str(l.get("name")).strip()
+                     for l in (params.get("lora_inputs") or params.get("loras") or [])
+                     if isinstance(l, dict) and (l.get("name") or "").strip()
+                     and l.get("name") != "None"]
+            if not names:
+                return prompt
+            from app.core.config import get_lora_trigger_words
+            words = get_lora_trigger_words(names)
+            if not words:
+                return prompt
+            logger.info("%s: LoRA-Trigger-Woerter ergaenzt: %s", self.name, ", ".join(words))
+            return ", ".join(words) + ", " + prompt
+        except Exception as e:
+            logger.debug("LoRA-Trigger-Injektion fehlgeschlagen: %s", e)
+            return prompt
+
     def generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:
         """Generiert Bilder mit automatischem Job-Tracking fuer Load-Balancing.
 
@@ -212,6 +233,10 @@ class ImageBackend(ABC):
         ``image_use_case`` enthaelt (item / location). Caller, die volle
         Aufloesung brauchen (Outfit, Avatar), setzen den Key nicht.
         """
+        # LoRA-Aktivierungs-Woerter (per-Welt-Repository) zentral in den Prompt
+        # aufnehmen — gilt fuer ALLE Backends/Pfade, sobald ein LoRA aktiv ist.
+        prompt = self._inject_lora_triggers(prompt, params)
+
         with self._jobs_lock:
             self._active_jobs += 1
         try:
@@ -1292,6 +1317,7 @@ class ComfyUIBackend(ImageBackend):
         # der beim naechsten Run wieder ueberschrieben wird.
         _activated_switches = set()  # Switch-Nodes die aktiviert wurden
         _slot_map = {}  # node_title -> slot_name Zuordnung
+        _injected_nodes = set()  # node_ids die diesen Run ein Bild bekamen
         import re as _re
         for i, (node_title, file_path) in enumerate(ref_images.items()):
             ref_node = self._find_node_by_title(workflow, node_title)
@@ -1316,6 +1342,7 @@ class ComfyUIBackend(ImageBackend):
                 uploaded = self._upload_image(file_path, slot_name=slot_name)
                 if uploaded:
                     workflow[ref_node]["inputs"]["image"] = uploaded
+                    _injected_nodes.add(ref_node)
                     # Width/Height auf LoadAndResizeImage-Nodes setzen (z.B. Qwen-Workflow)
                     if "width" in workflow[ref_node]["inputs"]:
                         workflow[ref_node]["inputs"]["width"] = w
@@ -1333,6 +1360,33 @@ class ComfyUIBackend(ImageBackend):
                         _activated_switches.add(on_node)
                         logger.debug(f"Switch '{on_node}' (fuer {node_title}): true")
                     logger.debug(f"Ref-Image '{node_title}': {uploaded} (slot: {slot_name})")
+
+        # Nicht befuellte Referenz-Slots auf den Placeholder zeigen lassen.
+        # Sonst behaelt eine input_reference_image*-Node ihren im Workflow-File
+        # fest verdrahteten image-Wert (z.B. ein altes "Vallerie_...png" aus dem
+        # Workflow-Design) — existiert die Datei auf dem ComfyUI-Server nicht,
+        # faellt die ganze Generierung mit HTTP 400 ("Invalid image file"). Die
+        # Placeholder-Dateien (<prefix>_slot_ref_N.png) wurden oben bereits per
+        # _reset_reference_slots hochgeladen. Nur input_*-Nodes (Konvention).
+        if _has_ref_nodes:
+            for node_id, node in workflow.items():
+                if not isinstance(node, dict):
+                    continue
+                if node_id in _injected_nodes:
+                    continue
+                title = node.get("_meta", {}).get("title", "")
+                if not title.startswith("input_reference_image"):
+                    continue
+                # Switch-/Typ-Hilfsnodes nicht anfassen (kein Bild-Input).
+                inputs = node.get("inputs", {})
+                if "image" not in inputs:
+                    continue
+                _m = _re.search(r'_(\d+)$', title)
+                _idx = (int(_m.group(1)) - 1) if _m else 0
+                if not (0 <= _idx < len(self._REF_SLOT_NAMES)):
+                    _idx = 0
+                inputs["image"] = f"{_slot_prefix}{self._REF_SLOT_NAMES[_idx]}"
+                logger.debug("Leerer Ref-Slot '%s' -> Placeholder %s", title, inputs["image"])
 
         # Inaktive Switch-Nodes: boolean=false setzen.
         # Workflows sind so designt, dass on_false auf EmptyImage zeigt —
@@ -1639,13 +1693,15 @@ class CivitAIBackend(ImageBackend):
             return False
 
         try:
+            # Sauberer authentifizierter GET (KEIN bogus ?token=… — der wurde von
+            # CivitAI als ungueltiges Job-Token interpretiert und gab faelschlich
+            # 401, obwohl der Bearer-Key gueltig war).
             resp = requests.get(
                 f"{self.api_url}/v1/consumer/jobs",
-                params={"token": "__ping__"},
                 headers=self._headers(),
                 timeout=10)
             if resp.status_code in (401, 403):
-                logger.warning(f"{self.name}: API-Key ungueltig (Status {resp.status_code})")
+                logger.warning(f"{self.name}: API-Key abgelehnt (Status {resp.status_code})")
                 self.available = False
                 return False
 
@@ -1733,7 +1789,7 @@ class CivitAIBackend(ImageBackend):
             # FLUX: kein cfgScale, kein clipSkip, kein negativePrompt
             pass
         else:
-            gen_params["negativePrompt"] = negative_prompt or self.negative_prompt
+            gen_params["negativePrompt"] = negative_prompt or ""
             gen_params["cfgScale"] = params.get("guidance_scale") or self.guidance_scale
             gen_params["clipSkip"] = self.clip_skip
 
@@ -1782,6 +1838,8 @@ class CivitAIBackend(ImageBackend):
         #    available=true + blobUrl vorhanden = fertig
         start_time = time.time()
         blob_url = None
+        _logged_shape = False  # einmaliges Roh-Logging der Job-Struktur
+        _last_raw = ""
 
         while time.time() - start_time < self.max_wait:
             time.sleep(self.poll_interval)
@@ -1794,15 +1852,30 @@ class CivitAIBackend(ImageBackend):
                     headers=self._headers(),
                     timeout=15)
                 if status_resp.status_code not in (200, 202):
-                    logger.warning(f"Polling-Fehler (Status {status_resp.status_code}), versuche erneut... ({elapsed}s)")
+                    logger.warning(f"{self.name}: Polling HTTP {status_resp.status_code} ({elapsed}s) — Body: {status_resp.text[:200]}")
                     continue
 
                 status_data = status_resp.json()
+                _last_raw = json.dumps(status_data)[:600]
                 status_jobs = status_data.get("jobs", [])
                 if not status_jobs:
                     continue
 
-                job_result = status_jobs[0].get("result")
+                job0 = status_jobs[0]
+                # Einmal die echte Struktur loggen (Diagnose: blobUrl-Feldname etc.)
+                if not _logged_shape:
+                    _logged_shape = True
+                    logger.info("%s: Job-Struktur (Diagnose) job-keys=%s result=%s",
+                                self.name, list(job0.keys()), json.dumps(job0.get("result"))[:300])
+
+                # Explizite Fehler-/Endzustaende erkennen (statt blind bis Timeout).
+                _status = str(job0.get("status") or job0.get("$type") or "").lower()
+                if any(s in _status for s in ("failed", "error", "canceled", "rejected", "deleted")):
+                    logger.error("%s: Job-Status '%s' — Abbruch. Raw: %s",
+                                 self.name, _status, _last_raw)
+                    return []
+
+                job_result = job0.get("result")
                 if job_result is None:
                     continue
 
@@ -1810,25 +1883,28 @@ class CivitAIBackend(ImageBackend):
                 result_item = job_result[0] if isinstance(job_result, list) and job_result else job_result
                 if isinstance(result_item, dict):
                     available = result_item.get("available", False)
-                    url = result_item.get("blobUrl", "")
+                    # Feldname-Varianten tolerant lesen.
+                    url = (result_item.get("blobUrl") or result_item.get("blobUrlExpirationDate") and result_item.get("blobUrl")
+                           or result_item.get("url") or "")
+                    # Explizit fehlgeschlagenes Result-Item.
+                    if str(result_item.get("blobKey") or "").lower() in ("failed", "error"):
+                        logger.error("%s: Result-Item fehlgeschlagen. Raw: %s", self.name, _last_raw)
+                        return []
                     if available and url:
                         blob_url = url
                         logger.info(f"Generierung abgeschlossen ({elapsed}s)")
                         break
-                    elif not available:
-                        # Noch in Bearbeitung
-                        continue
                     elif url:
-                        # available fehlt aber URL da
                         blob_url = url
                         logger.info(f"Generierung abgeschlossen ({elapsed}s)")
                         break
+                    # sonst noch in Bearbeitung -> weiter pollen
 
             except Exception as e:
-                logger.warning(f"Polling-Fehler: {e} ({elapsed}s)")
+                logger.warning(f"{self.name}: Polling-Fehler: {e} ({elapsed}s)")
 
         if not blob_url:
-            logger.error(f"{self.name}: Timeout nach {self.max_wait}s (kein blobUrl)")
+            logger.error(f"{self.name}: Timeout nach {self.max_wait}s (kein blobUrl). Letzte Response: {_last_raw}")
             return []
 
         # 3. Bild herunterladen
@@ -1925,6 +2001,24 @@ class TogetherBackend(ImageBackend):
     # Parameter-Keys die bei 400 einzeln entfernt werden koennen
     _OPTIONAL_KEYS = ("steps", "negative_prompt", "width", "height", "n")
 
+    def _rate_limit_wait(self, resp: requests.Response, attempt: int) -> float:
+        """Wartezeit bei 429: bevorzugt Retry-After / X-RateLimit-Reset Header,
+        sonst exponentielles Backoff (2,4,8,16s), gedeckelt auf 30s."""
+        for h in ("retry-after", "x-ratelimit-reset"):
+            v = resp.headers.get(h)
+            if not v:
+                continue
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            # Header kann absolute Epoch-Zeit ODER Sekunden sein.
+            if f > time.time():
+                f = f - time.time()
+            if f > 0:
+                return max(1.0, min(f, 30.0))
+        return min(2.0 * (2 ** (attempt - 1)), 30.0)
+
     def _post_with_retry(self, payload: Dict[str, Any],
                          optional: Dict[str, Any]) -> requests.Response:
         """Sendet den Request und entfernt bei 400 den beanstandeten Parameter.
@@ -1933,13 +2027,26 @@ class TogetherBackend(ImageBackend):
         und wiederholt den Request ohne diesen. Maximal len(optional) Retries.
         """
         remaining = dict(optional)
+        _429_retries = 0
+        _max_429 = 4
 
-        for _ in range(len(remaining) + 1):
+        for _ in range(len(remaining) + 1 + _max_429):
             resp = requests.post(
                 f"{self.api_url}/v1/images/generations",
                 json=payload,
                 headers=self._headers(),
                 timeout=self.timeout)
+            # Rate-Limit: mit Backoff erneut versuchen statt hart abzubrechen.
+            if resp.status_code == 429:
+                if _429_retries >= _max_429:
+                    error_msg = resp.text[:300] or '(leer)'
+                    logger.error(f"{self.name}: Rate-Limit (429) nach {_max_429} Versuchen — Abbruch")
+                    raise RuntimeError(f"{self.name}: HTTP 429 (Rate-Limit): {error_msg[:160]}")
+                _429_retries += 1
+                _wait = self._rate_limit_wait(resp, _429_retries)
+                logger.warning(f"{self.name}: Rate-Limit (429), warte {_wait:.1f}s (Versuch {_429_retries}/{_max_429})")
+                time.sleep(_wait)
+                continue
             if resp.status_code != 400:
                 if resp.status_code != 200:
                     error_msg = resp.text[:500] or '(leer)'
@@ -2001,15 +2108,13 @@ class TogetherBackend(ImageBackend):
         if self.disable_safety:
             payload["disable_safety_checker"] = True
 
-        # Seed aus params (optional)
-        seed = params.get("seed")
-        if seed and seed > 0:
-            payload["seed"] = seed
-
-        # Optionale Parameter — werden bei 400 einzeln entfernt und wiederholt
-        optional_params: Dict[str, Any] = {
-            "n": 1,
-        }
+        # Optionale Parameter — werden bei 400 einzeln entfernt und wiederholt.
+        # KEIN "n": Together generiert per Default 1 Bild; viele Modelle lehnen
+        # "n" mit 400 ab, und der dann sofortige Retry loeste ein 429
+        # ("too many requests in a short window") aus.
+        # seed/steps/dimensions sind ebenfalls optional — manche Modell-
+        # Architekturen (z.B. GPT-Image) lehnen 'seed' mit 400 ab.
+        optional_params: Dict[str, Any] = {}
         if steps:
             optional_params["steps"] = steps
         if width and height:
@@ -2017,6 +2122,9 @@ class TogetherBackend(ImageBackend):
             optional_params["height"] = height
         if negative_prompt:
             optional_params["negative_prompt"] = negative_prompt
+        seed = params.get("seed")
+        if seed and seed > 0:
+            optional_params["seed"] = seed
 
         payload.update(optional_params)
 

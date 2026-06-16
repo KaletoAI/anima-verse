@@ -49,6 +49,13 @@ def get_target_model(image_model: str = "", workflow_file: str = "", backend_mod
         "z_image" | "qwen" | "flux". Default "z_image" wenn unbekannt.
     """
     normalized = (image_model or "").strip().lower().replace("-", "_").replace(" ", "_")
+    # Image Family (natural/keywords) -> Render-Target. keywords = Komma-Tags
+    # (z_image-Renderer), natural = Fliesstext/Labeled-Sections (qwen-Renderer,
+    # identisch zu flux).
+    if normalized == "keywords":
+        return "z_image"
+    if normalized == "natural":
+        return "qwen"
     if normalized in TARGET_MODELS:
         return normalized
 

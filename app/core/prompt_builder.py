@@ -854,16 +854,17 @@ class PromptBuilder:
         variables: PromptVariables,
         *,
         kind: Optional[str] = None,
-        has_style_conditioning: bool = False) -> PromptVariables:
+        has_style_conditioning: bool = False,
+        max_slots: Optional[int] = None) -> PromptVariables:
         """Wendet Workflow-abhaengige Ausschlussregeln an.
 
-        Strippen geschieht NUR bei QWEN_STYLE — dort steuern die Reference-Bilder
-        Aussehen, Outfit und Location via Style-Conditioning, Doppel-Beschreibung
-        im Text waere kontraproduktiv.
+        Das Personen-Referenzbild liefert nur das *Aussehen* (Identitaet). Outfit
+        UND Aktivitaet bleiben deshalb immer im Text — das Ref-Bild zeigt nicht
+        das gewuenschte Outfit oder die Handlung. Einzig die *Location* entfaellt,
+        und auch nur, wenn ein Raum-Referenzbild tatsaechlich in einem Slot liegt
+        (dann zeigt das Bild die Location und der Text waere redundant).
 
-        Bei FLUX_BG/Z_IMAGE bleibt alles im Text, weil Charaktere ueber externes
-        Post-Processing reinkommen und das Outfit ohne Style-Conditioning sonst
-        fehlen wuerde.
+        Bei FLUX_BG/Z_IMAGE bleibt alles im Text.
 
         Args:
             variables: Gesammelte Prompt-Variablen.
@@ -871,6 +872,10 @@ class PromptBuilder:
                   None -> abgeleitet aus has_style_conditioning (Backward-Compat).
             has_style_conditioning: Backward-Compat-Flag fuer Caller, die noch
                   kein kind durchreichen. Wenn True -> wie QWEN_STYLE behandeln.
+            max_slots: Anzahl Ref-Slots des Workflows. Bestimmt ueber den
+                  Prio-Plan, ob der Raum ueberhaupt einen Slot bekommt. None ->
+                  Backward-Compat: Raum gilt als geslottet, sobald ein Raum-Ref
+                  existiert.
         """
         kind_value = (kind or "").strip().lower()
         if not kind_value:
@@ -879,21 +884,17 @@ class PromptBuilder:
         if kind_value != "qwen_style":
             return variables
 
-        # Regel 1: Ref-Bild einer Person vorhanden -> Outfit-Prompt entfaellt
-        for idx in list(variables.prompt_outfits.keys()):
-            if idx in variables.ref_images:
-                variables.prompt_outfits.pop(idx)
-                logger.debug("Ausschluss: prompt_outfit_%d entfernt (Ref-Bild vorhanden)", idx)
+        # Location entfaellt NUR wenn ein Raum-Referenzbild wirklich in einem Slot
+        # landet (Prio-Plan). Outfit und Aktivitaet bleiben bewusst im Text.
+        if max_slots is not None:
+            room_slotted = any(
+                e["kind"] == "room" for e in self._plan_qwen_slots(variables, max_slots))
+        else:
+            room_slotted = bool(variables.ref_image_room)
 
-        # Regel 2: Room-Ref-Bild vorhanden -> Location-Prompt entfaellt
-        if variables.ref_image_room and variables.prompt_location:
-            logger.debug("Ausschluss: prompt_location entfernt (Room-Ref-Bild vorhanden)")
+        if room_slotted and variables.prompt_location:
+            logger.debug("Ausschluss: prompt_location entfernt (Raum-Ref im Slot)")
             variables.prompt_location = ""
-
-        # Regel 3: Style-Conditioning -> Activity entfaellt (Mood bleibt!)
-        if variables.prompt_activity:
-            logger.debug("Ausschluss: prompt_activity entfernt (Style-Conditioning)")
-            variables.prompt_activity = ""
 
         return variables
 
@@ -1130,7 +1131,8 @@ class PromptBuilder:
         """Baut die Reference-Image Slot-Map fuer ComfyUI-Workflows.
 
         Dispatch je nach WorkflowKind:
-            QWEN_STYLE:  Slots 1..max_slots-1=Personen, Slot max_slots=Location
+            QWEN_STYLE:  Slots nach Prioritaet — 1 erstellender Character,
+                         2 Raum, 3 andere Charaktere, 4 Items (bis Slots voll)
             FLUX_BG:     ein Background-Slot mit Use-Schalter
             Z_IMAGE:     keine Ref-Slots
 
@@ -1160,62 +1162,92 @@ class PromptBuilder:
 
         return self._resolve_qwen_slots(variables, max_slots)
 
+    def _plan_qwen_slots(
+        self, variables: PromptVariables, max_slots: int) -> List[Dict[str, Any]]:
+        """Ordnet Referenzbilder nach Prioritaet auf die verfuegbaren Slots.
+
+        Reihenfolge (fuellt Slots 1..max_slots der Reihe nach, bis voll):
+            1. erstellender Character (is_agent)
+            2. Raum / Location (ref_image_room)
+            3. andere Charaktere im Prompt
+            4. Items
+
+        Einzige Quelle der Slot-Zuordnung — wird sowohl fuer die Generierung
+        (_resolve_qwen_slots) als auch fuer die Ausschlussregeln genutzt, damit
+        beide konsistent entscheiden, was tatsaechlich in einem Slot liegt.
+        """
+        plan: List[Dict[str, Any]] = []
+
+        def _person_entry(pos: int, person) -> Optional[Dict[str, Any]]:
+            ref_path = variables.ref_images.get(pos, "")
+            if not ref_path or not Path(ref_path).exists():
+                return None
+            return {"kind": "person", "pos": pos, "path": ref_path,
+                    "name": person.name, "is_agent": person.is_agent,
+                    "gender": self._normalize_gender(person.gender)}
+
+        # Prio 1: erstellender Character
+        for pos, person in enumerate(variables.persons, 1):
+            if person.is_agent:
+                entry = _person_entry(pos, person)
+                if entry:
+                    plan.append(entry)
+                break
+
+        # Prio 2: Raum / Location
+        if variables.ref_image_room and Path(variables.ref_image_room).exists():
+            plan.append({"kind": "room", "path": variables.ref_image_room})
+
+        # Prio 3: andere Charaktere
+        for pos, person in enumerate(variables.persons, 1):
+            if person.is_agent:
+                continue
+            entry = _person_entry(pos, person)
+            if entry:
+                plan.append(entry)
+
+        # Prio 4: Items
+        for it in (variables.items or []):
+            img_path = it.get("image", "")
+            if img_path and Path(img_path).exists():
+                plan.append({"kind": "item", "path": img_path,
+                             "name": it.get("name", "?")})
+
+        return plan[:max(0, max_slots)]
+
     def _resolve_qwen_slots(
         self, variables: PromptVariables, max_slots: int) -> Dict[str, Any]:
-        """QWEN_STYLE: Slots 1..max_slots-1 = Personen/Items, Slot max_slots = Room."""
+        """QWEN_STYLE: Referenzbilder nach Prioritaet auf die Slots verteilen.
+
+        Slot-Reihenfolge = Prioritaet (siehe _plan_qwen_slots): erstellender
+        Character zuerst, dann Raum, dann andere Charaktere, dann Items.
+        """
         reference_images: Dict[str, str] = {}
         boolean_inputs: Dict[str, bool] = {}
         string_inputs: Dict[str, str] = {}
+        has_reference_slots = False
 
-        max_person_slots = max_slots - 1
-        next_free_slot = 1
+        for slot, entry in enumerate(self._plan_qwen_slots(variables, max_slots), 1):
+            key = f"input_reference_image_{slot}"
+            reference_images[key] = entry["path"]
+            if entry["kind"] == "person":
+                boolean_inputs[f"input_person_ref_{slot}"] = True
+                string_inputs[f"{key}_type"] = entry["gender"] or "no"
+                has_reference_slots = True
+                logger.debug("RefSlot %d: %s (gender=%s)%s", slot, entry["name"],
+                             entry["gender"] or "no",
+                             " [Agent]" if entry.get("is_agent") else "")
+            elif entry["kind"] == "room":
+                boolean_inputs[f"input_person_ref_{slot}"] = False
+                string_inputs[f"{key}_type"] = "location"
+                logger.debug("RefSlot %d: Room/Location", slot)
+            else:  # item
+                boolean_inputs[f"input_person_ref_{slot}"] = False
+                string_inputs[f"{key}_type"] = "item"
+                logger.info("RefSlot %d: Item '%s'", slot, entry.get("name", "?"))
 
-        for idx, person in enumerate(variables.persons, 1):
-            if idx > max_person_slots:
-                logger.debug("RefSlot: %s uebersprungen (max %d Personen-Slots)",
-                             person.name, max_person_slots)
-                break
-
-            ref_path = variables.ref_images.get(idx, "")
-            if not ref_path:
-                continue
-
-            if not Path(ref_path).exists():
-                logger.warning("RefSlot %d: Datei nicht gefunden: %s — uebersprungen", idx, ref_path)
-                continue
-
-            norm_gender = self._normalize_gender(person.gender)
-            reference_images[f"input_reference_image_{idx}"] = ref_path
-            boolean_inputs[f"input_person_ref_{idx}"] = True
-            string_inputs[f"input_reference_image_{idx}_type"] = norm_gender or "no"
-            logger.debug("RefSlot %d: %s (gender=%s)", idx, person.name, norm_gender or "no")
-            next_free_slot = idx + 1
-
-        has_reference_slots = len(reference_images) > 0
-
-        for it in (variables.items or []):
-            if next_free_slot > max_person_slots:
-                logger.debug("Item-Slots voll: %s uebersprungen", it.get("name", "?"))
-                break
-            img_path = it.get("image", "")
-            if not img_path or not Path(img_path).exists():
-                continue
-            reference_images[f"input_reference_image_{next_free_slot}"] = img_path
-            boolean_inputs[f"input_person_ref_{next_free_slot}"] = False
-            string_inputs[f"input_reference_image_{next_free_slot}_type"] = "item"
-            logger.info("RefSlot %d: Item '%s'", next_free_slot, it.get("name", "?"))
-            next_free_slot += 1
-
-        if variables.ref_image_room and Path(variables.ref_image_room).exists():
-            reference_images[f"input_reference_image_{max_slots}"] = variables.ref_image_room
-            boolean_inputs[f"input_person_ref_{max_slots}"] = False
-            string_inputs[f"input_reference_image_{max_slots}_type"] = "location"
-            logger.debug("RefSlot %d: Room/Location", max_slots)
-
-        if has_reference_slots:
-            logger.info("RefSlots: %d Face-Slots belegt", len(
-                [k for k, v in boolean_inputs.items() if v]))
-        logger.debug("RefSlots: %d Slots insgesamt", len(reference_images))
+        logger.debug("RefSlots: %d belegt (Prio Agent>Raum>andere>Items)",
+                     len(reference_images))
 
         return {
             "reference_images": reference_images,
