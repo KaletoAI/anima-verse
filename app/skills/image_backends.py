@@ -1237,7 +1237,8 @@ class ComfyUIBackend(ImageBackend):
             # Branch auf den genutzten Branch umbiegen — dadurch hat der
             # ungenutzte Loader-Node keinen Consumer mehr und ComfyUI ignoriert
             # ihn beim Build des Execution-Graph.
-            _gguf_switch = self._find_node_by_title(workflow, "safetensors_gguf")
+            _gguf_switch = (self._find_node_by_title(workflow, "input_safetensors_gguf")
+                            or self._find_node_by_title(workflow, "safetensors_gguf"))
             if _gguf_switch:
                 _switch_inputs = workflow[_gguf_switch].get("inputs", {})
                 if "boolean" in _switch_inputs:
@@ -1388,14 +1389,19 @@ class ComfyUIBackend(ImageBackend):
                 inputs["image"] = f"{_slot_prefix}{self._REF_SLOT_NAMES[_idx]}"
                 logger.debug("Leerer Ref-Slot '%s' -> Placeholder %s", title, inputs["image"])
 
-        # Inaktive Switch-Nodes: boolean=false setzen.
-        # Workflows sind so designt, dass on_false auf EmptyImage zeigt —
-        # der Switch routet bei boolean=False sauber dorthin, ohne dass wir
-        # die Verkabelung anfassen muessen.
+        # Inaktive Switch-Nodes: boolean=false setzen — aber NUR REFERENZ-Switches
+        # (Titel enthaelt "reference_image"). Diese sind so designt, dass on_false
+        # auf EmptyImage zeigt, ungenutzte Ref-Slots routen sauber dorthin. Andere
+        # Crystools-Switches sind User-Workflow-Design (z.B. der Modell-Wahlschalter
+        # "input_safetensors_gguf", den der Dual-Loader-Code oben anhand der Datei-
+        # Endung selbst setzt) und duerfen hier NICHT angefasst werden — sonst kippt
+        # die Generierung still auf den falschen Modell-/Verkabelungs-Zweig.
         for node_id, node in workflow.items():
             if node.get("class_type") != "Switch any [Crystools]":
                 continue
             if node_id in _activated_switches:
+                continue
+            if "reference_image" not in node.get("_meta", {}).get("title", "").lower():
                 continue
             inputs = node.get("inputs", {})
             if "boolean" in inputs:

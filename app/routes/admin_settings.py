@@ -1914,7 +1914,17 @@ function renderUseCaseDetail(uc) {
             const p = 'image_generation.use_cases.' + uc + '.styles.' + fam + '.' + fld;
             const val = getVal(p) || '';
             const def = (((D.defaults || {})[uc] || {})[fam] || {})[fld] || '';
-            html += '<div class="field" style="margin-bottom:8px"><label style="font-size:.8em;opacity:.8">' + esc(lbl) + '</label>';
+            // „Copy default": fuellt das leere Feld mit dem eingebauten Default,
+            // damit man ihn als Ausgangspunkt bearbeiten kann (sonst nur grauer
+            // Placeholder). Nur anbieten, wenn ein Default existiert und das Feld
+            // leer ist (kein versehentliches Ueberschreiben eigener Eingaben).
+            const copyBtn = (def && !val)
+                ? ' <button type="button" class="btn btn-sm" '
+                  + 'style="margin-left:8px;font-size:.72em;padding:1px 6px;vertical-align:middle" '
+                  + 'title="Copy the built-in default into this field to edit it" '
+                  + 'onclick="copyUseCaseDefault(\\'' + p + '\\', \\'' + uc + '\\', \\'' + fam + '\\', \\'' + fld + '\\')">Copy default</button>'
+                : '';
+            html += '<div class="field" style="margin-bottom:8px"><label style="font-size:.8em;opacity:.8">' + esc(lbl) + copyBtn + '</label>';
             html += '<textarea rows="2" style="width:100%;font-family:inherit;resize:vertical" '
                   + 'placeholder="' + esc(def) + '" '
                   + 'onchange="setVal(\\'' + p + '\\', this.value)">' + esc(val) + '</textarea></div>';
@@ -1922,6 +1932,16 @@ function renderUseCaseDetail(uc) {
         html += '</div>';
     }
     return html;
+}
+
+// „Copy default": schreibt den eingebauten Use-Case-Default in das Feld, damit
+// man ihn bearbeiten kann. uc/fam/fld bestimmen den Default, p ist der Setz-Pfad.
+function copyUseCaseDefault(p, uc, fam, fld) {
+    const D = USE_CASE_DEFAULTS || { defaults: {} };
+    const def = (((D.defaults || {})[uc] || {})[fam] || {})[fld] || '';
+    if (!def) return;
+    setVal(p, def);
+    renderSection(ACTIVE_SECTION);
 }
 
 // Repository: LoRA -> Aktivierungs-Wort. Liste von {lora, word}; wird vom

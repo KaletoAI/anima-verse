@@ -617,15 +617,14 @@ _SLOT_LABELS = {"head": "Kopf", "neck": "Hals", "outer": "Mantel & Jacke",
                 "legs": "Beine", "feet": "Füße"}
 
 
-@router.get("/play/belongings")
-async def play_belongings(user=Depends(get_current_user)):
-    """Inventar + Outfit (Paper-Doll) des Avatars (B Tier 1).
+def build_belongings(character_name: str) -> dict:
+    """Inventar + Outfit (Paper-Doll) eines Characters — Single-Source für das
+    Avatar-Panel (/play) UND den Game-Admin-Garderoben-Tab.
     Liefert die getragenen Pieces pro Slot (für die Figur) und die volle
     Item-Liste mit Filter-Attributen (Kategorie/Slot/Outfit-Typ/Spell)."""
-    from app.models.account import get_active_character
+    avatar = (character_name or "").strip()
     out = {"avatar": "", "slot_order": _SLOT_ORDER, "slot_labels": _SLOT_LABELS,
            "equipped": {}, "items": [], "outfit_sets": [], "max_slots": 0}
-    avatar = (get_active_character() or "").strip()
     if not avatar:
         return out
     out["avatar"] = avatar
@@ -675,6 +674,13 @@ async def play_belongings(user=Depends(get_current_user)):
     except Exception as e:
         logger.debug("belongings outfit_sets failed: %s", e)
     return out
+
+
+@router.get("/play/belongings")
+async def play_belongings(user=Depends(get_current_user)):
+    """Belongings des aktiven Avatars."""
+    from app.models.account import get_active_character
+    return build_belongings((get_active_character() or "").strip())
 
 
 @router.post("/play/equip")

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import { apiGet } from '../../lib/api'
 
 /**
  * Minimaler, gesperrter Dialog für „Fit to neighbors". Fit ist eine
@@ -8,17 +9,46 @@ import { useI18n } from '../../i18n/I18nProvider'
  * Zeigt den 3×3-Nachbar-Canvas als Referenz-Vorschau und den editierbaren
  * Richtungs-Prompt (north/south/east/west).
  */
-export function FitDialog({ title, info, canvasUrl, defaultPrompt, onSubmit, onClose }: {
+export function FitDialog({ title, info = '', locId, canvasUrl, workflows = [], defaultWorkflow = '', mapfitPrompts = {}, onSubmit, onClose }: {
   title: string
-  info: string
+  info?: string
+  locId: string
   canvasUrl: string
-  defaultPrompt: string
-  onSubmit: (prompt: string) => void
+  /** Inpaint-Workflows (category=="inpaint") zur Auswahl; leer = Server-Default. */
+  workflows?: { name: string; spec: string; family?: string; prompt?: string; gray?: boolean }[]
+  defaultWorkflow?: string
+  /** mapfit-Default-Prompt pro Familie (natural/keywords) — Fallback ohne Workflow-Prompt. */
+  mapfitPrompts?: Record<string, string>
+  onSubmit: (prompt: string, workflow: string) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
-  const [prompt, setPrompt] = useState(defaultPrompt)
+  const [wf, setWf] = useState(defaultWorkflow || workflows[0]?.spec || '')
+  const [fitHint, setFitHint] = useState('')  // dynamischer Terrain-Hint (/fit-prompt)
+  const [prompt, setPrompt] = useState('')
   const [canvasFail, setCanvasFail] = useState(false)
+
+  // Per-Workflow-Instruktion (Fallback: mapfit pro Familie).
+  const instrFor = (spec: string): string => {
+    const w = workflows.find((x) => x.spec === spec)
+    const fam = w?.family || 'natural'
+    return (w?.prompt || '').trim() || mapfitPrompts[fam] || mapfitPrompts.natural || ''
+  }
+
+  // Terrain-Hint (langsam, vision-basiert) NACH dem Oeffnen asynchron holen.
+  useEffect(() => {
+    apiGet<{ prompt?: string }>(`/world/locations/${encodeURIComponent(locId)}/fit-prompt`)
+      .then((d) => setFitHint(d.prompt || ''))
+      .catch(() => { /* ignore */ })
+  }, [locId])
+  // Prompt = Workflow-Instruktion (+ dynamischer Terrain-Hint NUR bei Fill-
+  // Modellen). Edit-Modelle (gray) sehen die Umgebung im grauen Canvas selbst —
+  // eine Terrain-Beschreibung waere falsch.
+  useEffect(() => {
+    const isGray = !!workflows.find((w) => w.spec === wf)?.gray
+    setPrompt(isGray ? instrFor(wf) : [instrFor(wf), fitHint].filter(Boolean).join(', '))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wf, fitHint])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -29,6 +59,17 @@ export function FitDialog({ title, info, canvasUrl, defaultPrompt, onSubmit, onC
         </div>
         <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ fontSize: '0.8em', opacity: 0.75 }}>{info}</div>
+
+          {workflows.length > 0 ? (
+            <div>
+              <div style={{ fontSize: '0.8em', fontWeight: 600, marginBottom: 4 }}>{t('Inpaint workflow')}</div>
+              <select className="ga-input" value={wf} onChange={(e) => setWf(e.target.value)} style={{ width: '100%' }}>
+                {workflows.map((w) => (
+                  <option key={w.spec} value={w.spec}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
           <div>
             <div style={{ fontSize: '0.8em', fontWeight: 600, marginBottom: 4 }}>
@@ -61,7 +102,7 @@ export function FitDialog({ title, info, canvasUrl, defaultPrompt, onSubmit, onC
         </div>
         <div className="ga-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button className="ga-btn" onClick={onClose}>{t('Cancel')}</button>
-          <button className="ga-btn ga-btn-primary" onClick={() => { onSubmit(prompt); onClose() }}>
+          <button className="ga-btn ga-btn-primary" onClick={() => { onSubmit(prompt, wf); onClose() }}>
             {t('Generate')}
           </button>
         </div>

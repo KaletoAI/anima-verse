@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiDelete } from '../../lib/api'
 import { LightboxProvider, openLightbox } from '../../player/Lightbox'
+import { GalleryAccess } from './GalleryAccess'
 
 interface ImagesResp {
   character: string
@@ -64,6 +65,9 @@ export function GalleryTab({ character }: { character: string }) {
 
   return (
     <LightboxProvider>
+      <div style={{ marginBottom: 12 }}>
+        <GalleryAccess character={character} />
+      </div>
       <div className="ga-form" style={{ padding: 0 }}>
         {files.length === 0 ? (
           <div className="ga-placeholder">{t('No images yet')}</div>

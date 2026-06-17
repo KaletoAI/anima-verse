@@ -1041,6 +1041,9 @@ function LocationGallery({
       if (payload.use_source_as_reference) body.use_source_as_reference = true
       // Haken aus: das bestehende Bild in-place ersetzen statt ein neues anzulegen.
       if (payload.create_new === false) body.replace_source = true
+      // Optionaler "Was willst Du ändern"-Wunsch → Server lässt den Prompt per LLM
+      // umschreiben (gleiche enhance_prompt-Funktion wie Character/Instagram).
+      if (payload.improvement_request) body.improvement_request = payload.improvement_request
       void apiPost(`/world/locations/${encodeURIComponent(locationId)}/gallery`, body)
         .then(() => toast(t('Image queued')))
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
@@ -1094,6 +1097,14 @@ function LocationGallery({
           🟦 {t('Generate 2D icon')}
         </button>
       ) : null}
+      <button
+        className="ga-btn ga-btn-sm"
+        disabled={!!busy}
+        onClick={() => { void reload() }}
+        title={t('Reload the gallery (show newly generated images)')}
+      >
+        🔄 {t('Refresh')}
+      </button>
     </div>
   )
 
@@ -1123,12 +1134,12 @@ function LocationGallery({
     <ImageGenDialog
       open
       title={t('Adjust image — {name}').replace('{name}', room?.name || location.name)}
+      mode="regenerate"
       defaultPrompt={buildDefaultPrompt(regenTarget.type)}
       hideNegative
       sourceImageUrl={`/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(regenTarget.filename)}`}
       defaultUseSource
       requireSourceReference
-      showCreateNew
       defaultCreateNew
       settingsSuffix={
         regenTarget.type === 'map_2d' && mapSuffix.map_2d

@@ -10,8 +10,8 @@
   },
   "3": {
     "inputs": {
-      "audio": "SOPHIE_ref_norm.wav",
-      "audioUI": "/api/view?filename=SOPHIE_ref_norm.wav&type=input&subfolder=&rand=0.5386196471014402"
+      "audio": "",
+      "audioUI": ""
     },
     "class_type": "LoadAudio",
     "_meta": {

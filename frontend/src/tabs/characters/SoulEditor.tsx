@@ -22,6 +22,8 @@ interface SoulFileMeta {
   path: string
   file_default: string
   exists: boolean
+  label?: string
+  label_de?: string
 }
 
 // Mirror of the backend _parse_soul_sections (and the legacy client parser):
@@ -61,7 +63,7 @@ function parseSections(text: string): SoulSection[] {
 }
 
 export function SoulEditor({ character }: { character: string }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const { toast } = useToast()
   const [files, setFiles] = useState<SoulFileMeta[]>([])
   const [section, setSection] = useState('')
@@ -153,7 +155,11 @@ export function SoulEditor({ character }: { character: string }) {
       <div className="soul-files-bar">
         {files.map((f) => {
           const lock = f.file_default === 'editable' ? '🟢' : '🔒'
-          const name = f.section.charAt(0).toUpperCase() + f.section.slice(1)
+          // Freundliches Label aus dem Template (DE/EN) statt der Roh-Section-ID.
+          const name =
+            (lang === 'de' && f.label_de) ||
+            f.label ||
+            f.section.charAt(0).toUpperCase() + f.section.slice(1)
           return (
             <button
               key={f.section}

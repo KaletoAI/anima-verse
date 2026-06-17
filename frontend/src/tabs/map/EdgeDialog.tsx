@@ -11,21 +11,35 @@ import { apiGet } from '../../lib/api'
 type Side = 'north' | 'south' | 'east' | 'west'
 const SIDES: Side[] = ['north', 'south', 'east', 'west']
 
-export function EdgeDialog({ locId, locName, available, info, rotation, onSubmit, onClose }: {
+export function EdgeDialog({ locId, locName, available, info = '', rotation, workflows = [], defaultWorkflow = '', mapfitPrompts = {}, onSubmit, onClose }: {
   locId: string
   locName: string
   /** side -> neighbor name (only sides that have a neighbor with a tile). */
   available: Partial<Record<Side, string>>
-  info: string
+  info?: string
   /** Cell display rotation (map_rotation_2d) — preview shown as on the map. */
   rotation?: number
-  onSubmit: (sides: Side[], prompt: string) => void
+  /** Inpaint-Workflows (category=="inpaint") zur Auswahl; leer = Server-Default. */
+  workflows?: { name: string; spec: string; family?: string; prompt?: string; gray?: boolean }[]
+  defaultWorkflow?: string
+  /** mapfit-Default-Prompt pro Familie (natural/keywords) — Fallback ohne Workflow-Prompt. */
+  mapfitPrompts?: Record<string, string>
+  onSubmit: (sides: Side[], prompt: string, workflow: string) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
   const availSides = useMemo(() => SIDES.filter((s) => available[s]), [available])
   const [sel, setSel] = useState<Set<Side>>(() => new Set(availSides))
+  const [wf, setWf] = useState(defaultWorkflow || workflows[0]?.spec || '')
+  const [edgeHint, setEdgeHint] = useState('')  // dynamischer Terrain-Hint (/edge-prompt)
   const [prompt, setPrompt] = useState('')
+
+  // Per-Workflow-Instruktion (Fallback: mapfit pro Familie).
+  const instrFor = (spec: string): string => {
+    const w = workflows.find((x) => x.spec === spec)
+    const fam = w?.family || 'natural'
+    return (w?.prompt || '').trim() || mapfitPrompts[fam] || mapfitPrompts.natural || ''
+  }
 
   const toggle = useCallback((s: Side) => {
     if (!available[s]) return
@@ -36,15 +50,23 @@ export function EdgeDialog({ locId, locName, available, info, rotation, onSubmit
     })
   }, [available])
 
-  // Prompt serverseitig aus der aktuellen Seitenauswahl ermitteln.
+  // selKey = gewaehlte Seiten (steuert die Rahmen-Maske via edge_sides + den Button).
   const selKey = useMemo(() => availSides.filter((s) => sel.has(s)).join(','), [availSides, sel])
+  // Dynamischen Kanten-Uebergangs-Hint (terrain-bewusst, pro Seiten) serverseitig holen.
   useEffect(() => {
-    if (!selKey) { setPrompt(''); return }
+    if (!selKey) { setEdgeHint(''); return }
     apiGet<{ prompt?: string }>(
       `/world/locations/${encodeURIComponent(locId)}/edge-prompt?sides=${encodeURIComponent(selKey)}`)
-      .then((d) => setPrompt(d.prompt || ''))
+      .then((d) => setEdgeHint(d.prompt || ''))
       .catch(() => { /* ignore */ })
   }, [locId, selKey])
+  // Prompt = Workflow-Instruktion (+ dynamischer Terrain-Hint NUR bei Fill-
+  // Modellen). Edit-Modelle (gray) sehen die Umgebung im grauen Canvas selbst.
+  useEffect(() => {
+    const isGray = !!workflows.find((w) => w.spec === wf)?.gray
+    setPrompt(isGray ? instrFor(wf) : [instrFor(wf), edgeHint].filter(Boolean).join(', '))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wf, edgeHint])
 
   // Kanten-Leiste: aktiv (Nachbar) + gewählt = Akzent; aktiv-ungewählt = dezent;
   // ohne Nachbar = sehr blass, nicht klickbar.
@@ -75,6 +97,17 @@ export function EdgeDialog({ locId, locName, available, info, rotation, onSubmit
           <div style={{ fontSize: '0.8em', opacity: 0.85 }}>
             {t('Click the edges to blend (only sides with a neighbor are active).')}
           </div>
+
+          {workflows.length > 0 ? (
+            <div>
+              <div style={{ fontSize: '0.8em', fontWeight: 600, marginBottom: 4 }}>{t('Inpaint workflow')}</div>
+              <select className="ga-input" value={wf} onChange={(e) => setWf(e.target.value)} style={{ width: '100%' }}>
+                {workflows.map((w) => (
+                  <option key={w.spec} value={w.spec}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
           <div style={{ position: 'relative', width: 300, height: 300, margin: '0 auto', borderRadius: 6, overflow: 'hidden', background: 'var(--bg, #0d1117)' }}>
             <img
@@ -109,7 +142,7 @@ export function EdgeDialog({ locId, locName, available, info, rotation, onSubmit
           <button
             className="ga-btn ga-btn-primary"
             disabled={!selKey}
-            onClick={() => { onSubmit(availSides.filter((s) => sel.has(s)), prompt); onClose() }}
+            onClick={() => { onSubmit(availSides.filter((s) => sel.has(s)), prompt, wf); onClose() }}
           >
             {t('Match edges')}
           </button>

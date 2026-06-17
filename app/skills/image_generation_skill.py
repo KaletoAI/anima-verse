@@ -42,8 +42,11 @@ class ComfyWorkflow:
     ref_slot_count: int = 0     # hoechster input_reference_image_N Slot (QWEN_STYLE) — Slot N = Location, 1..N-1 = Personen
     compatible_backends: list = field(default_factory=list)  # Backend-Namen, leer = alle ComfyUI
     image_family: str = ""      # natural/keywords — wie das Modell Prompts will
+    category: str = ""          # Zweck-Kategorie (z.B. "inpaint") — user-konfiguriert, fuer Spezial-Dialoge
+    prompt: str = ""            # Per-Workflow Default-Prompt (Fit/Edge-Dialog) — z.B. Edit-Instruktion vs. Fill-Beschreibung
     has_input_unet: bool = False  # Workflow hat eigenen input_unet Node (nicht input_model)
     has_input_safetensors: bool = False  # Workflow hat input_safetensors Node (z.B. Flux2 UNETLoader)
+    inpaint_gray: bool = False  # Edit-Modell-Inpaint (Qwen-Edit): Inpaint-Stellen GRAU ins Referenzbild
     clip: str = ""              # CLIP-Modell fuer den Workflow (clip_name1 bei DualCLIPLoader)
     clip2: str = ""             # 2. CLIP-Modell (clip_name2) fuer DualCLIPLoader-Nodes
     has_loras: bool = False     # Workflow hat input_loras/input_lora Node
@@ -263,6 +266,8 @@ class ImageGenerationSkill(BaseSkill):
                 continue
             wf_model = os.environ.get(f"{prefix}MODEL", "").strip()
             wf_image_family = os.environ.get(f"{prefix}IMAGE_FAMILY", "").strip()
+            wf_category = os.environ.get(f"{prefix}CATEGORY", "").strip()
+            wf_prompt = os.environ.get(f"{prefix}PROMPT", "").strip()
             # Kompatible Backends (kommasepariert), leer = alle ComfyUI-Backends
             raw_skills = os.environ.get(f"{prefix}SKILL", "").strip()
             compatible = [s.strip() for s in raw_skills.split(",") if s.strip()] if raw_skills else []
@@ -287,6 +292,7 @@ class ImageGenerationSkill(BaseSkill):
             has_separated_prompt = False
             has_input_unet = False
             has_input_safetensors = False
+            inpaint_gray = False  # Edit-Modell (Qwen-Edit) -> Inpaint-Stellen GRAU ins Bild
             model_type = ""
             kind = WorkflowKind.Z_IMAGE
             ref_slot_count = 0
@@ -300,6 +306,13 @@ class ImageGenerationSkill(BaseSkill):
                         node.get("_meta", {}).get("title", "")
                         for node in _wf_data.values() if isinstance(node, dict)
                     }
+                    # Edit-Modell-Inpaint (z.B. Qwen-Edit: TextEncodeQwenImageEditPlus):
+                    # die Inpaint-Stellen muessen GRAU im Referenzbild sein ("ergaenze
+                    # die grauen Flaechen"). Fill-Modelle (Flux DevFill) nutzen die
+                    # separate Maske und behalten den echten Bildinhalt -> KEIN Grau.
+                    inpaint_gray = any(
+                        "imageedit" in (node.get("class_type", "") or "").lower()
+                        for node in _wf_data.values() if isinstance(node, dict))
                     has_loras = bool(_titles & {"input_loras", "input_lora"})
                     has_seed = "input_seed" in _titles
                     has_separated_prompt = {
@@ -326,6 +339,11 @@ class ImageGenerationSkill(BaseSkill):
                         kind = WorkflowKind.FLUX_BG
                     else:
                         kind = WorkflowKind.Z_IMAGE
+                    # category default: Workflows mit Inpaint-Maske gelten als
+                    # "inpaint" (Map-Fit/Edge), sofern die Config nichts setzt —
+                    # so erscheinen sie ohne Handarbeit im Fit/Edge-Dialog.
+                    if not wf_category and "input_mask" in _titles:
+                        wf_category = "inpaint"
                     _model_node = next(
                         (node for node in _wf_data.values()
                          if isinstance(node, dict) and node.get("_meta", {}).get("title") == "input_model"),
@@ -366,10 +384,13 @@ class ImageGenerationSkill(BaseSkill):
                 ref_slot_count=ref_slot_count,
                 has_input_unet=has_input_unet,
                 has_input_safetensors=has_input_safetensors,
+                inpaint_gray=inpaint_gray,
                 clip=wf_clip,
                 clip2=wf_clip2,
                 compatible_backends=compatible,
                 image_family=wf_image_family,
+                category=wf_category,
+                prompt=wf_prompt,
                 has_loras=has_loras,
                 has_seed=has_seed,
                 has_separated_prompt=has_separated_prompt,
@@ -793,7 +814,8 @@ class ImageGenerationSkill(BaseSkill):
         return best or matches[0]
 
     def resolve_imagegen_target(self, spec: str, character_name: str = "",
-                                rotation_prefix: str = "img"
+                                rotation_prefix: str = "img",
+                                preferred_backend: str = ""
                                 ) -> Tuple[Optional[ImageBackend], Optional[ComfyWorkflow]]:
         """Loest einen Config-/Explizit-Workflow-Spec ueber das Match-Konzept auf.
 
@@ -803,6 +825,12 @@ class ImageGenerationSkill(BaseSkill):
           - ``"backend:<glob>"``  → ``match_backend`` (Glob ueber Backend-Namen,
             guenstigstes verfuegbares; exakter Name matcht sich selbst).
           - ``"<glob>"`` (bare)   → wird als Workflow-Glob behandelt.
+
+        ``preferred_backend``: exakter ComfyUI-Instanz-Name, der den Match
+        ueberschreibt — der Workflow wird normal aufgeloest, aber dieses Backend
+        gepinnt (z.B. um gezielt eine bestimmte GPU/Endpoint anzusprechen). Muss
+        verfuegbar UND kompatibel sein, sonst ``(None, workflow)`` (KEIN stiller
+        Fallback auf eine andere Instanz).
 
         Liefert ``(backend, workflow)`` — beide koennen ``None`` sein. Kein
         exakter Hard-Fail mehr: beide Teile laufen durch das Match-Konzept.
@@ -822,6 +850,14 @@ class ImageGenerationSkill(BaseSkill):
                       if b.available and b.instance_enabled
                       and b.api_type == "comfyui"
                       and (not compat or b.name in compat)]
+        pref = (preferred_backend or "").strip()
+        if pref:
+            forced = next((b for b in candidates if b.name == pref), None)
+            if not forced:
+                logger.warning(
+                    "Explizites Backend '%s' nicht verfuegbar/kompatibel fuer Workflow '%s'",
+                    pref, workflow.name)
+            return forced, workflow
         backend = self.pick_lowest_cost(
             candidates, rotation_key=f"{rotation_prefix}:{workflow.name}")
         return backend, workflow
@@ -1146,6 +1182,10 @@ class ImageGenerationSkill(BaseSkill):
                 "height": wf.height,
                 "filter": wf.filter,
                 "ref_slot_count": wf.ref_slot_count,
+                "category": wf.category,
+                "image_family": wf.image_family,
+                "prompt": wf.prompt,
+                "inpaint_gray": wf.inpaint_gray,
                 "available": wf_available,
             })
         return result

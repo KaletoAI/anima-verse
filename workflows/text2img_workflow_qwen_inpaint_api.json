@@ -13,7 +13,7 @@
   "10": {
     "inputs": {
       "images": [
-        "123",
+        "132",
         0
       ]
     },
@@ -38,14 +38,6 @@
       ],
       "image1": [
         "107",
-        0
-      ],
-      "image2": [
-        "108",
-        0
-      ],
-      "image3": [
-        "109",
         0
       ]
     },
@@ -79,14 +71,6 @@
       ],
       "image1": [
         "107",
-        0
-      ],
-      "image2": [
-        "108",
-        0
-      ],
-      "image3": [
-        "109",
         0
       ]
     },
@@ -196,7 +180,7 @@
     },
     "class_type": "LoadAndResizeImage",
     "_meta": {
-      "title": "input_reference_image_1"
+      "title": "input_reference_image"
     }
   },
   "108": {
@@ -213,24 +197,7 @@
     },
     "class_type": "LoadAndResizeImage",
     "_meta": {
-      "title": "input_reference_image_2"
-    }
-  },
-  "109": {
-    "inputs": {
-      "image": "",
-      "resize": true,
-      "width": 1024,
-      "height": 1024,
-      "repeat": 1,
-      "keep_proportion": true,
-      "divisible_by": 32,
-      "mask_channel": "alpha",
-      "background_color": ""
-    },
-    "class_type": "LoadAndResizeImage",
-    "_meta": {
-      "title": "input_reference_image_3"
+      "title": "input_crop"
     }
   },
   "115": {
@@ -306,6 +273,92 @@
     "class_type": "ColorMatchV2",
     "_meta": {
       "title": "ColorMatchV2"
+    }
+  },
+  "126": {
+    "inputs": {
+      "image": "",
+      "channel": "red"
+    },
+    "class_type": "LoadImageMask",
+    "_meta": {
+      "title": "input_mask"
+    }
+  },
+  "127": {
+    "inputs": {
+      "image": [
+        "123",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "128": {
+    "inputs": {
+      "resize_type": "scale dimensions",
+      "resize_type.width": [
+        "127",
+        0
+      ],
+      "resize_type.height": [
+        "127",
+        1
+      ],
+      "resize_type.crop": "center",
+      "scale_method": "nearest-exact",
+      "input": [
+        "108",
+        1
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Resize Image/Mask"
+    }
+  },
+  "129": {
+    "inputs": {
+      "model_name": "RealESRGAN_x2plus.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "Load Upscale Model"
+    }
+  },
+  "130": {
+    "inputs": {
+      "image": [
+        "123",
+        0
+      ],
+      "mask": [
+        "128",
+        0
+      ]
+    },
+    "class_type": "ImageCropByMask",
+    "_meta": {
+      "title": "Image Crop By Mask"
+    }
+  },
+  "132": {
+    "inputs": {
+      "upscale_model": [
+        "129",
+        0
+      ],
+      "image": [
+        "130",
+        0
+      ]
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "_meta": {
+      "title": "Upscale Image (using Model)"
     }
   }
 }

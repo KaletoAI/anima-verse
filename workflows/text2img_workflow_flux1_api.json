@@ -13,7 +13,7 @@
   },
   "61": {
     "inputs": {
-      "value": "an input"
+      "value": ""
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -22,7 +22,7 @@
   },
   "69": {
     "inputs": {
-      "value": 4545435351
+      "value": 0
     },
     "class_type": "PrimitiveInt",
     "_meta": {

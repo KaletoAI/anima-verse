@@ -911,7 +911,11 @@ def _compose_neighbor_canvas(location: Dict[str, Any], crop_empty: bool = False)
 
 
 # Edge-Match (Kanten angleichen): Rahmen-Maskenbreite + solider Kern an der Kante.
-MAP_EDGE_BLEND_FRAC = 0.45
+# BLEND_FRAC = wie weit das Inpaint-Band von jeder gewaehlten Kante nach innen
+# reicht (Anteil der Tile-Breite). Niedrig halten — bei MEHREREN Kanten ueber-
+# lappen die Baender, ein zu breites Band (0.45) frisst bei 2 Nachbarn ~70% der
+# Tile (alles grau). 0.22 -> schmales Kanten-Frame, Mitte bleibt erhalten.
+MAP_EDGE_BLEND_FRAC = 0.22
 MAP_EDGE_CORE_FRAC = 0.30
 _EDGE_DIRS = (("north", 0, -1), ("south", 0, 1), ("east", 1, 0), ("west", -1, 0))
 
@@ -1012,7 +1016,7 @@ def _edge_transition_prompt(location: Dict[str, Any], sides=None) -> str:
             "smoothly across the edges, cohesive unified palette and lighting, no hard seams")
 
 
-def _compose_edge_canvas(location: Dict[str, Any], sides=None):
+def _compose_edge_canvas(location: Dict[str, Any], sides=None, gray_fill: bool = False):
     """Wie :func:`_compose_neighbor_canvas` (3x3, echte Nachbarn rundum), ABER die
     Mitte ist das ECHTE Tile und die Maske ist ein RAHMEN (Distanz-Transform) nur
     fuer die gewaehlten Seiten mit Nachbar: an der Kante solide, gleichmaessig zur
@@ -1055,6 +1059,16 @@ def _compose_edge_canvas(location: Dict[str, Any], sides=None):
     val = np.where(dist < core, 255.0, 255.0 * (1.0 - sm))
     val = np.where((dist >= blend) | (~inside), 0.0, val)
     mask = Image.fromarray(val.astype("uint8"), "L")
+    # NUR fuer Edit-Modell-Inpaint (gray_fill, z.B. Qwen-Edit): die maskierte Kante
+    # SOLIDE grau einfaerben (gleiches (128,128,128) wie die leere Fit-Mitte), denn
+    # Qwen "ergaenzt die grauen Flaechen" und liest sie direkt aus dem Referenzbild.
+    # Solides Grau mit HARTER Kante (binaere Maske >0, NICHT die fadende Inpaint-
+    # Maske — kein Verlauf). Fill-Modelle (Flux DevFill) bekommen KEIN Grau: sie
+    # nutzen die separate input_mask und behalten den echten Tile-Inhalt.
+    if gray_fill:
+        _gray = Image.new("RGB", canvas.size, (128, 128, 128))
+        _solid = mask.point(lambda v: 255 if v > 0 else 0)
+        canvas = Image.composite(_gray, canvas.convert("RGB"), _solid)
     # Auch Edge schneidet leere Kanten weg (z.B. am Kartenrand).
     return _finalize_blend(canvas, mask, tile, placed_imgs, crop_empty=True)
 
@@ -1381,6 +1395,20 @@ def get_imagegen_options() -> Dict[str, Any]:
             "default_model": wf.get("model", ""),
             "filter": wf.get("filter", ""),
             "ref_slot_count": wf.get("ref_slot_count", 0),
+            # Zweck-Kategorie (z.B. "inpaint") — steuert, welche Workflows in
+            # Spezial-Dialogen (Fit/Edge) angeboten werden.
+            "category": wf.get("category", ""),
+            # Style-Familie (natural/keywords) — Fallback fuer den mapfit-Default-
+            # Prompt, falls der Workflow keinen eigenen prompt hat.
+            "image_family": wf.get("image_family", ""),
+            # Per-Workflow Default-Prompt fuer den Fit/Edge-Dialog (leer = Fallback).
+            "prompt": wf.get("prompt", ""),
+            # Edit-Modell-Inpaint (Qwen): kein dynamischer Terrain-Hint anhaengen
+            # (das Modell sieht die Umgebung im grauen Canvas selbst).
+            "inpaint_gray": wf.get("inpaint_gray", False),
+            # Kompatible ComfyUI-Instanzen (leer = alle) — fuer die „gepinnter
+            # Endpoint"-Eintraege im Dialog.
+            "compatible_backends": wf.get("compatible_backends", []),
         })
     # Nicht-ComfyUI Backends (CivitAI, Together, …). Symmetrisch zu den Workflows
     # oben: angeboten wird jedes AKTIVIERTE Backend — die Verfuegbarkeit loest der
@@ -1404,14 +1432,53 @@ def get_imagegen_options() -> Dict[str, Any]:
             opt["models"] = backend_models
             opt["default_model"] = getattr(b, 'model', backend_models[0])
         options.append(opt)
+    # Konkrete ComfyUI-Instanzen (fuer „gepinnter Endpoint"-Eintraege im Dialog).
+    comfy_backends = [
+        {"name": b.name, "available": bool(getattr(b, "available", False))}
+        for b in imagegen.backends
+        if b.api_type == "comfyui" and b.instance_enabled
+    ]
+    # mapfit-Default-Prompts pro Familie — der Fit/Edge-Dialog belegt damit das
+    # Prompt-Feld vor (statt des frueheren Terrain-/Edge-Hints).
+    from app.core import config as _cfg
+    mapfit_prompts = {}
+    for _fam in ("natural", "keywords"):
+        try:
+            _r = _cfg.resolve_use_case_style("mapfit", _fam, "", "", "")
+            mapfit_prompts[_fam] = _r.get("prompt_style", "")
+        except Exception:
+            mapfit_prompts[_fam] = ""
     # Default-Vorauswahl fuer Location aus .env
     loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
-    result = {"options": options}
+    result = {"options": options, "comfy_backends": comfy_backends,
+              "mapfit_prompts": mapfit_prompts}
     # Fit/Match-edges: imagegen-Target (Match-Spec, read-only im Fit-Dialog).
     result["mapfit_imagegen_default"] = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip()
     if loc_default:
         result["default_location"] = loc_default
     return result
+
+
+@router.post("/imagegen-enhance-prompt")
+async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
+    """Schreibt einen Image-Prompt per LLM um — generisch (ohne Character-Bindung).
+
+    Body: { prompt, improvement_request }
+    Returns: { prompt: "<umgeschriebener Prompt>" }
+
+    Gleiche enhance_prompt-Funktion wie beim Character-/Instagram-Regenerate,
+    damit der Dialog-Button „Improve" ueberall denselben Mechanismus nutzt.
+    """
+    body = await request.json()
+    prompt = (body.get("prompt") or "").strip()
+    improvement_request = (body.get("improvement_request") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt fehlt")
+    if not improvement_request:
+        raise HTTPException(status_code=400, detail="improvement_request fehlt")
+    from app.skills.image_regenerate import enhance_prompt
+    enhanced = await asyncio.to_thread(enhance_prompt, prompt, improvement_request, None)
+    return {"prompt": enhanced}
 
 
 @router.get("/imagegen-models")
@@ -1653,13 +1720,14 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         # Backend-Auswahl: explizit > Workflow > Auto (guenstigster)
         backend = None
         active_wf = None  # via Match aufgeloester Workflow — unten fuer workflow_file wiederverwendet
-        _fit_file = ""    # roher Fit-Workflow-Pfad (festverdrahtete Funktion)
         if _map_blend:
-            # Fit UND Kanten-Angleich nutzen das normale ComfyUI-Workflow-Matching
-            # (Default: "workflow:Flux Inpaint*"). Der gewaehlte Workflow muss die
-            # Inpaint-Nodes haben (input_reference_image=Canvas, input_mask,
-            # input_crop, output_final). Model/Clip/Clip2/LoRA werden normal injiziert.
-            _fit_spec = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip()
+            # Fit UND Kanten-Angleich nutzen das normale ComfyUI-Workflow-Matching.
+            # Der im Dialog gewaehlte Inpaint-Workflow (data["workflow"], category=
+            # "inpaint") hat Vorrang; ohne Auswahl Fallback auf MAPFIT_IMAGEGEN_DEFAULT.
+            # Der Workflow muss die Inpaint-Nodes haben (input_reference_image=Canvas,
+            # input_mask, input_crop, output_final).
+            _fit_spec = ((data.get("workflow") or "").strip()
+                         or (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip())
             backend, active_wf = img_skill.resolve_imagegen_target(
                 _fit_spec, rotation_prefix="mapfit")
             if active_wf and not backend:
@@ -1672,12 +1740,16 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                         backend.name if backend else "-")
         elif workflow_name:
             # Match-Konzept: Glob + Verfuegbarkeit statt exaktem Workflow-Namen.
+            # Wird zusaetzlich ein explizites Backend gewaehlt (gepinnter Endpoint),
+            # bleibt der Workflow-Match, aber diese Instanz wird erzwungen.
             backend, active_wf = img_skill.resolve_imagegen_target(
-                workflow_name, rotation_prefix="world_image")
+                workflow_name, rotation_prefix="world_image",
+                preferred_backend=backend_name)
             if active_wf and not backend:
+                _pin = f" auf Endpoint '{backend_name}'" if backend_name else ""
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Kein ComfyUI-Backend fuer Workflow '{active_wf.name}' verfuegbar")
+                    detail=f"Kein ComfyUI-Backend fuer Workflow '{active_wf.name}'{_pin} verfuegbar")
             if not active_wf:
                 logger.warning(
                     "Workflow '%s' nicht gefunden, verfuegbar: [%s]",
@@ -1722,16 +1794,41 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                     prompt = _hint
                     logger.info("Map-Fit Auto-Prompt: %s", _hint)
 
-        # Use-Case-Style/Negative: map_2d -> "map", sonst Location-Background.
+        # Regenerate (Selbst-Referenz): der Prompt ist eine woertliche Anpass-
+        # Anweisung fuer den Referenz-Workflow (z.B. "road turns right") — KEIN
+        # Use-Case-Praefix, KEIN Use-Case-Negative, keine sonstige Manipulation.
+        _is_regen = bool(data.get("use_source_as_reference"))
+        # Optionaler "Was willst Du aendern"-Wunsch: dieselbe LLM-Funktion wie
+        # beim Character-/Instagram-Regenerate baut daraus den finalen Prompt.
+        # Leer gelassen -> Prompt bleibt woertlich.
+        _improve = (data.get("improvement_request") or "").strip()
+        if _is_regen and _improve:
+            from app.skills.image_regenerate import enhance_prompt
+            prompt = await asyncio.to_thread(enhance_prompt, prompt, _improve, None)
+            logger.info("Regenerate-Prompt via enhance_prompt umgeschrieben: %s", prompt[:120])
+        # Use-Case-Style/Negative: Map-Blend (Inpaint) -> "mapfit" (graue Flaechen
+        # nahtlos ergaenzen, kein „neues Tile"-Stil), normales Tile -> "map",
+        # sonst Location-Background.
         from app.core import config as _cfg
-        _uc_name = "map" if prompt_type == "map_2d" else "location"
+        _uc_name = "mapfit" if _map_blend else ("map" if prompt_type == "map_2d" else "location")
         _ucp = _cfg.resolve_use_case_style(
             _uc_name,
             getattr(active_wf, "image_family", "") if active_wf else "",
             getattr(active_wf, "workflow_file", "") if active_wf else "",
             getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
-        full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
-        negative = _ucp.get("prompt_negative", "")
+        if _is_regen:
+            full_prompt = prompt
+            negative = ""
+        elif _map_blend and custom_prompt:
+            # Fit/Edge-Dialog liefert den (mapfit-)Prompt bereits fertig editiert —
+            # woertlich uebernehmen, KEIN Stil-Praefix doppeln. Negative bleibt aus
+            # dem mapfit-Use-Case. Ohne Dialog-Prompt (Batch) faellt es unten auf
+            # Stil+Auto-Hint zurueck.
+            full_prompt = prompt
+            negative = _ucp.get("prompt_negative", "")
+        else:
+            full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
+            negative = _ucp.get("prompt_negative", "")
         # Map-Icons sind kleine Thumbnails fuer die Welt-Uebersicht und werden
         # runtergerechnet. Day/Night/Description bleiben in voller Aufloesung
         # als Hintergrund-Bilder.
@@ -1742,53 +1839,47 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             # im 16:9 Location-Format — fuellt das Tile. Sonst Querformat.
             params["width"] = 1024
             params["height"] = 1024
-        if _map_blend:
-            # Festverdrahtet: roher Workflow-File direkt, kein active_wf, KEIN
-            # Model/Clip/LoRA-Override — alles ist im File. Frischer Seed gegen
-            # den NO_NEW_IMAGE-Cache-Hit (input_seed-Node im File).
-            if _fit_file:
-                params["workflow_file"] = _fit_file
+        # Workflow-File + Model/CLIP/LoRA — config-getrieben, fuer Map-Blend
+        # (Inpaint) GENAUSO wie fuer normale Generierung. Map-Blend hat active_wf
+        # schon via MAPFIT_IMAGEGEN_DEFAULT aufgeloest; sonst ohne expliziten
+        # Workflow den Default-Workflow nehmen. Ist ein Config-Wert leer (z.B. ein
+        # bewusst leeres NSFW-Model), bleibt der im Workflow-File gebackene Wert.
+        if not _map_blend and not workflow_name:
+            active_wf = getattr(img_skill, '_default_workflow', None)
+        if active_wf and active_wf.workflow_file:
+            params["workflow_file"] = active_wf.workflow_file
+        # Model-Override (input_unet/safetensors Workflows brauchen "unet" statt "model")
+        _model_key = "unet" if (active_wf and (active_wf.has_input_unet or active_wf.has_input_safetensors)) else "model"
+        if model_override:
+            params[_model_key] = model_override
+        elif active_wf and active_wf.model:
+            params[_model_key] = active_wf.model
+        # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
+        _current_model = params.get(_model_key, "")
+        if _current_model and backend.api_type == "comfyui" and img_skill:
+            _resolved = img_skill.resolve_model_for_backend(
+                _current_model, backend, active_wf.model_type if active_wf else "")
+            if _resolved and _resolved != _current_model:
+                logger.info("Model-Resolve: %s -> %s (Backend: %s)", _current_model, _resolved, backend.name)
+                params[_model_key] = _resolved
+        # CLIP (clip_name1 + clip_name2 fuer DualCLIPLoader, z.B. Flux Inpaint)
+        if active_wf and active_wf.clip:
+            params["clip_name"] = active_wf.clip
+        if active_wf and active_wf.clip2:
+            params["clip_name2"] = active_wf.clip2
+        # LoRA-Inputs
+        if active_wf and active_wf.has_loras:
+            if loras_override is not None:
+                params["lora_inputs"] = loras_override
+            elif active_wf.default_loras:
+                params["lora_inputs"] = active_wf.default_loras
+
+        # Frischer Seed pro Aufruf — sonst gibt ComfyUI bei identischem Prompt+Seed
+        # den NO_NEW_IMAGE-Sentinel (Memory feedback_no_new_image_sentinel). Bei
+        # Map-Blend IMMER neu, sonst wenn der Workflow einen input_seed-Node hat.
+        if _map_blend or (active_wf and active_wf.has_seed):
             import random as _rnd
             params["seed"] = _rnd.randint(1, 2**31 - 1)
-        else:
-            # Workflow-File: expliziter Workflow hat Vorrang vor Default-Workflow
-            # Workflow-File: den oben (Match) aufgeloesten active_wf wiederverwenden,
-            # damit Backend-Wahl und workflow_file denselben Workflow nutzen; ohne
-            # expliziten Workflow den Default-Workflow nehmen.
-            if not workflow_name:
-                active_wf = getattr(img_skill, '_default_workflow', None)
-            if active_wf and active_wf.workflow_file:
-                params["workflow_file"] = active_wf.workflow_file
-            # Model-Override (input_unet Workflows brauchen "unet" statt "model")
-            _model_key = "unet" if (active_wf and (active_wf.has_input_unet or active_wf.has_input_safetensors)) else "model"
-            if model_override:
-                params[_model_key] = model_override
-            elif active_wf and active_wf.model:
-                params[_model_key] = active_wf.model
-            # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
-            _current_model = params.get(_model_key, "")
-            if _current_model and backend.api_type == "comfyui" and img_skill:
-                _resolved = img_skill.resolve_model_for_backend(
-                    _current_model, backend, active_wf.model_type if active_wf else "")
-                if _resolved and _resolved != _current_model:
-                    logger.info("Model-Resolve: %s -> %s (Backend: %s)", _current_model, _resolved, backend.name)
-                    params[_model_key] = _resolved
-            # CLIP-Pairing fuer Flux2-Workflows
-            if active_wf and active_wf.clip:
-                params["clip_name"] = active_wf.clip
-            # LoRA-Inputs
-            if active_wf and active_wf.has_loras:
-                if loras_override is not None:
-                    params["lora_inputs"] = loras_override
-                elif active_wf.default_loras:
-                    params["lora_inputs"] = active_wf.default_loras
-
-            # Frischer Seed pro Aufruf — sonst gibt ComfyUI bei identischem
-            # Prompt+Seed den NO_NEW_IMAGE-Sentinel und das Bild wird nie
-            # neu erzeugt (Memory feedback_no_new_image_sentinel).
-            if active_wf and active_wf.has_seed:
-                import random as _rnd
-                params["seed"] = _rnd.randint(1, 2**31 - 1)
 
         # Selbst-Referenz: das bestehende (Karten-)Bild als Referenz in Slot 1 —
         # fuer „Regenerate mit aktuellem Bild" (z.B. damit 2D-Tiles besser
@@ -1811,7 +1902,10 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         # Tile neu); Edge = echtes Tile + Rahmen-Maske der gewaehlten Seiten.
         _fit_comp = None
         if _map_blend:
-            _fit_comp = (_compose_edge_canvas(location, edge_sides) if edge_match
+            # gray_fill nur bei Edit-Modell-Inpaint (Qwen-Edit) — dort muessen die
+            # Inpaint-Stellen grau im Referenzbild sein; Fill-Modelle (Flux) nicht.
+            _gray_fill = bool(active_wf and getattr(active_wf, "inpaint_gray", False))
+            _fit_comp = (_compose_edge_canvas(location, edge_sides, gray_fill=_gray_fill) if edge_match
                          else _compose_neighbor_canvas(location, crop_empty=True))
             if _fit_comp:
                 _cpath, _mpath, _ctile, _crop = _fit_comp
@@ -2003,13 +2097,19 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             # Image-Prompt in JSONL loggen
             try:
                 from app.utils.image_prompt_logger import log_image_prompt
+                from app.core.config import get_lora_trigger_words
                 _model_name = (getattr(backend, 'last_used_checkpoint', '')
                                or getattr(backend, 'model', '')
                                or getattr(backend, 'checkpoint', '') or '')
+                # final_prompt = WAS WIRKLICH an die Engine ging: das/die LoRA-
+                # Aktivierungswort(e) werden in backend.generate() vorangestellt,
+                # also hier fuer den Log denselben Schritt nachbilden.
+                _tw = get_lora_trigger_words(_loras_used)
+                _final_logged = (", ".join(_tw) + ", " + full_prompt) if _tw else full_prompt
                 log_image_prompt(
                     agent_name=location.get("name", location_name),
                     original_prompt=prompt,
-                    final_prompt=full_prompt,
+                    final_prompt=_final_logged,
                     negative_prompt=negative,
                     backend_name=backend.name,
                     backend_type=backend.api_type,
@@ -2449,10 +2549,18 @@ async def generate_time_variant(
 
             try:
                 from app.utils.image_prompt_logger import log_image_prompt
+                from app.core.config import get_lora_trigger_words
+                # final_prompt = mit vorangestelltem LoRA-Trigger (wie generate()).
+                _tv_names = [str(l.get("name")).strip()
+                             for l in (params.get("lora_inputs") or [])
+                             if isinstance(l, dict) and (l.get("name") or "").strip()
+                             and l.get("name") != "None"]
+                _tv_tw = get_lora_trigger_words(_tv_names)
+                _tv_final = (", ".join(_tv_tw) + ", " + full_prompt) if _tv_tw else full_prompt
                 log_image_prompt(
                     agent_name=location.get("name", location_name),
                     original_prompt=prompt,
-                    final_prompt=full_prompt,
+                    final_prompt=_tv_final,
                     negative_prompt=negative,
                     backend_name=backend.name,
                     backend_type=backend.api_type,

@@ -97,6 +97,15 @@ back into the RP, triggers a retry in `rp_first`). `intent_engine.py` picks whic
 **Movement is structured, never narrative.** A character changes location only via `set_location_skill`
 (named places, pathfinder), `move_skill` (one grid step), or a teleport spell — never by RP text claiming a
 cross-location jump. `move_skill` is `ALWAYS_LOAD` but default-off; passable terrain tiles are reachable only via Move.
+**Activity is free text, not a library** — `activity_hint` + free LLM output, no activity-library lookup.
+Activity resets are coupled to location changes (account for teleports).
+
+**Image generation is use-case-driven.** Every render occasion is a `use_case` (`config.json → image.use_cases`);
+the **style belongs to the use-case** (`use_cases.<uc>.styles.<family>`), not to the model or workflow.
+`image_family` (`natural` = flowing prose for Flux/Qwen, `keywords` = comma tags for Z-Image/SD) selects both the
+prompt adapter **and** which style family applies. Reference-slot priority is Agent > Room > others > Items; a
+reference image supplies **appearance only** — outfit/activity stay in the text, location is stripped only when the
+room itself is slotted.
 
 **The AgentLoop** (`agent_loop.py`) is a continuous weighted-round-robin loop (importance 1/2/3 → ticket
 count) that gives idle characters autonomous "thought" turns between user messages. It excludes sleeping
@@ -123,6 +132,7 @@ in-app UI for inputs and confirmations.
 ## Conventions
 
 - **A feature is backend + UI.** Never ship a backend capability and tell the user to edit the DB; it needs a UI surface.
+- **Character settings render generically from templates** (`shared/templates/character/*.json` via `TemplateTab`/`TemplateField`) — never hardcode field lists or per-feature forms.
 - **New/changed Admin-UI strings: English only** (existing German strings stay; no sweep). **Communicate with the user in German.** Code comments are a German/English mix — match the surrounding file.
 - **No backward-compat shims on renames/refactors** without asking — no fallback readers, no alias fields.
 - **No hardcoded character stats** (stamina/stress/lust/...) — keep stat handling generic (regex/dict-driven).

@@ -2268,6 +2268,14 @@ async def resolve_tokens_route(character_name: str, request: Request) -> Dict[st
     return {"character": character_name, "resolved": resolved}
 
 
+@router.get("/{character_name}/belongings")
+def get_belongings_route(character_name: str) -> Dict[str, Any]:
+    """Inventar + Outfit (Paper-Doll) eines Characters — gleiche Form wie
+    /play/belongings, für den Game-Admin-Garderoben-Tab."""
+    from app.routes.play import build_belongings
+    return build_belongings(character_name)
+
+
 @router.get("/{character_name}/active-conditions")
 def get_active_conditions_route(character_name: str) -> Dict[str, Any]:
     """Gibt aktive Conditions mit Icon/Label/Restdauer zurueck.
@@ -2871,8 +2879,33 @@ def get_soul_files(character_name: str) -> Dict[str, Any]:
     Berucksichtigt Template-Feature-Gates. Gibt pro Datei: section-id,
     file_default lock-status, ob die Datei existiert.
     """
-    from app.models.character import get_character_dir
+    from app.models.character import get_character_dir, get_character_profile
     char_dir = get_character_dir(character_name)
+
+    # Freundliche Labels aus dem Template: source_file-Basename (= section-id) →
+    # Feld-Label/-label_de. Damit zeigt der Soul-Tab „Roleplay Rules" statt
+    # „Roleplay_rules".
+    import os as _os
+    label_map: Dict[str, Dict[str, str]] = {}
+    try:
+        from app.models.character_template import get_template
+        _prof = get_character_profile(character_name) or {}
+        _tmpl = get_template(_prof.get("template", "")) if _prof.get("template") else None
+        for _sec in (_tmpl or {}).get("sections", []):
+            for _f in _sec.get("fields", []):
+                _sf = _f.get("source_file") or ""
+                if not _sf:
+                    continue
+                _sid = _os.path.basename(_sf)
+                if _sid.endswith(".md"):
+                    _sid = _sid[:-3]
+                label_map[_sid] = {
+                    "label": _f.get("label") or "",
+                    "label_de": _f.get("label_de") or "",
+                }
+    except Exception:
+        pass
+
     files = []
     for section_id in ("personality", "tasks", "presence", "roleplay_rules",
                         "beliefs", "lessons", "goals", "soul"):
@@ -2880,6 +2913,9 @@ def get_soul_files(character_name: str) -> Dict[str, Any]:
             continue
         meta = _soul_file_meta(section_id)
         meta["exists"] = (char_dir / meta["path"]).exists()
+        _lbl = label_map.get(section_id, {})
+        meta["label"] = _lbl.get("label", "")
+        meta["label_de"] = _lbl.get("label_de", "")
         files.append(meta)
     return {"character": character_name, "files": files}
 

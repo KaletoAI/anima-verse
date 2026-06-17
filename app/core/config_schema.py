@@ -418,6 +418,8 @@ SECTIONS = {
                     "clip": {"type": "comfyui_clip_select", "label": "CLIP Model"},
                     "clip2": {"type": "comfyui_clip_select", "label": "CLIP Model 2", "description": "Nur fuer DualCLIPLoader-Workflows (z.B. Flux Inpaint): clip_name2."},
                     "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "Wie das Modell Prompts will: keywords = Komma-Tags (Z-Image/SD), natural = Fliesstext (Flux/Qwen). Bestimmt Prompt-Adapter + welche Use-Case-Style-Familie greift. Leer = Fallback ueber Workflow-Dateiname."},
+                    "category": {"type": "select", "label": "Category", "choices": ["", "inpaint"], "description": "Workflow purpose, used to offer the right workflows in special dialogs. Empty = normal generation. 'inpaint' = map fit / edge-match workflows (need input_reference_image, input_mask, input_crop). Extensible for future workflow types."},
+                    "prompt": {"type": "str", "label": "Default prompt", "description": "Per-workflow default prompt, pre-filled in the Fit/Edge dialog (and used verbatim for map-blend). Differs per model — e.g. an edit instruction for Qwen Inpaint vs. a fill description for Flux Inpaint. Empty = fall back to the 'mapfit' use-case prompt."},
                     "width": {
                         "type": "int",
                         "label": "Breite",

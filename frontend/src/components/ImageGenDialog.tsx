@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
-import { apiGet } from '../lib/api'
+import { apiGet, apiPost } from '../lib/api'
 
 /**
  * Modal dialog for image-generation overrides — provider/workflow,
@@ -28,11 +28,34 @@ interface ImagegenOption {
   filter?: string
   models?: string[] // for non-comfy backends with their own model list
   ref_slot_count?: number // number of reference-image slots (0 = none)
+  compatible_backends?: string[] // ComfyUI instances this workflow runs on (empty = all)
+}
+
+interface ComfyBackend {
+  name: string
+  available: boolean
 }
 
 interface ImagegenOptionsResponse {
   options: ImagegenOption[]
+  comfy_backends?: ComfyBackend[]
   default_location?: string
+}
+
+// Ein Eintrag im „Service (match)"-Dropdown. Entweder ein reiner Match
+// (Workflow auto / Cloud-Backend) oder ein Workflow mit gepinntem ComfyUI-
+// Endpoint (backendOverride). `option` traegt die Metadaten (ref_slot_count,
+// LoRAs, Model) — der Override aendert nur, welche Instanz angesprochen wird.
+interface SelectEntry {
+  id: string
+  group: string
+  label: string
+  option: ImagegenOption
+  // Was als payload.workflow gesendet wird: bei „auto" der Filter-Glob (Match),
+  // bei „fixed endpoint" der EXAKTE Workflow-Name (sonst kann der Server zwei
+  // Workflows mit gleichem Glob — z.B. „Qwen*" — nicht unterscheiden).
+  workflowSpec?: string
+  backendOverride?: string
 }
 
 export interface ImageGenSubmit {
@@ -89,6 +112,13 @@ interface Props {
    */
   showCreateNew?: boolean
   defaultCreateNew?: boolean
+  /**
+   * Endpoint for the "Improve" button next to the improvement-request field
+   * (POST { prompt, improvement_request } -> { prompt }). The rewritten prompt
+   * is written back into the Prompt field. Default: generic, character-less
+   * `/world/imagegen-enhance-prompt`.
+   */
+  enhanceEndpoint?: string
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
   onClose: () => void
   /**
@@ -158,7 +188,8 @@ function filterByWorkflowName(items: string[], workflowName: string, filter: str
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
   showRoomReference, defaultUseSource, requireSourceReference,
-  showCreateNew, defaultCreateNew, onSubmit, onClose,
+  showCreateNew, defaultCreateNew,
+  enhanceEndpoint = '/world/imagegen-enhance-prompt', onSubmit, onClose,
   mode = 'create', hideNegative, characterOptions,
 }: Props) {
   const isRegen = mode === 'regenerate'
@@ -175,13 +206,38 @@ export function ImageGenDialog({
   const [negative, setNegative] = useState('')
   const [selectedChars, setSelectedChars] = useState<string[]>([])
   const [options, setOptions] = useState<ImagegenOption[] | null>(null)
+  const [comfyBackends, setComfyBackends] = useState<ComfyBackend[]>([])
   const [defaultLocationOpt, setDefaultLocationOpt] = useState<string>('')
-  const [optionKey, setOptionKey] = useState<string>('') // "workflow:name" | "backend:name"
+  const [optionKey, setOptionKey] = useState<string>('') // SelectEntry.id
   const [allLoras, setAllLoras] = useState<string[]>([])
   const [loraSlots, setLoraSlots] = useState<LoraDefault[]>(
     () => Array.from({ length: LORA_SLOTS }, () => ({ name: 'None', strength: 1.0 })),
   )
   const [submitting, setSubmitting] = useState(false)
+  const [enhancing, setEnhancing] = useState(false)
+
+  // "Improve": laesst den Prompt per LLM aus dem Aenderungswunsch umschreiben
+  // und schreibt das Ergebnis ins Prompt-Feld (sichtbar/editierbar vor dem
+  // Generieren). Danach ist das Improvement-Feld leer -> Generierung woertlich.
+  const applyImprovement = useCallback(async () => {
+    const base = prompt.trim()
+    const wish = improvement.trim()
+    if (!base || !wish || enhancing) return
+    setEnhancing(true)
+    try {
+      const res = await apiPost<{ prompt?: string }>(enhanceEndpoint, {
+        prompt: base, improvement_request: wish,
+      })
+      if (res?.prompt) {
+        setPrompt(res.prompt)
+        setImprovement('')
+      }
+    } catch {
+      /* Fehler still — der Nutzer kann den Prompt auch manuell anpassen. */
+    } finally {
+      setEnhancing(false)
+    }
+  }, [prompt, improvement, enhancing, enhanceEndpoint])
 
   // Resync prompt + independent config parts when the caller changes them
   // (e.g. day → night, or map → map_2d with a different suffix).
@@ -216,16 +272,11 @@ export function ImageGenDialog({
     if (!open || options !== null) return
     apiGet<ImagegenOptionsResponse>('/world/imagegen-options')
       .then((d) => {
-        // Nach Match-Wert deduplizieren — mehrere Workflows teilen sich oft
-        // denselben filter-Glob (z.B. zwei „Qwen*"). Pro Match nur ein Eintrag.
-        const seen = new Set<string>()
-        const deduped = (d.options || []).filter((o) => {
-          const m = optMatch(o)
-          if (seen.has(m)) return false
-          seen.add(m)
-          return true
-        })
-        setOptions(deduped)
+        // KEIN globaler Dedup mehr: die Fixed-Endpoint-Eintraege brauchen jeden
+        // einzelnen Workflow (auch zwei mit gleichem Glob, z.B. „Flux2 NVFP4"
+        // und „Flux2 Q5"). Der Dedup passiert nur noch in der „auto"-Gruppe.
+        setOptions(d.options || [])
+        setComfyBackends(d.comfy_backends || [])
         setDefaultLocationOpt(d.default_location || '')
       })
       .catch(() => setOptions([]))
@@ -234,27 +285,71 @@ export function ImageGenDialog({
       .catch(() => setAllLoras([]))
   }, [open, options])
 
-  // Pick initial option once the list arrives.
+  // Gruppierte Auswahl-Eintraege bauen: pro Workflow ein „auto"-Match plus je
+  // einen Eintrag pro kompatibler ComfyUI-Instanz (gepinnter Endpoint). Nicht-
+  // Comfy-Backends (Cloud) als eigene Gruppe.
+  const entries = useMemo<SelectEntry[]>(() => {
+    if (!options) return []
+    const auto: SelectEntry[] = []
+    const fixed: SelectEntry[] = []
+    const cloud: SelectEntry[] = []
+    const seenGlob = new Set<string>()
+    for (const o of options) {
+      if (o.type === 'workflow') {
+        // „auto": ein Eintrag pro Filter-Glob (Match waehlt Workflow + Endpoint).
+        const fspec = o.filter || o.name
+        const key = `workflow:${fspec}`
+        if (!seenGlob.has(key)) {
+          seenGlob.add(key)
+          auto.push({ id: `auto:${key}`, group: t('Workflows (auto)'), label: optMatch(o), option: o, workflowSpec: fspec })
+        }
+        // „fixed endpoint": exakter Workflow-Name × jede kompatible ComfyUI-Instanz.
+        const compat = o.compatible_backends || []
+        const eps = comfyBackends.filter((b) => compat.length === 0 || compat.includes(b.name))
+        for (const ep of eps) {
+          fixed.push({
+            id: `fix:${o.name}@${ep.name}`,
+            group: t('Fixed endpoints'),
+            label: `${o.name} @ ${ep.name}${ep.available ? '' : ' (offline?)'}`,
+            option: o,
+            workflowSpec: o.name,
+            backendOverride: ep.name,
+          })
+        }
+      } else {
+        cloud.push({ id: `be:${o.name}`, group: t('Cloud backends'), label: optMatch(o), option: o })
+      }
+    }
+    return [...auto, ...fixed, ...cloud]
+  }, [options, comfyBackends, t])
+
+  // Gruppen in Render-Reihenfolge (erste Vorkommnisse), fuer die <optgroup>s.
+  const entryGroups = useMemo<string[]>(() => {
+    const seen = new Set<string>()
+    const order: string[] = []
+    for (const e of entries) if (!seen.has(e.group)) { seen.add(e.group); order.push(e.group) }
+    return order
+  }, [entries])
+
+  // Pick initial entry once the list arrives.
   useEffect(() => {
-    if (!options || optionKey) return
-    if (!options.length) return
+    if (!entries.length || optionKey) return
     const match = defaultLocationOpt
-      ? options.find(
-          (o) =>
-            `${o.type}:${o.name}` === defaultLocationOpt ||
-            o.name === defaultLocationOpt,
+      ? entries.find(
+          (e) => e.backendOverride === undefined && (
+            `${e.option.type}:${e.option.name}` === defaultLocationOpt ||
+            e.option.name === defaultLocationOpt),
         )
       : null
-    const pick = match || options[0]
-    setOptionKey(`${pick.type}:${pick.name}`)
-  }, [options, defaultLocationOpt, optionKey])
+    setOptionKey((match || entries[0]).id)
+  }, [entries, defaultLocationOpt, optionKey])
+
+  const currentEntry = useMemo<SelectEntry | null>(
+    () => entries.find((e) => e.id === optionKey) || null, [entries, optionKey])
 
   const currentOption = useMemo<ImagegenOption | null>(() => {
-    if (!options || !optionKey) return null
-    const [type, ...rest] = optionKey.split(':')
-    const name = rest.join(':')
-    return options.find((o) => o.type === type && o.name === name) || null
-  }, [options, optionKey])
+    return currentEntry?.option || null
+  }, [currentEntry])
 
   // Reset LoRA slots when workflow changes; pull defaults from the option.
   useEffect(() => {
@@ -298,8 +393,14 @@ export function ImageGenDialog({
     if (settingsPrefix || settingsSuffix) payload.prompt_settings_applied = true
     // Match-Glob senden (workflow:<filter> / backend:<name>) — der Server löst ihn
     // nach Verfügbarkeit auf (match_workflow / match_backend), wie im Admin-Default.
-    if (currentOption.type === 'workflow') payload.workflow = currentOption.filter || currentOption.name
-    else payload.backend = currentOption.name
+    if (currentOption.type === 'workflow') {
+      // „auto" sendet den Filter-Glob, „fixed endpoint" den exakten Namen.
+      payload.workflow = currentEntry?.workflowSpec || currentOption.filter || currentOption.name
+      // Gepinnter Endpoint: Workflow bleibt, diese ComfyUI-Instanz wird erzwungen.
+      if (currentEntry?.backendOverride) payload.backend = currentEntry.backendOverride
+    } else {
+      payload.backend = currentOption.name
+    }
     if (currentOption.has_loras) {
       const active = loraSlots.filter((l) => l.name && l.name !== 'None')
       payload.loras = active.length ? active : null
@@ -317,10 +418,10 @@ export function ImageGenDialog({
     } finally {
       setSubmitting(false)
     }
-  }, [currentOption, prompt, prefixText, suffixText, settingsPrefix, settingsSuffix,
-      loraSlots, onSubmit, onClose, isRegen, showCreateNew, createNew, improvement,
-      hideNegative, negative, characterOptions, selectedChars, showRoomReference,
-      useRoom, sourceImageUrl, useSource])
+  }, [currentOption, currentEntry, prompt, prefixText, suffixText, settingsPrefix,
+      settingsSuffix, loraSlots, onSubmit, onClose, isRegen, showCreateNew, createNew,
+      improvement, hideNegative, negative, characterOptions, selectedChars,
+      showRoomReference, useRoom, sourceImageUrl, useSource])
 
   // Reference-slot budget: how many ref images may be used (workflow ref_slot_count).
   // Persons + room + current-image each consume one slot.
@@ -377,10 +478,12 @@ export function ImageGenDialog({
                 disabled={submitting}
                 onChange={(e) => setOptionKey(e.target.value)}
               >
-                {options.map((o) => (
-                  <option key={`${o.type}:${o.name}`} value={`${o.type}:${o.name}`}>
-                    {optMatch(o)}
-                  </option>
+                {entryGroups.map((g) => (
+                  <optgroup key={g} label={g}>
+                    {entries.filter((e) => e.group === g).map((e) => (
+                      <option key={e.id} value={e.id}>{e.label}</option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
 
@@ -460,7 +563,7 @@ export function ImageGenDialog({
                 className="ga-textarea"
                 rows={6}
                 value={prompt}
-                disabled={submitting}
+                disabled={submitting || enhancing}
                 onChange={(e) => setPrompt(e.target.value)}
               />
 
@@ -514,10 +617,14 @@ export function ImageGenDialog({
                   ) : null}
                   {slotBudget > 0 && sourceImageUrl ? (
                     <label className="ga-check-row">
-                      <input type="checkbox" checked={useSource}
-                        disabled={submitting || (!useSource && atBudget)}
+                      <input type="checkbox"
+                        checked={requireSourceReference ? true : useSource}
+                        disabled={submitting || !!requireSourceReference || (!useSource && atBudget)}
                         onChange={(e) => setUseSource(e.target.checked)} />
-                      <span>{t('Current image as reference')}</span>
+                      <span>
+                        {t('Current image as reference')}
+                        {requireSourceReference ? ` (${t('required')})` : ''}
+                      </span>
                     </label>
                   ) : null}
                 </>
@@ -542,9 +649,19 @@ export function ImageGenDialog({
                     rows={2}
                     placeholder={t('What to change (optional)')}
                     value={improvement}
-                    disabled={submitting}
+                    disabled={submitting || enhancing}
                     onChange={(e) => setImprovement(e.target.value)}
                   />
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm"
+                    style={{ alignSelf: 'flex-start' }}
+                    disabled={submitting || enhancing || !prompt.trim() || !improvement.trim()}
+                    onClick={() => { void applyImprovement() }}
+                    title={t('Rewrite the prompt with this change via LLM')}
+                  >
+                    {enhancing ? '…' : `✨ ${t('Improve prompt')}`}
+                  </button>
                 </>
               ) : null}
 
@@ -584,7 +701,7 @@ export function ImageGenDialog({
           <button
             className="ga-btn ga-btn-primary"
             onClick={handleSubmit}
-            disabled={submitting || !currentOption || sourceRefBlocked}
+            disabled={submitting || enhancing || !currentOption || sourceRefBlocked}
           >
             {submitting ? '…' : t('Generate')}
           </button>

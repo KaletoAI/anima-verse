@@ -26,14 +26,15 @@ const missingLogged = new Set<string>()
 
 function readInitialLang(): string {
   // Match the conventions used elsewhere in the app: ?lang= overrides,
-  // otherwise localStorage('uiLang'), otherwise 'en'.
+  // otherwise localStorage('uiLang'), otherwise the browser language (like the
+  // legacy main UI: `navigator.language || 'de'`), never hard 'en'.
   if (typeof window === 'undefined') return 'en'
   const url = new URL(window.location.href)
   const fromUrl = url.searchParams.get('lang')
   if (fromUrl) return fromUrl
   const fromStorage = window.localStorage.getItem('uiLang')
   if (fromStorage) return fromStorage
-  return 'en'
+  return (window.navigator.language || 'de').split('-')[0] || 'de'
 }
 
 export function I18nProvider({ children }: { children: ReactNode }) {

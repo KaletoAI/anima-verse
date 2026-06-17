@@ -209,6 +209,7 @@
           ],
           "in_prompt": true,
           "prompt_label": "Appearance",
+          "image_preview": "appearance",
           "llm_generable": true
         }
       ]

@@ -87,12 +87,31 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "name": "Flux Inpaint",
         "image_family": "natural",
         "filter": "Flux Inpaint*",
+        "category": "inpaint",
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/img2img_workflow_flux1_inpaint_api.json",
         "model": "Flux1-DevFill-Onereward_fp8.safetensors",
         "clip": "clip_l.safetensors",
         "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        # Flux1-DevFill = Fill-Modell: beschreibender Prompt fuer die Maske.
+        "prompt": "seamless top-down fantasy map tile, hand-painted, continue the surrounding terrain, colors and style into the masked area with no visible seam, border or frame",
+        "loras": [{"file": "", "strength": 1} for _ in range(4)],
+    },
+    "Qwen Inpaint": {
+        "name": "Qwen Inpaint",
+        "image_family": "natural",
+        "filter": "Qwen Inpaint*",
+        "category": "inpaint",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/text2img_workflow_qwen_inpaint_api.json",
+        # Modell bewusst leer: der Workflow-Default ist ein NSFW-Modell — gehoert
+        # nicht in die mitgelieferte Default-Config. Pro Welt im Admin setzen.
+        "model": "",
+        "clip": "Qwen2.5-VL-7B-Instruct-abliterated_merged.safetensors",
+        # Qwen-Edit = Instruktions-Modell: Anweisung statt Beschreibung.
+        "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
     "SD15": {
@@ -151,6 +170,22 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_style": "a single close-up fantasy game map tile of the place, hand-painted, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, cohesive palette, highly detailed",
             "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, framed, vignette, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, low quality",
             "prompt_instruction": "Describe a single close-up fantasy game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, hand-painted style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject is closely framed and fills the entire frame edge to edge with no border or frame. No people, no text.",
+        },
+    },
+    "mapfit": {
+        # Map-Fit / Kanten-Angleich (Inpaint): die grauen/maskierten Flaechen des
+        # Nachbar-Canvas nahtlos ergaenzen — KEIN „neues Tile"-Stil. Greift fuer
+        # Fit-to-neighbors + Match-edges (category=="inpaint"-Workflows wie Qwen
+        # Inpaint / Flux Inpaint), pro Familie editierbar im Use-Cases-Editor.
+        "keywords": {
+            "prompt_style": "seamless map inpainting, complement the gray masked areas, match the surrounding terrain, colors and hand-painted style, continuous top-down map tile, no seams, no border, no frame",
+            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, visible seam, hard edge, mismatched terrain, color shift, blurry, lowres, jpeg artifacts, low quality",
+            "prompt_instruction": "Write a short comma-separated instruction to complement the gray masked areas of the map so they blend seamlessly into the surrounding tiles — match the neighbouring terrain, colors and hand-painted style, no visible seam or border.",
+        },
+        "natural": {
+            "prompt_style": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
+            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, visible seam, hard edge, mismatched terrain, color shift, blurry, low quality",
+            "prompt_instruction": "Write a short instruction to complement the gray masked areas of the map so they blend seamlessly into the surrounding tiles — match the neighbouring terrain, colors and hand-painted style, no visible seam or border.",
         },
     },
     "location": {
@@ -493,17 +528,30 @@ def _seed_default_workflows(config: dict, config_path: Path) -> bool:
     ig = config.setdefault("image_generation", {})
     if "comfyui_workflows" not in ig:
         ig["comfyui_workflows"] = copy.deepcopy(_DEFAULT_COMFYUI_WORKFLOWS)
-        log_msg = "Default ComfyUI workflows (Qwen/Z-Image/Flux/Flux.1 Dev/Flux Inpaint) seeded"
+        log_msg = "Default ComfyUI workflows (Qwen/Z-Image/Flux/Flux.1 Dev/Flux Inpaint/Qwen Inpaint) seeded"
     else:
         # Backfill: feature-kritische Default-Workflows, die nach ihrer Einfuehrung
         # dazukamen, in bestehende Welten nachziehen (nur wenn der Key fehlt).
-        backfill = ["Flux Inpaint", "Flux 1 Dev"]
+        backfill = ["Flux Inpaint", "Flux 1 Dev", "Qwen Inpaint"]
         added = [k for k in backfill if k not in ig["comfyui_workflows"]]
-        if not added:
-            return False
         for k in added:
             ig["comfyui_workflows"][k] = copy.deepcopy(_DEFAULT_COMFYUI_WORKFLOWS[k])
-        log_msg = f"Backfilled ComfyUI workflow(s): {', '.join(added)}"
+        # Feld-Backfill: das per-Workflow `prompt`-Feld kam nach der Einfuehrung der
+        # Inpaint-Workflows dazu. Bestehende Default-Workflows, die es noch NICHT
+        # haben, bekommen den Default-Prompt nachgezogen (nur wenn fehlend) — sonst
+        # fallen Qwen/Flux Inpaint beide auf denselben mapfit-Fallback und der
+        # Dialog zeigt beim Wechsel denselben Prompt.
+        field_added = []
+        for k, dflt in _DEFAULT_COMFYUI_WORKFLOWS.items():
+            entry = ig["comfyui_workflows"].get(k)
+            if isinstance(entry, dict) and dflt.get("prompt") and "prompt" not in entry:
+                entry["prompt"] = dflt["prompt"]
+                field_added.append(f"{k}.prompt")
+        if not added and not field_added:
+            return False
+        log_msg = "Backfilled ComfyUI workflow(s): " + (", ".join(added) or "-")
+        if field_added:
+            log_msg += " | fields: " + ", ".join(field_added)
     try:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
@@ -888,7 +936,7 @@ def _flatten_to_env(config: dict) -> None:
     for wid, wf in ig.get("comfyui_workflows", {}).items():
         p = f"COMFY_IMAGEGEN_{wid}_"
         for key in ["name", "filter", "skill", "workflow_file",
-                     "model", "image_family",
+                     "model", "image_family", "category", "prompt",
                      "width", "height",
                      "clip", "clip2"]:
             val = wf.get(key, "")

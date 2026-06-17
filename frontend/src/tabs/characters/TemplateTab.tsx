@@ -18,6 +18,7 @@ import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { TemplateField, tmplText, type TmplFieldDef, type DynamicData } from './TemplateField'
 import type { TmplSection } from './TemplateSectionForm'
+import { FieldImage } from './FieldImage'
 
 const FORCE_READONLY = new Set(['character_name'])
 
@@ -215,27 +216,31 @@ export function TemplateTab({
     const label = (tmplText(f, 'label', lang) || f.key) + (f.required ? ' *' : '')
     const hint = tmplText(f, 'hint', lang)
     const isPrompt = f.type === 'text' && f.multiline
+    const imagePreview = typeof f.image_preview === 'string' ? f.image_preview : ''
     return (
-      <Field key={f.key} label={label} hint={hint || undefined}>
-        {isPrompt ? (
-          <PromptField
-            character={character}
-            field={f}
-            value={getVal(f)}
-            disabled={ro || savingKey === f.key}
-            onCommit={(v) => commit(f, v)}
-          />
-        ) : (
-          <TemplateField
-            field={f}
-            value={getVal(f)}
-            dynamicData={dynamicData}
-            disabled={ro || savingKey === f.key}
-            lang={lang}
-            onCommit={(v) => commit(f, v)}
-          />
-        )}
-      </Field>
+      <div key={f.key}>
+        <Field label={label} hint={hint || undefined}>
+          {isPrompt ? (
+            <PromptField
+              character={character}
+              field={f}
+              value={getVal(f)}
+              disabled={ro || savingKey === f.key}
+              onCommit={(v) => commit(f, v)}
+            />
+          ) : (
+            <TemplateField
+              field={f}
+              value={getVal(f)}
+              dynamicData={dynamicData}
+              disabled={ro || savingKey === f.key}
+              lang={lang}
+              onCommit={(v) => commit(f, v)}
+            />
+          )}
+        </Field>
+        {imagePreview ? <FieldImage character={character} kind={imagePreview} /> : null}
+      </div>
     )
   }
 

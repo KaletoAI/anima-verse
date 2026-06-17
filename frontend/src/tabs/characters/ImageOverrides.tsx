@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPut, apiPost } from '../../lib/api'
+import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
-import { loadCharacters } from '../../lib/refs'
 
 /**
  * Per-character image-generation overrides (Characters → Image):
@@ -69,10 +68,6 @@ export function ImageOverrides({ character }: { character: string }) {
   // Per-slot prompt + LoRA overrides (Image Appearance).
   const [slots, setSlots] = useState<Record<string, SlotEntry>>({})
   const [slotsSaving, setSlotsSaving] = useState(false)
-  // Gallery access: other characters allowed to browse this gallery in /play.
-  const [viewers, setViewers] = useState<string[]>([])
-  const [roster, setRoster] = useState<string[]>([])
-  const [viewersSaving, setViewersSaving] = useState(false)
 
   // Persist the full override ({workflow pattern, loras}); model is dropped.
   const persist = useCallback(
@@ -98,7 +93,7 @@ export function ImageOverrides({ character }: { character: string }) {
     setLoading(true)
     ;(async () => {
       try {
-        const [ovr, opts, loraOpts, slotResp, cfgResp, rosterData] = await Promise.all([
+        const [ovr, opts, loraOpts, slotResp] = await Promise.all([
           apiGet<{ workflow?: string; loras?: Lora[] }>(
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
@@ -109,10 +104,6 @@ export function ImageOverrides({ character }: { character: string }) {
           apiGet<{ slots?: Record<string, SlotEntry> }>(
             `/characters/${encodeURIComponent(character)}/slot-overrides`,
           ),
-          apiGet<{ config?: Record<string, unknown> }>(
-            `/characters/${encodeURIComponent(character)}/config`,
-          ),
-          loadCharacters(),
         ])
         if (cancelled) return
         setPattern(ovr.workflow || '')
@@ -124,9 +115,6 @@ export function ImageOverrides({ character }: { character: string }) {
         )
         setAvailableLoras((loraOpts.loras || []).filter((l) => l && l !== 'None'))
         setSlots(slotResp.slots || {})
-        const gv = (cfgResp.config || {}).gallery_allowed_viewers
-        setViewers(Array.isArray(gv) ? gv.map((x) => String(x)).filter(Boolean) : [])
-        setRoster(rosterData.map((c) => c.name).filter((n) => n && n !== character))
       } catch (e) {
         if (!cancelled) toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
       } finally {
@@ -178,25 +166,6 @@ export function ImageOverrides({ character }: { character: string }) {
       setSlotsSaving(false)
     }
   }, [character, slots, t, toast])
-
-  // Persist the viewer list immediately (config bulk-update).
-  const setViewersAndSave = useCallback(
-    async (next: string[]) => {
-      setViewers(next)
-      setViewersSaving(true)
-      try {
-        await apiPost(`/characters/${encodeURIComponent(character)}/config`, {
-          fields: { gallery_allowed_viewers: next },
-        })
-        toast(t('Saved'))
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      } finally {
-        setViewersSaving(false)
-      }
-    },
-    [character, t, toast],
-  )
 
 
   if (loading) return <div className="ga-loading">{t('Loading…')}</div>
@@ -377,54 +346,6 @@ export function ImageOverrides({ character }: { character: string }) {
           >
             {slotsSaving ? t('Saving…') : t('Save appearance')}
           </button>
-        </div>
-      </div>
-
-      <div className="ga-fieldset">
-        <div className="ga-fieldset-title">{t('Gallery access')}</div>
-        <p className="ga-sched-muted" style={{ margin: '0 0 8px' }}>
-          {t('Other characters allowed to browse this character’s gallery in the player UI. None checked = only the character itself.')}
-        </p>
-        <div className="ga-gallery-access">
-          {roster.length === 0 ? (
-            <span className="ga-sched-muted">{t('No other characters.')}</span>
-          ) : (
-            roster.map((name) => {
-              const on = viewers.includes(name)
-              return (
-                <label key={name} className="ga-check-row">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    disabled={viewersSaving}
-                    onChange={() =>
-                      setViewersAndSave(
-                        on ? viewers.filter((x) => x !== name) : [...viewers, name],
-                      )
-                    }
-                  />
-                  <span>{name}</span>
-                </label>
-              )
-            })
-          )}
-          {/* Stored names that are not (any longer) in the roster — keep them
-              visible so they can be unchecked instead of silently dropped. */}
-          {viewers
-            .filter((v) => !roster.includes(v))
-            .map((v) => (
-              <label key={v} className="ga-check-row">
-                <input
-                  type="checkbox"
-                  checked
-                  disabled={viewersSaving}
-                  onChange={() => setViewersAndSave(viewers.filter((x) => x !== v))}
-                />
-                <span>
-                  {v} <span className="ga-sched-muted">({t('not in roster')})</span>
-                </span>
-              </label>
-            ))}
         </div>
       </div>
     </div>

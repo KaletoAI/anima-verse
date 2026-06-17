@@ -1,53 +1,109 @@
 {
   "1": {
-    "inputs": { "ckpt_name": "sd_xl_base_1.0.safetensors" },
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    },
     "class_type": "CheckpointLoaderSimple",
-    "_meta": { "title": "input_checkpoint" }
+    "_meta": {
+      "title": "input_checkpoint"
+    }
   },
   "2": {
-    "inputs": { "value": "top-down orthographic map tile, seamless transition, no hard seam" },
+    "inputs": {
+      "value": ""
+    },
     "class_type": "PrimitiveStringMultiline",
-    "_meta": { "title": "input_prompt_positiv" }
+    "_meta": {
+      "title": "input_prompt_positiv"
+    }
   },
   "3": {
-    "inputs": { "value": "blurry, low quality, deformed, distorted, watermark, text, frame, border" },
+    "inputs": {
+      "value": ""
+    },
     "class_type": "PrimitiveStringMultiline",
-    "_meta": { "title": "input_prompt_negativ" }
+    "_meta": {
+      "title": "input_prompt_negativ"
+    }
   },
   "4": {
-    "inputs": { "text": ["2", 0], "clip": ["1", 1] },
+    "inputs": {
+      "text": [
+        "2",
+        0
+      ],
+      "clip": [
+        "1",
+        1
+      ]
+    },
     "class_type": "CLIPTextEncode",
-    "_meta": { "title": "CLIP Text Encode (Positive)" }
+    "_meta": {
+      "title": "CLIP Text Encode (Positive)"
+    }
   },
   "5": {
-    "inputs": { "text": ["3", 0], "clip": ["1", 1] },
+    "inputs": {
+      "text": [
+        "3",
+        0
+      ],
+      "clip": [
+        "1",
+        1
+      ]
+    },
     "class_type": "CLIPTextEncode",
-    "_meta": { "title": "CLIP Text Encode (Negative)" }
+    "_meta": {
+      "title": "CLIP Text Encode (Negative)"
+    }
   },
   "6": {
-    "inputs": { "image": "real_edge4_input_image.png", "upload": "image" },
+    "inputs": {
+      "image": "",
+      "upload": "image"
+    },
     "class_type": "LoadImage",
-    "_meta": { "title": "input_reference_image" }
+    "_meta": {
+      "title": "input_reference_image"
+    }
   },
   "7": {
-    "inputs": { "image": "real_edge4_input_mask.png", "channel": "red" },
+    "inputs": {
+      "image": "",
+      "channel": "red"
+    },
     "class_type": "LoadImageMask",
-    "_meta": { "title": "input_mask" }
+    "_meta": {
+      "title": "input_mask"
+    }
   },
   "8": {
-    "inputs": { "value": 1024 },
+    "inputs": {
+      "value": 1024
+    },
     "class_type": "PrimitiveInt",
-    "_meta": { "title": "input_width" }
+    "_meta": {
+      "title": "input_width"
+    }
   },
   "9": {
-    "inputs": { "value": 1024 },
+    "inputs": {
+      "value": 1024
+    },
     "class_type": "PrimitiveInt",
-    "_meta": { "title": "input_height" }
+    "_meta": {
+      "title": "input_height"
+    }
   },
   "10": {
-    "inputs": { "value": 123456789 },
+    "inputs": {
+      "value": 0
+    },
     "class_type": "PrimitiveInt",
-    "_meta": { "title": "input_seed" }
+    "_meta": {
+      "title": "input_seed"
+    }
   },
   "11": {
     "inputs": {
@@ -55,41 +111,96 @@
       "width": 1536,
       "height": 1536,
       "crop": "disabled",
-      "image": ["6", 0]
+      "image": [
+        "6",
+        0
+      ]
     },
     "class_type": "ImageScale",
-    "_meta": { "title": "Scale canvas to 1536 (3x512)" }
+    "_meta": {
+      "title": "Scale canvas to 1536 (3x512)"
+    }
   },
   "12": {
-    "inputs": { "pixels": ["11", 0], "vae": ["1", 2] },
+    "inputs": {
+      "pixels": [
+        "11",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
     "class_type": "VAEEncode",
-    "_meta": { "title": "VAE Encode" }
+    "_meta": {
+      "title": "VAE Encode"
+    }
   },
   "13": {
-    "inputs": { "samples": ["12", 0], "mask": ["7", 0] },
+    "inputs": {
+      "samples": [
+        "12",
+        0
+      ],
+      "mask": [
+        "7",
+        0
+      ]
+    },
     "class_type": "SetLatentNoiseMask",
-    "_meta": { "title": "Set Latent Noise Mask" }
+    "_meta": {
+      "title": "Set Latent Noise Mask"
+    }
   },
   "14": {
     "inputs": {
-      "seed": ["10", 0],
+      "seed": [
+        "10",
+        0
+      ],
       "steps": 25,
       "cfg": 7.0,
       "sampler_name": "dpmpp_2m",
       "scheduler": "karras",
       "denoise": 1.0,
-      "model": ["1", 0],
-      "positive": ["4", 0],
-      "negative": ["5", 0],
-      "latent_image": ["13", 0]
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
     },
     "class_type": "KSampler",
-    "_meta": { "title": "KSampler" }
+    "_meta": {
+      "title": "KSampler"
+    }
   },
   "15": {
-    "inputs": { "samples": ["14", 0], "vae": ["1", 2] },
+    "inputs": {
+      "samples": [
+        "14",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
     "class_type": "VAEDecode",
-    "_meta": { "title": "VAE Decode" }
+    "_meta": {
+      "title": "VAE Decode"
+    }
   },
   "16": {
     "inputs": {
@@ -97,25 +208,48 @@
       "height": 512,
       "x": 512,
       "y": 512,
-      "image": ["15", 0]
+      "image": [
+        "15",
+        0
+      ]
     },
     "class_type": "ImageCrop",
-    "_meta": { "title": "Crop center cell (512x512)" }
+    "_meta": {
+      "title": "Crop center cell (512x512)"
+    }
   },
   "17": {
     "inputs": {
       "upscale_method": "lanczos",
-      "width": ["8", 0],
-      "height": ["9", 0],
+      "width": [
+        "8",
+        0
+      ],
+      "height": [
+        "9",
+        0
+      ],
       "crop": "disabled",
-      "image": ["16", 0]
+      "image": [
+        "16",
+        0
+      ]
     },
     "class_type": "ImageScale",
-    "_meta": { "title": "Scale to output tile size" }
+    "_meta": {
+      "title": "Scale to output tile size"
+    }
   },
   "18": {
-    "inputs": { "images": ["17", 0] },
+    "inputs": {
+      "images": [
+        "17",
+        0
+      ]
+    },
     "class_type": "PreviewImage",
-    "_meta": { "title": "output_final" }
+    "_meta": {
+      "title": "output_final"
+    }
   }
 }

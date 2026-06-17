@@ -2,7 +2,7 @@
   "10": {
     "inputs": {
       "images": [
-        "124",
+        "310",
         0
       ]
     },
@@ -13,7 +13,7 @@
   },
   "61": {
     "inputs": {
-      "value": "a candid photograph taken with a 35mm lens, natural indoor lighting, skin with visible pores and texture, detailed anatomy, 8k, high detail, photorealistic, portrait, only head, young woman, 23 years old, petite build, fair skin, long ash blonde hair, green eyes, large breasts, red lips, innocent yet seductive expression, slightly dumbfounded look"
+      "value": ""
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -22,7 +22,7 @@
   },
   "63": {
     "inputs": {
-      "value": "blurry, low resolution, bad anatomy, deformed, distorted, ugly,"
+      "value": ""
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -31,7 +31,7 @@
   },
   "69": {
     "inputs": {
-      "value": 4545435351
+      "value": 0
     },
     "class_type": "PrimitiveInt",
     "_meta": {
@@ -297,7 +297,7 @@
   },
   "302": {
     "inputs": {
-      "clip_name": "",
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
       "type": "flux2",
       "device": "default"
     },
@@ -337,7 +337,7 @@
   },
   "305": {
     "inputs": {
-      "unet_name": "",
+      "unet_name": "Flux.2-9B-FluxtraitV2.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
@@ -347,7 +347,7 @@
   },
   "308": {
     "inputs": {
-      "gguf_name": ""
+      "gguf_name": "Flux.2-9B-Q8.gguf"
     },
     "class_type": "LoaderGGUF",
     "_meta": {
@@ -369,6 +369,25 @@
     "class_type": "Switch any [Crystools]",
     "_meta": {
       "title": "safetensors_gguf"
+    }
+  },
+  "310": {
+    "inputs": {
+      "method": "mkl",
+      "strength": 0.5,
+      "multithread": true,
+      "image_target": [
+        "124",
+        0
+      ],
+      "image_ref": [
+        "304",
+        0
+      ]
+    },
+    "class_type": "ColorMatchV2",
+    "_meta": {
+      "title": "ColorMatchV2"
     }
   },
   "276:119": {

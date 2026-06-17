@@ -10,9 +10,17 @@ function readHashTab(): TabId {
   return isTabId(raw) ? raw : 'characters'
 }
 
+// Verfügbare UI-Sprachen (es existiert nur de.json; Englisch = Quelle).
+const UI_LANGS = [
+  { v: 'de', l: 'Deutsch' },
+  { v: 'en', l: 'English' },
+]
+
 export default function App() {
-  const { t } = useI18n()
+  const { t, lang, setLang } = useI18n()
   const { user, logout } = useAuth()
+  // Aktuelle Sprache immer als Option zeigen (z.B. Browser-Default 'fr').
+  const langOpts = UI_LANGS.some((o) => o.v === lang) ? UI_LANGS : [{ v: lang, l: lang }, ...UI_LANGS]
   const [active, setActive] = useState<TabId>(readHashTab)
 
   useEffect(() => {
@@ -37,6 +45,20 @@ export default function App() {
         <h1>{t('Game Admin')}</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           <GenerationIndicator />
+          <select
+            className="ga-input"
+            style={{ width: 'auto', padding: '3px 8px', fontSize: '0.85em' }}
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+            title={t('Language')}
+            aria-label={t('Language')}
+          >
+            {langOpts.map((o) => (
+              <option key={o.v} value={o.v}>
+                {o.l}
+              </option>
+            ))}
+          </select>
           {user ? <span style={{ opacity: 0.7, fontSize: '0.85em' }}>{user.username}</span> : null}
           <button className="ga-btn ga-btn-sm" onClick={() => { void logout() }}>{t('Logout')}</button>
         </div>

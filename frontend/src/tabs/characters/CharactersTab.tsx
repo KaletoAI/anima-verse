@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -21,6 +21,7 @@ import { GalleryTab } from './GalleryTab'
 import { ExpressionsTab } from './ExpressionsTab'
 import { type TmplSection } from './TemplateSectionForm'
 import { TemplateTab } from './TemplateTab'
+import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from './TemplateField'
 import { SecretsEditor } from './SecretsEditor'
 import { SkillsTab } from './SkillsTab'
@@ -149,6 +150,7 @@ export function CharactersTab() {
   // Aufgelöstes Template des gewählten Characters — Quelle der generischen
   // Feld-Sektionen (Identity/Appearance/Behavior/…).
   const [template, setTemplate] = useState<{ sections?: TmplSectionRaw[]; tabs?: TmplTabRaw[] } | null>(null)
+  const [templateId, setTemplateId] = useState<string>('')
   // Dynamic TTS option lists (Others tab) — loaded once on mount.
   const [ttsVoices, setTtsVoices] = useState<Array<{ value: string; label: string }>>([])
   const [ttsSpeakers, setTtsSpeakers] = useState<Array<{ value: string; label: string }>>([])
@@ -223,6 +225,7 @@ export function CharactersTab() {
       setCurrentFeeling('')
       setDraft(null)
       setTemplate(null)
+      setTemplateId('')
       if (!name) return
       try {
         const [loc, feel, cfgResp, profResp] = await Promise.all([
@@ -237,6 +240,7 @@ export function CharactersTab() {
         setCfg(config)
         // Template laden (generische Feld-Sektionen)
         const tmplId = String(profResp.profile?.template || '')
+        setTemplateId(tmplId)
         if (tmplId) {
           apiGet<{ sections?: TmplSectionRaw[]; tabs?: TmplTabRaw[] }>(`/templates/${encodeURIComponent(tmplId)}`)
             .then((tmpl) => setTemplate(tmpl))
@@ -381,32 +385,39 @@ export function CharactersTab() {
       .map((tb) => ({ id: `tab:${tb.id}`, label: tmplText(tb, 'label', lang) || tb.id, tab: tb }))
   }, [template, lang])
 
-  // Feld-Tabs zuerst, dann die Spezial-Tabs. „Image" wird direkt hinter den
-  // „Aussehen"-Tab eingefügt (Wunsch: Reiter Bild hinter Reiter Aussehen).
+  // Reihenfolge: Feld-Tabs (General/Aussehen), dann direkt Image · Wardrobe ·
+  // Secrets, dann die restlichen Feld-Tabs (Configuration) und Spezial-Tabs.
+  // Wunsch: Bild hinter Aussehen, Garderobe+Secrets zwischen Bild und Config.
   const subTabs = useMemo(() => {
+    const afterAussehen = [
+      { id: 'image', label: 'Image' },
+      { id: 'wardrobe', label: 'Wardrobe' },
+      { id: 'secrets', label: 'Secrets' },
+    ]
+    const placed = new Set(afterAussehen.map((t) => t.id))
     const out: Array<{ id: string; label: string }> = []
-    let imagePlaced = false
+    let inserted = false
     for (const ft of fieldTabs) {
       out.push({ id: ft.id, label: ft.label })
       if (ft.tab.id === 'aussehen') {
-        out.push({ id: 'image', label: 'Image' })
-        imagePlaced = true
+        out.push(...afterAussehen)
+        inserted = true
       }
     }
-    if (!imagePlaced) out.push({ id: 'image', label: 'Image' })
-    out.push(...SPECIAL_TABS)
+    if (!inserted) out.push(...afterAussehen)
+    out.push(...SPECIAL_TABS.filter((s) => !placed.has(s.id)))
     return out
   }, [fieldTabs])
 
-  // Beim Character-Wechsel einmalig auf den ersten Feld-Tab (z.B. „General")
-  // springen, sobald das Template geladen ist — statt auf „Current state".
-  const autoTabFor = useRef<string>('')
+  // Den gewählten Reiter beim Character-Wechsel BEHALTEN. Nur dann auf den
+  // ersten Feld-Tab springen, wenn der aktuelle Reiter für diesen Character
+  // gar nicht existiert (z.B. Erst-Laden mit Default 'general', oder das neue
+  // Template hat diesen Tab nicht).
   useEffect(() => {
-    if (selected && fieldTabs.length && autoTabFor.current !== selected) {
-      autoTabFor.current = selected
+    if (fieldTabs.length && !subTabs.some((s) => s.id === subTab)) {
       setSubTab(fieldTabs[0].id)
     }
-  }, [selected, fieldTabs])
+  }, [subTabs, subTab, fieldTabs])
 
   // Dynamische Optionsquellen für Template-Selects.
   const dynamicData: DynamicData = useMemo(
@@ -469,6 +480,32 @@ export function CharactersTab() {
               ))}
             </select>
           </Field>
+        </div>
+        <div className="ga-form-row">
+          <Field
+            label={t('Mood')}
+            hint={
+              currentFeeling
+                ? t('Currently: {name}').replace('{name}', currentFeeling)
+                : t('Canonical mood id from shared/config/moods.json. Empty clears the mood.')
+            }
+          >
+            <select
+              className="ga-input"
+              value={draft.feeling}
+              onChange={(e) => setDraft({ ...draft, feeling: e.target.value })}
+            >
+              <option value="">— {t('none')} —</option>
+              {draft.feeling && !MOODS.some((m) => m.id === draft.feeling) ? (
+                <option value={draft.feeling}>{draft.feeling}</option>
+              ) : null}
+              {MOODS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </Field>
           <Field
             label={t('Activity')}
             hint={
@@ -494,32 +531,6 @@ export function CharactersTab() {
                     </option>
                   ))}
                 </optgroup>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <div className="ga-form-row">
-          <Field
-            label={t('Mood')}
-            hint={
-              currentFeeling
-                ? t('Currently: {name}').replace('{name}', currentFeeling)
-                : t('Canonical mood id from shared/config/moods.json. Empty clears the mood.')
-            }
-          >
-            <select
-              className="ga-input"
-              value={draft.feeling}
-              onChange={(e) => setDraft({ ...draft, feeling: e.target.value })}
-            >
-              <option value="">— {t('none')} —</option>
-              {draft.feeling && !MOODS.some((m) => m.id === draft.feeling) ? (
-                <option value={draft.feeling}>{draft.feeling}</option>
-              ) : null}
-              {MOODS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
               ))}
             </select>
           </Field>
@@ -598,6 +609,11 @@ export function CharactersTab() {
                   />
                 </>
               }
+            />
+            <TemplateSelector
+              character={selected}
+              templateId={templateId}
+              onSwitched={() => reloadCurrent(selected)}
             />
             <nav className="ga-subtabs">
               {subTabs.map((tab) => (

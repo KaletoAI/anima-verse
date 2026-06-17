@@ -648,6 +648,34 @@ html, * {
   flex: 0 0 auto;
 }
 
+/* Template-Auswahl-Leiste über der Sub-Tab-Navigation. */
+.ga-template-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+.ga-template-bar-label {
+  font-size: 12px;
+  color: var(--text-muted, #8b949e);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.ga-template-diff {
+  flex: 1 1 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+}
+.ga-template-diff-title { font-weight: 600; margin-bottom: 6px; }
+.ga-template-diff-head { margin-top: 6px; color: var(--text-muted, #8b949e); }
+.ga-template-diff-add { color: #3fb950; }
+.ga-template-diff-rem { color: #e05656; text-decoration: line-through; opacity: 0.85; }
+
 /* Template-Tab: Spalten nebeneinander (column-Bereich des Tabs), je Spalte die
    Sections gestapelt, Felder untereinander. */
 .tpl-tab-cols {
@@ -684,6 +712,32 @@ html, * {
   color: #c9d1d9;
   white-space: pre-wrap;
 }
+/* Bild + Generieren-Button unter einem Aussehen-Prompt-Feld. */
+.tpl-field-image {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.tpl-field-image img {
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: rgba(255, 255, 255, 0.04);
+  object-fit: contain;
+}
+.tpl-field-image-empty {
+  width: 100%;
+  padding: 28px 8px;
+  text-align: center;
+  color: var(--text-muted, #8b949e);
+  font-size: 12px;
+  border: 1px dashed var(--border, #30363d);
+  border-radius: 8px;
+}
+
 .tpl-token-preview-label {
   display: block;
   font-size: 10px;

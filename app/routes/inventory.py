@@ -897,11 +897,12 @@ async def apply_outfit_set_route(character_name: str, request: Request) -> Dict[
     from app.models.character import get_character_outfits
     from app.models.inventory import apply_equipped_pieces, get_item
     body = await request.json()
-    user_id = (body.get("user_id") or "").strip()
     outfit_id = (body.get("outfit_id") or "").strip()
     name = (body.get("name") or "").strip()
-    if not user_id or (not outfit_id and not name):
-        raise HTTPException(status_code=400, detail="user_id + outfit_id|name required")
+    # user_id wird hier nicht verwendet — kein Pflicht-Guard (konsistent zu
+    # equip/unequip). Admin-Garderobe ruft ohne user_id.
+    if not outfit_id and not name:
+        raise HTTPException(status_code=400, detail="outfit_id or name required")
 
     outfits = get_character_outfits(character_name)
     target = None

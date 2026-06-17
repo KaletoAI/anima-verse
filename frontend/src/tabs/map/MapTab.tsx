@@ -73,13 +73,26 @@ export function MapTab() {
   // Bild-Generierung aus dem Cell-image-Dialog: ✨ = normaler ImageGenDialog,
   // ⊞ = festverdrahteter FitDialog (Workflow/Backend aus der Config).
   const [gen, setGen] = useState<{ loc: Location; type: 'map_2d' } | null>(null)
-  const [fit, setFit] = useState<{ loc: Location; prompt: string } | null>(null)
+  const [fit, setFit] = useState<{ loc: Location } | null>(null)
   const [edge, setEdge] = useState<{ loc: Location; available: Record<string, string> } | null>(null)
-  const [mapfit, setMapfit] = useState({ target: '' })
+  // Inpaint-Workflows (category=="inpaint") fuer die Auswahl in Fit/Edge + die
+  // mapfit-Default-Prompts pro Familie (belegen das Prompt-Feld vor).
+  const [inpaintWfs, setInpaintWfs] = useState<{ name: string; spec: string; family: string; prompt: string; gray: boolean }[]>([])
+  const [mapfitPrompts, setMapfitPrompts] = useState<Record<string, string>>({})
   useEffect(() => {
-    apiGet<{ mapfit_imagegen_default?: string }>('/world/imagegen-options')
+    apiGet<{
+      mapfit_prompts?: Record<string, string>
+      options?: Array<{ type?: string; name?: string; category?: string; image_family?: string; prompt?: string; inpaint_gray?: boolean }>
+    }>('/world/imagegen-options')
       .then((d) => {
-        setMapfit({ target: d.mapfit_imagegen_default || '' })
+        setMapfitPrompts(d.mapfit_prompts || {})
+        const inp = (d.options || [])
+          .filter((o) => o.type === 'workflow' && o.category === 'inpaint' && o.name)
+          .map((o) => ({
+            name: o.name as string, spec: `workflow:${o.name}`,
+            family: o.image_family || '', prompt: o.prompt || '', gray: !!o.inpaint_gray,
+          }))
+        setInpaintWfs(inp)
       })
       .catch(() => { /* ignore */ })
   }, [])
@@ -159,8 +172,10 @@ export function MapTab() {
   // aus der Config; hier nur prompt_type/fit + der editierte Richtungs-Prompt.
   // settings_applied=true: Server hängt weder Stil-Suffix noch Hinweis erneut an.
   const submitFit = useCallback(
-    async (prompt: string, loc: Location) => {
-      const body = { prompt_type: 'map_2d', prompt, fit_neighbors: true, settings_applied: true }
+    async (prompt: string, workflow: string, loc: Location) => {
+      const body: Record<string, unknown> = { prompt_type: 'map_2d', prompt, fit_neighbors: true, settings_applied: true }
+      // Gewaehlter Inpaint-Workflow (category=="inpaint"); leer = Server-Default.
+      if (workflow) body.workflow = workflow
       void apiPost(`/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
         .then(() => toast(t('Image queued')))
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
@@ -171,10 +186,11 @@ export function MapTab() {
   // ⧉ Kanten angleichen — gleicher mapfit-Workflow, aber Rahmen-Maske + Übergangs-
   // Prompt nur für die gewählten Seiten. Mitte = bestehendes Tile.
   const submitEdge = useCallback(
-    async (sides: string[], prompt: string, loc: Location) => {
-      const body = {
+    async (sides: string[], prompt: string, workflow: string, loc: Location) => {
+      const body: Record<string, unknown> = {
         prompt_type: 'map_2d', prompt, edge_match: true, edge_sides: sides, settings_applied: true,
       }
+      if (workflow) body.workflow = workflow
       void apiPost(`/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
         .then(() => toast(t('Image queued')))
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
@@ -523,16 +539,11 @@ export function MapTab() {
                             <button
                               type="button"
                               className="ga-btn ga-btn-sm"
-                              onClick={async () => {
-                                // Nachbar-Hinweis serverseitig holen (north/south/…),
-                                // als editierbaren Prompt in den Fit-Dialog.
-                                let p = ''
-                                try {
-                                  const r = await apiGet<{ prompt?: string }>(
-                                    `/world/locations/${encodeURIComponent(picker.id)}/fit-prompt`)
-                                  p = r.prompt || ''
-                                } catch { /* ignore */ }
-                                setFit({ loc: picker, prompt: p })
+                              onClick={() => {
+                                // Dialog SOFORT oeffnen — der (langsame, vision-
+                                // basierte) Terrain-Hint wird im Dialog asynchron
+                                // nachgeladen, sonst wirkt es, als ginge er nicht auf.
+                                setFit({ loc: picker })
                               }}
                               title={t('Fit to neighbors: inpaint the tile so its edges continue the adjacent map cells')}
                             >
@@ -616,10 +627,11 @@ export function MapTab() {
       {fit ? (
         <FitDialog
           title={t('Fit to neighbors — {name}').replace('{name}', fit.loc.name)}
-          info={`${t('Target')}: ${mapfit.target || t('auto')}`}
+          locId={fit.loc.id}
           canvasUrl={`/world/locations/${encodeURIComponent(fit.loc.id)}/fit-canvas`}
-          defaultPrompt={fit.prompt}
-          onSubmit={(prompt) => submitFit(prompt, fit.loc)}
+          workflows={inpaintWfs}
+          mapfitPrompts={mapfitPrompts}
+          onSubmit={(prompt, workflow) => submitFit(prompt, workflow, fit.loc)}
           onClose={() => setFit(null)}
         />
       ) : null}
@@ -630,8 +642,9 @@ export function MapTab() {
           locName={edge.loc.name}
           available={edge.available}
           rotation={edge.loc.map_rotation_2d || 0}
-          info={`${t('Target')}: ${mapfit.target || t('auto')}`}
-          onSubmit={(sides, prompt) => submitEdge(sides, prompt, edge.loc)}
+          workflows={inpaintWfs}
+          mapfitPrompts={mapfitPrompts}
+          onSubmit={(sides, prompt, workflow) => submitEdge(sides, prompt, workflow, edge.loc)}
           onClose={() => setEdge(null)}
         />
       ) : null}
