@@ -407,15 +407,22 @@ def import_character_from_zip(
             item_rows = []
         if isinstance(item_rows, list) and item_rows:
             from app.core.content_io import _existing_item_ids, _item_dir_for
+            from app.models.inventory import _save_items
             existing = _existing_item_ids()
-            new_ids: List[str] = []
-            with transaction() as t_conn:
-                for it in item_rows:
-                    iid = (it.get("id") or "").strip()
-                    if not iid or iid in existing:
-                        continue
-                    if _restore_table(t_conn, "items", [it]):
-                        new_ids.append(iid)
+            # items.json holds the flattened get_item() shape (meta spread to
+            # top level, pieces -> outfit_piece, no updated_at). _save_items is
+            # the inverse writer that rebuilds the meta/pieces/slots columns and
+            # stamps created_at/updated_at — the generic _restore_table would
+            # drop those columns and fail the updated_at NOT NULL constraint.
+            # Keep original ids so outfit/inventory references stay valid.
+            new_items = [
+                it for it in item_rows
+                if (it.get("id") or "").strip()
+                and (it.get("id") or "").strip() not in existing
+            ]
+            if new_items:
+                _save_items(new_items)
+            new_ids: List[str] = [(it.get("id") or "").strip() for it in new_items]
             for iid in new_ids:
                 dest = _item_dir_for(iid, shared=False)
                 prefix = f"item_files/{iid}/"
