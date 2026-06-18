@@ -30,9 +30,8 @@ pip install -e .            # inside an activated .venv
 python queue_cli.py list|info|cancel|retry|move|priority|pause|resume|clear|stats
 # (docstring in queue_cli.py has full usage; DB path via TASK_QUEUE_DB in legacy .env)
 
-# Tests — plain pytest, no config; tests also run standalone as scripts
-./.venv/bin/python -m pytest tests/
-./.venv/bin/python tests/test_perception_earshot.py   # single test, direct
+# Tests — there is no longer a tests/ suite; the only standalone check is:
+./.venv/bin/python scripts/test_llm_tools.py   # exercises LLM tool-calling
 
 # Frontend (React/Vite, lives in frontend/)
 cd frontend
