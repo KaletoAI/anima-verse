@@ -111,6 +111,7 @@ export function TemplateTab({
   sections,
   dynamicData,
   specialSlots,
+  excludeKeys,
 }: {
   character: string
   tab: TmplTabDef
@@ -118,6 +119,8 @@ export function TemplateTab({
   dynamicData: DynamicData
   /** Render-Node je `section.special` (z.B. "placement" → Platzierungs-UI). */
   specialSlots?: Record<string, React.ReactNode>
+  /** Policy-Ausschluss einzelner Felder (z.B. Social-Zahlen im /play). */
+  excludeKeys?: string[]
 }) {
   const { t, lang } = useI18n()
   const { toast } = useToast()
@@ -204,8 +207,11 @@ export function TemplateTab({
     [character, status, t, toast, load],
   )
 
+  const ex = new Set(excludeKeys || [])
   const editableFields = (s: TmplSectionRaw): TmplFieldDef[] =>
-    (s.fields || []).filter((f) => f.editor_visible !== false && !f.source_file && visible(f.visible_when))
+    (s.fields || []).filter(
+      (f) => f.editor_visible !== false && !f.source_file && !ex.has(f.key) && visible(f.visible_when),
+    )
 
   if (!loaded) return <div className="ga-loading">{t('Loading…')}</div>
 

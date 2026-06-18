@@ -59,6 +59,7 @@ const DEFAULT_LAYOUT: Layout[] = [
   { i: 'phone', x: 41, y: 38, w: 14, h: 22, minW: 10, minH: 12 },
   { i: 'tasks', x: 24, y: 27, w: 17, h: 10, minW: 6, minH: 4 },
   { i: 'layouts', x: 24, y: 37, w: 17, h: 14, minW: 6, minH: 6 },
+  { i: 'settings', x: 14, y: 10, w: 28, h: 30, minW: 12, minH: 12 },
 ]
 
 // Default-Box je Panel-id — Quelle der Wahrheit fuer Mindest-/Anfangsgroesse.
@@ -80,12 +81,15 @@ const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | '
   { id: 'instagram', label: 'Instagram', icon: 'instagram' },
   { id: 'phone', label: 'Phone', icon: 'phone' },
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
-  { id: 'settings', label: 'Avatar', icon: 'sliders', kind: 'dialog' },
+  { id: 'settings', label: 'Avatar', icon: 'sliders' },
   { id: 'layouts', label: 'Layouts', icon: 'layouts', kind: 'dialog' },
 ]
 const ALL_PANELS = PANEL_META.map((p) => p.id)
 const GRID_PANELS = PANEL_META.filter((p) => p.kind !== 'dialog').map((p) => p.id)
 const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((p) => p.id)
+// Grid-Panel, aber NICHT default-offen (occasional, per Button geöffnet).
+const CLOSED_BY_DEFAULT = new Set(['settings'])
+const INITIAL_OPEN = GRID_PANELS.filter((id) => !CLOSED_BY_DEFAULT.has(id))
 const ICON_BY_ID: Record<string, IconName> = Object.fromEntries(
   PANEL_META.map((p) => [p.id, p.icon]))
 const LABEL_BY_ID: Record<string, string> = Object.fromEntries(
@@ -140,7 +144,7 @@ export function PlayerApp() {
   const lightbox = useLightbox()
   const { toast } = useToast()
   const [layout, setLayout] = useState<Layout[]>(DEFAULT_LAYOUT)
-  const [open, setOpen] = useState<string[]>(GRID_PANELS)  // Dialoge starten geschlossen
+  const [open, setOpen] = useState<string[]>(INITIAL_OPEN)  // Dialoge starten geschlossen
   const [autosize, setAutosize] = useState<string[]>([])  // Panels mit Höhen-Autosize
   const [iconMode, setIconMode] = useState<IconMode>('icon')      // Launcher: nur Icon vs Icon+Text
   const [toolbarAlign, setToolbarAlign] = useState<ToolbarAlign>('right')  // Launcher links/rechts
@@ -306,11 +310,11 @@ export function PlayerApp() {
 
   const resetLayout = useCallback(() => {
     layoutRef.current = DEFAULT_LAYOUT
-    openRef.current = GRID_PANELS
+    openRef.current = INITIAL_OPEN
     autosizeRef.current = []
     frozenRef.current = false
     setLayout(DEFAULT_LAYOUT)
-    setOpen(GRID_PANELS)
+    setOpen(INITIAL_OPEN)
     setAutosize([])
     setFrozen(false)  // zurück in den responsiven Modus
     persist()
@@ -560,7 +564,7 @@ export function PlayerApp() {
 
   // Z-Stacking für überlappende Fenster: zuletzt angefasstes Panel steht zuletzt
   // im DOM → vorderstes. Klick/Drag auf ein Panel holt es nach vorn.
-  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'layouts'])
+  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'settings', 'layouts'])
   const bringToFront = useCallback((id: string) => {
     setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
   }, [])
@@ -830,10 +834,20 @@ export function PlayerApp() {
     </div>
   )
 
+  const settingsPanel = (
+    <div key="settings" className="player-panel" style={{ zIndex: zOf('settings') }} onMouseDownCapture={() => bringToFront('settings')}>
+      <div className="player-panel-head">{headIcon('settings')}{t('Avatar')}{headerControls('settings', true)}</div>
+      <div className="player-panel-body" style={{ padding: 10, overflow: 'hidden' }}>
+        <AvatarSettingsPanel avatar={data?.avatar || ''} />
+      </div>
+    </div>
+  )
+
   const byId: Record<string, ReactNode> = {
     scene: scenePanel, env: envPanel, map: mapPanel, worldmap: worldMapPanel,
     tasks: tasksPanel, self: selfPanel, others: othersPanel, belongings: belongingsPanel,
     journal: journalPanel, gallery: galleryPanel, instagram: instagramPanel, phone: phonePanel,
+    settings: settingsPanel,
   }
 
   // Spaltenzahl aus gemessener Breite: colWidth ≈ CELL → quadratische Zellen.
@@ -954,7 +968,6 @@ export function PlayerApp() {
   const layoutsMeta = PANEL_META.find((p) => p.id === 'layouts')!
   const fixedCluster = (
     <>
-      {tbBtn('settings', t('Avatar'), 'sliders', open.includes('settings'), () => togglePanel('settings'))}
       {tbBtn('layouts', layoutsMeta.label, layoutsMeta.icon, open.includes('layouts'), () => togglePanel('layouts'))}
       <button onClick={toggleFreeze} aria-pressed={frozen}
         title={frozen ? t('Unfreeze layout (responsive columns)') : t('Freeze layout (scale with window)')}
@@ -1059,7 +1072,6 @@ export function PlayerApp() {
               {id === 'layouts' && (
                 <LayoutsPanel presets={presets} onSave={savePreset} onLoad={loadPreset} onDelete={deletePreset} />
               )}
-              {id === 'settings' && <AvatarSettingsPanel avatar={data?.avatar || ''} />}
             </div>
           </div>
         </div>
