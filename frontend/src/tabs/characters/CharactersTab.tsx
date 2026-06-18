@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
+import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
@@ -166,6 +166,8 @@ export function CharactersTab() {
   const [homeLoading, setHomeLoading] = useState(false)
   // "New character" dialog — open state only; the dialog manages its own form.
   const [creating, setCreating] = useState(false)
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -261,11 +263,32 @@ export function CharactersTab() {
 
   const onSelect = useCallback(
     (name: string) => {
+      setConfirmDel(false)
       setSelected(name)
       reloadCurrent(name)
     },
     [reloadCurrent],
   )
+
+  // Character vollständig löschen (DELETE /characters/{name}). In-App-Bestätigung.
+  const deleteCharacter = useCallback(async () => {
+    if (!selected || deleting) return
+    setDeleting(true)
+    try {
+      await apiDelete(`/characters/${encodeURIComponent(selected)}`)
+      toast(t('Character deleted'))
+      setConfirmDel(false)
+      setSelected('')
+      setCurrent(null)
+      setDraft(null)
+      setTemplate(null)
+      loadCharacters().then(setCharacters).catch(() => {})
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setDeleting(false)
+    }
+  }, [selected, deleting, t, toast])
 
   const selectedLocation: LocationRef | undefined = useMemo(
     () => locations.find((l) => l.id === draft?.locationId),
@@ -607,6 +630,23 @@ export function CharactersTab() {
                     entityId={selected}
                     defaultName={selected}
                   />
+                  {confirmDel ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: '0.82em', color: '#e0a356' }}>
+                        {t('Delete {name}? DB, images, memories — irreversible.').replace('{name}', selected)}
+                      </span>
+                      <button className="ga-btn ga-btn-sm ga-btn-danger" disabled={deleting} onClick={deleteCharacter}>
+                        {deleting ? t('Deleting…') : t('Delete')}
+                      </button>
+                      <button className="ga-btn ga-btn-sm" disabled={deleting} onClick={() => setConfirmDel(false)}>
+                        {t('Cancel')}
+                      </button>
+                    </span>
+                  ) : (
+                    <button className="ga-btn ga-btn-sm ga-btn-danger" onClick={() => setConfirmDel(true)}>
+                      {t('Delete character')}
+                    </button>
+                  )}
                 </>
               }
             />

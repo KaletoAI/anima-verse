@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -1069,6 +1069,28 @@ function LocationGallery({
     [locationId, reload, t, toast],
   )
 
+  // Hintergrundbild für diesen Ort (optional Raum, wenn roomFilter gesetzt)
+  // hochladen statt generieren.
+  const uploadRef = useRef<HTMLInputElement>(null)
+  const uploadBg = useCallback(async (file: File) => {
+    if (!file) return
+    setBusy('upload')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      if (roomFilter) fd.append('room_id', roomFilter)
+      await fetch(`/world/locations/${encodeURIComponent(locationId)}/background/upload`, {
+        method: 'POST', body: fd, credentials: 'same-origin',
+      })
+      await reload()
+      toast(t('Saved'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(null)
+    }
+  }, [locationId, roomFilter, reload, t, toast])
+
   const generatePanel = (
     <div className="ga-gallery-generate">
       <button
@@ -1097,6 +1119,21 @@ function LocationGallery({
           🟦 {t('Generate 2D icon')}
         </button>
       ) : null}
+      <button
+        className="ga-btn ga-btn-sm"
+        disabled={!!busy}
+        onClick={() => uploadRef.current?.click()}
+        title={roomFilter ? t('Upload a background image for this room.') : t('Upload a background image for this place.')}
+      >
+        ⬆ {t('Upload')}
+      </button>
+      <input
+        ref={uploadRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadBg(f); e.target.value = '' }}
+      />
       <button
         className="ga-btn ga-btn-sm"
         disabled={!!busy}

@@ -1172,6 +1172,49 @@ async def set_location_map_rotation_route(location_id: str, request: Request) ->
     return {"status": "success", "location": loc}
 
 
+@router.post("/locations/{location_name}/background/upload")
+async def upload_location_background(location_name: str, request: Request) -> Dict[str, Any]:
+    """Lädt ein Hintergrundbild für einen Ort (optional Raum) hoch.
+
+    Multipart: file (Bild) + optional room_id. Speichert in die Galerie des
+    Orts, registriert es als Background und mappt es ggf. auf den Raum —
+    derselbe Speicher-/Registrierpfad wie die Generierung.
+    """
+    from app.models.world import (get_gallery_dir, toggle_background_image,
+                                   set_gallery_image_room)
+    from app.core.timeutils import utc_now
+    from pathlib import Path as _Path
+
+    form = await request.form()
+    file = form.get("file")
+    room_id = (form.get("room_id") or "").strip() if isinstance(form.get("room_id"), str) else ""
+    if not file:
+        raise HTTPException(status_code=400, detail="file fehlt")
+
+    location = resolve_location(location_name)
+    if not location:
+        raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+    loc_id = location.get("id") or location_name
+
+    fname = (getattr(file, "filename", "") or "").lower()
+    ext = _Path(fname).suffix or ".png"
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        raise HTTPException(status_code=400, detail="Format nicht unterstützt")
+
+    gallery_dir = get_gallery_dir(loc_id)
+    gallery_dir.mkdir(parents=True, exist_ok=True)
+    image_name = f"{loc_id}_{utc_now().strftime('%Y%m%d%H%M%S')}{ext}"
+    (gallery_dir / image_name).write_bytes(await file.read())
+
+    toggle_background_image(loc_id, image_name)
+    if room_id:
+        try:
+            set_gallery_image_room(location_name, image_name, room_id)
+        except Exception as e:
+            logger.debug("set_gallery_image_room beim Upload fehlgeschlagen: %s", e)
+    return {"status": "success", "image": image_name, "room_id": room_id}
+
+
 @router.post("/locations/{location_name}/background")
 async def generate_location_background(location_name: str, request: Request) -> Dict[str, Any]:
     """Generiert ein Hintergrundbild fuer einen Ort per Image-Backend (per ID oder Name)."""

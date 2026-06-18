@@ -61,6 +61,30 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     }, 3000)
   }, [kind, loadProfile])
 
+  const fileRef = useRef<HTMLInputElement>(null)
+  // Profilbild hochladen: Datei → /characters/{n}/images (multipart) → als
+  // Profilbild setzen → /characters/{n}/profile-image/{filename}.
+  const upload = useCallback(async (file: File) => {
+    if (!file || busy) return
+    setBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const r = await fetch(`/characters/${enc}/images`, { method: 'POST', body: fd, credentials: 'same-origin' })
+      const d = await r.json()
+      if (d?.filename) {
+        await apiPost(`/characters/${enc}/profile-image/${encodeURIComponent(d.filename)}`, {})
+      }
+      await loadProfile()
+      setBust((b) => b + 1)
+      toast(t('Saved'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, enc, loadProfile, t, toast])
+
   const generate = useCallback(async () => {
     if (busy) return
     setBusy(true)
@@ -95,9 +119,29 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
       ) : (
         <div className="tpl-field-image-empty">{t('No image yet')}</div>
       )}
-      <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={generate}>
-        {busy ? t('Generating…') : t('Generate')}
-      </button>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={generate}>
+          {busy ? t('Generating…') : t('Generate')}
+        </button>
+        {kind === 'profile' ? (
+          <>
+            <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => fileRef.current?.click()}>
+              {t('Upload')}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) upload(f)
+                e.target.value = ''
+              }}
+            />
+          </>
+        ) : null}
+      </div>
     </div>
   )
 }

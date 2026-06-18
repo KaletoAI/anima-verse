@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
+import { apiGet, apiPost, apiDelete } from '../../lib/api'
 
 // Anker-Positionen (x%, y%) im Bild-Koordinatensystem (silhouette.svg).
 const SLOT_ANCHOR: Record<string, [number, number]> = {
@@ -53,22 +53,21 @@ const EMPTY: Belongings = {
   outfit_sets: [], max_slots: 0,
 }
 
-type Cat = 'all' | 'outfit' | 'consumable' | 'spell' | 'other'
-function catOf(it: Item): Cat {
-  if (it.is_spell) return 'spell'
-  if (it.is_outfit) return 'outfit'
-  if (it.consumable) return 'consumable'
-  return 'other'
-}
-const CAT_EMOJI: Record<Cat, string> = { all: '🎒', outfit: '👕', consumable: '🧪', spell: '✨', other: '📦' }
-
 export function WardrobeTab({ character }: { character: string }) {
   const { t } = useI18n()
   const enc = encodeURIComponent(character)
   const [data, setData] = useState<Belongings>(EMPTY)
-  const [cat, setCat] = useState<Cat>('all')
   const [slotFilter, setSlotFilter] = useState('')
   const [busy, setBusy] = useState(false)
+  // Item-Vergabe (Items-an-Character): verfügbare Item-Defs + Auswahl.
+  const [allItems, setAllItems] = useState<Array<{ item_id: string; name: string; category?: string }>>([])
+  const [pickId, setPickId] = useState('')
+  const [pickQty, setPickQty] = useState(1)
+  useEffect(() => {
+    apiGet<{ items?: Array<{ item_id: string; name: string; category?: string }> }>('/inventory/items')
+      .then((d) => setAllItems(d.items || []))
+      .catch(() => setAllItems([]))
+  }, [])
   const figRef = useRef<HTMLDivElement>(null)
   const [figH, setFigH] = useState(0)
   const avatarReady = data.avatar
@@ -96,12 +95,30 @@ export function WardrobeTab({ character }: { character: string }) {
     } catch { /* ignore */ } finally { setBusy(false) }
   }, [busy, load])
 
+  // Item an den Character geben (POST /inventory/characters/{c}).
+  const grant = useCallback(async () => {
+    if (!pickId || busy) return
+    await act(`/inventory/characters/${enc}`, { item_id: pickId, quantity: pickQty })
+    setPickId('')
+    setPickQty(1)
+  }, [pickId, pickQty, busy, act, enc])
+
+  // Item komplett aus dem Inventar entfernen.
+  const removeItem = useCallback(async (itemId: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await apiDelete(`/inventory/characters/${enc}/${encodeURIComponent(itemId)}`)
+      await load()
+    } catch { /* ignore */ } finally { setBusy(false) }
+  }, [busy, enc, load])
+
+  // Garderobe zeigt NUR Outfit-Pieces (keine Consumables/Spells/sonstigen Items).
   const filtered = useMemo(() => {
-    let list = data.items
-    if (cat !== 'all') list = list.filter((it) => catOf(it) === cat)
-    if (cat === 'outfit' && slotFilter) list = list.filter((it) => it.slots.includes(slotFilter))
+    let list = data.items.filter((it) => it.is_outfit)
+    if (slotFilter) list = list.filter((it) => it.slots.includes(slotFilter))
     return list
-  }, [data.items, cat, slotFilter])
+  }, [data.items, slotFilter])
 
   const slotOptions = useMemo(() => {
     const s = new Set<string>()
@@ -113,22 +130,28 @@ export function WardrobeTab({ character }: { character: string }) {
     return <div className="ga-form"><div className="ga-placeholder">{t('No character selected')}</div></div>
   }
 
-  const cats: Cat[] = ['all', 'outfit', 'consumable', 'spell', 'other']
   const markerSize = Math.round(Math.max(22, Math.min(80, figH * 0.11)))
   const figureSlots = data.slot_order.filter((s) => SLOT_ANCHOR[s])
 
   return (
     <div style={{ display: 'flex', gap: 12, height: '100%', minHeight: 0, fontSize: '0.9em' }}>
-      {/* ── Links: Filter + Liste ── */}
+      {/* ── Links: Item-Vergabe + Slot-Filter + Outfit-Liste ── */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {cats.map((c) => (
-            <button key={c} onClick={() => { setCat(c); if (c !== 'outfit') setSlotFilter('') }} style={chip(cat === c)}>
-              {CAT_EMOJI[c]} {t(c === 'all' ? 'All' : c === 'outfit' ? 'Outfit' : c === 'consumable' ? 'Consumable' : c === 'spell' ? 'Spell' : 'Other')}
-            </button>
-          ))}
+        {/* Items an den Character geben */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <select className="ga-input" style={{ flex: 1, minWidth: 0, padding: '3px 8px', fontSize: '0.85em' }}
+            value={pickId} disabled={busy} onChange={(e) => setPickId(e.target.value)}>
+            <option value="">{t('Add item to character…')}</option>
+            {allItems.map((it) => (
+              <option key={it.item_id} value={it.item_id}>{it.name}{it.category ? ` · ${it.category}` : ''}</option>
+            ))}
+          </select>
+          <input className="ga-input" type="number" min={1} max={99} value={pickQty} disabled={busy}
+            style={{ width: 56, padding: '3px 6px', fontSize: '0.85em' }}
+            onChange={(e) => setPickQty(Math.max(1, Number(e.target.value) || 1))} />
+          <button className="ga-btn ga-btn-sm" disabled={!pickId || busy} onClick={grant}>+ {t('Add')}</button>
         </div>
-        {cat === 'outfit' && slotOptions.length > 0 && (
+        {slotOptions.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             <button onClick={() => setSlotFilter('')} style={chip(!slotFilter, true)}>{t('All slots')}</button>
             {slotOptions.map((s) => (
@@ -139,14 +162,9 @@ export function WardrobeTab({ character }: { character: string }) {
           </div>
         )}
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {filtered.length === 0 && <div className="ga-placeholder">{t('Nothing here')}</div>}
+          {filtered.length === 0 && <div className="ga-placeholder">{t('No outfit pieces')}</div>}
           {filtered.map((it) => {
-            const fallback = it.is_spell
-              ? (it.incantation ? `„${it.incantation}"` : t('Spell'))
-              : it.is_outfit
-                ? it.slots.map((s) => data.slot_labels[s] || s).join(', ')
-                : it.consumable ? t('Consumable') : (it.category || t('Other'))
-            const sub = it.description || fallback
+            const sub = it.description || it.slots.map((s) => data.slot_labels[s] || s).join(', ')
             const rarityColor = RARITY_COLOR[it.rarity] || RARITY_COLOR.common
             return (
               <div key={it.item_id} title={it.rarity || 'common'} style={{
@@ -154,7 +172,7 @@ export function WardrobeTab({ character }: { character: string }) {
                 borderRadius: 6, borderLeft: `3px solid ${rarityColor}`,
                 background: it.equipped ? 'rgba(120,170,255,0.14)' : 'rgba(255,255,255,0.04)',
               }}>
-                <ItemIcon itemId={it.item_id} hasImage={it.image} emoji={CAT_EMOJI[catOf(it)]} size={40} />
+                <ItemIcon itemId={it.item_id} hasImage={it.image} emoji="👕" size={40} />
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {it.name}{it.quantity > 1 ? <span style={{ opacity: 0.6 }}> ×{it.quantity}</span> : null}
@@ -164,11 +182,11 @@ export function WardrobeTab({ character }: { character: string }) {
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>
                   )}
                 </div>
-                {it.is_outfit && (
-                  it.equipped
-                    ? <span style={{ fontSize: '0.72em', opacity: 0.6 }}>{t('worn')}</span>
-                    : <button disabled={busy} style={btn()} onClick={() => act(`/inventory/characters/${enc}/equip`, { item_id: it.item_id })}>{t('Wear')}</button>
-                )}
+                {it.equipped
+                  ? <span style={{ fontSize: '0.72em', opacity: 0.6 }}>{t('worn')}</span>
+                  : <button disabled={busy} style={btn()} onClick={() => act(`/inventory/characters/${enc}/equip`, { item_id: it.item_id })}>{t('Wear')}</button>}
+                <button disabled={busy} title={t('Remove from inventory')} style={{ ...btn(), borderColor: 'rgba(224,86,86,0.4)' }}
+                  onClick={() => removeItem(it.item_id)}>✕</button>
               </div>
             )
           })}
@@ -218,7 +236,7 @@ export function WardrobeTab({ character }: { character: string }) {
           </div>
         </div>
         <div style={{ opacity: 0.5, fontSize: '0.72em', textAlign: 'center' }}>
-          {data.items.length}/{data.max_slots || '∞'} {t('items')}
+          {data.items.filter((it) => it.is_outfit).length} {t('outfit pieces')}
         </div>
       </div>
     </div>
