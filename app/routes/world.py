@@ -1998,6 +1998,10 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             # Ueber die GPU-Provider-Queue generieren — serialisiert pro Backend
             # (nie zwei parallel) und aktiviert den Track erst, wenn der Kanal die
             # Arbeit aufnimmt; wartende World-Gens bleiben so korrekt "pending".
+            # Kontext fuers ZENTRALE Logging in backend.generate() (final_prompt,
+            # Backend, Model, LoRAs, Refs, Dauer setzt generate() selbst).
+            _log_meta = {"agent_name": location.get("name", location_name),
+                         "original_prompt": prompt, "auto_enhance": False}
             def _op(b):
                 def _gen():
                     try:
@@ -2005,7 +2009,7 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                         _tq.track_activate(_track_id, queue_name=match_queue_name(b.name) or "", provider=b.name)
                     except Exception:
                         pass
-                    return b.generate(full_prompt, negative, params)
+                    return b.generate(full_prompt, negative, params, log_meta=_log_meta)
                 if getattr(b, "api_type", "") in ("comfyui", "a1111"):
                     from app.core.llm_queue import get_llm_queue, Priority as _P
                     return get_llm_queue().submit_gpu_task(
@@ -2137,32 +2141,8 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             logger.info("Bild generiert: %s (%s)/%s%s", location['name'], loc_id, image_name,
                         f" room={room_id}" if room_id else "")
 
-            # Image-Prompt in JSONL loggen
-            try:
-                from app.utils.image_prompt_logger import log_image_prompt
-                from app.core.config import get_lora_trigger_words
-                _model_name = (getattr(backend, 'last_used_checkpoint', '')
-                               or getattr(backend, 'model', '')
-                               or getattr(backend, 'checkpoint', '') or '')
-                # final_prompt = WAS WIRKLICH an die Engine ging: das/die LoRA-
-                # Aktivierungswort(e) werden in backend.generate() vorangestellt,
-                # also hier fuer den Log denselben Schritt nachbilden.
-                _tw = get_lora_trigger_words(_loras_used)
-                _final_logged = (", ".join(_tw) + ", " + full_prompt) if _tw else full_prompt
-                log_image_prompt(
-                    agent_name=location.get("name", location_name),
-                    original_prompt=prompt,
-                    final_prompt=_final_logged,
-                    negative_prompt=negative,
-                    backend_name=backend.name,
-                    backend_type=backend.api_type,
-                    model=_model_name,
-                    auto_enhance=False,
-                    duration_s=_gen_duration,
-                    loras=params.get("lora_inputs", []),
-                    reference_images=params.get("reference_images", {}))
-            except Exception as _log_err:
-                logger.error("Image-Logging Fehler: %s", _log_err)
+            # Image-Prompt-Logging passiert jetzt ZENTRAL in backend.generate()
+            # (mit dem finalen, trigger-injizierten Prompt) — via log_meta unten.
             return {"status": "success", "location": location["name"], "location_id": loc_id, "image": image_name}
         except HTTPException:
             raise
@@ -2512,6 +2492,8 @@ async def generate_time_variant(
         try:
             # GPU-Provider-Queue: serialisiert pro Backend + Track erst aktiv,
             # wenn der Kanal die Arbeit aufnimmt (wartende stehen "pending").
+            _log_meta = {"agent_name": location.get("name", location_name),
+                         "original_prompt": prompt, "auto_enhance": False}
             def _op(b):
                 def _gen():
                     try:
@@ -2519,7 +2501,7 @@ async def generate_time_variant(
                         _tq.track_activate(_track_id, queue_name=match_queue_name(b.name) or "", provider=b.name)
                     except Exception:
                         pass
-                    return b.generate(full_prompt, negative, params)
+                    return b.generate(full_prompt, negative, params, log_meta=_log_meta)
                 if getattr(b, "api_type", "") in ("comfyui", "a1111"):
                     from app.core.llm_queue import get_llm_queue, Priority as _P
                     return get_llm_queue().submit_gpu_task(
@@ -2590,31 +2572,8 @@ async def generate_time_variant(
             _gen_duration = time.time() - _gen_start
             logger.info("%s generiert: %s (%s)/%s -> %s", _variant_label, location['name'], loc_id, image_name, new_image_name)
 
-            try:
-                from app.utils.image_prompt_logger import log_image_prompt
-                from app.core.config import get_lora_trigger_words
-                # final_prompt = mit vorangestelltem LoRA-Trigger (wie generate()).
-                _tv_names = [str(l.get("name")).strip()
-                             for l in (params.get("lora_inputs") or [])
-                             if isinstance(l, dict) and (l.get("name") or "").strip()
-                             and l.get("name") != "None"]
-                _tv_tw = get_lora_trigger_words(_tv_names)
-                _tv_final = (", ".join(_tv_tw) + ", " + full_prompt) if _tv_tw else full_prompt
-                log_image_prompt(
-                    agent_name=location.get("name", location_name),
-                    original_prompt=prompt,
-                    final_prompt=_tv_final,
-                    negative_prompt=negative,
-                    backend_name=backend.name,
-                    backend_type=backend.api_type,
-                    model=_model_used,
-                    auto_enhance=False,
-                    duration_s=_gen_duration,
-                    loras=params.get("lora_inputs", []),
-                    reference_images=params.get("reference_images", {}))
-            except Exception as _log_err:
-                logger.error("Image-Logging Fehler: %s", _log_err)
-
+            # Image-Prompt-Logging passiert jetzt ZENTRAL in backend.generate()
+            # (final, trigger-injiziert) — via log_meta beim generate-Aufruf.
             return {"status": "success", "location_id": loc_id, "image": new_image_name, "source": image_name}
         except HTTPException:
             raise

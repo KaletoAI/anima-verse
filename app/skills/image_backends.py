@@ -226,21 +226,34 @@ class ImageBackend(ABC):
             logger.debug("LoRA-Trigger-Injektion fehlgeschlagen: %s", e)
             return prompt
 
-    def generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:
+    def generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any],
+                 log_meta: Optional[Dict[str, Any]] = None) -> List[bytes]:
         """Generiert Bilder mit automatischem Job-Tracking fuer Load-Balancing.
+
+        ZENTRALER letzter Schritt der Bild-Erzeugung: (1) LoRA-Aktivierungswoerter
+        in den Prompt aufnehmen -> finaler Prompt, (2) an die Engine uebergeben,
+        (3) bei Erfolg das Image-Prompt-Logfile schreiben — mit GENAU dem finalen
+        Prompt, der an die Engine ging. So bleibt Log == Generierung, ohne dass
+        jeder Aufrufer das nachpflegen muss. ``log_meta`` liefert den Kontext des
+        Aufrufers (agent_name, original_prompt, PromptBuilder-Vars …); die
+        engine-/prompt-seitigen Felder (final_prompt, Backend, Model, LoRAs,
+        Referenzbilder, Dauer, Seed, Negative) setzt diese Funktion selbst.
+        ``log_meta=None`` -> kein Logging (z.B. Fehler-Logging macht der Aufrufer).
 
         Wendet zentrales Downscale-Postprocessing an, wenn ``params`` einen
         ``image_use_case`` enthaelt (item / location). Caller, die volle
         Aufloesung brauchen (Outfit, Avatar), setzen den Key nicht.
         """
+        import time as _time
         # LoRA-Aktivierungs-Woerter (per-Welt-Repository) zentral in den Prompt
         # aufnehmen — gilt fuer ALLE Backends/Pfade, sobald ein LoRA aktiv ist.
-        prompt = self._inject_lora_triggers(prompt, params)
+        final_prompt = self._inject_lora_triggers(prompt, params)
 
+        _t0 = _time.time()
         with self._jobs_lock:
             self._active_jobs += 1
         try:
-            result = self._generate(prompt, negative_prompt, params)
+            result = self._generate(final_prompt, negative_prompt, params)
         finally:
             with self._jobs_lock:
                 self._active_jobs = max(0, self._active_jobs - 1)
@@ -256,7 +269,39 @@ class ImageBackend(ABC):
                 ]
             except Exception as _exc:
                 logger.warning("Downscale-Postprocess fehlgeschlagen: %s", _exc)
+
+        # Zentrales Logging nur bei echtem Erfolg (Bilder erzeugt, kein Cache-Hit).
+        if log_meta is not None and isinstance(result, list) and result:
+            self._log_generation(final_prompt, negative_prompt, params,
+                                 _time.time() - _t0, log_meta)
         return result
+
+    def _log_generation(self, final_prompt: str, negative_prompt: str,
+                        params: Dict[str, Any], duration_s: float,
+                        log_meta: Dict[str, Any]) -> None:
+        """Schreibt die Image-Prompt-Logzeile mit dem FINALEN Prompt + engine-/
+        prompt-seitigen Feldern; ``log_meta`` steuert den Aufrufer-Kontext bei."""
+        try:
+            from app.utils.image_prompt_logger import log_image_prompt
+            _model = (params.get("model") or params.get("unet")
+                      or getattr(self, 'last_used_checkpoint', '')
+                      or getattr(self, 'model', '') or getattr(self, 'checkpoint', '') or '')
+            fields = dict(log_meta or {})
+            fields.update(
+                final_prompt=final_prompt,
+                negative_prompt=negative_prompt,
+                backend_name=self.name,
+                backend_type=self.api_type,
+                model=_model,
+                loras=params.get("lora_inputs") or params.get("loras") or [],
+                reference_images=params.get("reference_images") or {},
+                duration_s=round(float(duration_s), 2),
+            )
+            if "seed" not in fields and params.get("seed") is not None:
+                fields["seed"] = int(params.get("seed") or 0)
+            log_image_prompt(**fields)
+        except Exception as _le:
+            logger.debug("Zentrales Image-Logging fehlgeschlagen: %s", _le)
 
     @abstractmethod
     def _generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:

@@ -2435,6 +2435,22 @@ class ImageGenerationSkill(BaseSkill):
                 # Backend-Default mehr.
                 return enhanced_prompt, negative_prompt
 
+            # Kontext fuers ZENTRALE Logging in backend.generate() (final_prompt,
+            # Backend, Model, LoRAs, Refs, Dauer, Seed setzt generate() selbst).
+            _log_meta = {
+                "agent_name": character_name,
+                "original_prompt": prompt_text,
+                "appearances": appearances,
+                "agent_mentioned": agent_mentioned,
+                "auto_enhance": auto_enhance,
+                "context": {k: v for k, v in {
+                    "mood": pv.prompt_mood if pv else "",
+                    "activity": pv.prompt_activity if pv else "",
+                    "location": pv.prompt_location if pv else "",
+                }.items() if v},
+                "pose_prompt": params.get("pose_prompt", ""),
+                "expression_prompt": params.get("expression_prompt", ""),
+            }
             def _op(b):
                 _p, _n = _prepare_for_backend(b)
                 _is_local = b.api_type in ("comfyui", "a1111")
@@ -2451,7 +2467,7 @@ class ImageGenerationSkill(BaseSkill):
                             provider=b.name)
                     except Exception:
                         pass
-                    return b.generate(_p, _n, params)
+                    return b.generate(_p, _n, params, log_meta=_log_meta)
 
                 if _is_local:
                     from app.core.llm_queue import get_llm_queue, Priority as _P
@@ -2490,46 +2506,8 @@ class ImageGenerationSkill(BaseSkill):
             _gen_duration = time.time() - _gen_start
             logger.info("ERFOLG - %d Bild(er) generiert via %s (%.1fs)", len(images), backend.name, _gen_duration)
 
-            # Image-Prompt in JSONL loggen (nach Generierung fuer korrekte Dauer)
-            # Model-Name ermitteln — gleiche Prioritaet wie die Bild-Metadaten
-            # (s.u. ~3435): params["model"]/["unet"] = tatsaechlich in den Workflow
-            # gesetztes Modell (Flux/GGUF nutzen "unet", nicht "model"), danach
-            # Backend-Felder. Ohne params-Lookup blieb "model": "N/A" bei
-            # UNET/Safetensors-Workflows wie Flux auf ComfyUI.
-            _model_name = (
-                params.get("model")
-                or params.get("unet")
-                or getattr(backend, 'last_used_checkpoint', '')
-                or getattr(backend, 'model', '')
-                or getattr(backend, 'checkpoint', '')
-                or '')
-            # For separated-prompt workflows, log what actually gets sent to ComfyUI
-            _is_separated = active_workflow and active_workflow.has_separated_prompt
-            _logged_prompt = params.get("character_prompt", enhanced_prompt) if _is_separated else enhanced_prompt
-            log_image_prompt(
-                agent_name=character_name,
-                original_prompt=prompt_text,
-                final_prompt=_logged_prompt,
-                negative_prompt=negative_prompt,
-                backend_name=backend.name,
-                backend_type=backend.api_type,
-                model=_model_name,
-                appearances=appearances,
-                agent_mentioned=agent_mentioned,
-                auto_enhance=auto_enhance,
-                context={
-                    k: v for k, v in {
-                        "mood": pv.prompt_mood if pv else "",
-                        "activity": pv.prompt_activity if pv else "",
-                        "location": pv.prompt_location if pv else "",
-                    }.items() if v
-                },
-                duration_s=_gen_duration,
-                seed=params.get("seed", 0),
-                pose_prompt=params.get("pose_prompt", ""),
-                expression_prompt=params.get("expression_prompt", ""),
-                loras=params.get("lora_inputs", []),
-                reference_images=params.get("reference_images") or face_refs.get("reference_images") or {})
+            # Image-Prompt-Logging passiert jetzt ZENTRAL in backend.generate()
+            # (mit dem finalen, trigger-injizierten Prompt) — via log_meta oben.
 
             # 1. Zuerst Bilder/Videos auf die Platte speichern.
             # Gallery-Target-Routing (Prio von hoch nach niedrig):

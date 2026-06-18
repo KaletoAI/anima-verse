@@ -436,12 +436,16 @@ def regenerate_image(character_name: str,
                     provider_name=b.name,
                     task_type="image_regen",
                     priority=Priority.NORMAL,
-                    callable_fn=lambda: b.generate(_gen_prompt, _gen_neg, _bp),
+                    callable_fn=lambda: b.generate(_gen_prompt, _gen_neg, _bp, log_meta=_log_meta),
                     agent_name=character_name,
                     gpu_type="comfyui")
-            return b.generate(_gen_prompt, _gen_neg, _bp)
+            return b.generate(_gen_prompt, _gen_neg, _bp, log_meta=_log_meta)
         return _op
 
+    # Kontext fuers ZENTRALE Logging in backend.generate() (final_prompt, Backend,
+    # Model, LoRAs, Refs, Dauer setzt generate() selbst).
+    _log_meta = {"agent_name": character_name, "original_prompt": original_prompt,
+                 "auto_enhance": bool(improvement_request)}
     try:
         _op = _build_op(final_prompt, negative_prompt, params, active_workflow)
         try:
@@ -576,24 +580,8 @@ def regenerate_image(character_name: str,
             except Exception as meta_err:
                 logger.warning("Character-Image-Meta Update fehlgeschlagen: %s", meta_err)
 
-        # Image-Prompt loggen
-        try:
-            from app.utils.image_prompt_logger import log_image_prompt
-            _model_name = getattr(backend, 'last_used_checkpoint', '') or getattr(backend, 'model', '') or getattr(backend, 'checkpoint', '') or ''
-            log_image_prompt(
-                agent_name=character_name,
-                original_prompt=original_prompt,
-                final_prompt=final_prompt,
-                negative_prompt=negative_prompt,
-                backend_name=backend.name,
-                backend_type=backend.api_type,
-                model=_model_name,
-                auto_enhance=bool(improvement_request),
-                duration_s=_gen_duration,
-                loras=params.get("lora_inputs", []),
-                reference_images=params.get("reference_images") or face_refs.get("reference_images") or {})
-        except Exception as log_err:
-            logger.warning(f"Logging-Fehler: {log_err}")
+        # Image-Prompt-Logging passiert jetzt ZENTRAL in backend.generate()
+        # (final, trigger-injiziert) — via log_meta beim generate-Aufruf.
 
         # Bildanalyse via Vision-LLM (aktualisiert Metadaten)
         try:
