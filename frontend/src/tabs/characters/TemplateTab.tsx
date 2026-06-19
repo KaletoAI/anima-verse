@@ -38,27 +38,79 @@ function asBoolStore(f: TmplFieldDef) {
   return f.store === 'config' ? 'config' : f.store === 'status_effects' ? 'status_effects' : 'profile'
 }
 
-// Mehrzeiliges Text-Feld mit Live-Token-Vorschau (Backend-Resolver).
+interface TokenChip {
+  token: string
+  label: string
+}
+
+// Sammelt die {token}-Platzhalter, die laut Template auf `targetKey` zielen
+// (replacement.target == targetKey, string oder Liste) — quer über ALLE
+// Sektionen, da z.B. {gender} aus einer anderen Spalte stammt.
+function collectTokens(sections: TmplSectionRaw[], targetKey: string, lang: string): TokenChip[] {
+  const out: TokenChip[] = []
+  const seen = new Set<string>()
+  for (const s of sections) {
+    for (const f of s.fields || []) {
+      const r = f.replacement as { token?: string; target?: string | string[] } | undefined
+      if (!r) continue
+      const targets = Array.isArray(r.target) ? r.target : r.target ? [r.target] : []
+      if (!targets.includes(targetKey)) continue
+      const tok = String(r.token || f.key)
+      if (!tok || seen.has(tok)) continue
+      seen.add(tok)
+      out.push({ token: tok, label: tmplText(f, 'label', lang) || tok })
+    }
+  }
+  return out
+}
+
+// Mehrzeiliges Text-Feld mit Live-Token-Vorschau (Backend-Resolver) und
+// klickbaren Token-Chips, die {placeholder} an der Cursor-Position einfügen.
 function PromptField({
   character,
   field,
   value,
   disabled,
+  tokens,
   onCommit,
 }: {
   character: string
   field: TmplFieldDef
   value: unknown
   disabled?: boolean
+  tokens: TokenChip[]
   onCommit: (v: string) => void
 }) {
   const { t } = useI18n()
   const [local, setLocal] = useState(String(value ?? ''))
   const [resolved, setResolved] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const taRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
     setLocal(String(value ?? ''))
   }, [value])
+
+  // Token an der aktuellen Cursor-Position (bzw. Auswahl) einfügen. mousedown +
+  // preventDefault hält den Fokus im Textarea (kein vorzeitiges Commit/Blur).
+  const insertToken = (tok: string) => {
+    const ins = `{${tok}}`
+    const ta = taRef.current
+    if (!ta) {
+      setLocal((v) => v + ins)
+      return
+    }
+    const s = ta.selectionStart ?? local.length
+    const e = ta.selectionEnd ?? local.length
+    const next = local.slice(0, s) + ins + local.slice(e)
+    setLocal(next)
+    requestAnimationFrame(() => {
+      const el = taRef.current
+      if (!el) return
+      el.focus()
+      const pos = s + ins.length
+      el.setSelectionRange(pos, pos)
+    })
+  }
 
   // Debounced Resolve über das Backend, wann immer der Text Tokens enthält.
   useEffect(() => {
@@ -85,9 +137,30 @@ function PromptField({
 
   return (
     <>
+      {tokens.length > 0 ? (
+        <div className="tpl-token-chips">
+          <span className="tpl-token-chips-label">{t('Insert')}:</span>
+          {tokens.map((tk) => (
+            <button
+              key={tk.token}
+              type="button"
+              className="tpl-token-chip"
+              title={tk.label}
+              disabled={disabled}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                insertToken(tk.token)
+              }}
+            >
+              {`{${tk.token}}`}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <textarea
+        ref={taRef}
         className="ga-input"
-        rows={4}
+        rows={8}
         value={local}
         disabled={disabled}
         onChange={(e) => setLocal(e.target.value)}
@@ -112,6 +185,7 @@ export function TemplateTab({
   dynamicData,
   specialSlots,
   excludeKeys,
+  imageBeside,
 }: {
   character: string
   tab: TmplTabDef
@@ -121,6 +195,9 @@ export function TemplateTab({
   specialSlots?: Record<string, React.ReactNode>
   /** Policy-Ausschluss einzelner Felder (z.B. Social-Zahlen im /play). */
   excludeKeys?: string[]
+  /** Prompt-Felder mit Bild zweispaltig rendern (Prompt links, Bild rechts)
+   *  statt Bild unter dem Prompt — genutzt vom /play-Avatar-Panel. */
+  imageBeside?: boolean
 }) {
   const { t, lang } = useI18n()
   const { toast } = useToast()
@@ -223,27 +300,44 @@ export function TemplateTab({
     const hint = tmplText(f, 'hint', lang)
     const isPrompt = f.type === 'text' && f.multiline
     const imagePreview = typeof f.image_preview === 'string' ? f.image_preview : ''
+    const input = isPrompt ? (
+      <PromptField
+        character={character}
+        field={f}
+        value={getVal(f)}
+        disabled={ro || savingKey === f.key}
+        tokens={collectTokens(sections, f.key, lang)}
+        onCommit={(v) => commit(f, v)}
+      />
+    ) : (
+      <TemplateField
+        field={f}
+        value={getVal(f)}
+        dynamicData={dynamicData}
+        disabled={ro || savingKey === f.key}
+        lang={lang}
+        onCommit={(v) => commit(f, v)}
+      />
+    )
+    // Side-by-side (Avatar-Panel): Prompt + Chips + Preview links, Bild rechts.
+    if (imageBeside && isPrompt && imagePreview) {
+      return (
+        <div key={f.key} className="tpl-prompt-beside">
+          <div className="tpl-prompt-beside-text">
+            <Field label={label} hint={hint || undefined}>
+              {input}
+            </Field>
+          </div>
+          <div className="tpl-prompt-beside-image">
+            <FieldImage character={character} kind={imagePreview} />
+          </div>
+        </div>
+      )
+    }
     return (
       <div key={f.key}>
         <Field label={label} hint={hint || undefined}>
-          {isPrompt ? (
-            <PromptField
-              character={character}
-              field={f}
-              value={getVal(f)}
-              disabled={ro || savingKey === f.key}
-              onCommit={(v) => commit(f, v)}
-            />
-          ) : (
-            <TemplateField
-              field={f}
-              value={getVal(f)}
-              dynamicData={dynamicData}
-              disabled={ro || savingKey === f.key}
-              lang={lang}
-              onCommit={(v) => commit(f, v)}
-            />
-          )}
+          {input}
         </Field>
         {imagePreview ? <FieldImage character={character} kind={imagePreview} /> : null}
       </div>

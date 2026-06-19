@@ -2969,6 +2969,46 @@ async function loadComfyModels() {
     return COMFY_CACHE;
 }
 
+// ── Workflow "Filter Pattern" auf Model-/LoRA-Listen anwenden ──
+// Das `filter`-Feld eines Workflows (Glob mit * als Wildcard, case-insensitive,
+// wie fnmatch im Backend) filtert direkt die Auswahl-Dropdowns. Liegt am
+// Geschwister-Feld: <...>.model / <...>.loras -> <...>.filter.
+function comfyFilterForPath(path) {
+    const parts = path.split('.');
+    parts[parts.length - 1] = 'filter';
+    return getVal(parts.join('.'));
+}
+function _comfyGlobMatch(name, glob) {
+    const n = String(name).toLowerCase();
+    const g = String(glob).toLowerCase().trim();
+    if (!g) return true;
+    if (g.indexOf('*') === -1) return n === g; // fnmatch: ohne Wildcard exakt
+    const parts = g.split('*');
+    if (parts[0] && n.slice(0, parts[0].length) !== parts[0]) return false;
+    let pos = parts[0].length;
+    for (let i = 1; i < parts.length - 1; i++) {
+        const p = parts[i];
+        if (!p) continue;
+        const idx = n.indexOf(p, pos);
+        if (idx === -1) return false;
+        pos = idx + p.length;
+    }
+    const last = parts[parts.length - 1];
+    if (last) {
+        if (n.length - last.length < pos) return false;
+        if (n.slice(n.length - last.length) !== last) return false;
+    }
+    return true;
+}
+// Mehrere Globs per Komma (ODER-Verknuepfung). Leeres Pattern -> alle Items.
+function comfyApplyFilter(items, pattern) {
+    const pat = String(pattern || '').trim();
+    if (!pat) return items;
+    const globs = pat.split(',').map(s => s.trim()).filter(Boolean);
+    if (!globs.length) return items;
+    return (items || []).filter(m => globs.some(g => _comfyGlobMatch(m, g)));
+}
+
 function renderComfyModelSelect(val, path) {
     let html = '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">';
     html += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
@@ -3014,6 +3054,10 @@ async function populateComfySelect(path, type) {
         const cache = await loadComfyModels();
         items = cache[type] || [];
     }
+    // Workflow "Filter Pattern" auf Modell-/UNet-Listen anwenden (nicht CLIP —
+    // CLIP-Namen passen nicht zum Checkpoint-Glob). Aktueller Wert bleibt unten
+    // als Option erhalten, auch wenn er rausgefiltert wuerde.
+    if (type === 'checkpoints') items = comfyApplyFilter(items, comfyFilterForPath(path));
     const current = sel.value;
     let opts = '<option value="">— none —</option>';
     for (const m of items) {
@@ -3446,8 +3490,8 @@ function renderLoraField(loras, path, maxItems) {
 
 async function populateLoraSelects(path, maxItems) {
     const cache = await loadComfyModels();
-    const items = cache.loras || [];
-    if (!items.length) { toast('No LoRAs found. Server running?', 'error'); return; }
+    const items = comfyApplyFilter(cache.loras || [], comfyFilterForPath(path));
+    if (!items.length) { toast('No LoRAs found (check Filter Pattern / server).', 'error'); return; }
     for (let i = 0; i < maxItems; i++) {
         const sel = document.getElementById('lora-' + path + '-' + i);
         if (!sel) continue;

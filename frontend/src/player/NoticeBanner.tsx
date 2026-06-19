@@ -48,25 +48,34 @@ export function NoticeBanner() {
   if (!hasAny) return null
 
   // Opaker Hintergrund + farbiger Rand-Streifen — damit die Szene-Schrift
-  // darunter nicht durchscheint (sonst „überlagert" sich der Text am Satzanfang).
+  // darunter nicht durchscheint. Explizite helle Textfarbe (nicht `inherit`),
+  // sonst ist die Schrift je nach Theme/Kontext auf dem dunklen Block unlesbar.
   const row = (accent: string): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px',
-    borderRadius: 8, background: 'rgba(16,18,24,0.94)',
+    borderRadius: 8, background: 'rgba(16,18,24,0.94)', color: 'var(--text, #e6edf3)',
     border: '1px solid rgba(255,255,255,0.12)', borderLeft: `4px solid ${accent}`,
     fontSize: '0.82em', maxWidth: '100%', boxShadow: '0 2px 8px rgba(0,0,0,0.45)',
+    pointerEvents: 'auto',
   })
 
   const hasLeftItems = !!n.leave_blocked || n.events.length > 0 || n.notifications.length > 0
 
+  // Overlay statt Inline-Fluss: der Banner-Container ist 0px hoch und lässt seinen
+  // Inhalt nach unten überlaufen, zentriert über den oberen Panel-Rand. So
+  // verschiebt er die UI-Verteilung NICHT, auch wenn mehrere Meldungen anliegen.
+  // Container ohne Pointer-Events (Panels darunter bleiben bedienbar), nur die
+  // interaktiven Elemente (×) fangen Klicks ab.
   return (
-    <>
-      {/* Force-Regel als zentrierter, schlanker Separator über die volle Breite —
-          zeigt nur, von wem die Meldung kommt (Avatar) + der Text. Kein „Apply",
-          kein opaker Block, damit kein UI-Platz weggenommen wird. */}
+    <div style={{
+      position: 'relative', height: 0, overflow: 'visible', zIndex: 60,
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      gap: 6, paddingTop: 6, pointerEvents: 'none',
+    }}>
+      {/* Force-Regel als zentrierter, schlanker Separator. */}
       {n.force_warning && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 6px',
-          fontSize: '0.8em', opacity: 0.85, pointerEvents: 'none',
+          display: 'flex', alignItems: 'center', gap: 10, width: 'min(560px, 70vw)',
+          fontSize: '0.8em', opacity: 0.85, color: 'var(--text, #e6edf3)',
         }}>
           <span style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.16)' }} />
           <span style={{ flex: '0 0 auto', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '80%' }}>
@@ -77,8 +86,7 @@ export function NoticeBanner() {
       )}
       {hasLeftItems && (
         <div style={{
-          display: 'flex', flexDirection: 'column', gap: 4,
-          maxWidth: 'min(560px, 60vw)', margin: '0 0 6px', pointerEvents: 'auto',
+          display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 'min(560px, 70vw)',
         }}>
           {n.leave_blocked && (
             <div style={row('#e05656')}>
@@ -103,6 +111,6 @@ export function NoticeBanner() {
           ))}
         </div>
       )}
-    </>
+    </div>
   )
 }

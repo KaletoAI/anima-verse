@@ -182,10 +182,12 @@ export function SecretsEditor({ character }: { character: string }) {
           <div className="ga-placeholder">{t('No secrets yet.')}</div>
         ) : (
           <div className="ga-secret-list">
-            {secrets.map((s) => (
+            {secrets.map((s) => {
+              const content = s.content || ''
+              return (
               <div key={s.id} className="ga-secret-row">
                 <div className="ga-secret-info">
-                  <strong>{s.content.length > 90 ? s.content.slice(0, 90) + '…' : s.content}</strong>
+                  <strong>{content.length > 90 ? content.slice(0, 90) + '…' : content}</strong>
                   <span className="ga-sched-muted">
                     {t(CATEGORIES.find((c) => c.value === s.category)?.label || s.category)} ·{' '}
                     {t(SEVERITY[s.severity] || String(s.severity))}
@@ -208,7 +210,8 @@ export function SecretsEditor({ character }: { character: string }) {
                   </button>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

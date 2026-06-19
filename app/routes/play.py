@@ -947,11 +947,14 @@ async def play_worldmap(user=Depends(get_current_user)):
 
     characters = []
     for name in list_available_characters():
+        loc_id = get_character_current_location(name) or ""
+        if not loc_id:
+            continue  # offmap (z.B. avatar-only & ungesteuert) -> nicht auf der Karte
         mt = get_movement_target(name) or ""
         prof = get_character_profile_image(name) or ""
         characters.append({
             "name": name,
-            "location_id": get_character_current_location(name) or "",
+            "location_id": loc_id,
             "activity": get_effective_activity(name) or "",
             "movement_target_id": mt,
             "movement_target_name": name_by_id.get(mt, "") or mt,
@@ -1334,6 +1337,25 @@ async def play_messages_list(user=Depends(get_current_user)):
     except Exception:
         available = []
     return {"avatar": avatar, "conversations": convs, "available": available}
+
+
+@router.post("/play/messages/read-all")
+async def play_messages_read_all(user=Depends(get_current_user)):
+    """Markiert alle 1:1-Konversationen des Avatars als gelesen (Unread → 0)."""
+    from app.models.account import get_active_character
+    from app.models.chat import get_chat_history
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=404, detail="Kein aktiver Avatar")
+    count = 0
+    for partner in _messaging_partners(avatar):
+        hist = [m for m in (get_chat_history(avatar, partner_name=partner) or [])
+                if (m.get("content") or "").strip()]
+        if not hist:
+            continue
+        _phone_set_read(avatar, partner, hist[-1].get("timestamp") or "")
+        count += 1
+    return {"ok": True, "conversations": count}
 
 
 @router.get("/play/messages/thread")

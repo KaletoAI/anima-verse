@@ -564,6 +564,25 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         file_count += 1
     zf.close()
 
+    # Remap the image→room mapping in gallery_meta.json to the new room ids.
+    # The file is copied verbatim and still references the OLD room ids; without
+    # this the imported room images stay orphaned (each room falls back to the
+    # location default), which reads as "room images were not imported".
+    meta_path = gallery_dir / "gallery_meta.json"
+    if meta_path.exists() and room_id_map:
+        try:
+            gmeta = json.loads(meta_path.read_text(encoding="utf-8"))
+            rooms_map = gmeta.get("rooms")
+            if isinstance(rooms_map, dict) and rooms_map:
+                gmeta["rooms"] = {
+                    img: room_id_map.get(rid, rid) for img, rid in rooms_map.items()
+                }
+                meta_path.write_text(
+                    json.dumps(gmeta, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+        except Exception as e:
+            logger.warning("Location import: remap gallery_meta rooms failed: %s", e)
+
     logger.info(
         "Location import: %s (id=%s, %d gallery files)",
         loc["name"], new_loc_id, file_count,

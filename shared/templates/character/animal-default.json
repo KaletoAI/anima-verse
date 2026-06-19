@@ -238,10 +238,10 @@
       ]
     },
     {
-      "id": "others",
-      "label": "Other",
-      "label_de": "Sonstiges",
-      "column": 4,
+      "id": "characteristics",
+      "label": "Characteristics",
+      "label_de": "Eigenschaften",
+      "column": 2,
       "row": 0,
       "fields": [
         {
@@ -255,14 +255,25 @@
           "hint": "How the animal communicates (sounds, body language, thoughts in italics, etc.)",
           "hint_de": "Wie das Tier kommuniziert (Geräusche, Körpersprache, Gedanken in Kursiv, etc.)",
           "llm_generable": true
+        },
+        {
+          "key": "romantic_interests",
+          "label": "Romantic Interests",
+          "label_de": "Romantische Interessen",
+          "type": "text",
+          "store": "config",
+          "hint": "Describe romantic/sexual interests (e.g. \"women\", \"tall dark men\", \"dominant personalities\"). Empty = none.",
+          "hint_de": "Romantische/sexuelle Interessen beschreiben (z.B. \"Frauen\", \"grosse dunkle Maenner\", \"dominante Persoenlichkeiten\"). Leer = keine.",
+          "placeholder": "e.g. women, dominant men...",
+          "placeholder_de": "z.B. Frauen, dominante Maenner..."
         }
       ]
     },
     {
-      "id": "characteristics",
-      "label": "Characteristics",
-      "label_de": "Eigenschaften",
-      "column": 3,
+      "id": "appearance_physical",
+      "label": "Appearance",
+      "label_de": "Aussehen",
+      "column": 4,
       "row": 0,
       "fields": [
         {
@@ -461,7 +472,16 @@
           },
           "in_prompt": false,
           "llm_generable": true
-        },
+        }
+      ]
+    },
+    {
+      "id": "appearance",
+      "label": "Appearance",
+      "label_de": "Aussehen",
+      "column": 5,
+      "row": 0,
+      "fields": [
         {
           "key": "character_appearance",
           "label": "Appearance",
@@ -469,6 +489,7 @@
           "type": "text",
           "multiline": true,
           "required": true,
+          "image_preview": "appearance",
           "workflow_required": [
             "image_generation"
           ],
@@ -476,17 +497,6 @@
           "prompt_label": "Appearance",
           "default": "{animal_size} {species}, {breed}, {fur_type}, {primary_color} {pattern}, {eye_color}",
           "llm_generable": true
-        },
-        {
-          "key": "romantic_interests",
-          "label": "Romantic Interests",
-          "label_de": "Romantische Interessen",
-          "type": "text",
-          "store": "config",
-          "hint": "Describe romantic/sexual interests (e.g. \"women\", \"tall dark men\", \"dominant personalities\"). Empty = none.",
-          "hint_de": "Romantische/sexuelle Interessen beschreiben (z.B. \"Frauen\", \"grosse dunkle Maenner\", \"dominante Persoenlichkeiten\"). Leer = keine.",
-          "placeholder": "e.g. women, dominant men...",
-          "placeholder_de": "z.B. Frauen, dominante Maenner..."
         }
       ]
     }

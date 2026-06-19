@@ -77,6 +77,9 @@ async def switch_character(request: Request) -> Dict[str, Any]:
     previous = get_active_character()
     set_active_character(character_name)
 
+    from app.core.auth_dependency import get_current_user_optional
+    user = get_current_user_optional(request)
+    username = (user or {}).get("username", "(unknown)")
     logger.info(
         "Player %s switched from '%s' to '%s'",
         username, previous or "(none)", character_name)

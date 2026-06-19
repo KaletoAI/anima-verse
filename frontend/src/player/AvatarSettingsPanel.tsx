@@ -5,8 +5,8 @@
  * user-taugliche Spalten/Felder.
  *
  * Sub-Tabs:
- *  - Aussehen   = Template-Spalten 1,4,5,6 (Identität + physische Werte +
- *                 Aussehen-Prompt inkl. Bild + Gesicht inkl. Profilbild)
+ *  - Aussehen   = Template-Spalten 1,6 (Identität + Gesicht inkl. Profilbild)
+ *  - Körper     = Template-Spalten 4,5 (physische Werte + Aussehen-Prompt inkl. Bild)
  *  - Soul       = SoulEditor (Lock-Sektionen respektiert)
  *  - Präferenzen= Spalten 2,10 ohne Social-Zahlen → Dressing-Preference + TTS
  *
@@ -30,10 +30,11 @@ interface TmplSectionRaw extends TmplSection {
 
 // Social-Zahlen bleiben Admin-only (auch wenn sie in einer erlaubten Spalte liegen).
 const HIDE_KEYS = ['popularity', 'trustworthiness', 'social_dialog_probability', 'roles', 'romantic_interests']
-const AUSSEHEN_COLS = [1, 4, 5, 6] // Identität + physisch + Prompt(+Bild) + Gesicht(+Profilbild)
+const AUSSEHEN_COLS = [1, 6] // Identität + Gesicht(+Profilbild)
+const KOERPER_COLS = [4, 5] // physische Werte + Aussehen-Prompt(+Bild)
 const PREF_COLS = [2, 10] // Eigenschaften (→ nur Dressing-Preference) + TTS
 
-type Sub = 'look' | 'soul' | 'prefs'
+type Sub = 'look' | 'body' | 'soul' | 'prefs'
 
 export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
   const { t } = useI18n()
@@ -77,6 +78,7 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
 
   const tabs: Array<{ id: Sub; label: string }> = [
     { id: 'look', label: 'Appearance' },
+    { id: 'body', label: 'Physique' },
     { id: 'soul', label: 'Soul' },
     { id: 'prefs', label: 'Preferences' },
   ]
@@ -97,12 +99,26 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
       </nav>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingTop: 8 }}>
         {sub === 'look' && (
-          <TemplateTab
-            character={avatar}
-            tab={{ id: 'look', columns: AUSSEHEN_COLS }}
-            sections={sections}
-            dynamicData={dynamicData}
-          />
+          <div className="avatar-aussehen-tab">
+            <TemplateTab
+              character={avatar}
+              tab={{ id: 'look', columns: AUSSEHEN_COLS }}
+              sections={sections}
+              dynamicData={dynamicData}
+              imageBeside
+            />
+          </div>
+        )}
+        {sub === 'body' && (
+          <div className="avatar-aussehen-tab">
+            <TemplateTab
+              character={avatar}
+              tab={{ id: 'body', columns: KOERPER_COLS }}
+              sections={sections}
+              dynamicData={dynamicData}
+              imageBeside
+            />
+          </div>
         )}
         {sub === 'prefs' && (
           <TemplateTab

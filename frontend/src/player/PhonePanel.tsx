@@ -80,6 +80,13 @@ export function PhonePanel() {
 
   const openConv = (partner: string) => { setPicking(false); setSelected(partner) }
 
+  const markAllRead = useCallback(async () => {
+    // Optimistisch lokal auf 0 setzen, dann Backend + Reload.
+    setConvs((prev) => prev.map((c) => ({ ...c, unread: 0 })))
+    try { await apiPost('/play/messages/read-all', {}) } catch { /* ignore */ }
+    loadConvs()
+  }, [loadConvs])
+
   const send = useCallback(async () => {
     const partner = selRef.current
     const text = draft.trim()
@@ -138,11 +145,19 @@ export function PhonePanel() {
   }
 
   // ----- Kontaktliste -----
+  const totalUnread = convs.reduce((s, c) => s + (c.unread || 0), 0)
   return (
     <div style={WRAP}>
       <div style={{ ...HEAD, justifyContent: 'space-between' }}>
         <span style={{ fontWeight: 600 }}>{t('Conversations')}</span>
-        <button onClick={() => setPicking((v) => !v)} style={NEW_BTN}>{picking ? t('Cancel') : '+ ' + t('New')}</button>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {totalUnread > 0 && (
+            <button onClick={markAllRead} style={NEW_BTN} title={t('Mark all as read')}>
+              ✓ {t('Mark all read')}
+            </button>
+          )}
+          <button onClick={() => setPicking((v) => !v)} style={NEW_BTN}>{picking ? t('Cancel') : '+ ' + t('New')}</button>
+        </div>
       </div>
       {picking && (
         <div style={{ flex: '0 0 auto', maxHeight: 160, overflow: 'auto', borderBottom: '1px solid var(--border, #30363d)' }}>

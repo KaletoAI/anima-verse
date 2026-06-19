@@ -38,15 +38,25 @@ def _row_to_secret(row) -> Dict[str, Any]:
         meta = json.loads(row[4] or "{}")
     except Exception:
         pass
-    # meta haelt das komplette originale Secret-Dict
-    if not meta:
-        # Minimaler Fallback
-        meta = {
-            "id": f"sec_{row[0]}",
-            "content": row[2] or "",
-            "category": "personal",
-            "severity": 2,
-        }
+    if not isinstance(meta, dict):
+        meta = {}
+    # meta haelt normalerweise das komplette originale Secret-Dict. Bei
+    # importierten / aelteren Rows kann es Pflichtfelder fehlen — content und id
+    # leben dann nur in den Spalten. Immer aus den Spalten auffuellen, sonst
+    # liefert die API ein Secret ohne `content` (Frontend-Crash) bzw. ohne `id`.
+    if not meta.get("content"):
+        meta["content"] = row[2] or ""
+    meta.setdefault("id", f"sec_{row[0]}")
+    meta.setdefault("category", "personal")
+    meta.setdefault("severity", 2)
+    if "known_by" not in meta or "discovered_by" not in meta:
+        vis = {}
+        try:
+            vis = json.loads(row[3] or "{}")
+        except Exception:
+            pass
+        meta.setdefault("known_by", vis.get("known_by", []) if isinstance(vis, dict) else [])
+        meta.setdefault("discovered_by", vis.get("discovered_by", []) if isinstance(vis, dict) else [])
     return meta
 
 

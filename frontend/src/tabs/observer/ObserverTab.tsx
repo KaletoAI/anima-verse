@@ -139,7 +139,7 @@ export function ObserverTab() {
                 <option value="">{t('(whole location)')}</option>
                 {(currentLoc?.rooms || []).map((r) => (
                   <option key={r.room_id} value={r.room_id}>
-                    {r.name} {r.present.length ? `· ${r.present.join(', ')}` : ''}
+                    {r.name} {(r.present || []).length ? `· ${(r.present || []).join(', ')}` : ''}
                   </option>
                 ))}
               </select>

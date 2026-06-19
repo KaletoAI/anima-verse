@@ -13,7 +13,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 
 const CELL = 72
-const GAP = 4
+const GAP = 0 // Zellen stoßen aneinander → zusammenhängende Karte (keine Lücken)
 const PAD = 6
 const VIEW_KEY = 'anima.map2d.view'
 
@@ -79,18 +79,18 @@ function Cell({ loc, isActive, chars, events, travellingTo }: {
   const tooltip = events.map((e) => `${(e.category || '').toUpperCase()}: ${e.text || ''}`).join('\n')
   return (
     <div style={{
-      width: CELL, height: CELL, borderRadius: 6, position: 'relative', overflow: 'visible',
+      width: CELL, height: CELL, boxSizing: 'border-box', position: 'relative', overflow: 'visible',
       border: isActive ? '2px solid var(--accent, #6aa9ff)' : '1px solid var(--border, #30363d)',
       background: 'var(--bg, #0d1117)', opacity: loc.passable ? 0.85 : 1,
     }} title={loc.name}>
-      <div style={{ position: 'absolute', inset: 0, borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
         <MapIcon loc={loc} />
       </div>
       <div style={{
         position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: '0.6em',
         textAlign: 'center', background: 'rgba(0,0,0,0.55)', color: '#fff',
         padding: '1px 2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontStyle: loc.passable ? 'italic' : 'normal', borderRadius: '0 0 6px 6px',
+        fontStyle: loc.passable ? 'italic' : 'normal',
       }}>{loc.name}</div>
       {isActive ? <div style={{ position: 'absolute', top: 1, right: 2, fontSize: '0.8em', zIndex: 5 }}>📍</div> : null}
       {events.length > 0 ? (
