@@ -15,7 +15,6 @@ from app.models.world import (
     rename_location, resolve_location, get_location_by_id,
     get_entry_room_id,
     update_location_position,
-    list_all_activities,
     get_background_path, get_background_file_path,
     get_background_images, toggle_background_image, remove_background_image,
     get_gallery_dir, list_gallery_images,
@@ -638,15 +637,6 @@ async def import_location_route(
         return import_location_from_zip(content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-# === Aktivitaeten (flache Compat-Liste) ===
-
-@router.get("/activities")
-def get_activities_route(character_name: str = Query("", alias="agent_name")
-) -> Dict[str, Any]:
-    """Listet alle Aktivitaeten eines Users auf (flat, dedupliziert)."""
-    return {"activities": list_all_activities()}
 
 
 @router.get("/conditions/list")

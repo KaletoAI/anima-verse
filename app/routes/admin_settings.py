@@ -1607,15 +1607,6 @@ setInterval(load, 5000);
 """
 
 
-# ── Scheduler (admin-only background jobs) ────────────────────────────
-
-@router.get("/scheduler", response_class=HTMLResponse)
-async def scheduler_page(user=Depends(require_admin)):
-    """Legacy URL — scheduler lives in the React Game-Admin SPA now."""
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/game-admin#/scheduler", status_code=307)
-
-
 def _apply_schema_defaults(data: dict) -> None:
     """Fuellt leere Config-Felder mit Schema-Defaults vor.
 

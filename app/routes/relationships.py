@@ -9,26 +9,12 @@ from app.models.relationship import (
     get_character_relationships,
     get_relationship,
     update_relationship_manual,
-    build_graph_data,
     reclassify_all_relationships,
 )
 
 logger = get_logger("routes.relationships")
 
 router = APIRouter(prefix="/relationships", tags=["relationships"])
-
-
-# ---------------------------------------------------------------------------
-# Graph data (for vis-network)
-# ---------------------------------------------------------------------------
-
-@router.get("/graph")
-async def get_graph(character: Optional[str] = Query(None)):
-    """Return nodes + edges for the social graph visualization.
-
-    If *character* is given, only return that character's direct relationships.
-    """
-    return build_graph_data(focus_character=character)
 
 
 # ---------------------------------------------------------------------------

@@ -17,9 +17,6 @@ from app.models.character import (
     list_available_characters,
     generate_random_appearance,
     get_character_appearance,
-    save_character_appearance,
-    get_character_personality,
-    save_character_personality,
     get_character_current_location,
     save_character_current_location,
     get_effective_activity,
@@ -364,52 +361,6 @@ def generate_character_appearance(character_name: str) -> Dict[str, Any]:
     """Generiert ein zufaelliges Aussehen"""
     appearance = generate_random_appearance()
     return {"character": character_name, "appearance": appearance}
-
-
-@router.get("/{character_name}/appearance")
-def get_character_appearance_route(character_name: str) -> Dict[str, Any]:
-    """Ruft das aktuelle Aussehen ab"""
-    appearance = get_character_appearance(character_name)
-    return {"character": character_name, "appearance": appearance or ""}
-
-
-@router.post("/{character_name}/appearance")
-async def update_character_appearance(character_name: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert das Aussehen"""
-    try:
-        data = await request.json()
-        user_id = data.get("user_id", "")
-        appearance = data.get("appearance", "")
-        if not appearance:
-            raise HTTPException(status_code=400, detail="Aussehen darf nicht leer sein")
-
-        save_character_appearance(character_name, appearance)
-        return {"status": "success", "character": character_name, "appearance": appearance}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{character_name}/personality")
-def get_character_personality_route(character_name: str) -> Dict[str, Any]:
-    """Ruft die aktuelle Persoenlichkeit ab"""
-    personality = get_character_personality(character_name)
-    return {"character": character_name, "personality": personality or ""}
-
-
-@router.post("/{character_name}/personality")
-async def update_character_personality(character_name: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert die Persoenlichkeit"""
-    try:
-        data = await request.json()
-        user_id = data.get("user_id", "")
-        personality = data.get("personality", "")
-        if not personality:
-            raise HTTPException(status_code=400, detail="Persoenlichkeit darf nicht leer sein")
-
-        save_character_personality(character_name, personality)
-        return {"status": "success", "character": character_name, "personality": personality}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{character_name}/current-location")
@@ -2413,6 +2364,21 @@ async def update_config_route(character_name: str, request: Request) -> Dict[str
         config = get_character_config(character_name)
         config.update(fields)
         save_character_config(character_name, config)
+
+        # Sofort-Wirkung des avatar_only_presence-Flags: an + ungesteuert ->
+        # verschwinden; aus -> wieder auftauchen (idempotent).
+        if "avatar_only_presence" in fields:
+            try:
+                from app.models.account import is_player_controlled
+                from app.models.character import enter_offmap_sleep, appear_in_world
+                on = str(fields.get("avatar_only_presence")).strip().lower() == "true"
+                if on:
+                    if not is_player_controlled(character_name):
+                        enter_offmap_sleep(character_name)
+                else:
+                    appear_in_world(character_name)
+            except Exception:
+                pass
 
         return {"status": "success", "character": character_name, "updated_fields": list(fields.keys())}
     except HTTPException:
