@@ -14,6 +14,7 @@ import { MapTab } from './map/MapTab'
 import { WorldDevTab } from './world-dev/WorldDevTab'
 import { SchedulerTab } from './scheduler/SchedulerTab'
 import { IntentsTab } from './intents/IntentsTab'
+import { EventsTab } from './events/EventsTab'
 import { MarketplaceTab } from './marketplace/MarketplaceTab'
 import { ObserverTab } from './observer/ObserverTab'
 
@@ -29,6 +30,7 @@ export type TabId =
   | 'world-dev'
   | 'scheduler'
   | 'intents'
+  | 'events'
   | 'marketplace'
   | 'observer'
 
@@ -50,6 +52,7 @@ export const TABS: TabSpec[] = [
   { id: 'world-dev', label: 'World Dev', Component: WorldDevTab },
   { id: 'scheduler', label: 'Scheduler', Component: SchedulerTab },
   { id: 'intents', label: 'Intents', Component: IntentsTab },
+  { id: 'events', label: 'Events', Component: EventsTab },
   { id: 'marketplace', label: 'Marketplace', Component: MarketplaceTab },
   { id: 'observer', label: 'Observer', Component: ObserverTab },
 ]

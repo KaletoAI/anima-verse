@@ -787,6 +787,241 @@ async def imagegen_targets(user=Depends(require_admin)):
     return {"targets": out}
 
 
+@router.get("/templates/list")
+async def templates_list(user=Depends(require_admin)):
+    """List all .md files under shared/templates/llm/."""
+    from app.core.template_preview import list_templates
+    return {"templates": list_templates()}
+
+
+@router.get("/templates/file")
+async def templates_read(path: str, user=Depends(require_admin)):
+    from app.core.template_preview import read_template
+    try:
+        return {"path": path, "content": read_template(path)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Template not found: {path}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/templates/file")
+async def templates_save(request: Request, user=Depends(require_admin)):
+    body = await request.json()
+    path = (body.get("path") or "").strip()
+    content = body.get("content")
+    if not path or content is None:
+        raise HTTPException(status_code=400, detail="path + content required")
+    from app.core.template_preview import save_template
+    try:
+        save_template(path, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "saved", "path": path}
+
+
+@router.get("/templates/render")
+async def templates_render(path: str, agent: str = "", avatar: str = "",
+                           user=Depends(require_admin)):
+    """Render the template at ``path`` against real production data for
+    the given agent + avatar."""
+    from app.core.template_preview import render_with_real_data
+    return render_with_real_data(path, agent, avatar)
+
+
+@router.get("/templates", response_class=HTMLResponse)
+async def templates_page(user=Depends(require_admin)):
+    """Template playground: top bar + 2-column editor/preview."""
+    return _TEMPLATES_PAGE_HTML
+
+
+_TEMPLATES_PAGE_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Templates</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#0d1117; color:#c9d1d9; margin:0; padding:0; height:100vh; display:flex; flex-direction:column; }
+.topbar { display:flex; gap:8px; align-items:center; padding:10px 14px; background:#161b22; border-bottom:1px solid #30363d; flex-wrap:wrap; }
+.topbar select, .topbar button { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px 10px; border-radius:4px; font-size:12px; }
+.topbar select { min-width:200px; }
+.topbar button { cursor:pointer; }
+.topbar button:hover { background:#21262d; }
+.topbar button.primary { background:#238636; border-color:#238636; color:#fff; }
+.topbar button.primary:hover { background:#2ea043; }
+.topbar label { font-size:11px; color:#8b949e; }
+#status { margin-left:auto; font-size:11px; color:#8b949e; }
+#status.ok { color:#3fb950; }
+#status.err { color:#f85149; }
+.cols { flex:1; display:flex; min-height:0; }
+.col { flex:1; display:flex; flex-direction:column; min-width:0; }
+.col + .col { border-left:1px solid #30363d; }
+.col-header { padding:6px 10px; background:#161b22; border-bottom:1px solid #30363d; font-size:11px; color:#8b949e; }
+textarea, pre.preview { flex:1; margin:0; padding:10px; background:#0d1117; color:#c9d1d9; border:0; outline:0; font-family: ui-monospace, SFMono-Regular, monospace; font-size:12px; line-height:1.5; resize:none; white-space:pre-wrap; word-break:break-word; overflow:auto; }
+textarea:focus { background:#010409; }
+.note { padding:6px 10px; background:#161b22; border-top:1px solid #30363d; font-size:11px; color:#8b949e; }
+.kind-chat { color:#58a6ff; }
+.kind-tasks { color:#a5a5a5; }
+.no-preview { opacity:0.5; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <label>Template</label>
+  <select id="sel-template"></select>
+  <label>Avatar</label>
+  <select id="sel-avatar"></select>
+  <label>Agent</label>
+  <select id="sel-agent"></select>
+  <button id="btn-save" class="primary">Save</button>
+  <button id="btn-render">Refresh preview</button>
+  <span id="status">—</span>
+</div>
+<div class="cols">
+  <div class="col">
+    <div class="col-header">Edit (raw markdown)</div>
+    <textarea id="editor" spellcheck="false" placeholder="Pick a template above…"></textarea>
+  </div>
+  <div class="col">
+    <div class="col-header">Preview (real data, what production would build)</div>
+    <pre class="preview" id="preview">—</pre>
+    <div class="note" id="note">—</div>
+  </div>
+</div>
+
+<script>
+let _state = { templates: [], characters: [], dirty: false };
+
+function setStatus(msg, kind) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = kind || '';
+}
+
+async function loadTemplates() {
+  const r = await fetch('/admin/templates/list');
+  if (!r.ok) { setStatus('list failed: ' + r.status, 'err'); return; }
+  const d = await r.json();
+  _state.templates = d.templates || [];
+  const sel = document.getElementById('sel-template');
+  sel.innerHTML = '';
+  let lastKind = '';
+  for (const t of _state.templates) {
+    if (t.kind !== lastKind) {
+      const og = document.createElement('optgroup');
+      og.label = t.kind;
+      og.id = 'optgroup-' + t.kind;
+      sel.appendChild(og);
+      lastKind = t.kind;
+    }
+    const o = document.createElement('option');
+    o.value = t.path;
+    o.textContent = t.path.split('/').pop().replace('.md', '') + (t.has_preview ? '' : '  (no preview)');
+    if (!t.has_preview) o.classList.add('no-preview');
+    document.getElementById('optgroup-' + t.kind).appendChild(o);
+  }
+}
+
+async function loadCharacters() {
+  const r = await fetch('/characters/list');
+  if (!r.ok) return;
+  const d = await r.json();
+  const chars = d.characters || [];
+  const av = document.getElementById('sel-avatar');
+  const ag = document.getElementById('sel-agent');
+  av.innerHTML = '<option value="">(none)</option>';
+  ag.innerHTML = '';
+  for (const c of chars) {
+    const oa = document.createElement('option'); oa.value = c; oa.textContent = c; av.appendChild(oa);
+    const og = document.createElement('option'); og.value = c; og.textContent = c; ag.appendChild(og);
+  }
+  if (chars.length >= 2) av.value = chars[0];
+  if (chars.length >= 1) ag.value = chars[chars.length >= 2 ? 1 : 0];
+}
+
+async function loadFile(path) {
+  setStatus('loading…');
+  try {
+    const r = await fetch('/admin/templates/file?path=' + encodeURIComponent(path));
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    document.getElementById('editor').value = d.content || '';
+    _state.dirty = false;
+    setStatus('loaded', 'ok');
+    await render();
+  } catch (e) {
+    setStatus('load failed: ' + e.message, 'err');
+  }
+}
+
+async function saveFile() {
+  const path = document.getElementById('sel-template').value;
+  const content = document.getElementById('editor').value;
+  if (!path) return;
+  setStatus('saving…');
+  try {
+    const r = await fetch('/admin/templates/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    _state.dirty = false;
+    setStatus('saved', 'ok');
+    await render();
+  } catch (e) {
+    setStatus('save failed: ' + e.message, 'err');
+  }
+}
+
+async function render() {
+  const path = document.getElementById('sel-template').value;
+  const avatar = document.getElementById('sel-avatar').value;
+  const agent = document.getElementById('sel-agent').value;
+  if (!path) return;
+  setStatus('rendering…');
+  try {
+    const r = await fetch(`/admin/templates/render?path=${encodeURIComponent(path)}&agent=${encodeURIComponent(agent)}&avatar=${encodeURIComponent(avatar)}`);
+    const d = await r.json();
+    const prev = document.getElementById('preview');
+    const note = document.getElementById('note');
+    if (d.ok) {
+      prev.textContent = d.output || '(empty)';
+      note.textContent = d.note || '';
+      setStatus('rendered', 'ok');
+    } else {
+      prev.textContent = '(no output)';
+      note.textContent = d.note || 'preview failed';
+      setStatus('preview failed', 'err');
+    }
+  } catch (e) {
+    setStatus('render failed: ' + e.message, 'err');
+  }
+}
+
+document.getElementById('sel-template').addEventListener('change', e => loadFile(e.target.value));
+document.getElementById('sel-avatar').addEventListener('change', render);
+document.getElementById('sel-agent').addEventListener('change', render);
+document.getElementById('btn-save').addEventListener('click', saveFile);
+document.getElementById('btn-render').addEventListener('click', render);
+document.getElementById('editor').addEventListener('input', () => { _state.dirty = true; setStatus('unsaved changes'); });
+
+(async () => {
+  await Promise.all([loadTemplates(), loadCharacters()]);
+  const sel = document.getElementById('sel-template');
+  if (sel.options.length) {
+    sel.value = sel.options[0].value;
+    await loadFile(sel.value);
+  }
+})();
+</script>
+</body>
+</html>
+"""
+
+
 @router.get("/settings/comfyui-models")
 async def comfyui_models_all(user=Depends(require_admin)):
     """Aggregierte Liste aller gecachten ComfyUI-Modelle (alle Backends gemerged).
@@ -1732,7 +1967,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
     <a href="#" data-section="_users" onclick="event.preventDefault(); activateIframe('_users', '/admin/users', 'User-Verwaltung')"><span class="nav-icon">👥</span> User-Verwaltung</a>
     <a href="#" data-section="_models" onclick="event.preventDefault(); activateIframe('_models', '/admin/models', 'Model Capabilities')"><span class="nav-icon">🧩</span> Model Capabilities</a>
     <a href="#" data-section="_agent_loop" onclick="event.preventDefault(); activateIframe('_agent_loop', '/admin/agent-loop', 'Agent Loop')"><span class="nav-icon">🔄</span> Agent Loop</a>
-    <a href="/game-admin#/scheduler" target="_blank"><span class="nav-icon">⏱</span> Scheduler</a>
     <a href="#" data-section="_templates" onclick="event.preventDefault(); activateIframe('_templates', '/admin/templates', 'LLM Templates')"><span class="nav-icon">📄</span> LLM Templates</a>
     <div class="nav-section-label">Logs & Monitoring</div>
     <a href="#" data-section="_dashboard" onclick="event.preventDefault(); activateIframe('_dashboard', '/dashboard', 'Dashboard')"><span class="nav-icon">📊</span> Dashboard</a>

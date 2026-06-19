@@ -82,18 +82,21 @@ def list_events_route() -> Dict[str, Any]:
 async def create_event_route(request: Request) -> Dict[str, Any]:
     """Erstellt ein neues Event."""
     body = await request.json()
-    user_id = body.get("user_id", "")
     text = body.get("text", "").strip()
     location_id = body.get("location_id") or None
+    # category: ambient | social | disruption | danger (leer = unkategorisiert).
+    # danger/disruption werden in der Player-News als "Breaking" hervorgehoben.
+    category = (body.get("category") or "").strip().lower()
 
     ttl_hours = body.get("ttl_hours")
     if ttl_hours is not None:
         ttl_hours = int(ttl_hours)
 
     if not text:
-        raise HTTPException(status_code=400, detail="user_id and text required")
+        raise HTTPException(status_code=400, detail="text required")
 
-    event = add_event(text, location_id=location_id, ttl_hours=ttl_hours)
+    event = add_event(text, location_id=location_id, ttl_hours=ttl_hours,
+                      category=category)
     return {"ok": True, "event": event}
 
 

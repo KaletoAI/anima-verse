@@ -489,9 +489,15 @@ async def get_world_settings() -> Dict[str, Any]:
                 or "20"
             ),
         },
+        "news": {
+            # Praesentations-Stil des Player-News-Channels.
+            "style": get_world_setting("news.style", "modern") or "modern",
+            "title": get_world_setting("news.title", "") or "",
+        },
         "choices": {
             "temperature": list(WORLD_TEMPERATURE_VALUES),
             "weather":     list(WORLD_WEATHER_VALUES),
+            "news_style":  ["modern", "newspaper", "flyer"],
         },
     }
 
@@ -506,6 +512,13 @@ async def put_world_settings(request: Request) -> Dict[str, Any]:
     data = await request.json()
     world = data.get("world") or {}
     pose = data.get("pose") or {}
+    news = data.get("news") or {}
+    if "style" in news:
+        v = (news.get("style") or "").strip().lower()
+        if v in ("modern", "newspaper", "flyer"):
+            set_world_setting("news.style", v)
+    if "title" in news:
+        set_world_setting("news.title", (news.get("title") or "").strip())
     if "temperature" in world:
         v = (world.get("temperature") or "").strip().lower()
         if v in WORLD_TEMPERATURE_VALUES:

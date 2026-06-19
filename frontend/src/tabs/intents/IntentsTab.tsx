@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPost } from '../../lib/api'
+import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } from '../../lib/refs'
 
@@ -33,22 +33,40 @@ interface FormState {
   title: string
   description: string
   owner: string
+  participants: string[] // additional participants beyond the owner
   priority: number
   triggerKind: TriggerKind
   locationId: string
   runDate: string
   outfitHint: string
+  durationMin: number // 0 = never expires
 }
 
 const INITIAL_FORM: FormState = {
   title: '',
   description: '',
   owner: '',
+  participants: [],
   priority: 3,
   triggerKind: 'standing',
   locationId: '',
   runDate: '',
   outfitHint: '',
+  durationMin: 0,
+}
+
+const DURATION_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 0, label: 'Never expires' },
+  { value: 60, label: '1 hour' },
+  { value: 360, label: '6 hours' },
+  { value: 1440, label: '1 day' },
+  { value: 2880, label: '2 days' },
+  { value: 10080, label: '7 days' },
+]
+
+function expiresAtLabel(iso: string | undefined): string {
+  if (!iso) return ''
+  return iso.slice(0, 16).replace('T', ' ')
 }
 
 const PRIORITY_LABELS: Record<number, string> = {
@@ -79,6 +97,12 @@ export function IntentsTab() {
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [submitting, setSubmitting] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  // original participant objects of the intent being edited — preserved so an
+  // admin edit does not wipe role/progress of participants that stay.
+  const [editParticipants, setEditParticipants] = useState<
+    Record<string, { role?: string; progress?: unknown[] }>
+  >({})
 
   const locName = useCallback(
     (id: string) => locations.find((l) => l.id === id)?.name || id || '—',
@@ -106,11 +130,48 @@ export function IntentsTab() {
     return () => window.clearInterval(id)
   }, [reload])
 
+  const resetForm = useCallback(() => {
+    setEditingId(null)
+    setEditParticipants({})
+    setForm(INITIAL_FORM)
+  }, [])
+
+  const handleEdit = useCallback(
+    (it: Intent) => {
+      const allParts = Object.keys(it.participants || {})
+      const owner = it.owner || allParts[0] || ''
+      const extras = allParts.filter((p) => p !== owner)
+      const k = (it.trigger?.kind as TriggerKind) || 'standing'
+      setEditParticipants(it.participants || {})
+      setForm({
+        title: it.title || '',
+        description: it.description || '',
+        owner,
+        participants: extras,
+        priority: it.priority || 3,
+        triggerKind: ['standing', 'now', 'at_location', 'at_time'].includes(k) ? k : 'standing',
+        locationId: it.trigger?.location_id || it.location_id || '',
+        runDate: it.trigger?.run_date ? it.trigger.run_date.slice(0, 16) : '',
+        outfitHint: it.outfit_hint || '',
+        // expires_at is absolute; we cannot reverse it to a preset, so keep the
+        // existing expiry untouched on edit unless the admin picks a new duration.
+        durationMin: 0,
+      })
+      setEditingId(it.id)
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
+    },
+    [],
+  )
+
   const handleSubmit = useCallback(
     async (e: FormEvent) => {
       e.preventDefault()
       if (!form.title.trim()) {
         toast(t('Title is required'), 'error')
+        return
+      }
+      if (!form.owner.trim()) {
+        toast(t('Pick an owner'), 'error')
         return
       }
       const trigger: Record<string, unknown> = { kind: form.triggerKind }
@@ -128,28 +189,53 @@ export function IntentsTab() {
         }
         trigger.run_date = new Date(form.runDate).toISOString()
       }
+      // Build participants dict (owner + extras), preserving role/progress of
+      // members that already existed on the edited intent.
+      const names = [form.owner.trim(), ...form.participants].filter(
+        (n, i, arr) => n && arr.indexOf(n) === i,
+      )
+      const participants: Record<string, { role?: string; progress?: unknown[] }> = {}
+      for (const n of names) {
+        participants[n] = editParticipants[n] || { role: '', progress: [] }
+      }
+      const payload: Record<string, unknown> = {
+        title: form.title.trim(),
+        description: form.description.trim(),
+        owner: form.owner.trim(),
+        participants,
+        priority: form.priority,
+        trigger,
+        location_id: form.triggerKind === 'at_location' ? form.locationId : '',
+        outfit_hint: form.outfitHint.trim(),
+      }
+      // Only stamp source on create — editing must not flip a character-owned
+      // intent into a human one.
+      if (!editingId) payload.source = 'human'
+      // expires_at: only set when a duration preset is chosen. 0 = leave as-is
+      // on edit / "never" on create.
+      if (form.durationMin > 0) {
+        payload.expires_at = new Date(Date.now() + form.durationMin * 60_000).toISOString()
+      } else if (!editingId) {
+        payload.expires_at = ''
+      }
       setSubmitting(true)
       try {
-        await apiPost('/intents', {
-          title: form.title.trim(),
-          description: form.description.trim(),
-          owner: form.owner.trim(),
-          source: 'human',
-          priority: form.priority,
-          trigger,
-          location_id: form.triggerKind === 'at_location' ? form.locationId : '',
-          outfit_hint: form.outfitHint.trim(),
-        })
-        setForm({ ...INITIAL_FORM, owner: form.owner, triggerKind: form.triggerKind })
-        toast(t('Intent created'))
+        if (editingId) {
+          await apiPatch(`/intents/${encodeURIComponent(editingId)}`, payload)
+          toast(t('Intent updated'))
+        } else {
+          await apiPost('/intents', payload)
+          toast(t('Intent created'))
+        }
+        resetForm()
         await reload()
       } catch (err) {
-        toast(t('Create failed') + ': ' + (err as Error).message, 'error')
+        toast(t('Save failed') + ': ' + (err as Error).message, 'error')
       } finally {
         setSubmitting(false)
       }
     },
-    [form, reload, t, toast],
+    [form, editingId, editParticipants, reload, resetForm, t, toast],
   )
 
   const handleComplete = useCallback(
@@ -202,6 +288,7 @@ export function IntentsTab() {
               <th>{t('Source')}</th>
               <th>{t('Trigger')}</th>
               <th>{t('Priority')}</th>
+              <th>{t('Expires')}</th>
               <th>{t('Status')}</th>
               <th />
             </tr>
@@ -209,17 +296,17 @@ export function IntentsTab() {
           <tbody>
             {error ? (
               <tr>
-                <td colSpan={7}>error: {error}</td>
+                <td colSpan={8}>error: {error}</td>
               </tr>
             ) : intents === null ? (
               <tr>
-                <td colSpan={7} className="ga-sched-muted">
+                <td colSpan={8} className="ga-sched-muted">
                   {t('Loading…')}
                 </td>
               </tr>
             ) : intents.length === 0 ? (
               <tr>
-                <td colSpan={7} className="ga-sched-muted">
+                <td colSpan={8} className="ga-sched-muted">
                   {t('No intents yet.')}
                 </td>
               </tr>
@@ -251,8 +338,14 @@ export function IntentsTab() {
                     </td>
                     <td>{triggerSummary(it, locName)}</td>
                     <td>{t(PRIORITY_LABELS[it.priority] || 'Normal')}</td>
+                    <td className="ga-sched-muted" style={{ fontSize: 12 }}>
+                      {expiresAtLabel(it.expires_at) || '—'}
+                    </td>
                     <td className={active ? 'ga-status-ok' : 'ga-status-paused'}>{t(it.status)}</td>
                     <td className="ga-or-actions-col">
+                      <button className="ga-btn ga-btn-sm" onClick={() => handleEdit(it)}>
+                        {t('Edit')}
+                      </button>{' '}
                       {active ? (
                         <button className="ga-btn ga-btn-sm" onClick={() => handleComplete(it.id)}>
                           {t('Complete')}
@@ -274,7 +367,7 @@ export function IntentsTab() {
       </section>
 
       <section className="ga-sched-section">
-        <h3>{t('Create intent')}</h3>
+        <h3>{editingId ? t('Edit intent') : t('Create intent')}</h3>
         <form className="ga-sched-form" onSubmit={handleSubmit}>
           <div className="ga-sched-form-row">
             <div className="ga-sched-field" style={{ flex: 1, minWidth: 220 }}>
@@ -366,6 +459,21 @@ export function IntentsTab() {
                 onChange={(e) => setForm((f) => ({ ...f, outfitHint: e.target.value }))}
               />
             </div>
+            <div className="ga-sched-field">
+              <label>{editingId ? t('Expiry (change)') : t('Expiry')}</label>
+              <select
+                className="ga-input"
+                value={form.durationMin}
+                onChange={(e) => setForm((f) => ({ ...f, durationMin: parseInt(e.target.value, 10) }))}
+              >
+                {editingId ? <option value={0}>{t('keep current')}</option> : null}
+                {DURATION_OPTIONS.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {t(d.label)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="ga-sched-form-row">
             <div className="ga-sched-field" style={{ flex: 1, minWidth: 320 }}>
@@ -377,11 +485,43 @@ export function IntentsTab() {
                 placeholder={t('What should happen?')}
               />
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-              <button type="submit" className="ga-btn ga-btn-primary" disabled={submitting}>
-                {submitting ? t('Creating…') : t('Create')}
-              </button>
+            <div className="ga-sched-field" style={{ minWidth: 220 }}>
+              <label>{t('Additional participants (optional)')}</label>
+              <select
+                className="ga-input"
+                multiple
+                size={3}
+                value={form.participants}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    participants: Array.from(e.target.selectedOptions, (o) => o.value),
+                  }))
+                }
+              >
+                {characters
+                  .filter((c) => c.name !== form.owner)
+                  .map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.display_name || c.name}
+                    </option>
+                  ))}
+              </select>
             </div>
+          </div>
+          <div className="ga-sched-form-row">
+            <button type="submit" className="ga-btn ga-btn-primary" disabled={submitting}>
+              {submitting
+                ? t('Saving…')
+                : editingId
+                  ? t('Save changes')
+                  : t('Create')}
+            </button>
+            {editingId ? (
+              <button type="button" className="ga-btn" onClick={resetForm} disabled={submitting}>
+                {t('Cancel')}
+              </button>
+            ) : null}
           </div>
         </form>
       </section>

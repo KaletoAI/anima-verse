@@ -10,7 +10,7 @@ import type { SVGProps } from 'react'
 
 export type IconName =
   | 'chat' | 'surroundings' | 'move' | 'worldmap' | 'self' | 'others'
-  | 'inventory' | 'journal' | 'gallery' | 'instagram' | 'phone' | 'tasks' | 'layouts'
+  | 'inventory' | 'journal' | 'gallery' | 'instagram' | 'phone' | 'tasks' | 'layouts' | 'news'
   | 'reset' | 'close' | 'sendBack' | 'autosize' | 'maximize' | 'lock' | 'unlock'
   | 'zoomIn' | 'zoomOut' | 'settings' | 'trash'
   | 'brain' | 'cpu' | 'cloud' | 'sliders'
@@ -56,6 +56,13 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M8 6V5a4 4 0 0 1 8 0v1" />
       <rect x="4" y="6" width="16" height="15" rx="2" />
       <path d="M9 11h6" />
+    </>
+  ),
+  news: (
+    <>
+      <path d="M4 5h13v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6" />
+      <path d="M17 9h3v10a2 2 0 0 1-2 2" />
+      <path d="M7 8h6M7 12h6M7 16h5" />
     </>
   ),
   journal: (

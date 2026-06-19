@@ -609,6 +609,44 @@ async def play_notices(user=Depends(get_current_user)):
     return out
 
 
+@router.get("/play/news")
+async def play_news(user=Depends(get_current_user)):
+    """News-Channel für den Avatar: aktive (nicht-resolvte) Events am eigenen Ort
+    + globale Events, neueste zuerst. danger/disruption = "breaking". Liefert auch
+    den welt-konfigurierten Präsentations-Stil (modern/newspaper/flyer)."""
+    from app.models.account import get_active_character
+    from app.models.world import get_world_setting
+    out = {"avatar": "", "style": get_world_setting("news.style", "modern") or "modern",
+           "title": get_world_setting("news.title", "") or "", "items": []}
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        return out
+    out["avatar"] = avatar
+    try:
+        from app.models.character import get_character_current_location
+        from app.models.events import list_events
+        loc = get_character_current_location(avatar) or ""
+        items = []
+        for e in (list_events(location_id=loc) or []):
+            if e.get("resolved"):
+                continue
+            cat = (e.get("category") or "").lower()
+            items.append({
+                "id": e.get("id", ""),
+                "text": e.get("text", "") or "",
+                "category": cat,
+                "created_at": e.get("created_at", "") or "",
+                "location_id": e.get("location_id") or "",
+                "global": e.get("location_id") is None,
+                "breaking": cat in ("danger", "disruption"),
+            })
+        items.sort(key=lambda x: x["created_at"], reverse=True)
+        out["items"] = items
+    except Exception as ex:
+        logger.debug("play_news failed: %s", ex)
+    return out
+
+
 _SLOT_ORDER = ["head", "neck", "outer", "top", "underwear_top",
                "bottom", "underwear_bottom", "legs", "feet"]
 _SLOT_LABELS = {"head": "Kopf", "neck": "Hals", "outer": "Mantel & Jacke",

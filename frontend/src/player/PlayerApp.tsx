@@ -25,6 +25,7 @@ import { MovePad } from './MovePad'
 import { EnvironmentPanel } from './EnvironmentPanel'
 import { MapPanel } from './MapPanel'
 import { TaskPanel } from './TaskPanel'
+import { NewsPanel } from './NewsPanel'
 import { LayoutsPanel } from './LayoutsPanel'
 import { SelfPanel } from './SelfPanel'
 import { OthersPanel } from './OthersPanel'
@@ -58,6 +59,7 @@ const DEFAULT_LAYOUT: Layout[] = [
   { i: 'instagram', x: 20, y: 54, w: 21, h: 18, minW: 10, minH: 8 },
   { i: 'phone', x: 41, y: 38, w: 14, h: 22, minW: 10, minH: 12 },
   { i: 'tasks', x: 24, y: 27, w: 17, h: 10, minW: 6, minH: 4 },
+  { i: 'news', x: 41, y: 38, w: 14, h: 20, minW: 8, minH: 8 },
   { i: 'layouts', x: 24, y: 37, w: 17, h: 14, minW: 6, minH: 6 },
   { i: 'settings', x: 14, y: 10, w: 28, h: 30, minW: 12, minH: 12 },
 ]
@@ -81,6 +83,7 @@ const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | '
   { id: 'instagram', label: 'Instagram', icon: 'instagram' },
   { id: 'phone', label: 'Phone', icon: 'phone' },
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { id: 'news', label: 'News', icon: 'news' },
   { id: 'settings', label: 'Avatar', icon: 'sliders' },
   { id: 'layouts', label: 'Layouts', icon: 'layouts', kind: 'dialog' },
 ]
@@ -88,7 +91,7 @@ const ALL_PANELS = PANEL_META.map((p) => p.id)
 const GRID_PANELS = PANEL_META.filter((p) => p.kind !== 'dialog').map((p) => p.id)
 const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((p) => p.id)
 // Grid-Panel, aber NICHT default-offen (occasional, per Button geöffnet).
-const CLOSED_BY_DEFAULT = new Set(['settings'])
+const CLOSED_BY_DEFAULT = new Set(['settings', 'news'])
 const INITIAL_OPEN = GRID_PANELS.filter((id) => !CLOSED_BY_DEFAULT.has(id))
 const ICON_BY_ID: Record<string, IconName> = Object.fromEntries(
   PANEL_META.map((p) => [p.id, p.icon]))
@@ -564,7 +567,7 @@ export function PlayerApp() {
 
   // Z-Stacking für überlappende Fenster: zuletzt angefasstes Panel steht zuletzt
   // im DOM → vorderstes. Klick/Drag auf ein Panel holt es nach vorn.
-  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'settings', 'layouts'])
+  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'news', 'settings', 'layouts'])
   const bringToFront = useCallback((id: string) => {
     setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
   }, [])
@@ -771,6 +774,15 @@ export function PlayerApp() {
     </div>
   )
 
+  const newsPanel = (
+    <div key="news" className="player-panel" style={{ zIndex: zOf('news') }} onMouseDownCapture={() => bringToFront('news')}>
+      <div className="player-panel-head">{headIcon('news')}{t('News')}{headerControls('news', true)}</div>
+      <div className="player-panel-body" style={{ padding: 0, overflow: 'hidden' }}>
+        <NewsPanel />
+      </div>
+    </div>
+  )
+
   const selfPanel = (
     <div key="self" className="player-panel" style={{ zIndex: zOf('self') }} onMouseDownCapture={() => bringToFront('self')}>
       <div className="player-panel-head">{headIcon('self')}{data?.avatar || t('Self')}{headerControls('self', true)}</div>
@@ -847,7 +859,7 @@ export function PlayerApp() {
     scene: scenePanel, env: envPanel, map: mapPanel, worldmap: worldMapPanel,
     tasks: tasksPanel, self: selfPanel, others: othersPanel, belongings: belongingsPanel,
     journal: journalPanel, gallery: galleryPanel, instagram: instagramPanel, phone: phonePanel,
-    settings: settingsPanel,
+    news: newsPanel, settings: settingsPanel,
   }
 
   // Spaltenzahl aus gemessener Breite: colWidth ≈ CELL → quadratische Zellen.

@@ -1,7 +1,7 @@
 """Main FastAPI application - Refactored modular structure"""
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from app.core.log import get_logger
 
 logger = get_logger("server")
@@ -22,9 +22,8 @@ class _SuppressHealthPolling(logging.Filter):
 
 
 logging.getLogger("uvicorn.access").addFilter(_SuppressHealthPolling())
-from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
@@ -425,15 +424,14 @@ app.include_router(observer_route.router)
 app.include_router(play_route.router)
 app.include_router(api_images_route.router)
 
-# Static files & templates
+# Static files (the legacy vanilla-JS UI in templates/index.html was removed)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    """Serve the main HTML page"""
-    return templates.TemplateResponse(request, "index.html")
+@app.get("/")
+async def read_root():
+    """Redirect to the Player UI (legacy index.html removed)."""
+    return RedirectResponse(url="/play")
 
 
 @app.get("/health")

@@ -1,0 +1,278 @@
+/* NewsPanel — three world-selectable presentation styles.
+   modern  : dark media feed with colour accents.
+   newspaper: light cream broadsheet, serif, ruled masthead.
+   flyer   : high-contrast black & white printed notice. */
+
+.news {
+  height: 100%;
+  overflow: auto;
+  padding: 12px 14px;
+  box-sizing: border-box;
+}
+
+.news-masthead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+.news-title {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.news-sub {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+}
+
+.news-breaking {
+  margin: 0 0 12px;
+}
+.news-breaking-label {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 2px 8px;
+  margin-bottom: 6px;
+}
+
+.news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.news-item {
+  padding: 8px 0;
+}
+.news-item-body {
+  font-size: 14px;
+  line-height: 1.45;
+}
+.news-item-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+.news-cat {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.news-scope {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
+}
+.news-empty {
+  opacity: 0.6;
+  font-size: 13px;
+  padding: 16px 0;
+  text-align: center;
+}
+
+/* ── Modern: dark media feed ─────────────────────────────────────────── */
+.news--modern {
+  background: #0f1115;
+  color: #e6e9ef;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.news--modern .news-title {
+  color: #fff;
+}
+.news--modern .news-sub {
+  color: #7aa2ff;
+}
+.news--modern .news-breaking-label {
+  background: #e0245e;
+  color: #fff;
+  border-radius: 3px;
+}
+.news--modern .news-item {
+  background: #181b22;
+  border: 1px solid #262b36;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.news--modern .news-item--breaking {
+  border-color: #e0245e;
+  box-shadow: 0 0 0 1px #e0245e inset;
+}
+.news--modern .news-cat {
+  color: #7aa2ff;
+}
+
+/* ── Newspaper: light cream broadsheet ───────────────────────────────── */
+.news--newspaper {
+  background: #f4efe2;
+  color: #1a1712;
+  font-family: Georgia, 'Times New Roman', serif;
+}
+.news--newspaper .news-masthead {
+  border-bottom: 3px double #1a1712;
+  padding-bottom: 6px;
+  text-align: center;
+  align-items: center;
+}
+.news--newspaper .news-title {
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  font-variant: small-caps;
+}
+.news--newspaper .news-sub {
+  border-top: 1px solid #1a1712;
+  border-bottom: 1px solid #1a1712;
+  padding: 2px 0;
+  width: 100%;
+  text-align: center;
+}
+.news--newspaper .news-breaking-label {
+  border: 2px solid #1a1712;
+  font-style: italic;
+}
+.news--newspaper .news-list {
+  column-count: 2;
+  column-gap: 18px;
+  column-rule: 1px solid #cbbfa6;
+  display: block;
+}
+.news--newspaper .news-item {
+  break-inside: avoid;
+  border-bottom: 1px solid #cbbfa6;
+}
+.news--newspaper .news-item--breaking {
+  column-span: all;
+  border: 2px solid #1a1712;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.news--newspaper .news-item-body {
+  text-align: justify;
+}
+.news--newspaper .news-item--breaking .news-item-body {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* ── Flyer: worn, photocopied black & white notice ───────────────────── */
+.news--flyer {
+  position: relative;
+  /* aged, grubby paper: yellowed base + uneven toner blotches + foxing spots */
+  background-color: #e9e3d2;
+  background-image:
+    radial-gradient(120px 80px at 12% 18%, rgba(80, 60, 20, 0.10), transparent 70%),
+    radial-gradient(160px 120px at 88% 72%, rgba(60, 45, 15, 0.12), transparent 70%),
+    radial-gradient(40px 40px at 70% 22%, rgba(70, 50, 20, 0.14), transparent 70%),
+    radial-gradient(30px 30px at 30% 80%, rgba(70, 50, 20, 0.13), transparent 70%),
+    linear-gradient(95deg, rgba(0, 0, 0, 0.05), transparent 40%, rgba(0, 0, 0, 0.06));
+  color: #15120c;
+  font-family: 'Courier New', ui-monospace, monospace;
+  /* faded photocopy: slightly washed + grainy contrast */
+  filter: contrast(1.08) sepia(0.12) brightness(0.98);
+  text-shadow: 0.4px 0 rgba(0, 0, 0, 0.35), -0.3px 0.3px rgba(0, 0, 0, 0.18);
+}
+/* coffee ring stain, top-right */
+.news--flyer::before {
+  content: '';
+  position: absolute;
+  top: 8%;
+  right: 6%;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 4px solid rgba(92, 64, 24, 0.22);
+  box-shadow: inset 0 0 0 2px rgba(92, 64, 24, 0.10);
+  pointer-events: none;
+}
+/* smudge / scuff band across the sheet */
+.news--flyer::after {
+  content: '';
+  position: absolute;
+  left: -5%;
+  bottom: 22%;
+  width: 110%;
+  height: 26px;
+  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.07) 30%, rgba(0, 0, 0, 0.04) 60%, transparent);
+  transform: rotate(-1.4deg);
+  pointer-events: none;
+}
+.news--flyer .news-masthead {
+  position: relative;
+  border: 3px solid #15120c;
+  outline: 1px solid #15120c;
+  outline-offset: 2px;
+  padding: 6px 8px;
+  text-align: center;
+  align-items: center;
+  transform: rotate(-0.7deg);
+  /* torn / dog-eared bottom-right corner */
+  clip-path: polygon(0 0, 100% 0, 100% 78%, 94% 100%, 0 100%);
+  box-shadow: 2px 3px 0 rgba(0, 0, 0, 0.18);
+}
+.news--flyer .news-title {
+  font-size: 26px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  /* ink not pressed evenly — patchy weight */
+  text-shadow: 0.6px 0.4px rgba(0, 0, 0, 0.4), -0.5px 0 rgba(0, 0, 0, 0.25);
+}
+.news--flyer .news-sub {
+  opacity: 0.92;
+}
+.news--flyer .news-breaking-label {
+  background: #15120c;
+  color: #e9e3d2;
+  border-radius: 0;
+  transform: rotate(-1deg);
+  box-shadow: 1px 1px 0 rgba(0, 0, 0, 0.3);
+}
+.news--flyer .news-item {
+  position: relative;
+  border: 2px solid #15120c;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.16);
+}
+/* each notice tacked up a little askew */
+.news--flyer .news-item:nth-child(odd) { transform: rotate(0.6deg); }
+.news--flyer .news-item:nth-child(even) { transform: rotate(-0.8deg); }
+/* a strip of yellowed sticky tape at the top */
+.news--flyer .news-item::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  width: 46px;
+  height: 14px;
+  transform: translateX(-50%) rotate(-2deg);
+  background: rgba(190, 170, 110, 0.38);
+  border-left: 1px dashed rgba(0, 0, 0, 0.18);
+  border-right: 1px dashed rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+.news--flyer .news-item--breaking {
+  background: #15120c;
+  color: #e9e3d2;
+  transform: rotate(-0.4deg);
+}
+.news--flyer .news-item--breaking .news-cat,
+.news--flyer .news-item--breaking .news-time {
+  color: #e9e3d2;
+}
+.news--flyer .news-item-body {
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.news--flyer .news-item-meta {
+  opacity: 0.85;
+}
