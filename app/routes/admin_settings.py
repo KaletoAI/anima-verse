@@ -3046,9 +3046,17 @@ async function populateComfySelect(path, type) {
         items = cache[type] || [];
     }
     // Workflow "Filter Pattern" auf Modell-/UNet-Listen anwenden (nicht CLIP —
-    // CLIP-Namen passen nicht zum Checkpoint-Glob). Aktueller Wert bleibt unten
-    // als Option erhalten, auch wenn er rausgefiltert wuerde.
-    if (type === 'checkpoints') items = comfyApplyFilter(items, comfyFilterForPath(path));
+    // CLIP-Namen passen nicht zum Checkpoint-Glob). NICHT-destruktiv: trifft das
+    // Pattern keinen Eintrag, lieber ALLE zeigen (statt leer) — sonst sieht es
+    // aus wie "Server not running", obwohl nur der Filter nichts trifft.
+    if (type === 'checkpoints' && items.length) {
+        const pat = String(comfyFilterForPath(path) || '').trim();
+        if (pat) {
+            const filtered = comfyApplyFilter(items, pat);
+            if (filtered.length) items = filtered;
+            else toast('Filter Pattern "' + pat + '" matches no model — showing all', 'error');
+        }
+    }
     const current = sel.value;
     let opts = '<option value="">— none —</option>';
     for (const m of items) {
@@ -3481,8 +3489,16 @@ function renderLoraField(loras, path, maxItems) {
 
 async function populateLoraSelects(path, maxItems) {
     const cache = await loadComfyModels();
-    const items = comfyApplyFilter(cache.loras || [], comfyFilterForPath(path));
-    if (!items.length) { toast('No LoRAs found (check Filter Pattern / server).', 'error'); return; }
+    const all = cache.loras || [];
+    // Nicht-destruktiv: Filter anwenden, aber bei 0 Treffern ALLE zeigen.
+    let items = all;
+    const pat = String(comfyFilterForPath(path) || '').trim();
+    if (pat && all.length) {
+        const filtered = comfyApplyFilter(all, pat);
+        if (filtered.length) items = filtered;
+        else toast('Filter Pattern "' + pat + '" matches no LoRA — showing all', 'error');
+    }
+    if (!items.length) { toast('No LoRAs found. Server running?', 'error'); return; }
     for (let i = 0; i < maxItems; i++) {
         const sel = document.getElementById('lora-' + path + '-' + i);
         if (!sel) continue;

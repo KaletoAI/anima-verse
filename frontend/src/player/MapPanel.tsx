@@ -16,6 +16,27 @@ const CELL = 72
 const GAP = 0 // Zellen stoßen aneinander → zusammenhängende Karte (keine Lücken)
 const PAD = 6
 const VIEW_KEY = 'anima.map2d.view'
+const LABELS_KEY = 'anima.map2d.labels'
+
+// Label-Anzeige: alle / nur eindeutige / keine. "Eindeutig" = kein Durchgang
+// (passable=false), also benannte Einzelorte; Durchgangs-/Terrain-Elemente wie
+// "Stadtteil" werden ausgeblendet. Modus wird in PlayerApp gehalten (Button im
+// Panel-Header) und hier nur angewandt. Persistenz-Helfer exportiert.
+export type LabelMode = 'all' | 'unique' | 'none'
+const LABEL_CYCLE: LabelMode[] = ['all', 'unique', 'none']
+export function loadLabelMode(): LabelMode {
+  try {
+    const v = localStorage.getItem(LABELS_KEY)
+    if (v === 'all' || v === 'unique' || v === 'none') return v
+  } catch { /* ignore */ }
+  return 'all'
+}
+export function nextLabelMode(m: LabelMode): LabelMode {
+  return LABEL_CYCLE[(LABEL_CYCLE.indexOf(m) + 1) % LABEL_CYCLE.length]
+}
+export function saveLabelMode(m: LabelMode): void {
+  try { localStorage.setItem(LABELS_KEY, m) } catch { /* ignore */ }
+}
 
 interface WLoc {
   id: string; name: string; grid_x?: number | null; grid_y?: number | null
@@ -72,8 +93,8 @@ function MapIcon({ loc }: { loc: WLoc }) {
   )
 }
 
-function Cell({ loc, isActive, chars, events, travellingTo }: {
-  loc: WLoc; isActive: boolean; chars: WChar[]; events: WEvent[]; travellingTo: string
+function Cell({ loc, isActive, chars, events, travellingTo, showLabel }: {
+  loc: WLoc; isActive: boolean; chars: WChar[]; events: WEvent[]; travellingTo: string; showLabel: boolean
 }) {
   const hasDanger = events.some((e) => e.category === 'danger')
   const tooltip = events.map((e) => `${(e.category || '').toUpperCase()}: ${e.text || ''}`).join('\n')
@@ -86,12 +107,14 @@ function Cell({ loc, isActive, chars, events, travellingTo }: {
       <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
         <MapIcon loc={loc} />
       </div>
-      <div style={{
-        position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: '0.6em',
-        textAlign: 'center', background: 'rgba(0,0,0,0.55)', color: '#fff',
-        padding: '1px 2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontStyle: loc.passable ? 'italic' : 'normal',
-      }}>{loc.name}</div>
+      {showLabel ? (
+        <div style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: '0.6em',
+          textAlign: 'center', background: 'rgba(0,0,0,0.55)', color: '#fff',
+          padding: '1px 2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontStyle: loc.passable ? 'italic' : 'normal',
+        }}>{loc.name}</div>
+      ) : null}
       {isActive ? <div style={{ position: 'absolute', top: 1, right: 2, fontSize: '0.8em', zIndex: 5 }}>📍</div> : null}
       {events.length > 0 ? (
         <div className={`worldmap-event-pin ${hasDanger ? 'worldmap-event-pin-danger' : 'worldmap-event-pin-disruption'}`}
@@ -120,8 +143,8 @@ function Cell({ loc, isActive, chars, events, travellingTo }: {
   )
 }
 
-export function MapPanel({ currentLocationId, autoFit = false }:
-  { currentLocationId: string; autoFit?: boolean }) {
+export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all' }:
+  { currentLocationId: string; autoFit?: boolean; labelMode?: LabelMode }) {
   const { t } = useI18n()
   const [data, setData] = useState<WorldMap | null>(null)
   // autoFit (vergrößertes Overlay): gespeicherte Ansicht ignorieren, stattdessen
@@ -240,6 +263,15 @@ export function MapPanel({ currentLocationId, autoFit = false }:
     placed.forEach((l) => byCell.set(`${l.grid_x},${l.grid_y}`, l))
     const charsAt = (id: string) => data.characters.filter((c) => c.location_id === id)
 
+    // "Eindeutig" = kein Durchgang (passable=false): benannte Einzelorte.
+    // Durchgangs-/Terrain-Elemente (passable, z.B. "Stadtteil") gelten NICHT
+    // als eindeutig und werden im unique-Modus ausgeblendet.
+    const showLabelFor = (l: WLoc): boolean => {
+      if (labelMode === 'none') return false
+      if (labelMode === 'all') return true
+      return !l.passable
+    }
+
     const els: React.ReactNode[] = []
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
@@ -250,7 +282,8 @@ export function MapPanel({ currentLocationId, autoFit = false }:
         }
         els.push(
           <Cell key={`${x},${y}`} loc={l} isActive={l.id === current}
-            chars={charsAt(l.id)} events={data.events_by_location[l.id] || []} travellingTo={travellingTo} />,
+            chars={charsAt(l.id)} events={data.events_by_location[l.id] || []} travellingTo={travellingTo}
+            showLabel={showLabelFor(l)} />,
         )
       }
     }
@@ -264,7 +297,7 @@ export function MapPanel({ currentLocationId, autoFit = false }:
     const gH = rows * CELL + (rows - 1) * GAP + PAD * 2
 
     return { cells: grid, gridW: gW, gridH: gH }
-  }, [data, current, travellingTo])
+  }, [data, current, travellingTo, labelMode])
 
   // Restore saved scroll once after first load, else center the grid.
   useEffect(() => {
@@ -321,7 +354,11 @@ export function MapPanel({ currentLocationId, autoFit = false }:
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+      // Natürliche Inhaltsgröße melden, damit das Autosize in PlayerApp BREITE
+      // und Höhe setzen kann (DOM-Messung scheitert, weil die Karte intern
+      // scrollt/fittet). Nur im Grid-Panel (nicht im autoFit-Overlay).
+      {...(!autoFit && gridW ? { 'data-content-w': Math.round(gridW), 'data-content-h': Math.round(gridH) } : {})}>
       <div ref={containerRef} onMouseDown={onDown}
         style={{ flex: 1, minHeight: 0, overflow: 'auto', cursor: 'grab' }}>
         <div style={{ width: gridW * zoom, height: gridH * zoom }}>

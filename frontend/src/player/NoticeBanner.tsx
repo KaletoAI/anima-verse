@@ -51,10 +51,10 @@ export function NoticeBanner() {
   // darunter nicht durchscheint. Explizite helle Textfarbe (nicht `inherit`),
   // sonst ist die Schrift je nach Theme/Kontext auf dem dunklen Block unlesbar.
   const row = (accent: string): CSSProperties => ({
-    display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px',
+    display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
     borderRadius: 8, background: 'rgba(16,18,24,0.94)', color: 'var(--text, #e6edf3)',
     border: '1px solid rgba(255,255,255,0.12)', borderLeft: `4px solid ${accent}`,
-    fontSize: '0.82em', maxWidth: '100%', boxShadow: '0 2px 8px rgba(0,0,0,0.45)',
+    fontSize: 13, lineHeight: 1.35, maxWidth: '100%', boxShadow: '0 2px 8px rgba(0,0,0,0.45)',
     pointerEvents: 'auto',
   })
 
@@ -74,8 +74,8 @@ export function NoticeBanner() {
       {/* Force-Regel als zentrierter, schlanker Separator. */}
       {n.force_warning && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 10, width: 'min(560px, 70vw)',
-          fontSize: '0.8em', opacity: 0.85, color: 'var(--text, #e6edf3)',
+          display: 'flex', alignItems: 'center', gap: 10, width: 'min(560px, 70vw)', maxWidth: '100%',
+          fontSize: 12.5, opacity: 0.85, color: 'var(--text, #e6edf3)',
         }}>
           <span style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.16)' }} />
           <span style={{ flex: '0 0 auto', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '80%' }}>
@@ -86,7 +86,8 @@ export function NoticeBanner() {
       )}
       {hasLeftItems && (
         <div style={{
-          display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 'min(560px, 70vw)',
+          display: 'flex', flexDirection: 'column', gap: 4,
+          width: 'min(560px, 70vw)', maxWidth: '100%',
         }}>
           {n.leave_blocked && (
             <div style={row('#e05656')}>

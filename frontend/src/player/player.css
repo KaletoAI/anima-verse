@@ -308,6 +308,30 @@
   border-color: var(--accent, #6aa9ff);
   color: var(--accent, #6aa9ff);
 }
+/* Panel dient gerade als Vollbild-Hintergrund — deutlich abgesetzt. */
+.play-tbtn.bg {
+  opacity: 1;
+  background: var(--accent, #2f81f7);
+  border-color: var(--accent, #2f81f7);
+  color: #fff;
+}
+
+/* Vollbild-Hintergrund (z.B. Surroundings „Set as background"): liegt hinter
+   den Panels (z 10+) und der Toolbar (z 1000), bleibt aber interaktiv. Der
+   Grid-Wrapper schaltet seine leeren Flächen durchlässig, Panels bleiben aktiv. */
+.player-bg-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+.player-root.has-bg .play-grid-wrap {
+  position: relative;
+  z-index: 2;
+  pointer-events: none;
+}
+.player-root.has-bg .play-grid-wrap .react-grid-item {
+  pointer-events: auto;
+}
 
 /* Badge „offene Themen" (Telefon-Unread / neue IG-Posts) oben rechts am Button. */
 .play-tbtn-badge {
@@ -378,6 +402,16 @@
   background: var(--accent, #6aa9ff);
   opacity: 0.18;
   border-radius: 10px;
+}
+
+/* Keine Position/Größen-Transition der Grid-Panels. Die GridLayout wird beim
+   Ein-/Ausblenden eines Panels bewusst neu gemountet (sonst erscheint ein
+   wieder-geöffnetes Panel als 1×1) — die RGL-Default-Transition ließ dabei alle
+   Panels „von rechts nach links neu aufbauen". Panels sitzen so sofort an ihrer
+   Position; Drag/Resize folgen dem Cursor weiterhin direkt. */
+.player-root .react-grid-item,
+.player-root .react-grid-item.cssTransforms {
+  transition: none;
 }
 
 /* "denkt …"-Indikator: drei pulsende Punkte (Szene + Task-Panel). */

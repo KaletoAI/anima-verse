@@ -600,8 +600,10 @@ async def play_notices(user=Depends(get_current_user)):
         from app.models.notifications import get_notifications, get_unread_count
         items = get_notifications(limit=10, unread_only=True,
                                   character_whitelist=[avatar]) or []
-        out["notifications"] = [{"id": n.get("id"), "kind": n.get("kind", ""),
-                                 "body": n.get("body", "") or n.get("title", "")}
+        # _row_to_notification liefert content/type/character (NICHT body/kind/
+        # title) — sonst bleiben die Banner-Zeilen leer.
+        out["notifications"] = [{"id": n.get("id"), "kind": n.get("type", ""),
+                                 "body": n.get("content", "")}
                                 for n in items]
         out["unread_count"] = get_unread_count(character_whitelist=[avatar])
     except Exception as ex:

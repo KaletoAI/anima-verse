@@ -23,7 +23,7 @@ import { SceneView, type SceneLine } from '../components/SceneView'
 import { ScenesRecap } from './ScenesRecap'
 import { MovePad } from './MovePad'
 import { EnvironmentPanel } from './EnvironmentPanel'
-import { MapPanel } from './MapPanel'
+import { MapPanel, type LabelMode, loadLabelMode, nextLabelMode, saveLabelMode } from './MapPanel'
 import { TaskPanel } from './TaskPanel'
 import { NewsPanel } from './NewsPanel'
 import { LayoutsPanel } from './LayoutsPanel'
@@ -159,6 +159,8 @@ export function PlayerApp() {
   const [phoneUnread, setPhoneUnread] = useState(0)
   const [igNew, setIgNew] = useState(0)
   const [expanded, setExpanded] = useState<string | null>(null)  // Panel im View-only-Overlay vergrößert
+  const [bgPanel, setBgPanel] = useState<string>('')             // Panel-id, die als Vollbild-Hintergrund dient ('' = keine)
+  const [mapLabelMode, setMapLabelMode] = useState<LabelMode>(loadLabelMode)  // Map-Beschriftungen: all/unique/none
   const igSeenRef = useRef<string | null>(null)  // zuletzt gesehene IG-Post-id
   const rootRef = useRef<HTMLDivElement | null>(null)
   const layoutLoaded = useRef(false)
@@ -171,6 +173,8 @@ export function PlayerApp() {
   const frozenRef = useRef(frozen)
   const frozenWidthRef = useRef(frozenWidth)
   const widthRef = useRef(width)
+  const bgPanelRef = useRef(bgPanel)
+  bgPanelRef.current = bgPanel
   layoutRef.current = layout
   openRef.current = open
   autosizeRef.current = autosize
@@ -185,6 +189,7 @@ export function PlayerApp() {
       grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current,
       iconMode: iconModeRef.current, toolbarAlign: toolbarAlignRef.current,
       frozen: frozenRef.current, frozenWidth: frozenWidthRef.current,
+      bg: bgPanelRef.current,
     } }).catch(() => { /* best-effort */ })
   }, [])
 
@@ -204,6 +209,7 @@ export function PlayerApp() {
           if (v.toolbarAlign === 'left' || v.toolbarAlign === 'right') setToolbarAlign(v.toolbarAlign)
           if (typeof v.frozenWidth === 'number' && v.frozenWidth > 0) setFrozenWidth(v.frozenWidth)
           if (v.frozen === true) setFrozen(true)
+          if (typeof v.bg === 'string') setBgPanel(v.bg)
         }
       })
       .catch(() => { /* Default behalten */ })
@@ -284,6 +290,22 @@ export function PlayerApp() {
     if (layoutLoaded.current) persist()
   }, [persist])
 
+  // Surroundings als Vollbild-Hintergrund: Panel verliert Kopf/Kachel, der
+  // Inhalt (inkl. Figuren-Drag) läuft als interaktiver Background weiter.
+  const setAsBackground = useCallback((id: string) => {
+    bgPanelRef.current = id
+    setBgPanel(id)
+    if (layoutLoaded.current) persist()
+  }, [persist])
+  const clearBackground = useCallback(() => {
+    bgPanelRef.current = ''
+    setBgPanel('')
+    if (layoutLoaded.current) persist()
+  }, [persist])
+  const cycleMapLabel = useCallback(() => {
+    setMapLabelMode((m) => { const n = nextLabelMode(m); saveLabelMode(n); return n })
+  }, [])
+
   const chooseIconMode = useCallback((m: IconMode) => {
     iconModeRef.current = m
     setIconMode(m)
@@ -316,10 +338,12 @@ export function PlayerApp() {
     openRef.current = INITIAL_OPEN
     autosizeRef.current = []
     frozenRef.current = false
+    bgPanelRef.current = ''
     setLayout(DEFAULT_LAYOUT)
     setOpen(INITIAL_OPEN)
     setAutosize([])
     setFrozen(false)  // zurück in den responsiven Modus
+    setBgPanel('')    // Vollbild-Hintergrund aufheben
     persist()
   }, [persist])
 
@@ -399,6 +423,21 @@ export function PlayerApp() {
           <Icon name="maximize" size={14} />
         </button>
       )}
+      {id === 'env' && (
+        <button className="player-ctrl-btn"
+          onClick={() => setAsBackground('env')} onMouseDown={(e) => e.stopPropagation()}
+          title={t('Set as background')} aria-label={t('Set as background')}>
+          <Icon name="background" size={14} />
+        </button>
+      )}
+      {id === 'worldmap' && (
+        <button className={`player-ctrl-btn${mapLabelMode !== 'all' ? ' on' : ''}`}
+          onClick={cycleMapLabel} onMouseDown={(e) => e.stopPropagation()}
+          title={`${t('Map labels')}: ${mapLabelMode === 'all' ? t('all') : mapLabelMode === 'unique' ? t('unique') : t('off')}`}
+          aria-label={t('Map labels')}>
+          <Icon name="tag" size={14} />
+        </button>
+      )}
       {withClose && (
         <button className="player-ctrl-btn player-ctrl-close"
           onClick={() => closePanel(id)} onMouseDown={(e) => e.stopPropagation()}
@@ -420,7 +459,7 @@ export function PlayerApp() {
   // View-only-Inhalt eines Panels für die vergrößerte Anzeige. Erweiterbar:
   // hier pro EXPANDABLE-Panel den (read-only) Inhalt zurückgeben.
   const expandedContent = (id: string): ReactNode => {
-    if (id === 'worldmap') return <MapPanel currentLocationId={data?.location_id || ''} autoFit />
+    if (id === 'worldmap') return <MapPanel currentLocationId={data?.location_id || ''} autoFit labelMode={mapLabelMode} />
     return null
   }
 
@@ -737,21 +776,24 @@ export function PlayerApp() {
     </div>
   )
 
+  const envContent = (
+    <EnvironmentPanel
+      locationId={data?.location_id || ''}
+      roomId={data?.room_id || ''}
+      locationName={data?.location_name || ''}
+      roomName={data?.room_name || ''}
+      present={data?.present_detail || []}
+      avatarName={data?.avatar || ''}
+      avatarExprVersion={data?.avatar_expr_version || ''}
+      bgVersion={data?.bg_version || ''}
+      bgId={data?.bg_id || ''}
+    />
+  )
   const envPanel = (
     <div key="env" className="player-panel" style={{ zIndex: zOf('env') }} onMouseDownCapture={() => bringToFront('env')}>
       <div className="player-panel-head">{headIcon('env')}{t('Surroundings')}{headerControls('env', true)}</div>
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden' }}>
-        <EnvironmentPanel
-          locationId={data?.location_id || ''}
-          roomId={data?.room_id || ''}
-          locationName={data?.location_name || ''}
-          roomName={data?.room_name || ''}
-          present={data?.present_detail || []}
-          avatarName={data?.avatar || ''}
-          avatarExprVersion={data?.avatar_expr_version || ''}
-          bgVersion={data?.bg_version || ''}
-          bgId={data?.bg_id || ''}
-        />
+        {envContent}
       </div>
     </div>
   )
@@ -760,7 +802,7 @@ export function PlayerApp() {
     <div key="worldmap" className="player-panel" style={{ zIndex: zOf('worldmap') }} onMouseDownCapture={() => bringToFront('worldmap')}>
       <div className="player-panel-head">{headIcon('worldmap')}{t('Map')}{headerControls('worldmap', true)}</div>
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden', padding: 4 }}>
-        <MapPanel currentLocationId={data?.location_id || ''} />
+        <MapPanel currentLocationId={data?.location_id || ''} labelMode={mapLabelMode} />
       </div>
     </div>
   )
@@ -887,7 +929,7 @@ export function PlayerApp() {
   // Effekt entfernt es → erscheint automatisch sobald jemand da ist, auch beim
   // Location-Wechsel; verschwindet wenn man allein ist).
   const renderedIds = GRID_PANELS.filter(
-    (id) => byId[id] && open.includes(id) && (id !== 'others' || hasOthers))
+    (id) => byId[id] && open.includes(id) && id !== bgPanel && (id !== 'others' || hasOthers))
   // Vorderstes Panel (höchster z-index) = aktiv → bekommt einen dezenten
   // Akzent-Streifen am Kopf + stärkeren Schatten, damit klar ist welches vorn liegt.
   const frontId = renderedIds.reduce<string | undefined>(
@@ -936,12 +978,24 @@ export function PlayerApp() {
       const body = bodyOf(id)
       if (!panel || !body) return
       const head = panel.querySelector('.player-panel-head') as HTMLElement | null
-      const contentH = body.offsetHeight + (head ? head.offsetHeight : 0)
+      const headH = head ? head.offsetHeight : 0
       const minH = DEFAULT_BY_ID[id]?.minH ?? 4
+      const minW = DEFAULT_BY_ID[id]?.minW ?? 4
+      // Inhalt darf seine natürliche Größe selbst melden (z.B. Map via
+      // data-content-w/h), da DOM-Messung bei intern scrollendem Inhalt scheitert.
+      // Dann wird BREITE + Höhe daraus gesetzt; sonst nur Höhe via offsetHeight.
+      const reporter = body.querySelector('[data-content-w]') as HTMLElement | null
+      const reportedW = reporter ? parseFloat(reporter.getAttribute('data-content-w') || '') : NaN
+      const reportedH = reporter ? parseFloat(reporter.getAttribute('data-content-h') || '') : NaN
+      const contentH = (reporter && reportedH > 0 ? reportedH : body.offsetHeight) + headH
       const rows = Math.max(minH, Math.ceil((contentH + MARGIN) / (CELL + MARGIN)))
       const cur = layoutRef.current.find((l) => l.i === id)
-      if (!cur || cur.h === rows) return
-      const next = layoutRef.current.map((l) => (l.i === id ? { ...l, h: rows } : l))
+      if (!cur) return
+      const newW = (reporter && reportedW > 0)
+        ? Math.max(minW, Math.ceil((reportedW + MARGIN) / (CELL + MARGIN)))
+        : cur.w
+      if (cur.h === rows && cur.w === newW) return
+      const next = layoutRef.current.map((l) => (l.i === id ? { ...l, h: rows, w: newW } : l))
       layoutRef.current = next
       setLayout(next)
       if (saveTimer.current) clearTimeout(saveTimer.current)
@@ -960,9 +1014,9 @@ export function PlayerApp() {
   }, [autosizeKey, openKey, persist])
 
   // --- Toolbar (Launcher) -------------------------------------------------
-  const tbBtn = (id: string, label: string, icon: IconName, isOpen: boolean, onClick: () => void, badge = 0) => (
+  const tbBtn = (id: string, label: string, icon: IconName, isOpen: boolean, onClick: () => void, badge = 0, bg = false) => (
     <button key={id} onClick={onClick} title={t(label)} aria-label={t(label)} aria-pressed={isOpen}
-      className={`play-tbtn${isOpen ? ' open' : ''}${iconMode === 'iconText' ? ' with-text' : ''}`}
+      className={`play-tbtn${isOpen ? ' open' : ''}${bg ? ' bg' : ''}${iconMode === 'iconText' ? ' with-text' : ''}`}
       style={{ position: 'relative' }}>
       <Icon name={icon} size={15} />
       {iconMode === 'iconText' && <span className="play-tbtn-label">{t(label)}</span>}
@@ -976,7 +1030,14 @@ export function PlayerApp() {
   const panelToggles = PANEL_META
     .filter((p) => p.kind !== 'dialog')
     .filter((p) => p.id !== 'others' || hasOthers)
-    .map((p) => tbBtn(p.id, p.label, p.icon, open.includes(p.id), () => togglePanel(p.id), badgeOf(p.id)))
+    .map((p) => {
+      // Surroundings im Background-Modus: Button anders darstellen, Klick stellt
+      // den normalen Panel-Zustand wieder her.
+      if (p.id === bgPanel) {
+        return tbBtn(p.id, 'Restore from background', p.icon, true, clearBackground, 0, true)
+      }
+      return tbBtn(p.id, p.label, p.icon, open.includes(p.id), () => togglePanel(p.id), badgeOf(p.id))
+    })
   const layoutsMeta = PANEL_META.find((p) => p.id === 'layouts')!
   const fixedCluster = (
     <>
@@ -1029,7 +1090,10 @@ export function PlayerApp() {
 
   return (
     <LightboxProvider>
-    <div className="player-root" ref={rootRef}>
+    <div className={`player-root${bgPanel ? ' has-bg' : ''}`} ref={rootRef}>
+      {bgPanel === 'env' && (
+        <div className="player-bg-layer">{envContent}</div>
+      )}
       <div className="play-toolbar">
         <div className="play-toolbar-group play-toolbar-start">
           {toolbarAlign === 'left' && panelToggles}
@@ -1040,7 +1104,7 @@ export function PlayerApp() {
         </div>
       </div>
       <NoticeBanner />
-      <div style={frozenActive ? { width, height: gridContentH * fitScale, overflow: 'hidden' } : undefined}>
+      <div className="play-grid-wrap" style={frozenActive ? { width, height: gridContentH * fitScale, overflow: 'hidden' } : undefined}>
         <div style={frozenActive
           ? { width: renderWidth, transform: `scale(${fitScale})`, transformOrigin: 'top left' }
           : undefined}>
@@ -1101,6 +1165,14 @@ export function PlayerApp() {
           <div className="player-panel-head">
             {headIcon(expanded)}{t(LABEL_BY_ID[expanded] || 'Map')}
             <span className="player-head-ctrls">
+              {expanded === 'worldmap' && (
+                <button className={`player-ctrl-btn${mapLabelMode !== 'all' ? ' on' : ''}`}
+                  onClick={cycleMapLabel}
+                  title={`${t('Map labels')}: ${mapLabelMode === 'all' ? t('all') : mapLabelMode === 'unique' ? t('unique') : t('off')}`}
+                  aria-label={t('Map labels')}>
+                  <Icon name="tag" size={14} />
+                </button>
+              )}
               <button className="player-ctrl-btn player-ctrl-close"
                 onClick={() => setExpanded(null)} title={t('Close')} aria-label={t('Close')}>
                 <Icon name="close" size={15} />

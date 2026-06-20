@@ -30,9 +30,19 @@ def normalize_pose(raw_pose: str, activity_hint: str = "") -> str:
     raw = (raw_pose or "").strip()
     if not raw:
         return ""
-    # Sehr kurze Inputs sind schon "normal".
-    if len(raw.split()) <= 4 and len(raw) <= 40:
-        return raw.lower()
+    # Sehr kurze Inputs sind schon "normal" — ABER nur, wenn keine Orts-/
+    # Szenen-Praeposition drinsteckt. "standing at mountain" / "standing in
+    # lobby" tragen den ORT mit; ohne Normalisierung embedden sie verschieden
+    # und gleiche Koerperposen werden nie zusammengeführt. Solche Faelle laufen
+    # daher durch den Normalizer (der den Ort strippt → exakter Match → merge).
+    _low = raw.lower()
+    _has_location = any(
+        f" {p} " in f" {_low} "
+        for p in ("at", "in", "on", "near", "by", "inside", "outside",
+                  "next to", "in front of", "behind", "beside", "around")
+    )
+    if not _has_location and len(raw.split()) <= 4 and len(raw) <= 40:
+        return _low
 
     try:
         from app.core.prompt_templates import render_task
