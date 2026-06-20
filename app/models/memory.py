@@ -569,11 +569,22 @@ def build_memory_prompt_section(character_name: str,
     commitments = []
     relationships = []
 
+    try:
+        from app.models.character import character_exists
+    except Exception:
+        character_exists = None  # type: ignore
+
     for mem in memories:
         ts = _format_memory_timestamp(mem.get("timestamp", ""))
         ts_prefix = f"({ts}) " if ts else ""
         related = mem.get("related_character", "")
         content = mem.get("content", "")
+
+        # Dangling-Filter: Memory/Commitment, das einen nicht (mehr) in der Welt
+        # existierenden Character referenziert, NICHT in den Prompt ziehen (Daten
+        # bleiben erhalten). Greift nur bei gesetztem related_character.
+        if related and character_exists is not None and not character_exists(related):
+            continue
 
         # Recency-Marker fuer sehr aktuelle Eintraege (< 2 Tage)
         recency_marker = ""

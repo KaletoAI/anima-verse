@@ -868,6 +868,21 @@ def build_relationship_prompt_section(character_name: str
         if not rels:
             return ""
 
+    # Dangling-Filter: Beziehungen zu nicht (mehr) in der Welt existierenden
+    # Characters nicht in den Prompt ziehen (Daten bleiben in der DB erhalten und
+    # tauchen wieder auf, sobald der referenzierte Character importiert wird).
+    try:
+        from app.models.character import character_exists
+        def _other_name(r: Dict[str, Any]) -> str:
+            a = r.get("character_a", "") or ""
+            b = r.get("character_b", "") or ""
+            return b if a.lower() == character_name.lower() else a
+        rels = [r for r in rels if character_exists(_other_name(r))]
+        if not rels:
+            return ""
+    except Exception:
+        pass
+
     # Sort by strength descending, take top 8
     rels.sort(key=lambda r: r.get("strength", 0), reverse=True)
     rels = rels[:8]

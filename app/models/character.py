@@ -2374,6 +2374,24 @@ def generate_random_appearance() -> str:
     return appearance
 
 
+def character_exists(name: str) -> bool:
+    """True wenn ein Character mit diesem Namen in der Welt existiert.
+
+    Case-insensitiver, exakter Name-Match (KEINE Vor-/Nachnamen-Aufloesung).
+    Fuer den Dangling-Filter: Beziehungen/Memories/Commitments, die einen nicht
+    (mehr) existierenden Character referenzieren, werden read-seitig aus Prompts
+    gefiltert (Daten bleiben in der DB, tauchen wieder auf sobald der Character
+    importiert wird). Siehe plan-character-import-fresh-start.md.
+    """
+    n = (name or "").strip().lower()
+    if not n:
+        return False
+    try:
+        return n in {c.lower() for c in list_available_characters()}
+    except Exception:
+        return False
+
+
 def list_available_characters() -> List[str]:
     """Listet alle verfuegbaren Characters aus der DB (Fallback: Dateisystem).
 

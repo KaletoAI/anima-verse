@@ -164,11 +164,15 @@ def _build_commitments_block(character_name: str) -> str:
     """Open commitments — promises this character made and hasn't fulfilled."""
     try:
         from app.models.memory import load_memories
+        from app.models.character import character_exists
         memories = load_memories(character_name)
+        # Dangling-Filter: Commitments gegenueber einem nicht (mehr) existierenden
+        # Character ausblenden (related_character gesetzt aber nicht in der Welt).
         open_ones = [
             m for m in memories
             if m.get("memory_type") == "commitment"
             and "completed" not in (m.get("tags") or [])
+            and not (m.get("related_character") and not character_exists(m.get("related_character")))
         ]
         if not open_ones:
             return ""

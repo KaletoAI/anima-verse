@@ -121,11 +121,17 @@ def _summarize_stale_relationships(character_name: str, max_summaries: int = 0) 
     if max_summaries > 0:
         stale = stale[:max_summaries]
 
+    from app.models.character import character_exists
+
     updates = 0
     for entry in stale:
         related = entry.get("related_character", "")
         facts = entry.get("content", "")
         if not related or not facts:
+            continue
+        # Dangling-Filter: keine Summary fuer Beziehungen zu nicht (mehr) in der
+        # Welt existierenden Characters generieren (Daten bleiben erhalten).
+        if not character_exists(related):
             continue
 
         previous_summary = entry.get("summary", "")
