@@ -279,6 +279,33 @@ def get_item_owners_route(
     return {"owners": owners, "item_id": item_id}
 
 
+@router.get("/ownership")
+def get_ownership_map_route() -> Dict[str, Any]:
+    """Map item_id -> Liste besitzender Characters (fuer den Items-Filter).
+
+    Ein Aufruf statt N x /items/{id}/owners. Items, die in keiner Liste
+    auftauchen, werden von niemandem besessen.
+    """
+    from app.models.character import list_available_characters
+    from app.models.inventory import _load_inventory
+    ownership: Dict[str, List[str]] = {}
+    for char in list_available_characters():
+        try:
+            inv = _load_inventory(char).get("inventory", []) or []
+        except Exception:
+            continue
+        for entry in inv:
+            iid = entry.get("item_id")
+            if not iid:
+                continue
+            chars = ownership.setdefault(iid, [])
+            if char not in chars:
+                chars.append(char)
+    for chars in ownership.values():
+        chars.sort(key=str.lower)
+    return {"ownership": ownership}
+
+
 def _alpha_coverage_too_low(image_path: Path, threshold_pct: float = 5.0) -> bool:
     """True wenn weniger als threshold_pct der Pixel sichtbar (alpha > 32) sind.
 

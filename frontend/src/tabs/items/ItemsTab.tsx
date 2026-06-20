@@ -299,11 +299,25 @@ export function ItemsTab() {
   const [filterCategory, setFilterCategory] = useState<Category | ''>('')
   const [filterRarity, setFilterRarity] = useState<Rarity | ''>('')
   const [filterScope, setFilterScope] = useState<'' | 'world' | 'shared'>('')
+  // Slot-Filter, nur relevant wenn filterCategory === 'outfit_piece'.
+  const [filterSlot, setFilterSlot] = useState('')
+  // '' = all, '__none__' = owned by nobody, otherwise a character name.
+  const [filterOwner, setFilterOwner] = useState('')
   const [characters, setCharacters] = useState<CharacterRef[]>([])
   const [owners, setOwners] = useState<Owner[]>([])
+  const [ownership, setOwnership] = useState<Record<string, string[]>>({})
   const [outfitTypeOptions, setOutfitTypeOptions] = useState<string[]>([])
   const [conditionOptions, setConditionOptions] = useState<ConditionOption[]>([])
   const [genDialogOpen, setGenDialogOpen] = useState(false)
+
+  const loadOwnership = useCallback(async () => {
+    try {
+      const d = await apiGet<{ ownership?: Record<string, string[]> }>('/inventory/ownership')
+      setOwnership(d.ownership || {})
+    } catch {
+      setOwnership({})
+    }
+  }, [])
 
   const reload = useCallback(async () => {
     try {
@@ -316,6 +330,7 @@ export function ItemsTab() {
 
   useEffect(() => {
     reload()
+    loadOwnership()
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
     // Schritt 7 (May 2026, plan-outfit-system-rethink.md §1): Outfit-Typen
     // auf das kurze style_hint-Vokabular reduziert. Items behalten die Tags
@@ -324,7 +339,7 @@ export function ItemsTab() {
     apiGet<{ conditions?: ConditionOption[] }>('/world/conditions/list')
       .then((d) => setConditionOptions(d.conditions || []))
       .catch(() => setConditionOptions([]))
-  }, [reload])
+  }, [reload, loadOwnership])
 
   const loadOwners = useCallback(async (id: string) => {
     if (!id) {
@@ -348,13 +363,33 @@ export function ItemsTab() {
         if (filterRarity && it.rarity !== filterRarity) return false
         if (filterScope === 'shared' && !it._shared) return false
         if (filterScope === 'world' && it._shared) return false
+        if (filterCategory === 'outfit_piece' && filterSlot && !(it.outfit_piece?.slots || []).includes(filterSlot)) return false
+        if (filterOwner) {
+          const ownedBy = ownership[it.id] || []
+          if (filterOwner === '__none__') {
+            if (ownedBy.length > 0) return false
+          } else if (!ownedBy.includes(filterOwner)) {
+            return false
+          }
+        }
         if (q && !((it.name || '').toLowerCase().includes(q) || (it.description || '').toLowerCase().includes(q))) {
           return false
         }
         return true
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  }, [items, search, filterCategory, filterRarity, filterScope])
+  }, [items, search, filterCategory, filterRarity, filterScope, filterSlot, filterOwner, ownership])
+
+  // Belegte Slots aus den vorhandenen Outfit-Pieces ableiten, in kanonischer
+  // Reihenfolge (head→feet) — wie der Slot-Filter im Player-Inventar.
+  const slotOptions = useMemo(() => {
+    if (!items) return []
+    const used = new Set<string>()
+    items.forEach((it) => {
+      if (it.category === 'outfit_piece') (it.outfit_piece?.slots || []).forEach((s) => used.add(s))
+    })
+    return VALID_PIECE_SLOTS.filter((s) => used.has(s))
+  }, [items])
 
   const newItem = useCallback(() => {
     setDraft({ ...EMPTY_DRAFT })
@@ -548,11 +583,12 @@ export function ItemsTab() {
         })
         toast(t('Given'))
         loadOwners(draft.id)
+        loadOwnership()
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [draft, loadOwners, t, toast],
+    [draft, loadOwners, loadOwnership, t, toast],
   )
 
   const removeOwner = useCallback(
@@ -562,11 +598,12 @@ export function ItemsTab() {
         await apiDelete(`/inventory/characters/${encodeURIComponent(characterName)}/${encodeURIComponent(draft.id)}`)
         toast(t('Removed'))
         loadOwners(draft.id)
+        loadOwnership()
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [draft, loadOwners, t, toast],
+    [draft, loadOwners, loadOwnership, t, toast],
   )
 
   if (items === null) return <div className="ga-loading">{t('Loading…')}</div>
@@ -601,7 +638,11 @@ export function ItemsTab() {
             className="ga-input"
             style={{ flex: 1 }}
             value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value as Category | '')}
+            onChange={(e) => {
+              const v = e.target.value as Category | ''
+              setFilterCategory(v)
+              if (v !== 'outfit_piece') setFilterSlot('')
+            }}
           >
             <option value="">{t('All categories')}</option>
             {CATEGORIES.map((c) => (
@@ -634,7 +675,40 @@ export function ItemsTab() {
               </option>
             ))}
           </select>
+          <select
+            className="ga-input"
+            style={{ flex: 1 }}
+            value={filterOwner}
+            onChange={(e) => setFilterOwner(e.target.value)}
+            title={t('Filter by owner')}
+          >
+            <option value="">{t('All owners')}</option>
+            <option value="__none__">{t('Owned by nobody')}</option>
+            {characters.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.display_name || c.name}
+              </option>
+            ))}
+          </select>
         </div>
+        {filterCategory === 'outfit_piece' && (
+          <div className="ga-form-row" style={{ marginTop: 4 }}>
+            <select
+              className="ga-input"
+              style={{ flex: 1 }}
+              value={filterSlot}
+              onChange={(e) => setFilterSlot(e.target.value)}
+              title={t('Filter by slot')}
+            >
+              <option value="">{t('All slots')}</option>
+              {slotOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <ul className="ga-list" style={{ marginTop: 6 }}>
           {filtered.length === 0 ? (
             <li className="ga-list-empty">{t('No items')}</li>
