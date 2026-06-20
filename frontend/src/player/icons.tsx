@@ -14,6 +14,7 @@ export type IconName =
   | 'reset' | 'close' | 'sendBack' | 'autosize' | 'maximize' | 'lock' | 'unlock'
   | 'zoomIn' | 'zoomOut' | 'settings' | 'trash'
   | 'brain' | 'cpu' | 'cloud' | 'sliders'
+  | 'background' | 'tag'
 
 // Jeder Eintrag = der innere Inhalt eines <svg> (Pfade/Formen).
 const PATHS: Record<IconName, JSX.Element> = {
@@ -192,6 +193,20 @@ const PATHS: Record<IconName, JSX.Element> = {
   // Automatic1111 — Regler (lucide "sliders")
   sliders: (
     <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4" />
+  ),
+  // "Als Hintergrund": großer Rahmen mit kleinem Inhalt (Inhalt füllt die Fläche).
+  background: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <rect x="6" y="8" width="8" height="6" rx="1" />
+    </>
+  ),
+  // Label/Tag — für den Map-Beschriftungs-Umschalter.
+  tag: (
+    <>
+      <path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.83 0l4.59-4.59a2 2 0 0 0 0-2.83Z" />
+      <circle cx="7.5" cy="7.5" r="1.5" />
+    </>
   ),
 }
 
