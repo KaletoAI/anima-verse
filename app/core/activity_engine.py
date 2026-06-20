@@ -638,14 +638,22 @@ def apply_hourly_status_tick(character_name: str):
         if not stat_rates:
             return
 
+        # Ruhephase = schlafend ODER offmap/abwesend. Ein gesteuerter Avatar wird
+        # vom Spieler nie schlafen gelegt — die Erholung passiert, waehrend niemand
+        # ihn steuert und er von der Karte verschwunden ist (current_location leer).
+        # Solange zaehlt die Zeit wie Schlaf, damit Energie sich erholt statt zu
+        # verfallen. Template-getrieben ueber bar_hourly_sleeping (kein Hardcoding).
+        from app.models.character import get_character_current_location
         is_sleeping = bool(profile.get("is_sleeping"))
+        is_offmap = not (get_character_current_location(character_name) or "").strip()
+        resting = is_sleeping or is_offmap
         changed = False
         for stat_key, (awake, sleeping) in stat_rates.items():
             if stat_key not in status:
                 continue
 
-            # Im Schlaf den Schlaf-Wert nehmen (falls definiert), sonst Wach-Wert.
-            use_sleep = is_sleeping and sleeping is not None
+            # Im Ruhezustand den Schlaf-Wert nehmen (falls definiert), sonst Wach-Wert.
+            use_sleep = resting and sleeping is not None
             base = sleeping if use_sleep else awake
             # Character-Override: config.{stat}_hourly[_sleeping] ueberschreibt Template.
             override_key = f"{stat_key}_hourly_sleeping" if use_sleep else f"{stat_key}_hourly"
