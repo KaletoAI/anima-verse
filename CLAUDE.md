@@ -120,9 +120,10 @@ it stops acting autonomously).
 
 ## Frontend
 
-Two coexisting UIs:
-- **Legacy vanilla JS** — `templates/index.html` (Jinja) + `static/script.js` + `static/themes/`. The classic chat/admin surface.
-- **React/Vite SPA** in `frontend/` — builds to `static/game_admin/` and is served by FastAPI at two routes from one project: `index.html` → **Game-Admin** (`/game-admin`), `play.html` → **Player UI** (`/play`). Tabs are registered in `frontend/src/tabs/registry.ts`; player panels in `frontend/src/player/`; API client in `frontend/src/lib/api.ts`.
+The legacy vanilla-JS UI (`templates/index.html` + `static/script.js`) was **removed** (commit `3f434d7`);
+`/` now redirects to `/play`. Two surfaces remain:
+- **Python-rendered admin pages** — `/admin/settings`, `/admin/users`, `/admin/llm-stats`, `/admin/models`, `/admin/agent-loop`, `/admin/templates`, `/logs/*`, `/dashboard`. These are the active server-side config surface (no React replacement) and need a **server restart** to reflect JS changes.
+- **React/Vite SPA** in `frontend/` — builds to `static/game_admin/`, served by FastAPI as two routes from one project: `index.html` → **Game-Admin** (`/game-admin`), `play.html` → **Player UI** (`/play`). Tabs registered in `frontend/src/tabs/registry.ts`; player panels in `frontend/src/player/`; API client in `frontend/src/lib/api.ts`. Built assets in `static/game_admin/assets/` are committed — `npm run build` regenerates them.
 
 New work is React. Modals inside the `/play` react-grid-layout must be rendered via `createPortal` to
 `document.body`, or they render as an empty floating window. No `window.prompt/alert/confirm` — build real
