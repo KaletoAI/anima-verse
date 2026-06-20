@@ -48,6 +48,14 @@ async def login(request: Request, response: Response) -> Dict[str, Any]:
     _set_session_cookie(response, token)
     logger.info("Login: %s (role=%s)", user["username"], user["role"])
 
+    # Avatar-only Presence: Avatar materialisieren + (falls offmap) zurueckholen,
+    # sonst bleibt er nach Logout/Reaper "ohne Raum". Siehe plan-avatar-only-presence.md.
+    try:
+        from app.models.account import restore_avatar_on_login
+        restore_avatar_on_login(user)
+    except Exception:
+        logger.warning("restore_avatar_on_login fehlgeschlagen fuer %s", user.get("username"))
+
     return {
         "status": "success",
         "user": {
@@ -62,6 +70,13 @@ async def login(request: Request, response: Response) -> Dict[str, Any]:
 @router.post("/logout")
 def logout(request: Request, response: Response) -> Dict[str, Any]:
     """Loggt aus — Session serverseitig loeschen + Cookie clearen."""
+    # Avatar freigeben (avatar-only Characters verschwinden dadurch von der Karte).
+    # Vor delete_session, solange der User noch im Request-Context steht.
+    try:
+        from app.models.account import release_active_character
+        release_active_character()
+    except Exception:
+        pass
     token = request.cookies.get(sessions.SESSION_COOKIE_NAME)
     if token:
         sessions.delete_session(token)

@@ -3044,6 +3044,50 @@ def wake_from_offmap(character_name: str) -> bool:
     return True
 
 
+def appear_in_world(character_name: str) -> bool:
+    """Bringt einen offmap-Character zurueck in die Welt (Avatar-Uebernahme).
+
+    Fallback-Kette: 1) letzter Steuer-Ort via :func:`wake_from_offmap`,
+    2) ``home_location`` aus der Config, 3) erste Welt-Location als Default.
+    Idempotent — steht der Character schon irgendwo, ist es ein no-op.
+
+    Returns True wenn der Character platziert wurde.
+    """
+    if wake_from_offmap(character_name):
+        return True
+    profile = get_character_profile(character_name) or {}
+    if (profile.get("current_location") or "").strip():
+        return False  # steht schon irgendwo
+    target = None
+    try:
+        from app.models.world import get_location, get_entry_room_id, list_locations
+        cfg = get_character_config(character_name) or {}
+        home = (cfg.get("home_location") or "").strip()
+        if home and home != OFFMAP_SLEEP_SENTINEL:
+            target = get_location(home)
+        if target is None:
+            locs = list_locations()
+            target = locs[0] if locs else None
+        if not target:
+            return False
+        loc_id = target.get("id") or ""
+        if not loc_id:
+            return False
+        room_id = get_entry_room_id(target)
+    except Exception as e:
+        get_logger("character").error("appear_in_world fuer %s fehlgeschlagen: %s", character_name, e)
+        return False
+    profile["current_location"] = loc_id
+    if room_id:
+        profile["current_room"] = room_id
+    profile.pop("_offmap_return_location", None)
+    profile.pop("_offmap_return_room", None)
+    save_character_profile(character_name, profile)
+    get_logger("character").info(
+        "Appear-in-world: %s -> %s/%s", character_name, loc_id, room_id or "-")
+    return True
+
+
 def is_character_sleeping(character_name: str) -> bool:
     """Prueft ob der Character gerade wirklich schlaeft.
 

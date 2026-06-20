@@ -499,6 +499,28 @@
           "default": "false",
           "hint": "When active, this character does NOT appear in photos they generate; only the subjects are shown. Ideal for paparazzi characters.",
           "hint_de": "Wenn aktiv, erscheint dieser Character NICHT in selbst generierten Fotos; nur die Motive sind zu sehen. Ideal fuer Paparazzi-Charaktere."
+        },
+        {
+          "key": "avatar_only_presence",
+          "label": "Avatar-only presence",
+          "label_de": "Nur als Avatar präsent",
+          "type": "select",
+          "options": [
+            {
+              "value": "false",
+              "label": "Off (always in world)",
+              "label_de": "Aus (immer in der Welt)"
+            },
+            {
+              "value": "true",
+              "label": "On (vanishes when unattended)",
+              "label_de": "An (verschwindet wenn ungesteuert)"
+            }
+          ],
+          "store": "config",
+          "default": "false",
+          "hint": "When on, this character vanishes from the world while no one controls it, and reappears at its last controlled spot (or home location) when taken over as an avatar.",
+          "hint_de": "Wenn an, verschwindet dieser Charakter aus der Welt solange ihn niemand steuert, und taucht beim Übernehmen am letzten Steuer-Ort (sonst Heimat-Ort) wieder auf."
         }
       ]
     },

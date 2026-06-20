@@ -183,6 +183,57 @@ def _update_current_user_settings(updates: Dict[str, Any]) -> bool:
         return False
 
 
+def _raw_active_character() -> str:
+    """Roher, gespeicherter active_character des aktuellen Users — ohne den
+    allowed[0]-Fallback von :func:`get_active_character`. Fuer Presence-
+    Transitions, die den *tatsaechlich* gesteuerten Char brauchen."""
+    us = _current_user_settings()
+    if us is not None:
+        return (us.get("active_character") or us.get("current_character") or "").strip()
+    profile = get_user_profile()
+    return (profile.get("active_character") or profile.get("current_character") or "").strip()
+
+
+def _has_avatar_only_presence(character_name: str) -> bool:
+    """True wenn der Character nur als Avatar in der Welt existiert
+    (Behavior-Flag ``avatar_only_presence``)."""
+    if not character_name:
+        return False
+    try:
+        from app.models.character import get_character_config
+        cfg = get_character_config(character_name) or {}
+        return str(cfg.get("avatar_only_presence", "")).strip().lower() == "true"
+    except Exception:
+        return False
+
+
+def apply_presence_transition(old_avatar: str, new_avatar: str) -> None:
+    """Avatar-only-Presence-Uebergang bei Avatar-Wechsel/-Freigabe.
+
+    - Wird der alte Avatar von niemandem mehr gesteuert und hat den Flag,
+      verschwindet er von der Karte (Offmap, letzter Ort gemerkt).
+    - Der neue Avatar mit Flag taucht am letzten Ort / home / Default auf.
+    Auf get_all_avatars() angewiesen — daher NACH dem Settings-Update aufrufen.
+    """
+    old_avatar = (old_avatar or "").strip()
+    new_avatar = (new_avatar or "").strip()
+    try:
+        if old_avatar and old_avatar != new_avatar and _has_avatar_only_presence(old_avatar):
+            if old_avatar not in get_all_avatars():
+                from app.models.character import enter_offmap_sleep
+                enter_offmap_sleep(old_avatar)
+        # Appear ist idempotent (no-op wenn schon on-map) und wird bewusst auch
+        # bei old==new ausgefuehrt: so heilt jeder set_active_character/Switch
+        # einen versehentlich offmap gebliebenen Avatar (z.B. nach Reaper).
+        if new_avatar and _has_avatar_only_presence(new_avatar):
+            from app.models.character import appear_in_world
+            appear_in_world(new_avatar)
+    except Exception:
+        from app.core.log import get_logger
+        get_logger("account").exception("apply_presence_transition fehlgeschlagen (%s -> %s)",
+                                         old_avatar or "-", new_avatar or "-")
+
+
 def get_active_character() -> str:
     """Return the character currently controlled by this player.
 
@@ -214,11 +265,13 @@ def get_active_character() -> str:
 
 def set_active_character(character_name: str):
     """Set which character this player controls."""
+    old = _raw_active_character()
     if _update_current_user_settings({
         "active_character": character_name,
         "default_character": character_name,
         "current_character": character_name,
     }):
+        apply_presence_transition(old, character_name)
         return
 
     # Fallback: Account (kein Request-Context)
@@ -228,6 +281,142 @@ def set_active_character(character_name: str):
         profile["default_character"] = character_name
     profile["current_character"] = character_name
     save_user_profile(profile)
+    apply_presence_transition(old, character_name)
+
+
+def release_active_character() -> None:
+    """Gibt den Avatar des aktuellen Users frei (Logout/Sitzungsende).
+
+    Leert ``active_character`` + ``current_character`` (damit der Char nicht
+    mehr als gesteuert gilt), behaelt aber ``default_character`` fuer den
+    naechsten Login. Loest die Presence-Transition aus — ein avatar-only
+    Character verschwindet damit beim Logout."""
+    old = _raw_active_character()
+    if not old:
+        return
+    if _update_current_user_settings({
+        "active_character": "",
+        "current_character": "",
+    }):
+        apply_presence_transition(old, "")
+        return
+    # Fallback: Account (kein Request-Context)
+    profile = get_user_profile()
+    profile["active_character"] = ""
+    profile["current_character"] = ""
+    save_user_profile(profile)
+    apply_presence_transition(old, "")
+
+
+def restore_avatar_on_login(user: Dict[str, Any]) -> None:
+    """Beim Login den Avatar des Users materialisieren und — falls er ein
+    avatar-only Character ist und offmap liegt — zurueck in die Welt holen.
+
+    Hintergrund: Logout/Reaper leeren ``active_character`` und setzen einen
+    avatar-only Char offmap. Der Login erstellt nur eine Session und ruft
+    ``set_active_character`` NICHT auf; ``get_active_character`` maskiert den
+    leeren Zustand zudem mit ``allowed[0]``. Ohne diesen Schritt bliebe der
+    Avatar offmap ("ohne Raum") und unbenutzbar.
+
+    Laeuft im Login-Request, wo es noch keinen ``current_user_ctx`` gibt — daher
+    direkt ueber ``user["id"]`` statt ``set_active_character``.
+    """
+    try:
+        from app.core.users import update_user
+        settings = dict(user.get("settings") or {})
+        resolved = (
+            settings.get("active_character")
+            or settings.get("current_character")
+            or settings.get("default_character")
+            or ""
+        ).strip()
+        if not resolved:
+            allowed = user.get("allowed_characters") or []
+            resolved = (allowed[0] if allowed else "").strip()
+        if not resolved:
+            return
+        # active_character konkret setzen (loest die allowed[0]-Maskierung auf).
+        if (settings.get("active_character") or "") != resolved or \
+           (settings.get("current_character") or "") != resolved:
+            settings["active_character"] = resolved
+            settings["current_character"] = resolved
+            update_user(user["id"], settings=settings)
+            user["settings"] = settings
+        # Avatar-only Char zurueck in die Welt holen (idempotent — no-op wenn schon da).
+        if _has_avatar_only_presence(resolved):
+            from app.models.character import appear_in_world
+            appear_in_world(resolved)
+    except Exception:
+        from app.core.log import get_logger
+        get_logger("account").exception("restore_avatar_on_login fehlgeschlagen")
+
+
+def reap_orphaned_avatars() -> int:
+    """Verwaiste Avatars freigeben: hat ein User ein ``active_character`` gesetzt,
+    aber keine gueltige (nicht abgelaufene) Session mehr — z.B. Session-Timeout
+    ohne Logout-Request — gilt der Char faelschlich als gesteuert und bleibt
+    praesent. Hier wird die stale Kontrolle geleert und ein avatar-only Character,
+    den dann niemand mehr steuert, offmap gesetzt.
+
+    Laeuft periodisch (periodic_jobs). Returns Anzahl verschwundener Chars.
+    """
+    try:
+        from app.core.db import get_connection
+        from app.core.users import list_users, update_user
+        from app.core.timeutils import utc_now, parse_iso
+    except Exception:
+        return 0
+
+    now = utc_now()
+    # user_ids mit gueltiger Session
+    active_uids: set = set()
+    try:
+        conn = get_connection()
+        for r in conn.execute("SELECT user_id, expires_at FROM user_sessions").fetchall():
+            uid = r["user_id"] if hasattr(r, "keys") else r[0]
+            exp = r["expires_at"] if hasattr(r, "keys") else r[1]
+            try:
+                if exp and parse_iso(exp) > now:
+                    active_uids.add(uid)
+            except Exception:
+                pass
+    except Exception:
+        return 0
+
+    # User mit gesetztem Avatar ohne aktive Session -> Kontrolle freigeben
+    freed: set = set()
+    try:
+        for u in list_users():
+            uid = u.get("id")
+            settings = dict(u.get("settings") or {})
+            ac = (settings.get("active_character") or settings.get("current_character") or "").strip()
+            if not ac or uid in active_uids:
+                continue
+            settings["active_character"] = ""
+            settings["current_character"] = ""
+            update_user(uid, settings=settings)
+            freed.add(ac)
+    except Exception:
+        from app.core.log import get_logger
+        get_logger("account").exception("reap_orphaned_avatars: Freigeben fehlgeschlagen")
+        return 0
+
+    if not freed:
+        return 0
+
+    # Avatar-only Chars, die jetzt niemand mehr steuert -> offmap
+    reaped = 0
+    try:
+        from app.models.character import enter_offmap_sleep
+        still = get_all_avatars()
+        for ch in freed:
+            if _has_avatar_only_presence(ch) and ch not in still:
+                if enter_offmap_sleep(ch):
+                    reaped += 1
+    except Exception:
+        from app.core.log import get_logger
+        get_logger("account").exception("reap_orphaned_avatars: Offmap fehlgeschlagen")
+    return reaped
 
 
 def get_default_character() -> str:

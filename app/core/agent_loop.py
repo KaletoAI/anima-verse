@@ -1315,6 +1315,15 @@ def _is_agent_eligible(character_name: str) -> bool:
             return False
     except Exception:
         pass
+    # Avatar-only-Presence: nicht gesteuert -> bleibt verschwunden, kein
+    # autonomes Handeln und NICHT via wake_from_offmap zurueckholen.
+    try:
+        from app.models.character import get_character_config
+        cfg = get_character_config(character_name) or {}
+        if str(cfg.get("avatar_only_presence", "")).strip().lower() == "true":
+            return False
+    except Exception:
+        pass
     try:
         from app.models.character import is_character_sleeping, wake_from_offmap
         if is_character_sleeping(character_name):

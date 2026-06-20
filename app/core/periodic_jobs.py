@@ -246,6 +246,18 @@ def _sub_variant_prune():
         logger.debug("variant_prune sub error: %s", e)
 
 
+def _sub_reap_orphaned_avatars():
+    """Avatar-only Characters von Usern ohne gueltige Session offmap setzen
+    (Session-Timeout ohne Logout). Siehe plan-avatar-only-presence.md."""
+    try:
+        from app.models.account import reap_orphaned_avatars
+        reaped = reap_orphaned_avatars()
+        if reaped:
+            logger.info("reap_orphaned_avatars: %d verwaiste Avatar(s) verschwunden", reaped)
+    except Exception as e:
+        logger.debug("reap_orphaned_avatars sub error: %s", e)
+
+
 def _sub_day_consolidation():
     """Tages-Konsolidierung: pro Character prüfen, ob ein Wach-Block zu schließen
     ist (Hauptschlaf erkannt oder Stau-Fallback) → Szenen → 1 Tages-Eintrag.
@@ -282,6 +294,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_relationship_decay,        24 * 3600,             "relationship_decay"),
     (_sub_variant_prune,             3600,                  "variant_prune"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),
+    (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),
 ]
 
 
