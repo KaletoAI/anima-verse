@@ -333,8 +333,29 @@ export function ImportButton({
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Character-Import: full clone vs fresh start ("neu zugezogen") + Intro-Memory.
+  const [mode, setMode] = useState<'full' | 'fresh'>('full')
+  const [intro, setIntro] = useState('')
+  const [introBusy, setIntroBusy] = useState(false)
 
-  const close = () => { setFile(null); setPreview(null); setPicked({}) }
+  const close = () => { setFile(null); setPreview(null); setPicked({}); setMode('full'); setIntro('') }
+
+  const regenIntro = async () => {
+    if (!file) return
+    setIntroBusy(true)
+    try {
+      const fd = new FormData(); fd.append('file', file)
+      const res = await fetch('/api/content/character-intro-suggest', {
+        method: 'POST', credentials: 'same-origin', body: fd })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`)
+      setIntro((body.intro || '').trim())
+    } catch (e) {
+      toast(t('Import failed') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setIntroBusy(false)
+    }
+  }
 
   const onFile = async (f: File) => {
     setFile(f); setPreview(null); setLoading(true)
@@ -366,6 +387,10 @@ export function ImportButton({
       // import as a whole.
       if (preview.multi) fd.append('selected_ids', selected.map((e) => e.id).join(','))
       fd.append('overwrite', overwrite ? 'true' : 'false')
+      if (preview.type === 'character') {
+        fd.append('mode', mode)
+        if (mode === 'fresh') fd.append('intro', intro.trim())
+      }
       const res = await fetch('/api/content/import', { method: 'POST', credentials: 'same-origin', body: fd })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`)
@@ -459,6 +484,36 @@ export function ImportButton({
                     ))}
                   </div>
                 </>
+              )}
+
+              {preview && preview.type === 'character' && (
+                <div style={{ marginTop: 12, borderTop: '1px solid var(--border, #30363d)', paddingTop: 10 }}>
+                  <div style={{ fontSize: '0.82em', fontWeight: 600, marginBottom: 6 }}>{t('Import mode')}</div>
+                  <label style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '3px 0', cursor: 'pointer' }}>
+                    <input type="radio" name="char-import-mode" checked={mode === 'full'} onChange={() => setMode('full')} />
+                    <span>{t('Full clone')} <span style={{ opacity: 0.55, fontSize: '0.82em' }}>— {t('keep all history (same/compatible world)')}</span></span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '3px 0', cursor: 'pointer' }}>
+                    <input type="radio" name="char-import-mode" checked={mode === 'fresh'}
+                      onChange={() => { setMode('fresh'); if (!intro.trim()) void regenIntro() }} />
+                    <span>{t('Fresh start (newly arrived)')} <span style={{ opacity: 0.55, fontSize: '0.82em' }}>— {t('keep identity, drop world-bound history')}</span></span>
+                  </label>
+                  {mode === 'fresh' && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: '0.78em', opacity: 0.7 }}>{t('Intro memory')}</span>
+                        <button className="ga-btn ga-btn-sm" style={{ marginLeft: 'auto' }}
+                          onClick={() => void regenIntro()} disabled={introBusy}>
+                          {introBusy ? t('Generating…') : t('Regenerate')}
+                        </button>
+                      </div>
+                      <textarea className="ga-input" rows={3} value={intro}
+                        onChange={(e) => setIntro(e.target.value)}
+                        placeholder={t('Short intro memory for the new arrival (editable)…')}
+                        style={{ width: '100%', resize: 'vertical' }} />
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
