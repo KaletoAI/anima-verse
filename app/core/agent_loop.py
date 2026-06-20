@@ -1226,7 +1226,14 @@ class AgentLoop:
 
 def _is_paused() -> bool:
     """Global pause indicator. Mirrors the existing world-pause toggle so
-    Admin/World-Dev pause buttons stop the AgentLoop too."""
+    Admin/World-Dev pause buttons stop the AgentLoop too — PLUS der
+    persistente World-Freeze (autonome Simulation eingefroren)."""
+    try:
+        from app.models.world import is_world_frozen
+        if is_world_frozen():
+            return True
+    except Exception:
+        pass
     try:
         from app.core.task_queue import get_task_queue
         tq = get_task_queue()

@@ -348,6 +348,25 @@ def set_world_setting(key: str, value: str) -> None:
         logger.warning("set_world_setting(%s) Fehler: %s", key, e)
 
 
+# --- World Freeze ---------------------------------------------------------
+# Persistenter Schalter, der die AUTONOME Welt-Simulation einfriert (AgentLoop,
+# hourly Ticks, Scheduler-Jobs, Telegram-Polling), damit man die Welt in Ruhe
+# aufbauen kann. TaskQueue (Bildgenerierung) und LLM-Tools bleiben bewusst
+# aktiv — daher NICHT die queue_paused-Pause wiederverwenden.
+# Siehe development_instructions/plan-world-freeze.md.
+WORLD_FROZEN_KEY = "world_frozen"
+
+
+def is_world_frozen() -> bool:
+    """True wenn die Welt eingefroren ist (autonome Simulation angehalten)."""
+    return get_world_setting(WORLD_FROZEN_KEY, "0") == "1"
+
+
+def set_world_frozen(frozen: bool) -> None:
+    """Friert die Welt ein (True) oder taut sie wieder auf (False)."""
+    set_world_setting(WORLD_FROZEN_KEY, "1" if frozen else "0")
+
+
 # Erlaubte Werte fuer Welt-Wetter / Temperatur — reine LLM-Hinweise,
 # keine Compliance-Logik. Siehe plan-outfit-system-rethink.md §1.2.
 WORLD_TEMPERATURE_VALUES = ("freezing", "cold", "mild", "hot")

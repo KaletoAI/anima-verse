@@ -401,6 +401,17 @@ class SchedulerManager:
 
         logger.info("Fuehre Job aus: %s (%s)", job_id, action_type)
 
+        # World-Freeze: bei eingefrorener Welt feuern geplante Jobs nicht
+        # (robust auch fuer Jobs, die waehrend des Freeze angelegt wurden).
+        try:
+            from app.models.world import is_world_frozen
+            if is_world_frozen():
+                logger.info("Job %s uebersprungen: Welt eingefroren", job_id)
+                self._log_execution(job_id, "skipped", {"reason": "Welt eingefroren"})
+                return
+        except Exception:
+            pass
+
         # Sleep-Check: Schlafende Characters fuehren keine Jobs aus.
         if agent and user_id:
             from app.models.character import is_character_sleeping

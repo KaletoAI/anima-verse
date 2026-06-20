@@ -185,6 +185,17 @@ class CharacterBotPoller:
         backoff = 1
         while self._running:
             try:
+                # World-Freeze: keine eingehenden Nachrichten verarbeiten. getUpdates
+                # auslassen, damit der Offset NICHT vorrueckt — Nachrichten bleiben bei
+                # Telegram gepuffert und gehen nicht verloren.
+                try:
+                    from app.models.world import is_world_frozen
+                    if is_world_frozen():
+                        await asyncio.sleep(5)
+                        continue
+                except Exception:
+                    pass
+
                 updates = await self._api("getUpdates", {
                     "offset": self._offset,
                     "timeout": 60,  # Telegram long-poll (seconds)

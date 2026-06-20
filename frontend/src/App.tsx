@@ -3,6 +3,7 @@ import { useI18n } from './i18n/I18nProvider'
 import { TABS, isTabId, type TabId } from './tabs/registry'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { GenerationIndicator } from './components/GenerationIndicator'
+import { FreezeToggle } from './components/FreezeToggle'
 import { useAuth } from './lib/AuthGate'
 
 function readHashTab(): TabId {
@@ -44,6 +45,7 @@ export default function App() {
         </a>
         <h1>{t('Game Admin')}</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <FreezeToggle />
           <GenerationIndicator />
           <select
             className="ga-input"

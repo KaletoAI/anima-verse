@@ -2,11 +2,12 @@
 import asyncio
 import io
 import os
-from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File, Depends
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from pathlib import Path
 from typing import Any, Dict, Optional
 from app.core.log import get_logger
+from app.core.auth_dependency import require_admin
 
 logger = get_logger("world")
 
@@ -463,6 +464,37 @@ async def clone_location_route(template_id: str, request: Request) -> Dict[str, 
 # Temperature/Weather/Pose-Variant-Settings leben in world_kv. Eigener
 # Endpunkt damit der Setup-Tab eine kompakte Form rendern kann ohne ueber
 # die generische admin-config-Maschinerie zu gehen.
+
+@router.get("/freeze-status")
+async def get_freeze_status() -> Dict[str, Any]:
+    """Aktueller World-Freeze-Status (autonome Simulation eingefroren?)."""
+    from app.models.world import is_world_frozen
+    return {"frozen": is_world_frozen()}
+
+
+@router.post("/freeze")
+async def freeze_world(
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Friert die Welt ein: AgentLoop, hourly Ticks, Scheduler-Jobs und
+    Telegram-Polling pausieren. TaskQueue (Bildgenerierung) + LLM-Tools bleiben
+    aktiv. Persistent (ueberlebt Neustart)."""
+    from app.models.world import set_world_frozen
+    set_world_frozen(True)
+    logger.info("World freeze AKTIVIERT (autonome Simulation angehalten)")
+    return {"frozen": True}
+
+
+@router.post("/unfreeze")
+async def unfreeze_world(
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Taut die Welt wieder auf — autonome Simulation laeuft weiter."""
+    from app.models.world import set_world_frozen
+    set_world_frozen(False)
+    logger.info("World freeze DEAKTIVIERT (autonome Simulation laeuft)")
+    return {"frozen": False}
+
 
 @router.get("/settings")
 async def get_world_settings() -> Dict[str, Any]:

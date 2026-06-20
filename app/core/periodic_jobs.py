@@ -46,7 +46,14 @@ _MAX_TICK_SECONDS = 3600
 
 
 def _is_paused() -> bool:
-    """Mirrors AgentLoop pause source — task_queue 'default' pause flag."""
+    """Mirrors AgentLoop pause source — task_queue 'default' pause flag —
+    PLUS der persistente World-Freeze (autonome Simulation eingefroren)."""
+    try:
+        from app.models.world import is_world_frozen
+        if is_world_frozen():
+            return True
+    except Exception:
+        pass
     try:
         from app.core.task_queue import get_task_queue
         tq = get_task_queue()
