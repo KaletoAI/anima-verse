@@ -259,37 +259,89 @@ interface LocationTreeRowProps {
   onSelect: (s: Selection) => void
 }
 
+// Entry-Room-id einer Location: explizites entry_room (wenn es einen Raum
+// matched), sonst der erste Raum — analog get_entry_room_id (Backend).
+function entryRoomId(loc: Location): string {
+  const rooms = loc.rooms || []
+  if (!rooms.length) return ''
+  const explicit = (loc.entry_room || '').trim()
+  if (explicit && rooms.some((r) => r.id === explicit)) return explicit
+  return rooms[0]?.id || ''
+}
+
+// Danger-Level-Farbe (0 = keine Anzeige, 1..5 zunehmend rot).
+const DANGER_COLORS = ['', '#6cc24a', '#d9c200', '#e0930b', '#e0560b', '#d62828']
+
 function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps) {
+  const { t } = useI18n()
   const isLocSelected = selection?.kind === 'location' && selection.locationId === location.id
   const isExpanded = isLocSelected || selection?.locationId === location.id
+
+  // Durchgang (passable) → Farbe der Zeile (Transit-Ort vs. fester Ort).
+  const passable = !!location.passable
+  const accent = passable ? '#2a9d8f' : '#6aa9ff'
+  // Indoor/Outdoor-Symbol.
+  const io = location.indoor === 'indoor'
+    ? { icon: '🏠', title: t('Indoor') }
+    : location.indoor === 'outdoor'
+      ? { icon: '🌳', title: t('Outdoor') }
+      : { icon: '', title: '' }
+  // Danger-Level-Spalte.
+  const danger = Math.max(0, Math.min(5, location.danger_level || 0))
+  const dangerLabel = DANGER_LEVELS.find((d) => d.value === danger)?.label || ''
+  // Entry-Room ans Listen-Anfang sortieren.
+  const eid = entryRoomId(location)
+  const rooms = [...(location.rooms || [])].sort(
+    (a, b) => (a.id === eid ? -1 : 0) - (b.id === eid ? -1 : 0))
+
   return (
     <li>
       <button
         type="button"
         className={`ga-list-row${isLocSelected ? ' is-active' : ''}`}
+        style={{ borderLeft: `3px solid ${accent}` }}
         onClick={() => onSelect({ kind: 'location', locationId: location.id })}
+        title={passable ? t('Passage (transit location)') : t('Fixed location')}
       >
-        <span className="ga-list-row-main">
-          <strong>{location.name}</strong>
+        <span className="ga-list-row-main" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={{ width: '1.2em', flex: '0 0 auto', textAlign: 'center' }}
+            title={io.title || undefined} aria-label={io.title || undefined}>{io.icon}</span>
+          <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            color: passable ? accent : undefined, fontStyle: passable ? 'italic' : undefined }}>
+            {location.name}
+          </strong>
           {location.is_template ? <span className="ga-source ga-source-shared">tpl</span> : null}
         </span>
-        <span className="ga-form-hint">
-          {(location.rooms || []).length} {(location.rooms || []).length === 1 ? 'room' : 'rooms'}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto', marginLeft: 8 }}>
+          {danger > 0 ? (
+            <span title={`${t('Danger')}: ${t(dangerLabel)}`}
+              style={{ fontSize: '0.72em', fontWeight: 700, color: '#fff', background: DANGER_COLORS[danger],
+                borderRadius: 4, padding: '0 5px', lineHeight: 1.6 }}>
+              ⚠{danger}
+            </span>
+          ) : null}
+          <span className="ga-form-hint">
+            {(location.rooms || []).length} {(location.rooms || []).length === 1 ? 'room' : 'rooms'}
+          </span>
         </span>
       </button>
-      {isExpanded && (location.rooms || []).length > 0 ? (
+      {isExpanded && rooms.length > 0 ? (
         <ul className="ga-list-nested">
-          {(location.rooms || []).map((r) => {
+          {rooms.map((r) => {
             const isRoomSelected =
               selection?.kind === 'room' && selection.locationId === location.id && selection.roomId === r.id
+            const isEntry = !!r.id && r.id === eid
             return (
               <li key={r.id}>
                 <button
                   type="button"
                   className={`ga-list-row ga-list-row-nested${isRoomSelected ? ' is-active' : ''}`}
                   onClick={() => onSelect({ kind: 'room', locationId: location.id, roomId: r.id || '' })}
+                  title={isEntry ? t('Entry room') : undefined}
                 >
-                  <span className="ga-list-row-main">↳ {r.name || r.id}</span>
+                  <span className="ga-list-row-main">
+                    {isEntry ? '🚪' : '↳'} {r.name || r.id}
+                  </span>
                   {r.decency ? <span className="ga-source ga-source-world">{r.decency}</span> : null}
                 </button>
               </li>
