@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -198,16 +198,26 @@ export function WorldTab() {
         <ul className="ga-list">
           {locations.length === 0 ? (
             <li className="ga-list-empty">{t('No places yet')}</li>
-          ) : (
-            locations.map((l) => (
-              <LocationTreeRow
-                key={l.id}
-                location={l}
-                selection={selection}
-                onSelect={setSelection}
-              />
-            ))
-          )}
+          ) : (() => {
+            // Gruppierung: erst eindeutige Orte (kein Durchgang), dann Durchgänge.
+            const unique = locations.filter((l) => !l.passable)
+            const passages = locations.filter((l) => l.passable)
+            const both = unique.length > 0 && passages.length > 0
+            const headStyle = {
+              padding: '6px 8px 2px', fontSize: '0.68em', fontWeight: 700,
+              letterSpacing: '0.04em', textTransform: 'uppercase' as const, opacity: 0.55,
+            }
+            const out: ReactNode[] = []
+            const push = (rows: Location[], key: string, label: string) => {
+              if (!rows.length) return
+              if (both) out.push(<li key={key} style={headStyle}>{label}</li>)
+              rows.forEach((l) => out.push(
+                <LocationTreeRow key={l.id} location={l} selection={selection} onSelect={setSelection} />))
+            }
+            push(unique, 'h-unique', t('Unique'))
+            push(passages, 'h-passages', t('Passages'))
+            return out
+          })()}
         </ul>
       </aside>
       <section className="ga-world-form-col">
@@ -277,9 +287,9 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
   const isLocSelected = selection?.kind === 'location' && selection.locationId === location.id
   const isExpanded = isLocSelected || selection?.locationId === location.id
 
-  // Durchgang (passable) → Farbe der Zeile (Transit-Ort vs. fester Ort).
+  // Durchgang (passable): Unterscheidung erfolgt über die Gruppierung der Liste
+  // (eindeutige Orte zuerst), nicht mehr über Farbe.
   const passable = !!location.passable
-  const accent = passable ? '#2a9d8f' : '#6aa9ff'
   // Indoor/Outdoor-Symbol.
   const io = location.indoor === 'indoor'
     ? { icon: '🏠', title: t('Indoor') }
@@ -299,15 +309,13 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
       <button
         type="button"
         className={`ga-list-row${isLocSelected ? ' is-active' : ''}`}
-        style={{ borderLeft: `3px solid ${accent}` }}
         onClick={() => onSelect({ kind: 'location', locationId: location.id })}
         title={passable ? t('Passage (transit location)') : t('Fixed location')}
       >
         <span className="ga-list-row-main" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <span style={{ width: '1.2em', flex: '0 0 auto', textAlign: 'center' }}
             title={io.title || undefined} aria-label={io.title || undefined}>{io.icon}</span>
-          <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            color: passable ? accent : undefined, fontStyle: passable ? 'italic' : undefined }}>
+          <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {location.name}
           </strong>
           {location.is_template ? <span className="ga-source ga-source-shared">tpl</span> : null}
