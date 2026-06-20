@@ -78,6 +78,7 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "image_analysis":     {"label": "Image Analysis",           "priority": Priority.NORMAL, "category": "image",  "gate": "image_generation.enabled"},
 
     # Sonstiges
+    "intro_memory":       {"label": "Intro Memory (Fresh Import)", "priority": Priority.NORMAL, "category": "helper"},
     "translation":        {"label": "Translation",              "priority": Priority.NORMAL, "category": "helper"},
     "expression_map":     {"label": "Expression Map",           "priority": Priority.LOW,    "category": "tool",   "gate": "image_generation.enabled"},
 }

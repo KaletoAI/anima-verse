@@ -611,14 +611,15 @@ def _manifest_type(content: bytes) -> str:
         zf.close()
 
 
-def _dispatch_install_selected(content: bytes, *, selected_ids, overwrite: bool) -> Dict[str, Any]:
+def _dispatch_install_selected(content: bytes, *, selected_ids, overwrite: bool,
+                               mode: str = "full", intro: str = "") -> Dict[str, Any]:
     """Generic import that honours a per-element selection + overwrite flag.
     Multi-element types (item_bundle, states) respect selected_ids; single-element
-    types import as a whole."""
+    types import as a whole. `mode`/`intro` only apply to character imports."""
     mtype = _manifest_type(content)
     if mtype == "character":
         from app.core.character_io import import_character_from_zip
-        return import_character_from_zip(content, overwrite=overwrite)
+        return import_character_from_zip(content, overwrite=overwrite, mode=mode, intro_text=intro)
     if mtype == "item":
         from app.core.content_io import import_item_from_zip
         return import_item_from_zip(content, target="world", overwrite=overwrite)
@@ -660,20 +661,82 @@ async def import_selected(
     file: UploadFile = File(...),
     selected_ids: str = Form("", description="comma-separated element ids; empty = all"),
     overwrite: bool = Form(False),
+    mode: str = Form("full", description="character import: full | fresh"),
+    intro: str = Form("", description="fresh-start intro memory text"),
 ) -> Dict[str, Any]:
     """Generic import for any export ZIP. `selected_ids` (multi-element types) and
-    `overwrite` are honoured per element."""
+    `overwrite` are honoured per element. `mode`/`intro` apply to character imports."""
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
     content = await file.read()
     sel = {s.strip() for s in selected_ids.split(",") if s.strip()} or None
     try:
-        result = _dispatch_install_selected(content, selected_ids=sel, overwrite=overwrite)
+        result = _dispatch_install_selected(content, selected_ids=sel, overwrite=overwrite,
+                                            mode=mode, intro=intro)
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "success", "result": result}
+
+
+@router.post("/character-intro-suggest")
+async def character_intro_suggest(
+    file: UploadFile = File(...),
+    hint: str = Form(""),
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Suggest one intro memory for a fresh-start character import. Reads the
+    personality + name from the uploaded ZIP (the character isn't imported yet)
+    and uses the per-world briefing (world_setup). Returns {character, intro}."""
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+
+    char_name = ""
+    personality = ""
+    try:
+        import zipfile as _zip
+        z = _zip.ZipFile(io.BytesIO(content))
+        try:
+            try:
+                m = json.loads(z.read("manifest.json"))
+                char_name = (m.get("character_name") or "").strip()
+            except Exception:
+                pass
+            if "files/soul/personality.md" in z.namelist():
+                personality = z.read("files/soul/personality.md").decode("utf-8", "ignore").strip()
+            if not personality and "db/characters.json" in z.namelist():
+                try:
+                    rows = json.loads(z.read("db/characters.json"))
+                    prof = json.loads(rows[0].get("profile_json") or "{}") if rows else {}
+                    personality = (prof.get("personality") or prof.get("character_personality") or "").strip()
+                except Exception:
+                    pass
+        finally:
+            z.close()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"invalid ZIP: {e}")
+
+    from app.core.prompt_templates import render_task
+    from app.core.llm_router import llm_call
+    from app.models.world_setup import get_world_setup_text
+    from app.core.paths import get_storage_dir
+    try:
+        sys_p, user_p = render_task(
+            "intro_memory",
+            character_name=char_name or "the character",
+            character_personality=personality or "",
+            world_name=get_storage_dir().name,
+            world_setup=get_world_setup_text() or "",
+            user_hint=(hint or "").strip(),
+        )
+        resp = llm_call("intro_memory", sys_p, user_p, agent_name=char_name, label="intro_memory")
+        intro = (getattr(resp, "content", "") or "").strip()
+    except Exception as e:
+        logger.exception("intro suggest failed")
+        raise HTTPException(status_code=500, detail=f"intro suggestion failed: {e}")
+    return {"character": char_name, "intro": intro}
 
 
 @router.get("/types")

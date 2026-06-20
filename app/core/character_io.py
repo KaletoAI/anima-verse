@@ -318,16 +318,37 @@ def _restore_table(conn, table: str, rows: List[Dict[str, Any]]) -> int:
     return inserted
 
 
+# Fresh-start ("neu zugezogen"): welt-gebundene Historie verwerfen, Identität
+# (Profil, Outfits, Items, Secrets, Beziehungen, Wissen, Tagesablauf) behalten.
+# Siehe development_instructions/plan-character-import-fresh-start.md.
+_FRESH_SKIP_TABLES = {
+    "memories", "summaries", "diary_entries", "mood_history",
+    "state_history", "evolution_history", "chat_messages", "stories",
+    "scheduler_jobs", "assignments",
+}
+
+
 def import_character_from_zip(
     content: bytes,
     *,
     overwrite: bool = False,
+    mode: str = "full",
+    intro_text: str = "",
 ) -> Dict[str, Any]:
     """Import a v2 character ZIP. Returns a stats dict.
+
+    mode:
+      - "full": restore everything (re-import into the same/compatible world).
+      - "fresh": keep identity (profile, outfits, inventory, secrets,
+        relationships, knowledge, daily schedule), DROP world-bound history
+        (memories/summaries/diary/mood/state/evolution/chats/…) and seed one
+        intro memory from ``intro_text``. Dangling references (to characters not
+        in this world) are filtered read-side at prompt build time.
 
     Raises ValueError on bad input, FileExistsError on existing character
     without overwrite=True.
     """
+    fresh = (mode or "full").strip().lower() == "fresh"
     try:
         zf = zipfile.ZipFile(io.BytesIO(content))
     except zipfile.BadZipFile as e:
@@ -394,6 +415,9 @@ def import_character_from_zip(
     for table in db_tables:
         if table == "characters":
             continue
+        if fresh and table in _FRESH_SKIP_TABLES:
+            db_stats[table] = 0  # bewusst verworfen (fresh start)
+            continue
         _restore_named(table)
 
     # Embedded world items: restore ONLY those missing in the target world —
@@ -440,13 +464,30 @@ def import_character_from_zip(
             logger.info("Import: %s — %d new world item(s) restored", character_name, len(new_ids))
 
     zf.close()
+
+    # Fresh start: seed one intro memory (identity kept, world history dropped).
+    if fresh and (intro_text or "").strip():
+        try:
+            from app.models.memory import add_memory
+            add_memory(
+                character_name,
+                (intro_text or "").strip(),
+                memory_type="semantic",
+                importance=4,
+                tags=["intro", "fresh_start"],
+            )
+            db_stats["intro_memory"] = 1
+        except Exception as e:
+            logger.warning("Fresh import: intro memory seed failed for %s: %s", character_name, e)
+
     logger.info(
-        "Import: %s — %d files, db: %s",
-        character_name, file_count, db_stats,
+        "Import: %s — %d files, db: %s (mode=%s)",
+        character_name, file_count, db_stats, "fresh" if fresh else "full",
     )
     return {
         "status": "success",
         "character": character_name,
+        "mode": "fresh" if fresh else "full",
         "files_imported": file_count,
         "db_rows_imported": db_stats,
         "overwritten": already_exists and overwrite,
