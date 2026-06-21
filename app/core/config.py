@@ -105,11 +105,14 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "category": "inpaint",
         "width": 1024,
         "height": 1024,
-        "workflow_file": "./workflows/text2img_workflow_qwen_inpaint_api.json",
+        "workflow_file": "./workflows/text2img_workflow_flux-qwen_inpaint_api.json",
         # Modell bewusst leer: der Workflow-Default ist ein NSFW-Modell — gehoert
         # nicht in die mitgelieferte Default-Config. Pro Welt im Admin setzen.
         "model": "",
         "clip": "Qwen2.5-VL-7B-Instruct-abliterated_merged.safetensors",
+        # CLIP-Loader-Type muss zum Modell passen (qwen_image fuer Qwen-Image,
+        # flux2 fuer Flux.2). Default hier auf den Qwen-Clip abgestimmt.
+        "clip_type": "qwen_image",
         # Qwen-Edit = Instruktions-Modell: Anweisung statt Beschreibung.
         "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
@@ -938,7 +941,7 @@ def _flatten_to_env(config: dict) -> None:
         for key in ["name", "filter", "skill", "workflow_file",
                      "model", "image_family", "category", "prompt",
                      "width", "height",
-                     "clip", "clip2"]:
+                     "clip", "clip2", "vae", "clip_type"]:
             val = wf.get(key, "")
             _set(env, f"{p}{key.upper()}", val)
         # LoRAs

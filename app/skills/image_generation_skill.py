@@ -49,6 +49,8 @@ class ComfyWorkflow:
     inpaint_gray: bool = False  # Edit-Modell-Inpaint (Qwen-Edit): Inpaint-Stellen GRAU ins Referenzbild
     clip: str = ""              # CLIP-Modell fuer den Workflow (clip_name1 bei DualCLIPLoader)
     clip2: str = ""             # 2. CLIP-Modell (clip_name2) fuer DualCLIPLoader-Nodes
+    vae: str = ""               # VAE-Modell fuer den Workflow (vae_name an input_vae/VAELoader)
+    clip_type: str = ""         # type-Param des CLIP-Loaders (flux2/qwen_image/...) an input_clip
     has_loras: bool = False     # Workflow hat input_loras/input_lora Node
     default_loras: list = field(default_factory=list)  # [{name, strength}, ...] aus .env
     model_type: str = ""        # "unet" | "checkpoint" | "" — erkannt aus input_model/input_unet Node
@@ -150,6 +152,7 @@ class ImageGenerationSkill(BaseSkill):
         self._cached_unet_models_by_service: Dict[str, List[str]] = {}
         self._cached_loras_by_service: Dict[str, List[str]] = {}
         self._cached_clip_models_by_service: Dict[str, List[str]] = {}
+        self._cached_vae_models_by_service: Dict[str, List[str]] = {}
         self._model_cache_loaded: bool = False
 
         # Round-Robin Counter pro Workflow-Name. Verteilt Tasks ueber
@@ -376,6 +379,8 @@ class ImageGenerationSkill(BaseSkill):
                 logger.debug("Workflow-JSON Check fehlgeschlagen fuer %s: %s", wf_file, _e)
             wf_clip = os.environ.get(f"{prefix}CLIP", "").strip()
             wf_clip2 = os.environ.get(f"{prefix}CLIP2", "").strip()
+            wf_vae = os.environ.get(f"{prefix}VAE", "").strip()
+            wf_clip_type = os.environ.get(f"{prefix}CLIP_TYPE", "").strip()
             wf = ComfyWorkflow(
                 name=wf_name,
                 workflow_file=wf_file,
@@ -387,6 +392,8 @@ class ImageGenerationSkill(BaseSkill):
                 inpaint_gray=inpaint_gray,
                 clip=wf_clip,
                 clip2=wf_clip2,
+                vae=wf_vae,
+                clip_type=wf_clip_type,
                 compatible_backends=compatible,
                 image_family=wf_image_family,
                 category=wf_category,
@@ -502,6 +509,20 @@ class ImageGenerationSkill(BaseSkill):
             if clip_models:
                 logger.info("Model-Cache [%s]: %d CLIP/Text-Encoder", svc_name, len(self._cached_clip_models_by_service[svc_name]))
 
+            # VAE-Modelle laden (ComfyUI /models/vae)
+            vae_models = []
+            try:
+                resp = requests.get(f"{api_url}/models/vae", timeout=10)
+                if resp.ok:
+                    raw = resp.json()
+                    if isinstance(raw, list):
+                        vae_models = sorted(raw)
+            except Exception:
+                pass
+            self._cached_vae_models_by_service[svc_name] = vae_models
+            if vae_models:
+                logger.info("Model-Cache [%s]: %d VAE", svc_name, len(vae_models))
+
         self._model_cache_loaded = True
         total_cp = sum(len(v) for v in self._cached_checkpoints_by_service.values())
         total_unet = sum(len(v) for v in self._cached_unet_models_by_service.values())
@@ -558,6 +579,13 @@ class ImageGenerationSkill(BaseSkill):
         for clips in self._cached_clip_models_by_service.values():
             all_clips.update(clips)
         return sorted(all_clips)
+
+    def get_cached_vae_models(self) -> List[str]:
+        """Gibt gecachte VAE-Liste zurueck (ueber alle Services kombiniert)."""
+        all_vae = set()
+        for vaes in self._cached_vae_models_by_service.values():
+            all_vae.update(vaes)
+        return sorted(all_vae)
 
     @staticmethod
     def fetch_models_from_url(api_url: str, model_type: str = "") -> List[str]:
@@ -2244,6 +2272,12 @@ class ImageGenerationSkill(BaseSkill):
             if active_workflow and active_workflow.clip2:
                 params["clip_name2"] = active_workflow.clip2
                 logger.info("CLIP2: %s (Workflow: %s)", active_workflow.clip2, active_workflow.name)
+            if active_workflow and active_workflow.clip_type:
+                params["clip_type"] = active_workflow.clip_type
+                logger.info("CLIP type: %s (Workflow: %s)", active_workflow.clip_type, active_workflow.name)
+            if active_workflow and active_workflow.vae:
+                params["vae_name"] = active_workflow.vae
+                logger.info("VAE: %s (Workflow: %s)", active_workflow.vae, active_workflow.name)
 
             # weight_dtype fuer den Safetensors/UNET-Loader (global konfigurierbar).
             # Leer = Workflow-Wert unveraendert. fp8-Modelle brauchen fp8_e4m3fn,

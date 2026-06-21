@@ -1033,7 +1033,7 @@ async def comfyui_models_all(user=Depends(require_admin)):
     zusammen — der ``model``-Selector im Workflow akzeptiert beides (z.B.
     Z-Image als UNet/GGUF, klassische SDXL als Checkpoint).
     """
-    out = {"checkpoints": [], "loras": [], "clip_models": []}
+    out = {"checkpoints": [], "loras": [], "clip_models": [], "vae_models": []}
     try:
         from app.core.dependencies import get_skill_manager
         sm = get_skill_manager()
@@ -1043,6 +1043,7 @@ async def comfyui_models_all(user=Depends(require_admin)):
             out["checkpoints"] = img.get_cached_checkpoints()
             out["loras"] = img.get_cached_loras()
             out["clip_models"] = img.get_cached_clip_models()
+            out["vae_models"] = img.get_cached_vae_models()
     except Exception as e:
         logger.warning("ComfyUI-Model-Cache nicht lesbar: %s", e)
         return {**out, "error": str(e)}
@@ -1068,6 +1069,7 @@ async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)
     cur_model = b.get("model", "")
     models: list = []
     clip: list = []
+    vae: list = []
     try:
         if api_type == "together":
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
@@ -1106,14 +1108,15 @@ async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)
                     _unet = _img._cached_unet_models_by_service.get(backend_name, [])
                     models = sorted(set(_ckpt + _unet))
                     clip = sorted(set(_img._cached_clip_models_by_service.get(backend_name, [])))
+                    vae = sorted(set(_img._cached_vae_models_by_service.get(backend_name, [])))
             except Exception as _e:
                 logger.warning("ComfyUI-Models-Cache nicht lesbar: %s", _e)
     except Exception as e:
-        return {"backend": backend_name, "models": [], "clip": [], "error": str(e)}
+        return {"backend": backend_name, "models": [], "clip": [], "vae": [], "error": str(e)}
     # cur_model immer dabei haben (auch wenn es nicht in der Liste ist)
     if cur_model and cur_model not in models:
         models.insert(0, cur_model)
-    return {"backend": backend_name, "models": models, "clip": clip, "current": cur_model}
+    return {"backend": backend_name, "models": models, "clip": clip, "vae": vae, "current": cur_model}
 
 
 @router.get("/settings/providers/{provider_name}/models")
@@ -2725,6 +2728,8 @@ function renderInput(f, val, path) {
             return renderImagegenTargetSelect(val, path);
         case 'comfyui_clip_select':
             return renderComfyClipSelect(val, path);
+        case 'comfyui_vae_select':
+            return renderComfyVaeSelect(val, path);
         default: // str
             return '<input type="text" id="' + id + '" value="' + esc(val) + '" '
                 + (f.placeholder ? 'placeholder="' + esc(f.placeholder) + '" ' : '')
@@ -3035,7 +3040,7 @@ async function populateComfySelect(path, type) {
                     { credentials: 'same-origin' });
                 const d = await resp.json();
                 if (d.error) toast('Backend ' + b + ': ' + d.error, 'error');
-                const list = (type === 'clip_models') ? (d.clip || []) : (d.models || []);
+                const list = (type === 'clip_models') ? (d.clip || []) : (type === 'vae_models') ? (d.vae || []) : (d.models || []);
                 for (const m of list) { if (!seen.has(m)) { seen.add(m); items.push(m); } }
             } catch (e) { toast('Load models failed (' + b + '): ' + e.message, 'error'); }
         }
@@ -3074,6 +3079,14 @@ function renderComfyClipSelect(val, path) {
     html += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
     html += '</select>';
     html += ' <button class="btn btn-sm" onclick="populateComfySelect(\\'' + path + '\\', \\'clip_models\\')">Load CLIP Models</button>';
+    return html;
+}
+
+function renderComfyVaeSelect(val, path) {
+    let html = '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">';
+    html += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
+    html += '</select>';
+    html += ' <button class="btn btn-sm" onclick="populateComfySelect(\\'' + path + '\\', \\'vae_models\\')">Load VAE Models</button>';
     return html;
 }
 

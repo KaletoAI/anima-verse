@@ -1,19 +1,8 @@
 {
-  "3": {
-    "inputs": {
-      "width": 1024,
-      "height": 1024,
-      "batch_size": 1
-    },
-    "class_type": "EmptyLatentImage",
-    "_meta": {
-      "title": "input_size"
-    }
-  },
   "10": {
     "inputs": {
       "images": [
-        "132",
+        "123",
         0
       ]
     },
@@ -37,7 +26,7 @@
         0
       ],
       "image1": [
-        "107",
+        "136",
         0
       ]
     },
@@ -48,7 +37,7 @@
   },
   "61": {
     "inputs": {
-      "value": ""
+      "value": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame\n\n"
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -70,7 +59,7 @@
         0
       ],
       "image1": [
-        "107",
+        "136",
         0
       ]
     },
@@ -104,16 +93,16 @@
         0
       ],
       "positive": [
-        "60",
+        "145",
         0
       ],
       "negative": [
-        "62",
-        0
+        "145",
+        1
       ],
       "latent_image": [
-        "3",
-        0
+        "145",
+        2
       ]
     },
     "class_type": "KSampler",
@@ -151,6 +140,11 @@
       "PowerLoraLoaderHeaderWidget": {
         "type": "PowerLoraLoaderHeaderWidget"
       },
+      "lora_1": {
+        "on": false,
+        "lora": "Qwen-Image-Lightning-8steps-V2.0-bf16.safetensors",
+        "strength": 1
+      },
       "➕ Add Lora": "",
       "model": [
         "115",
@@ -166,43 +160,9 @@
       "title": "input_lora"
     }
   },
-  "107": {
-    "inputs": {
-      "image": "",
-      "resize": true,
-      "width": 1024,
-      "height": 1024,
-      "repeat": 1,
-      "keep_proportion": true,
-      "divisible_by": 32,
-      "mask_channel": "alpha",
-      "background_color": ""
-    },
-    "class_type": "LoadAndResizeImage",
-    "_meta": {
-      "title": "input_reference_image"
-    }
-  },
-  "108": {
-    "inputs": {
-      "image": "",
-      "resize": true,
-      "width": 1024,
-      "height": 1024,
-      "repeat": 1,
-      "keep_proportion": true,
-      "divisible_by": 32,
-      "mask_channel": "alpha",
-      "background_color": ""
-    },
-    "class_type": "LoadAndResizeImage",
-    "_meta": {
-      "title": "input_crop"
-    }
-  },
   "115": {
     "inputs": {
-      "boolean": false,
+      "boolean": true,
       "on_true": [
         "120",
         0
@@ -223,7 +183,7 @@
     },
     "class_type": "VAELoader",
     "_meta": {
-      "title": "Load VAE"
+      "title": "input_vae"
     }
   },
   "119": {
@@ -238,7 +198,7 @@
   },
   "120": {
     "inputs": {
-      "gguf_name": "Flux2-9B-Q5_K_M.gguf"
+      "gguf_name": "Qwen-Edit-NSFW-v23_Q5_K.gguf"
     },
     "class_type": "LoaderGGUF",
     "_meta": {
@@ -266,7 +226,7 @@
         0
       ],
       "image_ref": [
-        "107",
+        "136",
         0
       ]
     },
@@ -275,9 +235,9 @@
       "title": "ColorMatchV2"
     }
   },
-  "126": {
+  "135": {
     "inputs": {
-      "image": "",
+      "image": "test_wald_tower_mask_hard.png",
       "channel": "red"
     },
     "class_type": "LoadImageMask",
@@ -285,80 +245,42 @@
       "title": "input_mask"
     }
   },
-  "127": {
+  "136": {
     "inputs": {
-      "image": [
-        "123",
-        0
-      ]
+      "image": "test_wald_tower_canvas_gray_hard.png"
     },
-    "class_type": "GetImageSize",
+    "class_type": "LoadImage",
     "_meta": {
-      "title": "Get Image Size"
+      "title": "input_reference_image"
     }
   },
-  "128": {
+  "145": {
     "inputs": {
-      "resize_type": "scale dimensions",
-      "resize_type.width": [
-        "127",
+      "noise_mask": true,
+      "positive": [
+        "60",
         0
       ],
-      "resize_type.height": [
-        "127",
-        1
+      "negative": [
+        "62",
+        0
       ],
-      "resize_type.crop": "center",
-      "scale_method": "nearest-exact",
-      "input": [
-        "108",
-        1
-      ]
-    },
-    "class_type": "ResizeImageMaskNode",
-    "_meta": {
-      "title": "Resize Image/Mask"
-    }
-  },
-  "129": {
-    "inputs": {
-      "model_name": "RealESRGAN_x2plus.pth"
-    },
-    "class_type": "UpscaleModelLoader",
-    "_meta": {
-      "title": "Load Upscale Model"
-    }
-  },
-  "130": {
-    "inputs": {
-      "image": [
-        "123",
+      "vae": [
+        "116",
+        0
+      ],
+      "pixels": [
+        "136",
         0
       ],
       "mask": [
-        "128",
+        "135",
         0
       ]
     },
-    "class_type": "ImageCropByMask",
+    "class_type": "InpaintModelConditioning",
     "_meta": {
-      "title": "Image Crop By Mask"
-    }
-  },
-  "132": {
-    "inputs": {
-      "upscale_model": [
-        "129",
-        0
-      ],
-      "image": [
-        "130",
-        0
-      ]
-    },
-    "class_type": "ImageUpscaleWithModel",
-    "_meta": {
-      "title": "Upscale Image (using Model)"
+      "title": "InpaintModelConditioning"
     }
   }
 }

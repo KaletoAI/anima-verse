@@ -304,6 +304,36 @@
             "strength": 1
           }
         ]
+      },
+      "Qwen Inpaint": {
+        "name": "Qwen Inpaint",
+        "image_family": "natural",
+        "filter": "Qwen Inpaint*",
+        "category": "inpaint",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/text2img_workflow_flux-qwen_inpaint_api.json",
+        "model": "",
+        "clip": "Qwen2.5-VL-7B-Instruct-abliterated_merged.safetensors",
+        "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
+        "loras": [
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          }
+        ]
       }
     },
     "use_cases": {

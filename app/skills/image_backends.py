@@ -1320,6 +1320,22 @@ class ComfyUIBackend(ImageBackend):
                 else:
                     _cin["clip_name"] = clip_name
                     logger.debug(f"CLIP: {clip_name}")
+                # CLIP-Loader-type passend zum Modell setzen (z.B. ClipLoaderGGUF /
+                # DualCLIPLoader haben einen 'type'-Input: flux2 / qwen_image / ...).
+                _clip_type = params.get("clip_type", "")
+                if _clip_type and "type" in _cin:
+                    _cin["type"] = _clip_type
+                    logger.debug(f"CLIP type: {_clip_type}")
+
+        # VAE setzen (VAELoader, input_vae). Nur den vae_name-Input anfassen.
+        vae_name = params.get("vae_name", "")
+        if vae_name:
+            vae_node = self._find_node_by_title(workflow, "input_vae")
+            if vae_node:
+                _vin = workflow[vae_node]["inputs"]
+                if "vae_name" in _vin:
+                    _vin["vae_name"] = vae_name
+                    logger.debug(f"VAE: {vae_name}")
 
         # Seed in input_seed Node setzen (PrimitiveInt)
         seed_value = params.get("seed")
