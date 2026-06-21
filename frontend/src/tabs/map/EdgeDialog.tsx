@@ -29,29 +29,30 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
 }) {
   const { t } = useI18n()
   const availSides = useMemo(() => SIDES.filter((s) => available[s]), [available])
-  const [sel, setSel] = useState<Set<Side>>(() => new Set(availSides))
-  const [wf, setWf] = useState(defaultWorkflow || workflows[0]?.spec || '')
+  // Neues Edge-Modell: nur Gray-Fill-Workflows (Qwen/Flux2) — KEIN Flux-Dev-Fill.
+  const wfs = useMemo(() => workflows.filter((w) => w.gray), [workflows])
+  // Genau EINE Kante zwischen zwei Karten-Elementen.
+  const [sel, setSel] = useState<Side | ''>(() => availSides[0] || '')
+  const [wf, setWf] = useState(() => {
+    const def = wfs.find((w) => w.spec === defaultWorkflow)
+    return def?.spec || wfs[0]?.spec || ''
+  })
   const [edgeHint, setEdgeHint] = useState('')  // dynamischer Terrain-Hint (/edge-prompt)
   const [prompt, setPrompt] = useState('')
 
   // Per-Workflow-Instruktion (Fallback: mapfit pro Familie).
   const instrFor = (spec: string): string => {
-    const w = workflows.find((x) => x.spec === spec)
+    const w = wfs.find((x) => x.spec === spec)
     const fam = w?.family || 'natural'
     return (w?.prompt || '').trim() || mapfitPrompts[fam] || mapfitPrompts.natural || ''
   }
 
-  const toggle = useCallback((s: Side) => {
-    if (!available[s]) return
-    setSel((prev) => {
-      const next = new Set(prev)
-      if (next.has(s)) next.delete(s); else next.add(s)
-      return next
-    })
+  const pick = useCallback((s: Side) => {
+    if (available[s]) setSel(s)
   }, [available])
 
-  // selKey = gewaehlte Seiten (steuert die Rahmen-Maske via edge_sides + den Button).
-  const selKey = useMemo(() => availSides.filter((s) => sel.has(s)).join(','), [availSides, sel])
+  // selKey = gewaehlte Kante (eine Seite).
+  const selKey = sel
   // Dynamischen Kanten-Uebergangs-Hint (terrain-bewusst, pro Seiten) serverseitig holen.
   useEffect(() => {
     if (!selKey) { setEdgeHint(''); return }
@@ -72,7 +73,7 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
   // ohne Nachbar = sehr blass, nicht klickbar.
   const bar = (s: Side, style: React.CSSProperties): React.CSSProperties => {
     const has = !!available[s]
-    const on = sel.has(s)
+    const on = sel === s
     return {
       position: 'absolute', cursor: has ? 'pointer' : 'default',
       background: on ? 'rgba(106,169,255,0.55)' : has ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
@@ -95,14 +96,14 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
         <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ fontSize: '0.8em', opacity: 0.75 }}>{info}</div>
           <div style={{ fontSize: '0.8em', opacity: 0.85 }}>
-            {t('Click the edges to blend (only sides with a neighbor are active).')}
+            {t('Click ONE edge to blend with that neighbor (only sides with a neighbor are active).')}
           </div>
 
-          {workflows.length > 0 ? (
+          {wfs.length > 0 ? (
             <div>
               <div style={{ fontSize: '0.8em', fontWeight: 600, marginBottom: 4 }}>{t('Inpaint workflow')}</div>
               <select className="ga-input" value={wf} onChange={(e) => setWf(e.target.value)} style={{ width: '100%' }}>
-                {workflows.map((w) => (
+                {wfs.map((w) => (
                   <option key={w.spec} value={w.spec}>{w.name}</option>
                 ))}
               </select>
@@ -117,13 +118,13 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
                 transform: rotation ? `rotate(${rotation}deg)` : undefined }}
             />
             <div style={bar('north', { top: 0, left: BW, right: BW, height: BW })}
-              title={available.north || t('no neighbor')} onClick={() => toggle('north')}>{arrow.north}</div>
+              title={available.north || t('no neighbor')} onClick={() => pick('north')}>{arrow.north}</div>
             <div style={bar('south', { bottom: 0, left: BW, right: BW, height: BW })}
-              title={available.south || t('no neighbor')} onClick={() => toggle('south')}>{arrow.south}</div>
+              title={available.south || t('no neighbor')} onClick={() => pick('south')}>{arrow.south}</div>
             <div style={bar('west', { left: 0, top: BW, bottom: BW, width: BW })}
-              title={available.west || t('no neighbor')} onClick={() => toggle('west')}>{arrow.west}</div>
+              title={available.west || t('no neighbor')} onClick={() => pick('west')}>{arrow.west}</div>
             <div style={bar('east', { right: 0, top: BW, bottom: BW, width: BW })}
-              title={available.east || t('no neighbor')} onClick={() => toggle('east')}>{arrow.east}</div>
+              title={available.east || t('no neighbor')} onClick={() => pick('east')}>{arrow.east}</div>
           </div>
 
           <div>
@@ -141,10 +142,10 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
           <button className="ga-btn" onClick={onClose}>{t('Cancel')}</button>
           <button
             className="ga-btn ga-btn-primary"
-            disabled={!selKey}
-            onClick={() => { onSubmit(availSides.filter((s) => sel.has(s)), prompt, wf); onClose() }}
+            disabled={!sel}
+            onClick={() => { if (sel) onSubmit([sel], prompt, wf); onClose() }}
           >
-            {t('Match edges')}
+            {t('Match edge')}
           </button>
         </div>
       </div>

@@ -802,14 +802,24 @@ def get_location_map_icon_2d(location_name: str):
 
 # Map-Fit (Nachbar-Inpaint): Generier-Canvas-Groesse (16-GB-tauglich) + Ziel-
 # Kachelgroesse, auf die die ausgeschnittene Mitte hochskaliert wird.
-MAP_FIT_GEN_SIZE = 1024
+# Standard-Ausgabegroesse: das Fit/Edge-Ergebnis (Mittel-Zelle) wird IMMER auf
+# diese Kantenlaenge skaliert (1024). Der 3x3-Canvas wird dagegen in der
+# ORIGINAL-Aufloesung der Quell-Tiles komponiert (siehe _place_neighbors) — der
+# Input wird NICHT mehr reduziert; nur die gecroppte Mitte wird am Ende auf
+# MAP_FIT_OUT_TILE normiert. (Frueher wurde der ganze Canvas auf 1024 begrenzt,
+# also jedes Tile auf ~341px verkleinert.)
 MAP_FIT_OUT_TILE = 1024
-# Wenn True: der ComfyUI-Workflow schneidet die Mitte selbst aus UND skaliert
-# hoch (z.B. per Modell-Upscaler — besser als LANCZOS); das Backend speichert
-# das Ergebnis dann unveraendert. False: Backend croppt+skaliert (LANCZOS).
-# Der produktive Flux.1-Fill-Fit-Workflow (output_final = gecroppte, modell-
-# hochskalierte Mitte) macht das selbst -> True.
-MAP_FIT_WORKFLOW_HANDLES_CROP = True
+# Sicherheits-Obergrenze pro Tile (verhindert absurd grosse Canvas/OOM bei
+# untypisch hochaufloesenden Quell-Tiles). 0 = keine Grenze.
+MAP_FIT_MAX_TILE = 1536
+# Die Inpaint-Workflows bekommen KEINE Crop-Maske mehr — der Workflow gibt das
+# volle (inpaintete) Canvas zurueck und das BACKEND schneidet die Mitte aus und
+# skaliert sie auf MAP_FIT_OUT_TILE.
+# Maskenrand ueber den grauen Bereich hinaus (damit das Modell die Kanten
+# einblendet) — getestet: Gray-Fill/Edit-Modelle (Qwen/Flux2) +5%, Flux-Dev-Fill
+# (Fill-Modell) +2% (etwas besser).
+MAP_BLEND_MASK_GROW_GRAY = 1.05
+MAP_BLEND_MASK_GROW_FILL = 1.02
 
 
 def _resolve_map_icon_path(loc: Dict[str, Any], field: str = "map_image_2d",
@@ -866,46 +876,68 @@ def _place_neighbors(location: Dict[str, Any]):
         lx, ly = loc.get("grid_x"), loc.get("grid_y")
         if lx is not None and ly is not None:
             by_pos[(lx, ly)] = loc
-    tile = MAP_FIT_GEN_SIZE // 3
-    canvas = Image.new("RGB", (tile * 3, tile * 3), (128, 128, 128))
     dirs = {
         (-1, -1): (0, 0), (0, -1): (1, 0), (1, -1): (2, 0),
         (-1, 0): (0, 1),                   (1, 0): (2, 1),
         (-1, 1): (0, 2), (0, 1): (1, 2), (1, 1): (2, 2),
     }
-    placed_imgs = {}
+    # Tiles in ORIGINAL-Aufloesung laden (kein Downscale). Die einheitliche
+    # Zellgroesse = groesste native Kantenlaenge unter dem eigenen Tile + allen
+    # Nachbarn, damit kein Tile verkleinert wird (kleinere werden auf die
+    # einheitliche Groesse hochskaliert). Die Mitte selbst nimmt das Edge-
+    # Compose; sie wird hier nur fuer die Groessenbestimmung beruecksichtigt.
+    loaded = {}   # (dx, dy) -> (img, rot, (col, row))
+    native_max = 0
+    own_p = _resolve_map_icon_path(location)
+    if own_p:
+        try:
+            with Image.open(own_p) as _o:
+                native_max = max(native_max, _o.width, _o.height)
+        except Exception:
+            pass
     for (dx, dy), (col, row) in dirs.items():
         nb = by_pos.get((gx + dx, gy + dy))
         p = _resolve_map_icon_path(nb) if nb else None
         if not p:
             continue
         try:
-            img = Image.open(p).convert("RGB").resize((tile, tile))
-            rot = int(nb.get("map_rotation_2d") or 0)
-            if rot:
-                img = img.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
-            canvas.paste(img, (col * tile, row * tile))
-            placed_imgs[(dx, dy)] = img
+            img = Image.open(p).convert("RGB")
+            native_max = max(native_max, img.width, img.height)
+            loaded[(dx, dy)] = (img, int(nb.get("map_rotation_2d") or 0), (col, row))
         except Exception as _e:
             logger.warning("Nachbar-Tile %s nicht ladbar: %s", p, _e)
-    if not placed_imgs:
+    if not loaded:
         return None
+    tile = native_max or MAP_FIT_OUT_TILE
+    if MAP_FIT_MAX_TILE and tile > MAP_FIT_MAX_TILE:
+        logger.info("Map-Fit: Tile-Aufloesung %dpx auf MAP_FIT_MAX_TILE=%dpx begrenzt",
+                    tile, MAP_FIT_MAX_TILE)
+        tile = MAP_FIT_MAX_TILE
+    canvas = Image.new("RGB", (tile * 3, tile * 3), (128, 128, 128))
+    placed_imgs = {}
+    for (dx, dy), (img, rot, (col, row)) in loaded.items():
+        im = img if img.size == (tile, tile) else img.resize((tile, tile))
+        if rot:
+            im = im.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
+        canvas.paste(im, (col * tile, row * tile))
+        placed_imgs[(dx, dy)] = im
+    logger.info("Map-Fit: Canvas in Original-Aufloesung komponiert — Tile %dpx, Canvas %dpx",
+                tile, tile * 3)
     return canvas, tile, placed_imgs
 
 
 def _finalize_blend(canvas, inpaint_mask, tile, placed_imgs, crop_empty: bool):
-    """Gemeinsamer Abschluss fuer Fit/Edge. Erzeugt zusaetzlich eine CROP-Maske
-    (immer die Center-Zelle, unabhaengig von der Inpaint-Maske), schneidet bei
-    ``crop_empty`` KOMPLETT leere Aussen-Zeilen/-Spalten weg (auch fuer Edge am
-    Kartenrand) und speichert:
-      - Canvas als RGBA (Inpaint-Maske im Alpha)   -> cpath
-      - Inpaint-Maske als L                        -> mpath
-      - Crop-Maske als RGBA (Center-Zelle im Alpha) -> crop_path
-    Rueckgabe ``(cpath, mpath, tile, crop_path)``."""
+    """Gemeinsamer Abschluss fuer Fit/Edge. Schneidet bei ``crop_empty`` KOMPLETT
+    leere Aussen-Zeilen/-Spalten weg (auch fuer Edge am Kartenrand) und speichert:
+      - Canvas (reines RGB)        -> cpath  (input_reference_image)
+      - Inpaint-Maske als L        -> mpath  (input_mask)
+    KEINE Crop-Maske mehr — die Mitte wird NICHT mehr im Workflow ausgeschnitten,
+    sondern vom Backend aus dem zurueckgegebenen Bild. Dafuer liefern wir die
+    Center-Zelle als FRAKTIONEN (x0,y0,x1,y1) des (ggf. getrimmten) Canvas, robust
+    gegen die Ausgabe-Aufloesung des Workflows.
+    Rueckgabe ``(cpath, mpath, tile, crop_frac)``."""
     import tempfile
-    from PIL import Image, ImageDraw
-    crop_mask = Image.new("L", canvas.size, 0)
-    ImageDraw.Draw(crop_mask).rectangle([tile, tile, tile * 2 - 1, tile * 2 - 1], fill=255)
+    left, top, right, bottom = 0, 0, tile * 3, tile * 3
     if crop_empty:
         # Aussen-Zeile/-Spalte nur abschneiden, wenn sie KOMPLETT leer ist
         # (auch keine Ecke) — sonst blieben Ecken-Tiles erhalten.
@@ -916,32 +948,40 @@ def _finalize_blend(canvas, inpaint_mask, tile, placed_imgs, crop_empty: bool):
         if (left, top, right, bottom) != (0, 0, tile * 3, tile * 3):
             canvas = canvas.crop((left, top, right, bottom))
             inpaint_mask = inpaint_mask.crop((left, top, right, bottom))
-            crop_mask = crop_mask.crop((left, top, right, bottom))
             logger.info("Map-Blend: leere Kanten abgeschnitten -> Canvas %dx%d",
                         right - left, bottom - top)
+    # Center-Zelle (Mitte) als Fraktionen des getrimmten Canvas.
+    cw, ch = canvas.size  # = (right-left, bottom-top)
+    cx0, cy0 = tile - left, tile - top
+    crop_frac = (cx0 / cw, cy0 / ch, (cx0 + tile) / cw, (cy0 + tile) / ch)
     cpath = tempfile.NamedTemporaryFile(suffix="_mapblend_canvas.png", delete=False).name
     mpath = tempfile.NamedTemporaryFile(suffix="_mapblend_mask.png", delete=False).name
-    crop_path = tempfile.NamedTemporaryFile(suffix="_mapblend_crop.png", delete=False).name
-    # Canvas OHNE Alpha-Maske (reines RGB) — die Inpaint-Maske wird separat als
-    # input_mask ausgegeben (Verdacht: Alpha-im-Bild macht Probleme).
     canvas.convert("RGB").save(cpath)
     inpaint_mask.save(mpath)
-    _save_rgba_mask(crop_mask, crop_path)
-    return cpath, mpath, tile, crop_path
+    return cpath, mpath, tile, crop_frac
 
 
-def _compose_neighbor_canvas(location: Dict[str, Any], crop_empty: bool = False):
-    """Fit: 3x3-Canvas (8 Nachbarn, graue Mitte) + Inpaint-Maske = Mitte. Schneidet
-    bei ``crop_empty`` leere Aussenkanten weg. Canvas traegt die Maske im Alpha,
-    zusaetzlich eine separate Crop-Maske (Center-Zelle, RGBA). Rueckgabe
-    ``(canvas, mask, tile, crop_mask)`` (Pfade) oder ``None``."""
+def _compose_neighbor_canvas(location: Dict[str, Any], crop_empty: bool = False,
+                             mask_grow: float = MAP_BLEND_MASK_GROW_GRAY):
+    """Fit: 3x3-Canvas (8 Nachbarn, graue Mitte) + Inpaint-Maske = Mitte * mask_grow.
+    Schneidet bei ``crop_empty`` leere Aussenkanten weg. Rueckgabe
+    ``(cpath, mpath, tile, crop_frac)`` oder ``None``.
+
+    ``mask_grow``: wie weit die Maske ueber die Mittel-Zelle hinausreicht
+    (1.05 = +5% fuer Gray-Fill/Edit-Modelle, 1.02 = +2% fuer Flux-Dev-Fill)."""
     from PIL import Image, ImageDraw
     placed = _place_neighbors(location)
     if not placed:
         return None
     canvas, tile, placed_imgs = placed
     mask = Image.new("L", canvas.size, 0)
-    ImageDraw.Draw(mask).rectangle([tile, tile, tile * 2 - 1, tile * 2 - 1], fill=255)
+    # Maske ueberlappt leicht in die Nachbarn, damit das Modell die Tile-Kanten
+    # einblendet. Ausgeschnitten (crop_frac in _finalize_blend) wird trotzdem nur
+    # die EXAKTE Mitte — die Nachbarn bleiben unveraendert, verwendet wird nur das
+    # neu erzeugte Tile.
+    _m = int(round(tile * (mask_grow - 1) / 2))
+    ImageDraw.Draw(mask).rectangle(
+        [tile - _m, tile - _m, tile * 2 - 1 + _m, tile * 2 - 1 + _m], fill=255)
     return _finalize_blend(canvas, mask, tile, placed_imgs, crop_empty)
 
 
@@ -1108,6 +1148,81 @@ def _compose_edge_canvas(location: Dict[str, Any], sides=None, gray_fill: bool =
     return _finalize_blend(canvas, mask, tile, placed_imgs, crop_empty=True)
 
 
+# Edge-Match (neues Modell): GENAU zwei benachbarte Tiles nebeneinander, die Naht
+# hart grau gefuellt; Maske = grauer Streifen + 5%. Der Workflow gibt EIN Bild
+# (gleiche Groesse) zurueck, das Backend zerschneidet es mittig und legt beide
+# Haelften in den jeweiligen Locations ab. KEIN Fill-Modell mehr.
+def _compose_edge_pair(location: Dict[str, Any], side: str):
+    """Baut den 2-Tile-Canvas (location + Nachbar in ``side``) in Display-
+    Orientierung, fuellt die Naht hart grau und erzeugt die Inpaint-Maske
+    (grauer Streifen + 5%). Rueckgabe ``(cpath, mpath, info)`` oder None.
+
+    ``info`` = dict(axis='x'|'y', a_first(bool), a_loc, b_loc, a_rot, b_rot, tile):
+      - axis: Naht-Achse (x = vertikale Naht, Tiles links/rechts; y = horizontale).
+      - a_first: ist ``location`` die erste Haelfte (links bzw. oben)?
+    """
+    import tempfile
+    from PIL import Image
+    import numpy as np
+    avail = _neighbor_sides(location)
+    nb = avail.get(side)
+    if not nb:
+        return None
+    pa = _resolve_map_icon_path(location)
+    pb = _resolve_map_icon_path(nb)
+    if not pa or not pb:
+        return None
+    ia = Image.open(pa).convert("RGB")
+    ib = Image.open(pb).convert("RGB")
+    tile = max(ia.width, ia.height, ib.width, ib.height)
+    if MAP_FIT_MAX_TILE and tile > MAP_FIT_MAX_TILE:
+        tile = MAP_FIT_MAX_TILE
+    a_rot = int(location.get("map_rotation_2d") or 0)
+    b_rot = int(nb.get("map_rotation_2d") or 0)
+
+    def _disp(img, rot):
+        im = img if img.size == (tile, tile) else img.resize((tile, tile))
+        return im.rotate(-rot, expand=False, fillcolor=(128, 128, 128)) if rot else im
+    a_img = _disp(ia, a_rot)
+    b_img = _disp(ib, b_rot)
+
+    horizontal = side in ("east", "west")  # Tiles links/rechts -> vertikale Naht
+    if horizontal:
+        canvas = Image.new("RGB", (tile * 2, tile), (128, 128, 128))
+        a_first = (side == "east")           # east: Nachbar rechts -> A links
+        canvas.paste(a_img, (0, 0) if a_first else (tile, 0))
+        canvas.paste(b_img, (tile, 0) if a_first else (0, 0))
+        axis, W_, H_, seam = "x", tile * 2, tile, tile
+    else:
+        canvas = Image.new("RGB", (tile, tile * 2), (128, 128, 128))
+        a_first = (side == "south")          # south: Nachbar unten -> A oben
+        canvas.paste(a_img, (0, 0) if a_first else (0, tile))
+        canvas.paste(b_img, (0, tile) if a_first else (0, 0))
+        axis, W_, H_, seam = "y", tile, tile * 2, tile
+
+    blend = max(1, int(tile * MAP_EDGE_BLEND_FRAC))
+    coord = np.mgrid[0:H_, 0:W_][1 if axis == "x" else 0]
+    dist = np.abs(coord - seam)
+    # Naht hart grau fuellen (grauer Streifen ±blend).
+    gray_band = dist < blend
+    arr = np.array(canvas)
+    arr[gray_band] = (128, 128, 128)
+    canvas = Image.fromarray(arr, "RGB")
+    # Maske = Streifen + 5% (hart).
+    mask_w = blend * MAP_BLEND_MASK_GROW_GRAY
+    mask = Image.fromarray(np.where(dist < mask_w, 255, 0).astype("uint8"), "L")
+
+    cpath = tempfile.NamedTemporaryFile(suffix="_edgepair_canvas.png", delete=False).name
+    mpath = tempfile.NamedTemporaryFile(suffix="_edgepair_mask.png", delete=False).name
+    canvas.save(cpath)
+    mask.save(mpath)
+    info = {"axis": axis, "a_first": a_first, "a_loc": location, "b_loc": nb,
+            "a_rot": a_rot, "b_rot": b_rot, "tile": tile}
+    logger.info("Edge-Pair: %s <-%s-> %s | Canvas %dx%d, Naht %s",
+                location.get("name"), side, nb.get("name"), W_, H_, axis)
+    return cpath, mpath, info
+
+
 @router.patch("/locations/{location_id}/map-image")
 async def set_location_map_image_route(location_id: str, request: Request) -> Dict[str, Any]:
     """Setzt das pro Kartenabschnitt angezeigte 2D-Tile eines Ortes/Klons.
@@ -1156,7 +1271,7 @@ def get_location_fit_canvas(location_name: str):
     try:
         data = Path(cpath).read_bytes()
     finally:
-        for _p in comp[:2] + comp[3:]:  # cpath, mpath, crop_path (Pfade)
+        for _p in comp[:2]:  # cpath, mpath (Pfade; comp[3] ist die Crop-Fraktion)
             try:
                 os.remove(_p)
             except Exception:
@@ -1317,6 +1432,10 @@ async def generate_location_background(location_name: str, request: Request) -> 
         # CLIP-Pairing fuer Flux2-Workflows
         if active_wf and active_wf.clip:
             params["clip_name"] = active_wf.clip
+        if active_wf and getattr(active_wf, "clip_type", ""):
+            params["clip_type"] = active_wf.clip_type
+        if active_wf and getattr(active_wf, "vae", ""):
+            params["vae_name"] = active_wf.vae
 
         # Frischer Seed pro Aufruf gegen ComfyUI Cache-Hit
         # (Memory feedback_no_new_image_sentinel).
@@ -1945,6 +2064,10 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             params["clip_name"] = active_wf.clip
         if active_wf and active_wf.clip2:
             params["clip_name2"] = active_wf.clip2
+        if active_wf and getattr(active_wf, "clip_type", ""):
+            params["clip_type"] = active_wf.clip_type
+        if active_wf and getattr(active_wf, "vae", ""):
+            params["vae_name"] = active_wf.vae
         # LoRA-Inputs
         if active_wf and active_wf.has_loras:
             if loras_override is not None:
@@ -1979,45 +2102,55 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         # input_reference_image/input_mask injizieren. Fit = graue Mitte (ganzes
         # Tile neu); Edge = echtes Tile + Rahmen-Maske der gewaehlten Seiten.
         _fit_comp = None
-        if _map_blend:
-            # gray_fill nur bei Edit-Modell-Inpaint (Qwen-Edit) — dort muessen die
-            # Inpaint-Stellen grau im Referenzbild sein; Fill-Modelle (Flux) nicht.
-            _gray_fill = bool(active_wf and getattr(active_wf, "inpaint_gray", False))
-            _fit_comp = (_compose_edge_canvas(location, edge_sides, gray_fill=_gray_fill) if edge_match
-                         else _compose_neighbor_canvas(location, crop_empty=True))
+        _edge_pair = None
+        _cpath = _mpath = None
+        if edge_match:
+            # Neues Edge-Modell: GENAU zwei benachbarte Tiles, EINE Kante. Naht hart
+            # grau, Maske = Streifen +5%. Der Workflow gibt EIN Bild zurueck — das
+            # Backend zerschneidet es mittig und legt beide Haelften in den jeweiligen
+            # Locations ab. KEIN Fill-Modell (nur Gray-Fill-Workflows).
+            _side = (edge_sides[0] if isinstance(edge_sides, (list, tuple)) and edge_sides
+                     else (edge_sides if isinstance(edge_sides, str) else ""))
+            _ep = _compose_edge_pair(location, _side)
+            if _ep:
+                _cpath, _mpath, _edge_pair = _ep
+                params["image_use_case"] = "mapfit"  # 400-Cap umgehen: voller Output zum Zerschneiden
+        elif fit_neighbors:
+            # Maskenrand pro Modell: Gray-Fill/Edit (Qwen/Flux2) +5%, Flux-Dev-Fill +2%.
+            _is_gray = bool(active_wf and getattr(active_wf, "inpaint_gray", False))
+            _grow = MAP_BLEND_MASK_GROW_GRAY if _is_gray else MAP_BLEND_MASK_GROW_FILL
+            _fit_comp = _compose_neighbor_canvas(location, crop_empty=True, mask_grow=_grow)
             if _fit_comp:
-                _cpath, _mpath, _ctile, _crop = _fit_comp
-                # Canvas (reines RGB) -> input_reference_image, Inpaint-Maske
-                # SEPARAT -> input_mask, Crop-Maske (Center-Zelle) -> input_crop.
-                params["reference_images"] = {
-                    "input_reference_image": _cpath, "input_mask": _mpath,
-                    "input_crop": _crop}
-                params["width"] = MAP_FIT_OUT_TILE
-                params["height"] = MAP_FIT_OUT_TILE
-                logger.info("Map-Blend: Canvas + Inpaint-/Crop-Maske injiziert, Ziel %dpx",
-                            MAP_FIT_OUT_TILE)
-                # Debug: das, was REAL in den Workflow geht, zum Inspizieren ablegen
-                # (letzter Lauf). So vergleichbar mit dem manuellen ComfyUI-Test.
-                try:
-                    import shutil as _sh
-                    from app.core.paths import get_storage_dir as _gsd
-                    _dbg = _gsd() / "mapblend_debug"
-                    _dbg.mkdir(parents=True, exist_ok=True)
-                    _sh.copy(_cpath, _dbg / "last_canvas.png")
-                    _sh.copy(_mpath, _dbg / "last_mask.png")
-                    _sh.copy(_crop, _dbg / "last_crop_mask.png")
-                    (_dbg / "last_prompt.txt").write_text(
-                        f"mode: {'edge' if edge_match else 'fit'}\n"
-                        f"location: {location.get('name', '')} ({location.get('id', '')})\n"
-                        f"edge_sides: {edge_sides}\n\n"
-                        f"PROMPT:\n{full_prompt}\n\nNEGATIVE:\n{negative}\n",
-                        encoding="utf-8")
-                    logger.info("Map-Blend Debug (%s): %s",
-                                "edge" if edge_match else "fit", _dbg)
-                except Exception as _de:
-                    logger.debug("Map-Blend Debug-Copy fehlgeschlagen: %s", _de)
-            else:
-                logger.info("Map-Fit: keine Nachbarn/Grid-Position — normaler Lauf")
+                _cpath, _mpath, _ctile, _cfrac = _fit_comp
+        if _cpath and _mpath:
+            # Canvas (reines RGB) -> input_reference_image, Inpaint-Maske -> input_mask.
+            # Beides in Original-Aufloesung; dem Workflow die echten Canvas-Maße geben.
+            params["reference_images"] = {
+                "input_reference_image": _cpath, "input_mask": _mpath}
+            from PIL import Image as _ImgSz
+            with _ImgSz.open(_cpath) as _cv:
+                _cw, _ch = _cv.size
+            params["width"] = _cw
+            params["height"] = _ch
+            logger.info("Map-Blend: Canvas + Inpaint-Maske injiziert (%dx%d)", _cw, _ch)
+            try:
+                import shutil as _sh
+                from app.core.paths import get_storage_dir as _gsd
+                _dbg = _gsd() / "mapblend_debug"
+                _dbg.mkdir(parents=True, exist_ok=True)
+                _sh.copy(_cpath, _dbg / "last_canvas.png")
+                _sh.copy(_mpath, _dbg / "last_mask.png")
+                (_dbg / "last_prompt.txt").write_text(
+                    f"mode: {'edge' if edge_match else 'fit'}\n"
+                    f"location: {location.get('name', '')} ({location.get('id', '')})\n"
+                    f"edge_sides: {edge_sides}\n\n"
+                    f"PROMPT:\n{full_prompt}\n\nNEGATIVE:\n{negative}\n",
+                    encoding="utf-8")
+                logger.info("Map-Blend Debug (%s): %s", "edge" if edge_match else "fit", _dbg)
+            except Exception as _de:
+                logger.debug("Map-Blend Debug-Copy fehlgeschlagen: %s", _de)
+        elif _map_blend:
+            logger.info("Map-Fit/Edge: kein Nachbar/Grid-Position — normaler Lauf")
 
         from app.core.task_queue import get_task_queue
         _tq = get_task_queue()
@@ -2075,24 +2208,75 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")
                 raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
 
-            # Map-Fit: aus dem inpainteten 3x3-Ergebnis die Mitte (das neue Tile)
-            # herausschneiden + hochskalieren — ausser der Workflow macht das selbst
-            # (MAP_FIT_WORKFLOW_HANDLES_CROP, z.B. mit Modell-Upscaler).
-            if _fit_comp and not MAP_FIT_WORKFLOW_HANDLES_CROP:
+            # Edge-Pair (neues Modell): das zurueckgegebene EINE Bild mittig
+            # zerschneiden, jede Haelfte um ihre eigene Rotation nach Norden
+            # zurueckdrehen, auf Map-Thumbnail (400) bringen und in der jeweiligen
+            # Location als neues map_2d-Tile ablegen. Dann sofort fertig.
+            if _edge_pair:
+                import io as _io2
+                from PIL import Image as _ImgE
+                from app.core.image_postprocess import downscale_bytes
+                from app.models.world import set_location_map_image
+                _full = _ImgE.open(_io2.BytesIO(images[0])).convert("RGB")
+                _W, _H = _full.size
+                if _edge_pair["axis"] == "x":
+                    _mid = _W // 2
+                    _first = _full.crop((0, 0, _mid, _H))
+                    _second = _full.crop((_mid, 0, _W, _H))
+                else:
+                    _mid = _H // 2
+                    _first = _full.crop((0, 0, _W, _mid))
+                    _second = _full.crop((0, _mid, _W, _H))
+                _a_half = _first if _edge_pair["a_first"] else _second
+                _b_half = _second if _edge_pair["a_first"] else _first
+                _saved = []
+                for _hl, _loc2, _rot2 in ((_a_half, _edge_pair["a_loc"], _edge_pair["a_rot"]),
+                                          (_b_half, _edge_pair["b_loc"], _edge_pair["b_rot"])):
+                    if _rot2:
+                        _hl = _hl.rotate(_rot2, expand=False)  # zurueck nach Norden
+                    _bb = _io2.BytesIO(); _hl.save(_bb, format="PNG")
+                    _png = downscale_bytes(_bb.getvalue(), "map")  # Map-Thumbnail (400)
+                    _lid2 = _loc2.get("id", "")
+                    _gd2 = get_gallery_dir(_lid2); _gd2.mkdir(parents=True, exist_ok=True)
+                    _nm2 = f"{int(time.time())}_{_lid2[:6]}.png"
+                    (_gd2 / _nm2).write_bytes(_png)
+                    save_gallery_prompt(_lid2, _nm2, full_prompt)
+                    set_gallery_image_type(_lid2, _nm2, "map_2d")
+                    set_gallery_image_meta(_lid2, _nm2, {
+                        "backend": backend.name, "backend_type": backend.api_type,
+                        "model": (getattr(backend, 'model', '') or ''), "loras": []})
+                    set_location_map_image(_lid2, "map_image_2d", _nm2)  # neues Tile anzeigen
+                    toggle_background_image(_lid2, _nm2)
+                    _saved.append({"location_id": _lid2, "image": _nm2})
+                for _tmp in (_cpath, _mpath):
+                    try:
+                        os.remove(_tmp)
+                    except Exception:
+                        pass
+                _tq.track_finish(_track_id)
+                logger.info("Edge-Pair gespeichert: %s", _saved)
+                return {"status": "success", "edge": True, "saved": _saved}
+
+            # Map-Fit/Edge: das Backend schneidet die Mitte (das neue Tile) aus dem
+            # zurueckgegebenen vollen Canvas heraus (per Fraktions-Box, robust gegen
+            # die Ausgabe-Aufloesung) und skaliert sie auf MAP_FIT_OUT_TILE. Der
+            # Workflow bekommt KEINE Crop-Maske mehr.
+            if _fit_comp:
                 try:
                     import io as _io
                     from PIL import Image as _Img
                     _full = _Img.open(_io.BytesIO(images[0])).convert("RGB")
                     _w, _h = _full.size
-                    _tx, _ty = _w // 3, _h // 3
-                    _crop = _full.crop((_tx, _ty, _tx * 2, _ty * 2))
-                    # Mitte auf Ziel-Kachelgroesse hochskalieren (Gen lief kleiner).
+                    _fx0, _fy0, _fx1, _fy1 = _cfrac
+                    _box = (round(_fx0 * _w), round(_fy0 * _h),
+                            round(_fx1 * _w), round(_fy1 * _h))
+                    _crop = _full.crop(_box)
                     if _crop.size != (MAP_FIT_OUT_TILE, MAP_FIT_OUT_TILE):
                         _crop = _crop.resize((MAP_FIT_OUT_TILE, MAP_FIT_OUT_TILE), _Img.LANCZOS)
                     _buf = _io.BytesIO()
                     _crop.save(_buf, format="PNG")
                     images = [_buf.getvalue()]
-                    logger.info("Map-Fit: Mitte %dx%d -> %dpx", _tx, _ty, MAP_FIT_OUT_TILE)
+                    logger.info("Map-Fit: Mitte %s aus %dx%d -> %dpx", _box, _w, _h, MAP_FIT_OUT_TILE)
                 except Exception as _ce:
                     logger.warning("Map-Fit Crop fehlgeschlagen: %s", _ce)
                 finally:
@@ -2170,6 +2354,11 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             # Bild-Typ setzen wenn prompt_type angegeben (day/night/map_2d)
             if prompt_type in ("day", "night", "map_2d"):
                 set_gallery_image_type(loc_id, image_name, prompt_type)
+            # Neu erzeugtes Map-Tile sofort als angezeigtes Karten-Item setzen
+            # (Fit/Nachbar + normale map_2d-Gen) — sonst bliebe das alte Tile aktiv.
+            if prompt_type == "map_2d":
+                from app.models.world import set_location_map_image
+                set_location_map_image(loc_id, "map_image_2d", image_name)
 
             _tq.track_finish(_track_id)
             _gen_duration = time.time() - _gen_start
@@ -2434,9 +2623,14 @@ async def generate_time_variant(
             backend = img_skill.match_backend(backend_name)  # Backend-Glob via Match-Konzept
 
         if not backend:
-            # Qwen-Workflow bevorzugen (unterstuetzt Referenzbilder)
+            # Edit-Workflow mit Referenzbild-Slot bevorzugen (Qwen). KEINE
+            # Inpaint-Workflows: die brauchen input_mask/input_crop, die der
+            # Tag/Nacht-Convert nicht liefert → ComfyUI ResizeImageMaskNode wirft
+            # "required_input_missing".
             for wf in img_skill.comfy_workflows:
-                if "qwen" in wf.name.lower():
+                if ("qwen" in wf.name.lower()
+                        and (wf.category or "") != "inpaint"
+                        and (wf.ref_slot_count or 0) >= 1):
                     compat = wf.compatible_backends or []
                     candidates = [b for b in img_skill.backends if b.available and b.instance_enabled
                                   and b.api_type == "comfyui"
@@ -2457,6 +2651,17 @@ async def generate_time_variant(
                 status_code=503,
                 detail="Kein ComfyUI-Backend mit Referenzbild-Support verfuegbar "
                        "(z.B. Qwen-Workflow). Bitte ComfyUI-Backend starten.")
+
+        # Time-Variant braucht einen Edit-Workflow mit Referenzbild-Slot
+        # (input_reference_image_1). Ein Inpaint-Workflow (input_mask/input_crop)
+        # passt NICHT — sonst scheitert ComfyUI an fehlenden Masken-Inputs.
+        if active_wf and ((active_wf.category or "") == "inpaint"
+                          or (active_wf.ref_slot_count or 0) < 1):
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Workflow '{active_wf.name}' ist fuer Tag/Nacht-Varianten "
+                        "ungeeignet (Inpaint bzw. ohne Referenzbild-Slot). Bitte einen "
+                        "Qwen-Edit-Workflow mit input_reference_image_1 waehlen."))
 
         from app.core import config as _cfg
         _ucp = _cfg.resolve_use_case_style(
@@ -2494,6 +2699,10 @@ async def generate_time_variant(
         # CLIP — sonst scheitert ComfyUI mit value_not_in_list bei input_clip
         if active_wf and active_wf.clip:
             params["clip_name"] = active_wf.clip
+        if active_wf and getattr(active_wf, "clip_type", ""):
+            params["clip_type"] = active_wf.clip_type
+        if active_wf and getattr(active_wf, "vae", ""):
+            params["vae_name"] = active_wf.vae
 
         # LoRAs
         if active_wf and active_wf.has_loras and active_wf.default_loras:
