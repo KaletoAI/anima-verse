@@ -812,6 +812,21 @@ MAP_FIT_OUT_TILE = 1024
 # Sicherheits-Obergrenze pro Tile (verhindert absurd grosse Canvas/OOM bei
 # untypisch hochaufloesenden Quell-Tiles). 0 = keine Grenze.
 MAP_FIT_MAX_TILE = 1536
+# Fit: Anteil des Nachbar-Tiles, der als Kontext-Rand um die Mitte gelegt wird.
+# Kleiner = naeher an nativ und schaerfer, aber weniger Blend-Kontext. Flexibel.
+# 0.1875 → bei nativem 1024-Tile bleibt die Mitte voll 1024 und der Canvas ~1408.
+MAP_FIT_NEIGHBOR_FRAC = 0.1875
+# Fit: Flux-vertraegliche Obergrenze fuer den GANZEN Canvas (Generierungs-
+# Aufloesung). Flux ist um ~1 MP (1024px) optimal; deutlich darueber wird das
+# Bild weich. Das Tile wird so gewaehlt, dass tile + 2*border <= dieser Wert
+# bleibt (Mitte so gross wie moeglich, max. nativ). Auf Vielfaches von 16
+# gerundet (Flux/VAE-Anforderung). 1408 = ~2 MP, passt zu frac 0.1875 mit
+# voller 1024-Mitte. Nur fuer Fit — Edge nutzt weiter volle Tiles.
+MAP_FIT_CANVAS_MAX = 1408
+# Fit (nur Edit-Modelle wie Qwen): nur den inneren Anteil der Mitte ausschneiden.
+# Edit-Modelle erfinden am Rand der regenerierten Flaeche „mehr drumherum" — der
+# innere Kern ist sauber. 1.0 = ganze Mitte (wie Fill-Modelle), 0.7 = innere 70 %.
+MAP_FIT_INNER_CROP = 0.7
 # Die Inpaint-Workflows bekommen KEINE Crop-Maske mehr — der Workflow gibt das
 # volle (inpaintete) Canvas zurueck und das BACKEND schneidet die Mitte aus und
 # skaliert sie auf MAP_FIT_OUT_TILE.
@@ -862,10 +877,23 @@ def _save_rgba_mask(mask, path: str) -> None:
     rgba.save(path)
 
 
-def _place_neighbors(location: Dict[str, Any]):
-    """Baut den 3x3-Canvas (grau, Mitte=(1,1)) mit allen 8 Nachbar-Tiles
-    (orthogonal + diagonal, je mit Anzeige-Rotation). Rueckgabe
-    ``(canvas, tile, placed_imgs)`` oder ``None`` (keine Grid-Position/kein Nachbar)."""
+def _place_neighbors(location: Dict[str, Any], border_frac: float = 1.0,
+                     canvas_max: Optional[int] = None):
+    """Baut den Canvas (grau, Mitte = eigenes Tile) mit den Nachbar-Tiles ringsum.
+
+    ``border_frac`` = Anteil des Nachbar-Tiles, der als Kontext-Rand verwendet
+    wird (1.0 = ganzes Tile → klassischer 3*tile-Canvas; 0.25 = schmaler Rand).
+    Pro Nachbar wird NUR der zur Mitte zeigende Streifen (orthogonal) bzw. die
+    Ecke (diagonal) eingesetzt — so bleibt die Generierung naeher an der nativen
+    Aufloesung und damit schaerfer.
+
+    ``canvas_max`` (optional): Obergrenze fuer den GANZEN Canvas (tile + 2*border).
+    Ist sie gesetzt, wird das Tile so gewaehlt, dass der Canvas darunter bleibt
+    (Mitte so gross wie moeglich, max. nativ) und Tile/Border auf Vielfache von 16
+    gerundet (Flux-/VAE-tauglich). None = altes Verhalten (Edge).
+
+    Rueckgabe ``(canvas, tile, border, present)`` oder ``None``. ``border`` = Rand
+    in px, ``present`` = Set der vorhandenen Nachbar-Richtungen (dx, dy)."""
     from PIL import Image
     from app.models.world import list_locations
     gx, gy = location.get("grid_x"), location.get("grid_y")
@@ -876,17 +904,10 @@ def _place_neighbors(location: Dict[str, Any]):
         lx, ly = loc.get("grid_x"), loc.get("grid_y")
         if lx is not None and ly is not None:
             by_pos[(lx, ly)] = loc
-    dirs = {
-        (-1, -1): (0, 0), (0, -1): (1, 0), (1, -1): (2, 0),
-        (-1, 0): (0, 1),                   (1, 0): (2, 1),
-        (-1, 1): (0, 2), (0, 1): (1, 2), (1, 1): (2, 2),
-    }
-    # Tiles in ORIGINAL-Aufloesung laden (kein Downscale). Die einheitliche
-    # Zellgroesse = groesste native Kantenlaenge unter dem eigenen Tile + allen
-    # Nachbarn, damit kein Tile verkleinert wird (kleinere werden auf die
-    # einheitliche Groesse hochskaliert). Die Mitte selbst nimmt das Edge-
-    # Compose; sie wird hier nur fuer die Groessenbestimmung beruecksichtigt.
-    loaded = {}   # (dx, dy) -> (img, rot, (col, row))
+    # Tiles in ORIGINAL-Aufloesung laden (kein Downscale). Einheitliche Zellgroesse
+    # = groesste native Kantenlaenge (eigenes Tile + Nachbarn); kleinere werden
+    # hochskaliert.
+    loaded = {}   # (dx, dy) -> (img, rot)
     native_max = 0
     own_p = _resolve_map_icon_path(location)
     if own_p:
@@ -895,17 +916,20 @@ def _place_neighbors(location: Dict[str, Any]):
                 native_max = max(native_max, _o.width, _o.height)
         except Exception:
             pass
-    for (dx, dy), (col, row) in dirs.items():
-        nb = by_pos.get((gx + dx, gy + dy))
-        p = _resolve_map_icon_path(nb) if nb else None
-        if not p:
-            continue
-        try:
-            img = Image.open(p).convert("RGB")
-            native_max = max(native_max, img.width, img.height)
-            loaded[(dx, dy)] = (img, int(nb.get("map_rotation_2d") or 0), (col, row))
-        except Exception as _e:
-            logger.warning("Nachbar-Tile %s nicht ladbar: %s", p, _e)
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if dx == 0 and dy == 0:
+                continue
+            nb = by_pos.get((gx + dx, gy + dy))
+            p = _resolve_map_icon_path(nb) if nb else None
+            if not p:
+                continue
+            try:
+                img = Image.open(p).convert("RGB")
+                native_max = max(native_max, img.width, img.height)
+                loaded[(dx, dy)] = (img, int(nb.get("map_rotation_2d") or 0))
+            except Exception as _e:
+                logger.warning("Nachbar-Tile %s nicht ladbar: %s", p, _e)
     if not loaded:
         return None
     tile = native_max or MAP_FIT_OUT_TILE
@@ -913,47 +937,79 @@ def _place_neighbors(location: Dict[str, Any]):
         logger.info("Map-Fit: Tile-Aufloesung %dpx auf MAP_FIT_MAX_TILE=%dpx begrenzt",
                     tile, MAP_FIT_MAX_TILE)
         tile = MAP_FIT_MAX_TILE
-    canvas = Image.new("RGB", (tile * 3, tile * 3), (128, 128, 128))
-    placed_imgs = {}
-    for (dx, dy), (img, rot, (col, row)) in loaded.items():
+    frac = max(0.05, min(1.0, border_frac))
+    if canvas_max:
+        # Tile so begrenzen, dass der ganze Canvas (tile + 2*border) <= canvas_max
+        # bleibt → Flux-vertraegliche Generierungsaufloesung. Mitte so gross wie
+        # moeglich (max. nativ). Vielfache von 16 (Flux/VAE).
+        tile = min(tile, int(canvas_max / (1 + 2 * frac)))
+        tile = max(256, (tile // 16) * 16)
+        border = max(16, (int(round(tile * frac)) // 16) * 16)
+    else:
+        border = max(1, int(round(tile * frac)))
+    csize = tile + 2 * border
+    canvas = Image.new("RGB", (csize, csize), (128, 128, 128))
+    present = set()
+    for (dx, dy), (img, rot) in loaded.items():
         im = img if img.size == (tile, tile) else img.resize((tile, tile))
         if rot:
             im = im.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
-        canvas.paste(im, (col * tile, row * tile))
-        placed_imgs[(dx, dy)] = im
-    logger.info("Map-Fit: Canvas in Original-Aufloesung komponiert — Tile %dpx, Canvas %dpx",
-                tile, tile * 3)
-    return canvas, tile, placed_imgs
+        # Quell-Crop: nur der zur Mitte zeigende Streifen/Eck des Nachbarn.
+        sx0 = (tile - border) if dx < 0 else 0
+        sx1 = tile if dx < 0 else (border if dx > 0 else tile)
+        sy0 = (tile - border) if dy < 0 else 0
+        sy1 = tile if dy < 0 else (border if dy > 0 else tile)
+        strip = im.crop((sx0, sy0, sx1, sy1))
+        # Ziel-Position im Canvas (links/oben = 0, Mitte = border, rechts/unten = border+tile).
+        px = 0 if dx < 0 else (border + tile if dx > 0 else border)
+        py = 0 if dy < 0 else (border + tile if dy > 0 else border)
+        canvas.paste(strip, (px, py))
+        present.add((dx, dy))
+    logger.info("Map-Fit: Canvas komponiert — Tile %dpx, Border %dpx (frac %.2f), Canvas %dpx",
+                tile, border, frac, csize)
+    return canvas, tile, border, present
 
 
-def _finalize_blend(canvas, inpaint_mask, tile, placed_imgs, crop_empty: bool):
+def _finalize_blend(canvas, inpaint_mask, tile, border, present, crop_empty: bool,
+                    inner_crop: float = 1.0):
     """Gemeinsamer Abschluss fuer Fit/Edge. Schneidet bei ``crop_empty`` KOMPLETT
-    leere Aussen-Zeilen/-Spalten weg (auch fuer Edge am Kartenrand) und speichert:
+    leere Aussen-Raender weg (auch fuer Edge am Kartenrand) und speichert:
       - Canvas (reines RGB)        -> cpath  (input_reference_image)
       - Inpaint-Maske als L        -> mpath  (input_mask)
     KEINE Crop-Maske mehr — die Mitte wird NICHT mehr im Workflow ausgeschnitten,
     sondern vom Backend aus dem zurueckgegebenen Bild. Dafuer liefern wir die
     Center-Zelle als FRAKTIONEN (x0,y0,x1,y1) des (ggf. getrimmten) Canvas, robust
     gegen die Ausgabe-Aufloesung des Workflows.
+
+    ``inner_crop`` < 1.0 schneidet nur den inneren Anteil der Mitte aus (um den
+    Mittelpunkt) — gegen den „aussen erfundenen" Ring von Edit-Modellen.
+
+    Geometrie: Mitte (eigenes Tile) liegt bei ``border``, Canvas = tile + 2*border.
     Rueckgabe ``(cpath, mpath, tile, crop_frac)``."""
     import tempfile
-    left, top, right, bottom = 0, 0, tile * 3, tile * 3
+    csize = tile + 2 * border
+    left, top, right, bottom = 0, 0, csize, csize
     if crop_empty:
-        # Aussen-Zeile/-Spalte nur abschneiden, wenn sie KOMPLETT leer ist
-        # (auch keine Ecke) — sonst blieben Ecken-Tiles erhalten.
-        left = 0 if any(d in placed_imgs for d in ((-1, -1), (-1, 0), (-1, 1))) else tile
-        right = tile * 3 if any(d in placed_imgs for d in ((1, -1), (1, 0), (1, 1))) else tile * 2
-        top = 0 if any(d in placed_imgs for d in ((-1, -1), (0, -1), (1, -1))) else tile
-        bottom = tile * 3 if any(d in placed_imgs for d in ((-1, 1), (0, 1), (1, 1))) else tile * 2
-        if (left, top, right, bottom) != (0, 0, tile * 3, tile * 3):
+        # Aussen-Rand nur abschneiden, wenn auf der Seite KEIN Nachbar liegt
+        # (orthogonal oder diagonal) — sonst blieben Ecken erhalten.
+        left = 0 if any(d[0] < 0 for d in present) else border
+        right = csize if any(d[0] > 0 for d in present) else csize - border
+        top = 0 if any(d[1] < 0 for d in present) else border
+        bottom = csize if any(d[1] > 0 for d in present) else csize - border
+        if (left, top, right, bottom) != (0, 0, csize, csize):
             canvas = canvas.crop((left, top, right, bottom))
             inpaint_mask = inpaint_mask.crop((left, top, right, bottom))
-            logger.info("Map-Blend: leere Kanten abgeschnitten -> Canvas %dx%d",
+            logger.info("Map-Blend: leere Raender abgeschnitten -> Canvas %dx%d",
                         right - left, bottom - top)
-    # Center-Zelle (Mitte) als Fraktionen des getrimmten Canvas.
+    # Center-Zelle (Mitte) als Fraktionen des getrimmten Canvas — optional nur der
+    # innere Anteil (inner_crop) um den Mittelpunkt.
     cw, ch = canvas.size  # = (right-left, bottom-top)
-    cx0, cy0 = tile - left, tile - top
-    crop_frac = (cx0 / cw, cy0 / ch, (cx0 + tile) / cw, (cy0 + tile) / ch)
+    cx0, cy0 = border - left, border - top
+    _icf = max(0.05, min(1.0, inner_crop))
+    _cxc, _cyc = cx0 + tile / 2.0, cy0 + tile / 2.0
+    _half = (tile / 2.0) * _icf
+    crop_frac = ((_cxc - _half) / cw, (_cyc - _half) / ch,
+                 (_cxc + _half) / cw, (_cyc + _half) / ch)
     cpath = tempfile.NamedTemporaryFile(suffix="_mapblend_canvas.png", delete=False).name
     mpath = tempfile.NamedTemporaryFile(suffix="_mapblend_mask.png", delete=False).name
     canvas.convert("RGB").save(cpath)
@@ -962,27 +1018,40 @@ def _finalize_blend(canvas, inpaint_mask, tile, placed_imgs, crop_empty: bool):
 
 
 def _compose_neighbor_canvas(location: Dict[str, Any], crop_empty: bool = False,
-                             mask_grow: float = MAP_BLEND_MASK_GROW_GRAY):
-    """Fit: 3x3-Canvas (8 Nachbarn, graue Mitte) + Inpaint-Maske = Mitte * mask_grow.
-    Schneidet bei ``crop_empty`` leere Aussenkanten weg. Rueckgabe
+                             mask_grow: float = MAP_BLEND_MASK_GROW_GRAY,
+                             border_frac: float = MAP_FIT_NEIGHBOR_FRAC,
+                             full_mask: bool = False):
+    """Fit: Canvas (Nachbar-Raender, graue Mitte) + Inpaint-Maske = Mitte * mask_grow.
+    ``border_frac`` steuert die Rand-Breite (kleiner = naeher an nativ, schaerfer).
+    Schneidet bei ``crop_empty`` leere Aussenraender weg. Rueckgabe
     ``(cpath, mpath, tile, crop_frac)`` oder ``None``.
 
     ``mask_grow``: wie weit die Maske ueber die Mittel-Zelle hinausreicht
-    (1.05 = +5% fuer Gray-Fill/Edit-Modelle, 1.02 = +2% fuer Flux-Dev-Fill)."""
+    (1.05 = +5% fuer Gray-Fill/Edit-Modelle, 1.02 = +2% fuer Flux-Dev-Fill).
+    ``full_mask``: GANZE Flaeche maskieren statt nur die Mitte — noetig fuer
+    Edit-Modelle (Qwen-Edit), die bei einer Teil-Maske den schmalen Nachbar-
+    Streifen in die Mitte kopieren („Nachbar-Rand ins Bild gezogen")."""
     from PIL import Image, ImageDraw
-    placed = _place_neighbors(location)
+    placed = _place_neighbors(location, border_frac=border_frac,
+                             canvas_max=MAP_FIT_CANVAS_MAX)
     if not placed:
         return None
-    canvas, tile, placed_imgs = placed
-    mask = Image.new("L", canvas.size, 0)
-    # Maske ueberlappt leicht in die Nachbarn, damit das Modell die Tile-Kanten
-    # einblendet. Ausgeschnitten (crop_frac in _finalize_blend) wird trotzdem nur
-    # die EXAKTE Mitte — die Nachbarn bleiben unveraendert, verwendet wird nur das
-    # neu erzeugte Tile.
-    _m = int(round(tile * (mask_grow - 1) / 2))
-    ImageDraw.Draw(mask).rectangle(
-        [tile - _m, tile - _m, tile * 2 - 1 + _m, tile * 2 - 1 + _m], fill=255)
-    return _finalize_blend(canvas, mask, tile, placed_imgs, crop_empty)
+    canvas, tile, border, present = placed
+    if full_mask:
+        # Edit-Modell (Qwen): ganze Flaeche editierbar → kohaerente Regenerierung
+        # statt Streifen-Kopie. Der Center-Crop (crop_frac) bleibt unveraendert.
+        mask = Image.new("L", canvas.size, 255)
+    else:
+        mask = Image.new("L", canvas.size, 0)
+        # Maske ueberlappt leicht in die Nachbarn, damit das Modell die Tile-
+        # Kanten einblendet. Ausgeschnitten wird trotzdem nur die EXAKTE Mitte.
+        _m = int(round(tile * (mask_grow - 1) / 2))
+        ImageDraw.Draw(mask).rectangle(
+            [border - _m, border - _m, border + tile - 1 + _m, border + tile - 1 + _m], fill=255)
+    # Edit-Modelle (full_mask): nur den inneren Kern ausschneiden — der aussen
+    # erfundene Ring faellt weg. Fill-Modelle behalten die ganze Mitte.
+    _inner = MAP_FIT_INNER_CROP if full_mask else 1.0
+    return _finalize_blend(canvas, mask, tile, border, present, crop_empty, inner_crop=_inner)
 
 
 # Edge-Match (Kanten angleichen): Rahmen-Maskenbreite + solider Kern an der Kante.
@@ -1100,10 +1169,12 @@ def _compose_edge_canvas(location: Dict[str, Any], sides=None, gray_fill: bool =
     from PIL import Image
     avail = _neighbor_sides(location)
     use = [s for s in (sides or list(avail)) if s in avail]
-    placed = _place_neighbors(location)
+    # Edge nutzt volle Nachbar-Tiles (border_frac=1.0 → border == tile, klassischer
+    # 3*tile-Canvas) — die Rahmen-Maske braucht den vollen Nachbar-Kontext.
+    placed = _place_neighbors(location, border_frac=1.0)
     if not placed or not use:
         return None
-    canvas, tile, placed_imgs = placed
+    canvas, tile, border, present = placed
     # Mitte mit dem echten Tile fuellen (statt grau).
     tp = _resolve_map_icon_path(location)
     if tp:
@@ -1111,10 +1182,10 @@ def _compose_edge_canvas(location: Dict[str, Any], sides=None, gray_fill: bool =
         rot = int(location.get("map_rotation_2d") or 0)
         if rot:
             t_img = t_img.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
-        canvas.paste(t_img, (tile, tile))
+        canvas.paste(t_img, (border, border))
     # Rahmen-Maske via Distanz-Transform.
     W, H = canvas.size
-    cx0, cy0, cx1, cy1 = tile, tile, 2 * tile, 2 * tile
+    cx0, cy0, cx1, cy1 = border, border, border + tile, border + tile
     blend = max(1, int(tile * MAP_EDGE_BLEND_FRAC))
     core = max(0, int(blend * MAP_EDGE_CORE_FRAC))
     ys, xs = np.mgrid[0:H, 0:W]
@@ -1145,7 +1216,7 @@ def _compose_edge_canvas(location: Dict[str, Any], sides=None, gray_fill: bool =
         _solid = mask.point(lambda v: 255 if v > 0 else 0)
         canvas = Image.composite(_gray, canvas.convert("RGB"), _solid)
     # Auch Edge schneidet leere Kanten weg (z.B. am Kartenrand).
-    return _finalize_blend(canvas, mask, tile, placed_imgs, crop_empty=True)
+    return _finalize_blend(canvas, mask, tile, border, present, crop_empty=True)
 
 
 # Edge-Match (neues Modell): GENAU zwei benachbarte Tiles nebeneinander, die Naht
@@ -2119,9 +2190,17 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             # Maskenrand pro Modell: Gray-Fill/Edit (Qwen/Flux2) +5%, Flux-Dev-Fill +2%.
             _is_gray = bool(active_wf and getattr(active_wf, "inpaint_gray", False))
             _grow = MAP_BLEND_MASK_GROW_GRAY if _is_gray else MAP_BLEND_MASK_GROW_FILL
-            _fit_comp = _compose_neighbor_canvas(location, crop_empty=True, mask_grow=_grow)
+            # Edit-Modelle (inpaint_gray, z.B. Qwen-Edit) brauchen eine VOLLE Maske,
+            # sonst kopieren sie den schmalen Nachbar-Streifen in die Mitte.
+            _fit_comp = _compose_neighbor_canvas(location, crop_empty=True, mask_grow=_grow,
+                                                 full_mask=_is_gray)
             if _fit_comp:
                 _cpath, _mpath, _ctile, _cfrac = _fit_comp
+                # 400-Cap umgehen: das Backend soll den VOLLEN Canvas zurueckgeben,
+                # damit die Mitte in voller Aufloesung herausgeschnitten wird. Ohne
+                # das wird der Output vorab auf 400px (Map-Cap) verkleinert → der
+                # Center-Crop liefert nur ~290px hochskaliert (unscharf).
+                params["image_use_case"] = "mapfit"
         if _cpath and _mpath:
             # Canvas (reines RGB) -> input_reference_image, Inpaint-Maske -> input_mask.
             # Beides in Original-Aufloesung; dem Workflow die echten Canvas-Maße geben.
@@ -2146,7 +2225,14 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                     f"edge_sides: {edge_sides}\n\n"
                     f"PROMPT:\n{full_prompt}\n\nNEGATIVE:\n{negative}\n",
                     encoding="utf-8")
-                logger.info("Map-Blend Debug (%s): %s", "edge" if edge_match else "fit", _dbg)
+                # md5 mitloggen → 1:1-Abgleich mit der "Ref-Inject"-Logzeile des
+                # Backends: so ist belegt, dass die mapblend_debug-Dateien exakt
+                # die sind, die an ComfyUI gehen.
+                import hashlib as _hl
+                _cmd5 = _hl.md5(Path(_cpath).read_bytes()).hexdigest()[:12]
+                _mmd5 = _hl.md5(Path(_mpath).read_bytes()).hexdigest()[:12]
+                logger.info("Map-Blend Debug (%s): %s | canvas md5=%s mask md5=%s",
+                            "edge" if edge_match else "fit", _dbg, _cmd5, _mmd5)
             except Exception as _de:
                 logger.debug("Map-Blend Debug-Copy fehlgeschlagen: %s", _de)
         elif _map_blend:

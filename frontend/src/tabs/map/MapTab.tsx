@@ -69,6 +69,10 @@ export function MapTab() {
   const [picker, setPicker] = useState<Location | null>(null)
   const [pickerGallery, setPickerGallery] = useState<GalleryResp | null>(null)
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
+  // Globaler Refresh-Tick: erzwingt EINMAL ein Neuladen ALLER Tiles (z.B. nach
+  // Edge-Match, das auch den Nachbarn aendert). Pro Loc bleibt iconVer fuer
+  // gezielte Refreshes (normale Gen / Fit).
+  const [refreshTick, setRefreshTick] = useState(0)
   // Welche Galerie-Datei steht gerade zum Loeschen an (Inline-Bestaetigung, kein confirm()).
   const [delConfirm, setDelConfirm] = useState<string | null>(null)
 
@@ -182,9 +186,41 @@ export function MapTab() {
     return (loc.image_prompt_map_2d || '').trim() || (loc.description || loc.name || '').trim()
   }, [])
 
-  // Kein Auto-Refresh nach der Generierung — die periodischen Reloads bringen die
-  // Admin-UI durcheinander, während man parallel etwas anderes editiert. Der
-  // Picker zeigt das neue Tile beim erneuten Öffnen (frischer Galerie-Fetch).
+  // Kein PERIODISCHER Auto-Refresh (stört das Editieren). Stattdessen: nach einer
+  // erfolgreichen Generierung EINMAL gezielt das/die betroffene(n) Tile(s) neu
+  // laden. Die Gen ist fire-and-forget (POST liefert track_id, Bild kommt async)
+  // → den Track via /queue/status bis Endzustand pollen, dann Cache-Buster bumpen.
+  const bumpIcons = useCallback((ids: string[]) => {
+    setIconVer((v) => {
+      const next = { ...v }
+      for (const id of ids) next[id] = (next[id] || 0) + 1
+      return next
+    })
+  }, [])
+
+  const watchAndRefresh = useCallback(async (trackId: string, locIds: string[], all = false) => {
+    if (!trackId) return
+    const deadline = Date.now() + 4 * 60 * 1000  // Map-Gens koennen dauern
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2500))
+      let status: string | null = null
+      try {
+        const s = await apiGet<{
+          recent?: Array<{ task_id: string; status: string }>
+          recent_tasks?: Array<{ task_id: string; status: string }>
+        }>('/queue/status')
+        const hit = [...(s.recent || []), ...(s.recent_tasks || [])].find((x) => x.task_id === trackId)
+        if (hit) status = hit.status
+      } catch { /* weiter pollen */ }
+      if (status) {  // Endzustand erreicht
+        if (status === 'completed') {
+          if (all) setRefreshTick((n) => n + 1)
+          else bumpIcons(locIds)
+        }
+        return
+      }
+    }
+  }, [bumpIcons])
 
   // ✨ Normale Generierung aus dem Cell-image-Dialog. POST an die ZELLE (loc.id),
   // Klone speichern ins geteilte Template, die Auswahl bleibt pro Zelle.
@@ -196,11 +232,14 @@ export function MapTab() {
       if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras) body.loras = payload.loras
       if (payload.prompt_settings_applied) body.settings_applied = true
-      void apiPost(`/world/locations/${encodeURIComponent(target.loc.id)}/gallery`, body)
-        .then(() => toast(t('Image queued')))
-        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+      try {
+        const r = await apiPost<{ track_id?: string }>(
+          `/world/locations/${encodeURIComponent(target.loc.id)}/gallery`, body)
+        toast(t('Image queued'))
+        void watchAndRefresh(r?.track_id || '', [target.loc.id])
+      } catch (e) { toast(t('Error') + ': ' + (e as Error).message, 'error') }
     },
-    [t, toast],
+    [t, toast, watchAndRefresh],
   )
 
   // ⊞ Fit to neighbors — festverdrahtet: Workflow + Backend kommen serverseitig
@@ -211,11 +250,14 @@ export function MapTab() {
       const body: Record<string, unknown> = { prompt_type: 'map_2d', prompt, fit_neighbors: true, settings_applied: true }
       // Gewaehlter Inpaint-Workflow (category=="inpaint"); leer = Server-Default.
       if (workflow) body.workflow = workflow
-      void apiPost(`/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
-        .then(() => toast(t('Image queued')))
-        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+      try {
+        const r = await apiPost<{ track_id?: string }>(
+          `/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
+        toast(t('Image queued'))
+        void watchAndRefresh(r?.track_id || '', [loc.id])
+      } catch (e) { toast(t('Error') + ': ' + (e as Error).message, 'error') }
     },
-    [t, toast],
+    [t, toast, watchAndRefresh],
   )
 
   // ⧉ Kanten angleichen — gleicher mapfit-Workflow, aber Rahmen-Maske + Übergangs-
@@ -226,11 +268,15 @@ export function MapTab() {
         prompt_type: 'map_2d', prompt, edge_match: true, edge_sides: sides, settings_applied: true,
       }
       if (workflow) body.workflow = workflow
-      void apiPost(`/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
-        .then(() => toast(t('Image queued')))
-        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+      try {
+        const r = await apiPost<{ track_id?: string }>(
+          `/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
+        toast(t('Image queued'))
+        // Edge betrifft auch den Nachbarn → alle Tiles einmal refreshen.
+        void watchAndRefresh(r?.track_id || '', [loc.id], true)
+      } catch (e) { toast(t('Error') + ': ' + (e as Error).message, 'error') }
     },
-    [t, toast],
+    [t, toast, watchAndRefresh],
   )
 
   // Rotate the cell's 2D icon by +90° (0→90→180→270→0). Display-only.
@@ -499,7 +545,7 @@ export function MapTab() {
                       onDragEnd={() => setDragPayload(null)}
                       title={loc.name + (isClone ? ' (' + t('copy') + ')' : '')}
                     >
-                      <MapIcon locId={loc.id} className="ga-map-tile-bg" cacheKey={String(iconVer[loc.id] || 0)} rotation={loc.map_rotation_2d || 0} />
+                      <MapIcon locId={loc.id} className="ga-map-tile-bg" cacheKey={`${iconVer[loc.id] || 0}.${refreshTick}`} rotation={loc.map_rotation_2d || 0} />
                       <span className="ga-map-tile-name">{loc.name}</span>
                       <button
                         type="button"

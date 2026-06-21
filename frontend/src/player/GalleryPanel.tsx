@@ -240,9 +240,9 @@ export function GalleryPanel() {
               <Icon name="maximize" size={16} />
             </button>
             {zoom.video
-              ? <video src={zoom.video} controls autoPlay style={{ maxWidth: '100%', maxHeight: '100%' }} />
+              ? <video src={zoom.video} controls autoPlay style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 48px)' }} />
               : <img src={zoom.url} alt={zoom.name} onClick={() => lightbox.open({ src: zoom.url, alt: zoom.name })}
-                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }} />}
+                  style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 48px)', objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }} />}
           </div>
           {/* Bild-Informationen */}
           <div onClick={(e) => e.stopPropagation()} style={{

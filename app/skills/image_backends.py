@@ -1421,7 +1421,20 @@ class ComfyUIBackend(ImageBackend):
                         workflow[on_node]["inputs"]["boolean"] = True
                         _activated_switches.add(on_node)
                         logger.debug(f"Switch '{on_node}' (fuer {node_title}): true")
-                    logger.debug(f"Ref-Image '{node_title}': {uploaded} (slot: {slot_name})")
+                    # Nachvollziehbarkeit: welche QUELLDATEI (= mapblend_debug-Kopie
+                    # bei Map-Fit/Edge) geht unveraendert in welchen Node/Slot auf
+                    # ComfyUI. md5/Groesse erlauben den 1:1-Abgleich mit den Debug-
+                    # Dateien (Upload ist roh, keine Transformation).
+                    try:
+                        import hashlib as _hl
+                        with open(file_path, "rb") as _rf:
+                            _raw = _rf.read()
+                        _dig = _hl.md5(_raw).hexdigest()[:12]
+                        logger.info("Ref-Inject: node '%s' <- %s (%d B, md5=%s) -> ComfyUI '%s'",
+                                    node_title, os.path.basename(file_path), len(_raw), _dig, uploaded)
+                    except Exception:
+                        logger.info("Ref-Inject: node '%s' <- %s -> ComfyUI '%s'",
+                                    node_title, file_path, uploaded)
 
         # Nicht befuellte Referenz-Slots auf den Placeholder zeigen lassen.
         # Sonst behaelt eine input_reference_image*-Node ihren im Workflow-File

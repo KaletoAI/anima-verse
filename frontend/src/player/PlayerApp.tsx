@@ -177,6 +177,8 @@ export function PlayerApp() {
   const [phoneUnread, setPhoneUnread] = useState(0)
   const [igNew, setIgNew] = useState(0)
   const [expanded, setExpanded] = useState<string | null>(null)  // Panel im View-only-Overlay vergrößert
+  const [expandSeq, setExpandSeq] = useState(0)  // erzwingt frischen Remount des Overlay-Inhalts je Öffnen (Zoom-Reset)
+  const openExpanded = useCallback((id: string) => { setExpanded(id); setExpandSeq((s) => s + 1) }, [])
   const [bgPanel, setBgPanel] = useState<string>('')             // Panel-id, die als Vollbild-Hintergrund dient ('' = keine)
   const [mapLabelMode, setMapLabelMode] = useState<LabelMode>(loadLabelMode)  // Map-Beschriftungen: all/unique/none
   const igSeenRef = useRef<string | null>(null)  // zuletzt gesehene IG-Post-id
@@ -436,7 +438,7 @@ export function PlayerApp() {
       )}
       {EXPANDABLE.has(id) && (
         <button className="player-ctrl-btn"
-          onClick={() => setExpanded(id)} onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => openExpanded(id)} onMouseDown={(e) => e.stopPropagation()}
           title={t('Enlarge')} aria-label={t('Enlarge')}>
           <Icon name="maximize" size={14} />
         </button>
@@ -477,7 +479,7 @@ export function PlayerApp() {
   // View-only-Inhalt eines Panels für die vergrößerte Anzeige. Erweiterbar:
   // hier pro EXPANDABLE-Panel den (read-only) Inhalt zurückgeben.
   const expandedContent = (id: string): ReactNode => {
-    if (id === 'worldmap') return <MapPanel currentLocationId={data?.location_id || ''} autoFit labelMode={mapLabelMode} />
+    if (id === 'worldmap') return <MapPanel key={expandSeq} currentLocationId={data?.location_id || ''} autoFit labelMode={mapLabelMode} />
     return null
   }
 

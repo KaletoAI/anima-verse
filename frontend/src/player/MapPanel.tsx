@@ -8,7 +8,7 @@
  * Richtung Cursor), in localStorage gespeichert. Bewegung bleibt im Move-Pad.
  * Reuse der layout-neutralen worldmap-* Klassen aus /static/themes/base.css.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 
@@ -155,6 +155,13 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
   const containerRef = useRef<HTMLDivElement>(null)
   const restoredRef = useRef(false)
   const panRef = useRef({ on: false, sx: 0, sy: 0, scx: 0, scy: 0 })
+  // autoFit-Overlay: nach der ersten manuellen Zoom-Aktion NICHT mehr automatisch
+  // einpassen — sonst snappt jeder Reinzoom (Scrollbar toggelt → Resize → Re-Fit)
+  // zurueck auf den Fit-Zoom. Initial wird weiterhin eingepasst.
+  const userZoomedRef = useRef(false)
+  // Anker fuer cursor-zentriertes Zoomen: im Wheel-Handler gesetzt, im
+  // useLayoutEffect angewandt (dann steht die neue Inhaltsgroesse im DOM).
+  const zoomAnchorRef = useRef<{ mx: number; my: number; cx: number; cy: number; z: number } | null>(null)
 
   // Persist zoom + scroll offset so the view is restored next time.
   const persist = useCallback(() => {
@@ -177,6 +184,19 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
   }, [])
 
   useEffect(() => { zoomRef.current = zoom; persist() }, [zoom, persist])
+
+  // Cursor-zentriertes Zoomen: nach dem Zoom-Commit (neue Inhaltsgroesse steht im
+  // DOM) den Scroll so setzen, dass der Punkt unterm Cursor an Ort und Stelle
+  // bleibt. Nur wenn der Wheel-Handler einen Anker gesetzt hat (nicht beim Fit).
+  useLayoutEffect(() => {
+    const a = zoomAnchorRef.current
+    const c = containerRef.current
+    if (!a || !c) return
+    zoomAnchorRef.current = null
+    const ratio = zoom / a.z
+    c.scrollLeft = a.mx * ratio - a.cx
+    c.scrollTop = a.my * ratio - a.cy
+  }, [zoom])
 
   // Drag-to-pan on empty area (cells stop propagation? no — pan anywhere except
   // when starting on an avatar/pin which have their own pointer handling).
@@ -222,18 +242,17 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
     if (!c) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
+      userZoomedRef.current = true  // ab jetzt kein Auto-Fit-Rueckspringen mehr (autoFit-Overlay)
       const delta = e.deltaY > 0 ? -0.1 : 0.1
+      const rect = c.getBoundingClientRect()
+      const cx = e.clientX - rect.left
+      const cy = e.clientY - rect.top
       setZoom((z) => {
-        const nz = Math.min(3, Math.max(0.3, z + delta))
+        const nz = Math.min(6, Math.max(0.3, z + delta))
         if (nz === z) return z
-        const rect = c.getBoundingClientRect()
-        const mx = e.clientX - rect.left + c.scrollLeft
-        const my = e.clientY - rect.top + c.scrollTop
-        const ratio = nz / z
-        requestAnimationFrame(() => {
-          c.scrollLeft = mx * ratio - (e.clientX - rect.left)
-          c.scrollTop = my * ratio - (e.clientY - rect.top)
-        })
+        // Punkt unter dem Cursor merken (Inhalts-Koordinate bei altem Zoom +
+        // Viewport-Position) — Scroll-Korrektur folgt im useLayoutEffect.
+        zoomAnchorRef.current = { mx: cx + c.scrollLeft, my: cy + c.scrollTop, cx, cy, z }
         return nz
       })
     }
@@ -322,6 +341,7 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
   useEffect(() => {
     if (!autoFit || !gridW || !gridH) return
     const fit = () => {
+      if (userZoomedRef.current) return  // Nutzer hat manuell gezoomt → Ansicht nicht zuruecksetzen
       const c = containerRef.current
       if (!c || !c.clientWidth || !c.clientHeight) return
       const z = Math.min(c.clientWidth / gridW, c.clientHeight / gridH)

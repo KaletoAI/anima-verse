@@ -95,7 +95,7 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "clip": "clip_l.safetensors",
         "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
         # Flux1-DevFill = Fill-Modell: beschreibender Prompt fuer die Maske.
-        "prompt": "seamless top-down fantasy map tile, hand-painted, continue the surrounding terrain, colors and style into the masked area with no visible seam, border or frame",
+        "prompt": "seamless top-down map tile, photorealistic, continue the surrounding terrain, colors and style into the masked area with no visible seam, border or frame",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
     "Qwen Inpaint": {
@@ -114,7 +114,7 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         # flux2 fuer Flux.2). Default hier auf den Qwen-Clip abgestimmt.
         "clip_type": "qwen_image",
         # Qwen-Edit = Instruktions-Modell: Anweisung statt Beschreibung.
-        "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
+        "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and photorealistic style with no visible seams, border or frame",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
     "SD15": {
@@ -165,14 +165,14 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 _DEFAULT_IMAGE_USE_CASES = {
     "map": {
         "keywords": {
-            "prompt_style": "fantasy game map tile, hand-painted cartography, oblique top-down angle with a slight tilt for depth, single close-up map tile, subject fills the entire frame edge to edge, cohesive palette, highly detailed, full-bleed, no border, no frame, borderless",
+            "prompt_style": "game map tile, photorealistic, oblique top-down angle with a slight tilt for depth, single close-up map tile, subject fills the entire frame edge to edge, cohesive palette, highly detailed, full-bleed, no border, no frame, borderless",
             "prompt_negative": "people, person, characters, faces, text, words, letters, watermark, signature, logo, frame, border, framed, vignette, grid lines, map pins, icons, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, lowres, jpeg artifacts, low quality",
-            "prompt_instruction": "Write comma-separated keywords for a single close-up fantasy game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, hand-painted cartography style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject fills the entire frame edge to edge, closely framed, no border or frame. No people, no text, no camera or style talk.",
+            "prompt_instruction": "Write comma-separated keywords for a single close-up game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, photorealistic style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject fills the entire frame edge to edge, closely framed, no border or frame. No people, no text, no camera or style talk.",
         },
         "natural": {
-            "prompt_style": "a single close-up fantasy game map tile of the place, hand-painted, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, cohesive palette, highly detailed",
+            "prompt_style": "a single close-up game map tile of the place, photorealistic, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, cohesive palette, highly detailed",
             "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, framed, vignette, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, low quality",
-            "prompt_instruction": "Describe a single close-up fantasy game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, hand-painted style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject is closely framed and fills the entire frame edge to edge with no border or frame. No people, no text.",
+            "prompt_instruction": "Describe a single close-up game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, photorealistic style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject is closely framed and fills the entire frame edge to edge with no border or frame. No people, no text.",
         },
     },
     "mapfit": {
@@ -181,14 +181,14 @@ _DEFAULT_IMAGE_USE_CASES = {
         # Fit-to-neighbors + Match-edges (category=="inpaint"-Workflows wie Qwen
         # Inpaint / Flux Inpaint), pro Familie editierbar im Use-Cases-Editor.
         "keywords": {
-            "prompt_style": "seamless map inpainting, complement the gray masked areas, match the surrounding terrain, colors and hand-painted style, continuous top-down map tile, no seams, no border, no frame",
-            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, visible seam, hard edge, mismatched terrain, color shift, blurry, lowres, jpeg artifacts, low quality",
-            "prompt_instruction": "Write a short comma-separated instruction to complement the gray masked areas of the map so they blend seamlessly into the surrounding tiles — match the neighbouring terrain, colors and hand-painted style, no visible seam or border.",
+            "prompt_style": "top-down aerial map view of the area, filling the entire frame, in the same photorealistic style, colour palette and lighting as the rest of the map, highly detailed, slight tilt for depth, no border, no frame, no text",
+            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, washed out, desaturated, flat, blurry, lowres, jpeg artifacts, low quality",
+            "prompt_instruction": "Write a short comma-separated prompt for a top-down aerial map view of the area, filling the frame, in the same photorealistic style, colour palette and lighting as the rest of the map. Self-contained — do not continue or invent beyond the edges. No border, no frame, no text.",
         },
         "natural": {
-            "prompt_style": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
-            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, visible seam, hard edge, mismatched terrain, color shift, blurry, low quality",
-            "prompt_instruction": "Write a short instruction to complement the gray masked areas of the map so they blend seamlessly into the surrounding tiles — match the neighbouring terrain, colors and hand-painted style, no visible seam or border.",
+            "prompt_style": "a top-down aerial map view of the area, filling the entire frame, in the same photorealistic style, colour palette and lighting as the rest of the map, highly detailed, slight tilt for depth, no border, no frame, no text",
+            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, washed out, desaturated, flat, blurry, low quality",
+            "prompt_instruction": "Write a short prompt for a top-down aerial map view of the area, filling the frame, in the same photorealistic style, colour palette and lighting as the rest of the map. Self-contained — do not continue or invent beyond the edges. No border, no frame, no text.",
         },
     },
     "location": {
