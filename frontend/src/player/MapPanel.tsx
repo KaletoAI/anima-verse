@@ -355,10 +355,11 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
-      // Natürliche Inhaltsgröße melden, damit das Autosize in PlayerApp BREITE
-      // und Höhe setzen kann (DOM-Messung scheitert, weil die Karte intern
-      // scrollt/fittet). Nur im Grid-Panel (nicht im autoFit-Overlay).
-      {...(!autoFit && gridW ? { 'data-content-w': Math.round(gridW), 'data-content-h': Math.round(gridH) } : {})}>
+      // Aktuelle (gezoomte) Inhaltsgröße melden, damit das Autosize in PlayerApp
+      // BREITE und Höhe passend zur Zoomstufe setzt (DOM-Messung scheitert, weil
+      // die Karte intern scrollt/fittet). gridW/gridH sind ungeskaliert → * zoom.
+      // Nur im Grid-Panel (nicht im autoFit-Overlay).
+      {...(!autoFit && gridW ? { 'data-content-w': Math.round(gridW * zoom), 'data-content-h': Math.round(gridH * zoom) } : {})}>
       <div ref={containerRef} onMouseDown={onDown}
         style={{ flex: 1, minHeight: 0, overflow: 'auto', cursor: 'grab' }}>
         <div style={{ width: gridW * zoom, height: gridH * zoom }}>

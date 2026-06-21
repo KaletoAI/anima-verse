@@ -99,8 +99,11 @@ async def lifespan(app: FastAPI):
     ensure_default_admin()
 
     # Migration: Persistente Location-IDs hinzufuegen, Filesystem bereinigen
-    from app.models.world import migrate_location_ids
+    from app.models.world import migrate_location_ids, migrate_fixed_map_images
     migrate_location_ids()
+    # „Auto"-Map-Bild abschaffen: platzierte Zellen fest auf ihr erstes Map-Bild
+    # setzen (idempotent), damit Zaehlung + Generierung eindeutig sind.
+    migrate_fixed_map_images()
 
     # Vereinheitlichte Intents (plan-intents-unified.md, Phase 1): bestehende
     # Assignments idempotent in die intents-Tabelle spiegeln. Kein Verhaltens-

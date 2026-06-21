@@ -1120,6 +1120,43 @@ def set_location_map_image(location_id: str, field: str, filename: str) -> Optio
     return None
 
 
+def first_map_image(owner_id: str, image_type: str = "map_2d") -> str:
+    """Erste Galerie-Datei des angegebenen Map-Typs eines Galerie-Owners.
+
+    Gleiche Reihenfolge wie der Lese-Fallback in ``routes/world.py`` (Typ-Dict).
+    Leerer String, wenn der Owner kein Bild dieses Typs hat."""
+    if not owner_id:
+        return ""
+    gallery_dir = get_gallery_dir(owner_id)
+    for fn, tp in (get_gallery_image_types(owner_id) or {}).items():
+        if tp == image_type and (gallery_dir / fn).exists():
+            return fn
+    return ""
+
+
+def migrate_fixed_map_images() -> int:
+    """Einmalig/idempotent: „Auto"-Modus abschaffen — jeder platzierten Zelle ohne
+    explizites ``map_image_2d`` das erste verfuegbare Map-Bild ihres Galerie-Owners
+    fest zuordnen. Zellen ohne irgendein Map-Bild bleiben unveraendert."""
+    data = _load_world_data()
+    changed = 0
+    for loc in data.get("locations", []):
+        gx, gy = loc.get("grid_x"), loc.get("grid_y")
+        if gx is None or gy is None or gx < 0 or gy < 0:
+            continue
+        if (loc.get("map_image_2d") or "").strip():
+            continue
+        owner = (loc.get("template_location_id") or "").strip() or loc.get("id")
+        fm = first_map_image(owner, "map_2d")
+        if fm:
+            loc["map_image_2d"] = fm
+            changed += 1
+    if changed:
+        _save_world_data(data)
+        logger.info("migrate_fixed_map_images: %d Zellen fest zugeordnet", changed)
+    return changed
+
+
 def clear_map_image_references(image_name: str) -> int:
     """Entfernt haengende ``map_image``/``map_image_2d``-Pointer auf ein
     (geloeschtes) Galerie-Bild aus ALLEN Locations/Klonen — sonst zeigt die Zelle
@@ -1516,6 +1553,11 @@ def clone_location(template_id: str, grid_x: int, grid_y: int) -> Optional[Dict[
         "grid_y": gy,
         "rooms": [],
     }
+    # Kein „Auto"-Modus: gleich das erste Map-Bild des Templates fest zuordnen
+    # (sofern vorhanden) — ansonsten setzt es spaeter die Generierung.
+    _fm = first_map_image(template_id, "map_2d")
+    if _fm:
+        clone["map_image_2d"] = _fm
     data["locations"].append(clone)
     _save_world_data(data)
     # Resolved zurueckgeben — Frontend bekommt die merge-fertige Instanz.

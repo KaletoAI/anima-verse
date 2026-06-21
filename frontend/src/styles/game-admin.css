@@ -1516,6 +1516,7 @@ html, * {
 }
 
 .ga-gallery-thumb {
+  position: relative;
   flex: 0 0 100px;
   width: 100px;
   height: 100px;
@@ -1525,6 +1526,14 @@ html, * {
   overflow: hidden;
   cursor: zoom-in;
   padding: 0;
+}
+
+/* Map-Bild: kleiner Zaehler „auf der Karte verwendet" oben links. */
+.ga-gallery-usage {
+  position: absolute; top: 3px; left: 3px; pointer-events: none;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: rgba(0, 0, 0, 0.7); color: #fff; font-size: 10px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
 }
 
 .ga-gallery-thumb img {
@@ -1989,6 +1998,23 @@ html, * {
   border: 2px dashed var(--border, #30363d);
 }
 .ga-map-imgpicker-none.selected { border-style: solid; border-color: var(--accent, #6aa9ff); color: var(--text, #c9d1d9); }
+
+/* Bild-Kachel mit Overlay: Loeschen (rechts) */
+.ga-map-imgpicker-cell { position: relative; }
+.ga-map-imgpicker-del {
+  position: absolute; top: 3px; right: 3px; z-index: 2; padding: 0;
+  width: 18px; height: 18px; border: none; border-radius: 50%; cursor: pointer;
+  background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 13px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.ga-map-imgpicker-del:hover { background: var(--danger, #e0675e); }
+.ga-map-imgpicker-confirm {
+  position: absolute; inset: 0; z-index: 3; border-radius: 6px;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+}
+.ga-map-imgpicker-confirm span { font-size: 10px; color: #fff; }
+.ga-map-imgpicker-confirm-row { display: flex; gap: 6px; }
 
 /* === Modal overlay (image-gen dialog, etc.) ============================= */
 .ga-modal-backdrop {

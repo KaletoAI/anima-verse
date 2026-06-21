@@ -70,7 +70,7 @@
   },
   "63": {
     "inputs": {
-      "value": ""
+      "value": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, visible seam, hard edge, mismatched terrain, color shift, blurry, low quality\n"
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -179,7 +179,7 @@
   },
   "116": {
     "inputs": {
-      "vae_name": "qwen_image_vae.safetensors"
+      "vae_name": "flux2-vae.safetensors"
     },
     "class_type": "VAELoader",
     "_meta": {
@@ -198,7 +198,7 @@
   },
   "120": {
     "inputs": {
-      "gguf_name": "Qwen-Edit-NSFW-v23_Q5_K.gguf"
+      "gguf_name": "Flux2-9B-Q8.gguf"
     },
     "class_type": "LoaderGGUF",
     "_meta": {
@@ -207,8 +207,8 @@
   },
   "121": {
     "inputs": {
-      "clip_name": "Qwen2.5-VL-7B-Instruct-abliterated_merged.safetensors",
-      "type": "qwen_image",
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2",
       "device": "default"
     },
     "class_type": "ClipLoaderGGUF",
@@ -237,7 +237,7 @@
   },
   "135": {
     "inputs": {
-      "image": "test_wald_tower_mask_hard.png",
+      "image": "last_mask (6).png",
       "channel": "red"
     },
     "class_type": "LoadImageMask",
@@ -247,7 +247,7 @@
   },
   "136": {
     "inputs": {
-      "image": "test_wald_tower_canvas_gray_hard.png"
+      "image": "last_canvas (15).png"
     },
     "class_type": "LoadImage",
     "_meta": {

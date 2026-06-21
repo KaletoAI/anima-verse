@@ -270,11 +270,19 @@
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
-  margin: -8px -8px 6px;
-  padding: 8px 10px 7px;
-  background: var(--bg, #0d1117);
-  border-bottom: 1px solid var(--border, #30363d);
+  /* Kein eigener Streifen mehr: die Bar schwebt ueber den Panels. Negativer
+     Bottom-Margin zieht den Panelbereich bis unter die Buttons hoch; oben etwas
+     hoeher angesetzt. */
+  margin: -12px -8px -31px;
+  padding: 3px 10px 0;
+  background: transparent;
+  border-bottom: none;
+  /* Leere Bar-Flaeche durchklickbar zu den Panels darunter. */
+  pointer-events: none;
 }
+/* Alles Interaktive wieder aktiv; nur die leeren Gruppen-Container bleiben
+   durchlaessig (dort scheinen die Panels durch). */
+.play-toolbar *:not(.play-toolbar-group) { pointer-events: auto; }
 .play-toolbar-group {
   display: flex;
   gap: 4px;
@@ -288,22 +296,38 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 26px;
-  padding: 0 7px;
+  height: 28px;
+  padding: 0 8px;
   border-radius: 8px;
   cursor: pointer;
-  border: 1px solid var(--border, #30363d);
+  border: 1px solid transparent;
   background: transparent;
   color: var(--text, #e6edf3);
-  opacity: 0.5;
+  opacity: 0.85;
+  /* Schwebt ueber den Panels — leichter Backdrop haelt den Duotone-Chip lesbar. */
+  backdrop-filter: blur(3px);
   transition: opacity 0.12s, background 0.12s, border-color 0.12s, transform 0.06s;
 }
-.play-tbtn.with-text { padding: 0 10px 0 8px; }
-.play-tbtn-label { font-size: 0.74em; line-height: 1; }
-.play-tbtn:hover { opacity: 1; background: var(--bg-hover, #1f2937); }
+/* Panel-Bar-Icons 50% groesser (15 -> ~22) + etwas feinerer Strich = ruhigeres,
+   schoeneres Bild bei der groesseren Darstellung. Greift fuer ALLE
+   Toolbar-Buttons (Panel-Toggles + fixed-cluster), unabhaengig vom inline size. */
+.play-tbtn svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+}
+.play-tbtn.with-text { padding: 0 11px 0 8px; }
+.play-tbtn-label { font-size: 0.76em; line-height: 1; }
+.play-tbtn:hover {
+  opacity: 1;
+  background: var(--bg-hover, #1f2937);
+  border-color: var(--border, #30363d);
+  z-index: 2;
+}
 .play-tbtn:active { transform: translateY(1px); }
 .play-tbtn.open {
   opacity: 1;
+  z-index: 2;
   background: var(--bg-hover, #1f2937);
   border-color: var(--accent, #6aa9ff);
   color: var(--accent, #6aa9ff);

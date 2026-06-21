@@ -165,6 +165,34 @@ class TaskQueue:
         if c2.rowcount:
             logger.warning("Stale tracked Tasks als interrupted markiert: %d", c2.rowcount)
 
+    # Laufzeit-Reaper: tracked Tasks, die INNERHALB einer Session haengen
+    # bleiben (kein Neustart) — der externe In-Process-Generator ist
+    # gestorben/blockiert, ohne track_finish zu rufen. Symptom: "Ort-Bild"
+    # haengt ewig pending (z.B. ComfyUI beim Trigger down). Lazy beim Status-
+    # Abruf, damit kein extra Thread noetig ist.
+    _TRACKED_STALE_TIMEOUT_MIN = 20
+
+    def _reap_stale_tracked_runtime(self) -> int:
+        from datetime import timedelta
+        now = utc_now()
+        cutoff = (now - timedelta(minutes=self._TRACKED_STALE_TIMEOUT_MIN)).isoformat(timespec="seconds")
+        try:
+            with self._write_lock, self._connect() as conn:
+                c = conn.execute(
+                    "UPDATE tasks SET status='interrupted', completed_at=?, "
+                    "error='Timeout — haengender Task aufgeraeumt (Backend evtl. zwischenzeitlich weg)' "
+                    "WHERE task_origin='tracked' AND ("
+                    "  (status='pending'  AND created_at < ?) OR "
+                    "  (status='running'  AND COALESCE(started_at, created_at) < ?))",
+                    (now.isoformat(timespec="seconds"), cutoff, cutoff))
+                conn.commit()
+            if c.rowcount:
+                logger.warning("Stale tracked Tasks (Laufzeit-Timeout) aufgeraeumt: %d", c.rowcount)
+            return c.rowcount
+        except Exception as e:
+            logger.debug("_reap_stale_tracked_runtime: %s", e)
+            return 0
+
     # ------------------------------------------------------------------
     # Public API — compatible with BackgroundQueue
     # ------------------------------------------------------------------
@@ -395,6 +423,8 @@ class TaskQueue:
 
     def get_status(self) -> Dict[str, Any]:
         """Returns status for background tasks (queued + tracked)."""
+        # Haengende tracked Tasks vor dem Lesen aufraeumen (siehe Methode).
+        self._reap_stale_tracked_runtime()
         conn = self._connect()
         try:
             pending = [

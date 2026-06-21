@@ -14,29 +14,32 @@ export type IconName =
   | 'reset' | 'close' | 'sendBack' | 'autosize' | 'maximize' | 'lock' | 'unlock'
   | 'zoomIn' | 'zoomOut' | 'settings' | 'trash'
   | 'brain' | 'cpu' | 'cloud' | 'sliders'
-  | 'background' | 'tag'
+  | 'background' | 'tag' | 'backpack' | 'avatar'
 
 // Jeder Eintrag = der innere Inhalt eines <svg> (Pfade/Formen).
 const PATHS: Record<IconName, JSX.Element> = {
   chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
+  // Umgebung — Landschaft (Sonne + Berge), KEIN Foto-Rahmen.
   surroundings: (
     <>
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-3.5-3.5a2 2 0 0 0-2.8 0L4 22" />
+      <circle cx="6.5" cy="7" r="2.2" />
+      <path d="M2 20h20" />
+      <path d="m4 20 5-7 3 4 3-5 5 8" />
     </>
   ),
+  // Move — Kompass.
   move: (
     <>
       <circle cx="12" cy="12" r="9" />
-      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-      <path d="m9 12 3-5 3 5-3 2z" />
+      <path d="m16 8-2 6-6 2 2-6z" />
     </>
   ),
+  // Karte — Globus.
   worldmap: (
     <>
-      <path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z" />
-      <path d="M9 4v14M15 6v14" />
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3a14.5 14.5 0 0 0 0 18 14.5 14.5 0 0 0 0-18" />
     </>
   ),
   self: (
@@ -47,9 +50,9 @@ const PATHS: Record<IconName, JSX.Element> = {
   ),
   others: (
     <>
-      <circle cx="9" cy="8" r="3.2" />
-      <path d="M3 21a6 6 0 0 1 12 0" />
-      <path d="M16 5.5a3.2 3.2 0 0 1 0 6M17 14a6 6 0 0 1 4 7" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <path d="M16 3.1a4 4 0 0 1 0 7.8M22 21v-2a4 4 0 0 0-3-3.87" />
     </>
   ),
   inventory: (
@@ -59,11 +62,12 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M9 11h6" />
     </>
   ),
+  // News — Zeitung.
   news: (
     <>
-      <path d="M4 5h13v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6" />
-      <path d="M17 9h3v10a2 2 0 0 1-2 2" />
-      <path d="M7 8h6M7 12h6M7 16h5" />
+      <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h2" />
+      <path d="M10 6h8v4h-8z" />
+      <path d="M18 14h-8M15 18h-5" />
     </>
   ),
   journal: (
@@ -94,10 +98,12 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M11 18h2" />
     </>
   ),
+  // Tasks/Queue — Ueberwachung: Monitor mit Aktivitaets-Puls.
   tasks: (
     <>
-      <path d="m3 6 1.5 1.5L7 5M3 12l1.5 1.5L7 11M3 18l1.5 1.5L7 17" />
-      <path d="M11 6h10M11 12h10M11 18h10" />
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M6 10h2.5l1.5-3 2 5 1.5-2H18" />
+      <path d="M9 21h6M12 17v4" />
     </>
   ),
   layouts: (
@@ -206,6 +212,23 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.83 0l4.59-4.59a2 2 0 0 0 0-2.83Z" />
       <circle cx="7.5" cy="7.5" r="1.5" />
+    </>
+  ),
+  // Inventar — Rucksack.
+  backpack: (
+    <>
+      <path d="M5 10a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z" />
+      <path d="M9 6V4.5A2.5 2.5 0 0 1 11.5 2h1A2.5 2.5 0 0 1 15 4.5V6" />
+      <path d="M8 21v-4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4" />
+      <path d="M9 11h6" />
+    </>
+  ),
+  // Avatar — Person im Profil-Kreis.
+  avatar: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="10" r="3" />
+      <path d="M6.5 18.5a6 6 0 0 1 11 0" />
     </>
   ),
 }

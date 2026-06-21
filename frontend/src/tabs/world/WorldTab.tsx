@@ -51,6 +51,9 @@ interface Location {
   image_count?: number
   is_template?: boolean
   template_location_id?: string
+  grid_x?: number | null
+  grid_y?: number | null
+  map_image_2d?: string
   event_settings?: EventSettings
 }
 
@@ -85,6 +88,9 @@ export function WorldTab() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [locations, setLocations] = useState<Location[] | null>(null)
+  // Ungefilterte Liste inkl. Klon-Platzierungen — fuer die „auf der Karte
+  // verwendet"-Zaehlung in der Galerie (Klone tragen map_image_2d + grid).
+  const [placements, setPlacements] = useState<Location[]>([])
   const [selection, setSelection] = useState<Selection>(null)
   const [items, setItems] = useState<ItemRef[]>([])
 
@@ -97,6 +103,7 @@ export function WorldTab() {
       // lives on the template. Editing happens here in the World tab;
       // placement (clones) lives in the Map tab.
       const all = data.locations || []
+      setPlacements(all)
       const visible = all.filter((l) => !(l.template_location_id || '').trim())
       // Dedupe by lowercased name as a final guard against legacy data
       // with duplicate labels.
@@ -254,6 +261,7 @@ export function WorldTab() {
             room={selectedRoom || null}
             roomFilter={selectedRoom?.id || undefined}
             allLocations={locations}
+            placements={placements}
           />
         ) : (
           <div className="ga-placeholder">{t('Select a place to view its gallery.')}</div>
@@ -904,6 +912,7 @@ function LocationGallery({
   room,
   roomFilter,
   allLocations,
+  placements,
 }: {
   locationId: string
   location: Location
@@ -912,6 +921,8 @@ function LocationGallery({
   roomFilter?: string
   /** All places (for the "move image to another location" picker). */
   allLocations: Location[]
+  /** Ungefilterte Liste inkl. Klon-Platzierungen (fuer den Map-Usage-Zaehler). */
+  placements: Location[]
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -974,6 +985,20 @@ function LocationGallery({
   const rooms = data?.image_rooms || {}
   const types = data?.image_types || {}
   const metas = data?.image_metas || {}
+
+  // Wie oft wird jedes Map-Bild aktuell auf der Karte verwendet: platzierte Zellen,
+  // deren Galerie-Owner diese Location ist (Klone teilen die Template-Galerie), und
+  // die genau diese Datei als 2D-Tile gewaehlt haben. Datei -> Anzahl.
+  const mapUsage = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const l of placements) {
+      if (l.grid_x == null || l.grid_y == null || l.grid_x < 0 || l.grid_y < 0) continue
+      if (((l.template_location_id || '').trim() || l.id) !== locationId) continue
+      const f = (l.map_image_2d || '').trim()
+      if (f) m[f] = (m[f] || 0) + 1
+    }
+    return m
+  }, [placements, locationId])
 
   // Filter to the selected room (if provided): keep images explicitly
   // assigned to it; images without a room assignment fall back to the
@@ -1287,6 +1312,14 @@ function LocationGallery({
                 title={t('Click to enlarge')}
               >
                 <img src={url} alt={filename} />
+                {type === 'map_2d' ? (
+                  <span
+                    className="ga-gallery-usage"
+                    title={t('How many map cells currently use this image')}
+                  >
+                    {mapUsage[filename] || 0}
+                  </span>
+                ) : null}
               </button>
               <div className="ga-gallery-card-body">
                 <div className="ga-gallery-meta">

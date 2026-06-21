@@ -77,14 +77,14 @@ const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | '
   { id: 'worldmap', label: 'Map', icon: 'worldmap' },
   { id: 'self', label: 'Self', icon: 'self' },
   { id: 'others', label: 'Others', icon: 'others' },
-  { id: 'belongings', label: 'Inventory', icon: 'inventory' },
-  { id: 'journal', label: 'Mind', icon: 'journal' },
+  { id: 'belongings', label: 'Inventory', icon: 'backpack' },
+  { id: 'journal', label: 'Mind', icon: 'brain' },
   { id: 'gallery', label: 'Gallery', icon: 'gallery' },
   { id: 'instagram', label: 'Instagram', icon: 'instagram' },
   { id: 'phone', label: 'Phone', icon: 'phone' },
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
   { id: 'news', label: 'News', icon: 'news' },
-  { id: 'settings', label: 'Avatar', icon: 'sliders' },
+  { id: 'settings', label: 'Avatar', icon: 'avatar' },
   { id: 'layouts', label: 'Layouts', icon: 'layouts', kind: 'dialog' },
 ]
 const ALL_PANELS = PANEL_META.map((p) => p.id)
@@ -97,6 +97,24 @@ const ICON_BY_ID: Record<string, IconName> = Object.fromEntries(
   PANEL_META.map((p) => [p.id, p.icon]))
 const LABEL_BY_ID: Record<string, string> = Object.fromEntries(
   PANEL_META.map((p) => [p.id, p.label]))
+// Pro Panel ein Akzent-Farbton (dezent gesättigt, dark-theme-tauglich) — macht
+// die Leiste auf einen Blick lesbar: die Farbe färbt das Icon (aktiv = voll +
+// getönter Hintergrund, inaktiv = gedimmt). Utility-Buttons bleiben neutral.
+const PANEL_COLOR: Record<string, string> = {
+  scene: '#6aa9ff',      // Chat — blau
+  env: '#4ec9a8',        // Surroundings — teal
+  map: '#56c4dd',        // Move — cyan
+  worldmap: '#e0a356',   // Map — amber
+  self: '#b48ead',       // Self — violett
+  others: '#e8995e',     // Others — orange
+  belongings: '#d3a84a', // Inventory — gold
+  journal: '#c98bdb',    // Mind — magenta
+  gallery: '#5fb0e8',    // Gallery — himmelblau
+  instagram: '#e1567c',  // Instagram — pink
+  phone: '#6cc24a',      // Phone — grün
+  news: '#e0675e',       // News — rot
+  settings: '#9aa4b2',   // Avatar — grau
+}
 // Panels die sich vergrößert (view-only Overlay) anzeigen lassen. Erweiterbar.
 const EXPANDABLE = new Set<string>(['worldmap'])
 
@@ -1001,28 +1019,44 @@ export function PlayerApp() {
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(persist, 800)
     }
-    const observers = active.map((id) => {
+    const observers = active.flatMap((id) => {
       const body = bodyOf(id)
-      if (!body) return null
+      if (!body) return []
       const ro = new ResizeObserver(() => apply(id))
       ro.observe(body)
+      // Selbst-gemeldete Größe (data-content-w/h, z.B. Map) ändert sich bei
+      // Zoom OHNE Body-Resize → der ResizeObserver feuert nicht. Attribut-
+      // Mutationen separat beobachten, damit Autosize der Zoomstufe folgt.
+      const mo = new MutationObserver(() => apply(id))
+      mo.observe(body, { attributes: true, subtree: true,
+        attributeFilter: ['data-content-w', 'data-content-h'] })
       apply(id)  // initiale Messung
-      return ro
+      return [ro, mo]
     })
-    return () => observers.forEach((o) => o?.disconnect())
+    return () => observers.forEach((o) => o.disconnect())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autosizeKey, openKey, persist])
 
   // --- Toolbar (Launcher) -------------------------------------------------
-  const tbBtn = (id: string, label: string, icon: IconName, isOpen: boolean, onClick: () => void, badge = 0, bg = false) => (
-    <button key={id} onClick={onClick} title={t(label)} aria-label={t(label)} aria-pressed={isOpen}
-      className={`play-tbtn${isOpen ? ' open' : ''}${bg ? ' bg' : ''}${iconMode === 'iconText' ? ' with-text' : ''}`}
-      style={{ position: 'relative' }}>
-      <Icon name={icon} size={15} />
-      {iconMode === 'iconText' && <span className="play-tbtn-label">{t(label)}</span>}
-      {badge > 0 && <span className="play-tbtn-badge">{badge > 99 ? '99+' : badge}</span>}
-    </button>
-  )
+  const tbBtn = (id: string, label: string, icon: IconName, isOpen: boolean, onClick: () => void, badge = 0, bg = false) => {
+    // bg-Modus (Surroundings als Hintergrund) behaelt seinen Accent-Look.
+    const col = bg ? '' : PANEL_COLOR[id]
+    return (
+      <button key={id} onClick={onClick} title={t(label)} aria-label={t(label)} aria-pressed={isOpen}
+        className={`play-tbtn${isOpen ? ' open' : ''}${bg ? ' bg' : ''}${iconMode === 'iconText' ? ' with-text' : ''}`}
+        style={{
+          position: 'relative',
+          // Duotone: gefuellter Farb-Chip (Akzent) + Linien-Icon in derselben
+          // Panel-Farbe. Aktiv kraeftiger + Rahmen.
+          ...(col ? { color: col, background: col + (isOpen ? '40' : '20') } : {}),
+          ...(isOpen && col ? { borderColor: col } : {}),
+        }}>
+        <Icon name={icon} size={15} />
+        {iconMode === 'iconText' && <span className="play-tbtn-label">{t(label)}</span>}
+        {badge > 0 && <span className="play-tbtn-badge">{badge > 99 ? '99+' : badge}</span>}
+      </button>
+    )
+  }
   // Badge je Panel-id (offene Themen): Telefon-Unread, neue IG-Posts.
   const badgeOf = (id: string) => (id === 'phone' ? phoneUnread : id === 'instagram' ? igNew : 0)
   // Panel-Umschalter folgen der Position/Label-Einstellung. 'layouts' nicht hier:
@@ -1030,6 +1064,7 @@ export function PlayerApp() {
   const panelToggles = PANEL_META
     .filter((p) => p.kind !== 'dialog')
     .filter((p) => p.id !== 'others' || hasOthers)
+    .filter((p) => p.id !== 'tasks')  // Tasks = Ueberwachung -> rechts in den Werkzeug-Cluster
     .map((p) => {
       // Surroundings im Background-Modus: Button anders darstellen, Klick stellt
       // den normalen Panel-Zustand wieder her.
@@ -1041,6 +1076,7 @@ export function PlayerApp() {
   const layoutsMeta = PANEL_META.find((p) => p.id === 'layouts')!
   const fixedCluster = (
     <>
+      {tbBtn('tasks', 'Tasks', 'tasks', open.includes('tasks'), () => togglePanel('tasks'))}
       {tbBtn('layouts', layoutsMeta.label, layoutsMeta.icon, open.includes('layouts'), () => togglePanel('layouts'))}
       <button onClick={toggleFreeze} aria-pressed={frozen}
         title={frozen ? t('Unfreeze layout (responsive columns)') : t('Freeze layout (scale with window)')}

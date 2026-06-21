@@ -69,6 +69,8 @@ export function MapTab() {
   const [picker, setPicker] = useState<Location | null>(null)
   const [pickerGallery, setPickerGallery] = useState<GalleryResp | null>(null)
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
+  // Welche Galerie-Datei steht gerade zum Loeschen an (Inline-Bestaetigung, kein confirm()).
+  const [delConfirm, setDelConfirm] = useState<string | null>(null)
 
   // Bild-Generierung aus dem Cell-image-Dialog: ✨ = normaler ImageGenDialog,
   // ⊞ = festverdrahteter FitDialog (Workflow/Backend aus der Config).
@@ -118,14 +120,26 @@ export function MapTab() {
   const openPicker = useCallback(async (loc: Location) => {
     setPicker(loc)
     setPickerGallery(null)
+    setDelConfirm(null)
     try {
       const g = await apiGet<GalleryResp>(`/world/locations/${encodeURIComponent(ownerOf(loc))}/gallery`)
       setPickerGallery(g)
+      // Kein „Auto"-Modus: hat die Zelle noch kein festes Map-Bild, sofort das
+      // erste verfuegbare zuordnen — so ist die Auswahl immer konkret (Zaehlung).
+      if (!(loc.map_image_2d || '').trim()) {
+        const firstMap = (g.images || []).find((f) => (g.image_types || {})[f] === 'map_2d')
+        if (firstMap) {
+          await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`, { type: 'map_2d', file: firstMap })
+          setIconVer((v) => ({ ...v, [loc.id]: (v[loc.id] || 0) + 1 }))
+          setPicker((p) => (p && p.id === loc.id ? { ...p, map_image_2d: firstMap } : p))
+          void reload()
+        }
+      }
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       setPickerGallery({ images: [], image_types: {} })
     }
-  }, [t, toast])
+  }, [reload, t, toast])
 
   const chooseImage = useCallback(
     async (loc: Location, type: 'map_2d', file: string) => {
@@ -139,6 +153,27 @@ export function MapTab() {
       }
     },
     [reload, t, toast],
+  )
+
+  // Galerie-Bild loeschen (Backend raeumt haengende map_image_2d-Referenzen selbst
+  // auf). Danach Galerie + Locations neu laden und den offenen Picker auffrischen,
+  // damit die Auswahl-Markierung stimmt, falls das geloeschte Bild gewaehlt war.
+  const deleteImage = useCallback(
+    async (owner: string, file: string) => {
+      try {
+        await apiDelete(`/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(file)}`)
+        const g = await apiGet<GalleryResp>(`/world/locations/${encodeURIComponent(owner)}/gallery`)
+        setPickerGallery(g)
+        const data = await apiGet<{ locations?: Location[] }>('/world/locations')
+        const locs = data.locations || []
+        setLocations(locs)
+        setPicker((p) => (p ? locs.find((l) => l.id === p.id) || p : p))
+        toast(t('Image deleted'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [t, toast],
   )
 
   // Default-Prompt fuer Map-Icons: nur der Subjekt-Teil (Stil-Suffix haengt der
@@ -580,28 +615,54 @@ export function MapTab() {
                         <div className="ga-map-tray-empty">{t('No images of this type.')}</div>
                       ) : (
                         <div className="ga-map-imgpicker-grid">
-                          <button
-                            type="button"
-                            className={'ga-map-imgpicker-item ga-map-imgpicker-none' + (chosen ? '' : ' selected')}
-                            title={t('Default (first match)')}
-                            onClick={() => chooseImage(picker, type, '')}
-                          >
-                            {t('Auto')}
-                          </button>
-                          {imgs.map((f) => (
-                            <button
-                              key={f}
-                              type="button"
-                              className={'ga-map-imgpicker-item' + (chosen === f ? ' selected' : '')}
-                              onClick={() => chooseImage(picker, type, f)}
-                              title={f}
-                            >
-                              <img
-                                src={`/world/locations/${encodeURIComponent(ownerOf(picker))}/gallery/${encodeURIComponent(f)}`}
-                                alt=""
-                              />
-                            </button>
-                          ))}
+                          {imgs.map((f) => {
+                            const owner = ownerOf(picker)
+                            return (
+                              <div key={f} className="ga-map-imgpicker-cell">
+                                <button
+                                  type="button"
+                                  className={'ga-map-imgpicker-item' + (chosen === f ? ' selected' : '')}
+                                  onClick={() => chooseImage(picker, type, f)}
+                                  title={f}
+                                >
+                                  <img
+                                    src={`/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(f)}`}
+                                    alt=""
+                                  />
+                                </button>
+                                {delConfirm === f ? (
+                                  <div className="ga-map-imgpicker-confirm">
+                                    <span>{t('Delete?')}</span>
+                                    <div className="ga-map-imgpicker-confirm-row">
+                                      <button
+                                        type="button"
+                                        className="ga-btn ga-btn-sm ga-btn-danger"
+                                        onClick={() => { setDelConfirm(null); deleteImage(owner, f) }}
+                                      >
+                                        {t('Delete')}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="ga-btn ga-btn-sm"
+                                        onClick={() => setDelConfirm(null)}
+                                      >
+                                        {t('Cancel')}
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="ga-map-imgpicker-del"
+                                    title={t('Delete image')}
+                                    onClick={() => setDelConfirm(f)}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
                     </div>
