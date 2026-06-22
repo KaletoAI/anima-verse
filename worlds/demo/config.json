@@ -5,7 +5,7 @@
       "enabled": true,
       "gpus": [],
       "api_key": "",
-      "api_base": "",
+      "api_base": "http://192.168.8.197:8080/v1",
       "timeout": 300,
       "type": "openai",
       "max_concurrent": 1
@@ -14,7 +14,7 @@
   "llm_routing": [
     {
       "provider": "LocalAI",
-      "model": "Llama-3.2-11B-Vision-Instruct",
+      "model": "rocinante-12b-v1.1",
       "temperature": 0.3,
       "tasks": [
         {
@@ -33,7 +33,7 @@
     },
     {
       "provider": "LocalAI",
-      "model": "TheDrummer-Valkyrie-49B-v1",
+      "model": "rocinante-12b-v1.1",
       "temperature": 0.7,
       "tasks": [
         {
@@ -52,7 +52,7 @@
     },
     {
       "provider": "LocalAI",
-      "model": "TheDrummer-Rocinante-12B-v1.1",
+      "model": "rocinante-12b-v1.1",
       "temperature": 0.5,
       "tasks": [
         {
@@ -96,7 +96,7 @@
     },
     {
       "provider": "LocalAI",
-      "model": "Sao10K-72B-Qwen2.5-Kunou-v1-FP8-Dynamic",
+      "model": "rocinante-12b-v1.1",
       "temperature": 0.2,
       "tasks": [
         {
@@ -153,21 +153,37 @@
     "rebuild_llm_system_template": "You are an image prompt enhancer for the {target_model} image model. {prompt_instruction} Rewrite the following prompt in the style requested, keeping ALL factual content (persons, outfits, pose, expression, scene, location, mood). Do NOT add new visual elements, do NOT remove any. Respond with ONLY the rewritten prompt, no preamble, no commentary.",
     "backends": [
       {
-        "name": "Together-Fast",
+        "name": "LocalAI-Flux",
         "enabled": true,
         "gpus": [],
-        "api_type": "together",
-        "api_url": "https://api.together.xyz",
+        "api_type": "openai_diffusion",
+        "api_url": "http://192.168.8.197:8080",
         "api_key": "",
-        "model": "HiDream-ai/HiDream-I1-Fast",
-        "cost": 5,
-        "num_inference_steps": 16,
-        "guidance_scale": 1
+        "model": "flux.2-klein-4b",
+        "cost": 1,
+        "width": 1024,
+        "height": 1024,
+        "num_inference_steps": 20,
+        "image_family": "natural"
+      },
+      {
+        "name": "LocalAI-ZImage",
+        "enabled": true,
+        "gpus": [],
+        "api_type": "openai_diffusion",
+        "api_url": "http://192.168.8.197:8080",
+        "api_key": "",
+        "model": "Z-Image-Turbo",
+        "cost": 1,
+        "width": 1024,
+        "height": 1024,
+        "num_inference_steps": 8,
+        "image_family": "keywords"
       }
     ],
-    "outfit_imagegen_default": "backend:Together-Fast",
-    "expression_imagegen_default": "backend:Together-Fast",
-    "location_imagegen_default": "backend:Together-Fast",
+    "outfit_imagegen_default": "backend:LocalAI-Flux",
+    "expression_imagegen_default": "backend:LocalAI-Flux",
+    "location_imagegen_default": "backend:LocalAI-Flux",
     "comfyui_workflows": {
       "Qwen": {
         "name": "Qwen",
