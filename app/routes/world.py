@@ -1651,8 +1651,10 @@ def get_imagegen_options() -> Dict[str, Any]:
         return {"options": []}
 
     options = []
-    # ComfyUI-Workflows
-    for wf in imagegen.get_comfy_workflows():
+    # ComfyUI-Workflows — nur die, deren kompatible ComfyUI-Backends auch
+    # erreichbar sind. Ohne verfuegbares ComfyUI-Backend koennen sie nicht laufen
+    # und gehoeren nicht in den Image-Gen-Dialog (sonst waehlt man ein totes Ziel).
+    for wf in imagegen.get_comfy_workflows(only_available=True):
         options.append({
             "type": "workflow",
             "name": wf["name"],

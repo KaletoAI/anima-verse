@@ -3700,7 +3700,9 @@ def get_imagegen_workflows(character_name: str) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    workflows = imagegen.get_comfy_workflows()
+    # Nur Workflows mit erreichbarem ComfyUI-Backend anbieten — ohne verfuegbares
+    # Backend koennen sie nicht laufen und gehoeren nicht in den Auswahl-Dialog.
+    workflows = imagegen.get_comfy_workflows(only_available=True)
     agent_config = get_character_skill_config(character_name, "image_generation") or {}
     active = agent_config.get("comfy_workflow", workflows[0]["name"] if workflows else "")
     workflow_models = agent_config.get("workflow_models", {})
