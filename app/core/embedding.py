@@ -32,7 +32,8 @@ INTERNAL_MODELS = {
     "BAAI/bge-small-en-v1.5": "bge-small-en (384d, ~130 MB) — Default",
     "BAAI/bge-base-en-v1.5": "bge-base-en (768d, ~440 MB)",
     "sentence-transformers/all-MiniLM-L6-v2": "all-MiniLM-L6 (384d, ~90 MB)",
-    "intfloat/multilingual-e5-small": "multilingual-e5-small (384d, mehrsprachig)",
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2":
+        "paraphrase-multilingual-MiniLM-L12 (384d, multilingual)",
 }
 
 # model_id -> fastembed.TextEmbedding | None (None = Laden fehlgeschlagen)

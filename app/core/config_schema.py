@@ -206,7 +206,7 @@ SECTIONS = {
                     "BAAI/bge-small-en-v1.5",
                     "BAAI/bge-base-en-v1.5",
                     "sentence-transformers/all-MiniLM-L6-v2",
-                    "intfloat/multilingual-e5-small",
+                    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
                 ],
                 "default": "BAAI/bge-small-en-v1.5",
                 "description": "Built-in embedding model (downloaded on first use, CPU). "
