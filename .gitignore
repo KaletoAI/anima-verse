@@ -108,6 +108,8 @@ Aufgaben.md
 /models/**/*.pth
 /models/**/*.safetensors
 /models/**/*.gguf
+# fastembed downloads a full HF model cache here (built-in embeddings)
+/models/fastembed/
 voices/*.wav
 
 # original comfyui workflows
