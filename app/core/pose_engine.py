@@ -3,11 +3,12 @@
 Verbindet:
   1. free-text pose_intent (vom Chat-LLM gesetzt)
   2. pose_normalize (Tool-LLM → kanonische Kurzform)
-  3. pose_embedding (LLM-Routing-Stub, Vektor zum Match)
+  3. compute_embedding (via app.core.embedding: intern fastembed/ONNX
+     oder extern gerouteter /v1/embeddings-Provider) → Vektor zum Match
   4. character_pose_variants (DB-Match oder neuer Variant)
 
-Wenn weder Embedding-Provider konfiguriert noch verfuegbar: Match-Modul
-faellt auf reine String-Equality der normalisierten Pose zurueck.
+Wenn kein Embedding-Modell verfuegbar ist: Match-Modul faellt auf reine
+String-Equality der normalisierten Pose zurueck.
 
 API:
     resolve_pose_variant(char, raw_pose) -> variant_dict | None
@@ -70,54 +71,18 @@ def normalize_pose(raw_pose: str, activity_hint: str = "") -> str:
 
 
 def compute_embedding(text: str) -> Optional[List[float]]:
-    """Berechnet ein Embedding fuer den Text via dem Task ``pose_embedding``.
+    """Berechnet ein Embedding fuer den Text.
 
-    Nutzt den fuer ``pose_embedding`` gerouteten Provider (OpenAI-kompatibler
-    ``/v1/embeddings``-Endpoint — z.B. vLLM oder llama-server mit ``BAAI/bge-m3``).
-    Direkter HTTP-Call (Embeddings sind ein anderer Endpoint als die Chat-Queue),
-    sync — laeuft nur in Worker-Threads (Chat-Extraktor / Visual-Analyse).
+    Delegiert an ``app.core.embedding.embed`` — das waehlt je nach
+    ``config.embedding.backend`` zwischen dem eingebauten ONNX-Modell
+    (fastembed, CPU) und einem gerouteten externen ``/v1/embeddings``-Provider.
 
-    Returns ``None`` wenn kein Embedding-Modell zugewiesen ist oder der Call
+    Returns ``None`` wenn kein Modell verfuegbar ist oder der Aufruf
     fehlschlaegt → das Match-Modul faellt auf String-Equality der normalisierten
-    Pose zurueck (kein Crash, kein Queue-Block). Optionales Input-Praefix ueber
-    Setting ``pose.embedding_input_prefix`` (leer fuer bge-m3, ``"query: "`` fuer
-    e5-Modelle).
+    Pose zurueck (kein Crash, kein Queue-Block).
     """
-    text = (text or "").strip()
-    if not text:
-        return None
-    try:
-        from app.core.llm_router import resolve_llm
-        inst = resolve_llm("pose_embedding")
-        if inst is None:
-            return None  # kein Embedding-Modell geroutet → String-Fallback
-        prov = inst._provider
-        if prov is None:
-            from app.core.provider_manager import get_provider_manager
-            prov = get_provider_manager().get_provider(inst.provider_name)
-        if not prov or not (prov.api_base or "").strip():
-            return None
-        api_base = prov.api_base.rstrip("/")
-        api_key = (prov.api_key or "not-needed").strip()
-        from app.models.world import get_world_setting
-        prefix = get_world_setting("pose.embedding_input_prefix", "") or ""
-        import httpx
-        resp = httpx.post(
-            f"{api_base}/embeddings",
-            json={"model": inst.model, "input": prefix + text},
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=float(prov.timeout or 30),
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-        vec = (payload.get("data") or [{}])[0].get("embedding")
-        if not vec:
-            return None
-        return [float(x) for x in vec]
-    except Exception as e:
-        logger.debug("compute_embedding fehlgeschlagen (%s): %s",
-                     type(e).__name__, e)
-        return None
+    from app.core.embedding import embed
+    return embed(text)
 
 
 def resolve_pose_variant(character_name: str,

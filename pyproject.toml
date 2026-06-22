@@ -32,7 +32,8 @@ dependencies = [
     "python-multipart",
     "bcrypt>=4.0.0",
     "apscheduler",
-    "onnxruntime",          # runtime for rembg's u2net (rembg declares it only as an extra)
+    "onnxruntime",          # runtime for rembg's u2net + fastembed (rembg declares it only as an extra)
+    "fastembed",            # built-in text embeddings (ONNX/CPU) for pose matching — no external endpoint needed
     "aiohttp>=3.14.0",      # CVE-2026-34993 / CVE-2026-47265 (Dependabot)
     "gradio_client",        # TTS backends (F5/XTTS via Gradio)
     "rembg",                # background removal (u2net)

@@ -127,9 +127,18 @@ SECTIONS = {
             "busy_base_delay_seconds": {"type": "float", "label": "Busy Retry Base Delay (s)", "default": 10, "min": 1, "max": 120, "step": 1, "description": "Backoff base wait before retrying a busy (503) model. Doubles each attempt (e.g. 10 → 20 → 40s), capped at 120s. Keep total backoff under the provider Timeout so the queue worker does not abort mid-wait."},
         },
     },
-    "llm_routing": {
-        "label": "LLM Routing",
+    "llm_simple": {
+        # Virtuelle Section (kein eigenes Config-Feld) — eine einfache,
+        # kategorie-basierte Oberflaeche, die CONFIG.llm_routing automatisch
+        # befuellt. Gerendert durch renderLlmSimpleEditor() in admin_settings.py.
+        "label": "LLM Models (Simple)",
         "icon": "🧭",
+        "virtual": True,
+    },
+    "llm_routing": {
+        "label": "LLM Routing (Advanced)",
+        "icon": "🔧",
+        "nav_sub": True,
         "is_array": True,
         "item_label_field": ["name", "model"],
         "fields": {
@@ -172,6 +181,43 @@ SECTIONS = {
                 "type": "task_order_list",
                 "label": "Tasks",
                 "description": "Tasks this LLM serves. Order is the fallback rank between LLMs that share the same task (1 = primary, 2 = fallback if primary unavailable). Use the + All <category> buttons below to bulk-add a whole task group.",
+            },
+        },
+    },
+    "embedding": {
+        "label": "Embedding",
+        "icon": "🔢",
+        "fields": {
+            "backend": {
+                "type": "select",
+                "label": "Backend",
+                "choices": ["auto", "internal", "external"],
+                "default": "auto",
+                "description": "How pose-matching embeddings are produced. "
+                               "auto = built-in model if no external embedding model is routed (works out of the box). "
+                               "internal = always the built-in ONNX model (fastembed, CPU). "
+                               "external = only the LLM-routed 'Pose Embedding' provider.",
+            },
+            "internal_model": {
+                "type": "select",
+                "label": "Internal Model",
+                # Keys must match app.core.embedding.INTERNAL_MODELS.
+                "choices": [
+                    "BAAI/bge-small-en-v1.5",
+                    "BAAI/bge-base-en-v1.5",
+                    "sentence-transformers/all-MiniLM-L6-v2",
+                    "intfloat/multilingual-e5-small",
+                ],
+                "default": "BAAI/bge-small-en-v1.5",
+                "description": "Built-in embedding model (downloaded on first use, CPU). "
+                               "Pose descriptions are normalized to short English, so a small "
+                               "English model is enough. Only used when backend is internal/auto.",
+            },
+            "cache_dir": {
+                "type": "str",
+                "label": "Model Cache Dir",
+                "default": "./models/fastembed",
+                "description": "Where the built-in embedding model is downloaded/cached.",
             },
         },
     },

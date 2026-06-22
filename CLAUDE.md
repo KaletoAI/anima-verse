@@ -71,6 +71,7 @@ TTS, channels, agent loop). Routers under `app/routes/` are thin HTTP adapters; 
 - Chat/story **streaming bypasses the queue** for latency but registers for tracking; while a provider is streaming, its background tasks pause.
 - **Never run two image generations in parallel on the same backend** — serialize on the GPU/backend channel. Each GPU is its own queue channel.
 - `model_capabilities.py` / `model_suitability.py` track per-model tool-calling and vision support (per-world, in `world.db`, editable in `/admin/models`).
+- **Embeddings are the one path that bypasses the queue** (a `/v1/embeddings` endpoint, not the chat queue). `embedding.py` resolves `config.embedding.backend`: `internal` runs a built-in `fastembed`/ONNX model on CPU (no external endpoint needed), `external` uses the provider routed for the `pose_embedding` task, `auto` prefers external when routed. Only consumer today is pose matching (`pose_engine.py`); a `None` return falls back to string-equality — never crashes or blocks the queue.
 
 **Prompt construction is Jinja2 templates, not Python string-building.** All LLM prompts live under
 `shared/templates/llm/` and are loaded by `prompt_templates.py` (`StrictUndefined` — missing vars raise loudly):

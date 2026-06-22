@@ -1619,6 +1619,10 @@ def _apply_schema_defaults(data: dict) -> None:
     """
     schema = get_schema()
     for section_key, section_def in schema.items():
+        # Virtuelle Sections (z.B. llm_simple) haben kein eigenes Config-Feld —
+        # nicht anlegen, sonst landet ein leeres {} in config.json.
+        if section_def.get("virtual"):
+            continue
         is_array = section_def.get("is_array", False)
         fields = section_def.get("fields", {})
         if is_array:
@@ -2048,7 +2052,14 @@ function buildNav() {
     for (const [key, sec] of Object.entries(SCHEMA)) {
         const a = document.createElement('a');
         a.href = '#' + key;
-        a.innerHTML = '<span class="nav-icon">' + (sec.icon || '') + '</span> ' + sec.label;
+        // nav_sub: als eingerueckter Unterpunkt rendern (z.B. LLM Routing unter
+        // der einfachen LLM-Models-Seite).
+        if (sec.nav_sub) {
+            a.className = 'nav-sub';
+            a.innerHTML = '<span class="nav-icon">›</span> ' + sec.label;
+        } else {
+            a.innerHTML = '<span class="nav-icon">' + (sec.icon || '') + '</span> ' + sec.label;
+        }
         a.dataset.section = key;
         a.onclick = (e) => { e.preventDefault(); activateSection(key); };
         nav.appendChild(a);
@@ -2302,6 +2313,8 @@ function ltBlur(inp) {
 function renderSection(key) {
     // Compound-Key "<section>::<subArray>" -> eigene Sub-Array-Seite.
     if (key.indexOf('::') !== -1) { renderSubArrayPage(key); return; }
+    // Einfache, kategorie-basierte LLM-Seite (befuellt CONFIG.llm_routing).
+    if (key === 'llm_simple') { renderLlmSimpleEditor(); return; }
     const sec = SCHEMA[key];
     // null und undefined beide auf Default fallen lassen — sonst wirft
     // renderFields(null, ...) bei data[fKey] einen TypeError.
@@ -2414,6 +2427,201 @@ async function populateImagePreviewMetas() {
                 el.textContent = 'Noch nicht generiert.';
             }
         } catch (e) { /* ignore */ }
+    }
+}
+
+// ── Einfache, kategorie-basierte LLM-Seite ──────────────────────────────
+// Eine Provider+Model-Auswahl pro Job-Typ; befuellt CONFIG.llm_routing
+// (order=1) automatisch. Embedding kann "Internal (built-in)" sein → schreibt
+// stattdessen CONFIG.embedding.
+const LLM_SIMPLE_CATS = [
+    {key:'chat',      label:'Chat & Roleplay',           desc:'The main model your characters chat and roleplay with. Pick your biggest / best writing model.'},
+    {key:'tool',      label:'Tools & Decisions',         desc:'Structured decisions and tool-calling (intent, events, outfit generation). Needs a model that reliably follows instructions / returns clean JSON.'},
+    {key:'helper',    label:'Helper (small jobs)',       desc:'Cheap background work: summaries, translation, image-prompt cleanup. A small / fast model is fine here.'},
+    {key:'image',     label:'Vision (read images)',      desc:'Looks at generated images (recognition / analysis). Needs a vision-capable model.'},
+    {key:'embedding', label:'Similarity (pose matching)',desc:'Turns text into vectors so similar poses reuse the same image. Can run built-in on CPU — no server needed.'},
+];
+const LLM_SIMPLE_TEMP = { chat:0.8, tool:0.1, helper:0.5, image:0.3, embedding:0 };
+const LLM_SIMPLE_INTERNAL = '__internal__';
+let LLM_SIMPLE_SEL = {};
+
+async function renderLlmSimpleEditor() {
+    const content = document.getElementById('content');
+    content.innerHTML = '<div class="section active"><h1 class="section-title">🧭 LLM Models (Simple)</h1><div class="desc">Loading…</div></div>';
+    const tasks = await loadLlmTasks();
+    llmSimpleDetect(tasks);
+
+    let html = '<div class="section active">';
+    html += '<h1 class="section-title">🧭 LLM Models (Simple)</h1>';
+    html += '<div class="desc" style="margin-bottom:14px;">Pick one provider + model per job type. This fills the '
+         + '<a href="#llm_routing" onclick="event.preventDefault(); activateSection(\\'llm_routing\\')" style="color:#58a6ff;">Advanced LLM Routing</a> '
+         + 'automatically (as primary / order 1). Use the advanced page only for fallbacks and per-task tuning. Press <b>Save</b> when done.</div>';
+
+    const providers = CONFIG.providers || [];
+    for (const cat of LLM_SIMPLE_CATS) {
+        const sel = LLM_SIMPLE_SEL[cat.key] || {};
+        html += '<div class="subsection">';
+        html += '<div class="subsection-title">' + esc(cat.label) + '</div>';
+        html += '<div class="desc" style="margin-bottom:8px;">' + esc(cat.desc) + '</div>';
+        html += '<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">';
+        // Provider
+        html += '<select id="llmsimple-prov-' + cat.key + '" onchange="llmSimpleSetProvider(\\'' + cat.key + '\\', this.value)">';
+        html += '<option value="">— none —</option>';
+        if (cat.key === 'embedding') {
+            html += '<option value="' + LLM_SIMPLE_INTERNAL + '"' + (sel.provider === LLM_SIMPLE_INTERNAL ? ' selected' : '') + '>Internal (built-in — no setup)</option>';
+        }
+        for (const p of providers) {
+            html += '<option value="' + esc(p.name) + '"' + (p.name === sel.provider ? ' selected' : '') + '>' + esc(p.name) + ' (' + esc(p.type) + ')</option>';
+        }
+        html += '</select>';
+        // Model
+        html += '<select id="llmsimple-model-' + cat.key + '" onchange="llmSimpleSetModel(\\'' + cat.key + '\\', this.value)" style="min-width:240px;">';
+        html += '<option value="' + esc(sel.model || '') + '" selected>' + esc(sel.model || '— select —') + '</option>';
+        html += '</select>';
+        html += '<button class="btn btn-sm" onclick="llmSimpleLoadModels(\\'' + cat.key + '\\')">Load Models</button>';
+        html += '</div>';
+        html += '</div>';
+    }
+    html += '</div>';
+    content.innerHTML = html;
+    // Model-Dropdowns initial fuellen (aus Cache / interne Choices)
+    for (const cat of LLM_SIMPLE_CATS) llmSimplePopulateModels(cat.key, false);
+}
+
+function llmSimpleDetect(tasks) {
+    LLM_SIMPLE_SEL = {};
+    const routing = CONFIG.llm_routing || [];
+    const catOf = {};
+    for (const t of (tasks || [])) catOf[t.id] = t.category;
+    for (const cat of LLM_SIMPLE_CATS) {
+        const tally = {};
+        for (const e of routing) {
+            if (e.enabled === false) continue;
+            for (const t of (e.tasks || [])) {
+                if ((t.order || 1) !== 1) continue;
+                if (catOf[t.task] !== cat.key) continue;
+                const k = (e.provider || '') + '\\u0000' + (e.model || '');
+                tally[k] = (tally[k] || 0) + 1;
+            }
+        }
+        let best = null, bestN = 0;
+        for (const k in tally) if (tally[k] > bestN) { bestN = tally[k]; best = k; }
+        if (best) {
+            const parts = best.split('\\u0000');
+            LLM_SIMPLE_SEL[cat.key] = { provider: parts[0], model: parts[1] };
+        }
+    }
+    // Embedding: interne Config gewinnt ueber Routing-Detection
+    const emb = CONFIG.embedding || {};
+    if (emb.backend === 'internal') {
+        LLM_SIMPLE_SEL.embedding = { provider: LLM_SIMPLE_INTERNAL, model: emb.internal_model || '' };
+    }
+}
+
+function llmSimpleSetProvider(cat, val) {
+    LLM_SIMPLE_SEL[cat] = { provider: val, model: '' };
+    const m = document.getElementById('llmsimple-model-' + cat);
+    if (m) m.innerHTML = '<option value="" selected>— select —</option>';
+    llmSimplePopulateModels(cat, true);
+    llmSimpleRebuild();
+}
+
+function llmSimpleSetModel(cat, val) {
+    if (!LLM_SIMPLE_SEL[cat]) LLM_SIMPLE_SEL[cat] = {};
+    LLM_SIMPLE_SEL[cat].model = val;
+    llmSimpleRebuild();
+}
+
+function llmSimplePopulateModels(cat, autoload) {
+    const sel = LLM_SIMPLE_SEL[cat] || {};
+    const el = document.getElementById('llmsimple-model-' + cat);
+    if (!el) return;
+    const cur = sel.model || '';
+    // Interne Embedding-Modelle: Choices aus dem Schema
+    if (sel.provider === LLM_SIMPLE_INTERNAL) {
+        const f = ((SCHEMA.embedding || {}).fields || {}).internal_model || {};
+        const choices = f.choices || [];
+        let opts = '<option value="">— select —</option>';
+        for (const c of choices) opts += '<option value="' + esc(c) + '"' + (c === cur ? ' selected' : '') + '>' + esc(c) + '</option>';
+        el.innerHTML = opts;
+        if (!cur && choices.length) {
+            LLM_SIMPLE_SEL[cat].model = choices[0];
+            el.value = choices[0];
+            llmSimpleRebuild();
+        }
+        return;
+    }
+    if (!sel.provider) { el.innerHTML = '<option value="">— select provider —</option>'; return; }
+    const models = PROVIDERS_CACHE[sel.provider];
+    if (models && models.length) {
+        const vis = PROVIDERS_VISION[sel.provider] || new Set();
+        let opts = '<option value="">— select —</option>';
+        for (const m of models) opts += '<option value="' + esc(m) + '"' + (m === cur ? ' selected' : '') + '>' + esc(m) + (vis.has(m) ? ' (vision)' : '') + '</option>';
+        el.innerHTML = opts;
+        if (cur && !models.includes(cur)) {
+            el.innerHTML = '<option value="' + esc(cur) + '" selected>' + esc(cur) + ' (not on server)</option>' + opts;
+        }
+    } else if (autoload) {
+        llmSimpleLoadModels(cat);
+    }
+}
+
+async function llmSimpleLoadModels(cat) {
+    const sel = LLM_SIMPLE_SEL[cat] || {};
+    if (sel.provider === LLM_SIMPLE_INTERNAL) { llmSimplePopulateModels(cat, false); return; }
+    if (!sel.provider) { toast('Select a provider first', 'error'); return; }
+    const el = document.getElementById('llmsimple-model-' + cat);
+    if (el) el.innerHTML = '<option>Loading…</option>';
+    if (!PROVIDERS_CACHE[sel.provider] || !PROVIDERS_CACHE[sel.provider].length) {
+        try {
+            const resp = await fetch('/admin/settings/providers/' + encodeURIComponent(sel.provider) + '/models', { credentials: 'same-origin' });
+            const data = await resp.json();
+            if (data.error) toast('Error: ' + data.error, 'error');
+            const list = data.models || [];
+            if (list.length) {
+                PROVIDERS_CACHE[sel.provider] = list;
+                PROVIDERS_VISION[sel.provider] = new Set(data.vision || []);
+            }
+        } catch (e) { toast('Failed to load models: ' + e.message, 'error'); }
+    }
+    llmSimplePopulateModels(cat, false);
+}
+
+// Schreibt CONFIG.llm_routing (order=1) + CONFIG.embedding aus LLM_SIMPLE_SEL.
+function llmSimpleRebuild() {
+    const tasks = LLM_TASKS_CACHE || [];
+    const byCat = {};
+    for (const t of tasks) (byCat[t.category] = byCat[t.category] || []).push(t.id);
+    // Kopie ziehen, dann alle order==1-Zuordnungen entfernen (Fallbacks bleiben)
+    let routing = (CONFIG.llm_routing || []).map(e => Object.assign({}, e, { tasks: (e.tasks || []).slice() }));
+    for (const e of routing) e.tasks = (e.tasks || []).filter(t => (t.order || 1) !== 1);
+    for (const cat of LLM_SIMPLE_CATS) {
+        const sel = LLM_SIMPLE_SEL[cat.key] || {};
+        if (cat.key === 'embedding' && sel.provider === LLM_SIMPLE_INTERNAL) continue;
+        if (!sel.provider || !sel.model) continue;
+        const ids = byCat[cat.key] || [];
+        if (!ids.length) continue;
+        let entry = routing.find(e => e.provider === sel.provider && e.model === sel.model);
+        if (!entry) {
+            entry = { provider: sel.provider, model: sel.model, enabled: true, temperature: LLM_SIMPLE_TEMP[cat.key], tasks: [] };
+            routing.push(entry);
+        }
+        if (!entry.tasks) entry.tasks = [];
+        for (const id of ids) entry.tasks.push({ task: id, order: 1 });
+    }
+    // Leer gewordene Eintraege entfernen (ausser sie sind nur zum Preload da)
+    routing = routing.filter(e => (e.tasks && e.tasks.length) || e.preload_on_startup);
+    CONFIG.llm_routing = routing;
+    // Embedding-Config
+    if (!CONFIG.embedding) CONFIG.embedding = {};
+    const e = LLM_SIMPLE_SEL.embedding || {};
+    if (e.provider === LLM_SIMPLE_INTERNAL) {
+        CONFIG.embedding.backend = 'internal';
+        if (e.model) CONFIG.embedding.internal_model = e.model;
+    } else if (e.provider && e.model) {
+        CONFIG.embedding.backend = 'external';
+    } else {
+        CONFIG.embedding.backend = 'auto';
     }
 }
 
