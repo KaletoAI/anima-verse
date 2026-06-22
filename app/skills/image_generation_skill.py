@@ -2517,16 +2517,19 @@ class ImageGenerationSkill(BaseSkill):
                         pass
                     return b.generate(_p, _n, params, log_meta=_log_meta)
 
-                if _is_local:
-                    from app.core.llm_queue import get_llm_queue, Priority as _P
-                    return get_llm_queue().submit_gpu_task(
-                        provider_name=b.name,
-                        task_type="image_generation",
-                        priority=_P.IMAGE_GEN,
-                        callable_fn=_gen,
-                        agent_name=character_name, label=b.name,
-                        gpu_type="comfyui")
-                return _gen()
+                # ALLE Backends laufen ueber die channel-limitierte GPU-Queue:
+                # submit_gpu_task matcht per provider_name den backend:<name>-Channel
+                # mit dessen max_concurrent. Frueher liefen Cloud-/OpenAI-Backends
+                # direkt (return _gen()) → unbegrenzt parallel; jetzt wartet ein
+                # Job, wenn das Backend-Limit erreicht ist (wie bei ComfyUI/A1111).
+                from app.core.llm_queue import get_llm_queue, Priority as _P
+                return get_llm_queue().submit_gpu_task(
+                    provider_name=b.name,
+                    task_type="image_generation",
+                    priority=_P.IMAGE_GEN,
+                    callable_fn=_gen,
+                    agent_name=character_name, label=b.name,
+                    gpu_type=("comfyui" if _is_local else b.api_type))
 
             # Re-Check anderer Backends, falls sie beim Start unavailable waren
             for b in self.backends:
