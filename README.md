@@ -220,13 +220,16 @@ pip install -e .
 ```
 
 #### Download models
-The large model binaries are not committed to the repo. Fetch them with:
+The large model binaries are not committed to the repo. Fetch them with (run
+**after** `pip install -e .`):
 ```bash
 ./fetch_models.sh
 ```
 This downloads `u2net.onnx` (background removal for outfit previews and world/map
-images). The script is idempotent (skips files that already exist) and verifies
-checksums.
+images) and the built-in embedding model `BAAI/bge-small-en-v1.5` (pose matching,
+via `fastembed`). The script is idempotent (skips files that already exist) and
+verifies checksums. The embedding model otherwise auto-downloads on first use, so
+this step is optional — but it makes the first run offline-capable and predictable.
 
 #### Configuration
 

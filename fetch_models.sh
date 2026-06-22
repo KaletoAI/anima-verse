@@ -2,10 +2,13 @@
 # Fetch large model files that are NOT committed to the repo (the model binaries
 # under models/ are gitignored; their LICENSE/NOTICE are tracked).
 #
-# Currently: u2net.onnx — the rembg background-removal model used for outfit
-# previews and map/world images (NOT face-swapping; that was removed).
+# Currently:
+#   - u2net.onnx — the rembg background-removal model used for outfit previews
+#     and map/world images (NOT face-swapping; that was removed).
+#   - the built-in embedding model (fastembed) used for pose matching.
 #
-# Idempotent: skips a model if it already exists with the expected checksum.
+# Idempotent: skips a model if it already exists with the expected checksum
+# (fastembed skips re-download when its cache is already populated).
 #
 #   ./fetch_models.sh
 set -euo pipefail
@@ -59,4 +62,41 @@ fetch() {
 }
 
 fetch "$U2NET_URL" "$U2NET_FILE" "$U2NET_SHA256"
+
+# --- fastembed embedding model (built-in pose-matching embeddings) -------------
+# MIT-licensed (BAAI/bge-small-en-v1.5). Downloaded via fastembed into its own
+# HF cache layout under models/fastembed/ (gitignored). Must match the default
+# in app/core/config_schema.py (embedding.internal_model). Other internal models
+# auto-download on demand when selected in the admin UI.
+FASTEMBED_MODEL="BAAI/bge-small-en-v1.5"
+FASTEMBED_DIR="$MODELS_DIR/fastembed"
+
+fetch_fastembed() {
+    local py=""
+    if [ -x ".venv/bin/python" ]; then py=".venv/bin/python";
+    elif command -v python3 >/dev/null 2>&1; then py="python3";
+    elif command -v python >/dev/null 2>&1; then py="python";
+    else echo "[skip] fastembed model — no python interpreter found"; return 0; fi
+
+    if ! "$py" -c "import fastembed" >/dev/null 2>&1; then
+        echo "[skip] fastembed model — fastembed not installed yet"
+        echo "       (run 'pip install -e .' first; the model otherwise"
+        echo "        auto-downloads on first use)"
+        return 0
+    fi
+
+    echo "[get]  fastembed model $FASTEMBED_MODEL -> $FASTEMBED_DIR"
+    if "$py" - "$FASTEMBED_MODEL" "$FASTEMBED_DIR" <<'PY'
+import sys
+from fastembed import TextEmbedding
+TextEmbedding(model_name=sys.argv[1], cache_dir=sys.argv[2])
+PY
+    then
+        echo "[done] $FASTEMBED_DIR ($FASTEMBED_MODEL)"
+    else
+        echo "[warn] fastembed model download failed — it will auto-download on first use"
+    fi
+}
+
+fetch_fastembed
 echo "All models present."
