@@ -1722,6 +1722,9 @@ def get_imagegen_options() -> Dict[str, Any]:
               "mapfit_prompts": mapfit_prompts}
     # Fit/Match-edges: imagegen-Target (Match-Spec, read-only im Fit-Dialog).
     result["mapfit_imagegen_default"] = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip()
+    # Globaler Outfit-Default (Match-Spec, z.B. "backend:LocalAI-Flux") — die
+    # Character-Render-Match-UI zeigt ihn an, wenn kein Override gesetzt ist.
+    result["outfit_imagegen_default"] = (os.environ.get("OUTFIT_IMAGEGEN_DEFAULT") or "").strip()
     if loc_default:
         result["default_location"] = loc_default
     return result

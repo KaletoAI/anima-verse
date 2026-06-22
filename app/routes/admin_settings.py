@@ -2742,7 +2742,18 @@ async function renderLlmTaskView(entries) {
             html += '<div style="font-size:11px; color:#d29922;">runtime-disabled (preset)</div>';
         }
         if (isEmpty) {
-            html += '<div class="desc" style="color:#d29922;">no LLM assigned</div>';
+            // pose_embedding laeuft ueber CONFIG.embedding (eingebautes fastembed/ONNX
+            // oder externer /v1/embeddings-Provider), NICHT ueber llm_routing. Bei
+            // internem/auto-Backend ist "no LLM assigned" irrefuehrend -> echten Status zeigen.
+            const _emb = CONFIG.embedding || {};
+            const _embBackend = (_emb.backend || 'auto');
+            if (t.id === 'pose_embedding' && _embBackend !== 'external') {
+                const _m = _emb.internal_model || 'bge-small-en';
+                const _lbl = _embBackend === 'auto' ? 'built-in (auto)' : 'built-in';
+                html += '<div class="desc" style="color:#3fb950;">' + _lbl + ' embedding — ' + esc(_m) + ' (CPU, no LLM needed)</div>';
+            } else {
+                html += '<div class="desc" style="color:#d29922;">no LLM assigned</div>';
+            }
         } else {
             html += '<div style="margin-top:4px;">';
             for (const r of rows) {

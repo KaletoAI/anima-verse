@@ -133,6 +133,11 @@ def _check_llm_routing(config: dict) -> list:
             continue
         if is_task_gated_off(tid, config):
             continue
+        # pose_embedding laeuft ueber config.embedding (eingebautes fastembed/ONNX
+        # oder externer /v1/embeddings-Provider), NICHT ueber llm_routing. Nur bei
+        # backend="external" wird ein gerouteter Provider erwartet.
+        if tid == "pose_embedding" and (config.get("embedding", {}) or {}).get("backend", "auto") != "external":
+            continue
         issues.append(_warn("llm_routing", f"Task '{tid}' hat keinen LLM-Eintrag"))
 
     # Unbekannte Tasks
@@ -232,8 +237,11 @@ def _check_comfyui_workflows(config: dict) -> list:
         if skill and skill not in comfy_backend_names:
             issues.append(_warn("image_generation", f"Workflow '{name}': Backend '{skill}' ist kein ComfyUI-Backend"))
 
-        # Model set?
-        if not wf.get("model", ""):
+        # Model set? Nur relevant, wenn ueberhaupt ein ComfyUI-Backend existiert,
+        # das den Workflow ausfuehren koennte. Ohne ComfyUI-Backend sind die
+        # (Default-)Workflows inert — dann keine Warnung (viele liefern ihr Modell
+        # ohnehin ueber input-Nodes im Workflow-File, nicht ueber die Config).
+        if comfy_backend_names and not wf.get("model", ""):
             issues.append(_warn("image_generation", f"Workflow '{name}': Kein Model konfiguriert"))
 
     # Check imagegen_default references

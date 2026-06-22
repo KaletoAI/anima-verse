@@ -55,12 +55,22 @@ function globToRegex(glob: string): RegExp {
   return new RegExp('^' + escaped + '$', 'i')
 }
 
+// Match-Spec lesbar machen: "backend:LocalAI-Flux" -> "LocalAI-Flux",
+// "workflow:Qwen*" -> "Qwen*".
+function formatMatchSpec(spec: string): string {
+  const s = (spec || '').trim()
+  if (s.startsWith('backend:')) return s.slice(8)
+  if (s.startsWith('workflow:')) return s.slice(9)
+  return s
+}
+
 export function ImageOverrides({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [pattern, setPattern] = useState('')
   const [loras, setLoras] = useState<Lora[]>([])
   const [workflows, setWorkflows] = useState<string[]>([])
+  const [outfitDefault, setOutfitDefault] = useState('')  // globaler Outfit-Default (Match-Spec)
   const [availableLoras, setAvailableLoras] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -97,7 +107,7 @@ export function ImageOverrides({ character }: { character: string }) {
           apiGet<{ workflow?: string; loras?: Lora[] }>(
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
-          apiGet<{ options?: Array<{ type?: string; name?: string }> }>('/world/imagegen-options'),
+          apiGet<{ options?: Array<{ type?: string; name?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
           apiGet<{ loras?: string[] }>(
             `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
           ),
@@ -113,6 +123,7 @@ export function ImageOverrides({ character }: { character: string }) {
             .filter((o) => o.type === 'workflow' && o.name)
             .map((o) => o.name as string),
         )
+        setOutfitDefault(opts.outfit_imagegen_default || '')
         setAvailableLoras((loraOpts.loras || []).filter((l) => l && l !== 'None'))
         setSlots(slotResp.slots || {})
       } catch (e) {
@@ -191,7 +202,12 @@ export function ImageOverrides({ character }: { character: string }) {
           <Field label={t('Currently matches')} hint={t('Loaded workflows matching the pattern right now.')}>
             <div className="ga-img-matches">
               {pattern.trim() === '' ? (
-                <span className="ga-sched-muted">{t('— global default —')}</span>
+                <span className="ga-sched-muted">
+                  {t('— global default —')}
+                  {outfitDefault ? (
+                    <span className="ga-img-match-chip" style={{ marginLeft: 6 }}>{formatMatchSpec(outfitDefault)}</span>
+                  ) : null}
+                </span>
               ) : matching.length === 0 ? (
                 <span className="ga-img-nomatch">{t('no workflow matches')}</span>
               ) : (
