@@ -2,7 +2,9 @@
 # ── Stage 1: Builder ─────────────────────────────────────────────────────────
 # Installiert die Python-Dependencies aus pyproject.toml (single source of truth —
 # NICHT von Hand nachpflegen). Build-Tools nur hier, nicht im Runtime-Image.
-FROM python:3.11-slim AS builder
+# Python 3.13: der Code nutzt 3.12+-Syntax (z.B. Backslashes in f-String-
+# Ausdruecken) — 3.11 bricht beim Import. An die lokale Dev-Version angeglichen.
+FROM python:3.13-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc g++ build-essential \
@@ -19,7 +21,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
 
 # ── Stage 2: Runtime ────────────────────────────────────────────────────────
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # libgl1/libglib2.0 fuer onnxruntime/rembg (Hintergrundentfernung),
 # curl fuer fetch_models.sh + Healthcheck-Komfort.
@@ -30,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Installierte Packages + Konsolen-Skripte aus dem Builder uebernehmen.
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # App-Code + Laufzeit-Assets.
