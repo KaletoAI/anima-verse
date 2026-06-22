@@ -18,25 +18,6 @@
       "temperature": 0.3,
       "tasks": [
         {
-          "task": "instagram_caption",
-          "order": 1
-        },
-        {
-          "task": "image_recognition",
-          "order": 1
-        },
-        {
-          "task": "image_analysis",
-          "order": 1
-        }
-      ]
-    },
-    {
-      "provider": "LocalAI",
-      "model": "rocinante-12b-v1.1",
-      "temperature": 0.7,
-      "tasks": [
-        {
           "task": "chat_stream",
           "order": 1
         },
@@ -47,16 +28,17 @@
         {
           "task": "group_chat_stream",
           "order": 1
-        }
-      ]
-    },
-    {
-      "provider": "LocalAI",
-      "model": "rocinante-12b-v1.1",
-      "temperature": 0.5,
-      "tasks": [
+        },
         {
-          "task": "extraction",
+          "task": "storyteller",
+          "order": 1
+        },
+        {
+          "task": "send_message",
+          "order": 1
+        },
+        {
+          "task": "talk_to",
           "order": 1
         },
         {
@@ -65,6 +47,56 @@
         },
         {
           "task": "thought_greeting",
+          "order": 1
+        }
+      ],
+      "enabled": true,
+      "preload_on_startup": false
+    },
+    {
+      "provider": "LocalAI",
+      "model": "qwen3-vl-4b",
+      "enabled": true,
+      "temperature": 0.1,
+      "tasks": [
+        {
+          "task": "extraction_chat_state",
+          "order": 1
+        },
+        {
+          "task": "social_reaction",
+          "order": 1
+        },
+        {
+          "task": "random_event",
+          "order": 1
+        },
+        {
+          "task": "secret_generation",
+          "order": 1
+        },
+        {
+          "task": "outfit_generation",
+          "order": 1
+        },
+        {
+          "task": "intent",
+          "order": 1
+        },
+        {
+          "task": "spell_detect",
+          "order": 1
+        },
+        {
+          "task": "expression_map",
+          "order": 1
+        },
+        {
+          "task": "extraction",
+          "order": 1
+        },
+        {
+          "task": "pose_normalize",
           "order": 1
         },
         {
@@ -88,55 +120,23 @@
           "order": 1
         },
         {
+          "task": "intro_memory",
+          "order": 1
+        },
+        {
           "task": "translation",
           "order": 1
-        }
-      ],
-      "chat_template": "{% for message in messages %}<|im_start|>{{ message.role }}\n{{ message.content }}<|im_end|>\n{% endfor %}<|im_start|>assistant\n"
-    },
-    {
-      "provider": "LocalAI",
-      "model": "rocinante-12b-v1.1",
-      "temperature": 0.2,
-      "tasks": [
+        },
         {
-          "task": "social_reaction",
+          "task": "instagram_caption",
           "order": 1
         },
         {
-          "task": "random_event",
+          "task": "image_recognition",
           "order": 1
         },
         {
-          "task": "secret_generation",
-          "order": 1
-        },
-        {
-          "task": "outfit_generation",
-          "order": 1
-        },
-        {
-          "task": "send_message",
-          "order": 1
-        },
-        {
-          "task": "talk_to",
-          "order": 1
-        },
-        {
-          "task": "intent",
-          "order": 1
-        },
-        {
-          "task": "intent_commitment",
-          "order": 1
-        },
-        {
-          "task": "classify_activity",
-          "order": 1
-        },
-        {
-          "task": "expression_map",
+          "task": "image_analysis",
           "order": 1
         }
       ]
@@ -144,10 +144,8 @@
   ],
   "image_generation": {
     "enabled": true,
-    "profile_image_prompt_prefix": "photorealistic, portrait, only head,",
-    "outfit_image_prompt_prefix": "full body portrait",
-    "outfit_image_width": 832,
-    "outfit_image_height": 1216,
+    "outfit_image_width": 512,
+    "outfit_image_height": 512,
     "u2net_home": "./models/u2net",
     "image_analysis_prompt": "You are an expert image analyst. Provide a detailed and objective description of the image (max 300 tokens) in flowing prose. Cover:\n1. Overall scene: setting, environment, lighting, mood, composition.\n2. Subjects: number of people, body type, hair, skin tone, facial expression, pose.\n3. Clothing: garments in detail (style, color, fit, condition).\n4. Actions and interactions: what is happening, body positions.\n5. Visual style: photographic, illustrated, 3D render, anime, etc. Camera angle, depth of field, color palette.\n\nRules:\n- Respond in fluent, descriptive English prose.\n- If something is ambiguous or partially visible, describe it as such.\n- Plain text only — no markdown.",
     "rebuild_llm_system_template": "You are an image prompt enhancer for the {target_model} image model. {prompt_instruction} Rewrite the following prompt in the style requested, keeping ALL factual content (persons, outfits, pose, expression, scene, location, mood). Do NOT add new visual elements, do NOT remove any. Respond with ONLY the rewritten prompt, no preamble, no commentary.",
@@ -161,8 +159,8 @@
         "api_key": "",
         "model": "flux.2-klein-4b",
         "cost": 1,
-        "width": 1024,
-        "height": 1024,
+        "width": 512,
+        "height": 512,
         "num_inference_steps": 20,
         "image_family": "natural"
       },
@@ -175,8 +173,8 @@
         "api_key": "",
         "model": "Z-Image-Turbo",
         "cost": 1,
-        "width": 1024,
-        "height": 1024,
+        "width": 512,
+        "height": 512,
         "num_inference_steps": 8,
         "image_family": "keywords"
       }
@@ -187,7 +185,6 @@
     "comfyui_workflows": {
       "Qwen": {
         "name": "Qwen",
-        "image_model": "qwen",
         "filter": "Qwen*",
         "width": 1024,
         "height": 1024,
@@ -209,11 +206,11 @@
             "file": "",
             "strength": 1
           }
-        ]
+        ],
+        "image_family": "natural"
       },
       "Z-Image": {
         "name": "Z-Image",
-        "image_model": "z_image",
         "filter": "Z-Image*",
         "width": 1024,
         "height": 1024,
@@ -235,11 +232,11 @@
             "file": "",
             "strength": 1
           }
-        ]
+        ],
+        "image_family": "keywords"
       },
       "Flux": {
         "name": "Flux",
-        "image_model": "flux",
         "filter": "Flux.2-9B*",
         "width": 1024,
         "height": 1024,
@@ -261,11 +258,11 @@
             "file": "",
             "strength": 1
           }
-        ]
+        ],
+        "image_family": "natural"
       },
       "Flux Inpaint": {
         "name": "Flux Inpaint",
-        "image_model": "flux",
         "filter": "Flux Inpaint*",
         "width": 1024,
         "height": 1024,
@@ -290,11 +287,12 @@
             "file": "",
             "strength": 1
           }
-        ]
+        ],
+        "prompt": "seamless top-down map tile, photorealistic, continue the surrounding terrain, colors and style into the masked area with no visible seam, border or frame",
+        "image_family": "natural"
       },
       "Flux 1 Dev": {
         "name": "Flux 1 Dev",
-        "image_model": "flux",
         "filter": "Flux*1*",
         "width": 1024,
         "height": 1024,
@@ -319,7 +317,8 @@
             "file": "",
             "strength": 1
           }
-        ]
+        ],
+        "image_family": "natural"
       },
       "Qwen Inpaint": {
         "name": "Qwen Inpaint",
@@ -492,8 +491,29 @@
             "prompt_instruction": ""
           }
         }
+      },
+      "mapfit": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
       }
-    }
+    },
+    "postprocess_enabled": false,
+    "postprocess_trigger_url": "",
+    "unet_weight_dtype": "",
+    "mapfit_imagegen_default": "workflow:Flux Inpaint*",
+    "map_tile_vision_analysis": false,
+    "location_image_width": 512,
+    "location_image_height": 512
   },
   "log_level": "INFO",
   "storage_dir": "./storage",
@@ -553,7 +573,14 @@
   },
   "random_events": {
     "base_probability": 2,
-    "resolution_cooldown_minutes": 10
+    "resolution_cooldown_minutes": 10,
+    "enabled": true,
+    "entry_roll_enabled": true,
+    "entry_roll_cooldown_minutes": 10,
+    "entry_roll_jitter_seconds": 3,
+    "resolution_proactive": true,
+    "resolved_image_linger_minutes": 30,
+    "event_image_denoise_strength": 0.7
   },
   "thoughts": {
     "min_turn_gap_seconds": 30,
@@ -567,6 +594,82 @@
         "auth_token": "",
         "enabled": true
       }
-    ]
+    ],
+    "cache_ttl_minutes": 60,
+    "allow_install_url": false
+  },
+  "server": {
+    "log_level": "INFO",
+    "storage_dir": "./storage",
+    "timezone": "Europe/Berlin",
+    "log_retention_days": 5,
+    "world_admin_tick_interval_seconds": 60
+  },
+  "beszel": {},
+  "llm_retry": {
+    "busy_max_attempts": 3,
+    "busy_base_delay_seconds": 10
+  },
+  "embedding": {
+    "backend": "internal",
+    "internal_model": "BAAI/bge-small-en-v1.5",
+    "cache_dir": "./models/fastembed"
+  },
+  "chat": {
+    "frequency_penalty": 0.3,
+    "anti_rep_step": 0.1,
+    "anti_rep_max": 1.2,
+    "anti_rep_lookback": 6
+  },
+  "memory": {
+    "short_term_days": 3,
+    "mid_term_days": 30,
+    "long_term_days": 90,
+    "max_messages": 100,
+    "session_gap_hours": 4,
+    "max_semantic": 50,
+    "commitment_max_days": 5,
+    "commitment_completed_days": 3
+  },
+  "animation": {},
+  "tts": {
+    "enabled": false,
+    "auto": false,
+    "chunk_size": 300,
+    "backend": "xtts",
+    "fallback_backend": ""
+  },
+  "knowledge": {
+    "max_prompt_entries": 20,
+    "max_entries": 200,
+    "daily_summary_days": 7,
+    "batch_size": 5,
+    "max_input_tokens": 12000,
+    "max_output_tokens": 1500,
+    "search_max_candidates": 50,
+    "search_max_return": 8
+  },
+  "relationships": {
+    "summary_enabled": true,
+    "summary_interval_minutes": 120
+  },
+  "social_reactions": {
+    "enabled": true
+  },
+  "story_engine": {
+    "enabled": false,
+    "max_active_arcs": 2,
+    "cooldown_hours": 6,
+    "max_beats": 5,
+    "beat_images": true
+  },
+  "ui": {
+    "available_themes": "default,minimal,dark",
+    "downscale_enabled": true,
+    "downscale_item_max_dim": 512,
+    "downscale_map_max_dim": 400
+  },
+  "messaging_frame": {
+    "prompt": "photorealistic modern smartphone, isolated on white, screen is pure chroma green, centered, no person, no reflection, top-down product photo"
   }
 }
