@@ -1,72 +1,43 @@
-# Docker Deployment
+# Docker
 
-## Quick Start
+Run Anima Verse as a single container. The container runs only the FastAPI app
+(chat orchestration, world simulation, admin UI, the built React SPA) — the LLM
+runs on a **separate, external** OpenAI-compatible server (e.g. LocalAI / Ollama /
+vLLM) that you point the app at after the first start.
+
+There is **no `.env` file**: configuration is per-world (`config.json` / `world.db`)
+and edited at `/admin/settings`. The image ships the demo world with content.
+
+## Quick start
 
 ```bash
-# 1. Create configuration
-cp .env.example .env
-
-# Edit .env: Adjust URLs for Ollama, TTS, ComfyUI etc.
-# (localhost -> IP/Hostname of the host machine)
-
-# change to docker subfolder
-cd docker
-
-# 3. Build and start
+git clone https://github.com/KaletoAI/anima-verse.git
+cd anima-verse/docker
 docker compose up -d --build
-
-# 4. Check logs
-docker compose logs -f
+# → http://<host>:8100   (login: admin / admin1234)
 ```
 
-The app is accessible at `http://localhost:8100` (docker-compose maps 8100:8000).
+Then open `/admin/settings`, set the **LocalAI** provider's API base to your LLM
+server, and assign models under **LLM Routing**.
 
-## Update
+## Full guide
 
-```
-# pull from github
-git pull origin main
-
-# update container
-cd docker
-docker compose up -d --build
-```
-
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the complete, reproducible
+walkthrough: installing Docker (incl. the Proxmox-LXC `nesting` note), pointing
+the app at a LocalAI backend, the feature-coverage test, data volumes, updating
+and resetting.
 
 ## Volumes
 
-| Path in Container | Description |
-|---|---|
-| `/storage` | User data, character profiles, templates, stories |
-| `/workflows` | comfyUI workflows |
-| `/models` | model binaries (e.g. u2net for background removal) |
-| `/.env` | Configuration file |
-| `/voices` | TTS voice reference files (for F5-TTS voice cloning) |
-| `/logs` | Application log files |
-
-## External Services
-
-These services do NOT run inside the container and must be provided separately.
-The URLs in `.env` must point to the external hosts (not `localhost`!).
-
-| Service | Default Port | .env Variable |
+| Volume | Mount | Contents |
 |---|---|---|
-| Ollama | 11434 | `PROVIDER_1_API_BASE` |
-| F5-TTS | 7860 | `TTS_F5_URL` |
-| XTTS | 8020 | `TTS_XTTS_URL` |
-| ComfyUI | 8188 | `SKILL_IMAGEGEN_3_API_URL` |
-| SearX | 8888 | `SKILL_SEARX_URL` |
-| Stable Diffusion | 7860 | `SKILL_IMAGEGEN_1_API_URL` |
+| `anima_worlds` | `/app/worlds` | World data (characters, state, `config.json`, images). Seeded from the baked demo on first start. |
+| `anima_models` | `/app/models` | `u2net` (background removal) + `bge-small` (pose embeddings). |
+| `anima_logs` | `/app/logs` | Application logs. |
 
-## Commands
+## External services (optional, configured in the admin UI)
 
-```bash
-# Stop
-docker compose down
-
-# Rebuild after code changes
-docker compose up -d --build
-
-# Shell inside the container
-docker compose exec app bash
-```
+LLM (LocalAI/Ollama/vLLM), image generation (ComfyUI / SD / Together), TTS
+(F5/XTTS), SearX, n8n. None of these run inside the container — point the app at
+them under `/admin/settings`. Embeddings for pose matching run **inside** the
+container on CPU and need no external endpoint.

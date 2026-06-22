@@ -1,17 +1,33 @@
+# Anima Verse — Docker-Deployment.
+# Es gibt KEINE .env-Datei (siehe CLAUDE.md / docker/DEPLOYMENT.md): die
+# Konfiguration liegt pro Welt in der gemounteten world.db / config.json und
+# wird nach dem Start ueber /admin/settings gepflegt.
 services:
-  pas-app:
+  app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    container_name: anima-verse
     ports:
+      # Host:Container — die App lauscht im Container auf 8000, extern auf 8100.
       - "8100:8000"
+    environment:
+      # Welt, die beim Start geoeffnet wird (Verzeichnis unter /app/worlds/).
+      WORLD: demo
     volumes:
-      - ../storage:/app/storage
-      - ../logs:/app/logs
-      - ../models:/app/models
-      - ../workflows:/app/workflows
-      - ../.env:/app/.env
-      - ../voices:/app/voices
+      # Welt-Daten (Charaktere, State, config.json, Bilder, ...). Named Volume:
+      # wird beim ersten Start aus der ins Image gebackenen worlds/demo geseedet
+      # und ueberlebt danach Restarts. "docker compose down -v" setzt auf die
+      # frische Demo zurueck.
+      - anima_worlds:/app/worlds
+      # Lokale Modelle (u2net fuer rembg, bge-small fuer Pose-Embeddings) —
+      # persistiert, damit sie nicht bei jedem Neuaufbau neu geladen werden.
+      - anima_models:/app/models
+      # Server-Logs (main.log, llm_calls.jsonl, image_prompts.jsonl).
+      - anima_logs:/app/logs
     restart: unless-stopped
-    env_file:
-      - ../.env
+
+volumes:
+  anima_worlds:
+  anima_models:
+  anima_logs:

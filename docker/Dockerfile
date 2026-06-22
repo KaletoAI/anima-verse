@@ -1,57 +1,61 @@
+# syntax=docker/dockerfile:1
 # ── Stage 1: Builder ─────────────────────────────────────────────────────────
+# Installiert die Python-Dependencies aus pyproject.toml (single source of truth —
+# NICHT von Hand nachpflegen). Build-Tools nur hier, nicht im Runtime-Image.
 FROM python:3.11-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc g++ cmake build-essential \
-        libgl1 libglib2.0-0 \
+        gcc g++ build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# Dependencies zuerst (fuer Layer-Cache)
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir \
-    "openai>=1.0.0" \
-    "sse-starlette>=1.6.1" \
-    "fastapi>=0.95.0" \
-    "uvicorn>=0.22.0" \
-    python-dotenv \
-    "jinja2>=3.1.2" \
-    python-multipart \
-    "bcrypt>=4.0.0" \
-    "pyjwt>=2.8.0" \
-    apscheduler \
-    opencv-python-headless \
-    insightface \
-    onnxruntime \
-    aiohttp \
-    gradio_client
+# pyproject + README + Paketcode (poetry-core braucht das Paket zum Bauen).
+# Dependencies kommen ausschliesslich aus [project].dependencies in pyproject.toml.
+COPY pyproject.toml README.md ./
+COPY app/ ./app/
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir .
 
 # ── Stage 2: Runtime ────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
+# libgl1/libglib2.0 fuer onnxruntime/rembg (Hintergrundentfernung),
+# curl fuer fetch_models.sh + Healthcheck-Komfort.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgl1 libglib2.0-0 \
+        libgl1 libglib2.0-0 curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Python-Packages aus Builder kopieren
+# Installierte Packages + Konsolen-Skripte aus dem Builder uebernehmen.
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# App-Code
+# App-Code + Laufzeit-Assets.
+#   app/      — Backend
+#   static/   — gebaute Frontend-Assets (game_admin/play SPA, committed)
+#   shared/   — LLM-Prompt-Templates, Character-Templates, Sprachen, Schemas (PFLICHT)
+#   worlds/   — Welten inkl. gebackener Demo-Welt (worlds/demo/world.db)
+#   workflows/— ComfyUI-Workflows (optional, nur bei ComfyUI-Bildbackend genutzt)
 COPY app/ ./app/
 COPY static/ ./static/
-COPY templates/ ./templates/
-COPY start.sh ./start.sh
-COPY fetch_models.sh ./fetch_models.sh
+COPY shared/ ./shared/
+COPY worlds/ ./worlds/
+COPY workflows/ ./workflows/
+COPY start.sh fetch_models.sh ./
 COPY docker/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./start.sh ./fetch_models.sh ./docker-entrypoint.sh
 
+# Lokale Modelle vorab holen (u2net fuer rembg + bge-small fuer Pose-Embeddings).
+# Nicht-fataler Schritt: ohne Build-Internet laden sie sonst beim ersten Gebrauch
+# nach (und persistieren dann im /app/models-Volume).
+RUN ./fetch_models.sh || echo "[build] fetch_models.sh uebersprungen — Lazy-Download zur Laufzeit"
+
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 CMD ["./docker-entrypoint.sh"]

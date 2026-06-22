@@ -1,0 +1,43 @@
+# Build-Context ist das Repo-Root (docker-compose context: ..). Docker liest
+# NUR diese .dockerignore im Context-Root — docker/.dockerignore wird ignoriert.
+# Ziel: Context klein halten und Laufzeit-/Dev-Artefakte draussen lassen.
+
+# VCS / Editor / Tooling
+.git
+.github
+.vscode
+.idea
+.claude
+
+# Python-Laufzeit
+.venv
+**/__pycache__
+*.pyc
+*.pyo
+.pids
+
+# Frontend-Quellen: NICHT im Image noetig — die gebauten Assets liegen
+# bereits unter static/game_admin/ (committed). Spart den grossen node_modules-Transfer.
+frontend
+
+# Lokale Modell-Binaries (werden im Image via fetch_models.sh / Lazy-Download geholt)
+models
+*.onnx
+*.pth
+
+# Logs / temporaere Dateien
+logs
+*.log
+*.tmp
+*.bak
+
+# Per-Welt Laufzeit-Daten, die NICHT mitsollen.
+# worlds/demo/world.db wird bewusst mitgenommen (gebackene Demo-Welt),
+# aber die Queue-DB + WAL-Seitendateien sind reiner Laufzeit-State.
+worlds/*/task_queue.db
+worlds/*/*.db-shm
+worlds/*/*.db-wal
+worlds/*/secrets.json
+
+# Docker-eigene Hilfsdateien
+docker/storage

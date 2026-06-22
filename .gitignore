@@ -120,6 +120,11 @@ workflows/ComfyUI-Workflows/
 *.db-shm
 *.db-wal
 
+# Ausnahme: die kuratierte Demo-Welt wird MIT ihrer world.db ausgeliefert,
+# damit ein frischer Clone sofort Charaktere/Orte/Raeume hat. task_queue.db
+# (reiner Laufzeit-Queue-State) bleibt ignoriert.
+!worlds/demo/world.db
+
 # Cache
 .cache/
 *.cache
