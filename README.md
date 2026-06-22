@@ -1,207 +1,194 @@
 # Anima Verse
 
-A full-stack web application for creating, configuring and interacting with AI-powered virtual characters ("agents"). It combines a Python/FastAPI backend and a vanilla JavaScript frontend.
+**An LLM-driven character simulator — a "living world" of AI characters that chat, move
+around a world map, change their outfit and activity, and have every scene rendered through
+image-generation backends.** A Python/FastAPI backend drives the simulation; the UI is a
+React single-page app plus a set of server-rendered admin pages.
 
-> **⚠ Alpha — vibe-coded experiment.** This project is an experiment in how far one can push a small LLM-driven game / character simulator built with massive AI assistance ("vibe coding") rather than a traditional engineering process. Most of the code was written interactively with an LLM in the loop. **It has so far only been tested by a single person on a single setup.** Expect rough edges, inconsistent error handling, undocumented assumptions about your hardware/providers, and breaking changes between commits. Bug reports and patches are welcome — production use is not.
+**What sets it apart.** Unlike chat-centric frontends (e.g. SillyTavern) where image generation is
+an optional add-on, Anima Verse treats **both LLM chat and LLM-driven image generation as
+first-class, deeply integrated mechanics** — characters update their location, activity and outfit
+through tool calls, every scene can be rendered, mood drives expression, and the world map shows
+what each character is currently doing. The experiment is to see what kind of "living world"
+emerges when both modalities are pushed that hard at the same time.
 
-> **What sets it apart.** Unlike chat-centric frontends (e.g. SillyTavern) where image generation is an optional add-on, Anima Verse leans on **both LLM chat and LLM-driven image generation as first-class, deeply integrated mechanics** — characters update their location, activity and outfit through tool calls, every scene can be rendered, mood drives expression, the world map shows what each character is currently doing. The experiment is to see what kind of "living world" emerges when both modalities are pushed that hard at the same time. The author hasn't seen another open-source project doing this in this combination yet.
+> ℹ Early-stage, single-developer experiment with adult-content capability — please read
+> [Status & disclaimers](#status--disclaimers) before relying on it.
 
-> **⚠ Adult / NSFW content.** Anima Verse is a generic creative-writing and character-simulation framework. The bundled demo world, character templates and image-analysis prompt are SFW. **However, the system was designed flexibly: a user can author their own NSFW character templates, prompt the LLM into adult content, point the image-generation backends at adult-tuned models, etc.** Whether the framework is used for entirely innocuous storytelling or for explicit content is a choice made by each user when configuring their own setup. The author does not provide adult content with this project, and is not responsible for content users produce while running it. Users are responsible for complying with local laws and with the acceptable-use policies of any third-party services (LLM providers, image-generation APIs) they configure.
+---
+
+## Table of contents
+
+- [How it works (architecture)](#how-it-works-architecture)
+- [Features](#features)
+- [Installation](#installation)
+- [Running the server](#running-the-server)
+- [Worlds & storage](#worlds--storage)
+- [Getting started with a new world](#getting-started-with-a-new-world)
+- [Configuration model](#configuration-model)
+- [Admin & monitoring surfaces](#admin--monitoring-surfaces)
+- [Documentation](#documentation)
+- [Status & disclaimers](#status--disclaimers)
+- [License](#license)
+
+---
+
+## How it works (architecture)
+
+**Backend — Python / FastAPI.** `app/server.py` is the entrypoint. Thin HTTP routers live under
+`app/routes/`; the actual logic lives in `app/core/`. Nearly all structured data for a world lives
+in a single SQLite database (`world.db`); a second database (`task_queue.db`) holds the persistent
+task queue.
+
+**LLM access is always queued.** Logical *tasks* (`chat`, `tools`, `summarize`, `vision`,
+`embedding`, …) are mapped to a concrete *provider + model* via **LLM Routing**. Each provider has
+its own queue with concurrency limits and priority ordering; each GPU is its own channel. Chat /
+story streaming bypasses the queue for latency but is still tracked. Two image generations never
+run in parallel on the same backend.
+
+**Prompts are Jinja2 templates, not Python string-building.** Every LLM prompt lives under
+`shared/templates/llm/` and is live-editable at `/admin/templates`.
+
+**Two frontends, one project:**
+
+- **React / Vite SPA** (`frontend/`, built to `static/game_admin/`):
+  - **Player UI** at **`/play`** — the actual game: chat, world map, character panels, gallery,
+    phone messaging. `/` redirects here.
+  - **Game-Admin** at **`/game-admin`** — world building: characters, locations/rooms/activities,
+    items, rules, events, per-character "Mind" debugging.
+- **Server-rendered admin pages** (Python) — `/admin/settings`, `/admin/users`, `/admin/models`,
+  `/admin/agent-loop`, `/admin/templates`, `/admin/llm-stats`, `/logs/*`, `/dashboard`. These are
+  the configuration surface; there is no React replacement for them.
+
+**Three nouns, kept distinct:** a **Character** is any entity; an **Agent** is an LLM-driven chat
+partner / NPC; an **Avatar** is a character the user has taken over and now controls directly (it
+stops acting autonomously).
 
 ---
 
 ## Features
 
-### AI Chat System
-- Real-time streaming chat via Server-Sent Events (SSE)
-- Template-driven system prompt construction with character + user context
-- Sliding window history with automatic LLM-based summarization
-- System prompt caching to reduce token usage
-- Automatic user information extraction from conversations
-- Mood tracking (parses emotions from LLM responses)
-- Agent-loop with tool/skill invocation during chat
-- Intent Engine for smart, context-aware skill invocation
-- Proactive Agent Loop (characters act autonomously between user messages)
-- Cross-Memory System (characters share memories across conversations)
-- Token usage estimation and reporting
-- Notifications System (real-time user notifications)
+### LLM & routing
+- Multiple providers per world (types: **OpenAI-compatible**, **Ollama**, **Anthropic**) configured
+  through the admin UI — API keys land in a gitignored `secrets.json`.
+- **Simple model picker** (`/admin/settings → LLM Models`): one provider + model per job category
+  (chat / tools / helper / vision / embedding). It auto-fills the full **LLM Routing (Advanced)**
+  page, which supports per-task fallback chains, per-provider concurrency/timeouts and per-character
+  overrides.
+- Per-provider queues with priority ordering; per-GPU channels; automatic availability checks and
+  upstream-failure cooldown + fallback.
+- **Model Capabilities** database (per-world): tracks tool-calling and vision support per model,
+  editable at `/admin/models`.
+- **Built-in text embeddings** (`fastembed` / ONNX, CPU — no external endpoint needed) used for
+  pose matching; `auto` / `internal` / `external` backends, configurable in the admin UI.
 
-### Multi-LLM Provider System
-- Multiple providers configurable per world via the admin UI (stored in `worlds/<world>/config.json`; API keys land in a gitignored `secrets.json`)
-- Provider types: **Ollama**, **OpenAI**, **llama-swap** (or any OpenAI-compatible API)
-- Per-provider concurrency limits, timeouts and VRAM budgets
-- Priority-based queue system with automatic routing
-- Per-character LLM overrides
-- Automatic availability checks and VRAM monitoring (Ollama)
-- Model Capabilities database (per-world, in `world.db`) for tool-calling and vision support tracking, editable via the admin UI
+### Chat & memory
+- Real-time streaming chat over Server-Sent Events.
+- **Room-perception model:** a character's context is the multi-party transcript of what it heard
+  in its room, not a 1:1 pairwise history.
+- Two chat modes per character: **`single`** (tool-capable model emits tool calls inline) and
+  **`rp_first`** (RP model writes prose, a separate Tool LLM translates it into skill calls —
+  recommended for RP fine-tunes).
+- Tiered memory consolidation (day → week → month summaries), commitments, cross-character
+  knowledge, anti-repetition temperature control.
+- **Agent Loop:** idle characters take autonomous "thought" turns between user messages
+  (importance-weighted round-robin; excludes sleeping characters and the user's avatar).
+- **Intent Engine** decides which skills to surface for a given turn.
 
-### Character Management
-- Create and manage multiple characters per user
-- Rich character profiles: appearance, personality, outfits, location, activity, mood
-- Dynamic outfit resolution based on current location and activity
-- Character image gallery with upload, comments and profile picture selection
-- Character export/import as ZIP files (optionally including chats and stories)
+### Characters, avatars & world
+- Template-driven character editor (no hardcoded field lists) with appearance, personality
+  (the markdown "soul"), outfits, mood, location and activity.
+- **Avatar takeover:** step into any playable character — their location/mood/outfit follow your
+  decisions and they stop acting on their own.
+- **Structured movement only:** characters change location via the `set_location` skill
+  (pathfinder over named places), a single `move` grid step, or a teleport spell — never by RP text
+  claiming a cross-location jump. A 2D **world map** shows where everyone is and what they're doing.
+- Locations → rooms → activities (**activity is free text**, not a fixed library). Per-location
+  `known_locations`, an `entry_room`, item-gated rooms, and rule-based access control.
+- **Events:** disruption / danger events can swap the room background and spawn temporary access
+  rules (e.g. "can't leave during the fire"); announcements bump nearby characters.
+- **World Freeze:** pause the autonomous simulation (agent loop, ticks, scheduler, Telegram) while
+  keeping the task queue and LLM tools live.
 
-### Image Generation (Skill)
-- Multi-backend support: **Stable Diffusion WebUI (A1111/Forge)**, **ComfyUI**, **Mammouth AI**, **CivitAI**
-- Cost-based automatic backend selection with failover
-- Context-aware prompts (appearance, outfit, mood, activity, location automatically included)
-- Optional external post-processing hand-off (a separate service pulls finished
-  images and writes results back via the API; this project does no image manipulation itself)
-- Vision LLM auto-commenting on generated images
-- ImageRegenerate skill for re-generating images with adjusted parameters
-- NotifyUser skill for sending notifications to the user
+### Image generation & animation
+- Backends: **ComfyUI**, **Stable Diffusion WebUI (A1111/Forge)**, **CivitAI**, **Together.ai**,
+  **Mammouth AI** — cost-based selection with failover.
+- **Use-case-driven styling:** every render occasion is a *use case* and the style belongs to the
+  use case; `image_family` (`natural` prose for Flux/Qwen vs. `keywords` tags for Z-Image/SD)
+  selects the prompt adapter and style family.
+- Context-aware prompts (appearance, outfit, mood, activity, location), reference-image slots for
+  face consistency, pose/expression variants, outfit decency/compliance system.
+- ComfyUI workflow management, automatic background removal (rembg/u2net) and image downscaling.
+- Optional external **post-processing hand-off** (a separate service pulls finished images and
+  writes results back via the API — this project does no pixel editing itself).
+- **Animation:** turn a gallery image into a short video via a ComfyUI img2video workflow,
+  asynchronously.
 
-### Image Animation
-- Turn a gallery image into a short video animation on demand
-- Uses a ComfyUI img2video workflow (e.g. Wan2.2)
-- LLM can suggest an animation prompt from the image analysis
-- Runs asynchronously in the background
+### Text-to-speech
+- Backends: **XTTS v2** (voice cloning), **F5-TTS** (high-quality cloning), **Magpie** (NVIDIA
+  Riva, multilingual) and **ComfyUI (Qwen3-TTS)**.
+- Auto-TTS for every reply or on-demand per message; per-character voice config; text cleaning
+  (strips markdown / emojis / mood markers before synthesis).
 
-### Text-to-Speech (TTS)
-- Three backends: **XTTS v2** (voice cloning), **F5-TTS** (high-quality cloning) and **Magpie** (multilingual)
-- Auto-TTS mode (generates audio for every response) or on-demand per message
-- Per-character voice and TTS configuration
-- Text cleaning (strips markdown, emojis, mood markers before synthesis)
+### Social & narrative
+- **Instagram feed** (virtual) per character: image → vision-LLM caption + hashtags → post.
+- **Story engine:** background story-arc progression with beats and per-beat scene images.
+- **Group chat** with turn-taking; **TalkTo** for face-to-face character-to-character exchange;
+  **SendMessage** for remote messages; social reactions between characters.
+- **Relationships** with automatic decay over time.
+- **Messaging pillar:** phone-style chat layout in `/play`, plus a Telegram integration where the
+  user acts as their avatar.
 
-### Instagram Feed (virtual)
-- Virtual social media feed per character
-- 3-step pipeline: image generation, vision LLM caption + hashtag creation, post publication
-- Paginated feed with like functionality
-- Configurable caption style, hashtag count and language per character
+### Knowledge, search & automation
+- **Knowledge extraction:** pull facts from local files (Markdown/JSON/…) via LLM, mtime-cached,
+  with a `KnowledgeSearch` skill for use during chat.
+- **Web search** via a self-hosted SearX/SearXNG plugin.
+- **Scheduler:** APScheduler-based per-character jobs (`interval` / `cron` / `date`) with actions
+  like send-message, execute-tool, set-status.
+- **Content marketplace:** install content packs from configured catalogs.
 
-### Story System
-- Interactive branching narratives with lettered options (A/B/C/D)
-- Markdown-based story files with YAML frontmatter metadata
-- State persistence (tracks choices and current section)
-- In-character LLM narration with full character context
-- Automatic scene visualization and TTS per scene
-
-### Knowledge Extraction (Skill)
-- Extracts facts from local files (Markdown, JSON, etc.) via LLM
-- Multi-directory support (comma-separated paths)
-- Configurable file patterns, subdirectory inclusion, and directory exclusions
-- mtime-based cache: only changed files are re-processed
-- Automatic cleanup of stale entries for deleted files
-- Shared logic between Skill and Scheduler (`extract_utils.py`)
-- KnowledgeSearch skill for querying extracted knowledge during chat
-
-### Web Search (SearX Skill)
-- Privacy-respecting web search via self-hosted SearX/SearXNG
-- Configurable engines, categories and result count
-- Per-character overrides
-
-### Character Communication (TalkTo Skill)
-- Character-to-character information sharing
-- Target character processes and stores information as knowledge
-- Both characters receive knowledge entries
-- Social Reactions & Dialog (character-to-character interaction and responses)
-
-### Group Chat
-- Multi-character conversations in a shared chat
-- Turn-taking system for natural conversation flow
-
-### Relationship System
-- Tracks relationships between characters
-- Automatic relationship decay over time without interaction
-
-### Events System
-- Real-time event streaming for frontend updates
-- Server-Sent Events (SSE) based event bus
-
-### Plugin System
-- Extensible architecture via `plugins/` directory
-- Drop-in plugin support for custom skills and integrations
-
-### World System
-- Define locations and activities per character
-- Location-activity associations (allowed activities per location)
-- Dynamic location changes via chat (SetLocation Skill)
-- Location and activity context injected into image generation and Instagram captions
-- Additional skills: SetActivity, OutfitChange, DescribeRoom
-
-### Scheduler (Job Automation)
-- APScheduler-based background job system per character
-- Trigger types: `interval` (with jitter), `cron`, `date` (one-time)
-- Action types: `send_message`, `execute_tool`, `api_call`, `set_status`, `custom`
-- Job management: create, delete, toggle, manual execution, logs
-
-### Telegram Integration (work in progress)
-- Multi-channel Telegram bot integration
-- Per-agent bot token configuration
-- Webhook-based message handling
-- Chat with agents via Telegram
-
-### Template System
-- Flexible JSON-based templates for characters and users
-- Field types: `text`, `select`, `date` with multiline support
-- Workflow readiness checks (`chat`, `image_generation`, `instagram`)
-- Auto-extraction markers and computed display fields
-- Built-in templates: `human-default`, `human-roleplay`, `animal-default`, `user-default`, `user-roleplay`, `base-character.json`, `base-user.json`
-
-### Authentication & Multi-User
-- JWT-based authentication with bcrypt password hashing
-- Full multi-user support with per-user isolated storage
-- User profile with preferences (language, theme, hobbies, appearance)
-
-### Frontend
-- Single-page application with tab-based UI (Chat, Story)
-- Real-time streaming message display with markdown rendering
-- Character profile image with mood-driven expression
-- Location/activity selector in header
-- Per-message actions: Visualize, Instagram Post, Retry, Speak (TTS)
-- Skill activity indicators during processing
-- 3 themes: Default, Dark, Minimal
-- Character management modal (profile, skills, config)
-- Scheduler management UI
-- World editor (locations and activities)
-
-### Admin Tools
-- **Model Capabilities Admin** (`/admin/models`): View all available models, edit capabilities (tool-calling, vision) inline
-- **LLM Log Viewer** (`/logs/llm`): Searchable log of all LLM calls with prompts, responses, token counts
-- **Provider Queue Status** (`/queue/status`): Real-time view of provider queues, pending tasks, VRAM usage
-
-### Logging & Monitoring
-- LLM communication logging (prompts, responses, token counts)
-- Response latency tracking per model and task type
-- Health check endpoint (`GET /health`)
+### Platform
+- **Plugin system:** drop-in skills/integrations under the top-level `plugins/` directory
+  (each a folder with `plugin.yaml` + `skill.py`).
+- **Auth & multi-user:** JWT auth, bcrypt hashes, admin/user roles, per-user isolated access to
+  characters.
+- **Logging & monitoring:** LLM call log (`/logs/llm`), image-prompt log, LLM stats, dashboard,
+  health endpoint (`GET /health`), optional Beszel GPU/VRAM monitoring.
 
 ---
 
 ## Installation
 
-### Ubuntu 24.04 tested (Proxmox LXC Container)
+Tested on **Ubuntu 24.04** (e.g. a Proxmox LXC container). Python **3.11+** required.
 
-#### Prerequisites
+### 1. Prerequisites
 
-1. **LLM Provider**
-   - Ollama (tested)
-   - OpenAI
-   - llama-swap (tested)
-   - Any OpenAI-compatible API
-2. **(Optional) Image Generation**
-   - Stable Diffusion WebUI (A1111/Forge) with `--listen --api` flags
-   - ComfyUI
-   - Mammouth AI (or similar cloud service)
-3. **(Optional) SearX** (e.g. SearXNG) for web search
-4. **(Optional) TTS Service** - XTTS v2, F5-TTS or Magpie
-5. **(Optional) ComfyUI** for image animation (Wan2.2 img2video workflow)
+At minimum you need **one LLM provider**. Everything else is optional and only needed for the
+corresponding feature.
 
-6. Install system dependencies:
+| Purpose            | Options                                                                       |
+|--------------------|------------------------------------------------------------------------------|
+| **LLM (required)** | Ollama · any OpenAI-compatible API (vLLM, llama-swap, …) · Anthropic          |
+| Image generation   | ComfyUI · Stable Diffusion WebUI (A1111/Forge, run with `--listen --api`) · CivitAI · Together.ai · Mammouth |
+| Text-to-speech     | XTTS v2 · F5-TTS · Magpie (Riva) · ComfyUI (Qwen3-TTS)                        |
+| Web search         | SearX / SearXNG                                                               |
+| Animation          | ComfyUI (img2video workflow, e.g. Wan2.2)                                     |
+| GPU monitoring     | Beszel                                                                        |
+
+System packages:
 ```bash
 apt update
-apt install git python3.12-venv
-apt install -y build-essential python3-dev ffmpeg
+apt install -y git python3-venv build-essential python3-dev ffmpeg
 ```
 
-#### Clone project
+### 2. Clone
 ```bash
-git clone https://github.com/Kaix76/anima-verse.git
-```
-
-#### Create virtual Python environment
-```bash
+git clone https://github.com/KaletoAI/anima-verse.git
 cd anima-verse
+```
+
+### 3. Virtual environment
+```bash
 python3 -m venv .venv
 
 # Linux/Mac (bash/zsh):
@@ -213,246 +200,311 @@ source .venv/bin/activate.fish
 # Windows:
 .venv\Scripts\activate
 ```
+> You do not have to activate the venv to run things — you can always call the interpreter
+> directly (`./.venv/bin/python …`, `./.venv/bin/pip …`).
 
-#### Install dependencies
+### 4. Install dependencies
 ```bash
 pip install -e .
 ```
 
-#### Download models
-The large model binaries are not committed to the repo. Fetch them with (run
-**after** `pip install -e .`):
+### 5. Download models
+The large model binaries are not committed to the repo. Fetch them **after** installing
+dependencies:
 ```bash
 ./fetch_models.sh
 ```
-This downloads `u2net.onnx` (background removal for outfit previews and world/map
-images) and the built-in embedding model `BAAI/bge-small-en-v1.5` (pose matching,
-via `fastembed`). The script is idempotent (skips files that already exist) and
-verifies checksums. The embedding model otherwise auto-downloads on first use, so
+This downloads `u2net.onnx` (background removal for outfit previews and world/map images) and the
+built-in embedding model `BAAI/bge-small-en-v1.5` (pose matching, via `fastembed`). The script is
+idempotent and verifies checksums. The embedding model otherwise auto-downloads on first use, so
 this step is optional — but it makes the first run offline-capable and predictable.
 
-#### Configuration
-
-There is no `.env` file. Configuration is per-world (under `worlds/<world>/config.json`) and is filled in **after** the first start through the admin UI at `/admin/settings`. The full step-by-step setup is covered in [Getting Started with a New World](#getting-started-with-a-new-world) below.
-
 ### Docker
+See [`docker/README.md`](docker/README.md) for container deployment.
 
-See [`docker/README.md`](docker/README.md) for Docker deployment instructions.
-
----
-
-## Update
-
+### Updating
 ```bash
 git pull origin main
-
-# if, local installation (docker see docker directory)
-source .venv/bin/activate        # bash/zsh
-# source .venv/bin/activate.fish # fish shell
+source .venv/bin/activate          # bash/zsh
+# source .venv/bin/activate.fish   # fish shell
 pip install -e .
 ```
 
 ---
 
-## Start
+## Running the server
 
 ```bash
-# Only first time - execution rights
-chmod 755 start.sh
+chmod 755 start.sh        # first time only
 
-# Start the main app (port 8000)
-./start.sh
+./start.sh                # bundled demo world (worlds/demo), port 8000
+./start.sh --world NAME   # open or create worlds/NAME
+./start.sh --storage /path  # use an arbitrary storage directory
 
-# Stop
-./start.sh --stop
-
-# Restart
-./start.sh --restart
-
-# Status
-./start.sh --status
-```
----
-
-## Storage
-
-Each **world** is a self-contained directory under `worlds/`. Multiple worlds can co-exist (e.g. one per household / user / experiment) and are selected at startup with `--world NAME`.
-
-All structured data lives in **two SQLite databases per world**:
-
-- `world.db` — account, characters, character state, locations/rooms/activities, items, inventory, outfits, memories, knowledge, relationships, mood/state history, summaries, notifications, events, scheduler jobs/logs, group chats, story arcs, model capabilities, secrets, ...
-- `task_queue.db` — persistent task queue (image generation, LLM jobs, animations)
-
-Everything else on disk is either configuration or binary content (images, audio).
-
-```
-worlds/{world-name}/
-  world.db                    # Primary data store (see above)
-  task_queue.db               # Persistent task queue
-  config.json                 # Per-world config: LLM providers, image backends, ...
-  secrets.json                # API keys / passwords (gitignored, overlaid on config.json at load)
-  characters/{Name}/
-    gallery/                  # Curated profile and variant images
-    images/                   # Generated gallery images
-    outfits/                  # Rendered outfit images
-    skills/                   # Per-skill config + extraction caches
-    scheduler/                # Job run logs
-    soul/                     # Soul / core identity (markdown)
-  instagram/                  # Per-character Instagram posts (images + caption sidecars)
-  stories/                    # Rendered story scene stills
-  world_gallery/              # Generated location / room background images
-  chat_uploads/               # User-uploaded images in chat
-  tmp/                        # Temporary files (TTS audio, story stills, ...)
+./start.sh --stop | --restart | --status
 ```
 
-Cross-world resources (read-only, shared by every world) live in:
+Logs: `logs/main.log` (server), `logs/llm_calls.jsonl`, `logs/image_prompts.jsonl`.
 
-```
-shared/
-  templates/
-    character/                # Character templates: human-default, human-roleplay, animal, ...
-    expression/               # Facial expression presets for image generation
-    pose/                     # Pose presets for image generation
-    soul/                     # Soul / personality templates
-  config/                     # Language packs and other static config
-  world_dev_schemas/          # JSON Schemas used by the world-dev UI
-  items/                      # Global item catalog (merged with per-world items)
-  activities/                 # Global activity definitions
-```
+Once running, open `http://<host>:8000/` — it redirects to the Player UI at `/play`.
 
-### Selecting a world
-
+### Frontend development
+The React app lives in `frontend/` and is committed pre-built under `static/game_admin/`.
 ```bash
-./start.sh                    # opens the bundled demo world (./worlds/demo)
-./start.sh --world myworld    # opens (or creates) ./worlds/myworld
-./start.sh --storage /path    # custom path anywhere on disk
+cd frontend
+npm run dev      # Vite dev server on :5173, proxies the API to :8000
+npm run build    # tsc -b && vite build → static/game_admin/
+npm run lint
 ```
-
-The repository ships with a pre-populated `demo/` world as a starter. To begin from a clean slate, pass `--world <new-name>` — the directory is created automatically on first start.
 
 ---
 
-## Getting Started with a New World
+## Worlds & storage
+
+Each **world** is a self-contained directory under `worlds/`. Multiple worlds can co-exist and are
+selected at startup with `--world NAME`. All structured data lives in **two SQLite databases per
+world**:
+
+- `world.db` — accounts, characters and their runtime state, locations/rooms/activities, items,
+  inventory, outfits, memories, knowledge, relationships, mood/state history, summaries,
+  notifications, events, scheduler jobs/logs, group chats, story arcs, model capabilities,
+  pose variants, chat messages, …
+- `task_queue.db` — the persistent task queue (image generation, LLM jobs, animations).
+
+World data is **DB-only** — there are no JSON mirrors/backups on disk. Everything else under a
+world directory is configuration or binary content:
+
+```
+worlds/{world}/
+  world.db                  # primary data store (see above)
+  task_queue.db             # persistent task queue
+  config.json               # per-world config: LLM providers, image backends, TTS, routing, …
+  secrets.json              # API keys / passwords (gitignored, overlaid onto config.json at load)
+  world_setup.json          # optional per-world briefing injected into prompts
+  characters/{Name}/        # per-character galleries, generated images, outfits, soul/, skills/
+  instagram/                # per-character Instagram posts
+  stories/                  # rendered story scene stills
+  world_gallery/            # generated location / room backgrounds
+  chat_uploads/             # user-uploaded chat images
+  tmp/                      # temporary files (TTS audio, story stills, …)
+```
+
+Cross-world, read-only resources shared by every world live under `shared/` (character/expression/
+pose/soul templates, LLM prompt templates, item catalog, activity definitions, world-dev JSON
+schemas). Model binaries fetched by `fetch_models.sh` live under `models/` (gitignored).
+
+The repository ships a pre-populated `demo/` world as a starter; `worlds/demo/` **is** tracked in
+git. Pass `--world <new-name>` to begin from a clean slate — the directory is created on first
+start.
+
+---
+
+## Getting started with a new world
 
 Walk-through for setting up a fresh world from zero.
 
-> If a step is unclear, have a look at [`docs/images/getting-started/`](docs/images/getting-started/) — a few annotated screenshots are kept there for reference. They are not linked inline, since UIs evolve faster than screenshots.
+> If a step is unclear, see [`docs/images/getting-started/`](docs/images/getting-started/) for a
+> few annotated screenshots. They are not linked inline, since UIs evolve faster than screenshots.
 
-1. **Start the server with a brand-new world name.** Pick any name that does not yet exist under `worlds/`:
+1. **Start the server with a brand-new world name.** Pick any name that does not yet exist under
+   `worlds/`:
 
    ```bash
    ./start.sh --world myworld
    ```
 
-   Expected on first start: a warning `Config file not found: …/worlds/myworld/config.json — using empty config`. The server boots anyway; everything else is configured through the Admin UI.
+   On first start you'll see a warning that no `config.json` was found — the server boots anyway;
+   everything is configured through the admin UI.
 
-2. **Log in as the bootstrap admin.** Open `http://<host>:8000/` in a browser and log in with the credentials printed in the startup log:
+2. **Log in as the bootstrap admin.** Open `http://<host>:8000/` and log in with the credentials
+   printed in the startup log:
 
    ```
    username: admin
    password: admin1234
    ```
 
-   Change this password immediately under `/admin/users` — the bootstrap credentials are intentionally trivial and not safe for any real deployment.
+   Change this immediately under `/admin/users` — the bootstrap credentials are intentionally
+   trivial and not safe for any real deployment.
 
-3. **Configure server-side settings.** Go to `http://<host>:8000/admin/settings` and work through the sections from top to bottom. The minimum you need before anything else functions:
+3. **Configure server-side settings** at `http://<host>:8000/admin/settings`, top to bottom. The
+   minimum before anything works:
 
-   - **Server** — set a real `JWT Secret`
-   - **LLM Providers** — at least one provider (Ollama, OpenAI, llama-swap, ...) with `name`, `type`, `api_base`, GPU/VRAM info
-   - **LLM Routing** — map the built-in tasks (`chat`, `tools`, `summarize`, `vision`, ...) to a provider + model
-   - *(optional but recommended)* **Image Backends**, **TTS**, **Beszel** — only required for the corresponding features
+   - **Server** — set a real `JWT Secret`.
+   - **LLM Providers** — at least one provider (Ollama, OpenAI-compatible, Anthropic) with `name`,
+     `type`, `api_base` and (for local providers) GPU/VRAM info.
+   - **LLM Models (Simple)** — pick a provider + model per job category (chat / tools / helper /
+     vision / embedding). This fills the advanced routing automatically. Embedding can run built-in
+     ("Internal") with no external endpoint.
+   - *(optional)* **Image Backends**, **TTS**, **Beszel** — only for the corresponding features.
 
-   API keys, the JWT secret, passwords and similar fields are written to a separate **`secrets.json`** next to `config.json`. That file is gitignored, so the bundled demo world can ship with an empty `config.json` and each user fills in their own keys after cloning.
+   API keys, the JWT secret and passwords are written to a separate **`secrets.json`** next to
+   `config.json` (gitignored), so the demo world can ship with an empty `config.json` and each user
+   fills in their own keys.
 
-4. **Create your first character.** Character creation lives in the main UI, not in `/admin/settings`. After saving the admin settings, navigate back to the home page (`http://<host>:8000/`).
+4. **Create your first character.** Character creation lives in the game UI, not in
+   `/admin/settings`. Go to the **Game-Admin** (`/game-admin`, or the **🎮 Game Admin** button in
+   `/play`) → **Characters → `+ New`**:
 
-   In the header above the (still empty) character portrait you will find a **`➕ New`** button — that is the entry point. The flow:
+   1. Pick a template — e.g. **Human (Roleplay)** for a typical chat partner. Others:
+      `Human (Default)` (pure NPC), `Animal (Default)`, `Human (Roleplay NSFW)`, plus anything you
+      add under `shared/templates/character/`.
+   2. Enter a name (e.g. `Damian Demo`).
+   3. The template-driven editor opens on the new character — fill in appearance, personality
+      (soul), outfits, etc. The character is auto-added to your access list.
 
-   1. Click `➕ New`.
-   2. Pick a template, e.g. **Human (Roleplay)** for a typical chat partner. Other templates: `Human (Default)`, `Animal (Default)`, plus any you have added under `shared/templates/character/`.
-   3. Enter a name (e.g. `Damian Demo`).
-   4. The character editor opens directly on the new character so you can start filling in appearance, personality, outfits, etc.
+5. **Fill in the character profile.** Work through the editor tabs top to bottom; a few notes:
 
-   The character is automatically added to the creator's `allowed_characters`, so you do not need to step through `/admin/users` to grant yourself access.
+   - The **Soul** holds the character's inner life (personality, beliefs, goals, roleplay rules) as
+     markdown under `worlds/<world>/characters/<Name>/soul/`.
+   - **Appearance** has two prompts: a full-body `character_appearance` (gallery / outfits) and a
+     head-only **Face Prompt** (profile image). The token preview shows the resolved string.
+   - **Language** is per-character — it controls what language the model responds in.
 
-5. **Fill in the character profile.** With the editor open, work through the fields top to bottom. Most are template-driven and roughly self-explanatory; a few notes:
+6. **Set a profile image.** Either **generate** one (with an image backend configured and the Face
+   Prompt filled, use the camera action — it renders a portrait from the Face Prompt) or **upload**
+   one in the character's gallery and mark it as the profile image. The profile image becomes the
+   reference for later generations so the face stays consistent.
 
-   - The **Soul tab** holds the character's inner life (personality, beliefs, goals, lessons, soul, tasks, roleplay rules) as plain markdown files under `worlds/<world>/characters/<Name>/soul/`. Save in the editor or edit the `.md` files directly — both work.
-   - **Appearance** has two prompts: `character_appearance` (full body, used for gallery / outfits) and `Face Prompt` (head only, used for the profile image). The token preview underneath each shows the resolved string.
-   - **Language** is per-character — it controls what language the model is instructed to respond in.
+7. **Take over the character as your avatar.** Once it has a profile image and a filled profile,
+   pick it in the active-character selector. From then on that character is *you*: their location,
+   mood and outfit follow your decisions and they no longer act autonomously. Only templates with
+   the `playable_avatar` flag (`human-roleplay`, `human-roleplay-nsfw`, `animal-default`) can be
+   controlled; `human-default` is NPC-only.
 
-6. **Set a profile image.** Two ways:
+8. **Create at least one more character to talk to.** A world with a single character means
+   chatting with yourself. Add a second roleplay character (also playable) or a Human (Default) NPC.
 
-   - **Generate one:** with at least one Image Generation backend configured (and `face_appearance` filled), click the camera icon (📷) in the header — the system uses the Face Prompt to generate a fresh portrait. Re-clicking generates a new one.
-   - **Upload one:** open the character's gallery, upload an image, then mark it as the profile image. Useful when you have a reference photo or a curated render you want to reuse — it skips the generation step entirely.
+9. **Build the world map** in the Game-Admin:
 
-   The profile image is used as the reference for later generations so the
-   character keeps a consistent face. Any face matching / post-processing beyond
-   that is handled by a separate external service (see Image Generation above).
+   1. **`+ New Location`** — name + short description, save.
+   2. Select it and add one or more **rooms** (a location without rooms exists on the map but can't
+      host activities).
+   3. Add **activities** per room (free text, e.g. "drinking coffee", "people-watching") — picked
+      by the LLM via the `set_activity` skill.
+   4. Optionally fill day / night / map **image prompts** — backgrounds render asynchronously in
+      the background; you can keep editing.
 
-7. **Take over the character as your avatar.** Once a character has a profile image and a filled-in profile, you can step into them as the player. In the header you'll see an `active-character` dropdown — pick the character. From this point on, that character is *you*: their location, mood and outfit follow your decisions, and they no longer act autonomously.
+10. **Position locations on the world map.** Drag the location cards in the map view — positions set
+    `grid_x` / `grid_y` and are saved on drop. Characters move between adjacent cells, so positions
+    are not just cosmetic.
 
-   Templates differ in whether they expose this option: `human-roleplay`, `human-roleplay-nsfw` and `animal-default` carry the `playable_avatar` flag and can be controlled. `human-default` does not — it is meant strictly for NPCs / chat partners.
+11. **(Optional) Gate a room behind an item.** In the Game-Admin:
 
-8. **Create at least one more character to talk to.** A roleplay world with a single character means chatting with yourself, which is not particularly interesting. Repeat step 4 to add at least one more — common patterns:
+    1. **Items → `+ New`** — create the gating item (e.g. a key with id `key_room_506`) and assign
+       it to the character(s) who may enter.
+    2. **Rules → `+ New`** — Scope `All characters`, Subject `Location / Room`, Action `Enter`,
+       pick the gated room, Condition `NOT has_item:key_room_506`.
+    3. Save. The set-location skill, map movement and any LLM-driven location change all consult
+       these rules.
 
-   - A second **Roleplay** character (also `playable_avatar`) — useful if you ever want to switch sides.
-   - A **Human (Default)** character — a pure NPC. They cannot be the player avatar but show up in chats, social interactions, group chats etc.
+12. **Pick the right chat mode.** The character's `chat_mode` controls how skills are invoked and
+    **must match your chat model's tool-calling ability**:
 
-   After creating the new character, the system automatically sets them as your chat partner if they are the only "other" available. Otherwise pick them in the chat-partner UI.
+    - **`single`** — the chat LLM emits tool calls inline. Needs a model with reliable structured
+      tool output (Qwen/Llama-3.x-Instruct, GPT-4-class, Claude, …). One call, fast.
+    - **`rp_first`** *(recommended for RP fine-tunes)* — the chat LLM answers in prose, then a
+      separate Tool LLM translates it into skill calls. Pairs an RP fine-tune with a tool-capable
+      helper behind it.
 
-9. **Build the world map.** Open the world editor and add at least one location (e.g. "Café", "Park"). The flow:
+    **Symptom of the wrong mode:** the character agrees ("I'll come over") but `current_location`
+    never changes. Switch to `rp_first` and route a tool-capable model to the Tools tasks.
 
-   1. Click **`+ New Location`**, give it a name and a short description, save.
-   2. Once the location appears in the **locations list**, select it — the room editor unlocks. Add one or more **rooms** (e.g. for a café: "Main room", "Terrace"). Rooms are where activities happen and where characters actually spend time; a location without rooms exists on the map but cannot host activities.
-   3. Add **activities** per room (e.g. "drinking coffee", "people-watching", "working_on_computer", "cooking", "sleeping"). They show up as options for characters at that room and are picked by the LLM via the `set_activity` skill.
-   4. Optionally fill the **image prompts** (day / night / map). Background image generation runs **asynchronously in the background** — you can keep editing the next location, the image will appear in the gallery once the queue picks it up. No need to sit and wait for ComfyUI / Together to finish.
+From here you have a working setup: chat, watch characters move on the map, take over an avatar, run
+a group chat. The remaining features (Instagram feed, story arcs, scheduler, knowledge extraction, …)
+are configured in their respective admin sections — see [Features](#features).
 
-   Repeat for each location your characters should be able to be in.
+---
 
-10. **Position the location on the world map.** In the world editor, the map view shows every location as a draggable card. Drag-and-drop sets `grid_x` / `grid_y` — saved automatically on drop. Characters on the map move between adjacent cells, so positions are not just cosmetic.
+## Configuration model
 
-11. **(Optional) Gate a room behind an item.** Useful for rooms that should only be accessible to specific characters — bedrooms, locked storage, hidden areas. Open the **🎮 Game Admin** button in the header (admin only) and:
+There is **no `.env` file** and the app does not read config from environment variables. Each world
+is self-contained under `worlds/<world>/`:
 
-    1. **Items tab → `+ New`** — create the gating item (e.g. a key). Give it a clear ID like `key_room_506`. In the same dialog, scroll down to **Owners** and assign the item to the character(s) who should be able to enter.
-    2. **Rules tab → `+ New`** — define the access rule:
-       - **Scope:** `All characters`
-       - **Subject:** `Location / Room`
-       - **Action:** `Enter`
-       - **Location** + **Room** — pick the gated room
-       - **Condition:** `NOT has_item:key_room_506`
-    3. Save. From now on, only characters who own that item can enter the room. The set-location skill, the move-on-map flow and any LLM-driven location change all consult these rules.
+- **`config.json`** — LLM providers, image backends, TTS, routing, feature toggles. Edited through
+  the admin UI at `/admin/settings`, not by hand.
+- **`secrets.json`** — API keys / JWT secret / passwords. Gitignored, overlaid onto `config.json`
+  at load.
 
-12. **Pick the right chat mode for your character.** The character's `chat_mode` (in the editor under *Behavior*) controls how skills like `set_location`, `set_activity`, `change_outfit` are invoked during chat — and which one you choose **must match the tool-calling ability of your chat model**:
+Empty config fields are pre-filled with schema defaults on load, so the admin UI always shows the
+effective value. (Two legacy exceptions still read a root `.env`: `queue_cli.py` for `TASK_QUEUE_DB`
+and the `docker/` setup.)
 
-    - **`single`** — the chat LLM itself emits the tool calls inline with its response. Requires a chat model with **reliable, structured tool-call output** (e.g. raw Mixtral-Instruct, Qwen-Instruct without an RP fine-tune, GPT-4-class, Claude, Llama-3.x-Instruct). One LLM call, fast, but breaks silently on RP fine-tunes that produce only prose.
-    - **`rp_first`** *(Recommended for RP fine-tunes)* — the chat LLM answers narratively first ("I'm on my way to the café…"), then a separate Tool LLM reads that text and translates it into concrete skill calls. Two LLM calls per turn, slightly slower, but the chat stays in character and you can pair an RP fine-tune (Valkyrie, Sao10K, Anubis, …) with a tool-capable Helper model behind it.
+---
 
-    **Symptom of the wrong mode:** the character agrees ("I'll come over") but their `current_location` / `current_activity` never actually changes — no `set_location` was emitted. If you see this, switch the character to `rp_first` and route a tool-capable model to the Tools tasks (`/admin/settings → LLM Routing`).
+## Admin & monitoring surfaces
 
-13. **(Optional) Configure the Messaging Frame.** `/admin/settings → Messaging Frame (Phone Chat Layout)` lets you wrap the chat in a phone-style frame (status bar, rounded corners, etc.) — useful when you want the conversation to feel like a chat app rather than a generic web UI. Pick a frame preset, save, and reload the chat page.
+| Page                  | URL                 | Purpose                                                |
+|-----------------------|---------------------|--------------------------------------------------------|
+| Settings              | `/admin/settings`   | Providers, routing, image/TTS backends, feature config |
+| Users                 | `/admin/users`      | Accounts, roles, password reset                        |
+| Model Capabilities    | `/admin/models`     | Tool-calling / vision support per model                |
+| Agent Loop            | `/admin/agent-loop` | Autonomous-thought loop status & controls              |
+| LLM Templates         | `/admin/templates`  | Live editor for the Jinja2 prompt templates            |
+| LLM Stats             | `/admin/llm-stats`  | Latency / token usage per model & task                 |
+| Logs                  | `/logs/*`           | LLM call log, image-prompt log                         |
+| Dashboard             | `/dashboard`        | Overview / monitoring                                  |
+| Health                | `/health`           | Liveness check                                         |
 
-From here on you have a working setup: chat with the character, watch them move on the world map, take over a character as your avatar, run a group chat. The remaining features (Instagram feed, story arcs, scheduler, knowledge extraction, …) are documented in their respective admin sections — see the **Features** section above for a complete list.
+The task queue can also be inspected **without the server** via `python queue_cli.py`
+(`list` / `info` / `cancel` / `retry` / `stats` / …) — it reads the SQLite DB directly.
+
+---
+
+## Documentation
+
+- **`docs/`** — technical reference (config defaults, LLM task mapping/templates, movement model,
+  plugins).
+- **`development_instructions/`** — living plan/design docs for individual subsystems.
+- **`CLAUDE.md`** — build/run commands and cross-file architecture notes.
+- **`CHAT_PROMPTS.md`** — chat system/user prompt layout and caching behaviour.
+
+---
+
+## Status & disclaimers
+
+**Alpha — vibe-coded experiment.** This project is an experiment in how far one can push a small
+LLM-driven game / character simulator built with massive AI assistance ("vibe coding") rather than
+a traditional engineering process. Most of the code was written interactively with an LLM in the
+loop. **It has so far only been tested by a single person on a single setup.** Expect rough edges,
+inconsistent error handling, undocumented assumptions about your hardware/providers, and breaking
+changes between commits. Bug reports and patches are welcome — production use is not.
+
+**Adult / NSFW content.** Anima Verse is a generic creative-writing and character-simulation
+framework. The bundled demo world, character templates and image-analysis prompt are SFW. However,
+the system was designed flexibly: a user can author their own NSFW character templates, prompt the
+LLM into adult content, point the image-generation backends at adult-tuned models, etc. Whether the
+framework is used for entirely innocuous storytelling or for explicit content is a choice made by
+each user when configuring their own setup. The author does not provide adult content with this
+project, and is not responsible for content users produce while running it. Users are responsible
+for complying with local laws and with the acceptable-use policies of any third-party services
+(LLM providers, image-generation APIs) they configure.
 
 ---
 
 ## License
 
-Source-available, non-commercial, no public derivatives. See [`LICENSE`](LICENSE) for the binding text — this section is a non-binding summary.
+Source-available, non-commercial, no public derivatives. See [`LICENSE`](LICENSE) for the binding
+text — this section is a non-binding summary.
 
 **Allowed:**
 - Personal, educational and research use
 - Local modifications for your own use
-- Pull requests back to the upstream repository (your contribution becomes part of the project under the same license)
+- Pull requests back to the upstream repository (your contribution becomes part of the project under
+  the same license)
 
-**Not Allowed (without written permission):**
-- Any commercial use (business, SaaS, paid service, revenue-generating product, or for-profit internal use)
-- Publishing or distributing modified versions (no public forks / repackaged copies / hosted derivatives)
+**Not allowed (without written permission):**
+- Any commercial use (business, SaaS, paid service, revenue-generating product, or for-profit
+  internal use)
+- Publishing or distributing modified versions (no public forks / repackaged copies / hosted
+  derivatives)
 - Selling the Software or any derivative work
 
-**Not Open Source.** This is *source available*, not OSI-approved Open Source. If the terms above don't fit your use case, [contact me](#commercial-use--separate-licensing) for a separate license.
+**Not Open Source.** This is *source available*, not OSI-approved Open Source. If the terms above
+don't fit your use case, [contact me](#commercial-use--separate-licensing) for a separate license.
 
-**No Warranty.** The Software is provided "as is" without any warranty. The author is not liable for any damages or for content users generate while running the Software.
+**No Warranty.** The Software is provided "as is" without any warranty. The author is not liable for
+any damages or for content users generate while running the Software.
 
 ---
 
