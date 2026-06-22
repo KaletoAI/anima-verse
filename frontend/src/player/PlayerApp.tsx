@@ -46,25 +46,25 @@ import { LightboxProvider, useLightbox } from './Lightbox'
 const CELL = 14
 const MARGIN = 4
 
-// Standard-Layout fuer neue Welten + Demo — 1:1 uebernommen aus dem auf ct112
-// gespeicherten "Default"-Preset. Das Grid rendert mit compactType={null} +
-// allowOverlap, d.h. die Positionen bleiben exakt wie hier gesetzt.
+// Standard-Layout fuer neue Welten + Demo — uebernommen aus dem lokal
+// gespeicherten Stand. Das Grid rendert mit compactType={null} + allowOverlap,
+// d.h. die Positionen bleiben exakt wie hier gesetzt.
 const DEFAULT_LAYOUT: Layout[] = [
-  { i: 'scene', x: 13, y: 2, w: 50, h: 34, minW: 8, minH: 8 },
-  { i: 'env', x: 13, y: 2, w: 50, h: 24, minW: 6, minH: 5 },
-  { i: 'map', x: 24, y: 15, w: 17, h: 12, minW: 6, minH: 5 },
-  { i: 'worldmap', x: 63, y: 2, w: 19, h: 13, minW: 6, minH: 5 },
-  { i: 'self', x: 0, y: 2, w: 13, h: 20, minW: 6, minH: 8 },
-  { i: 'others', x: 0, y: 22, w: 13, h: 18, minW: 8, minH: 8 },
-  { i: 'belongings', x: 15, y: 9, w: 42, h: 30, minW: 10, minH: 8 },
-  { i: 'journal', x: 20, y: 8, w: 50, h: 31, minW: 8, minH: 6 },
+  { i: 'scene', x: 13, y: 18, w: 49, h: 26, minW: 8, minH: 8 },
+  { i: 'env', x: 13, y: 3, w: 49, h: 33, minW: 6, minH: 5 },
+  { i: 'map', x: 75, y: 3, w: 16, h: 12, minW: 6, minH: 5 },
+  { i: 'worldmap', x: 62, y: 3, w: 13, h: 12, minW: 6, minH: 5 },
+  { i: 'self', x: 0, y: 3, w: 13, h: 20, minW: 6, minH: 8 },
+  { i: 'others', x: 41, y: 20, w: 13, h: 18, minW: 8, minH: 8 },
+  { i: 'belongings', x: 62, y: 19, w: 29, h: 25, minW: 10, minH: 8 },
+  { i: 'journal', x: 20, y: 9, w: 50, h: 30, minW: 8, minH: 6 },
   { i: 'gallery', x: 0, y: 54, w: 20, h: 14, minW: 8, minH: 6 },
   { i: 'instagram', x: 20, y: 54, w: 21, h: 18, minW: 10, minH: 8 },
-  { i: 'phone', x: 15, y: 6, w: 21, h: 33, minW: 10, minH: 12 },
-  { i: 'tasks', x: 63, y: 15, w: 19, h: 21, minW: 6, minH: 4 },
-  { i: 'news', x: 25, y: 8, w: 29, h: 29, minW: 8, minH: 8 },
+  { i: 'phone', x: 18, y: 7, w: 18, h: 30, minW: 10, minH: 12 },
+  { i: 'tasks', x: 24, y: 27, w: 17, h: 10, minW: 6, minH: 4 },
+  { i: 'news', x: 18, y: 6, w: 34, h: 33, minW: 8, minH: 8 },
   { i: 'layouts', x: 24, y: 37, w: 17, h: 14, minW: 6, minH: 6 },
-  { i: 'settings', x: 10, y: 4, w: 58, h: 34, minW: 12, minH: 12 },
+  { i: 'settings', x: 11, y: 5, w: 59, h: 38, minW: 12, minH: 12 },
 ]
 
 // Default-Box je Panel-id — Quelle der Wahrheit fuer Mindest-/Anfangsgroesse.
@@ -94,10 +94,10 @@ const ALL_PANELS = PANEL_META.map((p) => p.id)
 const GRID_PANELS = PANEL_META.filter((p) => p.kind !== 'dialog').map((p) => p.id)
 const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((p) => p.id)
 // Grid-Panel, aber NICHT default-offen (occasional, per Button geöffnet).
-// Geschlossen-by-default = alle Grid-Panels, die NICHT im ct112-"Default"-
-// Preset offen waren (offen: scene/env/map/worldmap/self/others/gallery/
+// Geschlossen-by-default = alle Grid-Panels, die NICHT im gespeicherten Default
+// offen waren (offen: scene/env/map/worldmap/self/others/belongings/gallery/
 // instagram/tasks). 'layouts' ist ein Dialog und wird ohnehin nicht getiled.
-const CLOSED_BY_DEFAULT = new Set(['settings', 'news', 'belongings', 'journal', 'phone'])
+const CLOSED_BY_DEFAULT = new Set(['journal', 'news', 'phone', 'settings'])
 const INITIAL_OPEN = GRID_PANELS.filter((id) => !CLOSED_BY_DEFAULT.has(id))
 const ICON_BY_ID: Record<string, IconName> = Object.fromEntries(
   PANEL_META.map((p) => [p.id, p.icon]))
@@ -173,8 +173,8 @@ export function PlayerApp() {
   const [layout, setLayout] = useState<Layout[]>(DEFAULT_LAYOUT)
   const [open, setOpen] = useState<string[]>(INITIAL_OPEN)  // Dialoge starten geschlossen
   const [autosize, setAutosize] = useState<string[]>([])  // Panels mit Höhen-Autosize
-  const [iconMode, setIconMode] = useState<IconMode>('icon')      // Launcher: nur Icon vs Icon+Text
-  const [toolbarAlign, setToolbarAlign] = useState<ToolbarAlign>('right')  // Launcher links/rechts
+  const [iconMode, setIconMode] = useState<IconMode>('iconText')      // Launcher: nur Icon vs Icon+Text (Default aus gespeichertem Layout)
+  const [toolbarAlign, setToolbarAlign] = useState<ToolbarAlign>('left')  // Launcher links/rechts (Default aus gespeichertem Layout)
   const [appearanceOpen, setAppearanceOpen] = useState(false)    // Zahnrad-Popover
   const [frozen, setFrozen] = useState(false)                    // Layout einfrieren + mitskalieren
   const [frozenWidth, setFrozenWidth] = useState(0)              // Referenzbreite beim Einfrieren
@@ -374,10 +374,10 @@ export function PlayerApp() {
   }, [persist])
 
   // Benannte Layout-Presets
-  const [presets, setPresets] = useState<Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[] }>>({})
+  const [presets, setPresets] = useState<Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[]; iconMode?: IconMode; toolbarAlign?: ToolbarAlign; frozen?: boolean; frozenWidth?: number; bg?: string }>>({})
   const refreshPresets = useCallback(async () => {
     try {
-      const d = await apiGet<{ presets?: Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[] }> }>('/play/layouts')
+      const d = await apiGet<{ presets?: Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[]; iconMode?: IconMode; toolbarAlign?: ToolbarAlign; frozen?: boolean; frozenWidth?: number; bg?: string }> }>('/play/layouts')
       setPresets(d?.presets || {})
     } catch { /* ignore */ }
   }, [])
@@ -395,6 +395,10 @@ export function PlayerApp() {
     setLayout(grid)
     setOpen(op)
     setAutosize(az)
+    // Toolbar-Position + Labels mit-wiederherstellen (aeltere Presets ohne diese
+    // Felder lassen die aktuelle Einstellung unveraendert).
+    if (p.iconMode === 'icon' || p.iconMode === 'iconText') { iconModeRef.current = p.iconMode; setIconMode(p.iconMode) }
+    if (p.toolbarAlign === 'left' || p.toolbarAlign === 'right') { toolbarAlignRef.current = p.toolbarAlign; setToolbarAlign(p.toolbarAlign) }
     persist()  // geladenes Preset wird auch zum aktiven Layout
     closePanel('layouts')  // Dialog schließt nach dem Laden
   }, [presets, persist, closePanel])
@@ -403,7 +407,12 @@ export function PlayerApp() {
     const n = (name || '').trim()
     if (!n) return
     try {
-      await apiPut('/play/layouts', { name: n, layout: { grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current } })
+      await apiPut('/play/layouts', { name: n, layout: {
+        grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current,
+        // Toolbar-Position (links/rechts) + Labels (Icon/Icon+Text) gehoeren zum Preset.
+        iconMode: iconModeRef.current, toolbarAlign: toolbarAlignRef.current,
+        frozen: frozenRef.current, frozenWidth: frozenWidthRef.current, bg: bgPanelRef.current,
+      } })
       await refreshPresets()
       closePanel('layouts')  // Dialog schließt nach Speichern/Überschreiben
     } catch { /* ignore */ }
