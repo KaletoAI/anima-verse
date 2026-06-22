@@ -3,14 +3,18 @@
 Serves the React-built shell from ``static/game_admin/index.html``. All
 behavior lives in the React app under ``frontend/`` (built via
 ``npm run build`` to ``static/game_admin/``); this Python route exists only
-to gate the page behind admin auth and to return the bundled shell.
+to return the bundled shell.
+
+The shell is served WITHOUT a server-side auth gate on purpose: it is just the
+static React bundle (no secret). The SPA gates itself client-side via
+``<AuthGate>`` (login form on missing session). A server dependency here would
+return 401-JSON before the SPA loads -> no login dialog. The real admin
+enforcement stays on the ``/admin/*`` and other data endpoints.
 """
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import FileResponse, HTMLResponse
-
-from app.core.auth_dependency import require_admin
 
 router = APIRouter()
 
@@ -34,14 +38,14 @@ server proxies API calls to this FastAPI server on :8000.</p>
 
 
 @router.get("/game-admin", include_in_schema=False)
-async def game_admin_page(user=Depends(require_admin)):
+async def game_admin_page():
     if not _SHELL_PATH.is_file():
         return HTMLResponse(content=_DEV_HINT, status_code=503)
     return FileResponse(_SHELL_PATH)
 
 
 @router.get("/game-admin/", include_in_schema=False)
-async def game_admin_page_slash(user=Depends(require_admin)):
+async def game_admin_page_slash():
     if not _SHELL_PATH.is_file():
         return HTMLResponse(content=_DEV_HINT, status_code=503)
     return FileResponse(_SHELL_PATH)

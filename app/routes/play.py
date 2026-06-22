@@ -104,7 +104,12 @@ def _bg_id(location_id: str, room: str) -> str:
 
 
 @router.get("/play", include_in_schema=False)
-async def play_page(user=Depends(get_current_user)):
+async def play_page():
+    # Shell wird BEWUSST ohne Auth ausgeliefert: das ist nur das statische
+    # React-Bundle (kein Secret). Die SPA gated sich selbst client-seitig ueber
+    # <AuthGate> (zeigt das Login-Formular bei fehlender Session). Eine
+    # Server-Auth-Dependency hier wuerde 401-JSON zurueckgeben, bevor die SPA
+    # laedt -> kein Login-Dialog. Alle Daten-Endpoints (/play/*) bleiben gegated.
     if not _SHELL.is_file():
         return HTMLResponse(
             "<h1>Player UI build missing</h1>"
