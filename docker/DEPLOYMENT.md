@@ -38,6 +38,27 @@ immediately.
   Python base image + dependencies; also fetches the `u2net` and `bge-small`
   models unless the build runs offline, in which case they lazy-download later).
 
+### Important: LocalAI watchdog on a single GPU
+
+If the chat model and the image model share **one GPU**, they cannot both stay
+resident at once — loading the second on top of the first exhausts VRAM and the
+request fails with `HTTP 500 … cudaMalloc failed: out of memory` (or
+`inference failed`). Enable LocalAI's **watchdog** so it unloads the idle model
+and reclaims VRAM before serving the next request. In the LocalAI settings
+(`/app/studio` → settings, or the server config), the working setup is:
+
+| Setting | Value |
+|---|---|
+| Idle watchdog (Idle Timeout) | **enabled, 2m** |
+| Busy watchdog (Busy Check Enabled, Busy Timeout) | **enabled, 2m** |
+| Memory Reclaimer | **enabled** |
+
+With this, concurrent chat + image requests serialize on LocalAI's side (the
+second waits while the first model is reclaimed) instead of OOM-ing. This is the
+correct layer for single-GPU serialization — Anima Verse's per-backend
+`max_concurrent` only limits parallelism *within* one backend, not across the
+chat provider and the image backend (they are separate queue channels).
+
 ---
 
 ## Step 1 — Install Docker (Ubuntu 24.04)
@@ -219,6 +240,8 @@ run a different world, set it in `docker-compose.yml`:
 |---|---|
 | `docker` daemon won't start in an LXC | Enable `nesting=1,keyctl=1` on the Proxmox host (see Step 1). |
 | Chat hangs / "no model" errors | LocalAI has no model loaded, or the routed model name doesn't match `GET /v1/models`. |
+| `HTTP 500 … cudaMalloc failed: out of memory` / `inference failed` | A single GPU can't hold the chat + image model at once. Enable LocalAI's watchdog (Idle 2m, Busy Check 2m, Memory Reclaimer) so it reclaims VRAM between requests — see "LocalAI watchdog on a single GPU" above. |
+| Image render fails with `inference failed` only at larger sizes | The image model has a resolution ceiling on this GPU (e.g. `flux.2-klein-4b` only does small square sizes ≤768²). Lower the use-case / backend dimensions. |
 | Container `unhealthy` | `docker compose logs app` — usually a Python import or config error during boot. |
 | LocalAI unreachable from the container | Confirm `curl http://<localai>:8080/readyz` works **from the Docker host**; the container shares the host's LAN route. |
 | Character "promises" to move but never does | Wrong chat mode for the model — switch the character to `rp_first` and route a tool-capable model to the Tools tasks. |
