@@ -17,6 +17,7 @@ import { IntentsTab } from './intents/IntentsTab'
 import { EventsTab } from './events/EventsTab'
 import { MarketplaceTab } from './marketplace/MarketplaceTab'
 import { ObserverTab } from './observer/ObserverTab'
+import { MindTab } from './mind/MindTab'
 
 export type TabId =
   | 'setup'
@@ -33,6 +34,7 @@ export type TabId =
   | 'events'
   | 'marketplace'
   | 'observer'
+  | 'mind'
 
 export interface TabSpec {
   id: TabId
@@ -55,6 +57,7 @@ export const TABS: TabSpec[] = [
   { id: 'events', label: 'Events', Component: EventsTab },
   { id: 'marketplace', label: 'Marketplace', Component: MarketplaceTab },
   { id: 'observer', label: 'Observer', Component: ObserverTab },
+  { id: 'mind', label: 'Mind', Component: MindTab },
 ]
 
 const TAB_IDS: ReadonlySet<string> = new Set(TABS.map((t) => t.id))

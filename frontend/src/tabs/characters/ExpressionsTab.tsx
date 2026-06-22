@@ -42,7 +42,17 @@ export function ExpressionsTab({ character }: { character: string }) {
   const [items, setItems] = useState<Expression[] | null>(null)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
+  const [promptOf, setPromptOf] = useState<Expression | null>(null)
   const [busy, setBusy] = useState(false)
+
+  const copyPrompt = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast(t('Prompt copied'))
+    } catch {
+      toast(t('Copy failed — select the text manually'), 'error')
+    }
+  }
 
   const load = useCallback(async () => {
     if (!character) { setItems(null); return }
@@ -176,10 +186,57 @@ export function ExpressionsTab({ character }: { character: string }) {
                       </div>
                     )}
                     {e.created_at && <div style={{ fontSize: '0.68em', opacity: 0.45 }}>{fmtDate(e.created_at)}</div>}
+                    {/* Final prompt: ansehen + kopieren */}
+                    <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                      <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: '0.7em', padding: '2px 6px' }}
+                        disabled={!e.prompt} onClick={() => setPromptOf(e)}>
+                        📄 {t('Prompt')}
+                      </button>
+                      <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: '0.7em', padding: '2px 6px' }}
+                        disabled={!e.prompt} title={t('Copy prompt')} onClick={() => copyPrompt(e.prompt)}>
+                        📋
+                      </button>
+                    </div>
                   </div>
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {/* Prompt-Viewer (ansehbar + kopierbar) */}
+        {promptOf && (
+          <div onClick={() => setPromptOf(null)}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1000, display: 'flex',
+              alignItems: 'center', justifyContent: 'center', padding: 24,
+              background: 'rgba(8,10,14,0.7)',
+            }}>
+            <div onClick={(ev) => ev.stopPropagation()}
+              style={{
+                width: 'min(720px, 100%)', maxHeight: '80vh', display: 'flex', flexDirection: 'column',
+                gap: 10, padding: 16, borderRadius: 10, background: 'var(--bg, #0d1117)',
+                border: '1px solid var(--border, #30363d)',
+              }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                <strong style={{ fontSize: '0.9em' }}>
+                  {t('Final prompt')} — 😊 {promptOf.mood || t('neutral')}
+                  {promptOf.activity ? ` · 🚶 ${promptOf.activity}` : ''}
+                </strong>
+                <button type="button" className="ga-btn ga-btn-sm" onClick={() => setPromptOf(null)}>{t('Close')}</button>
+              </div>
+              <textarea readOnly value={promptOf.prompt} onFocus={(ev) => ev.currentTarget.select()}
+                style={{
+                  flex: 1, minHeight: 200, resize: 'vertical', width: '100%', boxSizing: 'border-box',
+                  fontFamily: 'monospace', fontSize: '0.82em', lineHeight: 1.4, padding: 10, borderRadius: 8,
+                  background: 'var(--bg-elev, #161b22)', color: 'inherit', border: '1px solid var(--border, #30363d)',
+                }} />
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => copyPrompt(promptOf.prompt)}>
+                  📋 {t('Copy prompt')}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

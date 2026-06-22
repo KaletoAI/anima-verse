@@ -2282,3 +2282,45 @@ html, * {
 .ga-secret-info strong { font-size: 13px; }
 .ga-secret-info .ga-sched-muted { font-size: 11px; }
 .ga-secret-actions { white-space: nowrap; flex-shrink: 0; }
+
+/* === Mind tab ============================================================= */
+/* Reused player MindPanel uses .player-chip — mirror the needed rules here so
+   it renders correctly in the Game-Admin (player.css is not loaded here). */
+.player-chip {
+  padding: 3px 11px; border-radius: 999px; cursor: pointer;
+  font-size: 0.82em; line-height: 1.4; color: inherit;
+  border: 1px solid var(--border, #30363d); background: transparent;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.player-chip:hover { background: var(--bg-hover, #1f2937); }
+.player-chip.on {
+  border-color: var(--accent, #6aa9ff);
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 26%, transparent);
+}
+.player-chip:disabled { opacity: 0.5; cursor: default; }
+
+/* Mind tab layout: character picker + debug block + reused MindPanel */
+.ga-mind-layout { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.ga-mind-bar { display: flex; align-items: center; gap: 10px; padding: 8px 4px; flex-wrap: wrap; }
+.ga-mind-body { flex: 1; min-height: 0; display: flex; gap: 12px; overflow: hidden; }
+.ga-mind-debug {
+  flex: 0 0 320px; min-width: 0; overflow: auto; padding-right: 4px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.ga-mind-panel-wrap { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; }
+.ga-mind-card {
+  border: 1px solid var(--border, #30363d); border-radius: 8px; padding: 10px;
+  background: var(--bg-elevated, #161b22);
+}
+.ga-mind-card h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
+.ga-mind-reason { font-size: 13px; line-height: 1.5; }
+.ga-mind-reason .tag {
+  display: inline-block; margin: 0 4px 4px 0; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; background: rgba(255,255,255,0.06); border: 1px solid var(--border, #30363d);
+}
+.ga-mind-reason .tag.warn { border-color: #e0675e; color: #e0675e; }
+.ga-mind-reason .tag.force { border-color: #d9a14a; color: #d9a14a; }
+.ga-mind-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ga-mind-list li { font-size: 12px; line-height: 1.45; }
+.ga-mind-list .ts { opacity: 0.55; font-size: 11px; margin-right: 6px; }
+.ga-mind-empty { opacity: 0.5; font-size: 12px; }

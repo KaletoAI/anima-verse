@@ -794,6 +794,7 @@ def get_status_effects_route(
         # Template laden — Quelle fuer Stat-Defaults und Bar-Metadaten
         bar_meta = {}
         stat_defaults = {}  # stat_key -> default_value aus Template
+        stat_order: List[str] = []  # Template-Reihenfolge der Stats
         try:
             from app.models.character_template import get_template
             template_name = profile.get("template", "human-default")
@@ -806,6 +807,8 @@ def get_status_effects_route(
                         stat_key = field.get("key", "")
                         if not stat_key:
                             continue
+                        if stat_key not in stat_order:
+                            stat_order.append(stat_key)
                         # Default aus Template
                         if field.get("default") is not None:
                             try:
@@ -838,7 +841,14 @@ def get_status_effects_route(
             profile["status_effects"] = status
             save_character_profile(character_name, profile)
 
-        return {"status_effects": status, "bar_meta": bar_meta}
+        # In Template-Reihenfolge zurueckgeben — sonst zeigen Self/Others-Panels
+        # dieselben Stats in verschiedenen (gespeicherten) Reihenfolgen.
+        ordered_status = {k: status[k] for k in stat_order if k in status}
+        for k, v in status.items():  # nicht im Template definierte Keys anhaengen
+            if k not in ordered_status:
+                ordered_status[k] = v
+
+        return {"status_effects": ordered_status, "bar_meta": bar_meta}
     except HTTPException:
         raise
     except Exception as e:
@@ -1675,6 +1685,31 @@ async def set_outfit_lock_route(character_name: str, request: Request) -> Dict[s
     locked = bool(data.get("locked"))
     set_outfit_locked(character_name, locked)
     return {"character": character_name, "locked": is_outfit_locked(character_name)}
+
+
+@router.get("/{character_name}/decency-exempt")
+def get_decency_exempt_route(character_name: str) -> Dict[str, Any]:
+    """Gibt den decency_exempt-Status zurueck (Decency-Override auf nude_ok)."""
+    from app.models.character import get_state_flags
+    return {"character": character_name,
+            "exempt": bool(get_state_flags(character_name).get("decency_exempt"))}
+
+
+@router.post("/{character_name}/decency-exempt")
+async def set_decency_exempt_route(character_name: str, request: Request) -> Dict[str, Any]:
+    """Setzt/entfernt decency_exempt. Gesetzt = Decency-Regeln aufgehoben
+    (nude_ok), unabhaengig von Anwesenheit. Compliance reagiert sofort."""
+    from app.models.character import set_decency_exempt, get_state_flags
+    data = await request.json()
+    exempt = bool(data.get("exempt"))
+    set_decency_exempt(character_name, exempt)
+    try:
+        from app.core.outfit_compliance import apply_outfit_compliance
+        apply_outfit_compliance(character_name)
+    except Exception:
+        pass
+    return {"character": character_name,
+            "exempt": bool(get_state_flags(character_name).get("decency_exempt"))}
 
 
 @router.get("/{character_name}/default-outfit")
@@ -4261,9 +4296,37 @@ def memory_today(character_name: str) -> Dict[str, Any]:
     since_mood = (mood_lane[-1].get("timestamp") if mood_lane
                   else (full_mood[-1].get("timestamp") if full_mood else None))
 
+    # --- Stats (status_effects) — generisch aus dem Template, nichts hardcoden.
+    # Reihenfolge + Labels aus den Template-Feldern mit store=status_effects;
+    # zusaetzliche, nicht im Template definierte Keys werden hinten angehaengt.
+    stat_items: List[Dict[str, Any]] = []
+    try:
+        from app.models.character_template import is_feature_enabled, get_template
+        if is_feature_enabled(character_name, "status_effects_enabled"):
+            cur_stats = profile.get("status_effects", {}) or {}
+            tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
+            seen: set = set()
+            if tmpl:
+                for section in tmpl.get("sections", []):
+                    for fld in section.get("fields", []):
+                        if fld.get("store") != "status_effects":
+                            continue
+                        k = fld.get("key")
+                        if not k or k not in cur_stats:
+                            continue
+                        stat_items.append({"key": k, "label": fld.get("label") or k,
+                                           "value": cur_stats.get(k)})
+                        seen.add(k)
+            for k, v in cur_stats.items():
+                if k not in seen:
+                    stat_items.append({"key": k, "label": k, "value": v})
+    except Exception:
+        pass
+
     return {
         "character": character_name,
         "now": now.isoformat(),
+        "stats": stat_items,
         "status": {
             "location": location_name or current_location_id,
             "location_id": current_location_id,
@@ -4287,6 +4350,159 @@ def memory_today(character_name: str) -> Dict[str, Any]:
             "effects": _bucket_state_lane(effects_lane),
         },
         "active_memories": top,
+    }
+
+
+@router.get("/{character_name}/debug-activity")
+def debug_activity(character_name: str) -> Dict[str, Any]:
+    """Game-Admin-Debug: warum verhaelt sich ein (Nicht-Avatar-)Character so?
+
+    Aggregiert read-only: aktuelles Gefuehl + Quelle, juengste Mood-/State-/Thought-
+    Aktivitaet und aktive Block-/Force-Regeln zu einer „Why"-Begruendung. Keine
+    Avatar-Bindung — der Name kommt aus dem Pfad.
+    """
+    from app.core.db import get_connection
+    from app.models.memory import load_mood_history
+    from app.models.character import (get_character_profile,
+                                      get_character_current_feeling, get_state_flags)
+    import json as _json
+
+    profile = get_character_profile(character_name) or {}
+    feeling = (get_character_current_feeling(character_name) or "").strip()
+    status_effects = profile.get("status_effects", {}) or {}
+    try:
+        flags = get_state_flags(character_name)
+    except Exception:
+        flags = {}
+
+    # Letzter Thought-Zeitpunkt + juengste (globale) Thought-Turns dieses Characters.
+    last_thought_at = ""
+    try:
+        from app.core.agent_inbox import get_last_thought_at
+        last_thought_at = get_last_thought_at(character_name) or ""
+    except Exception:
+        pass
+    thoughts_recent: List[Dict[str, Any]] = []
+    try:
+        from app.core.agent_loop import get_agent_loop
+        recent = (get_agent_loop().status() or {}).get("recent", []) or []
+        thoughts_recent = [
+            {"ts": r.get("ts", ""), "action": r.get("action", "")}
+            for r in recent if r.get("name") == character_name
+        ][-12:]
+    except Exception:
+        pass
+
+    # Mood-Historie (juengste zuerst).
+    mood_all = load_mood_history(character_name) or []
+    mood_recent = list(reversed(mood_all))[:8]
+    latest_mood = mood_recent[0] if mood_recent else None
+
+    # State-Historie direkt lesen (kein public Reader) — juengste zuerst.
+    state_recent: List[Dict[str, Any]] = []
+    last_warning: Optional[Dict[str, Any]] = None
+
+    # id→Name fuer location/room-Eintraege (sonst zeigt die UI rohe Hex-IDs).
+    def _resolve_state_value(stype: str, value: str) -> str:
+        if not value:
+            return value
+        try:
+            from app.models.world import get_location_name, list_locations, get_location_rooms
+            if stype == "location":
+                return get_location_name(value) or value
+            if stype == "room":
+                for _loc in list_locations():
+                    for _rm in get_location_rooms(_loc):
+                        if _rm.get("id") == value:
+                            return _rm.get("name") or value
+        except Exception:
+            pass
+        return value
+
+    try:
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT ts, state_json FROM state_history WHERE character_name=? "
+            "ORDER BY ts DESC LIMIT 25", (character_name,),
+        ).fetchall()
+        for ts, state_json in rows:
+            try:
+                s = _json.loads(state_json or "{}")
+            except Exception:
+                continue
+            _stype = s.get("type", "")
+            ev = {"ts": s.get("timestamp", ts), "type": _stype,
+                  "value": _resolve_state_value(_stype, s.get("value", "")),
+                  "metadata": s.get("metadata", {})}
+            state_recent.append(ev)
+            if last_warning is None and ev["type"] in ("access_denied", "forced_action"):
+                last_warning = ev
+    except Exception:
+        pass
+
+    # Aktive Block-Regeln fuer diesen Character (character leer/„all" = gilt fuer alle)
+    # + aktive Force-Regel.
+    block_rules: List[Dict[str, Any]] = []
+    force_rule: Optional[Dict[str, Any]] = None
+    try:
+        from app.models.rules import load_rules, check_force_rules
+        for r in (load_rules() or []):
+            if (r.get("type") or "") != "block":
+                continue
+            who = (r.get("character") or "").strip().lower()
+            if who and who not in ("all", "*", "any", character_name.lower()):
+                continue
+            block_rules.append({
+                "id": r.get("id", ""), "name": r.get("name", ""),
+                "action": r.get("action", ""), "target": r.get("target", ""),
+                "message": r.get("message", ""), "event_id": r.get("event_id", ""),
+            })
+        force_rule = check_force_rules(character_name)
+    except Exception:
+        pass
+
+    # „Why" — menschenlesbare Begruendungs-Bausteine, wichtigste zuerst.
+    reasons: List[str] = []
+    if feeling:
+        if latest_mood and (latest_mood.get("source") or "").strip():
+            reasons.append(f"Feeling “{feeling}” (last set via {latest_mood['source']})")
+        else:
+            reasons.append(f"Feeling “{feeling}”")
+    if force_rule:
+        reasons.append(
+            f"Forced by rule “{force_rule.get('rule_name', force_rule.get('rule_id',''))}”"
+            + (f" → {force_rule.get('go_to')}" if force_rule.get("go_to") else ""))
+    for br in block_rules:
+        if (br.get("action") or "") == "leave":
+            reasons.append(f"Must leave (rule “{br.get('name') or br.get('id')}”)"
+                           + (f": {br['message']}" if br.get("message") else ""))
+    if last_warning:
+        kind = "Blocked" if last_warning["type"] == "access_denied" else "Forced action"
+        reasons.append(f"{kind}: {last_warning.get('value','')}".strip())
+    # Auffaellige Stat-Extreme generisch melden (keine hartkodierten Stat-Namen).
+    for k, v in status_effects.items():
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            continue
+        if iv <= 20:
+            reasons.append(f"Low {k}: {iv}")
+        elif iv >= 80:
+            reasons.append(f"High {k}: {iv}")
+
+    return {
+        "character": character_name,
+        "current_feeling": feeling,
+        "state_flags": flags,
+        "status_effects": status_effects,
+        "last_thought_at": last_thought_at,
+        "last_warning": last_warning,
+        "reasons": reasons,
+        "mood_recent": mood_recent,
+        "state_recent": state_recent[:20],
+        "thoughts_recent": list(reversed(thoughts_recent)),
+        "block_rules": block_rules,
+        "force_rule": force_rule,
     }
 
 

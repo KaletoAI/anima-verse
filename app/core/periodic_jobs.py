@@ -155,10 +155,11 @@ def _sub_force_rules():
                 if _set_flags:
                     from app.models.character import (
                         set_is_sleeping, set_is_wet, set_is_intimate,
-                        get_state_flags)
+                        set_decency_exempt, get_state_flags)
                     _setters = {"is_sleeping": set_is_sleeping,
                                 "is_wet": set_is_wet,
-                                "is_intimate": set_is_intimate}
+                                "is_intimate": set_is_intimate,
+                                "decency_exempt": set_decency_exempt}
                     _before_flags = get_state_flags(name)
                     for _fk, _fv in _set_flags.items():
                         _setter = _setters.get(_fk)

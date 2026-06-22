@@ -217,6 +217,7 @@ _STATE_TYPED_COLS = (
     ("is_sleeping",     "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
     ("is_wet",          "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
     ("is_intimate",     "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
+    ("decency_exempt",  "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
 )
 
 # Weitere Runtime-Keys — landen in character_state.meta (JSON-Blob) statt
@@ -250,7 +251,7 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
             "SELECT current_location, current_room, current_activity, "
             "current_feeling, location_changed_at, activity_changed_at, meta, "
             "pose_intent, pose_variant_id, "
-            "is_sleeping, is_wet, is_intimate "
+            "is_sleeping, is_wet, is_intimate, decency_exempt "
             "FROM character_state WHERE character_name=?",
             (character_name,),
         ).fetchone()
@@ -267,6 +268,7 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
                 "is_sleeping": bool(row[9]),
                 "is_wet": bool(row[10]),
                 "is_intimate": bool(row[11]),
+                "decency_exempt": bool(row[12]),
             })
             try:
                 meta = json.loads(row[6] or "{}")
@@ -1179,7 +1181,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # auf "walking" setzen — man ist nicht gelaufen, also einfach leeren.
     if location_changed:
         profile["pose_intent"] = ""
-        profile.pop("pose_variant_id", None)
+        profile["pose_variant_id"] = None  # = None, nicht pop (sonst Save-Skip → alter Variant bleibt)
     # Intent.forbidden_slots zuruecksetzen bei echtem Location-Wechsel: die
     # absichtlich-leeren Slots aus dem Chat ("zieht sich aus") galten fuer
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
@@ -1287,7 +1289,7 @@ def set_pose_intent(character_name: str, pose: str) -> None:
     if variant:
         profile["pose_variant_id"] = variant["id"]
     elif not pose:
-        profile.pop("pose_variant_id", None)
+        profile["pose_variant_id"] = None  # = None, nicht pop (sonst Save-Skip → alter Variant bleibt)
     save_character_profile(character_name, profile)
 
 
@@ -3055,6 +3057,11 @@ def wake_from_offmap(character_name: str) -> bool:
         profile["current_room"] = return_room
     profile.pop("_offmap_return_location", None)
     profile.pop("_offmap_return_room", None)
+    # Pose beim Aufwachen zuruecksetzen — sonst zeigt das Expression-Bild
+    # weiter die Schlaf-/Alt-Pose (wake laeuft direkt ueber das Profil, also
+    # ohne das Pose-Reset von save_character_current_location).
+    profile["pose_intent"] = ""
+    profile["pose_variant_id"] = None  # = None, nicht pop: pop wird beim Save uebersprungen
     save_character_profile(character_name, profile)
     get_logger("character").info(
         "Offmap-Wake: %s -> zurueck nach %s/%s",
@@ -3185,6 +3192,12 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     profile = get_character_profile(character_name) or {}
     was = bool(profile.get("is_sleeping"))
     profile["is_sleeping"] = bool(value)
+    # Aufwachen (True->False): Schlaf-/Alt-Pose verwerfen, sonst bleibt das
+    # Expression-Bild auf "schlafend" haengen. (wake_from_offmap macht das
+    # ebenfalls, greift aber nur fuer off-map Schlaefer.)
+    if was and not value:
+        profile["pose_intent"] = ""
+        profile["pose_variant_id"] = None  # = None, nicht pop: pop wird beim Save uebersprungen
     save_character_profile(character_name, profile)
     # Schlaf-Längen-Messung für die Tages-Konsolidierung (plan-history-
     # consolidation-cleanup.md, Phase 2): Einschlafen merkt die Startzeit,
@@ -3213,15 +3226,26 @@ def set_is_intimate(character_name: str, value: bool) -> None:
     save_character_profile(character_name, profile)
 
 
+def set_decency_exempt(character_name: str, value: bool) -> None:
+    """Setzt decency_exempt — Decency-Override auf nude_ok (wie is_intimate,
+    aber als manuell/regelbasiert gesetzter Dauerzustand gedacht)."""
+    if not character_name:
+        return
+    profile = get_character_profile(character_name) or {}
+    profile["decency_exempt"] = bool(value)
+    save_character_profile(character_name, profile)
+
+
 def get_state_flags(character_name: str) -> Dict[str, bool]:
-    """Liefert alle drei State-Flags als Dict. Praktisch fuer Compliance-
+    """Liefert alle State-Flags als Dict. Praktisch fuer Compliance-
     Aufrufe und Prompt-Builder.
     """
     profile = get_character_profile(character_name) or {}
     return {
-        "is_sleeping": bool(profile.get("is_sleeping")),
-        "is_wet":      bool(profile.get("is_wet")),
-        "is_intimate": bool(profile.get("is_intimate")),
+        "is_sleeping":    bool(profile.get("is_sleeping")),
+        "is_wet":         bool(profile.get("is_wet")),
+        "is_intimate":    bool(profile.get("is_intimate")),
+        "decency_exempt": bool(profile.get("decency_exempt")),
     }
 
 

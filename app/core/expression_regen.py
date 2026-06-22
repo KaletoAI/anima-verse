@@ -880,7 +880,20 @@ def generate_expression_image(character_name: str,
     # Resolve prompts via PromptBuilder — separiert fuer korrekte Reihenfolge
     from app.core.prompt_builder import PromptBuilder
     expression_prompt = resolve_expression_prompt(mood) if mood else DEFAULT_EXPRESSION
-    pose_prompt = resolve_pose_prompt(activity) if activity else DEFAULT_POSE
+    # Pose-Preset ("The person is seated…") ist menschzentriert. Nur fuer
+    # menschartige Characters anwenden; Tiere bekommen den rohen Aktivitaets-
+    # Text als Pose ("sleeping", "lying down") — das Bildmodell setzt das auf
+    # ihre Anatomie um, ohne menschliche Pose-Schablone.
+    _humanoid = True
+    try:
+        from app.models.character_template import is_feature_enabled as _ife
+        _humanoid = _ife(character_name, "humanoid")
+    except Exception:
+        pass
+    if activity:
+        pose_prompt = resolve_pose_prompt(activity) if _humanoid else activity.strip()
+    else:
+        pose_prompt = DEFAULT_POSE if _humanoid else ""
 
     # Aktive Conditions (drunk, exhausted, ...) ersetzen den Expression-Prompt.
     # Activity-Pose bleibt unberuehrt.

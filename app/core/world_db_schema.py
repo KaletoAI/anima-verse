@@ -601,6 +601,10 @@ ALTER_MIGRATIONS = [
     ("character_state", "is_sleeping",  "INTEGER NOT NULL DEFAULT 0"),
     ("character_state", "is_wet",       "INTEGER NOT NULL DEFAULT 0"),
     ("character_state", "is_intimate",  "INTEGER NOT NULL DEFAULT 0"),
+    # Juni 2026: decency_exempt → Decency-Override auf nude_ok, unabhaengig
+    # von Anwesenheit/Fremden. Settbar via Toggle (UI), Rule set_flags und
+    # LLM-Skill — die manuelle/regelbasierte Entsprechung zu is_intimate.
+    ("character_state", "decency_exempt", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

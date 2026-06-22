@@ -59,14 +59,15 @@ def _get_room_and_location(character_name: str) -> tuple[Optional[Dict], Optiona
     return room, loc
 
 
-def _is_alone_in_room(character_name: str, room_id: str, location_id: str) -> bool:
-    """True wenn kein anderer Char gerade im selben Raum ist.
+def _present_other_characters(character_name: str, room_id: str,
+                              location_id: str) -> List[str]:
+    """Namen aller anderen Chars im selben Raum.
 
     Liest character_state direkt — ungefiltert (player-controlled zaehlt
     als anwesend, da fuer Decency relevant).
     """
     if not (character_name and room_id and location_id):
-        return True
+        return []
     try:
         from app.core.db import get_connection
         conn = get_connection()
@@ -76,10 +77,49 @@ def _is_alone_in_room(character_name: str, room_id: str, location_id: str) -> bo
             "AND character_name != ?",
             (location_id, room_id, character_name),
         ).fetchall()
-        return not bool(rows)
+        return [r[0] for r in rows if r and r[0]]
     except Exception as e:
-        logger.debug("_is_alone_in_room Fehler: %s", e)
-        return True  # konservativ: wenn unklar → privacy gewaehren
+        logger.debug("_present_other_characters Fehler: %s", e)
+        return []  # konservativ: wenn unklar → niemand → privacy gewaehren
+
+
+def _is_humanoid(character_name: str) -> bool:
+    """True wenn dieser Char menschartig ist (generisches Template-Feature
+    ``humanoid``). Steuert u.a. die Decency-Eskalation: nur menschartige
+    Anwesende zaehlen als "Zuschauer".
+
+    Tiere o.ae. (animal-Templates: humanoid=False) eskalieren private nicht
+    auf public. Default True (fail-open) fuer Templates ohne das Feature.
+    """
+    try:
+        from app.models.character_template import is_feature_enabled
+        return is_feature_enabled(character_name, "humanoid")
+    except Exception as e:
+        logger.debug("_is_humanoid Fehler: %s", e)
+        return True  # konservativ: im Zweifel als Person zaehlen (bedeckt)
+
+
+def _all_present_are_intimate(character_name: str,
+                              others: List[str]) -> bool:
+    """True wenn JEDE anwesende Person ein romantischer Partner ist (Paar).
+
+    Nutzt den generischen Relationship-``type`` (Core-System: friend/romantic/
+    rival/... — kein Template-Feld). Ein Paar darf vor einander privat bleiben;
+    sobald eine nicht-romantische Person dazukommt, greift wieder public.
+    Leere Liste = vacuously True (allein).
+    """
+    if not others:
+        return True
+    try:
+        from app.models.relationship import get_relationship
+        for other in others:
+            rel = get_relationship(character_name, other) or {}
+            if (rel.get("type") or "").strip().lower() != "romantic":
+                return False
+        return True
+    except Exception as e:
+        logger.debug("_all_present_are_intimate Fehler: %s", e)
+        return False  # konservativ: im Zweifel public (bedeckt)
 
 
 def resolve_decency(
@@ -90,18 +130,26 @@ def resolve_decency(
     """Ermittelt den effektiven Decency-Wert + Context-Info.
 
     Reihenfolge:
-        1. is_intimate=True → "nude_ok" (Activity-Override)
+        1. is_intimate=True ODER decency_exempt-Flag → "nude_ok" (Override)
         2. room.decency
         3. location.decency
         4. Default: "public"
 
-    private wird zu "public" eskaliert wenn nicht alone_in_room
-    UND nicht is_intimate.
+    private wird zu "public" eskaliert wenn eine nicht-romantische, fuer
+    menschartige (humanoid) Person im Raum ist.
 
     Returns: (decency, context-dict mit Debug-Info)
     """
     if is_intimate:
         return "nude_ok", {"reason": "is_intimate"}
+
+    # decency_exempt: manuell/per Rule/Skill gesetzter Dauer-Override (== nude_ok)
+    try:
+        from app.models.character import get_state_flags
+        if get_state_flags(character_name).get("decency_exempt"):
+            return "nude_ok", {"reason": "decency_exempt"}
+    except Exception:
+        pass
 
     room, loc = _get_room_and_location(character_name)
     raw_decency = ""
@@ -130,12 +178,21 @@ def resolve_decency(
     }
 
     if raw_decency == "private":
-        if not _is_alone_in_room(character_name, ctx["room_id"] or "",
-                                  ctx["location_id"] or ""):
-            ctx["escalated_to_public"] = True
-            return "public", ctx
-        ctx["alone"] = True
-        return "private", ctx
+        others = _present_other_characters(
+            character_name, ctx["room_id"] or "", ctx["location_id"] or "")
+        # Nur menschartige Personen sind "Zuschauer". Tiere o.ae. eskalieren
+        # private nicht.
+        relevant = [o for o in others if _is_humanoid(o)]
+        if not relevant:
+            ctx["alone"] = True
+            return "private", ctx
+        # Paar-Ausnahme: sind alle (zaehlenden) Anwesenden romantische Partner,
+        # bleibt der Raum privat (man zieht sich vor dem Partner nicht an).
+        if _all_present_are_intimate(character_name, relevant):
+            ctx["private_with_partner"] = True
+            return "private", ctx
+        ctx["escalated_to_public"] = True
+        return "public", ctx
 
     return raw_decency, ctx
 

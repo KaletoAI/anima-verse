@@ -451,34 +451,19 @@ set_current_agent = set_active_character
 def get_chat_partner() -> str:
     """Der Character mit dem der aktuelle User chattet (Chat-Agent).
 
-    Per-User via Middleware-ContextVar. Fallback fuer Background-Tasks:
-    Legacy _chat_partner.txt im Welt-Verzeichnis.
+    Per-User via Middleware-ContextVar. Ohne Request-Context (Background-Task)
+    gibt es keinen Chat-Partner — kein globaler Fallback, sonst wuerde ein
+    stale Wert als Gespraechspartner fuer fremde Charaktere durchsickern.
     """
     us = _current_user_settings()
     if us is not None:
         return us.get("chat_partner", "") or ""
-
-    # Fallback fuer Background / kein Request-Context
-    try:
-        cp = get_storage_dir() / "_chat_partner.txt"
-        if cp.exists():
-            return cp.read_text().strip()
-    except Exception:
-        pass
     return ""
 
 
 def set_chat_partner(character_name: str) -> None:
-    """Setzt den Chat-Partner fuer den aktuellen User."""
-    if _update_current_user_settings({"chat_partner": character_name}):
-        return
-
-    # Fallback: Legacy-File
-    try:
-        cp = get_storage_dir() / "_chat_partner.txt"
-        cp.write_text(character_name or "")
-    except Exception:
-        pass
+    """Setzt den Chat-Partner fuer den aktuellen User (per-User, DB-only)."""
+    _update_current_user_settings({"chat_partner": character_name})
 
 
 def is_player_controlled(character_name: str) -> bool:

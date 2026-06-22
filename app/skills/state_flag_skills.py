@@ -167,6 +167,35 @@ class IntimateSkill(_BaseFlagSkill):
         return f"{character_name} verlaesst den intimen Modus."
 
 
+# --- DecencyExempt --------------------------------------------------------
+
+class DecencyExemptSkill(_BaseFlagSkill):
+    """Setzt decency_exempt — Decency-Override auf nude_ok, unabhaengig von
+    Anwesenheit/Fremden. Zwei Verben: AllowExposed (active=True) /
+    RequireDecency (active=False). Manuelle/Skill-Entsprechung zu is_intimate,
+    aber als bewusster Dauerzustand (z.B. Exhibitionismus, FKK)."""
+
+    def __init__(self, config: Dict[str, Any], active: bool):
+        self._active = active
+        self.SKILL_ID = "allow_exposed" if active else "require_decency"
+        self.SKILL_META = "allow_exposed" if active else "require_decency"
+        super().__init__(config)
+
+    def _apply(self, character_name: str, ctx: Dict[str, Any]) -> str:
+        from app.models.character import set_decency_exempt
+        set_decency_exempt(character_name, self._active)
+        # Compliance reagiert sofort (nude_ok → kein Zwangs-Anziehen bzw. zurueck)
+        try:
+            from app.core.outfit_compliance import apply_outfit_compliance
+            apply_outfit_compliance(character_name)
+        except Exception as e:
+            logger.debug("compliance nach DecencyExempt-Toggle (active=%s): %s",
+                         self._active, e)
+        if self._active:
+            return f"{character_name} darf sich frei zeigen (Decency aufgehoben)."
+        return f"{character_name} haelt sich wieder an die Kleiderordnung."
+
+
 # --- SetPose --------------------------------------------------------------
 
 class SetPoseSkill(_BaseFlagSkill):

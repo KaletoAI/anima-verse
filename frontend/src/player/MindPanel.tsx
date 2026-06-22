@@ -4,13 +4,13 @@
  * eigene Sektionen (Navi ist darauf ausgelegt).
  *
  * Quellen (read-only):
- *   Heute        GET /characters/{avatar}/memory/today + GET /diary/me/{avatar}
- *   Tagebuch     GET /diary/me/{avatar}?date&type&limit&offset, /dates
- *   Erinnerungen GET /characters/{avatar}/memory/list?q&tier&source&related&sort
- * Einzige Schreib-Aktion: POST /diary/me/{avatar}/summary (async → Poll).
+ *   Heute        GET /characters/{character}/memory/today + GET /diary/me/{character}
+ *   Tagebuch     GET /diary/me/{character}?date&type&limit&offset, /dates
+ *   Erinnerungen GET /characters/{character}/memory/list?q&tier&source&related&sort
+ * Einzige Schreib-Aktion: POST /diary/me/{character}/summary (async → Poll).
  * Das user_id-Segment der Diary-Routen wird serverseitig ignoriert → "me".
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
 import { EmptyState } from './EmptyState'
@@ -32,7 +32,8 @@ interface TodayStatus {
   location: string; location_id?: string; room?: string; room_id?: string
   activity: string; mood: string
   since?: { activity?: string | null; location?: string | null; mood?: string | null }
-  last_warning?: string
+  // Server liefert ein Objekt (oder null) — NICHT als String rendern (React #31).
+  last_warning?: { type: string; value: string; ts?: string } | null
 }
 interface ActiveMemory {
   id: number; memory_type: string; ts: string; content: string
@@ -41,8 +42,10 @@ interface ActiveMemory {
 interface LanePoint { ts: string; value: string; count?: number }
 interface Lane { bucketed: boolean; points: LanePoint[] }
 interface Lanes24h { activity: Lane; location: Lane; mood: Lane; effects: Lane }
+interface StatItem { key: string; label: string; value: number }
 interface TodayResponse {
   character: string; now: string; status: TodayStatus
+  stats?: StatItem[]
   lanes_24h?: Lanes24h; active_memories: ActiveMemory[]
 }
 
@@ -257,11 +260,11 @@ function Lanes24h({ lanes, nowIso }: { lanes?: Lanes24h; nowIso: string }) {
 // ---------------------------------------------------------------------------
 // Sektion „Heute“ — Status + 24h-Lanes + aktive Erinnerungen + Zeitstrahl
 // ---------------------------------------------------------------------------
-function TodayView({ avatar, onOpenMemories }: { avatar: string; onOpenMemories?: () => void }) {
+function TodayView({ character, onOpenMemories }: { character: string; onOpenMemories?: () => void }) {
   const { t } = useI18n()
   const [today, setToday] = useState<TodayResponse | null>(null)
   const [diary, setDiary] = useState<DiaryResponse | null>(null)
-  const enc = encodeURIComponent(avatar)
+  const enc = encodeURIComponent(character)
 
   useEffect(() => {
     let alive = true
@@ -295,15 +298,34 @@ function TodayView({ avatar, onOpenMemories }: { avatar: string; onOpenMemories?
     </div>
   ) : null
 
+  const stats = today.stats || []
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px',
+      <div style={{ display: 'flex', gap: 16, padding: '6px 8px',
                     borderRadius: 8, background: 'rgba(255,255,255,0.05)' }}>
-        {statusRow('📍', [s.location, s.room].filter(Boolean).join(' · '), since.location)}
-        {statusRow('🎭', s.activity, since.activity)}
-        {statusRow('🙂', s.mood, since.mood)}
-        {s.last_warning ? (
-          <div style={{ fontSize: '0.78em', color: '#e0a356' }}>⚠ {s.last_warning}</div>
+        <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {statusRow('📍', [s.location, s.room].filter(Boolean).join(' · '), since.location)}
+          {statusRow('🎭', s.activity, since.activity)}
+          {statusRow('🙂', s.mood, since.mood)}
+          {s.last_warning ? (
+            <div style={{ fontSize: '0.78em', color: '#e0a356' }}>
+              ⚠ {s.last_warning.type === 'access_denied' ? t('Blocked') : t('Forced action')}: {s.last_warning.value}
+            </div>
+          ) : null}
+        </div>
+        {stats.length > 0 ? (
+          <div style={{ flex: '0 0 auto', display: 'grid', alignContent: 'start',
+                        gridTemplateColumns: 'auto auto', columnGap: 8, rowGap: 2,
+                        fontSize: '0.78em', borderLeft: '1px solid rgba(255,255,255,0.12)',
+                        paddingLeft: 10 }}>
+            {stats.map((st) => (
+              <Fragment key={st.key}>
+                <span style={{ opacity: 0.6, whiteSpace: 'nowrap' }}>{st.label}</span>
+                <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{st.value}</span>
+              </Fragment>
+            ))}
+          </div>
         ) : null}
       </div>
 
@@ -355,9 +377,9 @@ function TodayView({ avatar, onOpenMemories }: { avatar: string; onOpenMemories?
 // ---------------------------------------------------------------------------
 // Sektion „Tagebuch“ — Datum/Typ-Filter, Suche, Zeitstrahl, Tagesrückblick
 // ---------------------------------------------------------------------------
-function DiaryView({ avatar }: { avatar: string }) {
+function DiaryView({ character }: { character: string }) {
   const { t } = useI18n()
-  const enc = encodeURIComponent(avatar)
+  const enc = encodeURIComponent(character)
   const LIMIT = 100
   const [dates, setDates] = useState<string[]>([])
   const [date, setDate] = useState<string>('')        // '' = heute (Server-Default)
@@ -479,9 +501,9 @@ function DiaryView({ avatar }: { avatar: string }) {
 // ---------------------------------------------------------------------------
 // Sektion „Erinnerungen“ — Facetten-Suche über memory/list
 // ---------------------------------------------------------------------------
-function MemoriesView({ avatar, initialRelated = '' }: { avatar: string; initialRelated?: string }) {
+function MemoriesView({ character, initialRelated = '' }: { character: string; initialRelated?: string }) {
   const { t } = useI18n()
-  const enc = encodeURIComponent(avatar)
+  const enc = encodeURIComponent(character)
   const LIMIT = 50
   const [q, setQ] = useState('')
   const [qDebounced, setQDebounced] = useState('')
@@ -591,11 +613,11 @@ function MemoriesView({ avatar, initialRelated = '' }: { avatar: string; initial
 // ---------------------------------------------------------------------------
 // Sektion „Beziehungen“ — Sentiment/Tension/Interaktionen je Partner
 // ---------------------------------------------------------------------------
-function BondsView({ avatar, onOpenMemories }: {
-  avatar: string; onOpenMemories?: (partner: string) => void
+function BondsView({ character, onOpenMemories }: {
+  character: string; onOpenMemories?: (partner: string) => void
 }) {
   const { t } = useI18n()
-  const enc = encodeURIComponent(avatar)
+  const enc = encodeURIComponent(character)
   const [items, setItems] = useState<BondItem[] | null>(null)
   const [open, setOpen] = useState<string>('')   // Partner mit ausgeklappter Historie
 
@@ -611,12 +633,13 @@ function BondsView({ avatar, onOpenMemories }: {
   if (items.length === 0) return <EmptyState small icon="journal" title={t('No relationships')} />
 
   return (
-    <div style={{ height: '100%', minHeight: 0, overflow: 'auto',
-                  display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ height: '100%', minHeight: 0, overflowY: 'auto', overflowX: 'hidden',
+                  display: 'grid', gap: 6, alignContent: 'start',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
       {items.map((b) => {
         const expanded = open === b.partner
         return (
-          <div key={b.partner} style={{ padding: '5px 7px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
+          <div key={b.partner} style={{ minWidth: 0, padding: '5px 7px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', cursor: 'pointer' }}
                  onClick={() => setOpen(expanded ? '' : b.partner)}>
               <span style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden',
@@ -633,8 +656,8 @@ function BondsView({ avatar, onOpenMemories }: {
             </div>
             {/* Gerichtete Zuneigung als Balken (alte-UI-Darstellung) */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 5 }}>
-              <SentBar v={b.sentiment_self_to_other} label={`${avatar} → ${b.partner}`} />
-              <SentBar v={b.sentiment_other_to_self} label={`${b.partner} → ${avatar}`} />
+              <SentBar v={b.sentiment_self_to_other} label={`${character} → ${b.partner}`} />
+              <SentBar v={b.sentiment_other_to_self} label={`${b.partner} → ${character}`} />
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'baseline',
                           fontSize: '0.74em', opacity: 0.6, marginTop: 4 }}>
@@ -674,9 +697,9 @@ function BondsView({ avatar, onOpenMemories }: {
 // ---------------------------------------------------------------------------
 // Sektion „Verlauf“ — daily/weekly/monthly-Summaries, Gesamt, Evolution-Diffs
 // ---------------------------------------------------------------------------
-function HistoryView({ avatar }: { avatar: string }) {
+function HistoryView({ character }: { character: string }) {
   const { t } = useI18n()
-  const enc = encodeURIComponent(avatar)
+  const enc = encodeURIComponent(character)
   const LIMIT = 30
   const [kind, setKind] = useState<HistoryKind>('daily')
   const [resp, setResp] = useState<any>(null)
@@ -798,19 +821,21 @@ function HistoryView({ avatar }: { avatar: string }) {
 // ---------------------------------------------------------------------------
 type SectionId = 'today' | 'diary' | 'memories' | 'bonds' | 'history'
 
-export function MindPanel({ avatar }: { avatar: string }) {
+export function MindPanel({ character, alwaysLabels = false }: { character: string; alwaysLabels?: boolean }) {
   const { t } = useI18n()
   const [section, setSection] = useState<SectionId>('today')
-  const [narrow, setNarrow] = useState(false)
+  const [narrowRaw, setNarrowRaw] = useState(false)
+  const narrow = narrowRaw && !alwaysLabels
   const rootRef = useRef<HTMLDivElement | null>(null)
 
-  // Schmal-Erkennung: unter 340px Panel-Breite kollabiert die Navi auf Icons.
+  // Schmal-Erkennung: unter 340px Panel-Breite kollabiert die Navi auf Icons
+  // (im Game-Admin via alwaysLabels deaktiviert — dort sind Labels gewuenscht).
   useEffect(() => {
     const el = rootRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver((ents) => {
       const w = ents[0]?.contentRect?.width || 0
-      setNarrow(w > 0 && w < 340)
+      setNarrowRaw(w > 0 && w < 340)
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -828,8 +853,8 @@ export function MindPanel({ avatar }: { avatar: string }) {
     { id: 'history' as SectionId, icon: '🕰️', label: t('History') },
   ]), [t])
 
-  if (!avatar) {
-    return <EmptyState icon="journal" title={t('No active avatar')} />
+  if (!character) {
+    return <EmptyState icon="journal" title={t('No active character')} />
   }
 
   return (
@@ -855,11 +880,11 @@ export function MindPanel({ avatar }: { avatar: string }) {
         })}
       </div>
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: section === 'today' ? 'auto' : 'hidden' }}>
-        {section === 'today' && <TodayView avatar={avatar} onOpenMemories={() => openMemories('')} />}
-        {section === 'diary' && <DiaryView avatar={avatar} />}
-        {section === 'memories' && <MemoriesView avatar={avatar} initialRelated={memRelated} />}
-        {section === 'bonds' && <BondsView avatar={avatar} onOpenMemories={openMemories} />}
-        {section === 'history' && <HistoryView avatar={avatar} />}
+        {section === 'today' && <TodayView character={character} onOpenMemories={() => openMemories('')} />}
+        {section === 'diary' && <DiaryView character={character} />}
+        {section === 'memories' && <MemoriesView character={character} initialRelated={memRelated} />}
+        {section === 'bonds' && <BondsView character={character} onOpenMemories={openMemories} />}
+        {section === 'history' && <HistoryView character={character} />}
       </div>
     </div>
   )

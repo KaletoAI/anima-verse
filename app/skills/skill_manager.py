@@ -24,7 +24,7 @@ from .video_generation_skill import VideoGenerationSkill
 from .markdown_writer_skill import MarkdownWriterSkill
 from .retrospect_skill import RetrospectSkill
 from .state_flag_skills import (
-    SleepWakeSkill, WetSkill, IntimateSkill, SetPoseSkill,
+    SleepWakeSkill, WetSkill, IntimateSkill, DecencyExemptSkill, SetPoseSkill,
 )
 
 
@@ -77,6 +77,8 @@ class SkillManager:
         'dry_off': _Verb(WetSkill, wet=False),
         'start_intimate': _Verb(IntimateSkill, active=True),
         'end_intimate': _Verb(IntimateSkill, active=False),
+        'allow_exposed': _Verb(DecencyExemptSkill, active=True),
+        'require_decency': _Verb(DecencyExemptSkill, active=False),
         'set_pose': SetPoseSkill,
     }
 

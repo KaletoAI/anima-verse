@@ -867,7 +867,7 @@ export function PlayerApp() {
     <div key="journal" className="player-panel" style={{ zIndex: zOf('journal') }} onMouseDownCapture={() => bringToFront('journal')}>
       <div className="player-panel-head">{headIcon('journal')}{t('Mind')}{headerControls('journal', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'hidden' }}>
-        <MindPanel avatar={data?.avatar || ''} />
+        <MindPanel character={data?.avatar || ''} />
       </div>
     </div>
   )

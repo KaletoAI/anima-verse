@@ -4,6 +4,7 @@
   "template_type": "character",
   "base": "base-character",
   "features": {
+    "humanoid": false,
     "story_enabled": true,
     "storydev_enabled": true,
     "memory_enabled": true,

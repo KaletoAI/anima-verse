@@ -3,7 +3,9 @@
   "label": "Character Base",
   "template_type": "character",
   "selectable": false,
-  "features": {},
+  "features": {
+    "humanoid": true
+  },
   "tabs": [
     {
       "id": "general",

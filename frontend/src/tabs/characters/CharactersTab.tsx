@@ -708,7 +708,9 @@ export function CharactersTab() {
                       >
                         <option value="">— {t('none')} —</option>
                         <option value={OFFMAP_SLEEP}>{t('Off-map (sleeps away)')}</option>
-                        {locations.map((l) => (
+                        {/* Nur echte Wohn-Orte — Durchgangs-/Terrain-Locations
+                            (passable) sind keine Heimat/Schlafplätze. */}
+                        {locations.filter((l) => !l.passable).map((l) => (
                           <option key={l.id} value={l.id}>
                             {l.name || l.id}
                           </option>
