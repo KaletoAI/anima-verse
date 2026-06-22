@@ -227,7 +227,7 @@ class ImageGenerationSkill(BaseSkill):
                 continue
 
             try:
-                if api_type in ("mammouth", "civitai"):
+                if api_type in ("openai_chat", "civitai"):
                     api_key = os.environ.get(f"{prefix}API_KEY", "")
                     model = os.environ.get(f"{prefix}MODEL", "")
                     backend = backend_class(
@@ -1011,9 +1011,23 @@ class ImageGenerationSkill(BaseSkill):
         if workflow is not None and failed.api_type == "comfyui":
             candidates = self.list_available_backends(
                 character_name=character_name, workflow=workflow)
+            candidates = [b for b in candidates if b.name not in exclude]
+            if not candidates:
+                # Match lockern: keine workflow-kompatiblen Backends mehr uebrig
+                # (z.B. Workflow auf ein defektes Backend gepinnt). Statt
+                # abzubrechen auf IRGENDEIN verfuegbares ComfyUI ausweichen —
+                # das Modell wird in _prepare_for_backend pro Backend neu
+                # aufgeloest, der Workflow laeuft also auch dort.
+                relaxed = self.list_available_backends(
+                    character_name=character_name, comfyui_only=True)
+                candidates = [b for b in relaxed if b.name not in exclude]
+                if candidates:
+                    logger.info(
+                        "Fallback: keine workflow-kompatiblen Backends mehr — "
+                        "weiche auf anderes ComfyUI aus: %s", candidates[0].name)
         else:
             candidates = self.list_available_backends(character_name=character_name)
-        candidates = [b for b in candidates if b.name not in exclude]
+            candidates = [b for b in candidates if b.name not in exclude]
         return candidates[0] if candidates else None
 
     def run_with_fallback(

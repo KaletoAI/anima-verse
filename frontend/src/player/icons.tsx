@@ -194,7 +194,7 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
     </>
   ),
-  // Cloud-Image-Backends (CivitAI/Together/Mammouth) — Wolke (lucide "cloud")
+  // Cloud-Image-Backends (CivitAI/Together/OpenAI-kompatibel) — Wolke (lucide "cloud")
   cloud: <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />,
   // Automatic1111 — Regler (lucide "sliders")
   sliders: (

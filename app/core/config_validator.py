@@ -164,8 +164,9 @@ def _check_image_backends(config: dict) -> list:
         if not api_url:
             issues.append(_err("image_generation", f"Backend '{name}': API URL fehlt"))
 
-        # Cloud backends need API key
-        if api_type in ("mammouth", "civitai", "together") and not api_key:
+        # Echte Cloud-Backends brauchen einen API Key. openai_chat/openai_diffusion
+        # sind generisch (koennen auf LocalAI/vLLM ohne Key zeigen) -> kein Zwang.
+        if api_type in ("civitai", "together") and not api_key:
             issues.append(_err("image_generation", f"Backend '{name}': API Key fehlt (Cloud-Backend '{api_type}')"))
 
     # Hinweis: LLM-Provider-GPUs vom Typ 'comfyui' sind veraltet — die Queue

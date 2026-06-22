@@ -75,15 +75,15 @@ export interface ChannelStatus {
   healthy: boolean
   busy: boolean
   kind: 'llm' | 'image'
-  /** Roher Backend-/Provider-Typ (comfyui/civitai/together/mammouth/a1111/…)
-   *  fuer typ-spezifische Symbole im Panel. */
+  /** Roher Backend-/Provider-Typ (comfyui/civitai/together/openai_chat/
+   *  openai_diffusion/a1111/…) fuer typ-spezifische Symbole im Panel. */
   type: string
   running: number
   waiting: number
 }
 
 // Alle Image-Backend-Typen (kind='image'). Alles andere = LLM-Provider.
-const IMAGE_BACKEND_TYPES = new Set(['comfyui', 'civitai', 'together', 'mammouth', 'a1111'])
+const IMAGE_BACKEND_TYPES = new Set(['comfyui', 'civitai', 'together', 'openai_chat', 'openai_diffusion', 'a1111'])
 
 // Nicht-LLM-Tasks, die ebenfalls über Provider-Channels laufen (ComfyUI/TTS) —
 // sie gehören ins getrackte active_tasks-Panel, NICHT zu den Chat-LLM-Calls.

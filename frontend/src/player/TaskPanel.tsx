@@ -190,12 +190,13 @@ export function TaskPanel() {
             const icon: IconName = ch.kind === 'llm' ? 'brain'
               : ch.type === 'comfyui' ? 'cpu'
               : ch.type === 'a1111' ? 'sliders'
-              : 'cloud'  // civitai / together / mammouth (Cloud-APIs)
+              : 'cloud'  // civitai / together / openai_chat / openai_diffusion (Cloud/OpenAI-APIs)
             const typeName = ch.kind === 'llm' ? t('LLM provider')
               : ch.type === 'comfyui' ? 'ComfyUI'
               : ch.type === 'civitai' ? 'CivitAI'
               : ch.type === 'together' ? 'Together.ai'
-              : ch.type === 'mammouth' ? 'Mammouth'
+              : ch.type === 'openai_chat' ? 'OpenAI Chat'
+              : ch.type === 'openai_diffusion' ? 'OpenAI Diffusion'
               : ch.type === 'a1111' ? 'Automatic1111'
               : t('Image backend')
             return (

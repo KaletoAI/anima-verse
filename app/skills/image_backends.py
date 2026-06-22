@@ -456,16 +456,19 @@ class A1111Backend(ImageBackend):
         return images
 
 
-class MammouthBackend(ImageBackend):
+class OpenAIChatImageBackend(ImageBackend):
     """
-    Backend fuer Mammouth AI (OpenAI-kompatible API mit Bild-Modellen).
+    Generisches Bild-Backend fuer OpenAI-Chat-kompatible Bild-Output-Modelle
+    (z.B. Mammouth AI, Gemini-Image, GPT-Image-via-Chat). Das Bild kommt aus der
+    Chat-Antwort, nicht aus einem Diffusion-Endpoint — fuer Diffusion-Modelle
+    (SD/Flux/Z-Image) ist OpenAIDiffusionBackend (api_type "openai_diffusion") da.
     API: POST {url}/chat/completions
     Response: choices[0].message.images[].image_url.url (data:image/png;base64,...)
     """
 
     def __init__(self, name: str, api_url: str, cost: float, env_prefix: str,
                  api_key: str = "", model: str = "gemini-2.5-flash-image"):
-        super().__init__(name, api_url, cost, api_type="mammouth", env_prefix=env_prefix)
+        super().__init__(name, api_url, cost, api_type="openai_chat", env_prefix=env_prefix)
 
         self.api_key = api_key or os.environ.get(f"{env_prefix}API_KEY", "")
         self.model = model or os.environ.get(f"{env_prefix}MODEL", "gemini-2.5-flash-image")
@@ -2245,11 +2248,164 @@ class TogetherBackend(ImageBackend):
             return []
 
 
+class OpenAIDiffusionBackend(TogetherBackend):
+    """Generischer OpenAI-kompatibler Diffusion-Endpoint (POST {url}/v1/images/generations).
+
+    Funktioniert mit LocalAI / vLLM / jedem Server, der die OpenAI-Images-API
+    spricht. Unterschiede zum Together.ai-spezifischen TogetherBackend:
+      - **api_key optional** (LocalAI braucht keinen Bearer-Token).
+      - **ref_images-Support** (Flux Kontext / Referenzbild-Conditioning): lokale
+        Referenzdateien werden als base64-data-URI mitgeschickt, http(s)-URLs
+        unveraendert durchgereicht. Quelle ist params['reference_images'] (vom
+        Skill aufgeloeste Slots — dieselbe Quelle wie bei ComfyUI).
+      - schickt **keine** Together-Eigenheiten (disable_safety_checker) und nutzt
+        ``size`` ("WxH") statt separater width/height-Felder.
+
+    Erbt _post_with_retry / _rate_limit_wait von TogetherBackend (gleicher Endpoint).
+    """
+
+    def __init__(self, name: str, api_url: str, cost: float, env_prefix: str,
+                 api_key: str = "", model: str = ""):
+        super().__init__(name, api_url, cost, env_prefix, api_key=api_key, model=model)
+        self.api_type = "openai_diffusion"
+
+    def _headers(self) -> Dict[str, str]:
+        # api_key optional — Authorization nur senden wenn gesetzt.
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def check_availability(self) -> bool:
+        # Kein api_key noetig — nur Erreichbarkeit + konfiguriertes Modell pruefen.
+        if not self.model:
+            logger.warning(f"{self.name}: Kein MODEL konfiguriert")
+            self.available = False
+            return False
+        try:
+            resp = requests.get(f"{self.api_url}/v1/models",
+                                headers=self._headers(), timeout=10)
+            if resp.status_code == 200:
+                try:
+                    body = resp.json()
+                    items = body.get("data", body) if isinstance(body, dict) else body
+                    ids = [m.get("id") for m in items
+                           if isinstance(m, dict) and m.get("id")]
+                    if ids:
+                        self.available_models = sorted(ids)
+                except (ValueError, KeyError, AttributeError):
+                    pass
+                self._mark_available(f"OpenAI-Diffusion, Modell: {self.model}")
+                self.available = True
+                return True
+            self._log_unreachable(f"HTTP {resp.status_code}")
+            self.available = False
+            self._was_available = False
+            return False
+        except requests.ConnectionError:
+            self._log_unreachable("ConnectionError")
+            self.available = False
+            self._was_available = False
+            return False
+        except Exception as e:
+            logger.error(f"{self.name} Fehler: {e}")
+            self.available = False
+            return False
+
+    def _collect_ref_images(self, params: Dict[str, Any]) -> List[str]:
+        """ref_images-Liste fuers Conditioning aus params['reference_images'].
+
+        Dict-Werte (slot_title -> lokaler Pfad): http(s)-URLs werden
+        durchgereicht, lokale Dateien als base64-data-URI eingebettet (LocalAI
+        auf anderem Host kann lokale Pfade nicht lesen).
+        """
+        refs = params.get("reference_images") or {}
+        out: List[str] = []
+        for _title, path in refs.items():
+            if not path:
+                continue
+            sp = str(path)
+            if sp.startswith(("http://", "https://", "data:")):
+                out.append(sp)
+                continue
+            try:
+                with open(sp, "rb") as f:
+                    raw = f.read()
+                low = sp.lower()
+                mime = ("image/jpeg" if low.endswith((".jpg", ".jpeg"))
+                        else "image/webp" if low.endswith(".webp")
+                        else "image/png")
+                out.append(f"data:{mime};base64,{base64.b64encode(raw).decode()}")
+            except Exception as e:
+                logger.warning(f"{self.name}: Referenzbild '{sp}' nicht lesbar: {e}")
+        return out
+
+    def _generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:
+        model = params.get("model") or self.model
+        width = params.get("width") or self.width
+        height = params.get("height") or self.height
+        steps = params.get("num_inference_steps") or self.num_inference_steps
+        width = round(width / 8) * 8 or 1024
+        height = round(height / 8) * 8 or 1024
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "size": f"{width}x{height}",
+            "response_format": "b64_json",
+        }
+        # ref_images bewusst NICHT optional — Conditioning soll nicht bei einem
+        # 400 stillschweigend entfernt werden.
+        ref_images = self._collect_ref_images(params)
+        if ref_images:
+            payload["ref_images"] = ref_images
+
+        # Optionale Parameter (bei 400 einzeln entfernbar). LocalAI nutzt "step".
+        optional: Dict[str, Any] = {}
+        if steps:
+            optional["step"] = steps
+        if negative_prompt:
+            optional["negative_prompt"] = negative_prompt
+        seed = params.get("seed")
+        if seed and seed > 0:
+            optional["seed"] = seed
+        payload.update(optional)
+
+        logger.info(f"{self.name}: Starte Generierung (Modell {model}, {width}x{height}, "
+                    f"{len(ref_images)} Ref-Bild(er))")
+        try:
+            resp = self._post_with_retry(payload, optional)
+            data = resp.json()
+            images: List[bytes] = []
+            for item in data.get("data", []):
+                b64 = item.get("b64_json", "")
+                if b64:
+                    images.append(base64.b64decode(b64))
+                    continue
+                url = item.get("url", "")
+                if url:
+                    img_resp = requests.get(url, timeout=60)
+                    if img_resp.status_code == 200:
+                        images.append(img_resp.content)
+            if not images:
+                logger.error(f"{self.name}: Keine Bilder in Response")
+            return images
+        except requests.Timeout:
+            logger.error(f"{self.name}: Timeout nach {self.timeout}s")
+            return []
+        except RuntimeError:
+            return []
+        except Exception as e:
+            logger.error(f"{self.name}: Fehler: {e}")
+            return []
+
+
 # Registry der verfuegbaren Backend-Typen
 BACKEND_REGISTRY = {
     "a1111": A1111Backend,
-    "mammouth": MammouthBackend,
+    "openai_chat": OpenAIChatImageBackend,
     "comfyui": ComfyUIBackend,
     "civitai": CivitAIBackend,
     "together": TogetherBackend,
+    "openai_diffusion": OpenAIDiffusionBackend,
 }

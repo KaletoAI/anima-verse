@@ -1071,11 +1071,12 @@ async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)
     clip: list = []
     vae: list = []
     try:
-        if api_type == "together":
+        if api_type in ("together", "openai_diffusion"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
+            # api_key optional fuer openai_diffusion (LocalAI ohne Auth)
+            _hdrs = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"{base}/models",
-                                        headers={"Authorization": f"Bearer {api_key}"})
+                resp = await client.get(f"{base}/models", headers=_hdrs)
                 if resp.status_code == 200:
                     data = resp.json()
                     items = data.get("data", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
@@ -1093,7 +1094,7 @@ async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)
             # konfigurierte AIR URN als einzige Option zurueckgeben.
             if cur_model:
                 models = [cur_model]
-        elif api_type == "mammouth":
+        elif api_type == "openai_chat":
             if cur_model:
                 models = [cur_model]
         elif api_type == "comfyui":
