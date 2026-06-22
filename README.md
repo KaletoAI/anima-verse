@@ -204,8 +204,11 @@ git clone https://github.com/Kaix76/anima-verse.git
 cd anima-verse
 python3 -m venv .venv
 
-# Linux/Mac:
+# Linux/Mac (bash/zsh):
 source .venv/bin/activate
+
+# fish shell:
+source .venv/bin/activate.fish
 
 # Windows:
 .venv\Scripts\activate
@@ -241,7 +244,8 @@ See [`docker/README.md`](docker/README.md) for Docker deployment instructions.
 git pull origin main
 
 # if, local installation (docker see docker directory)
-source .venv/bin/activate
+source .venv/bin/activate        # bash/zsh
+# source .venv/bin/activate.fish # fish shell
 pip install -e .
 ```
 
