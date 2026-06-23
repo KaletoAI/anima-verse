@@ -1084,10 +1084,22 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
     else:
         filtered = list(all_loras)
 
+    # LoRA-Library-Eintraege fuer das Backend, das fuer diesen Character zur
+    # Gen-Zeit aufgeloest wird (Endpoint-gefiltert) — so bietet die Auswahl auch
+    # bei Cloud-/OpenAI-Backends (ohne ComfyUI-Scan) passende LoRAs, und nie die
+    # eines fremden Backends.
+    try:
+        from app.core.config import get_lora_library_names
+        eff = imagegen._select_backend_for_agent(character_name) if character_name else None
+        lib_names = get_lora_library_names(eff.name if eff else None)
+    except Exception:
+        lib_names = []
+    merged = list(dict.fromkeys(filtered + lib_names))
+
     return {
         "workflow": active_wf_name,
         "filter": flt,
-        "loras": filtered,
+        "loras": merged,
     }
 
 

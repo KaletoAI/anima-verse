@@ -357,6 +357,36 @@ def get_lora_trigger_words(lora_names) -> list:
     return out
 
 
+def get_lora_library_names(backend_name=None) -> list:
+    """LoRA-Namen aus der per-Welt-LoRA-Library (``image_generation.lora_triggers``
+    = [{lora, word, endpoint}, …]), gefiltert nach Endpoint:
+
+    - Eintraege mit ``endpoint == backend_name`` ODER leerem ``endpoint`` (= gilt
+      fuer alle Backends) werden aufgenommen.
+    - ``backend_name=None`` -> alle Namen (kein Filter).
+
+    Reihenfolge wie im Repo, Duplikate entfernt. Damit ziehen LoRA-Dropdowns die
+    manuell gepflegten LoRAs (z.B. fuer Cloud-/OpenAI-Backends ohne LoRA-API) und
+    bekommen nicht die LoRAs eines fremden Backends/Modells angeboten.
+    """
+    triggers = get("image_generation.lora_triggers", []) or []
+    if not isinstance(triggers, list):
+        return []
+    out, seen = [], set()
+    for e in triggers:
+        if not isinstance(e, dict):
+            continue
+        lora = (e.get("lora") or "").strip()
+        if not lora or lora in seen:
+            continue
+        ep = (e.get("endpoint") or "").strip()
+        if backend_name is not None and ep and ep != backend_name:
+            continue
+        seen.add(lora)
+        out.append(lora)
+    return out
+
+
 def resolve_use_case_style(use_case: str, image_family: str = "",
                            workflow_file: str = "", backend_model: str = "",
                            backend_family: str = "") -> dict:

@@ -2340,6 +2340,35 @@ class OpenAIDiffusionBackend(TogetherBackend):
                 logger.warning(f"{self.name}: Referenzbild '{sp}' nicht lesbar: {e}")
         return out
 
+    def _with_lora_syntax(self, prompt: str, params: Dict[str, Any]) -> str:
+        """Haengt ausgewaehlte LoRAs als ``<lora:name:gewicht>`` an den Prompt an
+        (LocalAI/sd.cpp-Syntax). Quelle ist params['lora_inputs'] (vom Skill aus
+        der per-Welt-LoRA-Library + per-Character-Overrides aufgeloest). Cloud-
+        Backends haben kein lora-Node — die Referenz MUSS im Prompt stehen. Keine
+        LoRAs -> Prompt unveraendert; bereits vorhandene <lora:..> nicht doppeln."""
+        tags = []
+        for l in (params.get("lora_inputs") or params.get("loras") or []):
+            if not isinstance(l, dict):
+                continue
+            name = (l.get("name") or "").strip()
+            if not name or name == "None":
+                continue
+            base = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            for ext in (".safetensors", ".ckpt", ".pt"):
+                if base.lower().endswith(ext):
+                    base = base[:-len(ext)]
+                    break
+            if f"<lora:{base}" in prompt:
+                continue
+            try:
+                strength = float(l.get("strength", 1.0))
+            except (TypeError, ValueError):
+                strength = 1.0
+            tags.append(f"<lora:{base}:{strength:g}>")
+        if tags:
+            return (prompt.rstrip() + " " + " ".join(tags)).strip()
+        return prompt
+
     def _generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:
         model = params.get("model") or self.model
         width = params.get("width") or self.width
@@ -2347,6 +2376,10 @@ class OpenAIDiffusionBackend(TogetherBackend):
         steps = params.get("num_inference_steps") or self.num_inference_steps
         width = round(width / 8) * 8 or 1024
         height = round(height / 8) * 8 or 1024
+
+        # Ausgewaehlte LoRAs als <lora:name:gewicht> in den Prompt (die Basis-
+        # generate() ergaenzt nur die Trigger-Woerter, nicht die LoRA-Referenz).
+        prompt = self._with_lora_syntax(prompt, params)
 
         payload: Dict[str, Any] = {
             "model": model,
