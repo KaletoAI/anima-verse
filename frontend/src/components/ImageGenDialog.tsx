@@ -27,6 +27,7 @@ interface ImagegenOption {
   default_model?: string
   filter?: string
   models?: string[] // for non-comfy backends with their own model list
+  lora_options?: string[] // LoRA names for backend options (from the LoRA Library, endpoint-filtered)
   ref_slot_count?: number // number of reference-image slots (0 = none)
   compatible_backends?: string[] // ComfyUI instances this workflow runs on (empty = all)
 }
@@ -380,6 +381,10 @@ export function ImageGenDialog({
 
   const filteredLoras = useMemo(() => {
     if (!currentOption || !currentOption.has_loras) return []
+    // Backend-Optionen (z.B. openai_diffusion): LoRA-Namen direkt aus der
+    // LoRA-Library (endpoint-gefiltert, vom Server geliefert). Workflows:
+    // ComfyUI-Scan nach Workflow-Name/Filter.
+    if (currentOption.type === 'backend') return currentOption.lora_options || []
     return filterByWorkflowName(allLoras, currentOption.name, currentOption.filter || '')
   }, [allLoras, currentOption])
 
