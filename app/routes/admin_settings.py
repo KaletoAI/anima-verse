@@ -2194,8 +2194,14 @@ function copyUseCaseDefault(p, uc, fam, fld) {
 function renderLoraTriggersEditor(path) {
     const items = getVal(path) || [];
     let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
-             + 'Pro LoRA ein Aktivierungs-Wort. Sobald ein Bild dieses LoRA nutzt, wird das Wort '
-             + 'automatisch dem Prompt vorangestellt — fuer alle Generierungen (Map, Character, …).</p>';
+             + 'Zentrale LoRA-Liste der Welt. Pro LoRA ein Aktivierungs-Wort: sobald ein Bild dieses '
+             + 'LoRA nutzt, wird das Wort automatisch dem Prompt vorangestellt (Map, Character, …). '
+             + 'Alle LoRA-Dropdowns in der UI ziehen ihre Vorschlaege aus dieser Liste.</p>';
+    html += '<p class="hint" style="opacity:.7;margin-bottom:12px">'
+             + '<b>„Load LoRAs"</b> liest die LoRAs nur von <b>ComfyUI</b>-Backends aus dem Modell-Verzeichnis. '
+             + 'Andere Endpoint-Typen (OpenAI-kompatibel wie LocalAI, Together, CivitAI) bieten <b>keine</b> '
+             + 'LoRA-Abfrage — solche LoRAs hier <b>manuell</b> eintragen. Angewandt werden sie ueber die '
+             + 'Prompt-Syntax <code>&lt;lora:Name:Gewicht&gt;</code> bzw. das Aktivierungs-Wort.</p>';
     html += '<div style="margin-bottom:12px">'
           + '<button class="btn btn-sm" onclick="addLoraTrigger(\\'' + path + '\\')">+ Add</button>'
           + ' <button class="btn btn-sm" onclick="loadLoraTriggerOptions(\\'' + path + '\\')">Load LoRAs</button></div>';
@@ -2206,9 +2212,18 @@ function renderLoraTriggersEditor(path) {
         const it = items[i] || {};
         const ip = path + '[' + i + ']';
         html += '<div class="lora-row" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">';
-        // Eigene dunkle Such-Combobox statt nativem <select> (das rendert die
-        // Optionsliste OS-seitig weiss und ist nicht dunkel stylebar). Freitext
-        // erlaubt: Namen notieren, waehrend das LoRA noch laedt.
+        // 1. Spalte: Endpoint-Zuordnung (Backend-Name) — leer = fuer alle Backends.
+        // Verhindert, dass eine LoRA beim falschen Backend (anderes Modell) erscheint.
+        html += '<select title="Endpoint (Backend) — leer = alle" style="flex:2;min-width:0;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px" onchange="setVal(\\'' + ip + '.endpoint\\', this.value)">';
+        html += '<option value="">— Alle Endpoints —</option>';
+        for (const be of ((CONFIG.image_generation && CONFIG.image_generation.backends) || [])) {
+            const bn = be.name || '';
+            if (!bn) continue;
+            html += '<option value="' + esc(bn) + '"' + (bn === (it.endpoint || '') ? ' selected' : '') + '>' + esc(bn) + '</option>';
+        }
+        html += '</select>';
+        // 2. Spalte: LoRA-Name. Eigene dunkle Such-Combobox statt nativem <select>
+        // (das rendert die Optionsliste OS-seitig weiss). Freitext erlaubt.
         html += '<div class="lt-combo" style="flex:3;min-width:0">';
         html += '<input type="text" class="lt-lora-input" autocomplete="off" value="' + esc(it.lora || '') + '" '
               + 'placeholder="LoRA-Name — tippen zum Suchen oder frei notieren" style="width:100%" '
@@ -2218,8 +2233,10 @@ function renderLoraTriggersEditor(path) {
               + 'onblur="ltBlur(this)">';
         html += '<div class="lt-dd"></div>';
         html += '</div>';
+        // 3. Spalte: Aktivierungs-Wort.
         html += '<input type="text" value="' + esc(it.word || '') + '" placeholder="Aktivierungs-Wort" '
               + 'style="flex:2;min-width:0" onchange="setVal(\\'' + ip + '.word\\', this.value)">';
+        html += '<button class="btn btn-sm" title="Kopieren (z.B. fuer anderen Endpoint)" onclick="copyLoraTrigger(\\'' + path + '\\', ' + i + ')">⧉</button>';
         html += '<button class="btn btn-sm btn-danger" title="Loeschen" onclick="removeItem(\\'' + ip + '\\')">✕</button>';
         html += '</div>';
     }
@@ -2230,7 +2247,16 @@ function renderLoraTriggersEditor(path) {
 
 function addLoraTrigger(path) {
     const arr = _ensureContainer(path, 'array');
-    arr.push({ lora: '', word: '' });
+    arr.push({ lora: '', word: '', endpoint: '' });
+    renderSection(ACTIVE_SECTION);
+}
+
+// Dupliziert einen LoRA-Eintrag (gleiche LoRA + Wort) direkt darunter — danach
+// nur den Endpoint umstellen, um dieselbe LoRA fuer ein anderes Backend zu nutzen.
+function copyLoraTrigger(path, i) {
+    const arr = _ensureContainer(path, 'array');
+    const src = arr[i] || {};
+    arr.splice(i + 1, 0, { lora: src.lora || '', word: src.word || '', endpoint: src.endpoint || '' });
     renderSection(ACTIVE_SECTION);
 }
 

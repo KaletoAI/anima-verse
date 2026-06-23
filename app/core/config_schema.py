@@ -369,7 +369,7 @@ SECTIONS = {
                 "use_cases_editor": True,
             },
             "lora_triggers": {
-                "label": "LoRA Trigger Words",
+                "label": "LoRA Library",
                 "lora_triggers_editor": True,
             },
             "backends": {
