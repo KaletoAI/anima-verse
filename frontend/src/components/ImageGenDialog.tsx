@@ -497,10 +497,12 @@ export function ImageGenDialog({
                   <label className="ga-imagegen-label">{t('LoRAs')}</label>
                   <div className="ga-imagegen-loras">
                     {loraSlots.map((slot, i) => {
-                      const choices =
+                      const rest =
                         slot.name && slot.name !== 'None' && !filteredLoras.includes(slot.name)
                           ? [slot.name, ...filteredLoras]
                           : filteredLoras
+                      // 'None' immer als erste Option (= Default + Abwahl moeglich).
+                      const choices = ['None', ...rest.filter((l) => l !== 'None')]
                       return (
                         <div key={i} className="ga-imagegen-lora-row">
                           <span className="ga-imagegen-lora-label">LoRA {i + 1}</span>
