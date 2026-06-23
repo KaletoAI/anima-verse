@@ -11,6 +11,7 @@ Usage:
     vram = pm.poll_all_vram()
 """
 import os
+import threading
 from typing import Any, Dict, List, Optional
 
 from .provider import GpuConfig, Provider
@@ -31,6 +32,10 @@ class ProviderManager:
         self.gpu_queues: Dict[str, ProviderQueue] = {}
         # Synthetic Provider objects backing per-backend ComfyUI/A1111 channels
         self._backend_providers: Dict[str, Provider] = {}
+        # GPU-Gruppen-Gates: keyed by GpuConfig.label. Channels (LLM-Provider +
+        # Image-Backends) mit gleichem label teilen ein Semaphore(1) → nur EIN
+        # Call gleichzeitig auf der physischen GPU. Leeres label = kein Gate.
+        self._gpu_gates: Dict[str, threading.Semaphore] = {}
         self._round_robin: int = 0  # Tiebreaker for equal-load channel selection
 
     def load_providers(self) -> None:
@@ -139,6 +144,11 @@ class ProviderManager:
                         chat_pause_enabled=has_llm,
                         gpu_indices=[g.index])
                     self.channels[channel_key] = pq
+                    # GPU-Gruppen-Gate: gleicher label (auch ueber einen
+                    # Image-Backend hinweg) → gemeinsames Semaphore(1).
+                    _lbl = (g.label or "").strip()
+                    if _lbl:
+                        pq._gpu_gate = self._gpu_gates.setdefault(_lbl, threading.Semaphore(1))
                     # Backwards-compat: first LLM GPU → queues[name], first comfyui GPU → gpu_queues[name]
                     if has_llm and name not in self.queues:
                         self.queues[name] = pq
@@ -274,6 +284,12 @@ class ProviderManager:
                 chat_pause_enabled=False,
                 gpu_indices=[g.index for g in gpu_configs])
             self.channels[channel_key] = pq
+            # GPU-Gruppen-Gate: hat eine der Backend-GPUs ein label, teilt sich
+            # dieses Backend das Semaphore(1) mit allen Channels (LLM + Image)
+            # desselben labels → Bild + Chat serialisieren auf der GPU.
+            _lbl = next(((gc.label or "").strip() for gc in gpu_configs if (gc.label or "").strip()), "")
+            if _lbl:
+                pq._gpu_gate = self._gpu_gates.setdefault(_lbl, threading.Semaphore(1))
             logger.info("  -> Backend-Channel %s: %s (%s, concurrent=%d)",
                         channel_key, api_url, api_type, max_concurrent)
 

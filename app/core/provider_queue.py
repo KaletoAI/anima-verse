@@ -81,6 +81,15 @@ class ProviderQueue:
         self._running = False
         self._workers: List[threading.Thread] = []
         self._semaphore = threading.Semaphore(effective_concurrent)
+        # Optionales GPU-Gruppen-Gate: ein gemeinsames Semaphore ueber ALLE
+        # Channels mit gleichem GpuConfig.label (Image + LLM auf derselben
+        # physischen GPU). Wird vom ProviderManager gesetzt; None = kein Gate
+        # (Default-/Bestandsverhalten). Sowohl der Worker (pro Task) als auch
+        # Streaming-Chat (register_chat_active) akquirieren es → nur EIN Call
+        # gleichzeitig auf der GPU. _holds_gpu_gate: haelt dieser Channel das
+        # Gate aktuell wegen aktiver Chats?
+        self._gpu_gate: Optional[threading.Semaphore] = None
+        self._holds_gpu_gate = False
         self._current_tasks: List[LLMTask] = []
         # Multiple concurrent chats supported (keyed by task_id)
         self._chat_tasks: Dict[str, LLMTask] = {}
@@ -253,6 +262,21 @@ class ProviderQueue:
                 logger.warning("[%s] Task laeuft noch nach 300s, Chat startet trotzdem",
                                self._queue_name)
 
+        # GPU-Gruppen-Gate: warte, bis die GPU frei ist (z.B. ein laufendes
+        # Bild-Gen auf demselben label), und halte es fuer die Chat-Dauer. Nur die
+        # ERSTE aktive Chat-Registrierung akquiriert; weitere Chats teilen es.
+        if self._gpu_gate is not None:
+            _claim = False
+            with self._lock:
+                if not self._holds_gpu_gate:
+                    self._holds_gpu_gate = True
+                    _claim = True
+            if _claim and not self._gpu_gate.acquire(timeout=300):
+                logger.warning("[%s] GPU-Gate-Timeout (300s) — Chat startet trotzdem",
+                               self._queue_name)
+                with self._lock:
+                    self._holds_gpu_gate = False
+
         active_count = len(self._chat_tasks)
         logger.info("[%s] Chat aktiv: %s (%s) — Queue pausiert (%d aktive Chats)",
                     self._queue_name, agent_name, task.task_id, active_count)
@@ -272,6 +296,19 @@ class ProviderQueue:
             task.current_iteration = iteration
             task.max_iterations = max_iterations
 
+    def _release_gpu_gate_if_held(self) -> None:
+        """Gibt das GPU-Gruppen-Gate frei, falls dieser Channel es wegen aktiver
+        Chats haelt. Idempotent (Doppel-Release-sicher ueber Flag unter Lock)."""
+        if self._gpu_gate is None:
+            return
+        _release = False
+        with self._lock:
+            if self._holds_gpu_gate:
+                self._holds_gpu_gate = False
+                _release = True
+        if _release:
+            self._gpu_gate.release()
+
     def register_chat_done(self, task_id: str) -> None:
         """Chat/story finished. Resumes queue only when ALL chats are done."""
         with self._lock:
@@ -290,6 +327,7 @@ class ProviderQueue:
         # Resume queue only when NO more active chats on this provider
         if remaining == 0:
             self._chat_active.set()
+            self._release_gpu_gate_if_held()  # GPU-Gate freigeben (letzter Chat weg)
             logger.info("[%s] Chat beendet: %s (%s) — Queue fortgesetzt (keine aktiven Chats)",
                         self._queue_name, agent, task_id)
         else:
@@ -417,6 +455,7 @@ class ProviderQueue:
                           self._queue_name, agent, tid, self._STALE_CHAT_TIMEOUT)
         if cleaned and remaining == 0:
             self._chat_active.set()
+            self._release_gpu_gate_if_held()  # Stale-Chat weg → GPU-Gate freigeben
             logger.info("[%s] Queue fortgesetzt (alle stale Chats bereinigt)", self._queue_name)
 
     def _worker_loop(self) -> None:
@@ -460,6 +499,13 @@ class ProviderQueue:
                 self._semaphore.release()
                 self._queue.task_done()
                 continue
+
+            # GPU-Gruppen-Gate: serialisiert die GPU-Arbeit ueber alle Channels
+            # mit gleichem GPU-label. Blockiert hier, falls ein anderer Channel
+            # (z.B. Streaming-Chat oder ein anderes Backend derselben GPU) gerade
+            # rechnet. None = kein Gate (Default).
+            if self._gpu_gate is not None:
+                self._gpu_gate.acquire()
 
             with self._lock:
                 self._current_tasks.append(task)
@@ -531,6 +577,8 @@ class ProviderQueue:
                                 self._pending_tasks.append(task)
                                 self._futures.pop(task.task_id, None)
                             self._queue.put((task.priority, seq, task))
+                            if self._gpu_gate is not None:
+                                self._gpu_gate.release()
                             self._semaphore.release()
                             self._queue.task_done()
                             continue  # Skip normal cleanup — task is re-queued
@@ -650,6 +698,10 @@ class ProviderQueue:
 
             # Unblock caller
             task._done_event.set()
+
+            # Release GPU-Gate (vor dem Semaphore, umgekehrte Akquise-Reihenfolge)
+            if self._gpu_gate is not None:
+                self._gpu_gate.release()
 
             # Release semaphore
             self._semaphore.release()

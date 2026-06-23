@@ -105,7 +105,7 @@ SECTIONS = {
                 "type": "array",
                 "label": "GPUs",
                 "item_fields": {
-                    "label": {"type": "str", "label": "Label", "description": "Anzeigename der GPU (z.B. 'RTX 4090 #1')"},
+                    "label": {"type": "str", "label": "Label", "description": "Anzeigename der GPU (z.B. 'RTX 4090 #1'). WICHTIG: gleiches Label hier UND an einem Image-Backend = dieselbe physische GPU → Chat + Bild serialisieren (nur einer gleichzeitig). Leer = keine Serialisierung."},
                     "vram_gb": {"type": "int", "label": "VRAM (GB)", "min": 0, "max": 512},
                     "device": {"type": "str", "label": "Device", "default": "0", "description": "Beszel GPU-Key (optional, fuer Monitoring)"},
                     "types": {
@@ -434,9 +434,9 @@ SECTIONS = {
                     "gpus": {
                         "type": "array",
                         "label": "GPUs (optional)",
-                        "applicable_for": ["comfyui", "a1111"],
+                        "applicable_for": ["comfyui", "a1111", "openai_diffusion", "openai_chat", "together", "civitai"],
                         "item_fields": {
-                            "label": {"type": "str", "label": "Label", "description": "Anzeigename, z.B. 'RTX 3090'"},
+                            "label": {"type": "str", "label": "Label", "description": "Anzeigename, z.B. 'RTX 3090'. WICHTIG: gleiches Label auf einem LLM-Provider UND einem Image-Backend = dieselbe physische GPU → die Calls (Chat + Bild) serialisieren (nur einer gleichzeitig). Leer = keine Serialisierung."},
                             "vram_gb": {"type": "int", "label": "VRAM (GB)", "min": 0, "max": 512},
                             "device": {"type": "str", "label": "Device", "default": "0", "description": "Beszel GPU-Key (Fallback wenn match_name nicht greift)"},
                             "match_name": {"type": "str", "label": "Match Name", "description": "Substring im Beszel-GPU-Namen — stabil ueber Reboots"},
