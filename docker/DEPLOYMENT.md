@@ -54,10 +54,16 @@ and reclaims VRAM before serving the next request. In the LocalAI settings
 | Memory Reclaimer | **enabled** |
 
 With this, concurrent chat + image requests serialize on LocalAI's side (the
-second waits while the first model is reclaimed) instead of OOM-ing. This is the
-correct layer for single-GPU serialization — Anima Verse's per-backend
-`max_concurrent` only limits parallelism *within* one backend, not across the
-chat provider and the image backend (they are separate queue channels).
+second waits while the first model is reclaimed) instead of OOM-ing.
+
+**Optional — serialize on the Anima Verse side too.** Per-backend `max_concurrent`
+only limits parallelism *within* one backend. To make the chat provider and the
+image backend share **one** GPU slot (so Anima Verse never even dispatches a chat
+and an image gen at the same time), give them a **shared GPU label**: in
+`/admin/settings`, add a GPU entry with the same **Label** (e.g. `localai-gpu`) to
+both the LLM provider *and* each LocalAI image backend. Same label = same physical
+GPU = only one call (chat or image) runs at a time, the rest queue. Leave the
+label empty to keep the default per-channel behavior.
 
 ---
 
