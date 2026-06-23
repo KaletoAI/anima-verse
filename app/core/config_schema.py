@@ -393,7 +393,7 @@ SECTIONS = {
                     },
                     "api_url": {"type": "str", "label": "API URL"},
                     "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Erforderlich fuer Cloud-Backends (civitai, together); optional fuer openai_chat/openai_diffusion (z.B. LocalAI/vLLM ohne Auth)", "applicable_for": ["openai_chat", "openai_diffusion", "civitai", "together"]},
-                    "model": {"type": "str", "label": "Model", "description": "Modell-ID oder URN (civitai: urn:air:sdxl:checkpoint:...)", "applicable_for": ["openai_chat", "openai_diffusion", "civitai", "together"]},
+                    "model": {"type": "imagegen_model", "label": "Model", "description": "Modell-ID oder URN (civitai: urn:air:sdxl:checkpoint:...). Freitext + 'Load Models' holt die Liste vom Backend (/v1/models) als Vorschlaege.", "applicable_for": ["openai_chat", "openai_diffusion", "civitai", "together"]},
                     "cost": {"type": "int", "label": "Kosten", "default": 0, "min": 0, "description": "Relative Kosten (0 = lokal/kostenlos, hoeher = teurer)"},
                     "width": {
                         "type": "int",

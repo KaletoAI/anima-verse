@@ -1051,27 +1051,34 @@ async def comfyui_models_all(user=Depends(require_admin)):
 
 
 @router.get("/settings/imagegen-backends/{backend_name}/models")
-async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)):
+async def imagegen_backend_models(backend_name: str,
+                                  api_type: str = "", api_url: str = "", api_key: str = "",
+                                  user=Depends(require_admin)):
     """Liefert Modellliste fuer ein Image-Generation-Backend (Cloud).
 
-    - Together: holt Live-Liste via /v1/models (image-Modelle filtern)
-    - CivitAI/Mammouth: aktuell nur das konfigurierte backend.model
+    - Together / openai_diffusion / openai_chat: Live-Liste via /v1/models
+    - CivitAI: aktuell nur das konfigurierte backend.model (kein API-Listing)
     - ComfyUI: leitet auf comfyui-models um
+
+    Optionale Query-Params (api_type/api_url/api_key) ueberschreiben die
+    gespeicherte Config — so kann die UI die Modelle direkt nach URL-Eingabe
+    laden, ohne vorher zu speichern.
     """
     img_gen = config.get("image_generation", {}) or {}
     backends = img_gen.get("backends", []) or []
-    b = next((x for x in backends if x.get("name") == backend_name), None)
-    if not b:
-        raise HTTPException(404, f"Backend '{backend_name}' nicht gefunden")
-    api_type = (b.get("api_type") or "").lower()
-    api_key = b.get("api_key", "")
-    api_url = (b.get("api_url") or "").rstrip("/")
+    b = next((x for x in backends if x.get("name") == backend_name), None) or {}
+    # Live-Formularwerte haben Vorrang, Fallback = gespeicherte Config.
+    api_type = (api_type or b.get("api_type") or "").lower()
+    api_key = api_key if api_key else b.get("api_key", "")
+    api_url = (api_url or b.get("api_url") or "").rstrip("/")
     cur_model = b.get("model", "")
+    if not api_url:
+        return {"backend": backend_name, "models": [], "clip": [], "vae": [], "error": "Keine API URL"}
     models: list = []
     clip: list = []
     vae: list = []
     try:
-        if api_type in ("together", "openai_diffusion"):
+        if api_type in ("together", "openai_diffusion", "openai_chat"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
             # api_key optional fuer openai_diffusion (LocalAI ohne Auth)
             _hdrs = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -1092,9 +1099,6 @@ async def imagegen_backend_models(backend_name: str, user=Depends(require_admin)
         elif api_type == "civitai":
             # CivitAI hat keine sinnvolle Modell-Liste via API — nur das
             # konfigurierte AIR URN als einzige Option zurueckgeben.
-            if cur_model:
-                models = [cur_model]
-        elif api_type == "openai_chat":
             if cur_model:
                 models = [cur_model]
         elif api_type == "comfyui":
@@ -2944,6 +2948,8 @@ function renderInput(f, val, path) {
             return renderImagegenBackendSelect(val, path);
         case 'imagegen_model_select':
             return renderImagegenModelSelect(val, path);
+        case 'imagegen_model':
+            return renderImagegenModelCombo(val, path);
         case 'imagegen_target_select':
             return renderImagegenTargetSelect(val, path);
         case 'comfyui_clip_select':
@@ -3162,6 +3168,43 @@ function renderImagegenModelSelect(val, path) {
     html += '</select>';
     html += ' <button class="btn btn-sm" onclick="loadImagegenBackendModels(\\'' + path + '\\', \\'' + esc(backendName) + '\\')">Load Models</button>';
     return html;
+}
+
+// Editierbares Modell-Combo fuer Image-Backends: Freitext (CivitAI-URN, manuelles
+// Tippen) + Datalist-Vorschlaege ueber "Load Models" (holt /v1/models vom Backend).
+function renderImagegenModelCombo(val, path) {
+    // base = das Backend-Item (z.B. image_generation.backends.2); name/api_* werden
+    // zur Klick-Zeit aus den Geschwister-Feldern gelesen, damit "URL eintragen ->
+    // Load Models" auch OHNE vorheriges Speichern funktioniert.
+    const parts = path.split('.');
+    const base = parts.slice(0, -1).join('.');
+    const dlId = 'dl-' + path.replace(/[^a-zA-Z0-9]/g, '-');
+    let html = '<input type="text" list="' + dlId + '" id="f-' + path + '" value="' + esc(val) + '" placeholder="z.B. flux.2-klein-4b" onchange="setVal(\\'' + path + '\\', this.value)">';
+    html += '<datalist id="' + dlId + '"></datalist>';
+    html += ' <button class="btn btn-sm" type="button" onclick="loadImagegenModelCombo(\\'' + path + '\\', \\'' + base + '\\')">Load Models</button>';
+    return html;
+}
+
+async function loadImagegenModelCombo(path, base) {
+    const name = getVal(base + '.name') || '';
+    const apiType = getVal(base + '.api_type') || '';
+    const apiUrl = getVal(base + '.api_url') || '';
+    const apiKey = getVal(base + '.api_key') || '';
+    const dlId = 'dl-' + path.replace(/[^a-zA-Z0-9]/g, '-');
+    const dl = document.getElementById(dlId);
+    if (!dl) return;
+    if (!apiUrl) { toast('Bitte zuerst die API URL eintragen', 'error'); return; }
+    try {
+        const qs = new URLSearchParams({ api_type: apiType, api_url: apiUrl, api_key: apiKey }).toString();
+        const resp = await fetch('/admin/settings/imagegen-backends/' + encodeURIComponent(name || '_new') + '/models?' + qs, { credentials: 'same-origin' });
+        const data = await resp.json();
+        if (data.error) { toast('Load Models: ' + data.error, 'error'); return; }
+        const list = data.models || [];
+        dl.innerHTML = list.map(m => '<option value="' + esc(m) + '"></option>').join('');
+        toast(list.length ? (list.length + ' Modelle geladen') : 'Keine Modelle gefunden', list.length ? 'success' : 'error');
+    } catch (e) {
+        toast('Load Models fehlgeschlagen: ' + e.message, 'error');
+    }
 }
 
 function updateMultiBackend(path) {
