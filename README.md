@@ -301,118 +301,64 @@ start.
 
 ## Getting started with a new world
 
-Walk-through for setting up a fresh world from zero.
+The full step-by-step first-world walk-through (create a world, configure providers, build
+characters, the map, rules, chat mode, …) has moved to
+**[docs/getting-started-new-world.md](docs/getting-started-new-world.md)**.
 
-> If a step is unclear, see [`docs/images/getting-started/`](docs/images/getting-started/) for a
-> few annotated screenshots. They are not linked inline, since UIs evolve faster than screenshots.
+The part most people get stuck on first is a **working LLM (and image) backend**. Two setups that
+work out of the box — plug either into step 3 of the walk-through:
 
-1. **Start the server with a brand-new world name.** Pick any name that does not yet exist under
-   `worlds/`:
+### Option A — LocalAI (self-hosted, OpenAI-compatible)
 
-   ```bash
-   ./start.sh --world myworld
-   ```
+[LocalAI](https://localai.io) serves chat, vision and image models behind one OpenAI-compatible
+endpoint, so it slots straight into Anima Verse as a normal `openai` provider. What worked for us:
 
-   On first start you'll see a warning that no `config.json` was found — the server boots anyway;
-   everything is configured through the admin UI.
+- **One LLM provider** `LocalAI`, type `openai`, `api_base = http://<host>:8080/v1`, no API key. Then
+  split the routing across two models (LLM Routing):
+  - a **chat / RP** model (e.g. `rocinante-12b-v1.1`) for `chat_stream`, `story_stream`,
+    `group_chat_stream`, `talk_to`, `send_message`, `thought`;
+  - a small **vision-capable** model (e.g. `qwen3-vl-4b`) for everything else — `extraction`,
+    `intent`, `expression_map`, `image_prompt`, `image_analysis`, `image_recognition`, summaries,
+    `translation`. One model that can both reason over tools *and* see images keeps the
+    utility + vision tasks on a single endpoint.
+- **Embeddings: built-in.** Set the embedding backend to *Internal* — Anima Verse runs a small ONNX
+  model on CPU, so LocalAI needs no embeddings model.
+- **Image generation:** add Image Backends of type **`openai_diffusion`** (LocalAI's
+  `/v1/images/generations`). `API URL = http://<host>:8080` (no `/v1`), API key empty, `Model` e.g.
+  `Z-Image-Turbo` or `flux.2-klein-4b`; set `image_family` to `natural` (Flux) or `keywords`
+  (Z-Image/SD). LoRAs go into the prompt as `<lora:name:weight>` and are managed per-endpoint in the
+  **LoRA Library** ("Load LoRAs" only scans ComfyUI; for LocalAI enter them by hand).
+- **Mind the model's resolution ceiling.** Small distilled diffusion models are picky —
+  `flux.2-klein-4b` only rendered small square sizes here (512² / 768²; 1024² and portrait sizes
+  returned HTTP 500). Set the use-case / backend dimensions to a size the model actually serves.
+- **Single GPU?** Chat and image share the card. Enable LocalAI's **watchdog** (Idle 2m, Busy Check
+  2m, Memory Reclaimer) so it reclaims VRAM between requests instead of OOM-ing. To also stop Anima
+  Verse from dispatching a chat and an image gen at the same time, give the LLM provider's GPU and
+  the image backend's GPU the **same Label** — same label = same physical GPU = one call at a time.
 
-2. **Log in as the bootstrap admin.** Open `http://<host>:8000/` and log in with the credentials
-   printed in the startup log:
+See **[docker/DEPLOYMENT.md](docker/DEPLOYMENT.md)** for a full reproducible LocalAI-backed
+deployment (incl. the watchdog and a Proxmox-LXC note).
 
-   ```
-   username: admin
-   password: admin1234
-   ```
+### Option B — Infermatic (cloud, the cheapest plan is enough)
 
-   Change this immediately under `/admin/users` — the bootstrap credentials are intentionally
-   trivial and not safe for any real deployment.
+[Infermatic](https://infermatic.ai) is an OpenAI-compatible cloud with a flat subscription — the
+**cheapest plan already runs Anima Verse comfortably**. Add one provider and route different jobs to
+different fine-tunes:
 
-3. **Configure server-side settings** at `http://<host>:8000/admin/settings`, top to bottom. The
-   minimum before anything works:
+- **Provider** `Infermatic`, type `openai`, `api_base = https://api.totalgpt.ai`, API key from your
+  Infermatic account.
+- **LLM Routing** (a working starting point — swap models for whatever your plan exposes):
 
-   - **Server** — set a real `JWT Secret`.
-   - **LLM Providers** — at least one provider (Ollama, OpenAI-compatible, Anthropic) with `name`,
-     `type`, `api_base` and (for local providers) GPU/VRAM info.
-   - **LLM Models (Simple)** — pick a provider + model per job category (chat / tools / helper /
-     vision / embedding). This fills the advanced routing automatically. Embedding can run built-in
-     ("Internal") with no external endpoint.
-   - *(optional)* **Image Backends**, **TTS**, **Beszel** — only for the corresponding features.
+  | Tasks | Model | temp |
+  |---|---|---|
+  | `chat_stream`, `story_stream`, `group_chat_stream` | `TheDrummer-Valkyrie-49B-v1` | 0.7 |
+  | `social_reaction`, `intent`, `talk_to`, `send_message`, `outfit_generation`, `secret_generation`, `random_event`, `classify_activity`, `expression_map`, `intent_commitment` | `Sao10K-72B-Qwen2.5-Kunou-v1-FP8-Dynamic` | 0.2 |
+  | `extraction`, `thought`, `thought_greeting`, `memory_consolidation`, `consolidation`, `relationship_summary`, `image_prompt`, `image_comment`, `translation` | `TheDrummer-Rocinante-12B-v1.1` | 0.5 |
+  | `instagram_caption`, `image_recognition`, `image_analysis` *(vision)* | `Llama-3.2-11B-Vision-Instruct` | 0.3 |
 
-   API keys, the JWT secret and passwords are written to a separate **`secrets.json`** next to
-   `config.json` (gitignored), so the demo world can ship with an empty `config.json` and each user
-   fills in their own keys.
-
-4. **Create your first character.** Character creation lives in the game UI, not in
-   `/admin/settings`. Go to the **Game-Admin** (`/game-admin`, or the **🎮 Game Admin** button in
-   `/play`) → **Characters → `+ New`**:
-
-   1. Pick a template — e.g. **Human (Roleplay)** for a typical chat partner. Others:
-      `Human (Default)` (pure NPC), `Animal (Default)`, `Human (Roleplay NSFW)`, plus anything you
-      add under `shared/templates/character/`.
-   2. Enter a name (e.g. `Damian Demo`).
-   3. The template-driven editor opens on the new character — fill in appearance, personality
-      (soul), outfits, etc. The character is auto-added to your access list.
-
-5. **Fill in the character profile.** Work through the editor tabs top to bottom; a few notes:
-
-   - The **Soul** holds the character's inner life (personality, beliefs, goals, roleplay rules) as
-     markdown under `worlds/<world>/characters/<Name>/soul/`.
-   - **Appearance** has two prompts: a full-body `character_appearance` (gallery / outfits) and a
-     head-only **Face Prompt** (profile image). The token preview shows the resolved string.
-   - **Language** is per-character — it controls what language the model responds in.
-
-6. **Set a profile image.** Either **generate** one (with an image backend configured and the Face
-   Prompt filled, use the camera action — it renders a portrait from the Face Prompt) or **upload**
-   one in the character's gallery and mark it as the profile image. The profile image becomes the
-   reference for later generations so the face stays consistent.
-
-7. **Take over the character as your avatar.** Once it has a profile image and a filled profile,
-   pick it in the active-character selector. From then on that character is *you*: their location,
-   mood and outfit follow your decisions and they no longer act autonomously. Only templates with
-   the `playable_avatar` flag (`human-roleplay`, `human-roleplay-nsfw`, `animal-default`) can be
-   controlled; `human-default` is NPC-only.
-
-8. **Create at least one more character to talk to.** A world with a single character means
-   chatting with yourself. Add a second roleplay character (also playable) or a Human (Default) NPC.
-
-9. **Build the world map** in the Game-Admin:
-
-   1. **`+ New Location`** — name + short description, save.
-   2. Select it and add one or more **rooms** (a location without rooms exists on the map but can't
-      host activities).
-   3. Add **activities** per room (free text, e.g. "drinking coffee", "people-watching") — picked
-      by the LLM via the `set_activity` skill.
-   4. Optionally fill day / night / map **image prompts** — backgrounds render asynchronously in
-      the background; you can keep editing.
-
-10. **Position locations on the world map.** Drag the location cards in the map view — positions set
-    `grid_x` / `grid_y` and are saved on drop. Characters move between adjacent cells, so positions
-    are not just cosmetic.
-
-11. **(Optional) Gate a room behind an item.** In the Game-Admin:
-
-    1. **Items → `+ New`** — create the gating item (e.g. a key with id `key_room_506`) and assign
-       it to the character(s) who may enter.
-    2. **Rules → `+ New`** — Scope `All characters`, Subject `Location / Room`, Action `Enter`,
-       pick the gated room, Condition `NOT has_item:key_room_506`.
-    3. Save. The set-location skill, map movement and any LLM-driven location change all consult
-       these rules.
-
-12. **Pick the right chat mode.** The character's `chat_mode` controls how skills are invoked and
-    **must match your chat model's tool-calling ability**:
-
-    - **`single`** — the chat LLM emits tool calls inline. Needs a model with reliable structured
-      tool output (Qwen/Llama-3.x-Instruct, GPT-4-class, Claude, …). One call, fast.
-    - **`rp_first`** *(recommended for RP fine-tunes)* — the chat LLM answers in prose, then a
-      separate Tool LLM translates it into skill calls. Pairs an RP fine-tune with a tool-capable
-      helper behind it.
-
-    **Symptom of the wrong mode:** the character agrees ("I'll come over") but `current_location`
-    never changes. Switch to `rp_first` and route a tool-capable model to the Tools tasks.
-
-From here you have a working setup: chat, watch characters move on the map, take over an avatar, run
-a group chat. The remaining features (Instagram feed, story arcs, scheduler, knowledge extraction, …)
-are configured in their respective admin sections — see [Features](#features).
+  RP fine-tunes (Valkyrie / Rocinante) work best in **`rp_first`** chat mode, with the tool-capable
+  model behind the Tool LLM. Image generation still needs a separate backend (ComfyUI or a hosted
+  image API) — Infermatic covers the LLM side.
 
 ---
 
@@ -453,6 +399,10 @@ The task queue can also be inspected **without the server** via `python queue_cl
 
 ## Documentation
 
+- **[`docs/getting-started-new-world.md`](docs/getting-started-new-world.md)** — full step-by-step
+  walk-through for setting up a fresh world from zero.
+- **[`docker/DEPLOYMENT.md`](docker/DEPLOYMENT.md)** — reproducible Docker deployment against a
+  self-hosted LocalAI backend (single-GPU watchdog, GPU-label serialization, Proxmox-LXC note).
 - **`docs/`** — technical reference (config defaults, LLM task mapping/templates, movement model,
   plugins).
 - **`development_instructions/`** — living plan/design docs for individual subsystems.
