@@ -117,6 +117,22 @@ _DEFAULT_COMFYUI_WORKFLOWS = {
         "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and photorealistic style with no visible seams, border or frame",
         "loras": [{"file": "", "strength": 1} for _ in range(4)],
     },
+    "Flux2 Inpaint": {
+        "name": "Flux2 Inpaint",
+        "image_family": "natural",
+        "filter": "Flux2 Inpaint*",
+        "category": "inpaint",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/text2img_workflow_flux-qwen_inpaint_api.json",
+        "model": "flux-2-klein-9b-Q8_0.gguf",
+        "clip": "Qwen3-8B-Q8_0.gguf",
+        "clip_type": "flux2",
+        "vae": "flux2-vae.safetensors",
+        "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
+        # skill (Backend) bewusst LEER: pro Welt zuweisen (sonst deaktiviert).
+        "loras": [{"file": "", "strength": 1} for _ in range(4)],
+    },
     "SD15": {
         "name": "SD15",
         "image_family": "keywords",
