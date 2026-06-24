@@ -459,7 +459,7 @@ SECTIONS = {
                 "fields": {
                     "name": {"type": "str", "label": "Anzeigename", "required": True},
                     "filter": {"type": "str", "label": "Filter Pattern", "description": "Glob-Pattern zum Filtern von Modellen/LoRAs (* als Wildcard, case-insensitive)"},
-                    "skill": {"type": "comfyui_backend_select", "label": "Backend(s)", "multi": True, "description": "ComfyUI Backend(s) die diesen Workflow ausfuehren koennen — mehrere moeglich (leer = alle)"},
+                    "skill": {"type": "comfyui_backend_select", "label": "Backend(s)", "multi": True, "description": "ComfyUI Backend(s) die diesen Workflow ausfuehren koennen — mehrere moeglich. LEER = deaktiviert (der Workflow wird nirgends angeboten/genutzt)."},
                     "workflow_file": {"type": "str", "label": "Workflow Datei", "required": True},
                     "model": {"type": "comfyui_model_select", "label": "Model"},
                     "clip": {"type": "comfyui_clip_select", "label": "CLIP Model"},

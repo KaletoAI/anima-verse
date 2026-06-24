@@ -2730,9 +2730,10 @@ async def generate_time_variant(
                         and (wf.category or "") != "inpaint"
                         and (wf.ref_slot_count or 0) >= 1):
                     compat = wf.compatible_backends or []
+                    # skill/compat LEER = deaktiviert -> kein Backend zugeordnet.
                     candidates = [b for b in img_skill.backends if b.available and b.instance_enabled
                                   and b.api_type == "comfyui"
-                                  and (not compat or b.name in compat)]
+                                  and b.name in compat]
                     _picked = img_skill.pick_lowest_cost(
                         candidates, rotation_key=f"time_variant:{wf.name}")
                     if _picked:

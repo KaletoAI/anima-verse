@@ -762,7 +762,8 @@ async def imagegen_targets(user=Depends(require_admin)):
                 continue
             if b.api_type != "comfyui":
                 continue
-            if compat and b.name not in compat:
+            # skill/compat LEER = deaktiviert -> kein Backend zugeordnet.
+            if b.name not in compat:
                 continue
             avail = True
             break
@@ -3029,7 +3030,7 @@ function renderModelSelect(val, path) {
 
 // Aktiviert? Ein ComfyUI-Workflow gilt als DEAKTIVIERT, wenn kein aktives
 // (enabled) ComfyUI-Backend ihn ausfuehren kann. wf.skill = zugewiesene
-// Backend(s) (leer = alle ComfyUI-Backends). Rein aus CONFIG, client-seitig.
+// Backend(s) (skill); LEER = deaktiviert. Rein aus CONFIG, client-seitig.
 function comfyEnabledBackendNames() {
     return new Set((CONFIG.image_generation?.backends || [])
         .filter(b => b.api_type === 'comfyui' && b.enabled !== false)
@@ -3039,7 +3040,7 @@ function workflowHasActiveBackend(wf) {
     const enabled = comfyEnabledBackendNames();
     if (!enabled.size) return false;
     const skill = (wf.skill || '').trim();
-    if (!skill) return true;  // leer = jedes aktive ComfyUI-Backend kann ihn fahren
+    if (!skill) return false;  // LEER = deaktiviert (kein Backend zugeordnet)
     return skill.split(',').map(s => s.trim()).filter(Boolean).some(n => enabled.has(n));
 }
 

@@ -40,7 +40,7 @@ class ComfyWorkflow:
     model: str
     kind: WorkflowKind = WorkflowKind.Z_IMAGE  # erkannt aus Workflow-JSON-Nodes
     ref_slot_count: int = 0     # hoechster input_reference_image_N Slot (QWEN_STYLE) — Slot N = Location, 1..N-1 = Personen
-    compatible_backends: list = field(default_factory=list)  # Backend-Namen, leer = alle ComfyUI
+    compatible_backends: list = field(default_factory=list)  # Backend-Namen (skill); LEER = DEAKTIVIERT (kein Backend zugeordnet)
     image_family: str = ""      # natural/keywords — wie das Modell Prompts will
     category: str = ""          # Zweck-Kategorie (z.B. "inpaint") — user-konfiguriert, fuer Spezial-Dialoge
     prompt: str = ""            # Per-Workflow Default-Prompt (Fit/Edge-Dialog) — z.B. Edit-Instruktion vs. Fill-Beschreibung
@@ -271,7 +271,7 @@ class ImageGenerationSkill(BaseSkill):
             wf_image_family = os.environ.get(f"{prefix}IMAGE_FAMILY", "").strip()
             wf_category = os.environ.get(f"{prefix}CATEGORY", "").strip()
             wf_prompt = os.environ.get(f"{prefix}PROMPT", "").strip()
-            # Kompatible Backends (kommasepariert), leer = alle ComfyUI-Backends
+            # Zugeordnete Backends (kommasepariert); LEER = deaktiviert
             raw_skills = os.environ.get(f"{prefix}SKILL", "").strip()
             compatible = [s.strip() for s in raw_skills.split(",") if s.strip()] if raw_skills else []
             # Bildgroesse pro Workflow (ueberschreibt Backend-Default)
@@ -805,8 +805,12 @@ class ImageGenerationSkill(BaseSkill):
                 return wf
         except Exception as _e:
             logger.debug("outfit_imagegen-Pattern lesen fehlgeschlagen: %s", _e)
-        # Sonst Default aus .env (COMFY_IMAGEGEN_DEFAULT)
-        return self._default_workflow
+        # Sonst Default aus .env (COMFY_IMAGEGEN_DEFAULT) — aber nur wenn er einem
+        # verfuegbaren Backend zugeordnet ist (skill leer = deaktiviert -> None,
+        # damit die Generierung auf ein Nicht-ComfyUI-Backend ausweicht).
+        if self._default_workflow and self._workflow_has_available_backend(self._default_workflow):
+            return self._default_workflow
+        return None
 
     def match_workflow(self, pattern: str,
                        character_name: str = "") -> Optional[ComfyWorkflow]:
@@ -839,7 +843,9 @@ class ImageGenerationSkill(BaseSkill):
                 if best_cost is None or cost < best_cost:
                     best_cost = cost
                     best = wf
-        return best or matches[0]
+        # Kein Treffer mit zugeordnetem, verfuegbarem Backend -> None (deaktiviert),
+        # NICHT auf matches[0] zurueckfallen (das waere ein deaktivierter Workflow).
+        return best
 
     def resolve_imagegen_target(self, spec: str, character_name: str = "",
                                 rotation_prefix: str = "img",
@@ -926,8 +932,9 @@ class ImageGenerationSkill(BaseSkill):
             # Nur ComfyUI-Backends kommen in Frage
             if b.api_type != "comfyui":
                 continue
-            # Kompatibilitaet pruefen
-            if workflow.compatible_backends and b.name not in workflow.compatible_backends:
+            # Kompatibilitaet: Backend muss dem Workflow zugeordnet sein
+            # (skill/compatible_backends LEER = deaktiviert -> kein Backend passt).
+            if b.name not in (workflow.compatible_backends or []):
                 continue
             # Per-Agent Override hat Vorrang
             agent_inst = agent_instances.get(b.name, {})
@@ -972,9 +979,9 @@ class ImageGenerationSkill(BaseSkill):
             if comfyui_only or workflow is not None:
                 if b.api_type != "comfyui":
                     continue
-            if workflow is not None and workflow.compatible_backends:
-                if b.name not in workflow.compatible_backends:
-                    continue
+            # Workflow gegeben: Backend muss zugeordnet sein (LEER = deaktiviert).
+            if workflow is not None and b.name not in (workflow.compatible_backends or []):
+                continue
             agent_inst = agent_instances.get(b.name, {})
             if "enabled" in agent_inst:
                 if not bool(agent_inst["enabled"]):
@@ -1241,7 +1248,8 @@ class ImageGenerationSkill(BaseSkill):
                 continue
             if not b.instance_enabled:
                 continue
-            if workflow.compatible_backends and b.name not in workflow.compatible_backends:
+            # Backend muss dem Workflow zugeordnet sein (LEER = deaktiviert).
+            if b.name not in (workflow.compatible_backends or []):
                 continue
             return True
         return False
@@ -1912,13 +1920,13 @@ class ImageGenerationSkill(BaseSkill):
             logger.info("Explizites Backend: %s", explicit_backend)
             # ComfyUI-Backends brauchen ZWINGEND einen Workflow — sonst kennt der
             # Backend keine Workflow-Datei und _generate scheitert mit "Kein
-            # Workflow konfiguriert". Auto-Pick: erster Workflow der den Backend
-            # in compatible_backends fuehrt (oder None = jeder Backend).
+            # Workflow konfiguriert". Auto-Pick: erster Workflow, der dieses Backend
+            # in compatible_backends (skill) fuehrt. Keiner -> None = Fehler unten.
             if backend.api_type == "comfyui" and self.comfy_workflows:
                 active_workflow = next(
                     (wf for wf in self.comfy_workflows
-                     if not wf.compatible_backends or backend.name in wf.compatible_backends),
-                    None) or self._default_workflow
+                     if backend.name in (wf.compatible_backends or [])),
+                    None)
                 if active_workflow:
                     logger.info("Auto-Workflow fuer Backend %s: %s",
                                 explicit_backend, active_workflow.name)
@@ -1956,11 +1964,15 @@ class ImageGenerationSkill(BaseSkill):
         if backend.api_type == "comfyui" and not active_workflow and self.comfy_workflows:
             active_workflow = next(
                 (wf for wf in self.comfy_workflows
-                 if not wf.compatible_backends or backend.name in wf.compatible_backends),
-                None) or self._default_workflow
+                 if backend.name in (wf.compatible_backends or [])),
+                None)
             if active_workflow:
                 logger.info("Workflow-Auto-Pick fuer Backend %s: %s",
                             backend.name, active_workflow.name)
+            else:
+                logger.warning("Backend %s (ComfyUI) hat keinen zugeordneten Workflow "
+                               "(skill leer = deaktiviert) — Generierung wird scheitern",
+                               backend.name)
 
         # Lade per-Agent per-Instanz Config
         cfg = self._get_instance_config(character_name, backend)
