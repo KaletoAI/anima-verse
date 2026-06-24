@@ -77,7 +77,7 @@
           "label_de": "Alter",
           "type": "number",
           "replacement": {
-            "target": "character_appearance"
+            "target": ["character_appearance", "face_appearance"]
           },
           "in_prompt": false,
           "llm_generable": true
