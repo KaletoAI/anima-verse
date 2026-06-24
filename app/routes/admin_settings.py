@@ -3027,12 +3027,29 @@ function renderModelSelect(val, path) {
     return select;
 }
 
+// Aktiviert? Ein ComfyUI-Workflow gilt als DEAKTIVIERT, wenn kein aktives
+// (enabled) ComfyUI-Backend ihn ausfuehren kann. wf.skill = zugewiesene
+// Backend(s) (leer = alle ComfyUI-Backends). Rein aus CONFIG, client-seitig.
+function comfyEnabledBackendNames() {
+    return new Set((CONFIG.image_generation?.backends || [])
+        .filter(b => b.api_type === 'comfyui' && b.enabled !== false)
+        .map(b => b.name));
+}
+function workflowHasActiveBackend(wf) {
+    const enabled = comfyEnabledBackendNames();
+    if (!enabled.size) return false;
+    const skill = (wf.skill || '').trim();
+    if (!skill) return true;  // leer = jedes aktive ComfyUI-Backend kann ihn fahren
+    return skill.split(',').map(s => s.trim()).filter(Boolean).some(n => enabled.has(n));
+}
+
 function renderWorkflowSelect(val, path) {
     // Default-MATCH statt fester Auswahl: Combobox mit Glob-Vorschlaegen
     // (Workflow-filter, z.B. "Qwen*") + Freitext. Aufloesung: match_workflow.
     const workflows = CONFIG.image_generation?.comfyui_workflows || {};
     const globs = new Set();
     for (const [wid, wf] of Object.entries(workflows)) {
+        if (!workflowHasActiveBackend(wf)) continue;  // ohne aktives Backend = deaktiviert
         const g = ((wf.filter || '').trim()) || (wf.name || wid);
         if (g) globs.add(g);
     }
@@ -3049,10 +3066,14 @@ function renderImagegenSelect(val, path) {
     const backends = CONFIG.image_generation?.backends || [];
     const sugg = new Set();
     for (const [wid, wf] of Object.entries(workflows)) {
+        if (!workflowHasActiveBackend(wf)) continue;  // ohne aktives Backend = deaktiviert
         const g = ((wf.filter || '').trim()) || (wf.name || wid);
         if (g) sugg.add('workflow:' + g);
     }
-    for (const be of backends) sugg.add('backend:' + be.name);
+    for (const be of backends) {
+        if (be.enabled === false) continue;  // deaktivierte Backends nicht vorschlagen
+        sugg.add('backend:' + be.name);
+    }
     let opts = '';
     for (const s of sugg) opts += '<option value="' + esc(s) + '">';
     return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="z.B. workflow:Qwen* oder backend:ComfyUI*" onchange="setVal(\\'' + path + '\\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
