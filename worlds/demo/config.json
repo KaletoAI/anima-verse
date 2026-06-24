@@ -3,7 +3,17 @@
     {
       "name": "LocalAI",
       "enabled": true,
-      "gpus": [],
+      "gpus": [
+        {
+          "vram_gb": 0,
+          "types": [
+            "openai"
+          ],
+          "match_name": "",
+          "device": "",
+          "label": "4070"
+        }
+      ],
       "api_key": "",
       "api_base": "http://192.168.8.197:8080/v1",
       "timeout": 300,
@@ -139,7 +149,8 @@
           "task": "image_analysis",
           "order": 1
         }
-      ]
+      ],
+      "preload_on_startup": false
     }
   ],
   "image_generation": {
@@ -153,7 +164,14 @@
       {
         "name": "LocalAI-Flux",
         "enabled": true,
-        "gpus": [],
+        "gpus": [
+          {
+            "vram_gb": 0,
+            "label": "4070",
+            "match_name": "",
+            "device": ""
+          }
+        ],
         "api_type": "openai_diffusion",
         "api_url": "http://192.168.8.197:8080",
         "api_key": "",
@@ -167,7 +185,14 @@
       {
         "name": "LocalAI-ZImage",
         "enabled": true,
-        "gpus": [],
+        "gpus": [
+          {
+            "vram_gb": 0,
+            "label": "4070",
+            "match_name": "",
+            "device": ""
+          }
+        ],
         "api_type": "openai_diffusion",
         "api_url": "http://192.168.8.197:8080",
         "api_key": "",
@@ -289,7 +314,8 @@
           }
         ],
         "prompt": "seamless top-down map tile, photorealistic, continue the surrounding terrain, colors and style into the masked area with no visible seam, border or frame",
-        "image_family": "natural"
+        "image_family": "natural",
+        "skill": ""
       },
       "Flux 1 Dev": {
         "name": "Flux 1 Dev",
@@ -297,9 +323,9 @@
         "width": 1024,
         "height": 1024,
         "workflow_file": "./workflows/text2img_workflow_flux1_api.json",
-        "model": "flux1-dev.safetensors",
+        "model": "Flux1-dev.safetensors",
         "clip": "clip_l.safetensors",
-        "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        "clip2": "t5xxl_fp16.safetensors",
         "loras": [
           {
             "file": "",
@@ -318,7 +344,10 @@
             "strength": 1
           }
         ],
-        "image_family": "natural"
+        "image_family": "natural",
+        "skill": "",
+        "vae": "flux1-vae.safetensors",
+        "clip_type": "flux"
       },
       "Qwen Inpaint": {
         "name": "Qwen Inpaint",
@@ -349,6 +378,39 @@
             "strength": 1
           }
         ]
+      },
+      "Qwen Inpaint_copy": {
+        "name": "Flux2 Inpaint",
+        "image_family": "natural",
+        "filter": "Flux2 Inpaint*",
+        "category": "inpaint",
+        "width": 1024,
+        "height": 1024,
+        "workflow_file": "./workflows/text2img_workflow_flux-qwen_inpaint_api.json",
+        "model": "flux-2-klein-9b-Q8_0.gguf",
+        "clip": "Qwen3-8B-Q8_0.gguf",
+        "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
+        "loras": [
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          },
+          {
+            "file": "",
+            "strength": 1
+          }
+        ],
+        "skill": "",
+        "vae": "flux2-vae.safetensors",
+        "clip_type": "flux2"
       }
     },
     "use_cases": {
@@ -510,10 +572,22 @@
     "postprocess_enabled": false,
     "postprocess_trigger_url": "",
     "unet_weight_dtype": "",
-    "mapfit_imagegen_default": "workflow:Flux Inpaint*",
     "map_tile_vision_analysis": false,
     "location_image_width": 512,
-    "location_image_height": 512
+    "location_image_height": 512,
+    "lora_triggers": [
+      {
+        "lora": "Flux2-9B-BreastSlider(-10to16).safetensors",
+        "word": "",
+        "endpoint": "LocalAI-Flux9"
+      },
+      {
+        "lora": "Flux1-Dev-RPGmaps_v5.safetensors",
+        "word": "rpgmap",
+        "endpoint": "LocalAI-Flux1-Dev"
+      }
+    ],
+    "mapfit_imagegen_default": "workflow:Flux Inpaint*"
   },
   "log_level": "INFO",
   "storage_dir": "./storage",

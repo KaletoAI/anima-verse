@@ -1,0 +1,51 @@
+{
+  "image_filename": "Marcus Hale_1782338972_a4258b9e_1.png",
+  "prompt": "male, olive skin, average height height, stocky body frame, short salt-and-pepper hair, hazel colored eyes",
+  "backend": "LocalAI-Flux",
+  "backend_type": "openai_diffusion",
+  "workflow": "",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality",
+  "from_character": "",
+  "guidance_scale": null,
+  "num_inference_steps": 20,
+  "duration_s": 9.5,
+  "created_at": "2026-06-24T22:09:32+00:00",
+  "location": "ec9b625c",
+  "room_id": "1e6e9aa9",
+  "seed": 0,
+  "loras": [],
+  "model": "flux.2-klein-4b",
+  "reference_images": {
+    "input_reference_image_1": "1777486510.png"
+  },
+  "target_model": "flux",
+  "canonical": {
+    "persons": [
+      {
+        "label": "Marcus Hale",
+        "name": "Marcus Hale",
+        "appearance": "male, olive skin, average height height, stocky body frame, short salt-and-pepper hair, hazel colored eyes",
+        "gender": "male",
+        "is_agent": true
+      }
+    ],
+    "person_prompts": {},
+    "outfits": {
+      "1": "Marcus Hale is wearing wearing: business shirt, beige chinos, business suit, bussiness shoes"
+    },
+    "pose": "",
+    "expression": "",
+    "scene": "male, olive skin, average height height, stocky body frame, short salt-and-pepper hair, hazel colored eyes",
+    "mood": "glad",
+    "activity": "Coffee",
+    "location": "Main room, The same café interior at night, warm pendant lamps over the communal table, the espresso machine quiet and gleaming, the chalkboard menu lit by a single spotlight, soft jazz feel, cinematic photo, no people, no text",
+    "personality_hint": "",
+    "profile_image_hint": "",
+    "style": "photorealistic, portrait, head and shoulders, only head, looking at camera, neutral background, sharp focus, high detail",
+    "negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality"
+  },
+  "template_prompt": "photorealistic, portrait, head and shoulders, only head, looking at camera, neutral background, sharp focus, high detail male, olive skin, average height height, stocky body frame, short salt-and-pepper hair, hazel colored eyes",
+  "prompt_method": "caller_provided",
+  "items_used": [],
+  "image_analysis": "The image presents a close-up portrait against a neutral, soft gray backdrop, suggesting a studio setting. The lighting is even and diffused, highlighting the subject’s facial features without harsh shadows, creating a calm, contemplative mood. The composition is centered, with the subject occupying most of the frame, drawing full attention to his face and upper torso. \n\nThe subject is a middle-aged man with short, neatly trimmed hair showing a mix of dark and gray strands. His skin tone is warm with visible texture, including fine lines and a few freckles or blemishes. His expression is neutral to slightly serious, with direct eye contact and a closed mouth, conveying a sense of quiet intensity. He is posed frontally, head slightly tilted, as if in a professional or formal portrait.\n\nHe wears a simple, dark brown crew-neck t-shirt, which appears casual and unadorned, fitting snugly without any visible wrinkles or embellishments. The garment’s plainness contrasts with the detailed facial features, emphasizing the subject’s presence.\n\nThere is no action or interaction occurring; the man is still, suggesting a posed photograph. The visual style is photographic, with high resolution and naturalistic detail. The depth of field is shallow, blurring the background slightly to isolate the subject. The color palette is muted, dominated by grays and earth tones, contributing to the image’s understated, professional aesthetic."
+}

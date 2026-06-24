@@ -3,7 +3,7 @@
   "service": "LocalAI-Flux",
   "model": "flux.2-klein-4b",
   "loras": [],
-  "prompt": "Amelia Lane, female, fair skin, tall height, athletic body frame, shoulder length ash blonde hair, ice blue colored eyes, Amelia Lane is wearing tanga, business shirt underneath black tailored blazer, slightly open to reveal cleavage, fitted on athletic frame, silver buttons, business setting, business Skirt, business heels, sitting at conference table, hands folded, upright posture, attentive engaged pose, bright wide eyes, raised eyebrows, big grin, clenched jaw",
+  "prompt": "Amelia Lane, female, fair skin, tall height, athletic body frame, shoulder length ash blonde hair, ice blue colored eyes, Amelia Lane is wearing tanga, business shirt underneath black tailored blazer, slightly open to reveal cleavage, fitted on athletic frame, silver buttons, business setting, business Skirt, business heels, standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up, bright wide eyes, raised eyebrows, big grin, clenched jaw",
   "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality",
   "characters": [
     "Amelia Lane"
@@ -12,11 +12,11 @@
     "input_reference_image_1": "Amelia Lane_1782339922_05f55a91_1.png"
   },
   "seed": 0,
-  "created_at": "2026-06-24T22:26:48+00:00",
-  "duration_s": 18.8,
+  "created_at": "2026-06-24T22:31:25+00:00",
+  "duration_s": 17.1,
   "workflow": "",
   "mood": "energized",
-  "activity": "Meeting",
+  "activity": "standing and speaking",
   "equipped_pieces": {
     "top": "item_f85cb432",
     "outer": "item_5bfe0cbc",
@@ -25,6 +25,6 @@
     "underwear_bottom": "item_189fa0ff"
   },
   "equipped_items": [],
-  "last_used_at": 1782340013.2995613,
-  "use_count": 1
+  "last_used_at": 1782340527.1839347,
+  "use_count": 2
 }

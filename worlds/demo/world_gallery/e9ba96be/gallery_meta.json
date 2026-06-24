@@ -30,10 +30,11 @@
       "backend_type": "together",
       "model": "HiDream-ai/HiDream-I1-Fast"
     },
-    "1777547258.png": {
-      "backend": "Together-Fast",
-      "backend_type": "together",
-      "model": "HiDream-ai/HiDream-I1-Fast"
+    "1782334214_e9ba96.png": {
+      "backend": "3090",
+      "backend_type": "comfyui",
+      "model": "",
+      "loras": []
     }
   },
   "image_types": {
@@ -43,7 +44,7 @@
     "1777486285.png": "day",
     "1777486302.png": "night",
     "1777486325.png": "night",
-    "1777547258.png": "map"
+    "1782334214_e9ba96.png": "map_2d"
   },
   "rooms": {
     "1777484771.png": "974e6676",

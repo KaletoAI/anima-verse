@@ -3,7 +3,7 @@
   "service": "LocalAI-Flux",
   "model": "flux.2-klein-4b",
   "loras": [],
-  "prompt": "Marcus Hale, male, olive skin, average height height, stocky body frame, short salt-and-pepper hair, hazel colored eyes, Marcus Hale is wearing business shirt, beige chinos, business suit, bussiness shoes, The person leans casually against the coffee machine with one shoulder, resting an arm along the side while the other hand holds a cup, legs slightly apart for balance., upturned mouth, crinkled eyes, relaxed eyebrows, soft jaw",
+  "prompt": "Marcus Hale, male, olive skin, average height height, stocky body frame, short salt-and-pepper hair, hazel colored eyes, Marcus Hale is wearing business shirt, beige chinos, business suit, bussiness shoes, standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up, upturned mouth, crinkled eyes, relaxed eyebrows, soft jaw",
   "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality",
   "characters": [
     "Marcus Hale"
@@ -12,11 +12,11 @@
     "input_reference_image_1": "Marcus Hale_1782339956_eeb03d72_1.png"
   },
   "seed": 0,
-  "created_at": "2026-06-24T22:26:57+00:00",
-  "duration_s": 28.0,
+  "created_at": "2026-06-24T22:32:16+00:00",
+  "duration_s": 16.9,
   "workflow": "",
   "mood": "glad",
-  "activity": "Coffee",
+  "activity": "standing, greeting",
   "equipped_pieces": {
     "bottom": "item_daffe7ca",
     "underwear_bottom": "item_84188422",
@@ -25,6 +25,6 @@
     "outer": "item_fcc885b2"
   },
   "equipped_items": [],
-  "last_used_at": 1782340023.2997196,
-  "use_count": 1
+  "last_used_at": 1782341171.8661077,
+  "use_count": 3
 }

@@ -1,0 +1,9 @@
+mode: edge
+location: Street (f41a3f29)
+edge_sides: ['north']
+
+PROMPT:
+complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame
+
+NEGATIVE:
+people, person, characters, faces, text, words, watermark, signature, logo, frame, border, washed out, desaturated, flat, blurry, low quality

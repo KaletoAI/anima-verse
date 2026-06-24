@@ -1,0 +1,50 @@
+{
+  "image_filename": "Marcus Hale_1782339938_99fd4a7c_1.png",
+  "prompt": "older male, olive skin, short salt-and-pepper hair, hazel colored eyes, clean-shaven",
+  "backend": "LocalAI-Flux",
+  "backend_type": "openai_diffusion",
+  "workflow": "",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality",
+  "from_character": "",
+  "guidance_scale": null,
+  "num_inference_steps": 20,
+  "duration_s": 9.4,
+  "created_at": "2026-06-24T22:25:38+00:00",
+  "location": "ec9b625c",
+  "room_id": "1e6e9aa9",
+  "seed": 0,
+  "loras": [],
+  "model": "flux.2-klein-4b",
+  "reference_images": {
+    "input_reference_image_1": "1777486503.png"
+  },
+  "target_model": "flux",
+  "canonical": {
+    "persons": [
+      {
+        "label": "Marcus Hale",
+        "name": "Marcus Hale",
+        "appearance": "male, olive skin, average height height, stocky body frame, short salt-and-pepper hair, hazel colored eyes",
+        "gender": "male",
+        "is_agent": true
+      }
+    ],
+    "person_prompts": {},
+    "outfits": {
+      "1": "Marcus Hale is wearing wearing: business shirt, beige chinos, business suit, bussiness shoes"
+    },
+    "pose": "",
+    "expression": "",
+    "scene": "older male, olive skin, short salt-and-pepper hair, hazel colored eyes, clean-shaven",
+    "mood": "glad",
+    "activity": "Coffee",
+    "location": "Main room, The same café interior at night, warm pendant lamps over the communal table, the espresso machine quiet and gleaming, the chalkboard menu lit by a single spotlight, soft jazz feel, cinematic photo, no people, no text",
+    "personality_hint": "",
+    "profile_image_hint": "",
+    "style": "photorealistic, portrait, head and shoulders, only head, looking at camera, neutral background, sharp focus, high detail",
+    "negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality"
+  },
+  "template_prompt": "photorealistic, portrait, head and shoulders, only head, looking at camera, neutral background, sharp focus, high detail older male, olive skin, short salt-and-pepper hair, hazel colored eyes, clean-shaven",
+  "prompt_method": "caller_provided",
+  "items_used": []
+}

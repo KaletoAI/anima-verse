@@ -1,6 +1,13 @@
 {
   "instances": {
-    "Together-Fast": {}
+    "Together-Fast": {},
+    "LocalAI-Flux": {},
+    "LocalAI-ZImage": {},
+    "LocalAI-Flux9": {},
+    "LocalAI-Flux1-Dev": {},
+    "3090": {}
   },
-  "enabled": true
+  "enabled": true,
+  "comfy_workflow": "Flux",
+  "comfy_seed": 1350317197
 }

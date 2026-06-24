@@ -1,0 +1,13 @@
+{
+  "image_metas": {
+    "1782334046_a3b3ab.png": {
+      "backend": "3090",
+      "backend_type": "comfyui",
+      "model": "",
+      "loras": []
+    }
+  },
+  "image_types": {
+    "1782334046_a3b3ab.png": "map_2d"
+  }
+}

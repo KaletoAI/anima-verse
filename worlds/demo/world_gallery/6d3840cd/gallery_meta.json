@@ -1,0 +1,20 @@
+{
+  "image_metas": {
+    "1782334196.png": {
+      "backend": "3090",
+      "backend_type": "comfyui",
+      "model": "flux-2-klein-9b-Q8_0.gguf",
+      "loras": []
+    },
+    "1782334214_f41a3f.png": {
+      "backend": "3090",
+      "backend_type": "comfyui",
+      "model": "",
+      "loras": []
+    }
+  },
+  "image_types": {
+    "1782334196.png": "map_2d",
+    "1782334214_f41a3f.png": "map_2d"
+  }
+}
