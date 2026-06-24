@@ -380,6 +380,12 @@ class ProviderQueue:
                        if t.status == "pending"]
             recent = [t.to_dict() for t in reversed(self._history[-20:])]
 
+        # GPU-Label(s) dieses Channels (flach, fuer die Task-Panel-Anzeige) —
+        # leer wenn keine gelabelte GPU zugeordnet ist.
+        _gpu_labels = [g.label for g in (self.provider.gpu_configs or [])
+                       if g.index in (self._gpu_indices or []) and (g.label or "").strip()]
+        gpu_label = ", ".join(dict.fromkeys(_gpu_labels))
+
         return {
             "provider": self.provider.name,
             "queue_name": self._queue_name,
@@ -387,6 +393,7 @@ class ProviderQueue:
             "available": self.provider.available,
             "max_concurrent": self._max_concurrent,
             "gpu_indices": self._gpu_indices,
+            "gpu": gpu_label,
             "chat_active": chat,
             "current_tasks": current,
             "pending": pending,

@@ -61,6 +61,7 @@ export interface RecentTaskInfo {
 interface ProviderChannel {
   provider?: string
   type?: string
+  gpu?: string
   healthy?: boolean
   chat_active?: LLMTaskInfo | LLMTaskInfo[] | null
   current_tasks?: LLMTaskInfo[]
@@ -78,6 +79,8 @@ export interface ChannelStatus {
   /** Roher Backend-/Provider-Typ (comfyui/civitai/together/openai_chat/
    *  openai_diffusion/a1111/…) fuer typ-spezifische Symbole im Panel. */
   type: string
+  /** GPU-Label(s) des Channels (leer = keine gelabelte GPU). */
+  gpu: string
   running: number
   waiting: number
 }
@@ -215,7 +218,8 @@ function collectChannels(providers: Record<string, ProviderChannel> | undefined,
     const running = nChat + (ch?.current_tasks?.length || 0) + trackedRunning
     const waiting = (ch?.pending?.length || 0) + trackedWaiting
     out.push({ key, name, healthy: !!ch?.healthy,
-               busy: running > 0, kind: isImage ? 'image' : 'llm', type, running, waiting })
+               busy: running > 0, kind: isImage ? 'image' : 'llm', type,
+               gpu: (ch?.gpu || '').trim(), running, waiting })
   }
   // LLM-Provider zuerst, dann Image-Backends; innerhalb der Gruppe alphabetisch.
   out.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name)
