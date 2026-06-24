@@ -2256,9 +2256,10 @@ class OpenAIDiffusionBackend(TogetherBackend):
     spricht. Unterschiede zum Together.ai-spezifischen TogetherBackend:
       - **api_key optional** (LocalAI braucht keinen Bearer-Token).
       - **ref_images-Support** (Flux Kontext / Referenzbild-Conditioning): lokale
-        Referenzdateien werden als base64-data-URI mitgeschickt, http(s)-URLs
-        unveraendert durchgereicht. Quelle ist params['reference_images'] (vom
-        Skill aufgeloeste Slots — dieselbe Quelle wie bei ComfyUI).
+        Referenzdateien werden als **rohes base64** mitgeschickt (LocalAI/Flux
+        erwartet KEIN data:-URI-Praefix), http(s)-URLs unveraendert durchgereicht.
+        Quelle ist params['reference_images'] (vom Skill aufgeloeste Slots —
+        dieselbe Quelle wie bei ComfyUI).
       - schickt **keine** Together-Eigenheiten (disable_safety_checker) und nutzt
         ``size`` ("WxH") statt separater width/height-Felder.
 
@@ -2317,8 +2318,10 @@ class OpenAIDiffusionBackend(TogetherBackend):
         """ref_images-Liste fuers Conditioning aus params['reference_images'].
 
         Dict-Werte (slot_title -> lokaler Pfad): http(s)-URLs werden
-        durchgereicht, lokale Dateien als base64-data-URI eingebettet (LocalAI
-        auf anderem Host kann lokale Pfade nicht lesen).
+        durchgereicht, lokale Dateien als **rohes base64** eingebettet.
+        WICHTIG: LocalAI/Flux erwartet im ref_images-Feld rohes base64 OHNE
+        "data:<mime>;base64,"-Praefix — ein data-URI wird serverseitig nicht
+        als Bild erkannt und still ignoriert.
         """
         refs = params.get("reference_images") or {}
         out: List[str] = []
@@ -2326,17 +2329,17 @@ class OpenAIDiffusionBackend(TogetherBackend):
             if not path:
                 continue
             sp = str(path)
-            if sp.startswith(("http://", "https://", "data:")):
+            if sp.startswith(("http://", "https://")):
                 out.append(sp)
+                continue
+            if sp.startswith("data:"):
+                # data:<mime>;base64,<payload> -> nur <payload> (rohes base64)
+                out.append(sp.split(",", 1)[1] if "," in sp else sp)
                 continue
             try:
                 with open(sp, "rb") as f:
                     raw = f.read()
-                low = sp.lower()
-                mime = ("image/jpeg" if low.endswith((".jpg", ".jpeg"))
-                        else "image/webp" if low.endswith(".webp")
-                        else "image/png")
-                out.append(f"data:{mime};base64,{base64.b64encode(raw).decode()}")
+                out.append(base64.b64encode(raw).decode())
             except Exception as e:
                 logger.warning(f"{self.name}: Referenzbild '{sp}' nicht lesbar: {e}")
         return out
