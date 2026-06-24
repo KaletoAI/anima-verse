@@ -347,18 +347,22 @@ different fine-tunes:
 
 - **Provider** `Infermatic`, type `openai`, `api_base = https://api.totalgpt.ai`, API key from your
   Infermatic account.
-- **LLM Routing** (a working starting point — swap models for whatever your plan exposes):
+- **LLM Routing** — the three-model split from the *Anima Dome* world (the demo author's working
+  Infermatic setup):
 
   | Tasks | Model | temp |
   |---|---|---|
-  | `chat_stream`, `story_stream`, `group_chat_stream` | `TheDrummer-Valkyrie-49B-v1` | 0.7 |
-  | `social_reaction`, `intent`, `talk_to`, `send_message`, `outfit_generation`, `secret_generation`, `random_event`, `classify_activity`, `expression_map`, `intent_commitment` | `Sao10K-72B-Qwen2.5-Kunou-v1-FP8-Dynamic` | 0.2 |
-  | `extraction`, `thought`, `thought_greeting`, `memory_consolidation`, `consolidation`, `relationship_summary`, `image_prompt`, `image_comment`, `translation` | `TheDrummer-Rocinante-12B-v1.1` | 0.5 |
+  | `chat_stream`, `story_stream`, `group_chat_stream`, `storyteller`, `send_message`, `talk_to`, `thought`, `thought_greeting` | `TheDrummer-Anubis-70B-v1.1-FP8-Dynamic` | 0.7 |
+  | `social_reaction`, `random_event`, `secret_generation`, `outfit_generation`, `intent`, `spell_detect`, `expression_map`, `extraction`, `pose_normalize`, `memory_consolidation`, `consolidation`, `relationship_summary`, `image_prompt`, `image_comment`, `translation`, `extraction_chat_state` | `Sao10K-72B-Qwen2.5-Kunou-v1-FP8-Dynamic` | 0.1 |
   | `instagram_caption`, `image_recognition`, `image_analysis` *(vision)* | `Llama-3.2-11B-Vision-Instruct` | 0.3 |
 
-  RP fine-tunes (Valkyrie / Rocinante) work best in **`rp_first`** chat mode, with the tool-capable
-  model behind the Tool LLM. Image generation still needs a separate backend (ComfyUI or a hosted
-  image API) — Infermatic covers the LLM side.
+  In short: one **RP fine-tune** for the in-character prose (Anubis-70B), one **tool/reasoning**
+  model for everything skill- and analysis-related (Sao10K-72B-Kunou), and a **vision** model for
+  image captioning/recognition. Embeddings (`pose_embedding`) run best **built-in** (*Internal*), so
+  Infermatic needs no embeddings model.
+- Drive the RP model in **`rp_first`** chat mode, with the Sao10K tool model behind the Tool LLM.
+  Image generation still needs a separate backend (ComfyUI or a hosted image API) — Infermatic
+  covers the LLM side.
 
 ---
 
