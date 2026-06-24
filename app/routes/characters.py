@@ -363,6 +363,21 @@ def generate_character_appearance(character_name: str) -> Dict[str, Any]:
     return {"character": character_name, "appearance": appearance}
 
 
+@router.get("/{character_name}/profile-image-prompt")
+def profile_image_prompt(character_name: str) -> Dict[str, Any]:
+    """Aufgeloeste Appearance als Default-Prompt fuer den Profilbild-Dialog
+    (identisch zum Fallback in generate-profile-image)."""
+    from app.models.character import get_character_profile, get_character_appearance
+    from app.models.character_template import resolve_profile_tokens, get_template
+    profile = get_character_profile(character_name) or {}
+    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
+    appearance = get_character_appearance(character_name) or ""
+    if appearance and "{" in appearance:
+        appearance = resolve_profile_tokens(appearance, profile, template=tmpl,
+                                            target_key="character_appearance")
+    return {"prompt": (appearance or "").strip()}
+
+
 @router.get("/{character_name}/current-location")
 def get_character_current_location_route(character_name: str) -> Dict[str, Any]:
     """Gibt den aktuellen virtuellen Aufenthaltsort zurueck"""

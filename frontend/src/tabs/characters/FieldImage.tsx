@@ -21,6 +21,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
   const [busy, setBusy] = useState(false)
   const [profileFile, setProfileFile] = useState<string>('')
   const [genOpen, setGenOpen] = useState(false)  // Profilbild: ImageGenDialog
+  const [genPrompt, setGenPrompt] = useState('')  // vorgeladene Appearance (Default-Prompt)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadProfile = useCallback(async () => {
@@ -127,6 +128,18 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     }
   }, [enc, t, toast, startPoll])
 
+  // Profilbild-Dialog oeffnen: vorher die aufgeloeste Appearance als Default-
+  // Prompt laden (editierbar im Dialog), dann oeffnen.
+  const openProfileDialog = useCallback(async () => {
+    try {
+      const d = await apiGet<{ prompt?: string }>(`/characters/${enc}/profile-image-prompt`)
+      setGenPrompt(d.prompt || '')
+    } catch {
+      setGenPrompt('')
+    }
+    setGenOpen(true)
+  }, [enc])
+
   return (
     <div className="tpl-field-image">
       {src ? (
@@ -142,7 +155,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
       )}
       <div style={{ display: 'flex', gap: 6 }}>
         <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
-          onClick={kind === 'profile' ? () => setGenOpen(true) : generate}>
+          onClick={kind === 'profile' ? openProfileDialog : generate}>
           {busy ? t('Generating…') : t('Generate')}
         </button>
         {kind === 'profile' ? (
@@ -168,7 +181,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
         <ImageGenDialog
           open
           title={t('Generate profile image')}
-          defaultPrompt=""
+          defaultPrompt={genPrompt}
           onSubmit={submitGenerate}
           onClose={() => setGenOpen(false)}
         />
