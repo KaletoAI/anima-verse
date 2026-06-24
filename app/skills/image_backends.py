@@ -472,6 +472,7 @@ class OpenAIChatImageBackend(ImageBackend):
 
         self.api_key = api_key or os.environ.get(f"{env_prefix}API_KEY", "")
         self.model = model or os.environ.get(f"{env_prefix}MODEL", "gemini-2.5-flash-image")
+        self.timeout = int(os.environ.get(f"{env_prefix}TIMEOUT", "120"))
 
     def _headers(self) -> Dict[str, str]:
         """Erstellt Auth-Headers."""
@@ -541,7 +542,7 @@ class OpenAIChatImageBackend(ImageBackend):
                 f"{self.api_url}/chat/completions",
                 headers=self._headers(),
                 json=payload,
-                timeout=120
+                timeout=self.timeout
             )
         except requests.exceptions.Timeout as e:
             logger.error(f"{self.name} Timeout nach 120s")

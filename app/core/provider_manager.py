@@ -224,6 +224,16 @@ class ProviderManager:
                 max_concurrent = max(1, int(mc_str))
             except ValueError:
                 max_concurrent = 1
+            # Backend-HTTP-Timeout (per-Backend einstellbar). Der Queue-Task-Timeout
+            # (synth.timeout) bekommt etwas Puffer, damit der HTTP-Timeout im Backend
+            # ZUERST sauber greift und die Queue nicht vorher killt. Nicht gesetzt =
+            # None -> Queue-Default 300 (Backend nutzt seinen eigenen Default 120).
+            _to_str = os.environ.get(f"{prefix}TIMEOUT", "").strip()
+            try:
+                _backend_timeout = int(_to_str) if _to_str else None
+            except ValueError:
+                _backend_timeout = None
+            synth_timeout = (_backend_timeout + 30) if _backend_timeout else None
             beszel_id = os.environ.get(f"{prefix}BESZEL_SYSTEM_ID", "").strip()
 
             gpu_configs: List[GpuConfig] = []
@@ -269,7 +279,8 @@ class ProviderManager:
                 beszel_system_id=beszel_id,
                 gpu_configs=gpu_configs,
                 system=name,
-                system_specs=system_specs)
+                system_specs=system_specs,
+                timeout=synth_timeout)
             # Real availability is tracked on the ImageBackend instance; we
             # default to True so find_channel() lists this channel. ChannelHealth
             # then enforces 'backend reachable' independently.
