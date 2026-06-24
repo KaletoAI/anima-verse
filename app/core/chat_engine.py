@@ -979,7 +979,7 @@ def post_process_response(
 
     # Chat context extraction (activity + outfit from response).
     # Im Thought-Modus ist user_input eine synthetische System-Instruktion
-    # ("Denke ueber deine Aufgabe nach…") und stammt NICHT vom Avatar — daher
+    # ("Think about your task…") und stammt NICHT vom Avatar — daher
     # wird sie aus updated_history weggelassen, damit die Avatar-Outfit-
     # Extraktion nicht mit Unsinn gefuettert wird. Agent-Side-Extraction aus
     # dem Thought-Response bleibt aktiv.

@@ -444,9 +444,12 @@ class ThoughtRunner:
         full_response = ""
         had_notification_tool = False
         notification_tool_content = ""
+        # Synthetischer Trigger fuer den Thought-Turn. Englisch — die Antwort-
+        # sprache steuert ausschliesslich die Sprachanweisung (lang_instruction)
+        # im System-Prompt (agent_thought.md), nicht dieser Text.
         user_input = (
-            f"Denke ueber deine Aufgabe nach und entscheide was du jetzt tun moechtest. "
-            f"Nutze die passenden Tools um deine Aufgabe zu erfuellen."
+            "Think about your task and decide what you want to do now. "
+            "Use the appropriate tools to accomplish your task."
         )
 
         logger.info("Starte Agent-Loop fuer %s (tools: %d, tool_llm: %s, history: %d)",
