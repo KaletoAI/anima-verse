@@ -4484,16 +4484,38 @@ def debug_activity(character_name: str) -> Dict[str, Any]:
     force_rule: Optional[Dict[str, Any]] = None
     try:
         from app.models.rules import load_rules, check_force_rules
+        from app.core.activity_engine import evaluate_condition
         for r in (load_rules() or []):
             if (r.get("type") or "") != "block":
                 continue
             who = (r.get("character") or "").strip().lower()
             if who and who not in ("all", "*", "any", character_name.lower()):
                 continue
+            target = r.get("target", {}) or {}
+            cond = (r.get("condition") or "").strip()
+            # Condition gegen den Character + das ZIEL der Regel auswerten, damit
+            # das Mind-Panel zeigt ob die Regel JETZT greift. Block-Semantik
+            # (siehe rules.check_access): Condition wahr → blockiert; eine Regel
+            # OHNE Condition blockt im scope location/room nicht.
+            t_loc, t_room = "", ""
+            if isinstance(target, dict):
+                t_loc = (target.get("location_id") or target.get("location") or "").strip()
+                _rooms = target.get("room_ids") or target.get("rooms") or []
+                if isinstance(_rooms, list) and _rooms:
+                    t_room = _rooms[0]
+            cond_met = False
+            if cond:
+                try:
+                    cond_met, _ = evaluate_condition(cond, character_name, t_loc, t_room)
+                except Exception:
+                    cond_met = False
             block_rules.append({
                 "id": r.get("id", ""), "name": r.get("name", ""),
-                "action": r.get("action", ""), "target": r.get("target", ""),
+                "action": r.get("action", ""), "target": target,
                 "message": r.get("message", ""), "event_id": r.get("event_id", ""),
+                "condition": cond,
+                "condition_met": bool(cond_met),
+                "blocking": bool(cond and cond_met),
             })
         force_rule = check_force_rules(character_name)
     except Exception:

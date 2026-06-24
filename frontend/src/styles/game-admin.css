@@ -2320,6 +2320,14 @@ html, * {
 }
 .ga-mind-reason .tag.warn { border-color: #e0675e; color: #e0675e; }
 .ga-mind-reason .tag.force { border-color: #d9a14a; color: #d9a14a; }
+/* Tags in der Active-rules-Liste (status badges) — gleiche Pill-Optik wie oben. */
+.ga-mind-list .tag {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; background: rgba(255,255,255,0.06); border: 1px solid var(--border, #30363d);
+}
+.ga-mind-list .tag.warn { border-color: #e0675e; color: #e0675e; }
+.ga-mind-list .tag.force { border-color: #d9a14a; color: #d9a14a; }
+.ga-mind-reason .tag.ok, .ga-mind-list .tag.ok { border-color: #57ab5a; color: #57ab5a; }
 .ga-mind-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .ga-mind-list li { font-size: 12px; line-height: 1.45; }
 .ga-mind-list .ts { opacity: 0.55; font-size: 11px; margin-right: 6px; }

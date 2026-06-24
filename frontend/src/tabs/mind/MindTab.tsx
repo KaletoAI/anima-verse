@@ -24,7 +24,10 @@ interface DebugActivity {
   mood_recent: { timestamp?: string; mood?: string; source?: string }[]
   state_recent: { ts: string; type: string; value: string }[]
   thoughts_recent: { ts: string; action: string }[]
-  block_rules: { id: string; name: string; action: string; message: string }[]
+  block_rules: {
+    id: string; name: string; action: string; message: string
+    condition?: string; condition_met?: boolean; blocking?: boolean
+  }[]
   force_rule?: { rule_name?: string; rule_id?: string; go_to?: string } | null
 }
 
@@ -134,13 +137,23 @@ export function MindTab() {
                       {dbg.force_rule.go_to ? <span style={{ opacity: 0.6 }}>→ {dbg.force_rule.go_to}</span> : null}
                     </li>
                   ) : null}
-                  {dbg.block_rules.map((b) => (
-                    <li key={b.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 6 }}>
-                      <span className={b.action === 'leave' ? 'tag warn' : 'tag'}>{b.action || 'block'}</span>
-                      <span style={{ fontWeight: 500 }}>{b.name || b.id}</span>
-                      {b.message ? <span style={{ flexBasis: '100%', opacity: 0.6 }}>{b.message}</span> : null}
-                    </li>
-                  ))}
+                  {dbg.block_rules.map((b) => {
+                    // Block-Semantik: Condition erfüllt → Regel greift jetzt.
+                    // enter: greift = kein Zutritt · leave: greift = eingesperrt.
+                    const isLeave = b.action === 'leave'
+                    const active = b.blocking ?? b.condition_met ?? false
+                    const status = isLeave
+                      ? (active ? t('confined now') : t('free to leave'))
+                      : (active ? t('no access') : t('access'))
+                    return (
+                      <li key={b.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 6 }}>
+                        <span className={isLeave ? 'tag warn' : 'tag'}>{b.action || 'block'}</span>
+                        <span style={{ fontWeight: 500 }}>{b.name || b.id}</span>
+                        <span className={active ? 'tag warn' : 'tag ok'} title={b.condition || undefined}>{status}</span>
+                        {b.message ? <span style={{ flexBasis: '100%', opacity: 0.6 }}>{b.message}</span> : null}
+                      </li>
+                    )
+                  })}
                 </ul>
               </div>
             ) : null}
