@@ -6,10 +6,11 @@ import { Field } from '../../components/Field'
 
 /**
  * Per-character image-generation overrides (Characters → Image):
- *  - Render match: a workflow glob (e.g. "Qwen*"). The backend resolves it to
- *    a concrete workflow at render time, picking among matches by endpoint
- *    availability — independent of the global fallback. A model picker is
- *    intentionally absent (the model comes from the workflow).
+ *  - Render match: a render-target glob — a workflow ("Qwen*") OR a backend
+ *    ("backend:LocalAI-Flux"). The server resolves it to a concrete workflow or
+ *    backend at render time, picking among matches by availability — independent
+ *    of the global fallback. A model picker is intentionally absent (the model
+ *    comes from the workflow/backend).
  *  - LoRA override: LoRAs always applied for this character.
  * Backed by /characters/{name}/outfit-imagegen (GET/PUT) plus the workflow
  * list (/world/imagegen-options) and available LoRAs (/outfit-lora-options).
@@ -70,6 +71,7 @@ export function ImageOverrides({ character }: { character: string }) {
   const [pattern, setPattern] = useState('')
   const [loras, setLoras] = useState<Lora[]>([])
   const [workflows, setWorkflows] = useState<string[]>([])
+  const [backends, setBackends] = useState<string[]>([])  // Image-Backend-Namen (Render-Target via backend:<name>)
   const [outfitDefault, setOutfitDefault] = useState('')  // globaler Outfit-Default (Match-Spec)
   const [availableLoras, setAvailableLoras] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
@@ -123,6 +125,11 @@ export function ImageOverrides({ character }: { character: string }) {
             .filter((o) => o.type === 'workflow' && o.name)
             .map((o) => o.name as string),
         )
+        setBackends(
+          (opts.options || [])
+            .filter((o) => o.type === 'backend' && o.name)
+            .map((o) => o.name as string),
+        )
         setOutfitDefault(opts.outfit_imagegen_default || '')
         setAvailableLoras((loraOpts.loras || []).filter((l) => l && l !== 'None'))
         setSlots(slotResp.slots || {})
@@ -140,9 +147,16 @@ export function ImageOverrides({ character }: { character: string }) {
   const matching = useMemo(() => {
     const p = pattern.trim()
     if (!p) return []
-    const re = globToRegex(p)
+    // "backend:<glob>" → gegen Backend-Namen matchen; sonst Workflow-Glob
+    // (auch "workflow:<glob>"). resolve_imagegen_target auf dem Server identisch.
+    const bm = /^backend:(.*)$/i.exec(p)
+    if (bm) {
+      const re = globToRegex(bm[1].trim())
+      return backends.filter((b) => re.test(b)).map((b) => `backend:${b}`)
+    }
+    const re = globToRegex(p.replace(/^workflow:/i, '').trim())
     return workflows.filter((w) => re.test(w))
-  }, [pattern, workflows])
+  }, [pattern, workflows, backends])
 
   const setLorasAndSave = useCallback(
     (next: Lora[]) => {
@@ -187,8 +201,8 @@ export function ImageOverrides({ character }: { character: string }) {
         <div className="ga-fieldset-title">{t('Render match')}</div>
         <div className="ga-form-row">
           <Field
-            label={t('Workflow pattern (glob)')}
-            hint={t('e.g. "Qwen*" — matched against workflow names; the backend picks an available match at render time. Empty = global default.')}
+            label={t('Render target (glob)')}
+            hint={t('e.g. "Qwen*" (workflow) or "backend:LocalAI-Flux" (backend). Matched against workflow/backend names; the server picks an available match at render time. Empty = global default.')}
           >
             <input
               className="ga-input"
@@ -199,7 +213,7 @@ export function ImageOverrides({ character }: { character: string }) {
               onBlur={() => persist({ pattern, loras })}
             />
           </Field>
-          <Field label={t('Currently matches')} hint={t('Loaded workflows matching the pattern right now.')}>
+          <Field label={t('Currently matches')} hint={t('Workflows/backends matching the pattern right now.')}>
             <div className="ga-img-matches">
               {pattern.trim() === '' ? (
                 <span className="ga-sched-muted">
@@ -209,7 +223,7 @@ export function ImageOverrides({ character }: { character: string }) {
                   ) : null}
                 </span>
               ) : matching.length === 0 ? (
-                <span className="ga-img-nomatch">{t('no workflow matches')}</span>
+                <span className="ga-img-nomatch">{t('no match')}</span>
               ) : (
                 matching.map((w) => (
                   <span key={w} className="ga-img-match-chip">
@@ -220,9 +234,9 @@ export function ImageOverrides({ character }: { character: string }) {
             </div>
           </Field>
         </div>
-        {workflows.length > 0 ? (
+        {workflows.length > 0 || backends.length > 0 ? (
           <p className="ga-sched-muted" style={{ margin: '2px 0 0' }}>
-            {t('Available workflows:')} {workflows.join(', ')}
+            {t('Available targets:')} {[...workflows, ...backends.map((b) => `backend:${b}`)].join(', ')}
           </p>
         ) : null}
       </div>
