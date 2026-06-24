@@ -1168,12 +1168,17 @@ def save_character_current_location(character_name: str = "", location: str = ""
             profile["movement_target"] = ""
     profile["current_location"] = location
     profile["location_changed_at"] = utc_now_iso()
-    # current_room beim Location-Wechsel leeren — sonst zeigt ein Char an
-    # Location A weiter auf einen Raum von Location B (stale Reference).
-    # Caller (SetLocation-Skill, Scheduler etc.) kann nach diesem Aufruf
-    # einen passenden Raum am neuen Ort explizit setzen.
-    if location and location != old_location and profile.get("current_room"):
-        profile["current_room"] = ""
+    # current_room beim Location-Wechsel direkt auf den Entry-Room der NEUEN
+    # Location setzen (statt nur zu leeren). Sonst hinterlaesst jeder Aufrufer,
+    # der danach keinen Raum explizit setzt (Avatar-Move, Teleport, Scheduler),
+    # einen raumlosen Char — dessen Utterances bekommen room_id='' und fallen aus
+    # dem raumgefilterten Chatfenster. Ein Aufrufer kann danach weiterhin einen
+    # spezifischen Raum am neuen Ort setzen (gewinnt, weil spaeter). Location ohne
+    # Raeume / Off-Map-Sentinel -> leer (kein Entry-Room).
+    if location and location != old_location:
+        from app.models.world import get_location_by_id, get_entry_room_id
+        _new_loc = get_location_by_id(location)
+        profile["current_room"] = get_entry_room_id(_new_loc) if _new_loc else ""
     # Aktivitaet (pose_intent) bei echtem Location-Wechsel leeren — sie gilt fuer
     # den alten Ort und wird sonst stale ("casting a spell" bleibt nach dem
     # Weggehen haengen). Greift fuer ALLE Bewegungswege zentral: Move-Skill,
