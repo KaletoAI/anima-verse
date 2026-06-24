@@ -1872,6 +1872,19 @@ class ImageGenerationSkill(BaseSkill):
         active_workflow = None
         backend = None
 
+        # Render-Target-Spec normalisieren: das "workflow"-Feld kann ein vollwertiges
+        # Match-Spec sein ("backend:<glob>" / "workflow:<glob>" / bare-Glob), z.B. aus
+        # der per-Character Render-Match. "backend:<glob>" gehoert in den Backend-Pfad
+        # (match_backend) — sonst wird der GANZE String "backend:Name" als Workflow-
+        # NAME gesucht, nicht gefunden, und faellt faelschlich auf einen ComfyUI-
+        # Default zurueck. "workflow:<glob>" -> Prefix strippen.
+        if explicit_workflow.lower().startswith("backend:"):
+            if not explicit_backend:
+                explicit_backend = explicit_workflow.split(":", 1)[1].strip()
+            explicit_workflow = ""
+        elif explicit_workflow.lower().startswith("workflow:"):
+            explicit_workflow = explicit_workflow.split(":", 1)[1].strip()
+
         if explicit_workflow:
             # Expliziten Workflow ueber das Match-Konzept aufloesen (Glob "Qwen*",
             # Auswahl nach Backend-Verfuegbarkeit; ein exakter Name matcht sich
