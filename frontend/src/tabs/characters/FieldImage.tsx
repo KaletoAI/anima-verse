@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 
 export function FieldImage({ character, kind }: { character: string; kind: string }) {
   const { t } = useI18n()
@@ -19,6 +20,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
   const [bust, setBust] = useState(1)
   const [busy, setBusy] = useState(false)
   const [profileFile, setProfileFile] = useState<string>('')
+  const [genOpen, setGenOpen] = useState(false)  // Profilbild: ImageGenDialog
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadProfile = useCallback(async () => {
@@ -85,26 +87,45 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     }
   }, [busy, enc, loadProfile, t, toast])
 
+  // Aussehen-Bild (kind!='profile'): direkter Trigger (leeres Outfit, Default-Pose).
   const generate = useCallback(async () => {
     if (busy) return
     setBusy(true)
     try {
-      if (kind === 'profile') {
-        await apiPost(`/characters/${enc}/generate-profile-image`, {})
-      } else {
-        // Override + trigger + force: leeres Outfit (no clothes), Default-Pose,
-        // neu rendern. GET (Bild/202), Antwort ignorieren — danach gepollt.
-        await fetch(`/characters/${enc}/outfit-expression?override=1&trigger=1&force=1&pieces=&items=`, {
-          credentials: 'same-origin',
-        })
-      }
+      await fetch(`/characters/${enc}/outfit-expression?override=1&trigger=1&force=1&pieces=&items=`, {
+        credentials: 'same-origin',
+      })
       toast(t('Generating…'))
       startPoll()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       setBusy(false)
     }
-  }, [busy, kind, enc, t, toast, startPoll])
+  }, [busy, enc, t, toast, startPoll])
+
+  // Profilbild: kommt aus dem ImageGenDialog (Backend/Workflow/Modell/LoRAs
+  // waehlbar) -> /generate-profile-image mit den Dialog-Params. Leerer Prompt =
+  // Server nimmt die Appearance.
+  const submitGenerate = useCallback(async (payload: ImageGenSubmit) => {
+    setGenOpen(false)
+    setBusy(true)
+    try {
+      const body: Record<string, unknown> = { prompt: payload.prompt }
+      if (payload.workflow) body.workflow = payload.workflow
+      if (payload.backend) body.backend = payload.backend
+      if (payload.model_override) body.model_override = payload.model_override
+      if (payload.loras && payload.loras.length) {
+        body.loras = payload.loras.map((l) => ({ file: l.name, strength: l.strength }))
+      }
+      if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
+      await apiPost(`/characters/${enc}/generate-profile-image`, body)
+      toast(t('Generating…'))
+      startPoll()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setBusy(false)
+    }
+  }, [enc, t, toast, startPoll])
 
   return (
     <div className="tpl-field-image">
@@ -120,7 +141,8 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
         <div className="tpl-field-image-empty">{t('No image yet')}</div>
       )}
       <div style={{ display: 'flex', gap: 6 }}>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={generate}>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+          onClick={kind === 'profile' ? () => setGenOpen(true) : generate}>
           {busy ? t('Generating…') : t('Generate')}
         </button>
         {kind === 'profile' ? (
@@ -142,6 +164,15 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
           </>
         ) : null}
       </div>
+      {kind === 'profile' && genOpen ? (
+        <ImageGenDialog
+          open
+          title={t('Generate profile image')}
+          defaultPrompt=""
+          onSubmit={submitGenerate}
+          onClose={() => setGenOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }
