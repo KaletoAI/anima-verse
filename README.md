@@ -376,7 +376,7 @@ Everything is managed from two surfaces — no config-file editing needed:
 
 | Surface          | URL               | What lives there                                                              |
 |------------------|-------------------|------------------------------------------------------------------------------|
-| **Game Admin**   | `/game-admin`     | Characters, world map, locations/rooms, items, rules, story arcs, group chats — the React management UI (also reachable from the **🎮 Game Admin** button in `/play`). |
+| **Game Admin**   | `/game-admin`     | Characters, world map, locations/rooms, items, rules, story arcs, group chats — the React management UI. |
 | **Server Admin** | `/admin/settings` | Providers & LLM routing, image/TTS backends, users & roles, model capabilities, prompt templates, agent loop, plus LLM stats and call/image logs — the cross-linked server-side config & monitoring pages. |
 
 The task queue can also be inspected **without the server** via `python queue_cli.py`

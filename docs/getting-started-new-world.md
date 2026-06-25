@@ -44,8 +44,7 @@ Infermatic) in the [README](../README.md#getting-started).
    fills in their own keys.
 
 4. **Create your first character.** Character creation lives in the game UI, not in
-   `/admin/settings`. Go to the **Game-Admin** (`/game-admin`, or the **🎮 Game Admin** button in
-   `/play`) → **Characters → `+ New`**:
+   `/admin/settings`. Open the **Game-Admin** at `/game-admin` → **Characters → `+ New`**:
 
    1. Pick a template — e.g. **Human (Roleplay)** for a typical chat partner. Others:
       `Human (Default)` (pure NPC), `Animal (Default)`, `Human (Roleplay NSFW)`, plus anything you
