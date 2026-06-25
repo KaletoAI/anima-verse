@@ -24,8 +24,7 @@ emerges when both modalities are pushed that hard at the same time.
 - [Installation](#installation)
 - [Running the server](#running-the-server)
 - [Worlds & storage](#worlds--storage)
-- [Getting started with a new world](#getting-started-with-a-new-world)
-- [Configuration model](#configuration-model)
+- [Getting started](#getting-started)
 - [Admin & monitoring surfaces](#admin--monitoring-surfaces)
 - [Documentation](#documentation)
 - [Status & disclaimers](#status--disclaimers)
@@ -299,14 +298,16 @@ start.
 
 ---
 
-## Getting started with a new world
+## Getting started
 
-The full step-by-step first-world walk-through (create a world, configure providers, build
-characters, the map, rules, chat mode, …) has moved to
+The quickest start is the **bundled `demo` world** — `./start.sh` boots it as-is; you only need to
+point it at an LLM backend in the admin UI. To build your own world from zero instead, the full
+step-by-step walk-through (create a world, configure providers, build characters, the map, rules,
+chat mode, …) lives in
 **[docs/getting-started-new-world.md](docs/getting-started-new-world.md)**.
 
-The part most people get stuck on first is a **working LLM (and image) backend**. Two setups that
-work out of the box — plug either into step 3 of the walk-through:
+Either way, the part most people get stuck on first is a **working LLM (and image) backend**. Two
+setups that work out of the box:
 
 ### Option A — LocalAI (self-hosted, OpenAI-compatible)
 
@@ -361,40 +362,22 @@ different fine-tunes:
   image captioning/recognition. Embeddings (`pose_embedding`) run best **built-in** (*Internal*), so
   Infermatic needs no embeddings model.
 - Drive the RP model in **`rp_first`** chat mode, with the Sao10K tool model behind the Tool LLM.
-  Image generation still needs a separate backend (ComfyUI or a hosted image API) — Infermatic
-  covers the LLM side.
-
----
-
-## Configuration model
-
-There is **no `.env` file** and the app does not read config from environment variables. Each world
-is self-contained under `worlds/<world>/`:
-
-- **`config.json`** — LLM providers, image backends, TTS, routing, feature toggles. Edited through
-  the admin UI at `/admin/settings`, not by hand.
-- **`secrets.json`** — API keys / JWT secret / passwords. Gitignored, overlaid onto `config.json`
-  at load.
-
-Empty config fields are pre-filled with schema defaults on load, so the admin UI always shows the
-effective value. (Two legacy exceptions still read a root `.env`: `queue_cli.py` for `TASK_QUEUE_DB`
-and the `docker/` setup.)
+- **Image generation** is separate — Infermatic only covers the LLM side. Without a local GPU, two
+  cheap hosted options are **[Together.ai](https://www.together.ai)** (backend type `together`,
+  Flux/SD models) and **[Civitai](https://civitai.com)** (backend type `civitai`, huge model + LoRA
+  catalogue, pay-per-image). Add either under **Image Backends** instead of running ComfyUI/LocalAI
+  yourself.
 
 ---
 
 ## Admin & monitoring surfaces
 
-| Page                  | URL                 | Purpose                                                |
-|-----------------------|---------------------|--------------------------------------------------------|
-| Settings              | `/admin/settings`   | Providers, routing, image/TTS backends, feature config |
-| Users                 | `/admin/users`      | Accounts, roles, password reset                        |
-| Model Capabilities    | `/admin/models`     | Tool-calling / vision support per model                |
-| Agent Loop            | `/admin/agent-loop` | Autonomous-thought loop status & controls              |
-| LLM Templates         | `/admin/templates`  | Live editor for the Jinja2 prompt templates            |
-| LLM Stats             | `/admin/llm-stats`  | Latency / token usage per model & task                 |
-| Logs                  | `/logs/*`           | LLM call log, image-prompt log                         |
-| Dashboard             | `/dashboard`        | Overview / monitoring                                  |
-| Health                | `/health`           | Liveness check                                         |
+Everything is managed from two surfaces — no config-file editing needed:
+
+| Surface          | URL               | What lives there                                                              |
+|------------------|-------------------|------------------------------------------------------------------------------|
+| **Game Admin**   | `/game-admin`     | Characters, world map, locations/rooms, items, rules, story arcs, group chats — the React management UI (also reachable from the **🎮 Game Admin** button in `/play`). |
+| **Server Admin** | `/admin/settings` | Providers & LLM routing, image/TTS backends, users & roles, model capabilities, prompt templates, agent loop, plus LLM stats and call/image logs — the cross-linked server-side config & monitoring pages. |
 
 The task queue can also be inspected **without the server** via `python queue_cli.py`
 (`list` / `info` / `cancel` / `retry` / `stats` / …) — it reads the SQLite DB directly.
@@ -409,9 +392,6 @@ The task queue can also be inspected **without the server** via `python queue_cl
   self-hosted LocalAI backend (single-GPU watchdog, GPU-label serialization, Proxmox-LXC note).
 - **`docs/`** — technical reference (config defaults, LLM task mapping/templates, movement model,
   plugins).
-- **`development_instructions/`** — living plan/design docs for individual subsystems.
-- **`CLAUDE.md`** — build/run commands and cross-file architecture notes.
-- **`CHAT_PROMPTS.md`** — chat system/user prompt layout and caching behaviour.
 
 ---
 

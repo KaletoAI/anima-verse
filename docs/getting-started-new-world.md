@@ -2,7 +2,7 @@
 
 Walk-through for setting up a fresh world from zero. For a quick, working **LLM +
 image backend** to plug in at step 3, see the two ready-made setups (LocalAI /
-Infermatic) in the [README](../README.md#getting-started-with-a-new-world).
+Infermatic) in the [README](../README.md#getting-started).
 
 > If a step is unclear, see [`images/getting-started/`](images/getting-started/) for a
 > few annotated screenshots. They are not linked inline, since UIs evolve faster than screenshots.

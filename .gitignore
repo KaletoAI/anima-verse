@@ -39,6 +39,7 @@ tools/
 docs/llm-task-mapping.md
 CHAT_PROMPTS.md
 MODEL_TESTS.md
+CLAUDE.md
 
 # Python
 __pycache__/
