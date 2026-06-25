@@ -111,7 +111,13 @@ stops acting autonomously).
 
 ### Image generation & animation
 - Backends: **ComfyUI**, **Stable Diffusion WebUI (A1111/Forge)**, **CivitAI**, **Together.ai**,
-  **Mammouth AI** — cost-based selection with failover.
+  plus two generic OpenAI-compatible types:
+  - **`openai_chat`** — image-returning *chat-completions* endpoints (the model replies with an
+    image), e.g. **Mammouth AI**. Text-only; no reference images.
+  - **`openai_diffusion`** — `/v1/images/generations` (DALL·E-style) endpoints, e.g. **LocalAI**.
+    Sends reference images as base64 and supports inline `<lora:name:weight>` LoRAs; API key optional.
+
+  Render targets are matched per use case, with cost-based selection and failover across backends.
 - **Use-case-driven styling:** every render occasion is a *use case* and the style belongs to the
   use case; `image_family` (`natural` prose for Flux/Qwen vs. `keywords` tags for Z-Image/SD)
   selects the prompt adapter and style family.
@@ -168,7 +174,7 @@ corresponding feature.
 | Purpose            | Options                                                                       |
 |--------------------|------------------------------------------------------------------------------|
 | **LLM (required)** | Ollama · any OpenAI-compatible API (vLLM, llama-swap, …) · Anthropic          |
-| Image generation   | ComfyUI · Stable Diffusion WebUI (A1111/Forge, run with `--listen --api`) · CivitAI · Together.ai · Mammouth |
+| Image generation   | ComfyUI · Stable Diffusion WebUI (A1111/Forge, run with `--listen --api`) · CivitAI · Together.ai · `openai_chat` (e.g. Mammouth) · `openai_diffusion` (e.g. LocalAI) |
 | Text-to-speech     | XTTS v2 · F5-TTS · Magpie (Riva) · ComfyUI (Qwen3-TTS)                        |
 | Web search         | SearX / SearXNG                                                               |
 | Animation          | ComfyUI (img2video workflow, e.g. Wan2.2)                                     |
