@@ -213,7 +213,7 @@ class ProviderManager:
             # (civitai/together/mammouth), sonst sind sie im Queue-Panel
             # unsichtbar UND die Channel-Auswahl (find_channel) faellt fuer
             # einen Cloud-Backend-Job faelschlich auf einen ComfyUI-Channel.
-            if api_type not in ("comfyui", "a1111", "civitai", "together", "openai_chat", "openai_diffusion"):
+            if api_type not in ("comfyui", "a1111", "civitai", "together", "openai_chat", "openai_diffusion", "localai"):
                 continue
             api_url = os.environ.get(f"{prefix}API_URL", "").strip()
             if not api_url:

@@ -1701,10 +1701,11 @@ def get_imagegen_options() -> Dict[str, Any]:
         if backend_models:
             opt["models"] = backend_models
             opt["default_model"] = getattr(b, 'model', backend_models[0])
-        # LoRAs via Prompt-Syntax (<lora:name:gewicht>) — aktuell openai_diffusion.
-        # Auswahl kommt aus der LoRA-Library, gefiltert nach DIESEM Backend, damit
-        # der Image-Gen-Dialog (z.B. „2D map icon") passende LoRA-Felder zeigt.
-        if b.api_type == "openai_diffusion":
+        # LoRAs aus der per-Welt LoRA-Library, gefiltert nach DIESEM Backend (endpoint),
+        # damit der Image-Gen-Dialog passende LoRA-Felder zeigt. Beide Cloud-Library-
+        # Backends: localai uebertraegt als <lora:>-Prompt-Syntax, openai_diffusion
+        # (Gateway) dynamisch als lora_NN/strength_NN-Params.
+        if b.api_type in ("localai", "openai_diffusion"):
             from app.core.config import get_lora_library_names
             opt["has_loras"] = True
             opt["lora_options"] = get_lora_library_names(b.name)

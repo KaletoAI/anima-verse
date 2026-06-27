@@ -172,7 +172,7 @@
             "device": ""
           }
         ],
-        "api_type": "openai_diffusion",
+        "api_type": "localai",
         "api_url": "http://192.168.8.197:8080",
         "api_key": "",
         "model": "flux.2-klein-4b",
@@ -193,7 +193,7 @@
             "device": ""
           }
         ],
-        "api_type": "openai_diffusion",
+        "api_type": "localai",
         "api_url": "http://192.168.8.197:8080",
         "api_key": "",
         "model": "Z-Image-Turbo",

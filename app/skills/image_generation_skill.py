@@ -2446,6 +2446,19 @@ class ImageGenerationSkill(BaseSkill):
                                 _validated.append({"name": "None", "strength": 1.0})
                         params["lora_inputs"] = _validated
 
+            # Cloud-Backends mit LoRA-Library (localai/openai_diffusion) laufen NICHT
+            # ueber den Workflow-Pfad oben — die im Dialog gewaehlten LoRAs (aus der
+            # endpoint-gefilterten per-Welt LoRA-Library) hier direkt nach lora_inputs
+            # uebernehmen, damit das Backend sie dynamisch in den Request uebertraegt
+            # (localai: <lora:>-Prompt, openai_diffusion: lora_NN/strength_NN-Params).
+            elif backend.api_type in ("localai", "openai_diffusion"):
+                _dialog_loras = input_data.get("loras")
+                if _dialog_loras:
+                    params["lora_inputs"] = [
+                        l for l in _dialog_loras
+                        if isinstance(l, dict) and (l.get("name") or "None") != "None"
+                    ]
+
             # Referenz-Slots fuer die Generierung (Conditioning) aufloesen.
             # Workflows mit Referenz-Slots (z.B. QWEN_STYLE) bekommen die
             # aufgeloesten Referenzbilder direkt in die Generierung injiziert.

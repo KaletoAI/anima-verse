@@ -1057,7 +1057,7 @@ async def imagegen_backend_models(backend_name: str,
                                   user=Depends(require_admin)):
     """Liefert Modellliste fuer ein Image-Generation-Backend (Cloud).
 
-    - Together / openai_diffusion / openai_chat: Live-Liste via /v1/models
+    - Together / openai_diffusion / localai / openai_chat: Live-Liste via /v1/models
     - CivitAI: aktuell nur das konfigurierte backend.model (kein API-Listing)
     - ComfyUI: leitet auf comfyui-models um
 
@@ -1079,9 +1079,9 @@ async def imagegen_backend_models(backend_name: str,
     clip: list = []
     vae: list = []
     try:
-        if api_type in ("together", "openai_diffusion", "openai_chat"):
+        if api_type in ("together", "openai_diffusion", "localai", "openai_chat"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
-            # api_key optional fuer openai_diffusion (LocalAI ohne Auth)
+            # api_key optional fuer localai (LocalAI ohne Auth); Gateway/Together brauchen ihn
             _hdrs = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(f"{base}/models", headers=_hdrs)

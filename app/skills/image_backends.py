@@ -461,7 +461,8 @@ class OpenAIChatImageBackend(ImageBackend):
     Generisches Bild-Backend fuer OpenAI-Chat-kompatible Bild-Output-Modelle
     (z.B. Mammouth AI, Gemini-Image, GPT-Image-via-Chat). Das Bild kommt aus der
     Chat-Antwort, nicht aus einem Diffusion-Endpoint — fuer Diffusion-Modelle
-    (SD/Flux/Z-Image) ist OpenAIDiffusionBackend (api_type "openai_diffusion") da.
+    (SD/Flux/Z-Image) sind LocalAIBackend (api_type "localai") bzw. das strikt
+    OpenAI-konforme OpenAIDiffusionBackend (api_type "openai_diffusion") da.
     API: POST {url}/chat/completions
     Response: choices[0].message.images[].image_url.url (data:image/png;base64,...)
     """
@@ -2249,19 +2250,22 @@ class TogetherBackend(ImageBackend):
             return []
 
 
-class OpenAIDiffusionBackend(TogetherBackend):
-    """Generischer OpenAI-kompatibler Diffusion-Endpoint (POST {url}/v1/images/generations).
+class LocalAIBackend(TogetherBackend):
+    """LocalAI-style OpenAI-kompatibler Diffusion-Endpoint (POST {url}/v1/images/generations).
 
-    Funktioniert mit LocalAI / vLLM / jedem Server, der die OpenAI-Images-API
-    spricht. Unterschiede zum Together.ai-spezifischen TogetherBackend:
+    Funktioniert mit LocalAI / vLLM / sd.cpp / jedem Server mit deren Eigenheiten.
+    Unterschiede zum Together.ai-spezifischen TogetherBackend:
       - **api_key optional** (LocalAI braucht keinen Bearer-Token).
       - **ref_images-Support** (Flux Kontext / Referenzbild-Conditioning): lokale
         Referenzdateien werden als **rohes base64** mitgeschickt (LocalAI/Flux
         erwartet KEIN data:-URI-Praefix), http(s)-URLs unveraendert durchgereicht.
         Quelle ist params['reference_images'] (vom Skill aufgeloeste Slots —
         dieselbe Quelle wie bei ComfyUI).
-      - schickt **keine** Together-Eigenheiten (disable_safety_checker) und nutzt
-        ``size`` ("WxH") statt separater width/height-Felder.
+      - LoRAs als ``<lora:name:gewicht>``-Prompt-Syntax (sd.cpp/LocalAI), nutzt den
+        LocalAI-Parameternamen ``step`` und ``size`` ("WxH") statt width/height.
+
+    Fuer einen Endpoint, der sich an den **strikten OpenAI-Images-Standard** haelt
+    (z.B. das LLM-Gateway), siehe die abgeleitete ``OpenAIDiffusionBackend``.
 
     Erbt _post_with_retry / _rate_limit_wait von TogetherBackend (gleicher Endpoint).
     """
@@ -2269,7 +2273,7 @@ class OpenAIDiffusionBackend(TogetherBackend):
     def __init__(self, name: str, api_url: str, cost: float, env_prefix: str,
                  api_key: str = "", model: str = ""):
         super().__init__(name, api_url, cost, env_prefix, api_key=api_key, model=model)
-        self.api_type = "openai_diffusion"
+        self.api_type = "localai"
 
     def _headers(self) -> Dict[str, str]:
         # api_key optional — Authorization nur senden wenn gesetzt.
@@ -2437,6 +2441,184 @@ class OpenAIDiffusionBackend(TogetherBackend):
             return []
 
 
+class OpenAIDiffusionBackend(LocalAIBackend):
+    """Strikt OpenAI-Images-Standard (POST {url}/v1/images/generations).
+
+    Fuer Endpoints, die sich an den OpenAI-Standard halten — insbesondere das
+    **LLM-Gateway** (OpenAI-kompatibler Reverse-Proxy vor ComfyUI). Unterschiede
+    zum LocalAI-flavour (``LocalAIBackend``):
+      - Parametername ``steps`` (nicht ``step``).
+      - Generischer **Extra-Params-Block** (JSON): beliebige Zusatz-Keys
+        (seed/steps/cfg/lora_01/...) werden 1:1 in den Request gemergt. Welche Namen
+        gueltig sind, definiert der Alias-Workflow gateway-seitig — daher NICHT
+        hartkodiert, sondern frei konfigurierbar.
+      - ``response_format`` konfigurierbar (Default ``b64_json``).
+      - **Bearer-Header auch beim Result-URL-Abruf** (Gateway-Result-URLs sind nicht
+        oeffentlich, verlangen denselben Job-Owner-Token).
+      - Fehler-Mapping nach OpenAI-/Gateway-Semantik: 400=Request-Fehler (kein Retry),
+        401/403=Config, 402=Quota, 502=1x Retry, 503=Backoff-Retry, 429=Backoff.
+
+    ``model`` ist hier ein **Generierungs-Alias** des Gateways, kein ComfyUI-Checkpoint.
+    ``ref_images`` (rohes base64) bleibt geerbt — das Gateway akzeptiert es als Bonus.
+    """
+
+    def __init__(self, name: str, api_url: str, cost: float, env_prefix: str,
+                 api_key: str = "", model: str = ""):
+        super().__init__(name, api_url, cost, env_prefix, api_key=api_key, model=model)
+        self.api_type = "openai_diffusion"
+        rf = os.environ.get(f"{env_prefix}RESPONSE_FORMAT", "").strip().lower()
+        self.response_format = rf if rf in ("b64_json", "url") else "b64_json"
+        # Extra-Params: frei konfigurierbarer JSON-Block (loras/seed/steps/cfg/...).
+        # Wird als zusaetzliche Top-Level-Keys in den Request gemergt.
+        raw = os.environ.get(f"{env_prefix}EXTRA_PARAMS", "").strip()
+        self.extra_params: Dict[str, Any] = {}
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    self.extra_params = parsed
+                else:
+                    logger.warning(f"{name}: EXTRA_PARAMS ist kein JSON-Objekt, ignoriert")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"{name}: EXTRA_PARAMS kein gueltiges JSON ({e}), ignoriert")
+
+    def _post_gateway(self, payload: Dict[str, Any]) -> requests.Response:
+        """POST mit OpenAI-/Gateway-Fehler-Mapping (Spec §6). Blockiert synchron bis
+        das Bild fertig ist (Gateway parkt unter Last selbst — kein eigenes Throttling).
+        """
+        url = f"{self.api_url}/v1/images/generations"
+        _429 = _502 = _503 = 0
+        max_429, max_502, max_503 = 4, 1, 4
+        while True:
+            resp = requests.post(url, json=payload, headers=self._headers(),
+                                 timeout=self.timeout)
+            code = resp.status_code
+            if code == 200:
+                return resp
+            body = (resp.text or "")[:300]
+            if code == 429:
+                if _429 >= max_429:
+                    raise RuntimeError(f"{self.name}: HTTP 429 (Rate-Limit) nach {max_429} Versuchen")
+                _429 += 1
+                wait = self._rate_limit_wait(resp, _429)
+                logger.warning(f"{self.name}: 429, warte {wait:.1f}s ({_429}/{max_429})")
+                time.sleep(wait)
+                continue
+            if code == 503:  # kein gesundes Backend fuer den Alias — mit Backoff erneut
+                if _503 >= max_503:
+                    raise RuntimeError(f"{self.name}: HTTP 503 (kein Backend) nach {max_503} Versuchen: {body}")
+                _503 += 1
+                wait = min(2.0 * (2 ** (_503 - 1)), 30.0)
+                logger.warning(f"{self.name}: 503 (kein gesundes Backend), warte {wait:.1f}s ({_503}/{max_503})")
+                time.sleep(wait)
+                continue
+            if code == 502:  # Generierung fehlgeschlagen / Park-Timeout — 1x erneut
+                if _502 >= max_502:
+                    raise RuntimeError(f"{self.name}: HTTP 502 (Generierung fehlgeschlagen): {body}")
+                _502 += 1
+                logger.warning(f"{self.name}: 502, einmaliger Retry ({_502}/{max_502})")
+                continue
+            if code == 402:
+                logger.error(f"{self.name}: HTTP 402 — Credit-/Quota-Limit erreicht: {body}")
+                raise RuntimeError(f"{self.name}: Quota/Credit-Limit erreicht (HTTP 402): {body[:160]}")
+            if code in (401, 403):
+                logger.error(f"{self.name}: HTTP {code} — API-Key/Alias nicht erlaubt: {body}")
+                raise RuntimeError(f"{self.name}: Auth/Alias-Fehler (HTTP {code}): {body[:160]}")
+            if code == 400:
+                logger.error(f"{self.name}: HTTP 400 — Request-Fehler (prompt/image fehlt?): {body}")
+                raise RuntimeError(f"{self.name}: Request-Fehler (HTTP 400): {body[:160]}")
+            logger.error(f"{self.name}: HTTP {code}: {body}")
+            raise RuntimeError(f"{self.name}: HTTP {code}: {body[:160]}")
+
+    def _apply_lora_params(self, payload: Dict[str, Any], params: Dict[str, Any]) -> None:
+        """Uebertraegt ausgewaehlte LoRAs dynamisch als ``lora_01``/``strength_01``,
+        ``lora_02``/``strength_02`` … (ComfyUI-/Gateway-Konvention, vgl. Spec §2/§4).
+
+        Quelle ist params['lora_inputs'] — vom Skill aufgeloest (Dialog-Auswahl aus
+        der per-Welt LoRA-Library, endpoint-gefiltert). Anders als LocalAI KEINE
+        ``<lora:>``-Prompt-Syntax: das Gateway/ComfyUI mappt die keyed Params auf den
+        Lora-Loader-Node des Alias-Workflows. 'None'/leere Slots werden uebersprungen.
+        """
+        idx = 0
+        for l in (params.get("lora_inputs") or params.get("loras") or []):
+            if not isinstance(l, dict):
+                continue
+            name = (l.get("name") or "").strip()
+            if not name or name == "None":
+                continue
+            try:
+                strength = float(l.get("strength", 1.0))
+            except (TypeError, ValueError):
+                strength = 1.0
+            idx += 1
+            payload[f"lora_{idx:02d}"] = name
+            payload[f"strength_{idx:02d}"] = strength
+        if idx:
+            logger.info(f"{self.name}: {idx} LoRA(s) dynamisch als lora_NN-Params uebertragen")
+
+    def _generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:
+        model = params.get("model") or self.model
+        width = params.get("width") or self.width
+        height = params.get("height") or self.height
+        steps = params.get("num_inference_steps") or self.num_inference_steps
+        width = round(width / 8) * 8 or 1024
+        height = round(height / 8) * 8 or 1024
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "size": f"{width}x{height}",
+            "response_format": self.response_format,
+        }
+        ref_images = self._collect_ref_images(params)
+        if ref_images:
+            payload["ref_images"] = ref_images
+        # LoRAs dynamisch (lora_01/strength_01..) — KEINE <lora:>-Prompt-Syntax.
+        self._apply_lora_params(payload, params)
+        if steps:
+            payload["steps"] = steps  # OpenAI-Standard: steps (nicht LocalAI "step")
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        seed = params.get("seed")
+        if seed and seed > 0:
+            payload["seed"] = seed
+        # Frei konfigurierte Extra-Params (Alias-Workflow-spezifisch) zuletzt mergen —
+        # sie duerfen die Defaults oben bewusst ueberschreiben.
+        if self.extra_params:
+            payload.update(self.extra_params)
+
+        logger.info(f"{self.name}: Starte Generierung (Alias {model}, {width}x{height}, "
+                    f"{len(ref_images)} Ref-Bild(er), rf={self.response_format})")
+        try:
+            resp = self._post_gateway(payload)
+            data = resp.json()
+            images: List[bytes] = []
+            for item in data.get("data", []):
+                b64 = item.get("b64_json", "")
+                if b64:
+                    images.append(base64.b64decode(b64))
+                    continue
+                url = item.get("url", "")
+                if url:
+                    # Result-URLs sind nicht oeffentlich — Bearer-Header mitschicken.
+                    img_resp = requests.get(url, headers=self._headers(), timeout=60)
+                    if img_resp.status_code == 200:
+                        images.append(img_resp.content)
+                    else:
+                        logger.error(f"{self.name}: Result-URL HTTP {img_resp.status_code}")
+            if not images:
+                logger.error(f"{self.name}: Keine Bilder in Response")
+            return images
+        except requests.Timeout:
+            logger.error(f"{self.name}: Timeout nach {self.timeout}s")
+            return []
+        except RuntimeError:
+            return []
+        except Exception as e:
+            logger.error(f"{self.name}: Fehler: {e}")
+            return []
+
+
 # Registry der verfuegbaren Backend-Typen
 BACKEND_REGISTRY = {
     "a1111": A1111Backend,
@@ -2444,5 +2626,6 @@ BACKEND_REGISTRY = {
     "comfyui": ComfyUIBackend,
     "civitai": CivitAIBackend,
     "together": TogetherBackend,
+    "localai": LocalAIBackend,
     "openai_diffusion": OpenAIDiffusionBackend,
 }

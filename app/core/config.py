@@ -971,8 +971,12 @@ def _flatten_to_env(config: dict) -> None:
                      "sampling_method", "schedule_type",
                      "checkpoint", "poll_interval", "max_wait", "disable_safety",
                      "scheduler", "clip_skip", "image_family", "timeout",
-                     "max_concurrent", "beszel_system_id"]:
+                     "max_concurrent", "beszel_system_id",
+                     "response_format", "extra_params"]:
             val = be.get(key, "")
+            # extra_params kann ein Dict sein (JSON-Editor) — als JSON-String bruecken.
+            if key == "extra_params" and isinstance(val, (dict, list)):
+                val = json.dumps(val)
             _set(env, f"{p}{key.upper()}", val)
         for gi, g in enumerate(be.get("gpus", []) or []):
             gp = f"{p}GPU{gi}_"

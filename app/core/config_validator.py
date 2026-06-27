@@ -169,8 +169,8 @@ def _check_image_backends(config: dict) -> list:
         if not api_url:
             issues.append(_err("image_generation", f"Backend '{name}': API URL fehlt"))
 
-        # Echte Cloud-Backends brauchen einen API Key. openai_chat/openai_diffusion
-        # sind generisch (koennen auf LocalAI/vLLM ohne Key zeigen) -> kein Zwang.
+        # Echte Cloud-Backends brauchen einen API Key. openai_chat/localai/openai_diffusion
+        # sind generisch (koennen auf LocalAI/vLLM/Gateway ohne Key zeigen) -> kein Zwang.
         if api_type in ("civitai", "together") and not api_key:
             issues.append(_err("image_generation", f"Backend '{name}': API Key fehlt (Cloud-Backend '{api_type}')"))
 
