@@ -1710,14 +1710,18 @@ def get_imagegen_options() -> Dict[str, Any]:
         if backend_models:
             opt["models"] = backend_models
             opt["default_model"] = getattr(b, 'model', backend_models[0])
-        # LoRAs aus der per-Welt LoRA-Library, gefiltert nach DIESEM Backend (endpoint),
-        # damit der Image-Gen-Dialog passende LoRA-Felder zeigt. Beide Cloud-Library-
-        # Backends: localai uebertraegt als <lora:>-Prompt-Syntax, openai_diffusion
-        # (Gateway) dynamisch als lora_NN/strength_NN-Params.
+        # LoRA-Auswahl im Image-Gen-Dialog. Quelle: bei gesetztem lora_url die vom
+        # Backend-Endpoint geholten LoRAs (analog ComfyUI), sonst die per-Welt
+        # LoRA-Library (endpoint-gefiltert). Uebertragung: localai als <lora:>-Prompt,
+        # openai_diffusion dynamisch als lora_NN/strength_NN-Params.
         if b.api_type in ("localai", "openai_diffusion"):
-            from app.core.config import get_lora_library_names
             opt["has_loras"] = True
-            opt["lora_options"] = get_lora_library_names(b.name)
+            _be_loras = getattr(b, "available_loras", None)
+            if getattr(b, "lora_url", "") and _be_loras:
+                opt["lora_options"] = _be_loras
+            else:
+                from app.core.config import get_lora_library_names
+                opt["lora_options"] = get_lora_library_names(b.name)
         options.append(opt)
     # Konkrete ComfyUI-Instanzen (fuer „gepinnter Endpoint"-Eintraege im Dialog).
     comfy_backends = [

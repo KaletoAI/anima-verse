@@ -394,6 +394,7 @@ SECTIONS = {
                     "api_url": {"type": "str", "label": "API URL"},
                     "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Erforderlich fuer Cloud-Backends (civitai, together) und das LLM-Gateway (openai_diffusion, Bearer immer); optional fuer openai_chat/localai (z.B. LocalAI/vLLM ohne Auth)", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together"]},
                     "model": {"type": "imagegen_model", "label": "Model", "description": "Modell-ID, Gateway-Generierungs-Alias (openai_diffusion) oder URN (civitai: urn:air:sdxl:checkpoint:...). Freitext + 'Load Models' holt die Liste vom Backend (/v1/models) als Vorschlaege.", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together"]},
+                    "lora_url": {"type": "str", "label": "LoRA Query URL", "description": "Optional: Endpoint, der die fuer das Modell verfuegbaren LoRAs liefert (GET -> {\"loras\": [...]}). Gefuellt = LoRA-Auswahl im Image-Gen-Dialog kommt von hier statt aus der LoRA-Library. '{alias}' wird durch den Modellnamen ersetzt; ohne Platzhalter wird '/v1/generations/<model>/loras' angehaengt. Beispiel: http://192.168.8.10:4000", "applicable_for": ["openai_diffusion", "localai"]},
                     "cost": {"type": "int", "label": "Kosten", "default": 0, "min": 0, "description": "Relative Kosten (0 = lokal/kostenlos, hoeher = teurer)"},
                     "width": {
                         "type": "int",

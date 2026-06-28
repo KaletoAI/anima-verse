@@ -2274,6 +2274,37 @@ class LocalAIBackend(TogetherBackend):
                  api_key: str = "", model: str = ""):
         super().__init__(name, api_url, cost, env_prefix, api_key=api_key, model=model)
         self.api_type = "localai"
+        # Optionaler Endpoint, um die fuer dieses Modell verfuegbaren LoRAs abzufragen
+        # (analog ComfyUI). Leer = keine Abfrage. ``{alias}`` wird durch den Modellnamen
+        # ersetzt; ohne Platzhalter wird ``/v1/generations/{model}/loras`` angehaengt.
+        self.lora_url = os.environ.get(f"{env_prefix}LORA_URL", "").strip()
+        self.available_loras: List[str] = []
+
+    def _lora_query_url(self) -> str:
+        """Baut die LoRA-Abfrage-URL aus lora_url + Modellname (Alias)."""
+        model = (self.model or "").strip()
+        if "{alias}" in self.lora_url:
+            return self.lora_url.replace("{alias}", model)
+        return f"{self.lora_url.rstrip('/')}/v1/generations/{model}/loras"
+
+    def fetch_loras(self) -> List[str]:
+        """Holt die verfuegbaren LoRAs vom lora_url-Endpoint (GET -> {"loras": [...]}).
+        Setzt + liefert self.available_loras. Leere/fehlerhafte Antwort -> []."""
+        if not self.lora_url or not self.model:
+            return self.available_loras
+        try:
+            resp = requests.get(self._lora_query_url(), headers=self._headers(), timeout=10)
+            if resp.status_code == 200:
+                body = resp.json()
+                loras = body.get("loras") if isinstance(body, dict) else body
+                if isinstance(loras, list):
+                    self.available_loras = [str(l).strip() for l in loras if l and str(l).strip()]
+                    logger.info(f"{self.name}: {len(self.available_loras)} LoRA(s) vom Endpoint geladen")
+            else:
+                logger.warning(f"{self.name}: LoRA-Abfrage HTTP {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"{self.name}: LoRA-Abfrage fehlgeschlagen: {e}")
+        return self.available_loras
 
     def _headers(self) -> Dict[str, str]:
         # api_key optional — Authorization nur senden wenn gesetzt.
@@ -2303,6 +2334,9 @@ class LocalAIBackend(TogetherBackend):
                     pass
                 self._mark_available(f"OpenAI-Diffusion, Modell: {self.model}")
                 self.available = True
+                # LoRAs (falls Endpoint konfiguriert) gleich mitziehen.
+                if self.lora_url:
+                    self.fetch_loras()
                 return True
             self._log_unreachable(f"HTTP {resp.status_code}")
             self.available = False
