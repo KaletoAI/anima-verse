@@ -109,7 +109,7 @@ export function ImageOverrides({ character }: { character: string }) {
           apiGet<{ workflow?: string; loras?: Lora[] }>(
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
-          apiGet<{ options?: Array<{ type?: string; name?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
+          apiGet<{ options?: Array<{ type?: string; name?: string; category?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
           apiGet<{ loras?: string[] }>(
             `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
           ),
@@ -120,14 +120,16 @@ export function ImageOverrides({ character }: { character: string }) {
         if (cancelled) return
         setPattern(ovr.workflow || '')
         setLoras(Array.isArray(ovr.loras) ? ovr.loras : [])
+        // Inpaint-Ziele (category=inpaint) sind nur für Map-Fit/Match-Edges, nicht
+        // für das normale Render-Matching eines Characters.
         setWorkflows(
           (opts.options || [])
-            .filter((o) => o.type === 'workflow' && o.name)
+            .filter((o) => o.type === 'workflow' && o.name && o.category !== 'inpaint')
             .map((o) => o.name as string),
         )
         setBackends(
           (opts.options || [])
-            .filter((o) => o.type === 'backend' && o.name)
+            .filter((o) => o.type === 'backend' && o.name && o.category !== 'inpaint')
             .map((o) => o.name as string),
         )
         setOutfitDefault(opts.outfit_imagegen_default || '')
