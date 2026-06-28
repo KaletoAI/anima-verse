@@ -30,6 +30,7 @@ interface ImagegenOption {
   lora_options?: string[] // LoRA names for backend options (from the LoRA Library, endpoint-filtered)
   ref_slot_count?: number // number of reference-image slots (0 = none)
   compatible_backends?: string[] // ComfyUI instances this workflow runs on (empty = all)
+  category?: string // 'inpaint' = nur für Map-Fit/Match-Edges, nicht für normale Renders
 }
 
 interface ComfyBackend {
@@ -296,6 +297,9 @@ export function ImageGenDialog({
     const cloud: SelectEntry[] = []
     const seenGlob = new Set<string>()
     for (const o of options) {
+      // Inpaint-Ziele gehören nur in die Map-Fit/Match-Edges-Dialoge, nie in die
+      // normale Render-Auswahl.
+      if (o.category === 'inpaint') continue
       if (o.type === 'workflow') {
         // „auto": ein Eintrag pro Filter-Glob (Match waehlt Workflow + Endpoint).
         const fspec = o.filter || o.name

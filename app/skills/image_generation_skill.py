@@ -709,9 +709,17 @@ class ImageGenerationSkill(BaseSkill):
             self._round_robin_counter[rotation_key] = idx + 1
         return tier[idx % len(tier)]
 
+    @staticmethod
+    def _is_inpaint_backend(b: ImageBackend) -> bool:
+        """Inpaint-Backends (category=="inpaint") sind NUR fuer die Inpaint-Dialoge
+        (Map-Fit/Match-Edges, explizit per exaktem backend:<name>) — niemals fuer
+        normales Render-Matching, Auto-Select oder Fallback."""
+        return getattr(b, "category", "") == "inpaint"
+
     def _select_backend(self) -> Optional[ImageBackend]:
         """Waehlt das guenstigste verfuegbare und global-enabled Backend."""
-        available = [b for b in self.backends if b.available and b.instance_enabled]
+        available = [b for b in self.backends if b.available and b.instance_enabled
+                     and not self._is_inpaint_backend(b)]
         return self.pick_lowest_cost(available, rotation_key="_select_backend")
 
     def _ensure_agent_config(self, character_name: str) -> Dict[str, Any]:
@@ -771,6 +779,9 @@ class ImageGenerationSkill(BaseSkill):
             if is_enabled:
                 # ComfyUI-Backends ohne Workflow und ohne Default-Workflow ueberspringen
                 if b.api_type == "comfyui" and not getattr(b, 'workflow_file', "") and not self._default_workflow:
+                    continue
+                # Inpaint-Backends nie ins normale Agent-Render-Matching
+                if self._is_inpaint_backend(b):
                     continue
                 available.append(b)
 
@@ -908,9 +919,13 @@ class ImageGenerationSkill(BaseSkill):
         if not pat:
             return None
         pl = pat.lower()
+        # Inpaint-Backends nur bei EXAKTEM Namen (Fit/Edge: backend:<inpaint-name>),
+        # nie ueber ein Glob/"*" — sonst landet ein normaler Render dort.
+        has_wildcard = any(ch in pat for ch in "*?[")
         matches = [b for b in self.backends
                    if fnmatch.fnmatch(b.name.lower(), pl)
-                   and b.available and b.instance_enabled]
+                   and b.available and b.instance_enabled
+                   and not (has_wildcard and self._is_inpaint_backend(b))]
         if not matches:
             return None
         return self.pick_lowest_cost(matches, rotation_key=f"backend_match:{pat}")
@@ -1035,6 +1050,10 @@ class ImageGenerationSkill(BaseSkill):
         else:
             candidates = self.list_available_backends(character_name=character_name)
             candidates = [b for b in candidates if b.name not in exclude]
+        # Inpaint-Backends sind kein Fallback fuer normale Renders. Nur wenn das
+        # fehlgeschlagene Backend selbst Inpaint war, bleibt die Kette bei Inpaint.
+        if not self._is_inpaint_backend(failed):
+            candidates = [b for b in candidates if not self._is_inpaint_backend(b)]
         return candidates[0] if candidates else None
 
     def run_with_fallback(
