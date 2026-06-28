@@ -1020,7 +1020,8 @@ def _finalize_blend(canvas, inpaint_mask, tile, border, present, crop_empty: boo
 def _compose_neighbor_canvas(location: Dict[str, Any], crop_empty: bool = False,
                              mask_grow: float = MAP_BLEND_MASK_GROW_GRAY,
                              border_frac: float = MAP_FIT_NEIGHBOR_FRAC,
-                             full_mask: bool = False):
+                             full_mask: bool = False,
+                             inner_crop: float = MAP_FIT_INNER_CROP):
     """Fit: Canvas (Nachbar-Raender, graue Mitte) + Inpaint-Maske = Mitte * mask_grow.
     ``border_frac`` steuert die Rand-Breite (kleiner = naeher an nativ, schaerfer).
     Schneidet bei ``crop_empty`` leere Aussenraender weg. Rueckgabe
@@ -1048,9 +1049,9 @@ def _compose_neighbor_canvas(location: Dict[str, Any], crop_empty: bool = False,
         _m = int(round(tile * (mask_grow - 1) / 2))
         ImageDraw.Draw(mask).rectangle(
             [border - _m, border - _m, border + tile - 1 + _m, border + tile - 1 + _m], fill=255)
-    # Edit-Modelle (full_mask): nur den inneren Kern ausschneiden — der aussen
-    # erfundene Ring faellt weg. Fill-Modelle behalten die ganze Mitte.
-    _inner = MAP_FIT_INNER_CROP if full_mask else 1.0
+    # inner_crop: nur den inneren Kern der Mitte ausschneiden (frei konfigurierbar
+    # pro Backend). Bei Teil-Maske (full_mask=False) ist der Ring ohnehin echt → 1.0.
+    _inner = inner_crop if full_mask else 1.0
     return _finalize_blend(canvas, mask, tile, border, present, crop_empty, inner_crop=_inner)
 
 
@@ -1223,7 +1224,8 @@ def _compose_edge_canvas(location: Dict[str, Any], sides=None, gray_fill: bool =
 # hart grau gefuellt; Maske = grauer Streifen + 5%. Der Workflow gibt EIN Bild
 # (gleiche Groesse) zurueck, das Backend zerschneidet es mittig und legt beide
 # Haelften in den jeweiligen Locations ab. KEIN Fill-Modell mehr.
-def _compose_edge_pair(location: Dict[str, Any], side: str):
+def _compose_edge_pair(location: Dict[str, Any], side: str,
+                       mask_grow: float = MAP_BLEND_MASK_GROW_GRAY):
     """Baut den 2-Tile-Canvas (location + Nachbar in ``side``) in Display-
     Orientierung, fuellt die Naht hart grau und erzeugt die Inpaint-Maske
     (grauer Streifen + 5%). Rueckgabe ``(cpath, mpath, info)`` oder None.
@@ -1279,8 +1281,8 @@ def _compose_edge_pair(location: Dict[str, Any], side: str):
     arr = np.array(canvas)
     arr[gray_band] = (128, 128, 128)
     canvas = Image.fromarray(arr, "RGB")
-    # Maske = Streifen + 5% (hart).
-    mask_w = blend * MAP_BLEND_MASK_GROW_GRAY
+    # Maske = Streifen * mask_grow (hart).
+    mask_w = blend * mask_grow
     mask = Image.fromarray(np.where(dist < mask_w, 255, 0).astype("uint8"), "L")
 
     cpath = tempfile.NamedTemporaryFile(suffix="_edgepair_canvas.png", delete=False).name
@@ -1695,6 +1697,13 @@ def get_imagegen_options() -> Dict[str, Any]:
             "name": b.name,
             "label": b.name if b.available else f"{b.name} (offline?)",
             "available": b.available,
+            # Zweck-Kategorie (z.B. "inpaint") + Default-Prompt — wie bei Workflows,
+            # damit der Fit/Edge-Dialog Inpaint-Backends anbietet und vorbelegt.
+            "category": getattr(b, "category", "") or "",
+            "image_family": getattr(b, "image_family", "") or "",
+            "prompt": getattr(b, "default_prompt", "") or "",
+            # Terrain-Hint-Parameter — der Dialog haengt den Hint nur an, wenn True.
+            "terrain_hint": bool(getattr(b, "terrain_hint", False)),
         }
         # Backend mit Modellliste (z.B. Together.ai) — direkt als Auswahl anbieten
         backend_models = getattr(b, 'available_models', [])
@@ -2060,7 +2069,9 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
 
         # Map-Blend: Auto-Prompt nur als Fallback, wenn KEIN Prompt mitkam (der
         # Dialog liefert ihn bereits editierbar via .../fit-prompt bzw. .../edge-prompt).
-        if _map_blend and not custom_prompt:
+        # Terrain-Hint nur, wenn das Backend ihn will (terrain_hint) — sonst beschreibt
+        # der Prompt nur den Zielstil, der graue Canvas liefert den Kontext selbst.
+        if _map_blend and not custom_prompt and getattr(backend, "terrain_hint", False):
             # Terrain-Analyse macht blockierende LLM-Submits (describe_map_tile,
             # bis zu einer pro Nachbarseite) → in einen Thread, damit die
             # Event-Loop frei bleibt. War die Ursache des Watchdog-Blocks.
@@ -2188,25 +2199,32 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         _fit_comp = None
         _edge_pair = None
         _cpath = _mpath = None
+        # Inpaint-Maskenparameter kommen rein aus den Backend-Feldern (kein Flag,
+        # keine Modell-Sonderlogik). Greift nur, wenn das Backend ein Inpaint-Backend
+        # ist (category=="inpaint"). ComfyUI-Workflows (Legacy) + Nicht-Inpaint-Fallback
+        # nutzen weiter active_wf.inpaint_gray, bis ComfyUI entfernt ist.
+        _wf_gray = bool(active_wf and getattr(active_wf, "inpaint_gray", False))
+        if getattr(backend, "category", "") == "inpaint":
+            _grow = float(getattr(backend, "mask_grow", MAP_BLEND_MASK_GROW_GRAY))
+            _full = bool(getattr(backend, "full_mask", True))
+            _inner = float(getattr(backend, "inner_crop", MAP_FIT_INNER_CROP))
+        else:
+            _grow = MAP_BLEND_MASK_GROW_GRAY if _wf_gray else MAP_BLEND_MASK_GROW_FILL
+            _full = _wf_gray
+            _inner = MAP_FIT_INNER_CROP
         if edge_match:
-            # Neues Edge-Modell: GENAU zwei benachbarte Tiles, EINE Kante. Naht hart
-            # grau, Maske = Streifen +5%. Der Workflow gibt EIN Bild zurueck — das
-            # Backend zerschneidet es mittig und legt beide Haelften in den jeweiligen
-            # Locations ab. KEIN Fill-Modell (nur Gray-Fill-Workflows).
+            # GENAU zwei benachbarte Tiles, EINE Kante. Naht hart grau, Maske =
+            # Streifen * mask_grow. Der Backend gibt EIN Bild zurueck — world.py
+            # zerschneidet es mittig und legt beide Haelften in die Nachbar-Locations.
             _side = (edge_sides[0] if isinstance(edge_sides, (list, tuple)) and edge_sides
                      else (edge_sides if isinstance(edge_sides, str) else ""))
-            _ep = _compose_edge_pair(location, _side)
+            _ep = _compose_edge_pair(location, _side, mask_grow=_grow)
             if _ep:
                 _cpath, _mpath, _edge_pair = _ep
                 params["image_use_case"] = "mapfit"  # 400-Cap umgehen: voller Output zum Zerschneiden
         elif fit_neighbors:
-            # Maskenrand pro Modell: Gray-Fill/Edit (Qwen/Flux2) +5%, Flux-Dev-Fill +2%.
-            _is_gray = bool(active_wf and getattr(active_wf, "inpaint_gray", False))
-            _grow = MAP_BLEND_MASK_GROW_GRAY if _is_gray else MAP_BLEND_MASK_GROW_FILL
-            # Edit-Modelle (inpaint_gray, z.B. Qwen-Edit) brauchen eine VOLLE Maske,
-            # sonst kopieren sie den schmalen Nachbar-Streifen in die Mitte.
             _fit_comp = _compose_neighbor_canvas(location, crop_empty=True, mask_grow=_grow,
-                                                 full_mask=_is_gray)
+                                                 full_mask=_full, inner_crop=_inner)
             if _fit_comp:
                 _cpath, _mpath, _ctile, _cfrac = _fit_comp
                 # 400-Cap umgehen: das Backend soll den VOLLEN Canvas zurueckgeben,

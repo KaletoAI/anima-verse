@@ -20,7 +20,7 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
   /** Cell display rotation (map_rotation_2d) — preview shown as on the map. */
   rotation?: number
   /** Inpaint-Workflows (category=="inpaint") zur Auswahl; leer = Server-Default. */
-  workflows?: { name: string; spec: string; family?: string; prompt?: string; gray?: boolean }[]
+  workflows?: { name: string; spec: string; family?: string; prompt?: string; terrainHint?: boolean }[]
   defaultWorkflow?: string
   /** mapfit-Default-Prompt pro Familie (natural/keywords) — Fallback ohne Workflow-Prompt. */
   mapfitPrompts?: Record<string, string>
@@ -29,8 +29,8 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
 }) {
   const { t } = useI18n()
   const availSides = useMemo(() => SIDES.filter((s) => available[s]), [available])
-  // Neues Edge-Modell: nur Gray-Fill-Workflows (Qwen/Flux2) — KEIN Flux-Dev-Fill.
-  const wfs = useMemo(() => workflows.filter((w) => w.gray), [workflows])
+  // Alle Inpaint-Ziele (category=="inpaint") — keine Gray-Filter-Sonderbehandlung.
+  const wfs = workflows
   // Genau EINE Kante zwischen zwei Karten-Elementen.
   const [sel, setSel] = useState<Side | ''>(() => availSides[0] || '')
   const [wf, setWf] = useState(() => {
@@ -61,11 +61,11 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
       .then((d) => setEdgeHint(d.prompt || ''))
       .catch(() => { /* ignore */ })
   }, [locId, selKey])
-  // Prompt = Workflow-Instruktion (+ dynamischer Terrain-Hint NUR bei Fill-
-  // Modellen). Edit-Modelle (gray) sehen die Umgebung im grauen Canvas selbst.
+  // Prompt = Instruktion (+ dynamischer Terrain-Hint NUR wenn das Ziel ihn will,
+  // terrain_hint). Edit-Modelle ohne Hint sehen die Umgebung im grauen Canvas selbst.
   useEffect(() => {
-    const isGray = !!workflows.find((w) => w.spec === wf)?.gray
-    setPrompt(isGray ? instrFor(wf) : [instrFor(wf), edgeHint].filter(Boolean).join(', '))
+    const wantsHint = !!wfs.find((w) => w.spec === wf)?.terrainHint
+    setPrompt(wantsHint ? [instrFor(wf), edgeHint].filter(Boolean).join(', ') : instrFor(wf))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wf, edgeHint])
 

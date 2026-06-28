@@ -2468,6 +2468,32 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         self.api_type = "openai_diffusion"
         rf = os.environ.get(f"{env_prefix}RESPONSE_FORMAT", "").strip().lower()
         self.response_format = rf if rf in ("b64_json", "url") else "b64_json"
+        # Zweck-Kategorie (z.B. "inpaint") — steuert, ueber welchen Endpoint generiert
+        # wird: "inpaint" -> POST /v1/images/edits (Canvas + Maske als zwei Bilder),
+        # sonst /v1/images/generations. Markiert das Backend zudem als Inpaint-Ziel
+        # fuer den Map-Fit/Edge-Dialog.
+        self.category = os.environ.get(f"{env_prefix}CATEGORY", "").strip().lower()
+        # Default-Prompt (z.B. Inpaint-Fill-Anweisung) — Fallback, wenn der Aufrufer
+        # keinen Prompt liefert.
+        self.default_prompt = os.environ.get(f"{env_prefix}PROMPT", "").strip()
+        # Inpaint-Maskenparameter (nur bei category=inpaint). KEINE Modell-Sonderlogik —
+        # alles frei konfigurierbar; der Map-Blend-Pfad (world.py) baut Canvas + Maske
+        # rein aus diesen Werten. Die Maske wird IMMER mitgegeben.
+        #   full_mask    True = ganze Flaeche maskieren, False = nur die Mitte/Zelle
+        #   terrain_hint True = dynamische Terrain-Beschreibung an den Prompt anhaengen
+        #   mask_grow    Maskenrand-Faktor (1.05 = +5%)
+        #   inner_crop   Kern-Ausschnitt der Mitte (0.7 = innere 70%)
+        def _flag(key: str, default: bool) -> bool:
+            return os.environ.get(f"{env_prefix}{key}", str(default)).strip().lower() in ("true", "1", "yes")
+        def _num(key: str, default: float) -> float:
+            try:
+                return float(os.environ.get(f"{env_prefix}{key}", "").strip() or default)
+            except (TypeError, ValueError):
+                return default
+        self.full_mask = _flag("FULL_MASK", True)
+        self.terrain_hint = _flag("TERRAIN_HINT", False)
+        self.mask_grow = _num("MASK_GROW", 1.05)
+        self.inner_crop = _num("INNER_CROP", 0.7)
         # Extra-Params: frei konfigurierbarer JSON-Block (loras/seed/steps/cfg/...).
         # Wird als zusaetzliche Top-Level-Keys in den Request gemergt.
         raw = os.environ.get(f"{env_prefix}EXTRA_PARAMS", "").strip()
@@ -2482,16 +2508,26 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             except (ValueError, TypeError) as e:
                 logger.warning(f"{name}: EXTRA_PARAMS kein gueltiges JSON ({e}), ignoriert")
 
-    def _post_gateway(self, payload: Dict[str, Any]) -> requests.Response:
+    def _post_gateway(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
+                      files: Optional[list] = None,
+                      data: Optional[Dict[str, Any]] = None) -> requests.Response:
         """POST mit OpenAI-/Gateway-Fehler-Mapping (Spec §6). Blockiert synchron bis
         das Bild fertig ist (Gateway parkt unter Last selbst — kein eigenes Throttling).
+
+        ``endpoint`` = "generations" (JSON) oder "edits" (multipart: ``files`` + ``data``).
+        Bei multipart KEIN Content-Type setzen — requests fuegt die Boundary selbst an,
+        daher nur der Bearer-Header (Spec: Auth auf jedem Request).
         """
-        url = f"{self.api_url}/v1/images/generations"
+        url = f"{self.api_url}/v1/images/{endpoint}"
+        if json is not None:
+            headers = self._headers()
+        else:
+            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         _429 = _502 = _503 = 0
         max_429, max_502, max_503 = 4, 1, 4
         while True:
-            resp = requests.post(url, json=payload, headers=self._headers(),
-                                 timeout=self.timeout)
+            resp = requests.post(url, json=json, files=files, data=data,
+                                 headers=headers, timeout=self.timeout)
             code = resp.status_code
             if code == 200:
                 return resp
@@ -2556,7 +2592,62 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         if idx:
             logger.info(f"{self.name}: {idx} LoRA(s) dynamisch als lora_NN-Params uebertragen")
 
+    def _is_inpaint(self, params: Dict[str, Any]) -> bool:
+        """Inpaint, wenn das Backend so kategorisiert ist ODER eine Maske vorliegt."""
+        refs = params.get("reference_images") or {}
+        return self.category == "inpaint" or "input_mask" in refs
+
+    def _collect_ref_bytes(self, params: Dict[str, Any]) -> List[tuple]:
+        """Referenzbilder als geordnete (title, bytes)-Liste fuer den edits-Upload.
+
+        Reihenfolge = Insertion-Order von params['reference_images']. Der Aufrufer
+        unterscheidet anhand des Titels: 'input_mask' -> mask-Feld, alles andere ->
+        image-Feld (Canvas/Referenzen).
+        """
+        out: List[tuple] = []
+        for title, path in (params.get("reference_images") or {}).items():
+            if not path:
+                continue
+            sp = str(path)
+            try:
+                if sp.startswith(("http://", "https://")):
+                    r = requests.get(sp, timeout=30)
+                    if r.status_code == 200:
+                        out.append((title, r.content))
+                elif sp.startswith("data:"):
+                    out.append((title, base64.b64decode(sp.split(",", 1)[1] if "," in sp else sp)))
+                else:
+                    with open(sp, "rb") as f:
+                        out.append((title, f.read()))
+            except Exception as e:
+                logger.warning(f"{self.name}: Referenzbild '{sp}' nicht lesbar: {e}")
+        return out
+
+    def _parse_image_response(self, resp: requests.Response) -> List[bytes]:
+        """Gemeinsames Response-Parsing (b64_json | url) fuer generations + edits."""
+        images: List[bytes] = []
+        for item in resp.json().get("data", []):
+            b64 = item.get("b64_json", "")
+            if b64:
+                images.append(base64.b64decode(b64))
+                continue
+            url = item.get("url", "")
+            if url:
+                # Result-URLs sind nicht oeffentlich — Bearer-Header mitschicken.
+                img_resp = requests.get(url, headers=self._headers(), timeout=60)
+                if img_resp.status_code == 200:
+                    images.append(img_resp.content)
+                else:
+                    logger.error(f"{self.name}: Result-URL HTTP {img_resp.status_code}")
+        if not images:
+            logger.error(f"{self.name}: Keine Bilder in Response")
+        return images
+
     def _generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:
+        prompt = prompt or self.default_prompt
+        if self._is_inpaint(params):
+            return self._generate_edits(prompt, negative_prompt, params)
+
         model = params.get("model") or self.model
         width = params.get("width") or self.width
         height = params.get("height") or self.height
@@ -2590,25 +2681,94 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         logger.info(f"{self.name}: Starte Generierung (Alias {model}, {width}x{height}, "
                     f"{len(ref_images)} Ref-Bild(er), rf={self.response_format})")
         try:
-            resp = self._post_gateway(payload)
-            data = resp.json()
-            images: List[bytes] = []
-            for item in data.get("data", []):
-                b64 = item.get("b64_json", "")
-                if b64:
-                    images.append(base64.b64decode(b64))
-                    continue
-                url = item.get("url", "")
-                if url:
-                    # Result-URLs sind nicht oeffentlich — Bearer-Header mitschicken.
-                    img_resp = requests.get(url, headers=self._headers(), timeout=60)
-                    if img_resp.status_code == 200:
-                        images.append(img_resp.content)
-                    else:
-                        logger.error(f"{self.name}: Result-URL HTTP {img_resp.status_code}")
-            if not images:
-                logger.error(f"{self.name}: Keine Bilder in Response")
-            return images
+            resp = self._post_gateway("generations", json=payload)
+            return self._parse_image_response(resp)
+        except requests.Timeout:
+            logger.error(f"{self.name}: Timeout nach {self.timeout}s")
+            return []
+        except RuntimeError:
+            return []
+        except Exception as e:
+            logger.error(f"{self.name}: Fehler: {e}")
+            return []
+
+    def _to_openai_mask(self, raw: bytes) -> bytes:
+        """Graustufen-Inpaint-Maske (weiss = zu fuellen, ComfyUI-Konvention) ->
+        OpenAI-Edits-Standard: RGBA-PNG, wo editiert wird ist alpha=0 (transparent).
+        Bei Fehler die Rohbytes unveraendert (degradiert, statt zu crashen)."""
+        try:
+            from PIL import Image, ImageOps
+            import io as _io
+            m = Image.open(_io.BytesIO(raw)).convert("L")
+            rgba = Image.new("RGBA", m.size, (255, 255, 255, 255))
+            rgba.putalpha(ImageOps.invert(m))  # weiss(255) -> alpha 0 (transparent = edit)
+            buf = _io.BytesIO()
+            rgba.save(buf, format="PNG")
+            return buf.getvalue()
+        except Exception as e:
+            logger.warning(f"{self.name}: Masken-Konvertierung fehlgeschlagen ({e}), sende roh")
+            return raw
+
+    def _generate_edits(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:
+        """Inpaint/img2img ueber POST /v1/images/edits (multipart).
+
+        Das Gateway mappt ``image`` -> ``inputs.init_image`` und ``mask`` -> ``inputs.mask``
+        (Gateway-Plan: "image+mask -> inputs.init_image/mask"). Daher geht der Canvas
+        ins ``image``-Feld und die Inpaint-Maske ins **dedizierte** ``mask``-Feld —
+        NICHT als zweites ``image``, sonst greift keine Latent-Noise-Mask und das
+        ganze Bild wird neu gerechnet (nur der maskierte Bereich soll sich aendern).
+        Der Gateway gibt den vollen (inpainteten) Canvas zurueck — den Mitte-Crop macht
+        der Aufrufer (world.py) selbst.
+        """
+        model = params.get("model") or self.model
+        width = params.get("width") or self.width
+        height = params.get("height") or self.height
+        width = round(width / 8) * 8 or 1024
+        height = round(height / 8) * 8 or 1024
+
+        ref_bytes = self._collect_ref_bytes(params)
+        if not ref_bytes:
+            logger.error(f"{self.name}: Inpaint ohne Eingangsbild/Maske — abgebrochen")
+            return []
+        # Canvas/Referenzen -> image, input_mask -> mask. Maske ans Ende (Feldname
+        # entscheidet die Zuordnung, nicht die Position). Die Inpaint-Maske wird auf
+        # den OpenAI-Edits-Standard konvertiert: RGBA, transparent = zu editieren.
+        files: list = []
+        mask_part = None
+        for title, raw in ref_bytes:
+            if "mask" in title.lower():
+                mask_part = ("mask", (f"{title}.png", self._to_openai_mask(raw), "image/png"))
+            else:
+                files.append(("image", (f"{title}.png", raw, "image/png")))
+        if mask_part:
+            files.append(mask_part)
+
+        # Form-Felder: alle Werte als String (multipart). Extra-Params + LoRAs zuletzt.
+        data: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "size": f"{width}x{height}",
+            "response_format": self.response_format,
+        }
+        steps = params.get("num_inference_steps") or self.num_inference_steps
+        if steps:
+            data["steps"] = steps
+        if negative_prompt:
+            data["negative_prompt"] = negative_prompt
+        seed = params.get("seed")
+        if seed and seed > 0:
+            data["seed"] = seed
+        self._apply_lora_params(data, params)
+        if self.extra_params:
+            data.update(self.extra_params)
+        data = {k: str(v) for k, v in data.items()}
+
+        _img_n = sum(1 for f, _ in files if f == "image")
+        logger.info(f"{self.name}: Starte Inpaint/edits (Alias {model}, {width}x{height}, "
+                    f"{_img_n} image + {'1 mask' if mask_part else 'KEINE mask'})")
+        try:
+            resp = self._post_gateway("edits", files=files, data=data)
+            return self._parse_image_response(resp)
         except requests.Timeout:
             logger.error(f"{self.name}: Timeout nach {self.timeout}s")
             return []

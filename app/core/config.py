@@ -972,7 +972,8 @@ def _flatten_to_env(config: dict) -> None:
                      "checkpoint", "poll_interval", "max_wait", "disable_safety",
                      "scheduler", "clip_skip", "image_family", "timeout",
                      "max_concurrent", "beszel_system_id",
-                     "response_format", "extra_params"]:
+                     "response_format", "extra_params", "category", "prompt",
+                     "full_mask", "terrain_hint", "mask_grow", "inner_crop"]:
             val = be.get(key, "")
             # extra_params kann ein Dict sein (JSON-Editor) — als JSON-String bruecken.
             if key == "extra_params" and isinstance(val, (dict, list)):

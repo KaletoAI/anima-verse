@@ -83,20 +83,25 @@ export function MapTab() {
   const [edge, setEdge] = useState<{ loc: Location; available: Record<string, string> } | null>(null)
   // Inpaint-Workflows (category=="inpaint") fuer die Auswahl in Fit/Edge + die
   // mapfit-Default-Prompts pro Familie (belegen das Prompt-Feld vor).
-  const [inpaintWfs, setInpaintWfs] = useState<{ name: string; spec: string; family: string; prompt: string; gray: boolean }[]>([])
+  const [inpaintWfs, setInpaintWfs] = useState<{ name: string; spec: string; family: string; prompt: string; terrainHint: boolean }[]>([])
   const [mapfitPrompts, setMapfitPrompts] = useState<Record<string, string>>({})
   useEffect(() => {
     apiGet<{
       mapfit_prompts?: Record<string, string>
-      options?: Array<{ type?: string; name?: string; category?: string; image_family?: string; prompt?: string; inpaint_gray?: boolean }>
+      options?: Array<{ type?: string; name?: string; category?: string; image_family?: string; prompt?: string; terrain_hint?: boolean; inpaint_gray?: boolean }>
     }>('/world/imagegen-options')
       .then((d) => {
         setMapfitPrompts(d.mapfit_prompts || {})
+        // Inpaint-Ziele: ComfyUI-Workflows UND Gateway-Backends (openai_diffusion)
+        // mit category=="inpaint". Spec-Prefix entsprechend workflow: bzw. backend:.
+        // terrain_hint: Backend-Feld; ComfyUI-Fallback auf das alte inpaint_gray-Flag
+        // (gray-Modelle = KEIN Hint), bis ComfyUI entfernt ist.
         const inp = (d.options || [])
-          .filter((o) => o.type === 'workflow' && o.category === 'inpaint' && o.name)
+          .filter((o) => (o.type === 'workflow' || o.type === 'backend') && o.category === 'inpaint' && o.name)
           .map((o) => ({
-            name: o.name as string, spec: `workflow:${o.name}`,
-            family: o.image_family || '', prompt: o.prompt || '', gray: !!o.inpaint_gray,
+            name: o.name as string, spec: `${o.type}:${o.name}`,
+            family: o.image_family || '', prompt: o.prompt || '',
+            terrainHint: o.type === 'backend' ? !!o.terrain_hint : !o.inpaint_gray,
           }))
         setInpaintWfs(inp)
       })

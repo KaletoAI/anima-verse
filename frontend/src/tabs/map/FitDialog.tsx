@@ -15,7 +15,7 @@ export function FitDialog({ title, info = '', locId, canvasUrl, workflows = [], 
   locId: string
   canvasUrl: string
   /** Inpaint-Workflows (category=="inpaint") zur Auswahl; leer = Server-Default. */
-  workflows?: { name: string; spec: string; family?: string; prompt?: string; gray?: boolean }[]
+  workflows?: { name: string; spec: string; family?: string; prompt?: string; terrainHint?: boolean }[]
   defaultWorkflow?: string
   /** mapfit-Default-Prompt pro Familie (natural/keywords) — Fallback ohne Workflow-Prompt. */
   mapfitPrompts?: Record<string, string>
@@ -41,12 +41,11 @@ export function FitDialog({ title, info = '', locId, canvasUrl, workflows = [], 
       .then((d) => setFitHint(d.prompt || ''))
       .catch(() => { /* ignore */ })
   }, [locId])
-  // Prompt = Workflow-Instruktion (+ dynamischer Terrain-Hint NUR bei Fill-
-  // Modellen). Edit-Modelle (gray) sehen die Umgebung im grauen Canvas selbst —
-  // eine Terrain-Beschreibung waere falsch.
+  // Prompt = Instruktion (+ dynamischer Terrain-Hint NUR wenn das Ziel ihn will,
+  // terrain_hint). Edit-Modelle ohne Hint sehen die Umgebung im grauen Canvas selbst.
   useEffect(() => {
-    const isGray = !!workflows.find((w) => w.spec === wf)?.gray
-    setPrompt(isGray ? instrFor(wf) : [instrFor(wf), fitHint].filter(Boolean).join(', '))
+    const wantsHint = !!workflows.find((w) => w.spec === wf)?.terrainHint
+    setPrompt(wantsHint ? [instrFor(wf), fitHint].filter(Boolean).join(', ') : instrFor(wf))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wf, fitHint])
 
