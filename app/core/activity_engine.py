@@ -149,6 +149,12 @@ def _evaluate_single_condition_inner(
                 return True, ""
             return False, f"Nur tagsueber verfuegbar (day{lbl_offset})"
 
+    # --- present:Name --- (Ziel-Character im selben Raum/Ort)
+    present_match = re.match(r"present:(.+)", cond)
+    if present_match:
+        return _check_present(character_name, present_match.group(1).strip(),
+                              location_id, room_id)
+
     # --- mood:X ---
     mood_match = re.match(r"mood:(.+)", cond)
     if mood_match:
@@ -369,6 +375,30 @@ def _check_alone(character_name: str, location_id: str) -> Tuple[bool, str]:
         return True, ""
 
 
+def _check_present(character_name: str, target_name: str,
+                   location_id: str, room_id: str = "") -> Tuple[bool, str]:
+    """Prueft ob ``target_name`` im selben Raum wie ``character_name`` ist
+    (bzw. am selben Ort, wenn kein Raum bekannt). Fuer Presence-gekoppelte
+    Effekte: ``condition:charmed AND present:Lirien``."""
+    if not target_name:
+        return False, "present: kein Zielname"
+    try:
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room)
+        loc = location_id or get_character_current_location(character_name)
+        if not loc:
+            return False, f"{target_name} nicht hier (kein Ort)"
+        room = room_id or get_character_current_room(character_name)
+        from app.core.room_entry import _list_characters_in_room
+        present = _list_characters_in_room(loc, room)
+        if target_name in present:
+            return True, ""
+        return False, f"{target_name} nicht im selben Raum"
+    except Exception as e:
+        logger.warning("present-Check fehlgeschlagen: %s", e)
+        return False, "present-Check Fehler"
+
+
 def _check_mood(character_name: str, target_mood: str) -> Tuple[bool, str]:
     """Prueft ob der aktuelle Mood dem Ziel entspricht."""
     try:
@@ -500,6 +530,46 @@ def is_character_interruptible(character_name: str) -> Tuple[bool, str]:
 # ============================================================
 # 7. STUNDENTIMER — Decay/Regen fuer alle Status-Werte
 # ============================================================
+
+def cleanup_expired_conditions(character_name: str) -> int:
+    """Entfernt abgelaufene Conditions (``duration_hours`` ueberschritten) aus
+    ``active_conditions``. Liefert die Anzahl entfernter Conditions.
+
+    Wird sowohl aus ``apply_effects`` (Item/Danger) als auch periodisch
+    (periodic_jobs status_tick) aufgerufen — so klingen Effekte mit Abklingzeit
+    auch ohne neuen Item-/Danger-Trigger zuverlaessig ab.
+    """
+    try:
+        from app.models.character import get_character_profile, save_character_profile
+        _prof = get_character_profile(character_name)
+        _conditions = (_prof or {}).get("active_conditions", []) or []
+        if not _conditions:
+            return 0
+        _now = utc_now()
+        _active = []
+        for cond in _conditions:
+            if not isinstance(cond, dict):
+                _active.append(cond)
+                continue
+            duration_h = cond.get("duration_hours", 0)
+            if duration_h:
+                try:
+                    started = parse_iso(cond["started_at"])
+                    if (_now - started).total_seconds() > float(duration_h) * 3600:
+                        logger.info("Condition '%s' abgelaufen fuer %s", cond.get("name"), character_name)
+                        continue  # Abgelaufen — nicht behalten
+                except (ValueError, KeyError, TypeError):
+                    pass
+            _active.append(cond)
+        removed = len(_conditions) - len(_active)
+        if removed:
+            _prof["active_conditions"] = _active
+            save_character_profile(character_name, _prof)
+        return removed
+    except Exception as e:
+        logger.debug("Condition cleanup fehlgeschlagen fuer %s: %s", character_name, e)
+        return 0
+
 
 def apply_effects(character_name: str,
     effects: Dict[str, Any],
@@ -704,27 +774,5 @@ def apply_hourly_status_tick(character_name: str):
     except Exception as e:
         logger.debug("Hourly danger drain fehlgeschlagen: %s", e)
 
-    # Abgelaufene Conditions aufraeumen (drunk, exhausted, etc.)
-    try:
-        from app.models.character import get_character_profile, save_character_profile
-        _prof = get_character_profile(character_name)
-        _conditions = _prof.get("active_conditions", [])
-        if _conditions:
-            _now = utc_now()
-            _active = []
-            for cond in _conditions:
-                duration_h = cond.get("duration_hours", 0)
-                if duration_h:
-                    try:
-                        started = parse_iso(cond["started_at"])
-                        if (_now - started).total_seconds() > duration_h * 3600:
-                            logger.info("Condition '%s' abgelaufen fuer %s", cond.get("name"), character_name)
-                            continue  # Abgelaufen — nicht behalten
-                    except (ValueError, KeyError):
-                        pass
-                _active.append(cond)
-            if len(_active) < len(_conditions):
-                _prof["active_conditions"] = _active
-                save_character_profile(character_name, _prof)
-    except Exception as e:
-        logger.debug("Condition cleanup fehlgeschlagen: %s", e)
+    # Abgelaufene Conditions aufraeumen (drunk, exhausted, charmed, etc.)
+    cleanup_expired_conditions(character_name)

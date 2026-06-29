@@ -83,11 +83,15 @@ def _sub_status_tick():
     """Apply hourly stat decay to all characters. Internal 1h gating in
     apply_hourly_status_tick — billig auch jede Minute aufzurufen."""
     try:
-        from app.core.activity_engine import apply_hourly_status_tick
+        from app.core.activity_engine import apply_hourly_status_tick, cleanup_expired_conditions
         from app.models.character import list_available_characters
         for name in list_available_characters():
             try:
                 apply_hourly_status_tick(name)
+                # Abklingzeit: abgelaufene Conditions (duration_hours) jede Minute
+                # entfernen — NICHT am 1h-Gate des Status-Ticks haengen, sonst
+                # klingen Effekte bis zu eine Stunde zu spaet ab.
+                cleanup_expired_conditions(name)
             except Exception as e:
                 logger.debug("status_tick failed for %s: %s", name, e)
     except Exception as e:

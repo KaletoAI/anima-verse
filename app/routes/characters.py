@@ -4550,11 +4550,24 @@ def debug_activity(character_name: str) -> Dict[str, Any]:
         elif iv >= 80:
             reasons.append(f"High {k}: {iv}")
 
+    # Aktive prompt_filter-Effekte (genau die effects_block-Modifier, die in den
+    # System-Prompt gehen) + die rohen active_conditions (mit Abklingzeit), damit
+    # Mind konsistent zum Prompt ist.
+    active_effects: List[str] = []
+    try:
+        from app.core.prompt_filters import active_modifiers
+        active_effects = active_modifiers(character_name, profile.get("current_location") or "")
+    except Exception as _ae:
+        logger.debug("active_modifiers fuer %s fehlgeschlagen: %s", character_name, _ae)
+    active_conditions = profile.get("active_conditions", []) or []
+
     return {
         "character": character_name,
         "current_feeling": feeling,
         "state_flags": flags,
         "status_effects": status_effects,
+        "active_effects": active_effects,
+        "active_conditions": active_conditions,
         "last_thought_at": last_thought_at,
         "last_warning": last_warning,
         "reasons": reasons,

@@ -18,6 +18,8 @@ interface DebugActivity {
   current_feeling: string
   state_flags: Record<string, boolean>
   status_effects: Record<string, number>
+  active_effects?: string[]
+  active_conditions?: { name?: string; source?: string; started_at?: string; duration_hours?: number }[]
   last_thought_at: string
   last_warning?: { type: string; value: string; ts: string } | null
   reasons: string[]
@@ -155,6 +157,33 @@ export function MindTab() {
                     )
                   })}
                 </ul>
+              </div>
+            ) : null}
+
+            {/* Active effects (prompt filters) + conditions — was wirklich im
+                System-Prompt landet, inkl. Abklingzeit. */}
+            {dbg && ((dbg.active_effects && dbg.active_effects.length > 0)
+                     || (dbg.active_conditions && dbg.active_conditions.length > 0)) ? (
+              <div className="ga-mind-card">
+                <h4>{t('Active effects')}</h4>
+                {dbg.active_conditions && dbg.active_conditions.length > 0 ? (
+                  <div className="ga-mind-reason" style={{ marginBottom: 8 }}>
+                    {dbg.active_conditions.map((c, i) => (
+                      <span key={i} className="tag warn"
+                        title={[c.source, c.duration_hours ? `${c.duration_hours}h` : '',
+                                c.started_at ? `seit ${fmtTs(c.started_at)}` : ''].filter(Boolean).join(' · ')}>
+                        {c.name || '?'}{c.duration_hours ? ` (${c.duration_hours}h)` : ''}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {dbg.active_effects && dbg.active_effects.length > 0 ? (
+                  <ul className="ga-mind-list">
+                    {dbg.active_effects.map((e, i) => (
+                      <li key={i} style={{ opacity: 0.85 }}>{e}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             ) : null}
 
