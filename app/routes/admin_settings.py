@@ -4,7 +4,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import HTMLResponse
-from typing import Any, Dict
+from typing import Any, Dict, List
 import httpx
 
 from app.core.log import get_logger
@@ -228,8 +228,51 @@ async def prompt_filters_data(user=Depends(require_admin)):
     world = {(e.get("id") or "").strip(): e
              for e in _load_world() if e.get("id")}
 
+    # Gueltige Item-/Character-Referenzen fuer die Condition-Validierung.
+    valid_items: List[Dict[str, str]] = []
+    item_refs: set = set()
+    try:
+        from app.models.inventory import list_items
+        for it in (list_items() or []):
+            _iid = (it.get("id") or "").strip()
+            _inm = (it.get("name") or "").strip()
+            valid_items.append({"id": _iid, "name": _inm})
+            if _iid:
+                item_refs.add(_iid.lower())
+            if _inm:
+                item_refs.add(_inm.lower())
+    except Exception as _ie:
+        logger.debug("Item-Liste fuer Filter-Validierung fehlgeschlagen: %s", _ie)
+    valid_characters: List[str] = []
+    char_refs: set = {"any"}
+    try:
+        from app.models.character import list_available_characters
+        valid_characters = list_available_characters() or []
+        char_refs |= {c.lower() for c in valid_characters}
+    except Exception:
+        pass
+
+    def _condition_warnings(condition: str) -> List[str]:
+        """Findet unaufloesbare Referenzen in einer Condition (has_item:<ref>,
+        present/relationship/romantic:<name>) und liefert Klartext-Warnungen."""
+        import re as _re
+        warns: List[str] = []
+        for ref in _re.findall(r"has_item:([^\s)]+)", condition or ""):
+            if ref.lower() not in item_refs:
+                warns.append(f"Item '{ref}' existiert nicht")
+        for pred in ("present", "relationship", "romantic"):
+            for m in _re.findall(rf"{pred}:([A-Za-z0-9_]+)", condition or ""):
+                if m.lower() not in char_refs:
+                    warns.append(f"Character '{m}' existiert nicht ({pred}:)")
+        return warns
+
     out = []
     seen_ids = set()
+
+    def _finish(entry: Dict[str, Any]) -> Dict[str, Any]:
+        entry["warnings"] = _condition_warnings(entry.get("condition") or "")
+        return entry
+
     for fid, e in shared.items():
         if fid in world:
             entry = dict(world[fid])
@@ -238,28 +281,31 @@ async def prompt_filters_data(user=Depends(require_admin)):
             entry = dict(e)
             entry["source"] = "shared"
         seen_ids.add(fid)
-        out.append(entry)
+        out.append(_finish(entry))
     for fid, e in world.items():
         if fid in seen_ids:
             continue
         entry = dict(e)
         entry["source"] = "world"
-        out.append(entry)
+        out.append(_finish(entry))
 
     return {
         "filters": out,
         "block_keys": _PROMPT_FILTER_BLOCK_KEYS,
+        "valid_items": valid_items,
+        "valid_characters": valid_characters,
         "condition_hint": (
             "Filter id ALWAYS triggers when present as a tag in the profile (apply_condition). "
-            "This expression triggers ADDITIONALLY:\n"
+            "condition:<this-id> is therefore redundant here. This expression triggers ADDITIONALLY:\n"
             "Status: stamina>N, courage<N, stress>N, lust>N\n"
-            "Time/presence: alone, night, day\n"
+            "Time: alone, night, day\n"
+            "Presence: present:Name (same room as Name)\n"
             "Relationship: relationship:Name>N, romantic:Name>N (Name or 'any')\n"
             "Mood: mood:happy\n"
             "Other condition: condition:<tag>\n"
             "Current activity: current_activity:cooking\n"
             "Daily schedule: schedule:sleeping, schedule:awake, schedule:<activity>\n"
-            "Item: has_item:item_a1b2c3d4\n"
+            "Item: has_item:<item-id> (real id, not the example)\n"
             "Combination: AND / OR / NOT"
         ),
     }

@@ -18,15 +18,18 @@ interface PromptFilter {
   image_modifier?: string
   enabled?: boolean
   source?: string
+  warnings?: string[]
 }
 
 interface FiltersData {
   filters: PromptFilter[]
   block_keys: string[]
   condition_hint?: string
+  valid_items?: { id: string; name: string }[]
+  valid_characters?: string[]
 }
 
-interface DraftState extends Required<Omit<PromptFilter, 'source'>> {
+interface DraftState extends Required<Omit<PromptFilter, 'source' | 'warnings'>> {
   originalId: string
   source: string
   isNew: boolean
@@ -226,6 +229,10 @@ export function StatesTab() {
                       {f.icon ? <span style={{ marginRight: 6 }}>{f.icon}</span> : null}
                       <code>{f.id}</code>
                       {f.label ? <span className="ga-list-row-sub">— {f.label}</span> : null}
+                      {f.warnings && f.warnings.length > 0 ? (
+                        <span style={{ marginLeft: 6, color: '#f85149' }}
+                          title={f.warnings.join('\n')}>⚠</span>
+                      ) : null}
                     </span>
                     <span className={`ga-source ga-source-${(f.source || 'shared').replace(' ', '-')}`}>
                       {f.source || 'shared'}
@@ -257,6 +264,8 @@ export function StatesTab() {
             <DraftForm
               draft={draft}
               blockKeys={data.block_keys || []}
+              validItems={data.valid_items || []}
+              validCharacters={data.valid_characters || []}
               onUpdate={updateDraft}
               onToggleBlock={toggleBlock}
             />
@@ -272,13 +281,34 @@ export function StatesTab() {
 interface DraftFormProps {
   draft: DraftState
   blockKeys: string[]
+  validItems: { id: string; name: string }[]
+  validCharacters: string[]
   onUpdate: <K extends keyof DraftState>(key: K, value: DraftState[K]) => void
   onToggleBlock: (block: string) => void
 }
 
-function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps) {
+function DraftForm({ draft, blockKeys, validItems, validCharacters, onUpdate, onToggleBlock }: DraftFormProps) {
   const { t } = useI18n()
   const selectedBlocks = useMemo(() => new Set(draft.drop_blocks), [draft.drop_blocks])
+
+  // Live-Validierung der Condition: unaufloesbare has_item:/present:/relationship:/
+  // romantic:-Referenzen unter dem Feld melden (faengt z.B. die Beispiel-ID ab).
+  const condWarnings = useMemo(() => {
+    const cond = draft.condition || ''
+    const itemRefs = new Set<string>()
+    validItems.forEach((i) => { if (i.id) itemRefs.add(i.id.toLowerCase()); if (i.name) itemRefs.add(i.name.toLowerCase()) })
+    const charRefs = new Set<string>(['any', ...validCharacters.map((c) => c.toLowerCase())])
+    const out: string[] = []
+    for (const m of cond.matchAll(/has_item:([^\s)]+)/g)) {
+      if (!itemRefs.has(m[1].toLowerCase())) out.push(t("Item '{x}' does not exist").replace('{x}', m[1]))
+    }
+    for (const pred of ['present', 'relationship', 'romantic']) {
+      for (const m of cond.matchAll(new RegExp(`${pred}:([A-Za-z0-9_]+)`, 'g'))) {
+        if (!charRefs.has(m[1].toLowerCase())) out.push(t("Character '{x}' does not exist").replace('{x}', m[1]) + ` (${pred}:)`)
+      }
+    }
+    return out
+  }, [draft.condition, validItems, validCharacters, t])
 
   return (
     <div className="ga-form">
@@ -326,6 +356,11 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
             placeholder="stamina<10"
             onChange={(e) => onUpdate('condition', e.target.value)}
           />
+          {condWarnings.length > 0 ? (
+            <div style={{ color: '#f85149', fontSize: '0.8em', marginTop: 4 }}>
+              {condWarnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+            </div>
+          ) : null}
         </Field>
       </div>
 
