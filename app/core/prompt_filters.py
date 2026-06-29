@@ -235,6 +235,31 @@ def _has_tag_condition(character_name: str, tag: str) -> bool:
         return False
 
 
+def _resolve_avatar_name() -> str:
+    """Name fuer die ``{avatar}``-Substitution in prompt_modifier-Texten.
+
+    Reihenfolge: 1) Request-Avatar (``get_active_character`` — im Chat gesetzt),
+    2) im Hintergrund/Thought (kein Request) der **eindeutige** Welt-Avatar via
+    ``get_all_avatars``. Nur wenn keiner oder mehrere existieren, faellt es auf
+    den generischen Text ``"the avatar"`` zurueck — so steht im Gedanken ein Name
+    statt des Worts „avatar"."""
+    try:
+        from app.models.account import get_active_character
+        ac = (get_active_character() or "").strip()
+        if ac:
+            return ac
+    except Exception:
+        pass
+    try:
+        from app.models.account import get_all_avatars
+        avs = sorted(a for a in (get_all_avatars() or set()) if a)
+        if len(avs) == 1:
+            return avs[0]
+    except Exception:
+        pass
+    return "the avatar"
+
+
 def active_modifiers(character_name: str, location_id: str = "") -> List[str]:
     """Prompt-Modifier-Texte aller aktuell getriggerten Filter — OHNE Thought-ctx.
 
@@ -245,13 +270,7 @@ def active_modifiers(character_name: str, location_id: str = "") -> List[str]:
     out: List[str] = []
     try:
         filters = load_filters()
-        avatar_name = ""
-        try:
-            from app.models.account import get_active_character
-            avatar_name = (get_active_character() or "").strip()
-        except Exception:
-            pass
-        avatar_subst = avatar_name or "the avatar"
+        avatar_subst = _resolve_avatar_name()
         for f in filters:
             if not f.get("enabled", True):
                 continue
@@ -287,16 +306,9 @@ def apply_filters(character_name: str,
     triggered_modifiers: List[str] = []
     dropped: set = set()
 
-    # Resolve active avatar once per call so prompt_modifier templates can
-    # reference {avatar}. Empty string when no avatar context (background
-    # jobs, periodic ticks): substitution falls back to "the avatar".
-    avatar_name = ""
-    try:
-        from app.models.account import get_active_character
-        avatar_name = (get_active_character() or "").strip()
-    except Exception:
-        pass
-    avatar_subst = avatar_name or "the avatar"
+    # {avatar}-Substitution: Request-Avatar (Chat) bzw. eindeutiger Welt-Avatar
+    # (Thought/Hintergrund) — so steht im Gedanken ein Name statt „the avatar".
+    avatar_subst = _resolve_avatar_name()
 
     for f in filters:
         if not f.get("enabled", True):
