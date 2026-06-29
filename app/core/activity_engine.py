@@ -531,6 +531,50 @@ def is_character_interruptible(character_name: str) -> Tuple[bool, str]:
 # 7. STUNDENTIMER — Decay/Regen fuer alle Status-Werte
 # ============================================================
 
+def validate_condition_references(condition: str) -> List[str]:
+    """Prueft die Referenzen einer Filter-/Regel-Condition mit DENSELBEN Resolvern
+    wie die Live-Evaluierung (``evaluate_condition``): ``has_item:`` ueber
+    ``resolve_item_id``/``get_item`` (id<->name), ``present:``/``relationship:``/
+    ``romantic:`` ueber die Character-Liste. Nur Existenz-Check (keine Auswertung) —
+    so kann die Editor-Validierung nicht von der Laufzeit-Pruefung wegdriften.
+
+    Liefert Klartext-Warnungen fuer unaufloesbare Referenzen.
+    """
+    warns: List[str] = []
+    if not condition:
+        return warns
+    # Gleiche Zerlegung wie evaluate_condition: OR -> AND -> optionales NOT.
+    for group in re.split(r"\s+OR\s+", condition, flags=re.IGNORECASE):
+        for part in re.split(r"\s+AND\s+", group, flags=re.IGNORECASE):
+            atom = part.strip()
+            if atom.upper().startswith("NOT "):
+                atom = atom[4:].strip()
+            if not atom:
+                continue
+            m = re.match(r"has_item:(.+)", atom)
+            if m:
+                token = m.group(1).strip()
+                try:
+                    from app.models.inventory import resolve_item_id, get_item
+                    if not get_item(resolve_item_id(token) or token):
+                        warns.append(f"Item '{token}' existiert nicht")
+                except Exception:
+                    pass
+                continue
+            cm = re.match(r"(present|relationship|romantic):([A-Za-z0-9_]+)", atom)
+            if cm:
+                pred, name = cm.group(1), cm.group(2)
+                if name.lower() == "any" and pred in ("relationship", "romantic"):
+                    continue
+                try:
+                    from app.models.character import list_available_characters
+                    if name not in (list_available_characters() or []):
+                        warns.append(f"Character '{name}' existiert nicht ({pred}:)")
+                except Exception:
+                    pass
+    return warns
+
+
 def cleanup_expired_conditions(character_name: str) -> int:
     """Entfernt abgelaufene Conditions (``duration_hours`` ueberschritten) aus
     ``active_conditions``. Liefert die Anzahl entfernter Conditions.

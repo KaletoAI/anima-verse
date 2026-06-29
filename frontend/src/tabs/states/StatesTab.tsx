@@ -25,8 +25,6 @@ interface FiltersData {
   filters: PromptFilter[]
   block_keys: string[]
   condition_hint?: string
-  valid_items?: { id: string; name: string }[]
-  valid_characters?: string[]
 }
 
 interface DraftState extends Required<Omit<PromptFilter, 'source' | 'warnings'>> {
@@ -264,8 +262,6 @@ export function StatesTab() {
             <DraftForm
               draft={draft}
               blockKeys={data.block_keys || []}
-              validItems={data.valid_items || []}
-              validCharacters={data.valid_characters || []}
               onUpdate={updateDraft}
               onToggleBlock={toggleBlock}
             />
@@ -281,34 +277,28 @@ export function StatesTab() {
 interface DraftFormProps {
   draft: DraftState
   blockKeys: string[]
-  validItems: { id: string; name: string }[]
-  validCharacters: string[]
   onUpdate: <K extends keyof DraftState>(key: K, value: DraftState[K]) => void
   onToggleBlock: (block: string) => void
 }
 
-function DraftForm({ draft, blockKeys, validItems, validCharacters, onUpdate, onToggleBlock }: DraftFormProps) {
+function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps) {
   const { t } = useI18n()
   const selectedBlocks = useMemo(() => new Set(draft.drop_blocks), [draft.drop_blocks])
 
-  // Live-Validierung der Condition: unaufloesbare has_item:/present:/relationship:/
-  // romantic:-Referenzen unter dem Feld melden (faengt z.B. die Beispiel-ID ab).
-  const condWarnings = useMemo(() => {
-    const cond = draft.condition || ''
-    const itemRefs = new Set<string>()
-    validItems.forEach((i) => { if (i.id) itemRefs.add(i.id.toLowerCase()); if (i.name) itemRefs.add(i.name.toLowerCase()) })
-    const charRefs = new Set<string>(['any', ...validCharacters.map((c) => c.toLowerCase())])
-    const out: string[] = []
-    for (const m of cond.matchAll(/has_item:([^\s)]+)/g)) {
-      if (!itemRefs.has(m[1].toLowerCase())) out.push(t("Item '{x}' does not exist").replace('{x}', m[1]))
-    }
-    for (const pred of ['present', 'relationship', 'romantic']) {
-      for (const m of cond.matchAll(new RegExp(`${pred}:([A-Za-z0-9_]+)`, 'g'))) {
-        if (!charRefs.has(m[1].toLowerCase())) out.push(t("Character '{x}' does not exist").replace('{x}', m[1]) + ` (${pred}:)`)
-      }
-    }
-    return out
-  }, [draft.condition, validItems, validCharacters, t])
+  // Live-Validierung der Condition über den Server — EXAKT dieselbe Funktion wie
+  // die Laufzeit-Prüfung (validate_condition_references), kein eigener Regex.
+  const [condWarnings, setCondWarnings] = useState<string[]>([])
+  useEffect(() => {
+    const cond = (draft.condition || '').trim()
+    if (!cond) { setCondWarnings([]); return }
+    let cancelled = false
+    const h = setTimeout(() => {
+      apiGet<{ warnings?: string[] }>(`/admin/prompt-filters/validate?condition=${encodeURIComponent(cond)}`)
+        .then((d) => { if (!cancelled) setCondWarnings(d.warnings || []) })
+        .catch(() => { if (!cancelled) setCondWarnings([]) })
+    }, 350)
+    return () => { cancelled = true; clearTimeout(h) }
+  }, [draft.condition])
 
   return (
     <div className="ga-form">

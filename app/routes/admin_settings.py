@@ -228,49 +228,14 @@ async def prompt_filters_data(user=Depends(require_admin)):
     world = {(e.get("id") or "").strip(): e
              for e in _load_world() if e.get("id")}
 
-    # Gueltige Item-/Character-Referenzen fuer die Condition-Validierung.
-    valid_items: List[Dict[str, str]] = []
-    item_refs: set = set()
-    try:
-        from app.models.inventory import list_items
-        for it in (list_items() or []):
-            _iid = (it.get("id") or "").strip()
-            _inm = (it.get("name") or "").strip()
-            valid_items.append({"id": _iid, "name": _inm})
-            if _iid:
-                item_refs.add(_iid.lower())
-            if _inm:
-                item_refs.add(_inm.lower())
-    except Exception as _ie:
-        logger.debug("Item-Liste fuer Filter-Validierung fehlgeschlagen: %s", _ie)
-    valid_characters: List[str] = []
-    char_refs: set = {"any"}
-    try:
-        from app.models.character import list_available_characters
-        valid_characters = list_available_characters() or []
-        char_refs |= {c.lower() for c in valid_characters}
-    except Exception:
-        pass
-
-    def _condition_warnings(condition: str) -> List[str]:
-        """Findet unaufloesbare Referenzen in einer Condition (has_item:<ref>,
-        present/relationship/romantic:<name>) und liefert Klartext-Warnungen."""
-        import re as _re
-        warns: List[str] = []
-        for ref in _re.findall(r"has_item:([^\s)]+)", condition or ""):
-            if ref.lower() not in item_refs:
-                warns.append(f"Item '{ref}' existiert nicht")
-        for pred in ("present", "relationship", "romantic"):
-            for m in _re.findall(rf"{pred}:([A-Za-z0-9_]+)", condition or ""):
-                if m.lower() not in char_refs:
-                    warns.append(f"Character '{m}' existiert nicht ({pred}:)")
-        return warns
+    # Condition-Referenzen mit DENSELBEN Resolvern wie die Live-Evaluierung pruefen.
+    from app.core.activity_engine import validate_condition_references
 
     out = []
     seen_ids = set()
 
     def _finish(entry: Dict[str, Any]) -> Dict[str, Any]:
-        entry["warnings"] = _condition_warnings(entry.get("condition") or "")
+        entry["warnings"] = validate_condition_references(entry.get("condition") or "")
         return entry
 
     for fid, e in shared.items():
@@ -292,8 +257,6 @@ async def prompt_filters_data(user=Depends(require_admin)):
     return {
         "filters": out,
         "block_keys": _PROMPT_FILTER_BLOCK_KEYS,
-        "valid_items": valid_items,
-        "valid_characters": valid_characters,
         "condition_hint": (
             "Filter id ALWAYS triggers when present as a tag in the profile (apply_condition). "
             "condition:<this-id> is therefore redundant here. This expression triggers ADDITIONALLY:\n"
@@ -309,6 +272,14 @@ async def prompt_filters_data(user=Depends(require_admin)):
             "Combination: AND / OR / NOT"
         ),
     }
+
+
+@router.get("/prompt-filters/validate")
+async def prompt_filters_validate(condition: str = "", user=Depends(require_admin)):
+    """Live-Validierung einer Condition fuer den Editor — nutzt EXAKT dieselbe
+    Funktion wie die Laufzeit-Pruefung (keine Frontend-Regex-Duplikate)."""
+    from app.core.activity_engine import validate_condition_references
+    return {"warnings": validate_condition_references(condition or "")}
 
 
 @router.post("/prompt-filters/save")
