@@ -16,8 +16,9 @@ Zusaetzlich liegen hier:
 Streaming laeuft separat, nutzt aber denselben Resolver.
 """
 import os
+import time
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core import config
 from app.core.llm_client import AnthropicLLMClient, LLMClient
@@ -343,6 +344,10 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
         if not provider.available:
             logger.info("resolve_llm(%s): provider '%s' unavailable, trying next", task, provider_name)
             continue
+        if _model_cooled_down(provider_name, model):
+            logger.info("resolve_llm(%s): %s/%s in model-cooldown (no servable backend), trying next",
+                        task, provider_name, model)
+            continue
 
         temperature = float(entry.get("temperature") or 0.7)
         max_tokens = entry.get("max_tokens")
@@ -418,6 +423,38 @@ def _cooldown_provider(provider_name: str, reason: str) -> None:
         logger.debug("Cooldown set failed for %s: %s", provider_name, e)
 
 
+# Per-(provider, model) cooldown for MODEL-SPECIFIC failures, e.g. a gateway
+# returning 503 "No healthy backend for model X". Unlike _cooldown_provider this
+# leaves the provider available for its OTHER models — a gateway that can't serve
+# one model can still serve the rest (the user's "tools" model stays reachable
+# while "fallen-command" is down). resolve_llm skips cooled-down (provider, model)
+# pairs so the routing chain moves to the next provider for that task only.
+_MODEL_COOLDOWN: Dict[Tuple[str, str], float] = {}
+
+
+def _model_cooled_down(provider_name: str, model: str) -> bool:
+    key = (provider_name, model)
+    until = _MODEL_COOLDOWN.get(key)
+    if not until:
+        return False
+    if time.monotonic() < until:
+        return True
+    _MODEL_COOLDOWN.pop(key, None)  # expired — allow retry
+    return False
+
+
+def mark_model_unhealthy(provider_name: str, model: str,
+                         cooldown_seconds: float = _UPSTREAM_COOLDOWN_SECONDS) -> None:
+    """Marks a single (provider, model) pair unhealthy without touching the
+    provider's overall availability. Used for "no servable backend for model X"
+    so other models on the same provider keep routing normally."""
+    if not provider_name or not model:
+        return
+    _MODEL_COOLDOWN[(provider_name, model)] = time.monotonic() + max(0.0, cooldown_seconds)
+    logger.warning("Model %s/%s in cooldown for %ds (no servable backend)",
+                   provider_name, model, int(cooldown_seconds))
+
+
 def llm_call(
     task: str,
     system_prompt: str,
@@ -478,11 +515,22 @@ def llm_call(
             if not _is_upstream_failure(e):
                 # User error / non-retryable — fail fast, don't cooldown.
                 raise
-            logger.warning(
-                "llm_call upstream-fail on %s (%s): %s — cooldown + Fallback",
-                instance.provider_name, instance.model, str(e)[:200])
-            _cooldown_provider(instance.provider_name, f"upstream-fail: {str(e)[:120]}")
-            # Loop continues; resolve_llm now skips the cooled-down provider.
+            from app.core.llm_client import _is_no_backend_error
+            if _is_no_backend_error(e):
+                # Model-specific: cool down ONLY this model on this provider so
+                # the provider keeps serving its other models. resolve_llm picks
+                # the next provider in the chain for this task.
+                logger.warning(
+                    "llm_call no-backend on %s (%s): %s — model-cooldown + Fallback",
+                    instance.provider_name, instance.model, str(e)[:200])
+                mark_model_unhealthy(instance.provider_name, instance.model)
+            else:
+                # Provider genuinely broken (connection/5xx) — cool it down whole.
+                logger.warning(
+                    "llm_call upstream-fail on %s (%s): %s — cooldown + Fallback",
+                    instance.provider_name, instance.model, str(e)[:200])
+                _cooldown_provider(instance.provider_name, f"upstream-fail: {str(e)[:120]}")
+            # Loop continues; resolve_llm now skips the cooled-down model/provider.
 
     raise RuntimeError(
         f"llm_call: Alle Provider fuer '{task}' fehlgeschlagen nach "

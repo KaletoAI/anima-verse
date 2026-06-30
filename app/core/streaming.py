@@ -819,7 +819,7 @@ class StreamingAgent:
             # faellt erst beim ersten __anext__ an, nicht hier. Der Provider-
             # Fallback sitzt deshalb unten im Chunk-Error-Handler, solange noch
             # kein Chunk beim Client angekommen ist.
-            _tried_providers: set = set()
+            _tried_models: set = set()  # (provider, model) pairs already failed
             try:
                 _aiter = active_llm.astream(stream_messages).__aiter__()
             except Exception as _init_err:
@@ -855,7 +855,7 @@ class StreamingAgent:
                     # never restart.
                     if chunk_count == 0 and not iteration_response and count_sent == 0:
                         _next_llm = self._fallback_after_upstream_error(
-                            active_llm, _chunk_err, is_tool_decision, _tried_providers)
+                            active_llm, _chunk_err, is_tool_decision, _tried_models)
                         if _next_llm is not None:
                             active_llm = _next_llm
                             try:
@@ -1235,43 +1235,54 @@ class StreamingAgent:
     def _fallback_after_upstream_error(
             self, failed_llm, err: BaseException, is_tool_decision: bool,
             tried: set):
-        """On an upstream failure during stream init: cool the failed provider
-        down and resolve the next provider in the routing chain.
+        """On an upstream failure during stream init: take the failed model/
+        provider out of rotation and resolve the next provider in the chain.
 
         Only fires for genuine upstream failures (5xx / connection / gateway
         "No healthy backend"), never for user-/input errors. Returns a fresh LLM
         client, or None when the error is non-retryable or the chain is
         exhausted. Updates self.llm so later iterations use the fallback.
 
+        A "No healthy backend for model X" 503 is MODEL-specific: only that
+        (provider, model) is cooled down, the provider stays available for its
+        other models. A connection/5xx failure cools the whole provider down.
+
         Seamless re-resolve happens only for the main/chat LLM, whose routing
         task is reliably ``self.log_task`` ("chat_stream"/"thought"). For the
-        Tool-LLM we only cool the provider down (return None) — the next turn
-        then resolves onto the fallback.
+        Tool-LLM we only cool down (return None) — the next turn then resolves
+        onto the fallback.
 
         Note: per-turn overrides (frequency_penalty / anti-rep temperature) are
         lost on the fallback provider — acceptable in the error path.
         """
         from app.core.llm_router import (
-            _is_upstream_failure, _cooldown_provider, resolve_llm)
+            _is_upstream_failure, _cooldown_provider, resolve_llm,
+            mark_model_unhealthy)
+        from app.core.llm_client import _is_no_backend_error
         if not _is_upstream_failure(err):
             return None
         prov_name = self._resolve_provider(failed_llm)
         if not prov_name:
             # Can't identify the provider → can't cool it down or safely switch.
             return None
-        tried.add(prov_name)
-        _cooldown_provider(prov_name, f"stream upstream-fail: {str(err)[:120]}")
+        failed_model = get_model_name(failed_llm)
+        tried.add((prov_name, failed_model))
+        if _is_no_backend_error(err):
+            # Model-specific — leave the provider up for its other models.
+            mark_model_unhealthy(prov_name, failed_model)
+        else:
+            _cooldown_provider(prov_name, f"stream upstream-fail: {str(err)[:120]}")
         if is_tool_decision or not self.log_task:
             return None
         instance = resolve_llm(self.log_task, agent_name=self.agent_name)
-        if instance is None or instance.provider_name in tried:
+        if instance is None or (instance.provider_name, instance.model) in tried:
             logger.warning(
-                "Stream-Fallback erschoepft (task=%s, fehlgeschlagen=%s): %s",
-                self.log_task, prov_name, str(err)[:160])
+                "Stream-Fallback erschoepft (task=%s, fehlgeschlagen=%s/%s): %s",
+                self.log_task, prov_name, failed_model, str(err)[:160])
             return None
         new_llm = instance.create_llm()
         logger.warning(
-            "Stream upstream-fail auf %s — Fallback auf %s/%s",
-            prov_name, instance.provider_name, instance.model)
+            "Stream upstream-fail auf %s/%s — Fallback auf %s/%s",
+            prov_name, failed_model, instance.provider_name, instance.model)
         self.llm = new_llm
         return new_llm
