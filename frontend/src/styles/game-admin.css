@@ -695,17 +695,34 @@ html, * {
 .tpl-tab-section .ga-field {
   margin-bottom: 8px;
 }
-/* Avatar-Panel (Aussehen/Physique): erste Spalte (Felder) schmal = 25%, der
-   Rest geht an die Prompt+Bild-Spalte (intern via .tpl-prompt-beside in
-   Prompt | Bild aufgeteilt). Gilt für beide Reiter. */
-.avatar-aussehen-tab .tpl-tab-col:first-child {
-  flex: 0 0 25%;
-  max-width: 25%;
+/* Aussehen-Tab (Game-Admin UND Avatar-Panel): Struktur-Felder schmal links
+   (~30%), die Prompt-Felder mit Bild-Vorschau voll breit (~70%) untereinander
+   gestapelt rechts — jedes Bild jeweils UNTER seinem Prompt. */
+.tpl-aussehen-layout {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 22px;
+  align-items: flex-start;
 }
-/* Nur auf sehr schmalen Fenstern untereinander. */
+.tpl-aussehen-side {
+  flex: 0 0 30%;
+  min-width: 0;
+}
+.tpl-prompt-stack {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+/* Nur auf schmalen Fenstern untereinander. */
+@media (max-width: 720px) {
+  .tpl-aussehen-layout { flex-direction: column; }
+  .tpl-aussehen-side { flex: 1 1 auto; }
+}
 @media (max-width: 560px) {
   .tpl-tab-cols { flex-direction: column; }
-  .avatar-aussehen-tab .tpl-tab-col:first-child { flex: 1 1 auto; max-width: none; }
 }
 
 /* Live-Vorschau der Token-Ersetzungen unter einem Prompt-Feld. */
