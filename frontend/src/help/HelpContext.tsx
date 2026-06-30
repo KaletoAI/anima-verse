@@ -1,26 +1,55 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 
+/** Ein Hilfe-Item: statischer Hinweis (vom Server) oder dynamisches Insert-Token. */
+export interface HelpItem { code?: string; text: string; copy?: boolean; insert?: string }
+
+interface HelpOpts {
+  /** Dynamische Items (z.B. {token}-Platzhalter eines Prompt-Felds). */
+  items?: HelpItem[]
+  /** Fügt Text an der Cursor-Position des fokussierten Felds ein. */
+  insert?: (text: string) => void
+}
+
 /**
- * Kontextsensitive Editor-Hilfe. Felder melden beim Fokus ihr Hilfe-Thema
- * (z.B. "condition", "prompt_modifier"); das ausklappbare HelpPanel zeigt die
- * passenden Optionen. Topic bleibt bestehen bis ein anderes Feld fokussiert wird
- * (so kann man ins Panel klicken/scrollen, ohne dass es leer wird).
+ * Kontextsensitive Editor-Hilfe. Felder melden beim Fokus ihr Thema (setTopic)
+ * oder ein Thema + dynamische Items/Insert-Funktion (setHelp). Das ausklappbare
+ * HelpPanel zeigt das passende Topic vom Server plus die dynamischen Items.
  */
 interface HelpCtx {
   topic: string | null
-  setTopic: (t: string | null) => void
+  items: HelpItem[]
+  insert: ((text: string) => void) | null
   open: boolean
   setOpen: (b: boolean) => void
+  setTopic: (t: string | null) => void
+  setHelp: (t: string | null, opts?: HelpOpts) => void
 }
 
 const Ctx = createContext<HelpCtx>({
-  topic: null, setTopic: () => {}, open: false, setOpen: () => {},
+  topic: null, items: [], insert: null, open: false,
+  setOpen: () => {}, setTopic: () => {}, setHelp: () => {},
 })
 
 export function HelpProvider({ children }: { children: ReactNode }) {
-  const [topic, setTopic] = useState<string | null>(null)
+  const [topic, setTopicState] = useState<string | null>(null)
+  const [items, setItems] = useState<HelpItem[]>([])
+  const [insert, setInsert] = useState<((text: string) => void) | null>(null)
   const [open, setOpen] = useState(false)
-  return <Ctx.Provider value={{ topic, setTopic, open, setOpen }}>{children}</Ctx.Provider>
+
+  // setTopic: einfaches Thema ohne dynamische Items (leert sie).
+  const setTopic = (t: string | null) => { setTopicState(t); setItems([]); setInsert(() => null) }
+  // setHelp: Thema + dynamische Items + Insert-Funktion.
+  const setHelp = (t: string | null, opts?: HelpOpts) => {
+    setTopicState(t)
+    setItems(opts?.items || [])
+    setInsert(() => opts?.insert || null)
+  }
+
+  return (
+    <Ctx.Provider value={{ topic, items, insert, open, setOpen, setTopic, setHelp }}>
+      {children}
+    </Ctx.Provider>
+  )
 }
 
 export const useHelp = () => useContext(Ctx)

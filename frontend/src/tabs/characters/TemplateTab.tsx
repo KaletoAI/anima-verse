@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { useHelp } from '../../help/HelpContext'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { TemplateField, tmplText, type TmplFieldDef, type DynamicData } from './TemplateField'
@@ -82,6 +83,7 @@ function PromptField({
   onCommit: (v: string) => void
 }) {
   const { t } = useI18n()
+  const { setHelp } = useHelp()
   const [local, setLocal] = useState(String(value ?? ''))
   const [resolved, setResolved] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -90,18 +92,19 @@ function PromptField({
     setLocal(String(value ?? ''))
   }, [value])
 
-  // Token an der aktuellen Cursor-Position (bzw. Auswahl) einfügen. mousedown +
-  // preventDefault hält den Fokus im Textarea (kein vorzeitiges Commit/Blur).
-  const insertToken = (tok: string) => {
-    const ins = `{${tok}}`
+  // Text an der aktuellen Cursor-Position einfügen. Liest den LIVE-Wert aus dem
+  // DOM (ta.value) statt aus dem state-`local` — so funktioniert der Aufruf aus
+  // dem Help-Panel auch nach dem Tippen korrekt (kein stale-Closure).
+  const insertText = (ins: string) => {
     const ta = taRef.current
     if (!ta) {
       setLocal((v) => v + ins)
       return
     }
-    const s = ta.selectionStart ?? local.length
-    const e = ta.selectionEnd ?? local.length
-    const next = local.slice(0, s) + ins + local.slice(e)
+    const cur = ta.value
+    const s = ta.selectionStart ?? cur.length
+    const e = ta.selectionEnd ?? cur.length
+    const next = cur.slice(0, s) + ins + cur.slice(e)
     setLocal(next)
     requestAnimationFrame(() => {
       const el = taRef.current
@@ -111,6 +114,16 @@ function PromptField({
       el.setSelectionRange(pos, pos)
     })
   }
+
+  // Tokens + Insert-Funktion ans Help-Panel melden (beim Fokus). Topic kommt aus
+  // dem Template-help-Key (z.B. image_prompt fuer appearance), sonst kein Topic.
+  const announceHelp = () => setHelp(
+    typeof field.help === 'string' ? field.help : null,
+    {
+      items: tokens.map((tk) => ({ code: `{${tk.token}}`, text: tk.label, insert: `{${tk.token}}` })),
+      insert: insertText,
+    },
+  )
 
   // Debounced Resolve über das Backend, wann immer der Text Tokens enthält.
   useEffect(() => {
@@ -137,32 +150,15 @@ function PromptField({
 
   return (
     <>
-      {tokens.length > 0 ? (
-        <div className="tpl-token-chips">
-          <span className="tpl-token-chips-label">{t('Insert')}:</span>
-          {tokens.map((tk) => (
-            <button
-              key={tk.token}
-              type="button"
-              className="tpl-token-chip"
-              title={tk.label}
-              disabled={disabled}
-              onMouseDown={(e) => {
-                e.preventDefault()
-                insertToken(tk.token)
-              }}
-            >
-              {`{${tk.token}}`}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {/* Insert-Tokens sind ins Help-Panel verlagert (Fokus → Panel zeigt sie
+          mit Cursor-Insert). Der Textarea bekommt dafuer den vollen Platz. */}
       <textarea
         ref={taRef}
         className="ga-input"
-        rows={8}
+        rows={12}
         value={local}
         disabled={disabled}
+        onFocus={announceHelp}
         onChange={(e) => setLocal(e.target.value)}
         onBlur={() => {
           if (local !== String(value ?? '')) onCommit(local)
@@ -324,7 +320,7 @@ export function TemplateTab({
       return (
         <div key={f.key} className="tpl-prompt-beside">
           <div className="tpl-prompt-beside-text">
-            <Field label={label} hint={hint || undefined}>
+            <Field label={label} hint={hint || undefined} help={typeof f.help === 'string' ? f.help : undefined}>
               {input}
             </Field>
           </div>
@@ -336,7 +332,7 @@ export function TemplateTab({
     }
     return (
       <div key={f.key}>
-        <Field label={label} hint={hint || undefined}>
+        <Field label={label} hint={hint || undefined} help={typeof f.help === 'string' ? f.help : undefined}>
           {input}
         </Field>
         {imagePreview ? <FieldImage character={character} kind={imagePreview} /> : null}

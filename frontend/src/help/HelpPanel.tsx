@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useHelp } from './HelpContext'
+import { useHelp, type HelpItem } from './HelpContext'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 
-interface HelpItem { code?: string; text: string; copy?: boolean }
 interface HelpTopic { title: string; intro?: string; items: HelpItem[] }
 
 /** Kleiner Copy-Button: kopiert den Code-String (z.B. "{avatar}") in die Zwischenablage. */
@@ -35,7 +34,7 @@ function CopyBtn({ value }: { value: string }) {
  * gezeigt wird, steuert das gerade fokussierte Feld via HelpContext.
  */
 export function HelpPanel() {
-  const { topic, open, setOpen } = useHelp()
+  const { topic, items: dynItems, insert, open, setOpen } = useHelp()
   const { t } = useI18n()
   const [topics, setTopics] = useState<Record<string, HelpTopic>>({})
 
@@ -105,9 +104,35 @@ export function HelpPanel() {
               ))}
             </ul>
           </>
-        ) : (
+        ) : null}
+
+        {dynItems.length > 0 ? (
+          <div style={{ marginTop: data ? 14 : 0 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>{t('Insert')}</div>
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {dynItems.map((it, i) => (
+                <li key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {it.insert && insert ? (
+                    <button
+                      type="button"
+                      onClick={() => insert(it.insert as string)}
+                      title={t('Insert at cursor')}
+                      style={{ background: '#1f6feb', color: '#fff', border: 0, borderRadius: 4, cursor: 'pointer', padding: '1px 6px', fontSize: '0.85em' }}
+                    >+</button>
+                  ) : null}
+                  {it.code ? (
+                    <code style={{ background: '#161b22', padding: '1px 5px', borderRadius: 4, color: '#79c0ff' }}>{it.code}</code>
+                  ) : null}
+                  <span style={{ opacity: 0.7 }}>{it.text}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {!data && dynItems.length === 0 ? (
           <div style={{ opacity: 0.6 }}>{t('Focus a field to see its available options.')}</div>
-        )}
+        ) : null}
       </div>
     </aside>
   )
