@@ -3,7 +3,7 @@ import { useHelp } from './HelpContext'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 
-interface HelpItem { code?: string; text: string }
+interface HelpItem { code?: string; text: string; copy?: boolean }
 interface HelpTopic { title: string; intro?: string; items: HelpItem[] }
 
 /** Kleiner Copy-Button: kopiert den Code-String (z.B. "{avatar}") in die Zwischenablage. */
@@ -97,7 +97,7 @@ export function HelpPanel() {
                   {it.code ? (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                       <code style={{ background: '#161b22', padding: '1px 5px', borderRadius: 4, color: '#79c0ff' }}>{it.code}</code>
-                      <CopyBtn value={it.code} />
+                      {it.copy !== false ? <CopyBtn value={it.code} /> : null}
                     </span>
                   ) : null}
                   <div style={{ opacity: 0.8, marginTop: 2 }}>{it.text}</div>

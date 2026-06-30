@@ -325,11 +325,11 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
     },
     "image_prompt": {
         "title": "Image prompt",
-        "intro": "Describes the scene to render. Phrasing follows the use-case image family:",
+        "intro": "Describes the scene to render. HOW you phrase it depends on the use-case's image family (not copied — these are styles, not tokens):",
         "items": [
-            {"code": "natural", "text": "Flowing prose — for Flux / Qwen"},
-            {"code": "keywords", "text": "Comma-separated tags — for Z-Image / SD"},
-            {"code": "no people, text, watermark", "text": "Style/negative belong to the use-case, not here"},
+            {"code": "natural", "copy": False, "text": "Flowing prose / full sentences — for Flux / Qwen."},
+            {"code": "keywords", "copy": False, "text": "Comma-separated tags — for Z-Image / SD."},
+            {"text": "Style and negative prompts come from the use-case, not from this field."},
         ],
     },
     "effects_syntax": {
