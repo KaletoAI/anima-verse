@@ -289,7 +289,9 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
         "title": "Condition syntax",
         "intro": "Filter id triggers via the profile tag (condition:<this-id> is redundant). This expression triggers ADDITIONALLY:",
         "items": [
-            {"code": "stamina>N, courage<N, stress>N, lust>N", "text": "Status values"},
+            # Das Status-Item ({code}) wird im Endpoint dynamisch aus den
+            # Character-Templates befuellt (Stats sind NICHT hartkodiert).
+            {"code": "__STATS__", "text": "Status values (from the character template, e.g. stat>N)"},
             {"code": "alone, night, day", "text": "Time / presence"},
             {"code": "present:Name", "text": "Name is in the same room"},
             {"code": "relationship:Name>N, romantic:Name>N", "text": "Name or 'any'"},
@@ -314,8 +316,24 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
 
 @router.get("/help-topics")
 async def help_topics(user=Depends(require_admin)):
-    """Hilfe-Themen fuers kontextsensitive Help-Panel (eine Quelle, kein Frontend-Duplikat)."""
-    return {"topics": _HELP_TOPICS}
+    """Hilfe-Themen fuers kontextsensitive Help-Panel (eine Quelle, kein Frontend-Duplikat).
+
+    Der ``__STATS__``-Platzhalter im condition-Topic wird mit den echten Stat-Keys
+    aus den Character-Templates der Welt befuellt — die Stats sind nicht hartkodiert
+    und koennen pro Welt/Template variieren.
+    """
+    import copy as _copy
+    topics = _copy.deepcopy(_HELP_TOPICS)
+    try:
+        from app.core.stat_hints import get_all_stat_keys
+        keys = get_all_stat_keys()
+        stat_code = ", ".join(f"{k}>N" for k in keys[:6]) if keys else "stat>N (e.g. stamina>50)"
+        for it in topics.get("condition", {}).get("items", []):
+            if it.get("code") == "__STATS__":
+                it["code"] = stat_code
+    except Exception as _se:
+        logger.debug("Stat-Keys fuer condition-Topic fehlgeschlagen: %s", _se)
+    return {"topics": topics}
 
 
 @router.post("/prompt-filters/save")

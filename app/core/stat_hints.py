@@ -74,6 +74,28 @@ def get_stat_hints(character_name: str) -> List[str]:
     return hints
 
 
+def get_all_stat_keys() -> List[str]:
+    """Alle Stat-Feld-Keys (store=status_effects) ueber ALLE Character-Templates
+    der Welt — generisch, NICHT hartkodiert. Fuer template-agnostische Hilfen
+    (z.B. das Condition-Help-Topic), da die Stats pro Template variieren."""
+    keys: List[str] = []
+    seen = set()
+    try:
+        from app.models.character_template import list_templates, get_template
+        for entry in list_templates() or []:
+            tmpl = get_template(entry.get("name", "")) or {}
+            for field in _iter_template_fields(tmpl):
+                if field.get("store") != "status_effects":
+                    continue
+                k = field.get("key")
+                if k and k not in seen:
+                    seen.add(k)
+                    keys.append(k)
+    except Exception as e:
+        logger.debug("get_all_stat_keys failed: %s", e)
+    return keys
+
+
 def format_character_with_hints(character_name: str) -> str:
     """Wie get_stat_hints, aber formatiert als 'Name (hint1, hint2)'.
 
