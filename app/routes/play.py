@@ -200,12 +200,23 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     except Exception as _fe:
         logger.debug("follow_suggestions failed: %s", _fe)
 
+    # Party-Status (Kompass ausblenden wenn Follower) + offene Einladungen an den
+    # Avatar (Ja/Nein-Frage im Chat-Fenster).
+    party = _party_block(avatar)
+    try:
+        from app.core.party_engine import get_pending_invites_for
+        party_invites = [{"invite_id": i["invite_id"], "inviter": i["inviter"]}
+                         for i in get_pending_invites_for(avatar)]
+    except Exception:
+        party_invites = []
+
     return {
         "avatar": avatar,
         "location_id": loc, "location_name": location_name,
         "room_id": room, "room_name": room_name,
         "present": present, "present_detail": present_detail, "scene": scene,
         "follow_suggestions": follow_suggestions,
+        "party": party, "party_invites": party_invites,
         "avatar_expr_version": _expr_version(avatar),
         "bg_version": _bg_version(loc, room) if loc else "",
         "bg_id": _bg_id(loc, room) if loc else "",
@@ -252,6 +263,55 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     return {"ok": True, "room_id": room_id}
 
 
+def _party_block(avatar: str):
+    """Party-Status des Avatars fuer die UI (None = in keiner Party)."""
+    try:
+        from app.core.party_engine import get_party_of
+        p = get_party_of(avatar)
+        if not p:
+            return None
+        return {"role": p["role"], "leader": p["leader"], "members": p["members"]}
+    except Exception:
+        return None
+
+
+@router.post("/play/party/respond")
+async def play_party_respond(request: Request, user=Depends(get_current_user)):
+    """Avatar beantwortet eine Party-Einladung (Ja/Nein) aus dem Chat-Fenster."""
+    from app.models.account import get_active_character
+    from app.core.party_engine import get_invite, resolve_pending_invite
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=400, detail="no active avatar")
+    body = await request.json()
+    invite_id = str(body.get("invite_id") or "").strip() if isinstance(body, dict) else ""
+    accept = bool(body.get("accept")) if isinstance(body, dict) else False
+    if not invite_id:
+        raise HTTPException(status_code=400, detail="invite_id required")
+    inv = get_invite(invite_id)
+    # Nur eigene Einladungen beantworten (kein Fremd-Resolve).
+    if not inv or inv.get("invitee") != avatar:
+        raise HTTPException(status_code=404, detail="invite not found")
+    res = resolve_pending_invite(invite_id, accept)
+    return {"ok": res.get("status") in ("accepted", "declined"), **res}
+
+
+@router.post("/play/party/leave")
+async def play_party_leave(user=Depends(get_current_user)):
+    """Avatar verlaesst seine Party (Follower steigt aus, Leader = Aufloesung)."""
+    from app.models.account import get_active_character
+    from app.core.party_engine import leave_party, clear_invites_for
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=400, detail="no active avatar")
+    res = leave_party(avatar)
+    try:
+        clear_invites_for(avatar)
+    except Exception:
+        pass
+    return {"ok": res.get("status") == "ok", **res}
+
+
 async def _storyteller_fallback(actor: str, text: str, location_id: str,
                                 room_id: str, volume: str) -> None:
     """Storyteller-Fallback (plan-room-conversation, Option 3): reagiert kein
@@ -272,6 +332,35 @@ async def _storyteller_fallback(actor: str, text: str, location_id: str,
         logger.info("Storyteller-Fallback narrierte für %s (scope=%s)", actor, scope)
     except Exception as e:  # noqa: BLE001
         logger.warning("storyteller fallback failed: %s", e)
+
+
+async def _handle_party_invite(avatar: str, invitee: str, content: str,
+                               location_id: str, room_id: str) -> None:
+    """Hintergrund (Flow 1): laesst den eingeladenen NPC per LLM entscheiden
+    (ask_to_join_party) und macht seine Antwort im Raum sichtbar — run_chat_turn
+    schreibt selbst NICHT in den Wahrnehmungs-Stream. Bei Ja ist der Beitritt
+    bereits erfolgt; eine Erzaehler-Zeile bestaetigt es."""
+    import asyncio as _asyncio
+    from app.core.party_engine import ask_to_join_party
+    from app.core.perception import record_utterance, VOLUME_NORMAL
+    try:
+        accepted, reply = await _asyncio.to_thread(
+            ask_to_join_party, avatar, invitee, content)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("party invite handler %s->%s failed: %s", avatar, invitee, e)
+        return
+    # reply ist die echte NPC-Antwort (oder "" bei Pre-Check-Skip) — nur dann
+    # als Sprechzeile in den Raum schreiben.
+    if reply:
+        record_utterance(speaker=invitee, content=reply, volume=VOLUME_NORMAL,
+                         location_id=location_id, room_id=room_id, source="party_invite")
+    if accepted:
+        record_utterance(speaker="Erzähler",
+                         content=f"{invitee} schließt sich {avatar}s Party an.",
+                         volume=VOLUME_NORMAL, location_id=location_id,
+                         room_id=room_id, source="party")
+        logger.info("Party: %s ist %s beigetreten (Natural-Speech-Einladung)",
+                    invitee, avatar)
 
 
 @router.post("/play/say")
@@ -404,6 +493,25 @@ async def play_say(request: Request, user=Depends(get_current_user)):
             record_utterance(speaker="Erzähler", content=_hint, volume=VOLUME_NORMAL,
                              location_id=loc, room_id=room, source="spell")
 
+    # 2c) Party-Einladung per Natural Speech (Flow 1): erkennt der Avatar eine
+    #     Einladung ("komm mit …") an einen anwesenden NPC, entscheidet dieser im
+    #     Hintergrund per LLM (ask_to_join_party) und faellt aus dem normalen
+    #     Reaktions-Dispatch (exclude) — sonst antwortet er doppelt.
+    _party_invitee = ""
+    if content.strip() and not _is_spell:
+        try:
+            from app.core.party_engine import detect_invite_target
+            _party_invitee = detect_invite_target(avatar, content, present)
+        except Exception as _pe:  # noqa: BLE001
+            logger.debug("party invite detect failed: %s", _pe)
+    if _party_invitee:
+        addressees = [a for a in addressees if a != _party_invitee]
+        try:
+            asyncio.create_task(
+                _handle_party_invite(avatar, _party_invitee, content, loc, room))
+        except Exception as _pe:  # noqa: BLE001
+            logger.debug("party invite schedule failed: %s", _pe)
+
     # 3) Reaktionen über den Loop verteilen: Adressierte → Pflicht-Antwort,
     #    übrige Anwesende → Chime. Bei Spell reagiert das Ziel auf die WIRKUNG
     #    (Inhalt = chat_substitute + hint), nicht auf die rohen Zauberworte.
@@ -418,7 +526,8 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         reactions = get_agent_loop().dispatch_room_reactions(
             speaker=avatar, content=_react_content, volume=volume,
             location_id=loc, room_id=room, addressees=addressees,
-            is_avatar=True, hints=hints)
+            is_avatar=True, hints=hints,
+            exclude=[_party_invitee] if _party_invitee else None)
     except Exception as e:  # noqa: BLE001
         logger.warning("play_say dispatch_room_reactions failed: %s", e)
 
@@ -561,11 +670,13 @@ async def play_notices(user=Depends(get_current_user)):
     Ort, aktive Bewegungs-Sperre (Block/Force), ungelesene Notifications."""
     from app.models.account import get_active_character
     out = {"avatar": "", "events": [], "leave_blocked": None,
-           "force_warning": None, "notifications": [], "unread_count": 0}
+           "force_warning": None, "notifications": [], "unread_count": 0,
+           "party": None}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return out
     out["avatar"] = avatar
+    out["party"] = _party_block(avatar)
     # Aktive Force-Regel (z.B. "Erschöpfung: Bin erschöpft, gehe schlafen") —
     # fuer den Avatar NICHT automatisch ausgefuehrt, nur als Hinweis + Apply.
     try:

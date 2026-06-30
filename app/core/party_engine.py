@@ -187,27 +187,33 @@ def ask_to_join_party(inviter: str, invitee: str,
     from app.core.partner_consent import _classify_response
     inviter = (inviter or "").strip()
     invitee = (invitee or "").strip()
+    # Das zweite Tuple-Element ist die ECHTE NPC-Antwort (oder "") — Reason-Codes
+    # gehen nur ins Log, damit der Aufrufer sie nicht faelschlich als Sprechzeile
+    # in den Raum schreibt.
     if not inviter or not invitee or inviter == invitee:
-        return False, "invalid"
+        return False, ""
     try:
         from app.models.account import is_player_controlled
         if is_player_controlled(invitee):
-            return False, "player_character"
+            logger.info("Party-Consent: %s ist Avatar — uebersprungen", invitee)
+            return False, ""
     except Exception:
         pass
     if get_party_of(invitee) is not None:
-        return False, "already_in_party"
+        return False, ""
     try:
         from app.models.character import is_character_sleeping
         if is_character_sleeping(invitee):
-            return False, "invitee_sleeping"
+            logger.info("Party-Consent: %s schlaeft — auto-declined", invitee)
+            return False, ""
     except Exception:
         pass
     try:
         from app.core.activity_engine import is_character_interruptible
         can_interrupt, busy = is_character_interruptible(invitee)
         if not can_interrupt:
-            return False, f"invitee_busy:{busy}"
+            logger.info("Party-Consent: %s nicht unterbrechbar (%s)", invitee, busy)
+            return False, ""
     except Exception:
         pass
 
@@ -221,18 +227,22 @@ def ask_to_join_party(inviter: str, invitee: str,
             task_type="party_invite")
     except Exception as e:
         logger.warning("Party-Consent fehlgeschlagen (%s) — default No", e)
-        return False, "consent_failed"
+        return False, ""
     if not reply:
-        return False, "no_reply"
+        return False, ""
 
     accepted = _classify_response(reply)
-    preview = reply.strip()[:120]
+    full_reply = reply.strip()  # volle Antwort (Caller kann sie in den Stream schreiben)
     if accepted:
         pid = add_to_party(inviter, invitee)
         if not pid:
             logger.info("Party-Consent: %s sagte Ja, aber Beitritt scheiterte (Konflikt)",
                         invitee)
-            return False, "join_conflict"
+            return False, full_reply
+        try:
+            clear_invites_for(invitee)
+        except Exception:
+            pass
         try:
             from app.models.relationship import record_interaction
             record_interaction(inviter, invitee, "party_join",
@@ -241,8 +251,8 @@ def ask_to_join_party(inviter: str, invitee: str,
         except Exception:
             pass
     logger.info("Party-Consent: %s %s (preview: %s)",
-                invitee, "JA" if accepted else "NEIN", preview[:60])
-    return accepted, preview
+                invitee, "JA" if accepted else "NEIN", full_reply[:60])
+    return accepted, full_reply
 
 
 # --- Pending-Einladungen (NPC laedt Avatar ein) ---------------------------
@@ -321,6 +331,55 @@ def resolve_pending_invite(invite_id: str, accept: bool) -> Dict:
         return {"status": "join_conflict", "inviter": inv["inviter"], "invitee": inv["invitee"]}
     return {"status": "accepted", "party_id": pid,
             "inviter": inv["inviter"], "invitee": inv["invitee"]}
+
+
+_INVITE_KEYWORDS = (
+    "komm mit", "kommst du mit", "komm doch mit", "komm mit mir", "mit mir mit",
+    "begleite", "begleitest du", "lass uns", "lasst uns", "gehen wir",
+    "gehst du mit", "zusammen gehen", "zusammen los", "schliess dich",
+    "come with", "come along", "join me", "join us", "let's go", "let us go",
+    "wanna come", "tag along", "come too",
+)
+
+
+def detect_invite_target(inviter: str, text: str, present) -> str:
+    """Natural-Speech-Erkennung einer Party-Einladung in der Avatar-Nachricht.
+
+    Cheap (kein LLM): Keyword-Vorfilter + Namens-Match unter den Anwesenden;
+    Fallback genau-ein-anwesender-NPC. Liefert den Ziel-NPC oder "". Die eigentliche
+    Ja/Nein-Entscheidung trifft danach der NPC per LLM (ask_to_join_party).
+    """
+    t = (text or "").lower().strip()
+    inviter = (inviter or "").strip()
+    if not t or not inviter:
+        return ""
+    if not any(k in t for k in _INVITE_KEYWORDS):
+        return ""
+    if is_party_follower(inviter):
+        return ""  # ein Follower laedt nicht ein
+
+    def _eligible(c: str) -> bool:
+        if not c or c == inviter:
+            return False
+        if get_party_of(c) is not None:
+            return False
+        try:
+            from app.models.account import is_player_controlled
+            if is_player_controlled(c):
+                return False  # andere Avatare nicht einladbar
+        except Exception:
+            pass
+        return True
+
+    cands = [c for c in (present or []) if _eligible(c)]
+    # 1) Namens-Match: erster anwesender NPC, dessen Name im Text vorkommt.
+    for c in cands:
+        if c.lower() in t:
+            return c
+    # 2) Fallback: genau ein in Frage kommender Anwesender -> der ist gemeint.
+    if len(cands) == 1:
+        return cands[0]
+    return ""
 
 
 def clear_invites_for(character: str) -> None:

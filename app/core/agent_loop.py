@@ -367,7 +367,8 @@ class AgentLoop:
                                 location_id: str, room_id: str,
                                 addressees: Optional[List[str]] = None,
                                 is_avatar: bool = False,
-                                hints: Optional[Dict[str, str]] = None) -> Dict[str, List[str]]:
+                                hints: Optional[Dict[str, str]] = None,
+                                exclude: Optional[List[str]] = None) -> Dict[str, List[str]]:
         """Phase 3b: verteilt Reaktionen auf eine Raum-Äußerung über den Loop.
 
         - Adressierte Anwesende → Pflicht-Antwort (obligatory).
@@ -380,6 +381,10 @@ class AgentLoop:
         Charaktere zurück.
         """
         from app.core.room_entry import _list_characters_in_room
+        # exclude: Charaktere, die hier bewusst NICHT reagieren sollen (z.B. ein
+        # zur Party eingeladener NPC, der seine Antwort schon ueber den Consent-
+        # Pfad gibt — sonst doppelte Reaktion).
+        _excl = {e for e in (exclude or []) if e}
         # „Leaving"-Filter: wer ein Reiseziel WEG von dieser Location hat, ist im
         # Abgang — er gab seinen Abschieds-Beat im auslösenden Turn und bekommt
         # KEINE weiteren Room-Reaktionen mehr (sonst „X verlässt, labert aber
@@ -436,7 +441,7 @@ class AgentLoop:
                     self._room_winddown_done.add(key)
                     present = [c for c in _list_characters_in_room(location_id, room_id)
                                if c and c != speaker and _is_respond_eligible(c)
-                               and not _leaving(c)]
+                               and not _leaving(c) and c not in _excl]
                     if present:
                         closer = present[0]
                         if self.bump_respond(closer, speaker=speaker, content=content,
@@ -452,7 +457,7 @@ class AgentLoop:
         if not location_id:
             return {"obligatory": [], "chime": []}
         present = [c for c in _list_characters_in_room(location_id, room_id)
-                   if c and c != speaker and not _leaving(c)]
+                   if c and c != speaker and not _leaving(c) and c not in _excl]
         addr = set(addressees or [])
         out: Dict[str, List[str]] = {"obligatory": [], "chime": []}
 
