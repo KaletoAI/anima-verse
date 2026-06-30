@@ -141,6 +141,8 @@ interface SceneData {
   present_detail: Array<{ name: string; avatar_url: string; expr_version?: string }>
   scene: Array<{ ts: string; content: string; kind: string; meta?: Record<string, unknown> }>
   follow_suggestions?: Array<{ character: string; room_id: string; room_name: string }>
+  party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
+  party_invites?: Array<{ invite_id: string; inviter: string }>
   rooms: RoomInfo[]
   neighbors: Partial<Record<Dir, Neighbor | null>>
   at_entry_room: boolean
@@ -588,6 +590,12 @@ export function PlayerApp() {
     try { await apiPost('/play/enter-room', { room_id: roomId }); await load() }
     catch { /* ignore */ } finally { setMoving(false) }
   }, [moving, load])
+  // Party (gemeinsam reisen): Einladung im Chat-Fenster beantworten. Das
+  // Verlassen sitzt im NoticeBanner (persistenter Party-Streifen).
+  const handlePartyRespond = useCallback(async (inviteId: string, accept: boolean) => {
+    try { await apiPost('/play/party/respond', { invite_id: inviteId, accept }); await load() }
+    catch { /* ignore */ }
+  }, [load])
 
   const lines: SceneLine[] = (data?.scene || []).map((p) => ({
     ts: p.ts, content: p.content, kind: p.kind, meta: p.meta,
@@ -683,6 +691,30 @@ export function PlayerApp() {
                     <button onClick={() => handleEnterRoom(f.room_id)} disabled={moving}
                       className="player-chip player-chip-follow">
                       {t('Follow')}
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {(data?.party_invites?.length ?? 0) > 0 && (
+              <div style={{
+                flex: '0 0 auto', padding: '6px 12px', display: 'flex', flexWrap: 'wrap',
+                gap: 10, alignItems: 'center', borderTop: '1px solid var(--border, #30363d)',
+                background: 'rgba(120,170,255,0.10)',
+              }}>
+                {data!.party_invites!.map((inv) => (
+                  <span key={inv.invite_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
+                    <span style={{ fontStyle: 'italic', color: '#78aaff' }}>
+                      👥 {inv.inviter} {t('invites you to travel together.')}
+                    </span>
+                    <button onClick={() => handlePartyRespond(inv.invite_id, true)}
+                      className="player-chip player-chip-follow">
+                      {t('Join')}
+                    </button>
+                    <button onClick={() => handlePartyRespond(inv.invite_id, false)}
+                      className="player-chip">
+                      {t('Decline')}
                     </button>
                   </span>
                 ))}
@@ -806,6 +838,8 @@ export function PlayerApp() {
           busy={moving}
           onStep={handleStep}
           onEnterRoom={handleEnterRoom}
+          partyFollower={data?.party?.role === 'follower'}
+          partyLeaderName={data?.party?.leader || ''}
         />
       </div>
     </div>

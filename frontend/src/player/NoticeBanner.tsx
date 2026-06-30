@@ -14,6 +14,7 @@ interface ForceWarning {
   rule_id: string; rule_name: string; message: string
   go_to: string; go_to_location_id: string; go_to_room_id: string; set_activity: string
 }
+interface PartyInfo { role: 'leader' | 'follower'; leader: string; members: string[] }
 interface Notices {
   avatar: string
   events: NoticeEvent[]
@@ -21,9 +22,10 @@ interface Notices {
   force_warning: ForceWarning | null
   notifications: NoticeItem[]
   unread_count: number
+  party: PartyInfo | null
 }
 
-const EMPTY: Notices = { avatar: '', events: [], leave_blocked: null, force_warning: null, notifications: [], unread_count: 0 }
+const EMPTY: Notices = { avatar: '', events: [], leave_blocked: null, force_warning: null, notifications: [], unread_count: 0, party: null }
 
 export function NoticeBanner() {
   const { t } = useI18n()
@@ -44,7 +46,13 @@ export function NoticeBanner() {
     setN((prev) => ({ ...prev, notifications: prev.notifications.filter((x) => x.id !== id) }))
   }, [])
 
-  const hasAny = n.events.length > 0 || !!n.leave_blocked || !!n.force_warning || n.notifications.length > 0
+  const leaveParty = useCallback(async () => {
+    try { await apiPost('/play/party/leave', {}) } catch { /* ignore */ }
+    setN((prev) => ({ ...prev, party: null }))
+  }, [])
+
+  const hasAny = n.events.length > 0 || !!n.leave_blocked || !!n.force_warning
+    || n.notifications.length > 0 || !!n.party
   if (!hasAny) return null
 
   // Opaker Hintergrund + farbiger Rand-Streifen — damit die Szene-Schrift
@@ -58,7 +66,8 @@ export function NoticeBanner() {
     pointerEvents: 'auto',
   })
 
-  const hasLeftItems = !!n.leave_blocked || n.events.length > 0 || n.notifications.length > 0
+  const hasLeftItems = !!n.leave_blocked || n.events.length > 0
+    || n.notifications.length > 0 || !!n.party
 
   // Overlay statt Inline-Fluss: der Banner-Container ist 0px hoch und lässt seinen
   // Inhalt nach unten überlaufen, zentriert über den oberen Panel-Rand. So
@@ -89,6 +98,22 @@ export function NoticeBanner() {
           display: 'flex', flexDirection: 'column', gap: 4,
           width: 'min(560px, 70vw)', maxWidth: '100%',
         }}>
+          {n.party && (
+            <div style={row('#78aaff')}>
+              <span>👥</span>
+              <span style={{ flex: 1 }}>
+                {n.party.role === 'follower'
+                  ? `${t('You are in a party, following')} ${n.party.leader}`
+                  : `${t('You lead a party with')} ${n.party.members.join(', ')}`}
+              </span>
+              <button onClick={leaveParty}
+                style={{ border: '1px solid rgba(255,255,255,0.25)', background: 'transparent',
+                         color: 'inherit', cursor: 'pointer', borderRadius: 6,
+                         padding: '1px 8px', fontSize: '0.92em' }}>
+                {t('Leave party')}
+              </button>
+            </div>
+          )}
           {n.leave_blocked && (
             <div style={row('#e05656')}>
               <span>🚫</span>

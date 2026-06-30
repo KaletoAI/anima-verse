@@ -18,7 +18,7 @@ type Neighbors = Partial<Record<Dir, Neighbor | null>>
 
 export function MovePad({
   rooms, currentRoomId, neighbors, atEntryRoom, entryRoomName, busy,
-  onStep, onEnterRoom,
+  onStep, onEnterRoom, partyFollower = false, partyLeaderName = '',
 }: {
   rooms: RoomInfo[]
   currentRoomId: string
@@ -28,6 +28,10 @@ export function MovePad({
   busy: boolean
   onStep: (dir: Dir) => void
   onEnterRoom: (roomId: string) => void
+  /** Avatar ist Party-Follower: keine eigene Bewegung (Kompass + Raum-Chips aus),
+   *  er wird vom Leader mitgezogen. */
+  partyFollower?: boolean
+  partyLeaderName?: string
 }) {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -74,6 +78,28 @@ export function MovePad({
     )
   }
   const blank = <span />
+
+  // Party-Follower: keine eigene Bewegung — Kompass + Raum-Chips komplett aus,
+  // nur ein Hinweis. Der Avatar wird vom Leader mitgezogen.
+  if (partyFollower) {
+    return (
+      <div ref={rootRef} style={{
+        display: 'flex', flexDirection: 'column', height: '100%',
+        alignItems: 'center', justifyContent: 'center', gap: 8,
+        padding: 12, textAlign: 'center', opacity: 0.8,
+      }}>
+        <div style={{ fontSize: '1.6em' }}>👥</div>
+        <div style={{ fontSize: '0.86em' }}>
+          {partyLeaderName
+            ? `${t('You are following the party of')} ${partyLeaderName}.`
+            : t('You are part of a party.')}
+        </div>
+        <div style={{ fontSize: '0.74em', opacity: 0.7 }}>
+          {t('You move together — leave the party to move on your own.')}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 8 }}>
