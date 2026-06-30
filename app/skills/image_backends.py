@@ -90,7 +90,15 @@ class ImageBackend(ABC):
         self.cost = cost
         self.api_type = api_type
         self.env_prefix = env_prefix
-        self.available = False
+        self._available = False
+        # Cooldown nach Fehler: haelt available temporaer hart auf False, auch
+        # wenn check_availability den (erreichbaren) Endpoint wieder mit 200
+        # sieht. So wird ein Gateway, das zwar online ist aber das Modell gerade
+        # nicht liefern kann (z.B. 503 "No healthy backend"), nicht bei jeder
+        # Generierung neu probiert — die Match-Auswahl ueberspringt es bis der
+        # Cooldown ablaeuft (spiegelt provider.mark_unhealthy der LLM-Seite).
+        self._cooldown_until: float = 0.0
+        self._cooldown_reason: str = ""
         self._active_jobs = 0
         self._jobs_lock = __import__("threading").Lock()
         # Letzter Zeitpunkt an dem wir "nicht erreichbar" als WARNING geloggt haben
@@ -199,6 +207,45 @@ class ImageBackend(ABC):
         self._log_unreachable(reason)
         self._was_available = False
         self.available = False
+
+    @property
+    def available(self) -> bool:
+        """Verfuegbar fuer die Backend-Auswahl. Waehrend eines Cooldowns hart
+        False — unabhaengig davon, was die letzte Erreichbarkeits-Pruefung
+        gesetzt hat (siehe mark_unhealthy)."""
+        if self._cooldown_active():
+            return False
+        return self._available
+
+    @available.setter
+    def available(self, value: bool) -> None:
+        self._available = bool(value)
+
+    def _cooldown_active(self) -> bool:
+        if not self._cooldown_until:
+            return False
+        if time.monotonic() < self._cooldown_until:
+            return True
+        # Abgelaufen — zuruecksetzen, naechste check_availability darf neu proben.
+        self._cooldown_until = 0.0
+        self._cooldown_reason = ""
+        return False
+
+    def mark_unhealthy(self, reason: str = "", cooldown_seconds: float = 300.0) -> None:
+        """Setzt das Backend nach einem Fehler in Cooldown.
+
+        Anders als ``available = False`` ueberlebt das die naechste
+        ``check_availability``-Probe: solange der Cooldown laeuft liefert die
+        ``available``-Property False, sodass die Match-Auswahl dieses Backend
+        ueberspringt und ein anderes nimmt. Nach Ablauf wird wieder normal
+        geprobt (Retry).
+        """
+        self._available = False
+        self._was_available = False
+        self._cooldown_until = time.monotonic() + max(0.0, cooldown_seconds)
+        self._cooldown_reason = reason or "unhealthy"
+        logger.warning("Backend %s in Cooldown fuer %ds: %s",
+                       self.name, int(cooldown_seconds), reason)
 
     @abstractmethod
     def check_availability(self) -> bool:

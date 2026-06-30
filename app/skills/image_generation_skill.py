@@ -11,6 +11,10 @@ import uuid
 # "HTTP 422", "Bad Request"). 4xx = Service erreichbar, Payload kaputt —
 # Backend NICHT als unavailable markieren.
 _re_4xx = re.compile(r"\b(?:HTTP\s*)?4(?:00|01|03|04|05|22)\b|Bad Request|Unprocessable", re.IGNORECASE)
+# Cooldown nach einem nicht-Payload-Fehler (5xx / Connection / leeres Ergebnis).
+# Spiegelt den LLM-Provider-Cooldown: ein gescheitertes Backend wird fuer diese
+# Zeit aus der Match-Auswahl genommen und danach automatisch wieder probiert.
+_BACKEND_COOLDOWN_SECONDS = 300.0
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -1114,9 +1118,11 @@ class ImageGenerationSkill(BaseSkill):
                         current.name, type(e).__name__, _err_str[:200])
                 else:
                     logger.warning(
-                        "Fallback-Engine: %s warf Exception (%s: %s) — Backend als unavailable markiert, versuche Fallback",
+                        "Fallback-Engine: %s warf Exception (%s: %s) — Backend in Cooldown, versuche Fallback",
                         current.name, type(e).__name__, _err_str[:200])
-                    current.available = False
+                    current.mark_unhealthy(
+                        f"generate failed: {type(e).__name__}: {_err_str[:120]}",
+                        _BACKEND_COOLDOWN_SECONDS)
                 current = self._pick_fallback_backend(
                     current, workflow, character_name, tried)
                 continue
@@ -1130,9 +1136,10 @@ class ImageGenerationSkill(BaseSkill):
                 return result, current
 
             # Leeres Resultat = Fail, naechstes probieren
-            logger.warning("Fallback-Engine: %s lieferte leeres Ergebnis — versuche Fallback",
+            logger.warning("Fallback-Engine: %s lieferte leeres Ergebnis — Cooldown, versuche Fallback",
                            current.name)
-            current.available = False
+            current.mark_unhealthy("generate returned empty result",
+                                   _BACKEND_COOLDOWN_SECONDS)
             current = self._pick_fallback_backend(
                 current, workflow, character_name, tried)
 
@@ -2832,14 +2839,14 @@ class ImageGenerationSkill(BaseSkill):
         except requests.exceptions.Timeout:
             error_msg = f"Bildgenerierung hat zu lange gedauert ({backend.name})"
             logger.error("Timeout: %s", error_msg)
-            backend.available = False
+            backend.mark_unhealthy("generate timeout", _BACKEND_COOLDOWN_SECONDS)
             _tq.track_finish(_track_id, error=error_msg)
             _log_image_failure(locals(), error_msg)
             return f"Fehler: {error_msg}"
         except requests.exceptions.ConnectionError:
             error_msg = f"Verbindung zu {backend.name} ({backend.api_url}) fehlgeschlagen"
             logger.error("ConnectionError: %s", error_msg)
-            backend.available = False
+            backend.mark_unhealthy("connection error", _BACKEND_COOLDOWN_SECONDS)
             _tq.track_finish(_track_id, error=error_msg)
             _log_image_failure(locals(), error_msg)
             return f"Fehler: {error_msg}"
