@@ -340,58 +340,28 @@ export function TemplateTab({
     )
   }
 
-  // „Breite" Prompt-Sektionen: enthalten ein mehrzeiliges Text-Feld MIT
-  // Bild-Vorschau (z.B. Aussehen-/Gesichts-Prompt). Die werden NICHT in eine
-  // schmale Spalte gequetscht, sondern voll breit untereinander gerendert —
-  // jedes Bild jeweils unter seinem Prompt. (Nicht im /play-Avatar-Panel, das
-  // hat sein eigenes Prompt|Bild-Nebeneinander via imageBeside.)
-  const isWidePrompt = (s: TmplSectionRaw) =>
-    !s.special &&
-    editableFields(s).some((f) => f.type === 'text' && f.multiline && !!f.image_preview)
-  const wideSections = imageBeside
-    ? []
-    : sections
-        .filter(isWidePrompt)
-        .sort((a, b) => (a.column ?? 0) - (b.column ?? 0) || (a.row ?? 0) - (b.row ?? 0))
-  const wideIds = new Set(wideSections.map((s) => s.id))
-
-  const renderCol = (col: number) => {
-    const colSections = sections
-      .filter((s) => (s.column || 1) === col)
-      .filter((s) => !wideIds.has(s.id))
-      .filter((s) =>
-        s.special ? !!(specialSlots && specialSlots[String(s.special)]) : editableFields(s).length > 0,
-      )
-      .sort((a, b) => (a.row ?? 0) - (b.row ?? 0))
-    if (!colSections.length) return null
-    return (
-      <div key={col} className="tpl-tab-col">
-        {colSections.map((s) => (
-          <div key={s.id} className="tpl-tab-section">
-            <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
-            {s.special ? specialSlots?.[String(s.special)] : editableFields(s).map(renderField)}
+  return (
+    <div className="ga-form tpl-tab-cols">
+      {cols.map((col) => {
+        const colSections = sections
+          .filter((s) => (s.column || 1) === col)
+          .filter((s) =>
+            s.special ? !!(specialSlots && specialSlots[String(s.special)]) : editableFields(s).length > 0,
+          )
+          .sort((a, b) => (a.row ?? 0) - (b.row ?? 0))
+        return (
+          <div key={col} className="tpl-tab-col">
+            {colSections.map((s) => (
+              <div key={s.id} className="tpl-tab-section">
+                <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
+                {s.special
+                  ? specialSlots?.[String(s.special)]
+                  : editableFields(s).map(renderField)}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-    )
-  }
-  const gridCols = cols.map(renderCol).filter(Boolean)
-
-  if (wideSections.length > 0) {
-    return (
-      <div className="ga-form tpl-aussehen-layout">
-        {gridCols.length ? <div className="tpl-tab-cols tpl-aussehen-side">{gridCols}</div> : null}
-        <div className="tpl-prompt-stack">
-          {wideSections.map((s) => (
-            <div key={s.id} className="tpl-tab-section">
-              <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
-              {editableFields(s).map(renderField)}
-            </div>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  return <div className="ga-form tpl-tab-cols">{gridCols}</div>
+        )
+      })}
+    </div>
+  )
 }
