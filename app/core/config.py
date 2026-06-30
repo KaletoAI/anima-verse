@@ -1099,6 +1099,7 @@ def _flatten_to_env(config: dict) -> None:
         ("send_message", "SKILL_SEND_MESSAGE"),
         ("act", "SKILL_ACT"),
         ("invite_to_party", "SKILL_INVITE_TO_PARTY"),
+        ("join_party", "SKILL_JOIN_PARTY"),
         ("leave_party", "SKILL_LEAVE_PARTY"),
     ]:
         s = skills.get(skill_key, {})

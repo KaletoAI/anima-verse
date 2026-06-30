@@ -334,19 +334,6 @@ async def _storyteller_fallback(actor: str, text: str, location_id: str,
         logger.warning("storyteller fallback failed: %s", e)
 
 
-async def _handle_party_invite(avatar: str, invitee: str, content: str) -> None:
-    """Hintergrund (Flow 1): laesst den eingeladenen NPC per LLM entscheiden
-    (ask_to_join_party). ask_to_join_party laeuft im Raum-Modus und macht die
-    NPC-Antwort + Beitritts-Zeile selbst im Raum sichtbar; hier kein zusaetzliches
-    Recording (sonst doppelt)."""
-    import asyncio as _asyncio
-    from app.core.party_engine import ask_to_join_party
-    try:
-        await _asyncio.to_thread(ask_to_join_party, avatar, invitee, content)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("party invite handler %s->%s failed: %s", avatar, invitee, e)
-
-
 @router.post("/play/say")
 async def play_say(request: Request, user=Depends(get_current_user)):
     """Der Avatar äußert etwas in seinen aktuellen Raum.
@@ -477,28 +464,12 @@ async def play_say(request: Request, user=Depends(get_current_user)):
             record_utterance(speaker="Erzähler", content=_hint, volume=VOLUME_NORMAL,
                              location_id=loc, room_id=room, source="spell")
 
-    # 2c) Party-Einladung per Natural Speech (Flow 1): erkennt der Avatar eine
-    #     Einladung ("komm mit …") an einen anwesenden NPC, entscheidet dieser im
-    #     Hintergrund per LLM (ask_to_join_party) und faellt aus dem normalen
-    #     Reaktions-Dispatch (exclude) — sonst antwortet er doppelt.
-    _party_invitee = ""
-    if content.strip() and not _is_spell:
-        try:
-            from app.core.party_engine import detect_invite_target
-            _party_invitee = detect_invite_target(avatar, content, present)
-        except Exception as _pe:  # noqa: BLE001
-            logger.debug("party invite detect failed: %s", _pe)
-    if _party_invitee:
-        addressees = [a for a in addressees if a != _party_invitee]
-        try:
-            asyncio.create_task(
-                _handle_party_invite(avatar, _party_invitee, content))
-        except Exception as _pe:  # noqa: BLE001
-            logger.debug("party invite schedule failed: %s", _pe)
-
     # 3) Reaktionen über den Loop verteilen: Adressierte → Pflicht-Antwort,
     #    übrige Anwesende → Chime. Bei Spell reagiert das Ziel auf die WIRKUNG
     #    (Inhalt = chat_substitute + hint), nicht auf die rohen Zauberworte.
+    #    Party-Einladung (Flow 1): KEINE Sonderbehandlung mehr — lädt der Avatar
+    #    einen NPC per Natural Speech ein ("komm mit …"), antwortet der NPC ganz
+    #    normal und ruft bei Zustimmung in seinem Turn das JoinParty-Skill auf.
     reactions = {"obligatory": [], "chime": []}
     try:
         from app.core.agent_loop import get_agent_loop
@@ -510,8 +481,7 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         reactions = get_agent_loop().dispatch_room_reactions(
             speaker=avatar, content=_react_content, volume=volume,
             location_id=loc, room_id=room, addressees=addressees,
-            is_avatar=True, hints=hints,
-            exclude=[_party_invitee] if _party_invitee else None)
+            is_avatar=True, hints=hints)
     except Exception as e:  # noqa: BLE001
         logger.warning("play_say dispatch_room_reactions failed: %s", e)
 

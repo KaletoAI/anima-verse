@@ -26,7 +26,7 @@ from .retrospect_skill import RetrospectSkill
 from .state_flag_skills import (
     SleepWakeSkill, WetSkill, IntimateSkill, DecencyExemptSkill, SetPoseSkill,
 )
-from .party_skills import InviteToPartySkill, LeavePartySkill
+from .party_skills import PartySkill
 
 
 class _Verb:
@@ -81,10 +81,12 @@ class SkillManager:
         'allow_exposed': _Verb(DecencyExemptSkill, active=True),
         'require_decency': _Verb(DecencyExemptSkill, active=False),
         'set_pose': SetPoseSkill,
-        # Party-System (gemeinsam reisen): default-on via config.py-Env-Loop,
-        # Sichtbarkeit pro Rolle verfeinert in _get_agent_skills.
-        'invite_to_party': InviteToPartySkill,
-        'leave_party': LeavePartySkill,
+        # Party-System (gemeinsam reisen): EINE Klasse, drei Verben (wie Wet
+        # enter/leave). default-on via config.py-Env-Loop, Sichtbarkeit pro Rolle
+        # verfeinert in _get_agent_skills.
+        'invite_to_party': _Verb(PartySkill, verb="invite"),
+        'join_party': _Verb(PartySkill, verb="join"),
+        'leave_party': _Verb(PartySkill, verb="leave"),
     }
 
     def __init__(self):
@@ -224,6 +226,8 @@ class SkillManager:
             _sid = skill.SKILL_ID
             if _is_follower and _sid in ("setlocation", "move", "invite_to_party"):
                 continue
+            if _sid == "join_party" and _in_party:
+                continue  # nur wer in KEINER Party ist kann beitreten
             if _sid == "leave_party" and not _in_party:
                 continue
             agent_config = get_character_skill_config(character_name, _sid)
