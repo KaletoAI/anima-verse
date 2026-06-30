@@ -12,6 +12,7 @@ fehlende LLM-Antwort und Exceptions werden als Ablehnung gewertet,
 damit kein Phantom-Consent entstehen kann (insbesondere wenn der
 Partner ein vom User gesteuerter Avatar ist).
 """
+import re
 from typing import Tuple
 
 from app.core.log import get_logger
@@ -49,6 +50,16 @@ def _build_invitation_text(activity_def: dict) -> str:
     return f"Hast du Lust zu {label}?"
 
 
+def _contains_word(text: str, words) -> bool:
+    """Wort-Grenzen-Match (kein naives Substring). Verhindert Fehltreffer wie
+    "no" in "noch" / "Monolog" oder "ok" in "Lockenkopf". Mehrwort-Phrasen
+    ("keine lust", "lass uns") werden ebenso mit \\b an den Raendern gematcht."""
+    for w in words:
+        if re.search(r"\b" + re.escape(w) + r"\b", text):
+            return True
+    return False
+
+
 def _classify_response(text: str) -> bool:
     """True=accepted, False=declined.
 
@@ -57,16 +68,18 @@ def _classify_response(text: str) -> bool:
     - Nur explizite Yes-Woerter -> True
     - Leere/unverstaendliche/ambivalente Antwort -> False
       (kein Phantom-Consent ohne klares Ja)
+
+    Match auf WORT-Grenzen (nicht Substring): "noch"/"Monolog" lösen kein "no"
+    mehr aus (deutscher Text), sonst wurde eine Zusage faelschlich als Ablehnung
+    gewertet.
     """
     t = (text or "").lower()
     if not t.strip():
         return False
-    for w in _NO_WORDS:
-        if w in t:
-            return False
-    for w in _YES_WORDS:
-        if w in t:
-            return True
+    if _contains_word(t, _NO_WORDS):
+        return False
+    if _contains_word(t, _YES_WORDS):
+        return True
     return False  # Ambiguitaet -> No
 
 

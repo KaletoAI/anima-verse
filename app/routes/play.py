@@ -334,33 +334,17 @@ async def _storyteller_fallback(actor: str, text: str, location_id: str,
         logger.warning("storyteller fallback failed: %s", e)
 
 
-async def _handle_party_invite(avatar: str, invitee: str, content: str,
-                               location_id: str, room_id: str) -> None:
+async def _handle_party_invite(avatar: str, invitee: str, content: str) -> None:
     """Hintergrund (Flow 1): laesst den eingeladenen NPC per LLM entscheiden
-    (ask_to_join_party) und macht seine Antwort im Raum sichtbar — run_chat_turn
-    schreibt selbst NICHT in den Wahrnehmungs-Stream. Bei Ja ist der Beitritt
-    bereits erfolgt; eine Erzaehler-Zeile bestaetigt es."""
+    (ask_to_join_party). ask_to_join_party laeuft im Raum-Modus und macht die
+    NPC-Antwort + Beitritts-Zeile selbst im Raum sichtbar; hier kein zusaetzliches
+    Recording (sonst doppelt)."""
     import asyncio as _asyncio
     from app.core.party_engine import ask_to_join_party
-    from app.core.perception import record_utterance, VOLUME_NORMAL
     try:
-        accepted, reply = await _asyncio.to_thread(
-            ask_to_join_party, avatar, invitee, content)
+        await _asyncio.to_thread(ask_to_join_party, avatar, invitee, content)
     except Exception as e:  # noqa: BLE001
         logger.warning("party invite handler %s->%s failed: %s", avatar, invitee, e)
-        return
-    # reply ist die echte NPC-Antwort (oder "" bei Pre-Check-Skip) — nur dann
-    # als Sprechzeile in den Raum schreiben.
-    if reply:
-        record_utterance(speaker=invitee, content=reply, volume=VOLUME_NORMAL,
-                         location_id=location_id, room_id=room_id, source="party_invite")
-    if accepted:
-        record_utterance(speaker="Erzähler",
-                         content=f"{invitee} schließt sich {avatar}s Party an.",
-                         volume=VOLUME_NORMAL, location_id=location_id,
-                         room_id=room_id, source="party")
-        logger.info("Party: %s ist %s beigetreten (Natural-Speech-Einladung)",
-                    invitee, avatar)
 
 
 @router.post("/play/say")
@@ -508,7 +492,7 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         addressees = [a for a in addressees if a != _party_invitee]
         try:
             asyncio.create_task(
-                _handle_party_invite(avatar, _party_invitee, content, loc, room))
+                _handle_party_invite(avatar, _party_invitee, content))
         except Exception as _pe:  # noqa: BLE001
             logger.debug("party invite schedule failed: %s", _pe)
 
@@ -659,6 +643,15 @@ async def play_others(user=Depends(get_current_user)):
         present = ([c for c in _list_characters_in_room(loc, room) if c and c != avatar]
                    if loc else [])
         out["characters"] = [_state_block(c) for c in present]
+        # Party-Hervorhebung: markiere Anwesende, die zur Party des Avatars gehoeren.
+        try:
+            from app.core.party_engine import get_party_of
+            p = get_party_of(avatar)
+            members = {p["leader"], *p["members"]} if p else set()
+            for blk in out["characters"]:
+                blk["in_party"] = blk["name"] in members
+        except Exception:
+            pass
     except Exception as e:
         logger.debug("play_others failed: %s", e)
     return out

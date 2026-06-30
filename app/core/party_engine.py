@@ -219,12 +219,31 @@ def ask_to_join_party(inviter: str, invitee: str,
 
     invitation = (invitation_text or "").strip() \
         or f"{inviter} fragt: Komm mit, lass uns zusammen losziehen!"
+
+    # Raum-Kontext des invitee holen und run_chat_turn im RAUM-MODUS laufen lassen
+    # — so schreibt run_chat_turn die Antwort NICHT zusaetzlich in chat_messages
+    # (sonst doppelte Anzeige: Raum-Stream UND Telefon/Inbox). Die Antwort machen
+    # wir danach selbst im Raum sichtbar (run_chat_turn tut das im Raum-Modus nicht).
+    _loc = _room = ""
+    room_stream = None
+    try:
+        from app.models.character import (get_character_current_location,
+                                           get_character_current_room)
+        from app.models import perception_store
+        _loc = get_character_current_location(invitee) or ""
+        _room = get_character_current_room(invitee) or ""
+        if _loc:
+            room_stream = perception_store.get_character_room_stream(
+                invitee, _loc, _room, 40)
+    except Exception:
+        room_stream = None
+
     try:
         from app.core.chat_engine import run_chat_turn
         reply = run_chat_turn(
             owner_id="", responder=invitee, speaker=inviter,
             incoming_message=invitation, medium="in_person",
-            task_type="party_invite")
+            task_type="party_invite", room_stream=room_stream)
     except Exception as e:
         logger.warning("Party-Consent fehlgeschlagen (%s) — default No", e)
         return False, ""
@@ -232,7 +251,16 @@ def ask_to_join_party(inviter: str, invitee: str,
         return False, ""
 
     accepted = _classify_response(reply)
-    full_reply = reply.strip()  # volle Antwort (Caller kann sie in den Stream schreiben)
+    full_reply = reply.strip()
+
+    # NPC-Antwort sichtbar im Raum (einmalig, kein chat_messages-Doppel).
+    try:
+        from app.core.perception import record_utterance, VOLUME_NORMAL
+        record_utterance(speaker=invitee, content=full_reply, volume=VOLUME_NORMAL,
+                         location_id=_loc, room_id=_room, source="party_invite")
+    except Exception as _re:
+        logger.debug("Party-Antwort record fehlgeschlagen: %s", _re)
+
     if accepted:
         pid = add_to_party(inviter, invitee)
         if not pid:
@@ -241,6 +269,14 @@ def ask_to_join_party(inviter: str, invitee: str,
             return False, full_reply
         try:
             clear_invites_for(invitee)
+        except Exception:
+            pass
+        try:
+            from app.core.perception import record_utterance, VOLUME_NORMAL
+            record_utterance(speaker="Erzähler",
+                             content=f"{invitee} schließt sich {inviter}s Party an.",
+                             volume=VOLUME_NORMAL, location_id=_loc, room_id=_room,
+                             source="party")
         except Exception:
             pass
         try:

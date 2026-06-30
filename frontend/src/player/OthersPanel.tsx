@@ -17,6 +17,7 @@ interface CharState {
   bar_meta: Record<string, BarMeta>
   conditions: Array<{ name?: string; label?: string; icon?: string }>
   profile_image: string
+  in_party?: boolean
 }
 interface Others { avatar: string; characters: CharState[] }
 
@@ -96,14 +97,18 @@ export function OthersPanel() {
         <div key={c.name} style={{
           flex: '1 1 190px', minWidth: 160, maxWidth: '100%', alignSelf: 'flex-start',
           display: 'flex', flexDirection: 'column', gap: 4, padding: 8, borderRadius: 8,
-          background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+          // Party-Mitglieder bekommen eine eigene (blaue) Karten-Farbe.
+          background: c.in_party ? 'rgba(120,170,255,0.16)' : 'rgba(255,255,255,0.05)',
+          border: c.in_party ? '1px solid rgba(120,170,255,0.55)' : '1px solid rgba(255,255,255,0.08)',
         }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <img src={portraitUrl(c)} alt={c.name}
               onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
               style={{ width: 44, height: 44, borderRadius: 6, objectFit: 'cover', flex: '0 0 auto', background: 'rgba(255,255,255,0.08)' }} />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+              <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {c.name}{c.in_party ? <span title={t('In your party')} style={{ marginLeft: 4 }}>👥</span> : null}
+              </div>
               {c.mood && <div style={{ opacity: 0.6, fontSize: '0.78em', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.mood}</div>}
               {c.activity && <div style={{ opacity: 0.55, fontSize: '0.74em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.activity}</div>}
             </div>
