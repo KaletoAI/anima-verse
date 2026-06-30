@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { useHelp } from '../help/HelpContext'
 
 /**
  * Modal dialog for image-generation overrides — provider/workflow,
@@ -196,6 +197,7 @@ export function ImageGenDialog({
 }: Props) {
   const isRegen = mode === 'regenerate'
   const { t } = useI18n()
+  const { setTopic } = useHelp()
   const [prompt, setPrompt] = useState(defaultPrompt)
   // Editierbare, markierte unabhaengige Config-Teile (Prefix/Suffix).
   const [prefixText, setPrefixText] = useState(settingsPrefix?.text || '')
@@ -575,6 +577,7 @@ export function ImageGenDialog({
                 rows={6}
                 value={prompt}
                 disabled={submitting || enhancing}
+                onFocus={() => setTopic('image_prompt')}
                 onChange={(e) => setPrompt(e.target.value)}
               />
 

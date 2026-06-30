@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
+import { useHelp } from '../../help/HelpContext'
 
 /**
  * Minimaler, gesperrter Dialog für „Fit to neighbors". Fit ist eine
@@ -23,6 +24,7 @@ export function FitDialog({ title, info = '', locId, canvasUrl, workflows = [], 
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const { setTopic } = useHelp()
   const [wf, setWf] = useState(defaultWorkflow || workflows[0]?.spec || '')
   const [fitHint, setFitHint] = useState('')  // dynamischer Terrain-Hint (/fit-prompt)
   const [prompt, setPrompt] = useState('')
@@ -93,6 +95,7 @@ export function FitDialog({ title, info = '', locId, canvasUrl, workflows = [], 
             <textarea
               className="ga-input"
               value={prompt}
+              onFocus={() => setTopic('image_prompt')}
               onChange={(e) => setPrompt(e.target.value)}
               rows={5}
               style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }}

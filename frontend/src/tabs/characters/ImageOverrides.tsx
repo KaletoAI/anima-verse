@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
+import { useHelp } from '../../help/HelpContext'
 
 /**
  * Per-character image-generation overrides (Characters → Image):
@@ -68,6 +69,7 @@ function formatMatchSpec(spec: string): string {
 export function ImageOverrides({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
+  const { setTopic } = useHelp()
   const [pattern, setPattern] = useState('')
   const [loras, setLoras] = useState<Lora[]>([])
   const [workflows, setWorkflows] = useState<string[]>([])
@@ -330,6 +332,7 @@ export function ImageOverrides({ character }: { character: string }) {
                       className="ga-input"
                       placeholder={t('Prompt fragment (e.g. "bare feet")')}
                       value={entry.prompt || ''}
+                      onFocus={() => setTopic('image_prompt')}
                       onChange={(e) => updateSlot(slot, { prompt: e.target.value })}
                     />
                     <div className="ga-img-slotlora">

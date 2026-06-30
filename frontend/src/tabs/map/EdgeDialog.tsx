@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
+import { useHelp } from '../../help/HelpContext'
 
 /**
  * „Kanten angleichen" — gesperrter Dialog (gleicher mapfit-Workflow/Backend wie
@@ -28,6 +29,7 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const { setTopic } = useHelp()
   const availSides = useMemo(() => SIDES.filter((s) => available[s]), [available])
   // Alle Inpaint-Ziele (category=="inpaint") — keine Gray-Filter-Sonderbehandlung.
   const wfs = workflows
@@ -132,6 +134,7 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
             <textarea
               className="ga-input"
               value={prompt}
+              onFocus={() => setTopic('image_prompt')}
               onChange={(e) => setPrompt(e.target.value)}
               rows={5}
               style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }}

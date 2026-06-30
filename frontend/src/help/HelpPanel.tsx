@@ -53,7 +53,7 @@ export function HelpPanel() {
         onClick={() => setOpen(true)}
         title={t('Show help')}
         style={{
-          position: 'fixed', right: 0, top: 140, zIndex: 60,
+          position: 'fixed', right: 0, top: 140, zIndex: 1100,
           background: '#1f6feb', color: '#fff', border: 0,
           borderRadius: '6px 0 0 6px', padding: '10px 7px', cursor: 'pointer',
           writingMode: 'vertical-rl', fontSize: '0.8em', letterSpacing: 1,
@@ -68,7 +68,7 @@ export function HelpPanel() {
   return (
     <aside
       style={{
-        position: 'fixed', right: 0, top: 100, bottom: 0, width: 320, zIndex: 60,
+        position: 'fixed', right: 0, top: 100, bottom: 0, width: 320, zIndex: 1100,
         background: '#0d1117', borderLeft: '1px solid #30363d',
         boxShadow: '-4px 0 16px rgba(0,0,0,0.4)', display: 'flex',
         flexDirection: 'column', color: '#c9d1d9',
