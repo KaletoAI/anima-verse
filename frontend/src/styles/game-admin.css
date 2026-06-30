@@ -52,6 +52,12 @@ html, * {
   flex-direction: column;
   height: 100vh;
   min-height: 0;
+  transition: padding-right 0.18s ease;
+}
+/* Offenes Help-Panel (320px, fixed rechts) reserviert Platz — der Inhalt
+   rückt zusammen statt überlagert zu werden. */
+.ga-shell.help-open {
+  padding-right: 320px;
 }
 
 .ga-header {
@@ -775,38 +781,30 @@ html, * {
   margin-top: 0;
 }
 
-/* Clickable {placeholder} chips above a prompt field — insert at cursor. */
-.tpl-token-chips {
+/* Aussehen-Tab: Struktur-Felder schmal links, Prompt-Felder (mit Bild-Vorschau)
+   voll breit gestapelt rechts — jedes Bild jeweils unter seinem Prompt. */
+.tpl-aussehen-layout {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: 5px;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 22px;
+  align-items: flex-start;
 }
-.tpl-token-chips-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  color: var(--text-muted, #8b949e);
+.tpl-aussehen-side {
+  flex: 0 1 300px;
+  min-width: 0;
 }
-.tpl-token-chip {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  padding: 1px 7px;
-  border-radius: 11px;
-  border: 1px solid var(--border, #30363d);
-  background: rgba(88, 166, 255, 0.08);
-  color: var(--accent, #58a6ff);
-  cursor: pointer;
+.tpl-prompt-stack {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
-.tpl-token-chip:hover:not(:disabled) {
-  background: rgba(88, 166, 255, 0.18);
-  border-color: var(--accent, #58a6ff);
-}
-.tpl-token-chip:disabled {
-  opacity: 0.5;
-  cursor: default;
+/* Schmale Fenster: untereinander statt nebeneinander. */
+@media (max-width: 720px) {
+  .tpl-aussehen-layout { flex-direction: column; }
+  .tpl-aussehen-side { flex: 1 1 auto; }
 }
 
 /* Generic template-section form: fields wrap into a grid; single-line fields

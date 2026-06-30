@@ -5,7 +5,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { GenerationIndicator } from './components/GenerationIndicator'
 import { FreezeToggle } from './components/FreezeToggle'
 import { useAuth } from './lib/AuthGate'
-import { HelpProvider } from './help/HelpContext'
+import { HelpProvider, useHelp } from './help/HelpContext'
 import { HelpPanel } from './help/HelpPanel'
 
 function readHashTab(): TabId {
@@ -20,8 +20,18 @@ const UI_LANGS = [
 ]
 
 export default function App() {
+  return (
+    <HelpProvider>
+      <Shell />
+    </HelpProvider>
+  )
+}
+
+function Shell() {
   const { t, lang, setLang } = useI18n()
   const { user, logout } = useAuth()
+  // Offenes Help-Panel reserviert rechts Platz → Inhalt rückt zusammen.
+  const { open: helpOpen } = useHelp()
   // Aktuelle Sprache immer als Option zeigen (z.B. Browser-Default 'fr').
   const langOpts = UI_LANGS.some((o) => o.v === lang) ? UI_LANGS : [{ v: lang, l: lang }, ...UI_LANGS]
   const [active, setActive] = useState<TabId>(readHashTab)
@@ -40,8 +50,7 @@ export default function App() {
   const ActiveComponent = TABS.find((tab) => tab.id === active)?.Component
 
   return (
-    <HelpProvider>
-    <div className="ga-shell">
+    <div className={`ga-shell${helpOpen ? ' help-open' : ''}`}>
       <header className="ga-header">
         <a className="ga-back" href="/" title={t('Back to chat')}>
           ← {t('Back to chat')}
@@ -92,6 +101,5 @@ export default function App() {
       </main>
       <HelpPanel />
     </div>
-    </HelpProvider>
   )
 }
