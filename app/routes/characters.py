@@ -264,6 +264,7 @@ DEFAULT_NEW_CHARACTER_SKILLS = (
     "imagegen", "setlocation", "talk_to", "send_message", "notify_user",
     "instagram_comment", "instagram_reply",
     "consume_item", "outfit_change", "setactivity",
+    "invite_to_party", "leave_party",
 )
 
 

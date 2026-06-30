@@ -556,6 +556,16 @@ SCHEMA_STATEMENTS = [
         members    TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL
     )""",
+    # Offene Party-Einladungen an den Avatar (NPC laedt Avatar ein -> Frage im
+    # Chat-Fenster). NPC->NPC braucht keine Row (Entscheidung laeuft synchron).
+    """CREATE TABLE IF NOT EXISTS party_invites (
+        invite_id  TEXT PRIMARY KEY,
+        inviter    TEXT NOT NULL,
+        invitee    TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        status     TEXT NOT NULL DEFAULT 'pending'
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_party_invites_invitee ON party_invites (invitee, status)",
 ]
 
 

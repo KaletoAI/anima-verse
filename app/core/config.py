@@ -1098,6 +1098,8 @@ def _flatten_to_env(config: dict) -> None:
         ("talk_to", "SKILL_TALK_TO"),
         ("send_message", "SKILL_SEND_MESSAGE"),
         ("act", "SKILL_ACT"),
+        ("invite_to_party", "SKILL_INVITE_TO_PARTY"),
+        ("leave_party", "SKILL_LEAVE_PARTY"),
     ]:
         s = skills.get(skill_key, {})
         _set(env, f"{env_prefix_map}_ENABLED", s.get("enabled", True))

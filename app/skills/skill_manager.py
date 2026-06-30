@@ -26,6 +26,7 @@ from .retrospect_skill import RetrospectSkill
 from .state_flag_skills import (
     SleepWakeSkill, WetSkill, IntimateSkill, DecencyExemptSkill, SetPoseSkill,
 )
+from .party_skills import InviteToPartySkill, LeavePartySkill
 
 
 class _Verb:
@@ -80,6 +81,10 @@ class SkillManager:
         'allow_exposed': _Verb(DecencyExemptSkill, active=True),
         'require_decency': _Verb(DecencyExemptSkill, active=False),
         'set_pose': SetPoseSkill,
+        # Party-System (gemeinsam reisen): default-on via config.py-Env-Loop,
+        # Sichtbarkeit pro Rolle verfeinert in _get_agent_skills.
+        'invite_to_party': InviteToPartySkill,
+        'leave_party': LeavePartySkill,
     }
 
     def __init__(self):
@@ -198,23 +203,30 @@ class SkillManager:
 
         from app.models.character import get_character_skill_config
 
-        # Party-Follower duerfen sich nicht selbst bewegen — sie werden vom
-        # Leader mitgezogen. SetLocation/Move werden dem LLM gar nicht erst
-        # angeboten (leave_party bleibt erlaubt, siehe Phase 2).
+        # Party-Rolle bestimmt die Sichtbarkeit der Bewegungs-/Party-Skills:
+        #  - Follower: kein SetLocation/Move (wird mitgezogen) und kein
+        #    invite_to_party (ein Follower laedt nicht ein); leave_party erlaubt.
+        #  - In keiner Party: kein leave_party (nichts zu verlassen).
+        #  - Leader / unpartiet: SetLocation/Move + invite_to_party normal.
         try:
-            from app.core.party_engine import is_party_follower
-            _is_follower = is_party_follower(character_name)
+            from app.core.party_engine import get_party_of
+            _party = get_party_of(character_name)
         except Exception:
-            _is_follower = False
+            _party = None
+        _is_follower = bool(_party and _party.get("role") == "follower")
+        _in_party = _party is not None
 
         result = []
         for skill in self.skills:
             if not skill.SKILL_ID:
                 result.append(skill)
                 continue
-            if _is_follower and skill.SKILL_ID in ("setlocation", "move"):
+            _sid = skill.SKILL_ID
+            if _is_follower and _sid in ("setlocation", "move", "invite_to_party"):
                 continue
-            agent_config = get_character_skill_config(character_name, skill.SKILL_ID)
+            if _sid == "leave_party" and not _in_party:
+                continue
+            agent_config = get_character_skill_config(character_name, _sid)
             if agent_config and "enabled" in agent_config:
                 if not bool(agent_config["enabled"]):
                     continue

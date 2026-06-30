@@ -170,3 +170,169 @@ def disband_party(party_id: str) -> None:
         logger.info("Party %s aufgeloest", party_id)
     except Exception as e:
         logger.debug("disband_party(%s) fehlgeschlagen: %s", party_id, e)
+
+
+# --- NPC-Consent (LLM-Entscheidung) --------------------------------------
+
+def ask_to_join_party(inviter: str, invitee: str,
+                      invitation_text: str = "") -> "tuple[bool, str]":
+    """Fragt ``invitee`` per LLM, ob er der Party von ``inviter`` beitritt, und
+    fuegt ihn bei Ja hinzu. Klon der Logik aus partner_consent.ask_partner_to_join
+    (Pre-Checks -> run_chat_turn -> Keyword-Klassifikation, default-NO).
+
+    Nur fuer NPC-Entscheidungen: ein vom User gesteuerter Avatar wird hier NICHT
+    entschieden (der bekommt eine Pending-Einladung + UI-Frage). Returns
+    ``(accepted, preview)``.
+    """
+    from app.core.partner_consent import _classify_response
+    inviter = (inviter or "").strip()
+    invitee = (invitee or "").strip()
+    if not inviter or not invitee or inviter == invitee:
+        return False, "invalid"
+    try:
+        from app.models.account import is_player_controlled
+        if is_player_controlled(invitee):
+            return False, "player_character"
+    except Exception:
+        pass
+    if get_party_of(invitee) is not None:
+        return False, "already_in_party"
+    try:
+        from app.models.character import is_character_sleeping
+        if is_character_sleeping(invitee):
+            return False, "invitee_sleeping"
+    except Exception:
+        pass
+    try:
+        from app.core.activity_engine import is_character_interruptible
+        can_interrupt, busy = is_character_interruptible(invitee)
+        if not can_interrupt:
+            return False, f"invitee_busy:{busy}"
+    except Exception:
+        pass
+
+    invitation = (invitation_text or "").strip() \
+        or f"{inviter} fragt: Komm mit, lass uns zusammen losziehen!"
+    try:
+        from app.core.chat_engine import run_chat_turn
+        reply = run_chat_turn(
+            owner_id="", responder=invitee, speaker=inviter,
+            incoming_message=invitation, medium="in_person",
+            task_type="party_invite")
+    except Exception as e:
+        logger.warning("Party-Consent fehlgeschlagen (%s) — default No", e)
+        return False, "consent_failed"
+    if not reply:
+        return False, "no_reply"
+
+    accepted = _classify_response(reply)
+    preview = reply.strip()[:120]
+    if accepted:
+        pid = add_to_party(inviter, invitee)
+        if not pid:
+            logger.info("Party-Consent: %s sagte Ja, aber Beitritt scheiterte (Konflikt)",
+                        invitee)
+            return False, "join_conflict"
+        try:
+            from app.models.relationship import record_interaction
+            record_interaction(inviter, invitee, "party_join",
+                summary=f"{invitee} schloss sich {inviter}s Party an",
+                strength_delta=1.0)
+        except Exception:
+            pass
+    logger.info("Party-Consent: %s %s (preview: %s)",
+                invitee, "JA" if accepted else "NEIN", preview[:60])
+    return accepted, preview
+
+
+# --- Pending-Einladungen (NPC laedt Avatar ein) ---------------------------
+
+def create_pending_invite(inviter: str, invitee: str) -> Optional[str]:
+    """Legt eine offene Einladung an (NPC -> Avatar). Verwirft bestehende
+    pending-Einladungen desselben Paars vorher (kein Stau). Gibt invite_id."""
+    inviter = (inviter or "").strip()
+    invitee = (invitee or "").strip()
+    if not inviter or not invitee or inviter == invitee:
+        return None
+    invite_id = "pinv_" + uuid.uuid4().hex[:10]
+    try:
+        with transaction() as conn:
+            conn.execute(
+                "DELETE FROM party_invites WHERE inviter=? AND invitee=? AND status='pending'",
+                (inviter, invitee))
+            conn.execute(
+                "INSERT INTO party_invites (invite_id, inviter, invitee, created_at, status) "
+                "VALUES (?, ?, ?, ?, 'pending')",
+                (invite_id, inviter, invitee, utc_now_iso()))
+    except Exception as e:
+        logger.debug("create_pending_invite fehlgeschlagen: %s", e)
+        return None
+    logger.info("Party-Einladung %s: %s -> %s (pending)", invite_id, inviter, invitee)
+    return invite_id
+
+
+def get_pending_invites_for(invitee: str) -> List[Dict]:
+    """Offene Einladungen an ``invitee`` (fuer die UI-Frage)."""
+    invitee = (invitee or "").strip()
+    if not invitee:
+        return []
+    try:
+        rows = get_connection().execute(
+            "SELECT invite_id, inviter, invitee, created_at FROM party_invites "
+            "WHERE invitee=? AND status='pending' ORDER BY created_at ASC",
+            (invitee,)).fetchall()
+    except Exception:
+        return []
+    return [{"invite_id": r[0], "inviter": r[1], "invitee": r[2], "created_at": r[3]}
+            for r in rows]
+
+
+def get_invite(invite_id: str) -> Optional[Dict]:
+    if not invite_id:
+        return None
+    try:
+        r = get_connection().execute(
+            "SELECT invite_id, inviter, invitee, created_at, status FROM party_invites "
+            "WHERE invite_id=?", (invite_id,)).fetchone()
+    except Exception:
+        return None
+    if not r:
+        return None
+    return {"invite_id": r[0], "inviter": r[1], "invitee": r[2],
+            "created_at": r[3], "status": r[4]}
+
+
+def resolve_pending_invite(invite_id: str, accept: bool) -> Dict:
+    """Beantwortet eine Pending-Einladung. Bei Ja -> invitee tritt der Party des
+    inviter bei. Markiert die Row als accepted/declined. Returns Status-Dict."""
+    inv = get_invite(invite_id)
+    if not inv or inv["status"] != "pending":
+        return {"status": "not_found"}
+    try:
+        with transaction() as conn:
+            conn.execute("UPDATE party_invites SET status=? WHERE invite_id=?",
+                         ("accepted" if accept else "declined", invite_id))
+    except Exception as e:
+        logger.debug("resolve_pending_invite update fehlgeschlagen: %s", e)
+    if not accept:
+        return {"status": "declined", "inviter": inv["inviter"], "invitee": inv["invitee"]}
+    pid = add_to_party(inv["inviter"], inv["invitee"])
+    if not pid:
+        return {"status": "join_conflict", "inviter": inv["inviter"], "invitee": inv["invitee"]}
+    return {"status": "accepted", "party_id": pid,
+            "inviter": inv["inviter"], "invitee": inv["invitee"]}
+
+
+def clear_invites_for(character: str) -> None:
+    """Verwirft alle offenen Einladungen, an denen ``character`` beteiligt ist
+    (z.B. wenn er einer Party beitritt oder eine verlaesst)."""
+    c = (character or "").strip()
+    if not c:
+        return
+    try:
+        with transaction() as conn:
+            conn.execute(
+                "UPDATE party_invites SET status='stale' WHERE status='pending' "
+                "AND (inviter=? OR invitee=?)", (c, c))
+    except Exception as e:
+        logger.debug("clear_invites_for(%s) fehlgeschlagen: %s", c, e)
