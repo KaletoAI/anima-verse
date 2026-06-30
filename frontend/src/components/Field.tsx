@@ -41,7 +41,7 @@ export function Field({
       <label className="ga-field-caption">{label}</label>
       <div
         className="ga-field-control"
-        onFocusCapture={help ? () => setTopic(help) : undefined}
+        onFocusCapture={() => setTopic(help || null)}
       >{children}</div>
       {hint ? <div className="ga-field-hint">{hint}</div> : null}
     </div>

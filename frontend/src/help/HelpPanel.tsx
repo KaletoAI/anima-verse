@@ -6,6 +6,29 @@ import { apiGet } from '../lib/api'
 interface HelpItem { code?: string; text: string }
 interface HelpTopic { title: string; intro?: string; items: HelpItem[] }
 
+/** Kleiner Copy-Button: kopiert den Code-String (z.B. "{avatar}") in die Zwischenablage. */
+function CopyBtn({ value }: { value: string }) {
+  const { t } = useI18n()
+  const [done, setDone] = useState(false)
+  const copy = () => {
+    navigator.clipboard?.writeText(value).then(() => {
+      setDone(true)
+      setTimeout(() => setDone(false), 1000)
+    }).catch(() => { /* ignore */ })
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={t('Copy')}
+      style={{
+        background: 'none', border: 0, color: done ? '#3fb950' : '#8b949e',
+        cursor: 'pointer', padding: '0 2px', fontSize: '0.9em', lineHeight: 1,
+      }}
+    >{done ? '✓' : '⧉'}</button>
+  )
+}
+
 /**
  * Ausklappbares Hilfe-Panel am rechten Rand. Themen kommen vom Server
  * (/admin/help-topics → eine Quelle, kein Frontend-Duplikat). Welches Thema
@@ -72,7 +95,10 @@ export function HelpPanel() {
               {data.items.map((it, i) => (
                 <li key={i}>
                   {it.code ? (
-                    <code style={{ background: '#161b22', padding: '1px 5px', borderRadius: 4, color: '#79c0ff' }}>{it.code}</code>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <code style={{ background: '#161b22', padding: '1px 5px', borderRadius: 4, color: '#79c0ff' }}>{it.code}</code>
+                      <CopyBtn value={it.code} />
+                    </span>
                   ) : null}
                   <div style={{ opacity: 0.8, marginTop: 2 }}>{it.text}</div>
                 </li>
