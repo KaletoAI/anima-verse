@@ -273,6 +273,9 @@ def get_item_owners_route(
                 "character": char,
                 "quantity": int(entry.get("quantity", 1) or 1),
                 "equipped": bool(entry.get("equipped", False)),
+                # Schenkender/Uebergeber (von wem das Item kam) — fuer die
+                # Nachvollziehbarkeit des Charmed-/Effekt-Mechanismus.
+                "obtained_from": (entry.get("obtained_from") or "").strip(),
             })
             break
     owners.sort(key=lambda x: x["character"].lower())

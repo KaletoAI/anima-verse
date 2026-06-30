@@ -331,7 +331,8 @@ def execute_cast(avatar_name: str, target_name: str,
         try:
             from app.models.inventory import give_item, get_item, apply_item_effects
             if is_direct_effect:
-                apply_item_effects(target_name, clone_id)
+                # Caster = Schenkender → Condition merkt sich source_character.
+                apply_item_effects(target_name, clone_id, giver=avatar_name)
                 _eff_item = get_item(clone_id) or {}
                 delivered_item_id = clone_id
                 delivered_item_name = (_eff_item.get("name") or clone_id).strip()

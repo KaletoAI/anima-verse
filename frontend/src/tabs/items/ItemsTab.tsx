@@ -73,6 +73,7 @@ interface Owner {
   character: string
   quantity: number
   equipped: boolean
+  obtained_from?: string
 }
 
 interface DraftItem {
@@ -846,6 +847,7 @@ export function ItemsTab() {
                       <span>
                         {o.character} <span className="ga-form-hint">×{o.quantity}</span>
                         {o.equipped ? <span className="ga-form-hint"> · {t('equipped')}</span> : null}
+                        {o.obtained_from ? <span className="ga-form-hint"> · {t('from')} {o.obtained_from}</span> : null}
                       </span>
                       <button
                         className="ga-btn ga-btn-sm ga-btn-danger"

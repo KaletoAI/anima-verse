@@ -19,7 +19,7 @@ interface DebugActivity {
   state_flags: Record<string, boolean>
   status_effects: Record<string, number>
   active_effects?: string[]
-  active_conditions?: { name?: string; source?: string; started_at?: string; duration_hours?: number }[]
+  active_conditions?: { name?: string; source?: string; source_character?: string; started_at?: string; duration_hours?: number }[]
   last_thought_at: string
   last_warning?: { type: string; value: string; ts: string } | null
   reasons: string[]
@@ -170,9 +170,10 @@ export function MindTab() {
                   <div className="ga-mind-reason" style={{ marginBottom: 8 }}>
                     {dbg.active_conditions.map((c, i) => (
                       <span key={i} className="tag warn"
-                        title={[c.source, c.duration_hours ? `${c.duration_hours}h` : '',
+                        title={[c.source, c.source_character ? `${t('giver')}: ${c.source_character}` : '',
+                                c.duration_hours ? `${c.duration_hours}h` : '',
                                 c.started_at ? `seit ${fmtTs(c.started_at)}` : ''].filter(Boolean).join(' · ')}>
-                        {c.name || '?'}{c.duration_hours ? ` (${c.duration_hours}h)` : ''}
+                        {c.name || '?'}{c.source_character ? ` ← ${c.source_character}` : ''}{c.duration_hours ? ` (${c.duration_hours}h)` : ''}
                       </span>
                     ))}
                   </div>

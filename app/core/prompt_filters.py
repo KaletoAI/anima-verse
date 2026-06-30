@@ -260,6 +260,31 @@ def _resolve_avatar_name() -> str:
     return "the avatar"
 
 
+def _condition_source(character_name: str, cond_name: str) -> str:
+    """``source_character`` (Schenkender) der aktiven Condition mit Namen
+    ``cond_name`` — von ``apply_item_effects`` beim Konsum gespeichert."""
+    if not cond_name:
+        return ""
+    try:
+        from app.models.character import get_character_profile
+        for c in (get_character_profile(character_name) or {}).get("active_conditions", []) or []:
+            if isinstance(c, dict) and (c.get("name") or "").lower() == cond_name.lower():
+                return (c.get("source_character") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _substitute(modifier: str, character_name: str, fid: str, avatar_subst: str) -> str:
+    """Ersetzt Platzhalter im prompt_modifier: ``{avatar}`` = Welt-Avatar,
+    ``{giver}`` = Schenkender der ausloesenden Condition (source_character),
+    Fallback auf den Avatar-Namen, wenn kein Schenkender gespeichert ist."""
+    out = modifier.replace("{avatar}", avatar_subst)
+    if "{giver}" in out:
+        out = out.replace("{giver}", _condition_source(character_name, fid) or avatar_subst)
+    return out
+
+
 def active_modifiers(character_name: str, location_id: str = "") -> List[str]:
     """Prompt-Modifier-Texte aller aktuell getriggerten Filter — OHNE Thought-ctx.
 
@@ -282,7 +307,7 @@ def active_modifiers(character_name: str, location_id: str = "") -> List[str]:
                 continue
             modifier = (f.get("prompt_modifier") or "").strip()
             if modifier:
-                out.append(modifier.replace("{avatar}", avatar_subst))
+                out.append(_substitute(modifier, character_name, fid, avatar_subst))
     except Exception as e:
         logger.debug("active_modifiers(%s) failed: %s", character_name, e)
     return out
@@ -327,7 +352,7 @@ def apply_filters(character_name: str,
                 dropped.add(blk)
         modifier = (f.get("prompt_modifier") or "").strip()
         if modifier:
-            modifier = modifier.replace("{avatar}", avatar_subst)
+            modifier = _substitute(modifier, character_name, fid, avatar_subst)
             triggered_modifiers.append(modifier)
         logger.debug("prompt_filter triggered: %s for %s", fid, character_name)
 

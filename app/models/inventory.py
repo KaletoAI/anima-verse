@@ -1357,7 +1357,7 @@ def _trigger_secret_reveal(item: Dict[str, Any], knower: str) -> None:
         logger.warning("Secret-Reveal-Trigger fehlgeschlagen: %s", e)
 
 
-def apply_item_effects(character_name: str, item_id: str) -> Dict[str, Any]:
+def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Dict[str, Any]:
     """Wendet die effects + apply_condition eines Items auf einen Character
     an, OHNE das Inventar zu beruehren.
 
@@ -1393,6 +1393,10 @@ def apply_item_effects(character_name: str, item_id: str) -> Dict[str, Any]:
                     active.append({
                         "name": cond_name,
                         "source": f"item:{item.get('name', item_id)}",
+                        # Wer das Item ueberreicht/geschenkt hat (Schenkender) — fuer
+                        # die {giver}-Substitution + Anzeige im Mind-Tab. Bleibt fuer
+                        # die Dauer der Condition gespeichert.
+                        "source_character": (giver or "").strip(),
                         "started_at": utc_now_iso(),
                         "duration_hours": max(1, duration),
                     })
@@ -1418,12 +1422,23 @@ def consume_item(character_name: str, item_id: str) -> Dict[str, Any]:
     item = get_item(item_id)
     if not item:
         return {"success": False, "changes": {}, "condition_applied": None}
+    # Schenkenden (obtained_from) aus dem Eintrag merken, BEVOR remove ihn loescht —
+    # die Condition soll wissen, von wem das Item kam.
+    giver = ""
+    try:
+        for _e in (_load_inventory(character_name).get("inventory") or []):
+            if _e.get("item_id") == item_id:
+                giver = (_e.get("obtained_from") or "").strip()
+                break
+    except Exception:
+        pass
     success = remove_from_inventory(character_name, item_id, quantity=1)
     if not success:
         return {"success": False, "changes": {}, "condition_applied": None}
 
-    logger.info("%s hat Item '%s' verbraucht", character_name, item.get("name", item_id))
-    return apply_item_effects(character_name, item_id)
+    logger.info("%s hat Item '%s' verbraucht%s", character_name, item.get("name", item_id),
+                f" (von {giver})" if giver else "")
+    return apply_item_effects(character_name, item_id, giver=giver)
 
 
 def transfer_item(from_character: str,
