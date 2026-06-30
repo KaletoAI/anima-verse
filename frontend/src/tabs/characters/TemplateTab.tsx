@@ -29,7 +29,7 @@ interface TmplTabDef {
   label_de?: string
   columns?: number[]
 }
-interface TmplSectionRaw extends TmplSection {
+export interface TmplSectionRaw extends TmplSection {
   special?: unknown
   column?: number
   row?: number
@@ -47,7 +47,7 @@ interface TokenChip {
 // Sammelt die {token}-Platzhalter, die laut Template auf `targetKey` zielen
 // (replacement.target == targetKey, string oder Liste) — quer über ALLE
 // Sektionen, da z.B. {gender} aus einer anderen Spalte stammt.
-function collectTokens(sections: TmplSectionRaw[], targetKey: string, lang: string): TokenChip[] {
+export function collectTokens(sections: TmplSectionRaw[], targetKey: string, lang: string): TokenChip[] {
   const out: TokenChip[] = []
   const seen = new Set<string>()
   for (const s of sections) {

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { useHelp } from '../../help/HelpContext'
+import { collectTokens, type TmplSectionRaw } from './TemplateTab'
 
 /**
  * Per-character image-generation overrides (Characters → Image):
@@ -67,9 +68,13 @@ function formatMatchSpec(spec: string): string {
 }
 
 export function ImageOverrides({ character }: { character: string }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const { toast } = useToast()
-  const { setTopic } = useHelp()
+  const { setHelp } = useHelp()
+  // Appearance-{token}-Platzhalter (wie im Appearance-Prompt) + zuletzt
+  // fokussiertes Slot-Input, damit das Help-Panel an die Cursor-Position einfügt.
+  const [appearanceTokens, setAppearanceTokens] = useState<{ token: string; label: string }[]>([])
+  const slotElRef = useRef<{ slot: string; el: HTMLInputElement } | null>(null)
   const [pattern, setPattern] = useState('')
   const [loras, setLoras] = useState<Lora[]>([])
   const [workflows, setWorkflows] = useState<string[]>([])
@@ -148,6 +153,30 @@ export function ImageOverrides({ character }: { character: string }) {
     }
   }, [character, t, toast])
 
+  // Appearance-Tokens des Characters laden (Template → replacement.target ==
+  // character_appearance), damit die Slot-Fragmente dieselben {…}-Platzhalter
+  // anbieten wie der Appearance-Prompt. Rein optional (Bequemlichkeit).
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const pr = await apiGet<{ profile?: { template?: string } }>(
+          `/characters/${encodeURIComponent(character)}/profile`,
+        )
+        const tmplId = String(pr.profile?.template || '')
+        if (!tmplId) return
+        const tmpl = await apiGet<{ sections?: TmplSectionRaw[] }>(`/templates/${encodeURIComponent(tmplId)}`)
+        if (cancelled) return
+        setAppearanceTokens(collectTokens(tmpl.sections || [], 'character_appearance', lang))
+      } catch {
+        /* tokens are a convenience — ignore load errors */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [character, lang])
+
   const matching = useMemo(() => {
     const p = pattern.trim()
     if (!p) return []
@@ -183,6 +212,35 @@ export function ImageOverrides({ character }: { character: string }) {
       return { ...prev, [slot]: { ...cur, lora: { ...cur.lora, ...patch } } }
     })
   }, [])
+
+  // {token} an der Cursor-Position des zuletzt fokussierten Slot-Inputs einfügen.
+  // Liest den LIVE-Wert/Caret aus dem DOM (Selektion bleibt nach Blur erhalten),
+  // damit der Klick auf den „+"-Button im Help-Panel trotzdem korrekt einfügt.
+  const insertIntoFocusedSlot = useCallback((ins: string) => {
+    const cur = slotElRef.current
+    if (!cur) return
+    const { slot, el } = cur
+    const v = el.value
+    const s = el.selectionStart ?? v.length
+    const e = el.selectionEnd ?? v.length
+    const next = v.slice(0, s) + ins + v.slice(e)
+    updateSlot(slot, { prompt: next })
+    requestAnimationFrame(() => {
+      el.focus()
+      const pos = s + ins.length
+      el.setSelectionRange(pos, pos)
+    })
+  }, [updateSlot])
+
+  // Beim Fokus eines Slot-Fragments: Topic + Appearance-Tokens (mit Insert) ans
+  // Help-Panel melden — Parität zum Appearance-Prompt.
+  const announceSlotHelp = useCallback((slot: string, el: HTMLInputElement) => {
+    slotElRef.current = { slot, el }
+    setHelp('image_prompt', {
+      items: appearanceTokens.map((tk) => ({ code: `{${tk.token}}`, text: tk.label, insert: `{${tk.token}}` })),
+      insert: insertIntoFocusedSlot,
+    })
+  }, [appearanceTokens, setHelp, insertIntoFocusedSlot])
 
   const saveSlots = useCallback(async () => {
     setSlotsSaving(true)
@@ -332,7 +390,7 @@ export function ImageOverrides({ character }: { character: string }) {
                       className="ga-input"
                       placeholder={t('Prompt fragment (e.g. "bare feet")')}
                       value={entry.prompt || ''}
-                      onFocus={() => setTopic('image_prompt')}
+                      onFocus={(e) => announceSlotHelp(slot, e.currentTarget)}
                       onChange={(e) => updateSlot(slot, { prompt: e.target.value })}
                     />
                     <div className="ga-img-slotlora">
