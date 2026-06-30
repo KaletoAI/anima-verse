@@ -25,6 +25,7 @@ export interface TmplFieldDef {
   label_de?: string
   hint?: string
   hint_de?: string
+  help?: string  // Topic-Key fuers kontextsensitive Help-Panel
   default?: unknown
   store?: string
   source_file?: string

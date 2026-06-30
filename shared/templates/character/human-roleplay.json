@@ -310,6 +310,7 @@
       "fields": [
         {
           "key": "character_appearance",
+          "help": "image_prompt",
           "label": "Appearance Prompt",
           "label_de": "Prompt für Aussehen",
           "type": "text",
@@ -335,6 +336,7 @@
       "fields": [
         {
           "key": "face_appearance",
+          "help": "image_prompt",
           "label": "Face Prompt (Profile Image)",
           "label_de": "Gesicht (Profilbild)",
           "type": "text",

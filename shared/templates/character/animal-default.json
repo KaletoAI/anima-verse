@@ -485,6 +485,7 @@
       "fields": [
         {
           "key": "character_appearance",
+          "help": "image_prompt",
           "label": "Appearance",
           "label_de": "Aussehen",
           "type": "text",

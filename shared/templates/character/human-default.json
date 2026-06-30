@@ -199,6 +199,7 @@
       "fields": [
         {
           "key": "character_appearance",
+          "help": "image_prompt",
           "label": "Appearance Prompt",
           "label_de": "Prompt für Aussehen",
           "type": "text",

@@ -159,7 +159,7 @@ export function TemplateSectionForm({
           const wide = f.type === 'text' && f.multiline
           return (
             <div key={f.key} className={wide ? 'tpl-field-wide' : 'tpl-field'}>
-              <Field label={label + (f.required ? ' *' : '')} hint={hint || undefined}>
+              <Field label={label + (f.required ? ' *' : '')} hint={hint || undefined} help={f.help}>
                 <TemplateField
                   field={f}
                   value={getVal(f)}
