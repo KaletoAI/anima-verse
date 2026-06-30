@@ -338,6 +338,7 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
         </Field>
         <Field
           label={t('Additional condition')}
+          help="condition"
           hint={t('Optional. Filter triggers via the id-tag; this expression triggers it additionally (e.g. stamina<10).')}
         >
           <input
@@ -378,7 +379,8 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
 
       <Field
         label={t('Prompt modifier')}
-        hint={t('Text appended to effects_block. Placeholder {avatar} is replaced with the active avatar name.')}
+        help="prompt_modifier"
+        hint={t('Text appended to effects_block. Placeholders {avatar} / {giver} — see the help panel.')}
       >
         <textarea
           className="ga-textarea"

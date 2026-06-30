@@ -5,6 +5,8 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { GenerationIndicator } from './components/GenerationIndicator'
 import { FreezeToggle } from './components/FreezeToggle'
 import { useAuth } from './lib/AuthGate'
+import { HelpProvider } from './help/HelpContext'
+import { HelpPanel } from './help/HelpPanel'
 
 function readHashTab(): TabId {
   const raw = window.location.hash.replace(/^#\/?/, '').toLowerCase()
@@ -38,6 +40,7 @@ export default function App() {
   const ActiveComponent = TABS.find((tab) => tab.id === active)?.Component
 
   return (
+    <HelpProvider>
     <div className="ga-shell">
       <header className="ga-header">
         <a className="ga-back" href="/" title={t('Back to chat')}>
@@ -87,6 +90,8 @@ export default function App() {
           <div className="ga-placeholder">{t('Unknown tab')}</div>
         )}
       </main>
+      <HelpPanel />
     </div>
+    </HelpProvider>
   )
 }

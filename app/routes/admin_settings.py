@@ -282,6 +282,42 @@ async def prompt_filters_validate(condition: str = "", user=Depends(require_admi
     return {"warnings": validate_condition_references(condition or "")}
 
 
+# Kontextsensitive Editor-Hilfe (eine Quelle fuer das ausklappbare Help-Panel im
+# Game-Admin). Pro Feld/Kontext ein Topic-Key; der Editor setzt ihn beim Fokus.
+_HELP_TOPICS: Dict[str, Dict[str, Any]] = {
+    "condition": {
+        "title": "Condition syntax",
+        "intro": "Filter id triggers via the profile tag (condition:<this-id> is redundant). This expression triggers ADDITIONALLY:",
+        "items": [
+            {"code": "stamina>N, courage<N, stress>N, lust>N", "text": "Status values"},
+            {"code": "alone, night, day", "text": "Time / presence"},
+            {"code": "present:Name", "text": "Name is in the same room"},
+            {"code": "relationship:Name>N, romantic:Name>N", "text": "Name or 'any'"},
+            {"code": "mood:happy", "text": "Current mood"},
+            {"code": "condition:<tag>", "text": "Another active condition tag"},
+            {"code": "current_activity:cooking", "text": "Current activity"},
+            {"code": "schedule:sleeping / awake / <activity>", "text": "Daily schedule"},
+            {"code": "has_item:<item-id>", "text": "Owns the item (real id, not the example)"},
+            {"code": "AND / OR / NOT", "text": "Combine expressions"},
+        ],
+    },
+    "prompt_modifier": {
+        "title": "Prompt modifier placeholders",
+        "intro": "Text added to the character's prompt when the filter triggers. Placeholders:",
+        "items": [
+            {"code": "{avatar}", "text": "The world avatar (player-controlled character)."},
+            {"code": "{giver}", "text": "Who handed over the item that applied this condition (source_character); falls back to the avatar."},
+        ],
+    },
+}
+
+
+@router.get("/help-topics")
+async def help_topics(user=Depends(require_admin)):
+    """Hilfe-Themen fuers kontextsensitive Help-Panel (eine Quelle, kein Frontend-Duplikat)."""
+    return {"topics": _HELP_TOPICS}
+
+
 @router.post("/prompt-filters/save")
 async def prompt_filters_save(request: Request, user=Depends(require_admin)):
     """Upsert eines Filters in die per-world prompt_filters-Tabelle.
