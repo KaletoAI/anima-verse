@@ -198,10 +198,21 @@ class SkillManager:
 
         from app.models.character import get_character_skill_config
 
+        # Party-Follower duerfen sich nicht selbst bewegen — sie werden vom
+        # Leader mitgezogen. SetLocation/Move werden dem LLM gar nicht erst
+        # angeboten (leave_party bleibt erlaubt, siehe Phase 2).
+        try:
+            from app.core.party_engine import is_party_follower
+            _is_follower = is_party_follower(character_name)
+        except Exception:
+            _is_follower = False
+
         result = []
         for skill in self.skills:
             if not skill.SKILL_ID:
                 result.append(skill)
+                continue
+            if _is_follower and skill.SKILL_ID in ("setlocation", "move"):
                 continue
             agent_config = get_character_skill_config(character_name, skill.SKILL_ID)
             if agent_config and "enabled" in agent_config:

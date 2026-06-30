@@ -233,6 +233,13 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
+    # Party-Follower kann sich nicht selbst bewegen (auch keinen Raum wechseln) —
+    # er wird vom Leader mitgezogen. UI versteckt den Kompass; harter Backstop hier.
+    from app.core.party_engine import is_party_follower
+    if is_party_follower(avatar):
+        raise HTTPException(status_code=403, detail={
+            "reason": "party_follower",
+            "message": "Du bist Teil einer Party und wirst vom Leader mitgenommen — eigene Bewegung gesperrt."})
     loc = (get_character_current_location(avatar) or "").strip()
     loc_obj = get_location_by_id(loc) if loc else None
     valid = {(r.get("id") or "") for r in ((loc_obj.get("rooms") if loc_obj else None) or [])}

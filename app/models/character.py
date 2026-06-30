@@ -1139,7 +1139,8 @@ def _suggest_follow_after_move(leaver: str, from_loc: str, from_room: str,
 
 def save_character_current_location(character_name: str = "", location: str = "",
                                     _skip_compliance: bool = False,
-                                    _preserve_movement_target: bool = False):
+                                    _preserve_movement_target: bool = False,
+                                    _party_drag: bool = False):
     """Speichert den aktuellen Aufenthaltsort.
 
     _skip_compliance: wenn True, ueberspringt Outfit-Type-Compliance
@@ -1150,6 +1151,8 @@ def save_character_current_location(character_name: str = "", location: str = ""
     User/das System hat die Reise gerade ueberschrieben. Bei True und
     ``location == movement_target`` wird das Ziel ebenfalls geloescht
     (Ankunft).
+    _party_drag: True nur fuer einen mitgezogenen Party-Follower — verhindert,
+    dass der gezogene Follower seinerseits ein Party-Drag ausloest (Rekursion).
     """
     from datetime import datetime
     profile = get_character_profile(character_name)
@@ -1250,6 +1253,23 @@ def save_character_current_location(character_name: str = "", location: str = ""
     if location and location != old_location:
         _schedule_background_variant(character_name)
 
+    # Party-Mitziehen: ist der Bewegte Leader einer Party, ziehen alle Follower
+    # an denselben Ort mit. _party_drag=True am rekursiven Aufruf verhindert,
+    # dass ein gezogener Follower seinerseits ein Drag ausloest. Follower sind
+    # ohnehin keine Leader (party_followers liefert dann []), das kwarg ist die
+    # zusaetzliche sichere Bremse. Nur bei echtem Location-Wechsel.
+    if location_changed and not _party_drag:
+        try:
+            from app.core.party_engine import party_followers
+            for _follower in party_followers(character_name):
+                if _follower and _follower != character_name:
+                    save_character_current_location(_follower, location,
+                                                    _party_drag=True)
+        except Exception as _pe:
+            from app.core.log import get_logger
+            get_logger("character_model").debug(
+                "Party-Drag (location) fehlgeschlagen: %s", _pe)
+
 
 def get_location_changed_at(character_name: str = "") -> str:
     """Gibt den Timestamp des letzten Location-Wechsels zurueck (Character-Level)."""
@@ -1336,9 +1356,13 @@ def get_character_current_room(character_name: str) -> str:
     return profile.get("current_room", "")
 
 
-def save_character_current_room(character_name: str, room_id: str):
+def save_character_current_room(character_name: str, room_id: str,
+                                _party_drag: bool = False):
     """Speichert den aktuellen Raum (Room-ID) und prueft Outfit-Type-
-    Compliance fuer den Raum (ueberschreibt Location-Vorgabe)."""
+    Compliance fuer den Raum (ueberschreibt Location-Vorgabe).
+
+    _party_drag: True nur fuer einen mitgezogenen Party-Follower (Rekursions-
+    schutz, analog save_character_current_location)."""
     profile = get_character_profile(character_name)
     old_room = profile.get("current_room", "")
     cur_loc = profile.get("current_location", "")
@@ -1371,6 +1395,20 @@ def save_character_current_room(character_name: str, room_id: str):
                             f"{character_name} betritt {room_name}.")
             _suggest_follow_after_move(character_name, cur_loc, old_room,
                                        cur_loc, room_id, room_name)
+
+        # Party-Mitziehen (Raum): wechselt der Leader den Raum, ziehen alle
+        # Follower in denselben Raum mit. _party_drag verhindert Rekursion.
+        if not _party_drag:
+            try:
+                from app.core.party_engine import party_followers
+                for _follower in party_followers(character_name):
+                    if _follower and _follower != character_name:
+                        save_character_current_room(_follower, room_id,
+                                                    _party_drag=True)
+            except Exception as _pe:
+                from app.core.log import get_logger
+                get_logger("character_model").debug(
+                    "Party-Drag (room) fehlgeschlagen: %s", _pe)
 
     # Decency-Compliance nur bei echtem Raumwechsel + Avatar ausnehmen
     if not room_id or room_id == old_room:

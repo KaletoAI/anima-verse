@@ -132,6 +132,14 @@ async def avatar_step_route(request: Request) -> Dict[str, Any]:
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
 
+    # Party-Follower: der Avatar folgt dem Leader und kann sich nicht selbst
+    # bewegen (UI blendet den Kompass aus, hier der harte Backstop).
+    from app.core.party_engine import is_party_follower
+    if is_party_follower(avatar):
+        raise HTTPException(status_code=403, detail={
+            "reason": "party_follower",
+            "message": "Du bist Teil einer Party und wirst vom Leader mitgenommen — eigene Bewegung gesperrt."})
+
     cur_loc_id = (get_character_current_location(avatar) or "").strip()
     if not cur_loc_id:
         raise HTTPException(status_code=400, detail="avatar has no current location")

@@ -545,6 +545,17 @@ SCHEMA_STATEMENTS = [
         duration_s  REAL NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_llm_call_stats_lookup ON llm_call_stats (model, task, provider, ts DESC)",
+
+    # ── Party-System (gemeinsam reisen) ───────────────────────────────────
+    # Eine Party = ein Leader + N Follower (JSON-Liste). Nur der Leader bewegt
+    # sich selbst; Follower werden mitgezogen (siehe save_character_current_*).
+    # Ein Character ist in hoechstens einer Party. Siehe app/core/party_engine.py.
+    """CREATE TABLE IF NOT EXISTS parties (
+        party_id   TEXT PRIMARY KEY,
+        leader     TEXT NOT NULL,
+        members    TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+    )""",
 ]
 
 
