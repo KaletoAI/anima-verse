@@ -148,10 +148,11 @@ function PromptField({
     }
   }, [local, character, field.key])
 
+  // Eigener vertikaler Wrapper: .ga-field-control ist ein Flex-ROW, sonst
+  // landeten Textarea und Resolved-Preview NEBENeinander. So steht die Vorschau
+  // direkt UNTER dem Prompt. Insert-Tokens sind im Help-Panel (Fokus).
   return (
-    <>
-      {/* Insert-Tokens sind ins Help-Panel verlagert (Fokus → Panel zeigt sie
-          mit Cursor-Insert). Der Textarea bekommt dafuer den vollen Platz. */}
+    <div className="tpl-prompt-field">
       <textarea
         ref={taRef}
         className="ga-input"
@@ -170,7 +171,7 @@ function PromptField({
           {resolved}
         </div>
       ) : null}
-    </>
+    </div>
   )
 }
 
@@ -340,60 +341,29 @@ export function TemplateTab({
     )
   }
 
-  // „Breite" Prompt-Sektionen — NUR aus den Spalten DIESES Tabs (`cols`!), sonst
-  // würden die Aussehen-Prompts (col 5/6) auch in anderen Tabs den Split-Branch
-  // auslösen. Kriterium: mehrzeiliges Text-Feld MIT Bild-Vorschau. Die werden
-  // schmal-links (Struktur-Felder) / breit-rechts (Prompt ~70 %, Bild jeweils
-  // unter dem Prompt) gerendert statt in gleich breite Spalten gequetscht.
-  const colSet = new Set(cols)
-  const isWidePrompt = (s: TmplSectionRaw) =>
-    !s.special &&
-    colSet.has(s.column ?? 1) &&
-    editableFields(s).some((f) => f.type === 'text' && f.multiline && !!f.image_preview)
-  const wideSections = imageBeside
-    ? []
-    : sections
-        .filter(isWidePrompt)
-        .sort((a, b) => (a.column ?? 0) - (b.column ?? 0) || (a.row ?? 0) - (b.row ?? 0))
-  const wideIds = new Set(wideSections.map((s) => s.id))
-
-  const renderCol = (col: number) => {
-    const colSections = sections
-      .filter((s) => (s.column || 1) === col)
-      .filter((s) => !wideIds.has(s.id))
-      .filter((s) =>
-        s.special ? !!(specialSlots && specialSlots[String(s.special)]) : editableFields(s).length > 0,
-      )
-      .sort((a, b) => (a.row ?? 0) - (b.row ?? 0))
-    if (!colSections.length) return null
-    return (
-      <div key={col} className="tpl-tab-col">
-        {colSections.map((s) => (
-          <div key={s.id} className="tpl-tab-section">
-            <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
-            {s.special ? specialSlots?.[String(s.special)] : editableFields(s).map(renderField)}
+  // Spalten nebeneinander (eine pro tab.column); je Spalte die Sektionen
+  // gestapelt, je Sektion die Felder untereinander. In einem Prompt-Feld stehen
+  // Prompt → Resolved-Preview → Bild untereinander (siehe PromptField/renderField).
+  return (
+    <div className="ga-form tpl-tab-cols">
+      {cols.map((col) => {
+        const colSections = sections
+          .filter((s) => (s.column || 1) === col)
+          .filter((s) =>
+            s.special ? !!(specialSlots && specialSlots[String(s.special)]) : editableFields(s).length > 0,
+          )
+          .sort((a, b) => (a.row ?? 0) - (b.row ?? 0))
+        return (
+          <div key={col} className="tpl-tab-col">
+            {colSections.map((s) => (
+              <div key={s.id} className="tpl-tab-section">
+                <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
+                {s.special ? specialSlots?.[String(s.special)] : editableFields(s).map(renderField)}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-    )
-  }
-  const gridCols = cols.map(renderCol).filter(Boolean)
-
-  if (wideSections.length > 0) {
-    return (
-      <div className="ga-form tpl-aussehen-layout">
-        {gridCols.length ? <div className="tpl-tab-cols tpl-aussehen-side">{gridCols}</div> : null}
-        <div className="tpl-prompt-stack">
-          {wideSections.map((s) => (
-            <div key={s.id} className="tpl-tab-section">
-              <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
-              {editableFields(s).map(renderField)}
-            </div>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  return <div className="ga-form tpl-tab-cols">{gridCols}</div>
+        )
+      })}
+    </div>
+  )
 }
