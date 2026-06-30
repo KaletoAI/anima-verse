@@ -3,7 +3,8 @@ enter/leave): PartySkill mit verb='invite'|'join'|'leave' (via skill_manager._Ve
 
   invite_to_party (verb='invite'): der Character laedt einen Anwesenden ein.
     - Ziel = Avatar -> Pending-Einladung (Frage im Chat-Fenster, UI entscheidet).
-    - Ziel = NPC   -> sofortige LLM-Consent-Entscheidung (ask_to_join_party).
+    - Ziel = NPC   -> der Eingeladene wird angestossen und entscheidet selbst per
+      JoinParty in seinem eigenen Turn (kein Keyword-Matching).
   join_party (verb='join'): der Character TRITT der Party eines Anwesenden BEI —
     der robuste Weg fuer "X laedt mich ein, ich sage zu": die Tool-LLM ruft das
     Skill im normalen Antwort-Turn auf (keine Keyword-Erkennung, keine separate
@@ -85,13 +86,23 @@ class PartySkill(BaseSkill):
         except Exception:
             _is_avatar = False
         if _is_avatar:
+            # Avatar kann nicht per LLM entscheiden -> Pending-Einladung (UI-Frage).
             P.create_pending_invite(character_name, target)
             return (f"{character_name} hat {target} in die Party eingeladen "
                     f"— wartet auf dessen Antwort.")
-        accepted, _reply = P.ask_to_join_party(character_name, target)
-        if accepted:
-            return f"{target} schliesst sich {character_name}s Party an."
-        return f"{target} lehnt die Einladung ab."
+        # NPC-Ziel: KEINE Keyword-Klassifikation. Der Eingeladene entscheidet
+        # selbst per JoinParty-Tool in seinem eigenen Turn — wir stossen ihn nur
+        # an (mit Hinweis), damit er zeitnah reagiert.
+        try:
+            from app.core.agent_loop import get_agent_loop
+            get_agent_loop().bump(
+                target,
+                hint=(f"{character_name} lädt dich ein, mit der Gruppe "
+                      f"mitzukommen. Entscheide in deiner Rolle, ob du zusagst — "
+                      f"wenn ja, rufe JoinParty mit leader={character_name} auf."))
+        except Exception as _be:
+            logger.debug("invite bump fehlgeschlagen: %s", _be)
+        return f"{character_name} lädt {target} ein, mitzukommen."
 
     def _join(self, character_name: str, ctx: Dict[str, Any]) -> str:
         from app.core import party_engine as P
