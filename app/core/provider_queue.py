@@ -677,9 +677,20 @@ class ProviderQueue:
                         # cooldown the provider so resolve_llm skips it and
                         # the routing chain falls through. Streaming consumers
                         # that don't go through llm_call benefit too.
+                        # AUSNAHME: 503 "No healthy backend for model X" ist
+                        # modell-spezifisch — nur dieses (Provider, Modell) paar
+                        # abkühlen, NICHT den ganzen Provider (er serviert seine
+                        # anderen Modelle weiter). Spiegelt llm_router.llm_call /
+                        # streaming — der Guard fehlte hier nur im Queue-Worker.
                         try:
-                            from app.core.llm_router import _is_upstream_failure, _UPSTREAM_COOLDOWN_SECONDS
-                            if _is_upstream_failure(e):
+                            from app.core.llm_router import (
+                                _is_upstream_failure, _UPSTREAM_COOLDOWN_SECONDS,
+                                mark_model_unhealthy,
+                            )
+                            from app.core.llm_client import _is_no_backend_error
+                            if _is_no_backend_error(e):
+                                mark_model_unhealthy(self.provider.name, model_name)
+                            elif _is_upstream_failure(e):
                                 self.provider.mark_unhealthy(
                                     f"upstream-fail [{task.task_type}]: {str(e)[:120]}",
                                     _UPSTREAM_COOLDOWN_SECONDS)
