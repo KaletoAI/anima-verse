@@ -105,7 +105,6 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
               tab={{ id: 'look', columns: AUSSEHEN_COLS }}
               sections={sections}
               dynamicData={dynamicData}
-              imageBeside
             />
           </div>
         )}
@@ -116,7 +115,6 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
               tab={{ id: 'body', columns: KOERPER_COLS }}
               sections={sections}
               dynamicData={dynamicData}
-              imageBeside
             />
           </div>
         )}
