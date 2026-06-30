@@ -382,17 +382,26 @@ _UPSTREAM_FAIL_MARKERS = (
     " 502",
     " 504",
 )
-# NOTE: 503 / "Service Unavailable" is deliberately NOT here. A 503 means the
-# provider is momentarily busy (gateway at its parallel-call limit), so the
+# NOTE: a plain 503 / "Service Unavailable" is deliberately NOT here. It means
+# the provider is momentarily busy (gateway at its parallel-call limit), so the
 # LLMClient retries the SAME model with backoff (config: llm_retry.*). If those
 # retries are exhausted the call fails fast — we do NOT cool the provider down
 # for 5 minutes, since it is busy, not broken.
+# EXCEPTION: a 503 whose body says "No healthy backend for model X" is NOT
+# busy-ness — the model has no servable backend on this provider, so
+# _is_upstream_failure() treats it (via _is_no_backend_error) as a
+# cooldown+fallback case so the routing chain switches to the next provider.
 
 _UPSTREAM_COOLDOWN_SECONDS = 300.0  # 5 min — survives ~1-2 health probes
 _LLM_CALL_MAX_ATTEMPTS = 3
 
 
 def _is_upstream_failure(err: BaseException) -> bool:
+    # Single source of truth for the "no servable backend" 503 lives in
+    # llm_client so the busy-retry layer and this fallback layer always agree.
+    from app.core.llm_client import _is_no_backend_error
+    if _is_no_backend_error(err):
+        return True
     msg = str(err)
     return any(marker in msg for marker in _UPSTREAM_FAIL_MARKERS)
 

@@ -24,9 +24,39 @@ logger = get_logger("llm_client")
 # keep the existing cooldown+fallback path in llm_router.
 _BUSY_TEXT_MARKERS = ("503", "service unavailable", "overloaded")
 
+# A 503 normally means "busy" → retry the SAME model. But some gateways return
+# 503 with a body like {'detail': "No healthy backend for model 'X'"} when the
+# model has no servable backend on this provider at all — retrying the same
+# model is pointless. These are NOT busy: they must fall through to the routing
+# fallback (cooldown + next provider), see llm_router._is_upstream_failure.
+_NO_BACKEND_MARKERS = (
+    "no healthy backend",
+    "no healthy upstream",
+    "no available backend",
+    "no backend available",
+)
+
+
+def _is_no_backend_error(err: BaseException) -> bool:
+    """True for gateway errors meaning 'this model has no servable backend'.
+
+    Distinct from a transient 'busy' 503: the provider cannot serve the model at
+    all, so the only useful reaction is to cool it down and try the next provider
+    in the routing chain — never retry the same model.
+    """
+    msg = str(err).lower()
+    return any(m in msg for m in _NO_BACKEND_MARKERS)
+
 
 def _is_busy_error(err: BaseException) -> bool:
-    """True only for a real 'busy' signal (HTTP 503 / Service Unavailable)."""
+    """True only for a real 'busy' signal (HTTP 503 / Service Unavailable).
+
+    A 503 whose body says there is no healthy backend for the model is NOT busy
+    (see _is_no_backend_error) — we let it fall through to the routing fallback
+    instead of retrying the same dead model with backoff.
+    """
+    if _is_no_backend_error(err):
+        return False
     if getattr(err, "status_code", None) == 503:
         return True
     msg = str(err).lower()
