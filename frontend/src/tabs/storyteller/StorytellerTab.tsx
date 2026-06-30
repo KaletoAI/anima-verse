@@ -154,6 +154,7 @@ export function StorytellerTab() {
 
         <Field
           label={t('LLM task')}
+          help="llm_task"
           hint={t('Routing key used to pick the LLM (see Admin Settings → LLM Routing). Keep "storyteller" unless you want to share routing with another task.')}
         >
           <input

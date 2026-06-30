@@ -593,7 +593,7 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
           <div>
             <div className="ga-form-section-label">{t('Image prompts')}</div>
             <div className="ga-form">
-              <Field label={t('Day prompt')}>
+              <Field label={t('Day prompt')} help="image_prompt">
                 <textarea
                   className="ga-textarea"
                   rows={2}
@@ -601,7 +601,7 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
                   onChange={(e) => upd('image_prompt_day', e.target.value)}
                 />
               </Field>
-              <Field label={t('Night prompt')}>
+              <Field label={t('Night prompt')} help="image_prompt">
                 <textarea
                   className="ga-textarea"
                   rows={2}
@@ -609,7 +609,7 @@ function LocationEditor({ location, items, onChanged, onDeleted }: LocationEdito
                   onChange={(e) => upd('image_prompt_night', e.target.value)}
                 />
               </Field>
-              <Field label={t('2D map icon prompt')}>
+              <Field label={t('2D map icon prompt')} help="image_prompt">
                 <textarea
                   className="ga-textarea"
                   rows={2}
@@ -875,6 +875,7 @@ function RoomEditor({ location, room, items, onChanged, onDeleted }: RoomEditorP
           <div className="ga-form">
             <Field
               label={t('Day prompt')}
+              help="image_prompt"
               hint={t('Per-room override. Falls back to the location day prompt when empty.')}
             >
               <textarea
@@ -886,6 +887,7 @@ function RoomEditor({ location, room, items, onChanged, onDeleted }: RoomEditorP
             </Field>
             <Field
               label={t('Night prompt')}
+              help="image_prompt"
               hint={t('Per-room override. Falls back to the location night prompt when empty.')}
             >
               <textarea

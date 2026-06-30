@@ -289,17 +289,20 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
         "title": "Condition syntax",
         "intro": "Filter id triggers via the profile tag (condition:<this-id> is redundant). This expression triggers ADDITIONALLY:",
         "items": [
-            # Das Status-Item ({code}) wird im Endpoint dynamisch aus den
+            # __STATS__ / Stat-Werte werden im Endpoint dynamisch aus den
             # Character-Templates befuellt (Stats sind NICHT hartkodiert).
-            {"code": "__STATS__", "text": "Status values (from the character template, e.g. stat>N)"},
-            {"code": "alone, night, day", "text": "Time / presence"},
+            {"code": "__STATS__", "text": "Status values (from the character template, e.g. stat>N / <N / =N)"},
+            {"code": "alone, night, day", "text": "Time / presence (day/night accept +/-minutes)"},
             {"code": "present:Name", "text": "Name is in the same room"},
+            {"code": "npc_present", "text": "Any non-avatar character is here"},
             {"code": "relationship:Name>N, romantic:Name>N", "text": "Name or 'any'"},
             {"code": "mood:happy", "text": "Current mood"},
             {"code": "condition:<tag>", "text": "Another active condition tag"},
             {"code": "current_activity:cooking", "text": "Current activity"},
             {"code": "schedule:sleeping / awake / <activity>", "text": "Daily schedule"},
-            {"code": "has_item:<item-id>", "text": "Owns the item (real id, not the example)"},
+            {"code": "has_item:<item-id>", "text": "Character owns the item (real id)"},
+            {"code": "room_has_item:<item-id>", "text": "The current room contains the item"},
+            {"code": "has_secret", "text": "Character has an unrevealed secret"},
             {"code": "AND / OR / NOT", "text": "Combine expressions"},
         ],
     },
@@ -309,6 +312,49 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
         "items": [
             {"code": "{avatar}", "text": "The world avatar (player-controlled character)."},
             {"code": "{giver}", "text": "Who handed over the item that applied this condition (source_character); falls back to the avatar."},
+        ],
+    },
+    "imagegen_target": {
+        "title": "Render target (match)",
+        "intro": "A match glob resolving to a ComfyUI workflow or an image backend (by availability + cost):",
+        "items": [
+            {"code": "Qwen*", "text": "ComfyUI workflow whose name matches the glob"},
+            {"code": "backend:LocalAI-Flux", "text": "A specific image backend (exact name or glob after 'backend:')"},
+            {"code": "*", "text": "Any available target"},
+        ],
+    },
+    "image_prompt": {
+        "title": "Image prompt",
+        "intro": "Describes the scene to render. Phrasing follows the use-case image family:",
+        "items": [
+            {"code": "natural", "text": "Flowing prose — for Flux / Qwen"},
+            {"code": "keywords", "text": "Comma-separated tags — for Z-Image / SD"},
+            {"code": "no people, text, watermark", "text": "Style/negative belong to the use-case, not here"},
+        ],
+    },
+    "effects_syntax": {
+        "title": "Effects",
+        "intro": "One effect per line. Applied when the item is consumed:",
+        "items": [
+            {"code": "__STAT_CHANGES__", "text": "Change a template stat by +/- value"},
+            {"code": "mood_influence: happy", "text": "Nudge the mood"},
+            {"code": "apply_condition: charmed", "text": "Set a condition tag (filter id)"},
+            {"code": "condition_duration_hours: 2", "text": "How long that condition lasts before it expires"},
+        ],
+    },
+    "schedule_detail": {
+        "title": "Trigger detail",
+        "intro": "Meaning depends on the chosen trigger:",
+        "items": [
+            {"code": "30", "text": "Interval / delay in minutes"},
+            {"code": "03:00", "text": "Daily time (HH:MM)"},
+        ],
+    },
+    "llm_task": {
+        "title": "LLM task",
+        "intro": "Routing key — maps to a provider+model under LLM Routing.",
+        "items": [
+            {"code": "chat, tools, summarize, vision", "text": "Common task keys"},
         ],
     },
 }
@@ -328,11 +374,14 @@ async def help_topics(user=Depends(require_admin)):
         from app.core.stat_hints import get_all_stat_keys
         keys = get_all_stat_keys()
         stat_code = ", ".join(f"{k}>N" for k in keys[:6]) if keys else "stat>N (e.g. stamina>50)"
-        for it in topics.get("condition", {}).get("items", []):
-            if it.get("code") == "__STATS__":
-                it["code"] = stat_code
+        change_code = ", ".join(f"{k}_change: +N" for k in keys[:4]) if keys else "stat_change: +/-N"
+        repl = {"__STATS__": stat_code, "__STAT_CHANGES__": change_code}
+        for topic in topics.values():
+            for it in topic.get("items", []):
+                if it.get("code") in repl:
+                    it["code"] = repl[it["code"]]
     except Exception as _se:
-        logger.debug("Stat-Keys fuer condition-Topic fehlgeschlagen: %s", _se)
+        logger.debug("Dynamische Stat-Keys fuer Help-Topics fehlgeschlagen: %s", _se)
     return {"topics": topics}
 
 

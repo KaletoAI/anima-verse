@@ -204,6 +204,7 @@ export function ImageOverrides({ character }: { character: string }) {
         <div className="ga-form-row">
           <Field
             label={t('Render target (glob)')}
+            help="imagegen_target"
             hint={t('e.g. "Qwen*" (workflow) or "backend:LocalAI-Flux" (backend). Matched against workflow/backend names; the server picks an available match at render time. Empty = global default.')}
           >
             <input

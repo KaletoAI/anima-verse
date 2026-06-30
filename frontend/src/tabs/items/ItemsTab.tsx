@@ -986,7 +986,7 @@ function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, onUpdate,
         </div>
       </Field>
 
-      <Field label={t('Image prompt')} hint={t('Used to generate the item image.')}>
+      <Field label={t('Image prompt')} help="image_prompt" hint={t('Used to generate the item image.')}>
         <input
           className="ga-input"
           value={draft.image_prompt}
@@ -994,7 +994,7 @@ function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, onUpdate,
           onChange={(e) => onUpdate('image_prompt', e.target.value)}
         />
       </Field>
-      <Field label={t('Prompt fragment')} hint={t('Used in the character image when this item is held or worn.')}>
+      <Field label={t('Prompt fragment')} help="image_prompt" hint={t('Used in the character image when this item is held or worn.')}>
         <input
           className="ga-input"
           value={draft.prompt_fragment}
@@ -1177,6 +1177,7 @@ function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, onUpdate,
           </div>
           <Field
             label={t('Effects')}
+            help="effects_syntax"
             hint={t('Format: "stat_change: +/-value" per line. Click a stat or mood to insert it.')}
           >
             <EffectsEditor value={draft.effects} onChange={(v) => onUpdate('effects', v)} />

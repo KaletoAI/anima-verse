@@ -393,6 +393,7 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
 
       <Field
         label={t('Image modifier')}
+        help="image_prompt"
         hint={t("Visual hints for image generation, e.g. 'flushed cheeks, glassy eyes'.")}
       >
         <textarea

@@ -572,6 +572,7 @@ function RuleForm({ draft, locations, characters, activities, onUpdate }: RuleFo
 
       <Field
         label={t('Condition')}
+        help="condition"
         hint={
           <>
             <strong>{t('Always')}</strong> always (hard block) · {' '}
