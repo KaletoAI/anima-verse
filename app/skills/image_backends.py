@@ -2575,6 +2575,14 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         self.terrain_hint = _flag("TERRAIN_HINT", False)
         self.mask_grow = _num("MASK_GROW", 1.05)
         self.inner_crop = _num("INNER_CROP", 0.7)
+        # Masken-Format fuer den edits-Upload (nur category=inpaint):
+        #   grayscale = L-PNG 1:1 wie erzeugt (Weiss=Edit) — fuer Gateways, die die
+        #               Maske direkt an ComfyUIs ``inputs.mask`` reichen (Weiss=Edit).
+        #               Der Draht ist dann byte-identisch zu mapblend_debug/last_mask.png.
+        #   openai    = OpenAI-Edits-Standard (RGBA, transparent=Edit) fuer echte
+        #               OpenAI-/DALL-E-Edits-Endpoints.
+        _mf = os.environ.get(f"{env_prefix}MASK_FORMAT", "grayscale").strip().lower()
+        self.mask_format = _mf if _mf in ("grayscale", "openai") else "grayscale"
         # Extra-Params: frei konfigurierbarer JSON-Block (loras/seed/steps/cfg/...).
         # Wird als zusaetzliche Top-Level-Keys in den Request gemergt.
         raw = os.environ.get(f"{env_prefix}EXTRA_PARAMS", "").strip()
@@ -2812,13 +2820,16 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             logger.error(f"{self.name}: Inpaint ohne Eingangsbild/Maske — abgebrochen")
             return []
         # Canvas/Referenzen -> image, input_mask -> mask. Maske ans Ende (Feldname
-        # entscheidet die Zuordnung, nicht die Position). Die Inpaint-Maske wird auf
-        # den OpenAI-Edits-Standard konvertiert: RGBA, transparent = zu editieren.
+        # entscheidet die Zuordnung, nicht die Position). Polaritaet je nach
+        # ``mask_format``: 'grayscale' sendet die L-Maske (Weiss=Edit) 1:1 wie erzeugt
+        # (== mapblend_debug), 'openai' invertiert auf den OpenAI-Edits-Standard
+        # (RGBA, transparent = zu editieren).
         files: list = []
         mask_part = None
         for title, raw in ref_bytes:
             if "mask" in title.lower():
-                mask_part = ("mask", (f"{title}.png", self._to_openai_mask(raw), "image/png"))
+                _mbytes = self._to_openai_mask(raw) if self.mask_format == "openai" else raw
+                mask_part = ("mask", (f"{title}.png", _mbytes, "image/png"))
             else:
                 files.append(("image", (f"{title}.png", raw, "image/png")))
         if mask_part:
@@ -2845,8 +2856,9 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         data = {k: str(v) for k, v in data.items()}
 
         _img_n = sum(1 for f, _ in files if f == "image")
+        _mask_info = f"1 mask [{self.mask_format}]" if mask_part else "KEINE mask"
         logger.info(f"{self.name}: Starte Inpaint/edits (Alias {model}, {width}x{height}, "
-                    f"{_img_n} image + {'1 mask' if mask_part else 'KEINE mask'})")
+                    f"{_img_n} image + {_mask_info})")
         try:
             resp = self._post_gateway("edits", files=files, data=data)
             return self._parse_image_response(resp)
