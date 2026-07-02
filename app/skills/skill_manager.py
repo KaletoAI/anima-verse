@@ -166,16 +166,6 @@ class SkillManager:
             errors.append(error_msg)
             logger.error(error_msg)
 
-        # ComfyUI Model-/LoRA-Cache neu laden falls ImageGeneration aktiv
-        imagegen = next((s for s in self.skills if getattr(s, 'SKILL_ID', '') == 'image_generation'), None)
-        if imagegen and hasattr(imagegen, 'load_comfyui_model_cache'):
-            try:
-                imagegen.load_comfyui_model_cache()
-                logger.info("ComfyUI Model-Cache neu geladen")
-            except Exception as e:
-                errors.append(f"Model-Cache Reload fehlgeschlagen: {e}")
-                logger.error("Model-Cache Reload fehlgeschlagen: %s", e)
-
         logger.info("=" * 80)
         logger.info(f"Skills neu geladen: {old_count} -> {loaded_count}")
         logger.info("=" * 80)

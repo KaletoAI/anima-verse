@@ -185,14 +185,8 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 
-    # ComfyUI Model-/LoRA-Cache beim Start laden
-    imagegen = skill_manager.get_skill("image_generation")
-    if imagegen and hasattr(imagegen, "load_comfyui_model_cache"):
-        logger.info("Lade ComfyUI Model-/LoRA-Cache...")
-        imagegen.load_comfyui_model_cache()
-
-    # rembg/u2net im Hintergrund vorladen — verhindert ~5s Event-Loop-Block
-    # beim ersten Outfit-Postprocessing-Request.
+    # Preload rembg/u2net in the background — avoids a ~5s event-loop block
+    # on the first outfit post-processing request.
     try:
         from app.models.character import preload_rembg_session
         preload_rembg_session()
@@ -220,8 +214,6 @@ async def lifespan(app: FastAPI):
         _summary_lines.append(f"  Skill OK    {skill.name}")
     if not skill_manager.skills:
         _summary_lines.append("  Skill --    No skills loaded")
-    from app.skills.image_backends import get_active_comfyui_url as _get_comfyui_url
-    active_comfyui_url = _get_comfyui_url()
     tts_info = tts_service.status_info()
     if tts_info["enabled"]:
         tts_status = "OK" if tts_info["available"] else "FAIL"

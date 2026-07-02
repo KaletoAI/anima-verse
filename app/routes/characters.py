@@ -3883,25 +3883,6 @@ def get_available_checkpoints(character_name: str, model_type: str = "") -> Dict
     return {"models": models, "models_by_service": models_by_service}
 
 
-@router.post("/{character_name}/skills/image_generation/refresh-model-cache")
-def refresh_model_cache(character_name: str) -> Dict[str, Any]:
-    """Laedt den ComfyUI Model-/LoRA-Cache neu (z.B. nach Hinzufuegen neuer Modelle)."""
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        raise HTTPException(status_code=404, detail="ImageGeneration skill not found")
-
-    imagegen.load_comfyui_model_cache()
-    by_svc = imagegen.get_cached_checkpoints_by_service()
-    return {
-        "status": "success",
-        "checkpoints": len(imagegen.get_cached_checkpoints("checkpoint")),
-        "unet_models": len(imagegen.get_cached_checkpoints("unet")),
-        "loras": len(imagegen.get_cached_loras()),
-        "services": list(by_svc.keys()),
-    }
-
-
 @router.put("/{character_name}/skills/image_generation/workflow")
 def set_imagegen_workflow(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Setzt den aktiven ComfyUI-Workflow fuer einen Character."""
