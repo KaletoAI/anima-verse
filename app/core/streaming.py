@@ -362,6 +362,9 @@ class StreamingAgent:
         "ConsumeItem":      "Character drinks/eats/applies one item from their inventory",
         "DescribeRoom":     "Character looks around and describes what they see",
         "VideoGenerator":   "Character records a short video",
+        "JoinParty":        "Character agrees to travel together with whoever invited them (leader = the inviter's name)",
+        "InviteToParty":    "Character invites the user or another present character to come along / travel together as a group",
+        "LeaveParty":       "Character splits off / no longer travels with the group",
     }
 
     def _action_mapping_for_available_tools(self) -> str:
@@ -590,7 +593,13 @@ class StreamingAgent:
                 f"     - Character changes/puts on/takes off clothes, outfit, dress, shirt, etc. → ChangeOutfit\n"
                 f"     - Character takes a photo / makes an image / shows a picture → ImageGenerator\n"
                 f"     - Character posts to Instagram / shares a photo publicly → Instagram\n"
-                f"     - Character moves to a different location or room → SetLocation\n"
+                f"     - Character moves to a different location or room ON THEIR OWN → SetLocation\n"
+                f"     - Character agrees to go somewhere TOGETHER with whoever invited them / travels "
+                f"along with them as a group → JoinParty (leader = the inviter's name); prefer this over "
+                f"SetLocation when the character goes WITH someone rather than by themselves\n"
+                f"     - Character invites the user or another present character to come along / travel "
+                f"together as a group → InviteToParty (target = that character's name)\n"
+                f"     - Character wants to split off / no longer travel with the group → LeaveParty\n"
                 f"     - Character changes what they're physically doing (pose) → SetPose\n"
                 f"     - Character looks something up / searches / checks facts → KnowledgeSearch or WebSearch\n"
                 f"     - Character relays info to a third party not in chat → TalkTo\n"
@@ -598,8 +607,9 @@ class StreamingAgent:
                 f"tool just because it was only described. Call every tool that genuinely applies; "
                 f"multiple tools are fine.\n"
                 f"   BUT if the character ONLY talks, shows a feeling, or makes a trivial gesture "
-                f"(shaking their head, smiling, agreeing, waving something in their hand) — that is NOT a "
-                f"tool action. Do NOT call any tool for it. Emotions and small gestures are carried by the "
+                f"(shaking their head, smiling, waving something in their hand) — that is NOT a "
+                f"tool action. Do NOT call any tool for it. (Agreeing to travel together, though, IS "
+                f"JoinParty — see above.) Emotions and small gestures are carried by the "
                 f"markers in step 3, never by tools.\n\n"
                 f"2. EXTRACTION: Check the character's response for:\n"
                 f"   - Intent: If the character commits to a concrete action (posting something, "
