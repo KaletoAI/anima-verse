@@ -1,8 +1,6 @@
-"""Queue Status Endpoint — zeigt alle laufenden und kuerzlichen Tasks."""
-import os
-from typing import Any, Dict, List, Set
+"""Queue status endpoint — shows all running and recent tasks."""
+from typing import Any, Dict
 
-import requests
 from fastapi import APIRouter, HTTPException
 
 from app.core.log import get_logger
@@ -112,52 +110,6 @@ async def vram_status() -> Dict[str, Any]:
     from app.core.provider_manager import get_provider_manager
     pm = get_provider_manager()
     return pm.poll_all_vram()
-
-
-def _collect_comfyui_urls() -> List[str]:
-    """Sammelt alle einzigartigen ComfyUI-URLs aus der Konfiguration."""
-    urls: Set[str] = set()
-
-    # Image Generation Instanzen (SKILL_IMAGEGEN_N_API_TYPE=comfyui, nur aktivierte)
-    for i in range(1, 10):
-        enabled = os.environ.get(f"SKILL_IMAGEGEN_{i}_ENABLED", "true").strip().lower() in ("true", "1", "yes")
-        if not enabled:
-            continue
-        api_type = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_TYPE", "").strip().lower()
-        if api_type == "comfyui":
-            url = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_URL", "").strip().rstrip("/")
-            if url:
-                urls.add(url)
-
-    return sorted(urls)
-
-
-@router.post("/comfyui/free-vram")
-def free_comfyui_vram() -> Dict[str, Any]:
-    """Sendet POST /free an alle ComfyUI-Instanzen um VRAM freizugeben."""
-    comfy_urls = _collect_comfyui_urls()
-    if not comfy_urls:
-        return {"status": "no_comfyui", "message": "Keine ComfyUI-Instanzen konfiguriert"}
-
-    results = []
-    for url in comfy_urls:
-        try:
-            resp = requests.post(
-                f"{url}/free",
-                json={"unload_models": True, "free_memory": True},
-                timeout=10)
-            ok = resp.status_code == 200
-            results.append({"url": url, "ok": ok, "status": resp.status_code})
-            logger.info("ComfyUI VRAM freed: %s (HTTP %d)", url, resp.status_code)
-        except Exception as e:
-            results.append({"url": url, "ok": False, "error": str(e)})
-            logger.error("ComfyUI VRAM free failed: %s: %s", url, e)
-
-    all_ok = all(r["ok"] for r in results)
-    return {
-        "status": "ok" if all_ok else "partial",
-        "results": results,
-    }
 
 
 # ---------------------------------------------------------------------------

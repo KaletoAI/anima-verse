@@ -19,7 +19,7 @@ class GpuConfig:
     index: int                          # 0, 1, 2, ...
     vram_mb: int                        # VRAM in MB
     device: str = ""                    # Beszel device key (e.g. "0", "card0") — Fallback wenn kein match_name greift
-    types: List[str] = field(default_factory=list)  # ["ollama"], ["openai", "comfyui"]
+    types: List[str] = field(default_factory=list)  # ["ollama"], ["openai"]
     label: str = ""                     # Display name (e.g. "RTX 4090 #1")
     match_name: str = ""                # Case-insensitive Substring im Beszel-Namen (stabil ueber Reboots)
     max_concurrent: int = 1             # Max parallel tasks on this GPU
@@ -126,17 +126,6 @@ class Provider:
                 self.available = False
                 return False
 
-            elif self.type == "comfyui":
-                # ComfyUI: GET /system_stats
-                url = f"{self.api_base.rstrip('/')}/system_stats"
-                resp = requests.get(url, timeout=10)
-                self.available = resp.status_code == 200
-                if self.available:
-                    logger.info("OK   %s (comfyui, %s)", self.name, self.api_base)
-                else:
-                    logger.warning("FAIL %s (comfyui): HTTP %d at %s", self.name, resp.status_code, self.api_base)
-                return self.available
-
             elif self.type == "anthropic":
                 # Anthropic Claude API: GET /models mit x-api-key Header
                 url = f"{self.api_base.rstrip('/')}/models"
@@ -175,12 +164,10 @@ class Provider:
     def poll_vram_usage(self, cache_ttl: float = 10.0) -> Dict[str, Any]:
         """Polls VRAM usage.
 
-        Ollama: via /api/ps. ComfyUI: via /system_stats.
+        Ollama: via /api/ps.
         Returns dict with vram_total_mb, vram_used_mb, vram_free_mb, loaded_models.
         Cached for cache_ttl seconds.
         """
-        if self.type == "comfyui":
-            return self._poll_comfyui_vram(cache_ttl)
         if self.type != "ollama":
             return {}
 
@@ -229,51 +216,6 @@ class Provider:
             logger.error("VRAM poll failed for %s: %s", self.name, e)
             return {}
 
-    def _poll_comfyui_vram(self, cache_ttl: float = 10.0) -> Dict[str, Any]:
-        """Polls VRAM from ComfyUI /system_stats. Cached for cache_ttl seconds."""
-        now = time.monotonic()
-        if (now - self._vram_cache_time) < cache_ttl and self._vram_cache_time > 0:
-            used = self.vram_used_mb or 0
-            total = self.vram_mb or 0
-            return {
-                "vram_total_mb": total,
-                "vram_used_mb": used,
-                "vram_free_mb": total - used,
-                "loaded_models": [],
-                "source": "comfyui",
-            }
-        try:
-            resp = requests.get(f"{self.api_base.rstrip('/')}/system_stats", timeout=5)
-            if resp.status_code != 200:
-                return {}
-            data = resp.json()
-            devices = data.get("devices", [])
-            if devices:
-                dev = devices[0]
-                total_bytes = dev.get("vram_total", 0)
-                free_bytes = dev.get("vram_free", 0)
-                total = total_bytes // (1024 * 1024)
-                free = free_bytes // (1024 * 1024)
-                used = max(0, total - free)
-            else:
-                total = self.vram_mb or 0
-                used = 0
-                free = total
-            # Prefer configured vram_mb as "total" if set (more reliable label)
-            display_total = self.vram_mb or total
-            self.vram_used_mb = used
-            self._vram_cache_time = now
-            return {
-                "vram_total_mb": display_total,
-                "vram_used_mb": used,
-                "vram_free_mb": display_total - used,
-                "loaded_models": [],
-                "source": "comfyui",
-            }
-        except Exception as e:
-            logger.error("ComfyUI VRAM poll failed for %s: %s", self.name, e)
-            return {}
-
     def get_free_vram_mb(self) -> Optional[int]:
         """Returns free VRAM in MB, or None if unknown.
 
@@ -281,12 +223,6 @@ class Provider:
         1. Ollama /api/ps (if type=ollama)
         2. Beszel GPU monitoring (if beszel_system_id configured)
         """
-        # ComfyUI: poll /system_stats
-        if self.type == "comfyui":
-            vram = self._poll_comfyui_vram(cache_ttl=5.0)
-            if vram and vram.get("vram_free_mb") is not None:
-                return vram["vram_free_mb"]
-
         # Ollama: direct VRAM query
         if self.type == "ollama" and self.vram_mb:
             vram = self.poll_vram_usage(cache_ttl=5.0)
@@ -320,15 +256,6 @@ class Provider:
         if free is None:
             return True  # Unknown = optimistic
         return free >= vram_mb
-
-    def _is_comfyui_gpu(self, gpu_indices: Optional[List[int]] = None) -> bool:
-        """Returns True if the given GPU indices are exclusively ComfyUI GPUs."""
-        if not gpu_indices or not self.gpu_configs:
-            return False
-        for g in self.gpu_configs:
-            if g.index in gpu_indices and "comfyui" in g.types:
-                return True
-        return False
 
     def _do_unload(self, timeout: int = 30) -> bool:
         """Actually unloads all models via /unload endpoint."""

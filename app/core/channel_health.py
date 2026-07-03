@@ -1,37 +1,34 @@
-"""Channel Health Monitor: pollt Backend-Verfuegbarkeit pro GPU-Channel.
+"""Channel health monitor: polls backend reachability per queue channel.
 
-Jeder GPU-Channel (z.B. `Evo-X2:gpu2`) ist ueber `gpu_provider` in den
-image_generation.backends[] an konkrete ComfyUI-Endpoints gebunden
-(z.B. http://192.168.8.31:4070). Wenn alle diesem Channel zugeordneten
-Backends down sind, soll `find_channel` den Channel nicht mehr waehlen —
-sonst landen Tasks in einer Warteschlange, deren physische Ausfuehrung
-nur noch ueber Fallback-Backends auf fremden Channels laeuft.
+``backend:<name>`` channels map 1:1 to an image-generation backend
+instance. The monitor periodically re-checks each enabled backend via its
+own ``check_availability()`` (protocol-specific per backend class) so that
+``find_channel`` skips channels whose backend is down and the queue panel
+can show per-channel health. Cooldowns set via ``mark_unhealthy`` stay
+authoritative — the ``available`` property enforces them regardless of
+what a probe returns.
 
-Der Monitor pollt alle POLL_INTERVAL_S Sekunden und cached das Ergebnis.
-`is_healthy(channel_key)` wird synchron aus der find_channel-Heisspfad-
-Auflistung gelesen (Mutex-geschuetzt, sehr billig).
+LLM channels are not polled per-channel here — they are governed by
+``provider.available``, refreshed once per poll round via
+``pm.refresh_availability()``.
 
-Fuer nicht-comfyui-Channels (LLM) greift diese Logik nicht — die
-werden weiterhin nur ueber `provider.available` gesteuert.
+``is_healthy(channel_key)`` is read synchronously from the find_channel
+hot path (mutex-guarded, very cheap).
 """
 import threading
 import time
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Tuple
 
-import requests
-
-from app.core import config
 from app.core.log import get_logger
 
 logger = get_logger("channel_health")
 
 POLL_INTERVAL_S = 30
-REQUEST_TIMEOUT_S = 3
 STARTUP_DELAY_S = 5
 
 
 class ChannelHealthMonitor:
-    """Background-Poller fuer Channel-Health-Status."""
+    """Background poller for channel health status."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -48,113 +45,65 @@ class ChannelHealthMonitor:
         self._thread = threading.Thread(
             target=self._loop, daemon=True, name="channel-health")
         self._thread.start()
-        logger.info("ChannelHealthMonitor gestartet (poll alle %ds)", POLL_INTERVAL_S)
+        logger.info("ChannelHealthMonitor started (poll every %ds)", POLL_INTERVAL_S)
 
     def is_healthy(self, channel_key: str, gpu_type: str = "") -> bool:
-        """Liefert True wenn der Channel nutzbar ist.
+        """True when the channel is usable.
 
-        ``backend:<name>``-Channels werden immer ueber den Backend-Ping
-        geprueft (URL erreichbar?). LLM-Channels (ollama/openai/anthropic):
-        immer True — Provider-Level-Check reicht.
-        Channels mit nur unreachable Backends: False.
+        ``backend:<name>`` channels report the cached reachability of their
+        backend. All other channels (LLM providers): always True — the
+        provider-level availability check covers them.
         """
         if not channel_key.startswith("backend:"):
-            if gpu_type and gpu_type != "comfyui":
-                return True
+            return True
         with self._lock:
             entry = self._status.get(channel_key)
         if entry is None:
-            # Noch nie gepollt — optimistisch True. Nach Startup-Delay sind
-            # alle Channels vermessen.
+            # Never polled yet — optimistic True. After the startup delay
+            # every channel has been measured.
             return True
         return entry[0]
 
     def force_poll(self) -> None:
-        """Explizit alle Channels neu pollen. Nutzbar fuer Admin-Endpoints."""
+        """Explicitly re-poll all channels. Used by admin endpoints."""
         self._poll_all()
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _iter_comfyui_backends_for_channel(self, channel_key: str) -> Iterable[dict]:
-        """Listet enabled comfyui-Backends die diesem Channel zugeordnet sind.
-
-        Neue Architektur: ``backend:<name>``-Channels haben genau ein
-        Backend (1:1-Mapping ueber den Namen). Legacy: alte Configs ohne
-        eigenen Backend-Channel mit ``gpu_provider``-Feld auf eine
-        LLM-Provider-GPU werden weiterhin akzeptiert.
-        """
-        img_gen = config.get("image_generation", {}) or {}
-        backends = img_gen.get("backends", []) or []
-
-        # Neuer Pfad: backend:<name>-Channels direkt ueber den Namen finden
-        if channel_key.startswith("backend:"):
-            target = channel_key.split(":", 1)[1]
-            for b in backends:
-                if not isinstance(b, dict):
-                    continue
-                if b.get("api_type") != "comfyui":
-                    continue
-                if not b.get("enabled"):
-                    continue
-                if (b.get("name") or "").strip() == target:
-                    yield b
-            return
-
-        # Legacy-Pfad: gpu_provider auf einer LLM-Provider-GPU
-        for b in backends:
-            if not isinstance(b, dict):
-                continue
-            if b.get("api_type") != "comfyui":
-                continue
-            if not b.get("enabled"):
-                continue
-            gpu_provider = (b.get("gpu_provider") or "").strip()
-            if not gpu_provider:
-                continue
-            parts = gpu_provider.split(":", 1)
-            if len(parts) != 2:
-                continue
-            key = f"{parts[0]}:gpu{parts[1]}"
-            if key == channel_key:
-                yield b
-
-    def _check_backend(self, backend: dict) -> bool:
-        url = (backend.get("api_url") or "").rstrip("/")
-        if not url:
-            return False
-        # /system_stats kann auf manchen ComfyUI-Versionen 500 werfen (kaputter
-        # Custom-Node oder VRAM-Init-Fehler) obwohl der Server insgesamt OK
-        # ist. Fallback auf /queue — leichter Endpoint, in jeder Version da.
+    @staticmethod
+    def _backend_for_channel(channel_key: str):
+        """Resolves a ``backend:<name>`` channel to its backend instance."""
+        target = channel_key.split(":", 1)[1]
         try:
-            resp = requests.get(f"{url}/system_stats", timeout=REQUEST_TIMEOUT_S)
-            if resp.status_code == 200:
-                return True
+            from app.core.dependencies import get_skill_manager
+            skill = get_skill_manager().get_skill("image_generation")
         except Exception:
-            pass
-        try:
-            resp = requests.get(f"{url}/queue", timeout=REQUEST_TIMEOUT_S)
-            return resp.status_code == 200
-        except Exception:
-            return False
+            return None
+        for b in getattr(skill, "backends", []) if skill else []:
+            if b.name == target and b.instance_enabled:
+                return b
+        return None
 
     def _poll_channel(self, channel_key: str) -> None:
-        backends = list(self._iter_comfyui_backends_for_channel(channel_key))
-        if not backends:
-            # Kein zugeordnetes comfyui-Backend — nicht unsere Zustaendigkeit.
-            # True reporten, damit der Channel fuer andere Typen frei bleibt.
+        if not channel_key.startswith("backend:"):
+            return
+        backend = self._backend_for_channel(channel_key)
+        if backend is None:
+            # No (enabled) backend behind this channel — not our concern;
+            # report True so the channel stays selectable.
             with self._lock:
                 self._status[channel_key] = (True, time.time())
             return
 
-        healthy = False
-        failed_urls = []
-        for b in backends:
-            if self._check_backend(b):
-                healthy = True
-                break
-            failed_urls.append(b.get("api_url", "?"))
+        # Delegate to the backend's own protocol check; this also refreshes
+        # backend.available for the selection logic.
+        try:
+            healthy = bool(backend.check_availability())
+        except Exception as e:
+            logger.debug("Health check %s failed: %s", channel_key, e)
+            healthy = False
 
         with self._lock:
             prev_entry = self._status.get(channel_key)
@@ -162,18 +111,17 @@ class ChannelHealthMonitor:
             self._status[channel_key] = (healthy, time.time())
 
         if prev_healthy is None:
-            state = "healthy" if healthy else "unhealthy"
             if not healthy:
-                logger.warning("Channel %s initial %s (backends down: %s)",
-                               channel_key, state, ", ".join(failed_urls))
+                logger.warning("Channel %s initially unhealthy (%s down)",
+                               channel_key, backend.api_url)
             else:
-                logger.debug("Channel %s initial %s", channel_key, state)
+                logger.debug("Channel %s initially healthy", channel_key)
         elif prev_healthy != healthy:
             if healthy:
-                logger.info("Channel %s recovered (backend erreichbar)", channel_key)
+                logger.info("Channel %s recovered (backend reachable)", channel_key)
             else:
-                logger.warning("Channel %s jetzt unhealthy (backends down: %s)",
-                               channel_key, ", ".join(failed_urls))
+                logger.warning("Channel %s now unhealthy (%s down)",
+                               channel_key, backend.api_url)
 
     def _poll_all(self) -> None:
         try:
@@ -181,15 +129,15 @@ class ChannelHealthMonitor:
             pm = get_provider_manager()
             channel_keys = list(pm.channels.keys())
         except Exception as e:
-            logger.debug("ChannelHealth: Channels-Liste nicht lesbar: %s", e)
+            logger.debug("ChannelHealth: channel list unavailable: %s", e)
             return
-        # LLM-/OpenAI-Provider re-proben: provider.available wird beim Start nur
-        # einmal gesetzt — ein danach ausgeschalteter Host (z.B. ASUS-GX10)
-        # bliebe sonst dauerhaft "available". Hier dynamisch aktualisieren.
+        # Re-probe LLM providers: provider.available is only set once at
+        # startup — a host switched off later would otherwise stay
+        # "available" forever.
         try:
             pm.refresh_availability()
         except Exception as e:
-            logger.debug("ChannelHealth: refresh_availability fehlgeschlagen: %s", e)
+            logger.debug("ChannelHealth: refresh_availability failed: %s", e)
         for key in channel_keys:
             self._poll_channel(key)
 
@@ -199,12 +147,12 @@ class ChannelHealthMonitor:
             try:
                 self._poll_all()
             except Exception as e:
-                logger.warning("ChannelHealth-Loop Fehler: %s", e)
+                logger.warning("ChannelHealth loop error: %s", e)
             time.sleep(POLL_INTERVAL_S)
 
 
 # ----------------------------------------------------------------------
-# Singleton + Public API
+# Singleton + public API
 # ----------------------------------------------------------------------
 _monitor: ChannelHealthMonitor | None = None
 
@@ -217,10 +165,10 @@ def get_monitor() -> ChannelHealthMonitor:
 
 
 def is_healthy(channel_key: str, gpu_type: str = "") -> bool:
-    """Public-API fuer find_channel (und Tests)."""
+    """Public API for find_channel (and tests)."""
     return get_monitor().is_healthy(channel_key, gpu_type)
 
 
 def start() -> None:
-    """Public-API fuer Server-Lifespan. Idempotent."""
+    """Public API for the server lifespan. Idempotent."""
     get_monitor().start()

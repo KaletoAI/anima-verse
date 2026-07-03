@@ -168,7 +168,7 @@ class TaskQueue:
     # Laufzeit-Reaper: tracked Tasks, die INNERHALB einer Session haengen
     # bleiben (kein Neustart) — der externe In-Process-Generator ist
     # gestorben/blockiert, ohne track_finish zu rufen. Symptom: "Ort-Bild"
-    # haengt ewig pending (z.B. ComfyUI beim Trigger down). Lazy beim Status-
+    # haengt ewig pending (z.B. Backend beim Trigger down). Lazy beim Status-
     # Abruf, damit kein extra Thread noetig ist.
     _TRACKED_STALE_TIMEOUT_MIN = 20
 
@@ -674,9 +674,6 @@ class TaskQueue:
             "Track %s: %s (%.1fs)%s",
             status, task_id, duration_s, f" error={error}" if error else "")
 
-        # VRAM auto-free wenn keine tracked tasks mehr laufen
-        if not self._track_start_times:
-            _auto_free_comfyui_vram()
 
     def track_cancel(self, task_id: str) -> bool:
         """Cancel a tracked task. Returns True if found."""
@@ -820,77 +817,6 @@ class TaskQueue:
 # ---------------------------------------------------------------------------
 # VRAM Auto-Free (moved from task_tracker.py)
 # ---------------------------------------------------------------------------
-
-def _auto_free_comfyui_vram() -> None:
-    """Gibt ComfyUI VRAM frei wenn alle Queues idle sind. Laeuft im Hintergrund."""
-    import os
-    try:
-        import requests as req
-    except ImportError:
-        return
-
-    # Auch LLM Queue pruefen — nur freigeben wenn wirklich alles idle
-    try:
-        from app.core.llm_queue import get_llm_queue
-        status = get_llm_queue().get_status()
-        if status.get("current_task") or status.get("chat_active"):
-            return
-        if any(t.get("status") == "pending" for t in (status.get("pending") or [])):
-            return
-    except Exception:
-        pass
-
-    # TTS ComfyUI URL ausschliessen — sonst wird das TTS-Modell nach jedem
-    # TTS-Job entladen und muss beim naechsten voicename-Call neu geladen werden.
-    # URL wird aus TTS_COMFYUI_SKILL (SKILL_IMAGEGEN Backend) aufgeloest.
-    tts_comfyui_url = ""
-    _tts_skill = os.environ.get("TTS_COMFYUI_SKILL", "").strip()
-    if _tts_skill:
-        _targets = [s.strip() for s in _tts_skill.split(",") if s.strip()]
-        for _si in range(1, 20):
-            _sn = os.environ.get(f"SKILL_IMAGEGEN_{_si}_NAME", "")
-            if not _sn:
-                break
-            if _sn.strip() in _targets and os.environ.get(f"SKILL_IMAGEGEN_{_si}_API_TYPE", "").strip().lower() == "comfyui":
-                tts_comfyui_url = os.environ.get(f"SKILL_IMAGEGEN_{_si}_API_URL", "").strip().rstrip("/")
-                break
-
-    # ComfyUI URLs sammeln (nur aktivierte Image-Gen-Instanzen)
-    urls = set()
-    for i in range(1, 10):
-        enabled = os.environ.get(f"SKILL_IMAGEGEN_{i}_ENABLED", "true").strip().lower() in ("true", "1", "yes")
-        if not enabled:
-            continue
-        if os.environ.get(f"SKILL_IMAGEGEN_{i}_API_TYPE", "").strip().lower() == "comfyui":
-            url = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_URL", "").strip().rstrip("/")
-            if url and url != tts_comfyui_url:
-                urls.add(url)
-
-    if not urls:
-        return
-
-    def _free():
-        for comfy_url in urls:
-            try:
-                resp = req.post(
-                    f"{comfy_url}/free",
-                    json={"unload_models": True, "free_memory": True},
-                    timeout=3)
-                if resp.status_code == 200:
-                    logger.debug("ComfyUI VRAM freigegeben: %s", comfy_url)
-            except Exception:
-                pass  # Server nicht erreichbar – kein VRAM zu befreien
-
-    # Im Hintergrund ausfuehren um track_finish() nicht zu blockieren
-    threading.Thread(target=_free, daemon=True, name="ComfyUI-VRAM-Free").start()
-
-
-# ---------------------------------------------------------------------------
-# Module-level singleton
-# ---------------------------------------------------------------------------
-_task_queue: Optional[TaskQueue] = None
-_init_lock = threading.Lock()
-
 
 def get_task_queue() -> TaskQueue:
     """Returns the global TaskQueue singleton."""

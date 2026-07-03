@@ -568,9 +568,8 @@ class ProviderQueue:
                             logger.warning(
                                 "[%s] GPU-Task OOM, Retry %d/%d: %s — VRAM freigeben und erneut versuchen",
                                 self._queue_name, task._retry_count, _GPU_MAX_RETRIES, task.task_id)
-                            if not self.provider._is_comfyui_gpu(self._gpu_indices):
-                                self.provider._do_unload()
-                                time.sleep(5)  # Wait for VRAM to be freed by llama-swap
+                            self.provider._do_unload()
+                            time.sleep(5)  # Wait for VRAM to be freed by llama-swap
                             # Re-queue: reset status, put back in queue
                             task.status = "pending"
                             task.error = ""
