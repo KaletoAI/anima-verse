@@ -51,6 +51,7 @@ from app.models.character import (
     add_character_image_prompt,
     add_character_image_metadata,
     get_character_outfits_dir)
+from app.core import character_ops
 from app.core.dependencies import reload_skill_manager, get_skill_manager
 
 from app.core.timeutils import utc_now, utc_now_iso
@@ -307,20 +308,6 @@ def generate_character_appearance(character_name: str) -> Dict[str, Any]:
     return {"character": character_name, "appearance": appearance}
 
 
-def _resolve_face_prompt(profile: dict, character_name: str, tmpl) -> str:
-    """Profilbild-Prompt = Face Prompt (face_appearance), Tokens aufgeloest
-    (target_key 'character_appearance' — so werden beide Appearance-Felder
-    aufgeloest). Fallback auf die Body-Appearance, falls face_appearance leer."""
-    from app.models.character import get_character_appearance
-    from app.models.character_template import resolve_profile_tokens
-    face = ((profile or {}).get("face_appearance") or "").strip()
-    if face:
-        if "{" in face:
-            face = resolve_profile_tokens(face, profile, template=tmpl, target_key="character_appearance")
-        return face.strip()
-    return (get_character_appearance(character_name) or "").strip()
-
-
 @router.get("/{character_name}/profile-image-prompt")
 def profile_image_prompt(character_name: str) -> Dict[str, Any]:
     """Aufgeloester Face Prompt als Default-Prompt fuer den Profilbild-Dialog
@@ -329,7 +316,7 @@ def profile_image_prompt(character_name: str) -> Dict[str, Any]:
     from app.models.character_template import get_template
     profile = get_character_profile(character_name) or {}
     tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    return {"prompt": _resolve_face_prompt(profile, character_name, tmpl)}
+    return {"prompt": character_ops._resolve_face_prompt(profile, character_name, tmpl)}
 
 
 @router.get("/{character_name}/current-location")
@@ -1147,7 +1134,7 @@ async def generate_profile_image_route(character_name: str, request: Request) ->
     from app.models.character_template import resolve_profile_tokens, get_template
     profile = get_character_profile(character_name)
     tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    appearance = _resolve_face_prompt(profile, character_name, tmpl)
+    appearance = character_ops._resolve_face_prompt(profile, character_name, tmpl)
 
     # Prompt aus Dialog oder Face Prompt (Style kommt aus dem "profile"-Use-Case).
     prompt_text = data.get("prompt", "").strip() or (appearance or "").strip()
@@ -1204,25 +1191,6 @@ async def generate_profile_image_route(character_name: str, request: Request) ->
     return {"status": "success", "image": image_filename, "image_url": image_url}
 
 
-def _build_outfit_image_prompt(character_name: str, outfit_description: str) -> str:
-    """Baut den Prompt fuer ein Outfit-Bild (separiert: character + outfit + pose + expression)."""
-    import os
-    from app.core.prompt_builder import PromptBuilder
-    from app.core.expression_pose_maps import DEFAULT_EXPRESSION, DEFAULT_POSE
-
-    _builder = PromptBuilder(character_name)
-    _persons = _builder.detect_persons("", character_names=[character_name])
-    _actor = _persons[0].actor_label if _persons else character_name
-    _appearance = _persons[0].appearance if _persons else ""
-
-    # Style/Framing kommen aus dem "outfit"-Use-Case — hier nur der Inhalt.
-    character_prompt = f"{_actor}, {_appearance}"
-    outfit_prompt = f"{_actor} is wearing {outfit_description}"
-    return ", ".join(p for p in [
-        character_prompt, outfit_prompt, DEFAULT_POSE, DEFAULT_EXPRESSION,
-    ] if p)
-
-
 @router.get("/{character_name}/outfits/{outfit_id}/image-prompt")
 async def get_outfit_image_prompt(character_name: str, outfit_id: str) -> Dict[str, str]:
     """Berechnet den Prompt fuer ein Outfit-Bild (Vorschau fuer Dialog)."""
@@ -1239,7 +1207,7 @@ async def get_outfit_image_prompt(character_name: str, outfit_id: str) -> Dict[s
     if outfit_description and "{" in outfit_description:
         outfit_description = resolve_profile_tokens(outfit_description, profile, template=tmpl, target_key="outfit")
 
-    return {"prompt": _build_outfit_image_prompt(character_name, outfit_description)}
+    return {"prompt": character_ops._build_outfit_image_prompt(character_name, outfit_description)}
 
 
 @router.post("/{character_name}/outfits/{outfit_id}/generate-image")
@@ -1274,7 +1242,7 @@ async def generate_outfit_image_route(character_name: str, outfit_id: str, reque
     # Prompt: aus Dialog (wenn vorhanden) oder via Hilfsfunktion aufbauen
     prompt_text = data.get("prompt", "").strip()
     if not prompt_text:
-        prompt_text = _build_outfit_image_prompt(character_name, outfit_description)
+        prompt_text = character_ops._build_outfit_image_prompt(character_name, outfit_description)
 
     # ImageGenerationSkill holen
     try:
@@ -1475,7 +1443,7 @@ async def generate_all_outfit_images_route(character_name: str, request: Request
                     outfit_description, profile, template=tmpl, target_key="outfit")
 
             # Prompt via Hilfsfunktion
-            prompt_text = _build_outfit_image_prompt(character_name, outfit_description)
+            prompt_text = character_ops._build_outfit_image_prompt(character_name, outfit_description)
 
             # Appearance fuer Reference-Bilder
             appearance = get_character_appearance(character_name)
@@ -2083,25 +2051,6 @@ async def set_slot_overrides_route(character_name: str, request: Request) -> Dic
 
 # --- Profile (bulk read/update) ---
 
-def _soul_field_keys(template_id: str) -> set:
-    """Set der Profile-Keys deren Inhalt aus einer MD-Datei kommt (source_file)."""
-    if not template_id:
-        return set()
-    try:
-        from app.models.character_template import get_template
-        tmpl = get_template(template_id)
-    except Exception:
-        return set()
-    if not tmpl:
-        return set()
-    keys = set()
-    for section in tmpl.get("sections", []):
-        for field in section.get("fields", []):
-            if field.get("source_file") and field.get("key"):
-                keys.add(field["key"])
-    return keys
-
-
 @router.get("/{character_name}/profile")
 def get_profile_route(character_name: str) -> Dict[str, Any]:
     """Gibt das vollstaendige Character-Profil zurueck"""
@@ -2282,7 +2231,7 @@ async def update_profile_route(character_name: str, request: Request) -> Dict[st
         # Felder mit source_file gehoeren in MD-Files, NICHT ins JSON-Profil.
         # Falls jemand sie hier reinschickt, ignorieren — der Soul-Editor ist
         # zustaendig (siehe /characters/{char}/soul/*).
-        _sf_keys = _soul_field_keys(profile.get("template", ""))
+        _sf_keys = character_ops._soul_field_keys(profile.get("template", ""))
         for k in list(fields.keys()):
             if k in _sf_keys:
                 fields.pop(k, None)
@@ -3780,254 +3729,13 @@ def clear_character_knowledge(character_name: str) -> Dict[str, Any]:
 # Plan: development_instructions/plan-memory-window-redesign.md
 # ---------------------------------------------------------------------------
 
-def _score_memory_no_mutate(entry: Dict[str, Any], current_message: str = "") -> float:
-    """retrieve_relevant_memories ohne Side-Effects (kein access_count-Bump).
-
-    Spiegelt die Score-Formel aus app/models/memory.py:retrieve_relevant_memories
-    fuer die Read-Only-Anzeige im "Heute"-Tab.
-    """
-    from datetime import datetime as _dt
-    from app.models.memory import _compute_decay, _keyword_overlap, _recency_boost
-
-    decay = _compute_decay(entry)
-    importance = entry.get("importance", 3)
-    search_text = entry.get("content", "") + " " + " ".join(entry.get("tags", []))
-    relevance = _keyword_overlap(search_text, current_message) if current_message else 0.0
-    type_bonus = 0.0
-    mtype = entry.get("memory_type")
-    if mtype == "commitment":
-        if "completed" not in entry.get("tags", []):
-            type_bonus = 0.3
-    elif mtype == "episodic":
-        type_bonus = 0.1
-    try:
-        ts = _dt.fromisoformat(entry.get("timestamp", ""))
-        age_days = max(0, (_dt.now() - ts).total_seconds() / 86400)
-    except (ValueError, TypeError):
-        age_days = 30.0
-    recency = _recency_boost(age_days)
-    return importance * decay * recency * (1.0 + relevance * 2.0 + type_bonus)
-
-
-def _bucket_state_lane(events: List[Dict[str, Any]],
-                       max_unbucketed: int = 50) -> Dict[str, Any]:
-    """Hybrid-Verdichtung: ueber `max_unbucketed` Events pro Stunde gruppieren.
-
-    Erwartet Events sortiert (oldest first). Liefert
-    {bucketed: bool, points: [{ts, value, count?}], buckets?: [{hour, dominant, items}]}.
-    """
-    if len(events) <= max_unbucketed:
-        return {"bucketed": False, "points": events}
-    # Stunden-Bucketing: pro Stunden-Slot die dominante value (haeufigste)
-    buckets: Dict[str, List[Dict[str, Any]]] = {}
-    for ev in events:
-        ts = ev.get("ts") or ev.get("timestamp") or ""
-        hour = ts[:13]  # 'YYYY-MM-DDTHH'
-        buckets.setdefault(hour, []).append(ev)
-    out_points = []
-    out_buckets = []
-    for hour in sorted(buckets.keys()):
-        items = buckets[hour]
-        # dominant = most frequent value
-        from collections import Counter
-        cnt = Counter(it.get("value", "") for it in items)
-        dominant, _ = cnt.most_common(1)[0]
-        # Repraesentanten-TS = letzter Event in dieser Stunde
-        out_points.append({
-            "ts": items[-1].get("ts") or items[-1].get("timestamp"),
-            "value": dominant,
-            "count": len(items),
-        })
-        out_buckets.append({
-            "hour": hour,
-            "dominant": dominant,
-            "items": items,
-        })
-    return {"bucketed": True, "points": out_points, "buckets": out_buckets}
-
-
 @router.get("/{character_name}/memory/today")
 def memory_today(character_name: str) -> Dict[str, Any]:
     """Tab "Heute": Status, 24h-Lanes, Top-K aktuell relevante Memories.
 
     Read-only — kein access_count-Bump beim Anzeigen.
     """
-    from datetime import datetime, timedelta
-    from app.core.db import get_connection
-    from app.models.memory import load_memories, load_mood_history
-    from app.models.character import get_character_profile, get_known_locations
-    from app.models.world import (get_location_name, resolve_location,
-                                   get_room_by_id, _load_world_data)
-
-    profile = get_character_profile(character_name)
-    now = utc_now()
-    cutoff = (now - timedelta(hours=24)).isoformat()
-
-    conn = get_connection()
-    import json as _json
-
-    # Activity-Dauern (Lane-Band-Caps) gibt es nicht mehr — Activity-Library
-    # entfernt, Posen haben keine feste Dauer.
-    activity_durations: Dict[str, Optional[int]] = {}
-
-    # --- 24h State-History (alle Types) — fuer Lanes ---
-    rows = conn.execute(
-        "SELECT ts, state_json FROM state_history "
-        "WHERE character_name=? AND ts>=? ORDER BY ts ASC",
-        (character_name, cutoff),
-    ).fetchall()
-    activity_lane: List[Dict[str, Any]] = []
-    location_lane: List[Dict[str, Any]] = []
-    effects_lane: List[Dict[str, Any]] = []
-    last_warning: Optional[Dict[str, Any]] = None
-    for ts, state_json in rows:
-        try:
-            s = _json.loads(state_json or "{}")
-        except Exception:
-            continue
-        t = s.get("type", "")
-        v = s.get("value", "")
-        ev = {"ts": s.get("timestamp", ts), "value": v}
-        if t == "activity":
-            ev["duration_min"] = activity_durations.get(v)
-            activity_lane.append(ev)
-        elif t == "location":
-            # Location-IDs in Lesbare Namen aufloesen — fuer UI-Anzeige.
-            ev["value"] = get_location_name(v) or v
-            location_lane.append(ev)
-        elif t == "effects":
-            effects_lane.append(ev)
-        elif t in ("access_denied", "forced_action"):
-            last_warning = {"type": t, "value": v, "ts": ev["ts"]}
-
-    # --- 24h Mood-History ---
-    full_mood = load_mood_history(character_name)
-    mood_lane = [m for m in full_mood if m.get("timestamp", "") >= cutoff]
-
-    # --- "Seit"-Zeitstempel des aktuellen Zustands ---
-    def _last_change_ts(lane: List[Dict[str, Any]], current: str) -> Optional[str]:
-        # Letzter Wechsel ZUR aktuellen Value (von oldest nach newest scannen).
-        last_ts = None
-        prev = None
-        for ev in lane:
-            if ev.get("value") != prev and ev.get("value") == current:
-                last_ts = ev.get("ts")
-            prev = ev.get("value")
-        return last_ts
-
-    current_activity = profile.get("pose_intent") or ""
-    current_location_id = profile.get("current_location") or ""
-    current_room_id = profile.get("current_room") or ""
-    current_mood = profile.get("current_feeling") or profile.get("current_mood") or ""
-
-    # Namen aufloesen (location/room sind oft UUIDs in der DB)
-    location_name = get_location_name(current_location_id) if current_location_id else ""
-    room_name = ""
-    if current_location_id and current_room_id:
-        loc = resolve_location(current_location_id)
-        if loc:
-            room = get_room_by_id(loc, current_room_id)
-            if room:
-                room_name = room.get("name", "")
-
-    # "Seit"-Fallback: wenn 24h-Lane leer, oldest passende state_history-Entry
-    def _since_fallback(state_type: str, current_value: str) -> Optional[str]:
-        if not current_value:
-            return None
-        row = conn.execute(
-            "SELECT ts FROM state_history WHERE character_name=? "
-            "AND json_extract(state_json,'$.type')=? "
-            "AND json_extract(state_json,'$.value')=? "
-            "ORDER BY ts DESC LIMIT 1",
-            (character_name, state_type, current_value),
-        ).fetchone()
-        return row[0] if row else None
-
-    # --- Top-K aktive Memories (Score-basiert, ohne Mutation) ---
-    all_mem = load_memories(character_name)
-    # completed Commitments standardmaessig raus
-    visible = [m for m in all_mem if "completed" not in (m.get("tags") or [])]
-    scored = [(_score_memory_no_mutate(m), m) for m in visible]
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = []
-    for score, m in scored[:12]:
-        top.append({
-            "id": m.get("id"),
-            "memory_type": m.get("memory_type", "semantic"),
-            "ts": m.get("timestamp", ""),
-            "content": m.get("content", ""),
-            "importance": m.get("importance", 3),
-            "decay_factor": round(m.get("decay_factor", 1.0), 3),
-            "related_character": m.get("related_character", ""),
-            "score": round(score, 3),
-            "tags": m.get("tags", []),
-        })
-
-    # known_locations sind jetzt im eigenen Tab via /memory/locations.
-
-    since_activity = (_last_change_ts(activity_lane, current_activity)
-                      or _since_fallback("activity", current_activity))
-    # Location-Lane ist nach Namens-Aufloesung — direkt gegen die rohe DB
-    # vergleichen statt gegen die aufgeloeste Lane.
-    since_location = _since_fallback("location", current_location_id)
-    since_mood = (mood_lane[-1].get("timestamp") if mood_lane
-                  else (full_mood[-1].get("timestamp") if full_mood else None))
-
-    # --- Stats (status_effects) — generisch aus dem Template, nichts hardcoden.
-    # Reihenfolge + Labels aus den Template-Feldern mit store=status_effects;
-    # zusaetzliche, nicht im Template definierte Keys werden hinten angehaengt.
-    stat_items: List[Dict[str, Any]] = []
-    try:
-        from app.models.character_template import is_feature_enabled, get_template
-        if is_feature_enabled(character_name, "status_effects_enabled"):
-            cur_stats = profile.get("status_effects", {}) or {}
-            tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-            seen: set = set()
-            if tmpl:
-                for section in tmpl.get("sections", []):
-                    for fld in section.get("fields", []):
-                        if fld.get("store") != "status_effects":
-                            continue
-                        k = fld.get("key")
-                        if not k or k not in cur_stats:
-                            continue
-                        stat_items.append({"key": k, "label": fld.get("label") or k,
-                                           "value": cur_stats.get(k)})
-                        seen.add(k)
-            for k, v in cur_stats.items():
-                if k not in seen:
-                    stat_items.append({"key": k, "label": k, "value": v})
-    except Exception:
-        pass
-
-    return {
-        "character": character_name,
-        "now": now.isoformat(),
-        "stats": stat_items,
-        "status": {
-            "location": location_name or current_location_id,
-            "location_id": current_location_id,
-            "room": room_name,
-            "room_id": current_room_id,
-            "activity": current_activity,
-            "mood": current_mood,
-            "since": {
-                "activity": since_activity,
-                "location": since_location,
-                "mood": since_mood,
-            },
-            "last_warning": last_warning,
-        },
-        "lanes_24h": {
-            "activity": _bucket_state_lane(activity_lane),
-            "location": _bucket_state_lane(location_lane),
-            "mood": _bucket_state_lane(
-                [{"ts": m.get("timestamp"), "value": m.get("mood")} for m in mood_lane]
-            ),
-            "effects": _bucket_state_lane(effects_lane),
-        },
-        "active_memories": top,
-    }
+    return character_ops.build_memory_today(character_name)
 
 
 @router.get("/{character_name}/debug-activity")
@@ -4038,184 +3746,7 @@ def debug_activity(character_name: str) -> Dict[str, Any]:
     Aktivitaet und aktive Block-/Force-Regeln zu einer „Why"-Begruendung. Keine
     Avatar-Bindung — der Name kommt aus dem Pfad.
     """
-    from app.core.db import get_connection
-    from app.models.memory import load_mood_history
-    from app.models.character import (get_character_profile,
-                                      get_character_current_feeling, get_state_flags)
-    import json as _json
-
-    profile = get_character_profile(character_name) or {}
-    feeling = (get_character_current_feeling(character_name) or "").strip()
-    status_effects = profile.get("status_effects", {}) or {}
-    try:
-        flags = get_state_flags(character_name)
-    except Exception:
-        flags = {}
-
-    # Letzter Thought-Zeitpunkt + juengste (globale) Thought-Turns dieses Characters.
-    last_thought_at = ""
-    try:
-        from app.core.agent_inbox import get_last_thought_at
-        last_thought_at = get_last_thought_at(character_name) or ""
-    except Exception:
-        pass
-    thoughts_recent: List[Dict[str, Any]] = []
-    try:
-        from app.core.agent_loop import get_agent_loop
-        recent = (get_agent_loop().status() or {}).get("recent", []) or []
-        thoughts_recent = [
-            {"ts": r.get("ts", ""), "action": r.get("action", "")}
-            for r in recent if r.get("name") == character_name
-        ][-12:]
-    except Exception:
-        pass
-
-    # Mood-Historie (juengste zuerst).
-    mood_all = load_mood_history(character_name) or []
-    mood_recent = list(reversed(mood_all))[:8]
-    latest_mood = mood_recent[0] if mood_recent else None
-
-    # State-Historie direkt lesen (kein public Reader) — juengste zuerst.
-    state_recent: List[Dict[str, Any]] = []
-    last_warning: Optional[Dict[str, Any]] = None
-
-    # id→Name fuer location/room-Eintraege (sonst zeigt die UI rohe Hex-IDs).
-    def _resolve_state_value(stype: str, value: str) -> str:
-        if not value:
-            return value
-        try:
-            from app.models.world import get_location_name, list_locations, get_location_rooms
-            if stype == "location":
-                return get_location_name(value) or value
-            if stype == "room":
-                for _loc in list_locations():
-                    for _rm in get_location_rooms(_loc):
-                        if _rm.get("id") == value:
-                            return _rm.get("name") or value
-        except Exception:
-            pass
-        return value
-
-    try:
-        conn = get_connection()
-        rows = conn.execute(
-            "SELECT ts, state_json FROM state_history WHERE character_name=? "
-            "ORDER BY ts DESC LIMIT 25", (character_name,),
-        ).fetchall()
-        for ts, state_json in rows:
-            try:
-                s = _json.loads(state_json or "{}")
-            except Exception:
-                continue
-            _stype = s.get("type", "")
-            ev = {"ts": s.get("timestamp", ts), "type": _stype,
-                  "value": _resolve_state_value(_stype, s.get("value", "")),
-                  "metadata": s.get("metadata", {})}
-            state_recent.append(ev)
-            if last_warning is None and ev["type"] in ("access_denied", "forced_action"):
-                last_warning = ev
-    except Exception:
-        pass
-
-    # Aktive Block-Regeln fuer diesen Character (character leer/„all" = gilt fuer alle)
-    # + aktive Force-Regel.
-    block_rules: List[Dict[str, Any]] = []
-    force_rule: Optional[Dict[str, Any]] = None
-    try:
-        from app.models.rules import load_rules, check_force_rules
-        from app.core.activity_engine import evaluate_condition
-        for r in (load_rules() or []):
-            if (r.get("type") or "") != "block":
-                continue
-            who = (r.get("character") or "").strip().lower()
-            if who and who not in ("all", "*", "any", character_name.lower()):
-                continue
-            target = r.get("target", {}) or {}
-            cond = (r.get("condition") or "").strip()
-            # Condition gegen den Character + das ZIEL der Regel auswerten, damit
-            # das Mind-Panel zeigt ob die Regel JETZT greift. Block-Semantik
-            # (siehe rules.check_access): Condition wahr → blockiert; eine Regel
-            # OHNE Condition blockt im scope location/room nicht.
-            t_loc, t_room = "", ""
-            if isinstance(target, dict):
-                t_loc = (target.get("location_id") or target.get("location") or "").strip()
-                _rooms = target.get("room_ids") or target.get("rooms") or []
-                if isinstance(_rooms, list) and _rooms:
-                    t_room = _rooms[0]
-            cond_met = False
-            if cond:
-                try:
-                    cond_met, _ = evaluate_condition(cond, character_name, t_loc, t_room)
-                except Exception:
-                    cond_met = False
-            block_rules.append({
-                "id": r.get("id", ""), "name": r.get("name", ""),
-                "action": r.get("action", ""), "target": target,
-                "message": r.get("message", ""), "event_id": r.get("event_id", ""),
-                "condition": cond,
-                "condition_met": bool(cond_met),
-                "blocking": bool(cond and cond_met),
-            })
-        force_rule = check_force_rules(character_name)
-    except Exception:
-        pass
-
-    # „Why" — menschenlesbare Begruendungs-Bausteine, wichtigste zuerst.
-    reasons: List[str] = []
-    if feeling:
-        if latest_mood and (latest_mood.get("source") or "").strip():
-            reasons.append(f"Feeling “{feeling}” (last set via {latest_mood['source']})")
-        else:
-            reasons.append(f"Feeling “{feeling}”")
-    if force_rule:
-        reasons.append(
-            f"Forced by rule “{force_rule.get('rule_name', force_rule.get('rule_id',''))}”"
-            + (f" → {force_rule.get('go_to')}" if force_rule.get("go_to") else ""))
-    for br in block_rules:
-        if (br.get("action") or "") == "leave":
-            reasons.append(f"Must leave (rule “{br.get('name') or br.get('id')}”)"
-                           + (f": {br['message']}" if br.get("message") else ""))
-    if last_warning:
-        kind = "Blocked" if last_warning["type"] == "access_denied" else "Forced action"
-        reasons.append(f"{kind}: {last_warning.get('value','')}".strip())
-    # Auffaellige Stat-Extreme generisch melden (keine hartkodierten Stat-Namen).
-    for k, v in status_effects.items():
-        try:
-            iv = int(v)
-        except (TypeError, ValueError):
-            continue
-        if iv <= 20:
-            reasons.append(f"Low {k}: {iv}")
-        elif iv >= 80:
-            reasons.append(f"High {k}: {iv}")
-
-    # Aktive prompt_filter-Effekte (genau die effects_block-Modifier, die in den
-    # System-Prompt gehen) + die rohen active_conditions (mit Abklingzeit), damit
-    # Mind konsistent zum Prompt ist.
-    active_effects: List[str] = []
-    try:
-        from app.core.prompt_filters import active_modifiers
-        active_effects = active_modifiers(character_name, profile.get("current_location") or "")
-    except Exception as _ae:
-        logger.debug("active_modifiers fuer %s fehlgeschlagen: %s", character_name, _ae)
-    active_conditions = profile.get("active_conditions", []) or []
-
-    return {
-        "character": character_name,
-        "current_feeling": feeling,
-        "state_flags": flags,
-        "status_effects": status_effects,
-        "active_effects": active_effects,
-        "active_conditions": active_conditions,
-        "last_thought_at": last_thought_at,
-        "last_warning": last_warning,
-        "reasons": reasons,
-        "mood_recent": mood_recent,
-        "state_recent": state_recent[:20],
-        "thoughts_recent": list(reversed(thoughts_recent)),
-        "block_rules": block_rules,
-        "force_rule": force_rule,
-    }
+    return character_ops.build_debug_activity(character_name)
 
 
 @router.get("/{character_name}/memory/locations")
@@ -4226,52 +3757,7 @@ def memory_locations(character_name: str) -> Dict[str, Any]:
     Auswahl, die der Character laut `known_locations` kennt. Frontend
     entscheidet, ob es nur die bekannten oder alles zeigt.
     """
-    from app.models.character import get_character_profile, get_known_locations
-    from app.models.world import list_locations
-    from app.core.db import get_connection
-
-    profile = get_character_profile(character_name)
-    current_id = profile.get("current_location") or ""
-    known_ids = get_known_locations(character_name)
-    known_set = set(known_ids)
-
-    # Visit-Counts aus state_history (Ringbuffer ~200 Eintraege)
-    conn = get_connection()
-    visits: Dict[str, Dict[str, Any]] = {}
-    for loc_id, n, last_ts in conn.execute(
-        "SELECT json_extract(state_json,'$.value') AS loc_id, COUNT(*) AS n, "
-        "MAX(ts) AS last_ts FROM state_history WHERE character_name=? "
-        "AND json_extract(state_json,'$.type')='location' GROUP BY loc_id",
-        (character_name,),
-    ).fetchall():
-        if loc_id:
-            visits[loc_id] = {"count": n, "last": last_ts}
-
-    items: List[Dict[str, Any]] = []
-    for loc in list_locations() or []:
-        lid = loc.get("id", "")
-        if not lid:
-            continue
-        is_known = lid in known_set
-        v = visits.get(lid, {})
-        items.append({
-            "id": lid,
-            "name": loc.get("name", ""),
-            "grid_x": loc.get("grid_x"),
-            "grid_y": loc.get("grid_y"),
-            "map_rotation_2d": loc.get("map_rotation_2d", 0),
-            "passable": bool(loc.get("passable")),
-            "danger_level": loc.get("danger_level"),
-            "is_known": is_known,
-            "is_current": (lid == current_id),
-            "visit_count": v.get("count", 0),
-            "last_visit": v.get("last"),
-        })
-    return {
-        "character": character_name,
-        "current_location_id": current_id,
-        "items": items,
-    }
+    return character_ops.build_memory_locations(character_name)
 
 
 @router.put("/{character_name}/known-locations")
@@ -4305,88 +3791,10 @@ def memory_list(character_name: str,
 
     Sort: 'recent' (default) | 'importance' | 'access' | 'score'
     """
-    from app.models.memory import load_memories
-    from collections import Counter
-
-    all_mem = load_memories(character_name)
-    total_unfiltered = len(all_mem)
-
-    # --- Facets aus dem ungefilterten Bestand (fuer Toolbar-Counts) ---
-    tier_counts = Counter(m.get("memory_type", "semantic") for m in all_mem)
-    src_counts: Counter = Counter()
-    rel_counts: Counter = Counter()
-    for m in all_mem:
-        # Quelle: aus meta abgeleitet — agent-loop schreibt 'thought'/'intent',
-        # extraction-Pfad laesst es leer.
-        src = "thought" if "thought" in (m.get("tags") or []) else (
-            "intent" if "intent" in (m.get("tags") or []) else "extraction"
-        )
-        # Falls explizit gespeichert (neuerer Code): meta.source nutzen
-        # via load_memories liegt es flach im Entry-Dict
-        if m.get("source"):
-            src = m["source"]
-        src_counts[src] += 1
-        rc = (m.get("related_character") or "").strip()
-        if rc:
-            rel_counts[rc] += 1
-
-    # --- Filter ---
-    items = all_mem
-    if not include_completed:
-        items = [m for m in items if "completed" not in (m.get("tags") or [])]
-    if tier:
-        items = [m for m in items if m.get("memory_type") == tier]
-    if min_importance > 0:
-        items = [m for m in items if m.get("importance", 3) >= min_importance]
-    if related:
-        items = [m for m in items if (m.get("related_character") or "") == related]
-    if source:
-        def _src(m):
-            if m.get("source"): return m["source"]
-            tags = m.get("tags") or []
-            if "thought" in tags: return "thought"
-            if "intent" in tags: return "intent"
-            return "extraction"
-        items = [m for m in items if _src(m) == source]
-    if q:
-        ql = q.lower()
-        items = [m for m in items
-                 if ql in (m.get("content") or "").lower()
-                 or any(ql in (t or "").lower() for t in (m.get("tags") or []))]
-
-    total = len(items)
-
-    # --- Sort ---
-    if sort == "importance":
-        items.sort(key=lambda m: (m.get("importance", 3), m.get("timestamp", "")), reverse=True)
-    elif sort == "access":
-        items.sort(key=lambda m: (m.get("access_count", 0), m.get("timestamp", "")), reverse=True)
-    elif sort == "score":
-        scored = [(_score_memory_no_mutate(m), m) for m in items]
-        scored.sort(key=lambda x: x[0], reverse=True)
-        items = [m for _, m in scored]
-    else:  # recent
-        items.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
-
-    # --- Paginate ---
-    page = items[offset:offset + max(1, min(200, limit))]
-
-    return {
-        "character": character_name,
-        "total": total,
-        "total_unfiltered": total_unfiltered,
-        "limit": limit,
-        "offset": offset,
-        "items": page,
-        "facets": {
-            "tiers": dict(tier_counts),
-            "sources": dict(src_counts),
-            "related_characters": [
-                {"name": n, "count": c}
-                for n, c in rel_counts.most_common()
-            ],
-        },
-    }
+    return character_ops.build_memory_list(
+        character_name, limit=limit, offset=offset, tier=tier,
+        min_importance=min_importance, q=q, related=related, source=source,
+        sort=sort, include_completed=include_completed)
 
 
 @router.get("/{character_name}/memory/relationships")
@@ -4397,75 +3805,8 @@ def memory_relationships(character_name: str,
     `memories_count` = wie viele Memories haben diesen Partner als
     related_character gesetzt — Klick im Frontend filtert Tab 2.
     """
-    from app.models.relationship import get_character_relationships
-    from app.models.memory import load_memories
-    from collections import Counter
-
-    rels = get_character_relationships(character_name)
-    mem = load_memories(character_name)
-    rel_count_by_partner: Counter = Counter(
-        (m.get("related_character") or "").strip()
-        for m in mem if (m.get("related_character") or "").strip()
-    )
-
-    items = []
-    for r in rels:
-        # Partner = die andere Seite. _row_to_rel fuellt character_a/b mit
-        # from_char/to_char (DB-Reihenfolge); wir wollen den Nicht-self-Namen.
-        a = r.get("character_a") or ""
-        b = r.get("character_b") or ""
-        partner = b if a == character_name else a
-        # Sentiment aus Sicht des aufrufenden Characters herumdrehen,
-        # falls noetig: a_to_b ist Sentiment von a auf b.
-        if a == character_name:
-            self_sent = r.get("sentiment_a_to_b", 0.0)
-            other_sent = r.get("sentiment_b_to_a", 0.0)
-        else:
-            self_sent = r.get("sentiment_b_to_a", 0.0)
-            other_sent = r.get("sentiment_a_to_b", 0.0)
-        history = r.get("history") or []
-        # Neueste N Events
-        recent = history[-history_limit:][::-1] if history else []
-        items.append({
-            "partner": partner,
-            "type": r.get("type", "neutral"),
-            "strength": r.get("strength", 10),
-            "sentiment_self_to_other": round(self_sent, 3),
-            "sentiment_other_to_self": round(other_sent, 3),
-            "romantic_tension": round(r.get("romantic_tension", 0.0), 3),
-            "interaction_count": r.get("interaction_count", 0),
-            "last_interaction": r.get("last_interaction", ""),
-            "memories_count": rel_count_by_partner.get(partner, 0),
-            "history_recent": recent,
-        })
-    # Sort: meiste Interaktionen zuerst
-    items.sort(key=lambda x: x["interaction_count"], reverse=True)
-    return {"character": character_name, "items": items}
-
-
-def _evolution_diff(prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any]:
-    """Zeilenbasiertes Diff (Satz-granular) ueber beliefs/lessons/goals.
-
-    Splittet jedes Feld an Satzgrenzen (`. `, `! `, `? `) und liefert je
-    Feld {removed: [str,...], added: [str,...]}.
-    """
-    import re as _re
-
-    def _split(text: str) -> List[str]:
-        if not text: return []
-        # Split an Satzgrenzen, behalte aber nicht-leere Stuecke.
-        parts = _re.split(r"(?<=[\.!?])\s+", text.strip())
-        return [p.strip() for p in parts if p.strip()]
-
-    out = {}
-    for field in ("beliefs", "lessons", "goals"):
-        a = set(_split(prev.get(field, "")))
-        b = set(_split(curr.get(field, "")))
-        out[field] = {
-            "removed": sorted(list(a - b)),
-            "added": sorted(list(b - a)),
-        }
-    return out
+    return character_ops.build_memory_relationships(
+        character_name, history_limit=history_limit)
 
 
 @router.get("/{character_name}/memory/history")
@@ -4477,91 +3818,5 @@ def memory_history(character_name: str,
 
     Standard: `daily` (letzte 60 Eintraege ueber alle Partner).
     """
-    from app.core.db import get_connection
-    import json as _json
-
-    conn = get_connection()
-
-    if kind == "daily":
-        rows = conn.execute("""
-            SELECT date_key, partner, content
-            FROM summaries
-            WHERE character_name=? AND kind='daily'
-            ORDER BY date_key DESC, partner ASC
-            LIMIT ? OFFSET ?
-        """, (character_name, limit, offset)).fetchall()
-        items = [{"date": r[0], "partner": r[1] or "", "content": r[2]} for r in rows]
-        total = conn.execute(
-            "SELECT COUNT(*) FROM summaries WHERE character_name=? AND kind='daily'",
-            (character_name,),
-        ).fetchone()[0]
-        return {"character": character_name, "kind": kind,
-                "total": total, "limit": limit, "offset": offset, "items": items}
-
-    if kind == "weekly":
-        from app.core.memory_service import load_weekly_summaries
-        weekly = load_weekly_summaries(character_name)
-        items = [{"week": k, "content": v} for k, v in sorted(weekly.items(), reverse=True)]
-        return {"character": character_name, "kind": kind, "items": items}
-
-    if kind == "monthly":
-        from app.core.memory_service import load_monthly_summaries
-        monthly = load_monthly_summaries(character_name)
-        items = [{"month": k, "content": v} for k, v in sorted(monthly.items(), reverse=True)]
-        return {"character": character_name, "kind": kind, "items": items}
-
-    if kind == "history":
-        from app.utils.history_manager import get_cached_summary
-        return {"character": character_name, "kind": kind,
-                "content": get_cached_summary(character_name) or ""}
-
-    if kind == "diary":
-        rows = conn.execute("""
-            SELECT id, ts, content, tags
-            FROM diary_entries
-            WHERE character_name=?
-            ORDER BY ts DESC
-            LIMIT ? OFFSET ?
-        """, (character_name, limit, offset)).fetchall()
-        items = []
-        for r in rows:
-            try: tags = _json.loads(r[3] or "[]")
-            except Exception: tags = []
-            items.append({"id": r[0], "ts": r[1], "content": r[2], "tags": tags})
-        total = conn.execute(
-            "SELECT COUNT(*) FROM diary_entries WHERE character_name=?",
-            (character_name,),
-        ).fetchone()[0]
-        return {"character": character_name, "kind": kind,
-                "total": total, "limit": limit, "offset": offset, "items": items}
-
-    if kind == "evolution":
-        rows = conn.execute("""
-            SELECT ts, new_value, reason
-            FROM evolution_history
-            WHERE character_name=? AND field='snapshot'
-            ORDER BY ts ASC
-        """, (character_name,)).fetchall()
-        snaps = []
-        for ts, new_value, reason in rows:
-            try: payload = _json.loads(new_value or "{}")
-            except Exception: payload = {}
-            snaps.append({
-                "ts": ts,
-                "trigger": payload.get("trigger") or reason or "",
-                "beliefs": payload.get("beliefs", ""),
-                "lessons": payload.get("lessons", ""),
-                "goals": payload.get("goals", ""),
-            })
-        # Diff jeweils gegen vorherigen Snapshot
-        items = []
-        prev = None
-        for s in snaps:
-            diff = _evolution_diff(prev, s) if prev else None
-            items.append({**s, "diff": diff})
-            prev = s
-        # Neueste oben
-        items.reverse()
-        return {"character": character_name, "kind": kind, "items": items}
-
-    raise HTTPException(status_code=400, detail=f"unknown kind: {kind}")
+    return character_ops.build_memory_history(
+        character_name, kind=kind, limit=limit, offset=offset)
