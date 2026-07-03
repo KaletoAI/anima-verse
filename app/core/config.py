@@ -835,15 +835,6 @@ def _flatten_to_env(config: dict) -> None:
         _set(env, f"TTS_F5_VOCAB_{ul}", ldata.get("vocab", ""))
         _set(env, f"TTS_F5_CFG_{ul}", ldata.get("cfg", ""))
 
-    comfy_tts = tts.get("comfyui", {})
-    _set(env, "TTS_COMFYUI_SKILL", comfy_tts.get("skill", ""))
-    _set(env, "TTS_COMFYUI_MODE", comfy_tts.get("mode", "auto"))
-    _set(env, "TTS_COMFYUI_WORKFLOW_VOICECLONE", comfy_tts.get("workflow_voiceclone", ""))
-    _set(env, "TTS_COMFYUI_WORKFLOW_VOICEDESC", comfy_tts.get("workflow_voicedesc", ""))
-    _set(env, "TTS_COMFYUI_WORKFLOW_VOICENAME", comfy_tts.get("workflow_voicename", ""))
-    _set(env, "TTS_COMFYUI_MAX_WAIT", comfy_tts.get("max_wait", 300))
-    _set(env, "TTS_COMFYUI_POLL_INTERVAL", comfy_tts.get("poll_interval", 1.0))
-
     # Skills
     skills = config.get("skills", {})
 

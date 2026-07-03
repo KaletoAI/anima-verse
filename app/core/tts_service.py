@@ -26,77 +26,6 @@ from app.core.paths import get_storage_dir as _get_storage_dir
 _REF_AUDIO_CACHE: Dict[str, str] = {}
 
 
-def _resolve_comfyui_candidates(skill_names: str) -> List[Tuple[str, str]]:
-    """Resolve TTS_COMFYUI_SKILL to a list of (name, url).
-
-    skill_names: Kommaseparierte SKILL_IMAGEGEN Backend-Namen (z.B. "ComfyUI-4070,ComfyUI-3090").
-    Reihenfolge = Fallback-Reihenfolge. Nicht-ComfyUI-Backends werden uebersprungen.
-    """
-    targets = [s.strip() for s in skill_names.split(",") if s.strip()]
-    if not targets:
-        return []
-
-    found: Dict[str, Tuple[str, str]] = {}
-    i = 1
-    while True:
-        name = os.environ.get(f"SKILL_IMAGEGEN_{i}_NAME", "")
-        if not name:
-            break
-        name = name.strip()
-        if name in targets:
-            api_type = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_TYPE", "").strip().lower()
-            if api_type != "comfyui":
-                logger.warning("TTS_COMFYUI_SKILL '%s': Backend ist kein ComfyUI (api_type=%s)", name, api_type)
-            else:
-                url = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_URL", "").strip().rstrip("/")
-                found[name] = (name, url)
-        i += 1
-
-    # Reihenfolge aus skill_names beibehalten
-    candidates = [found[n] for n in targets if n in found]
-    missing = [n for n in targets if n not in found]
-    if missing:
-        logger.warning("TTS_COMFYUI_SKILL: Kein SKILL_IMAGEGEN Backend gefunden fuer: %s", ",".join(missing))
-    if candidates:
-        logger.info("TTS ComfyUI Candidates: %s", ", ".join(f"{n}={u}" for n, u, _ in candidates))
-    return candidates
-
-
-# Tracker: which voice_description was last used to generate a voice per character
-def _voice_desc_cache_file() -> Path:
-    return _get_storage_dir() / "tmp" / "tts_voice_cache.json"
-_voice_desc_cache: Dict[str, str] = {}  # {character_name: md5_of_voice_description}
-_voice_desc_cache_loaded = False
-
-
-def _load_voice_desc_cache() -> Dict[str, str]:
-    """Loads the voice description cache from disk."""
-    global _voice_desc_cache, _voice_desc_cache_loaded
-    if _voice_desc_cache_loaded:
-        return _voice_desc_cache
-    if _voice_desc_cache_file().exists():
-        try:
-            _voice_desc_cache = json.loads(_voice_desc_cache_file().read_text(encoding="utf-8"))
-        except Exception:
-            _voice_desc_cache = {}
-    _voice_desc_cache_loaded = True
-    return _voice_desc_cache
-
-
-def _save_voice_desc_cache(character_name: str, desc_hash: str):
-    """Saves the voice description hash for a character."""
-    global _voice_desc_cache
-    _voice_desc_cache[character_name] = desc_hash
-    _voice_desc_cache_file().parent.mkdir(parents=True, exist_ok=True)
-    _voice_desc_cache_file().write_text(json.dumps(_voice_desc_cache, ensure_ascii=False), encoding="utf-8")
-
-
-def _hash_voice_desc(desc: str) -> str:
-    """Returns MD5 hash of a voice description string."""
-    import hashlib
-    return hashlib.md5(desc.strip().encode("utf-8")).hexdigest()
-
-
 # Reference audio specs matching XTTS/F5-TTS expectations
 _REF_TARGET_RATE = 24000
 _REF_MAX_DURATION = 10  # seconds
@@ -223,45 +152,45 @@ def _normalize_reference_audio(audio_path: str) -> str:
 
 
 def clear_tts_tmp():
-    """Loescht alle temporaeren TTS-Audio-Dateien. Wird beim Server-Start aufgerufen."""
+    """Deletes all temporary TTS audio files. Called at server startup."""
     if (_get_storage_dir() / "tmp" / "tts_audio").exists():
         shutil.rmtree((_get_storage_dir() / "tmp" / "tts_audio"))
-        logger.info("Temp-Verzeichnis geleert: %s", (_get_storage_dir() / "tmp" / "tts_audio"))
+        logger.info("Temp directory cleared: %s", (_get_storage_dir() / "tmp" / "tts_audio"))
     (_get_storage_dir() / "tmp" / "tts_audio").mkdir(parents=True, exist_ok=True)
 
 
 def clean_text_for_tts(text: str) -> str:
-    """Bereinigt LLM-Antworttext fuer TTS-Ausgabe."""
-    # Options-Block entfernen
+    """Cleans LLM response text for TTS output."""
+    # Remove options block
     text = re.sub(r'\*\*Option\s+[A-Z]:\*\*\s*\[?[^\]\n]+\]?', '', text)
-    # Mood-Marker entfernen
+    # Remove mood marker
     text = re.sub(r'\*\*I\s+feel\s+.+?\*\*', '', text, flags=re.IGNORECASE)
-    # Markdown bold/italic entfernen
+    # Remove markdown bold/italic
     text = re.sub(r'\*{1,3}(.+?)\*{1,3}', r'\1', text)
-    # Markdown headers entfernen
+    # Remove markdown headers
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
     # Markdown links: [text](url) -> text
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-    # Inline-Bilder entfernen
+    # Remove inline images
     text = re.sub(r'!\[.*?\]\([^)]+\)', '', text)
-    # URLs entfernen
+    # Remove URLs
     text = re.sub(r'https?://\S+', '', text)
-    # Emojis entfernen (common unicode ranges)
+    # Remove emojis (common unicode ranges)
     text = re.sub(
         r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF'
         r'\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0000FE0F]+',
         '', text
     )
-    # Mehrfache Leerzeilen reduzieren
+    # Collapse multiple blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
 
 def _find_split_pos(buffer: str, i: int) -> int:
-    """Findet die Split-Position nach einem Satzende bei Index i.
+    """Finds the split position after a sentence end at index i.
 
-    Schliesst nachfolgende Anfuehrungszeichen, Klammern und Sternchen ein,
-    damit diese nicht als Fragmente im naechsten Chunk landen.
+    Includes trailing quotation marks, parentheses and asterisks so they
+    do not end up as fragments in the next chunk.
     """
     pos = i + 1
     while pos < len(buffer) and buffer[pos] in '"\'""»›*)':
@@ -270,23 +199,23 @@ def _find_split_pos(buffer: str, i: int) -> int:
 
 
 def split_tts_chunk(buffer: str, min_chars: int) -> tuple:
-    """Splittet Buffer am ersten Satzende nach min_chars.
+    """Splits the buffer at the first sentence end after min_chars.
 
-    Erkennt echte Satzenden: Punkt/Ausrufezeichen/Fragezeichen gefolgt von
-    Leerzeichen oder Newline. Ignoriert Abkuerzungen (z.B., Dr., Nr.).
-    Schliesst nachfolgende Anfuehrungszeichen/Sternchen ein.
+    Detects real sentence ends: period/exclamation/question mark followed by
+    a space or newline. Ignores abbreviations (e.g., Dr., Nr.).
+    Includes trailing quotation marks/asterisks.
 
     Args:
-        buffer: Gesammelter Text fuer TTS.
-        min_chars: Minimale Zeichenanzahl bevor ein Satzende gesucht wird.
+        buffer: Accumulated text for TTS.
+        min_chars: Minimum number of characters before a sentence end is searched.
 
     Returns:
-        (chunk, rest) — chunk ist None wenn Buffer zu kurz oder kein Satzende.
+        (chunk, rest) — chunk is None if the buffer is too short or has no sentence end.
     """
     if len(buffer) < min_chars:
         return (None, buffer)
 
-    # Erstes echtes Satzende AB min_chars suchen
+    # Search for the first real sentence end FROM min_chars onward
     for i in range(min_chars, len(buffer)):
         ch = buffer[i]
 
@@ -299,18 +228,18 @@ def split_tts_chunk(buffer: str, min_chars: int) -> tuple:
 
         elif ch == '.':
             next_idx = i + 1
-            # Nachfolgende Anfuehrungszeichen ueberspringen
+            # Skip trailing quotation marks
             closing = next_idx
             while closing < len(buffer) and buffer[closing] in '"\'""»›*)':
                 closing += 1
 
             if closing >= len(buffer):
-                # Punkt (+ Quotes) am Textende
+                # Period (+ quotes) at end of text
                 chunk = buffer[:closing].strip()
                 if chunk:
                     return (chunk, "")
             elif closing < len(buffer) and buffer[closing] in ' \n\t':
-                # Punkt + Whitespace — Abkuerzungen ausschliessen
+                # Period + whitespace — exclude abbreviations
                 word_start = i - 1
                 while word_start >= 0 and buffer[word_start].isalpha():
                     word_start -= 1
@@ -322,13 +251,13 @@ def split_tts_chunk(buffer: str, min_chars: int) -> tuple:
                         return (chunk, remaining)
 
         elif ch == '\n' and i > 0 and buffer[i - 1] == '\n':
-            # Doppelter Zeilenumbruch = Absatzende
+            # Double newline = paragraph end
             chunk = buffer[:i].strip()
             remaining = buffer[i:]
             if chunk:
                 return (chunk, remaining)
 
-    # Kein Satzende nach min_chars gefunden — suche LETZTES Satzende DAVOR
+    # No sentence end after min_chars — search for the LAST sentence end BEFORE it
     for i in range(min(min_chars, len(buffer)) - 1, -1, -1):
         ch = buffer[i]
         if ch in '!?':
@@ -384,7 +313,7 @@ class TTSService:
         self._load_config()
 
     def _load_config(self):
-        """Laedt Config aus Umgebungsvariablen."""
+        """Loads config from environment variables."""
         self.enabled = os.environ.get("TTS_ENABLED", "false").lower() in ("true", "1", "yes")
         self.auto = os.environ.get("TTS_AUTO", "false").lower() in ("true", "1", "yes")
         self.chunk_size = int(os.environ.get("TTS_CHUNK_SIZE", "0"))
@@ -400,19 +329,6 @@ class TTSService:
         self.magpie_url = os.environ.get("TTS_MAGPIE_URL", "http://localhost:9000").rstrip("/")
         self.magpie_voice = os.environ.get("TTS_MAGPIE_VOICE", "")
         self.magpie_language = os.environ.get("TTS_MAGPIE_LANGUAGE", "de-DE")
-
-        # ComfyUI TTS — Liste von ComfyUI-Backends (Fallback-Reihenfolge).
-        # URL wird pro Call aufgeloest (_pick_comfyui_url), nicht beim Init festgepinnt.
-        self.comfyui_skill = os.environ.get("TTS_COMFYUI_SKILL", "").strip()
-        self.comfyui_candidates: List[Tuple[str, str]] = []
-        if self.comfyui_skill:
-            self.comfyui_candidates = _resolve_comfyui_candidates(self.comfyui_skill)
-        self.comfyui_mode = os.environ.get("TTS_COMFYUI_MODE", "voiceclone").lower()  # voiceclone | voicedesc | voicename | auto
-        self.comfyui_workflow_voiceclone = os.environ.get("TTS_COMFYUI_WORKFLOW_VOICECLONE", "./workflows/tts_voiceclone_workflow_api.json")
-        self.comfyui_workflow_voicedesc = os.environ.get("TTS_COMFYUI_WORKFLOW_VOICEDESC", "./workflows/tts_voicedesc_workflow_api.json")
-        self.comfyui_workflow_voicename = os.environ.get("TTS_COMFYUI_WORKFLOW_VOICENAME", "./workflows/tts_voicename_workflow_api.json")
-        self.comfyui_max_wait = int(os.environ.get("TTS_COMFYUI_MAX_WAIT", "300"))
-        self.comfyui_poll_interval = float(os.environ.get("TTS_COMFYUI_POLL_INTERVAL", "1.0"))
 
         # F5-TTS
         self.f5_url = os.environ.get("TTS_F5_URL", "http://localhost:7860").rstrip("/")
@@ -440,7 +356,7 @@ class TTSService:
                     "vocab": vocab,
                     "cfg": cfg or self.f5_custom_cfg,
                 }
-                logger.info("F5-TTS: Sprache '%s' registriert: %s",
+                logger.info("F5-TTS: language '%s' registered: %s",
                             lang, 'standard' if not ckpt else ckpt.split('/')[-1][:50])
 
         # Backward compatibility: old TTS_F5_CUSTOM_CKPT as legacy fallback
@@ -450,31 +366,10 @@ class TTSService:
                 "vocab": self.f5_custom_vocab,
                 "cfg": self.f5_custom_cfg,
             }
-            logger.info("F5-TTS: Legacy Single-Model Config (keine TTS_F5_MODEL_* Variablen)")
-
-    def _pick_comfyui_backend(self) -> Tuple[str, str]:
-        """Waehlt den ersten erreichbaren ComfyUI-Backend (name, url).
-
-        Leeres Tuple wenn keiner erreichbar ist.
-        """
-        for name, url in self.comfyui_candidates:
-            if not url:
-                continue
-            try:
-                resp = requests.get(f"{url}/system_stats", timeout=5)
-                if resp.status_code == 200:
-                    return name, url
-                logger.debug("TTS ComfyUI: %s (%s) HTTP %d", name, url, resp.status_code)
-            except Exception as e:
-                logger.debug("TTS ComfyUI: %s (%s) nicht erreichbar: %s", name, url, type(e).__name__)
-        return "", ""
-
-    def _pick_comfyui_url(self) -> str:
-        """Backward-compat helper — gibt nur die URL aus _pick_comfyui_backend zurueck."""
-        return self._pick_comfyui_backend()[1]
+            logger.info("F5-TTS: legacy single-model config (no TTS_F5_MODEL_* variables)")
 
     def _check_backend_reachable(self, backend: str) -> bool:
-        """Prueft ob ein bestimmtes Backend erreichbar ist (ohne Modelle zu laden)."""
+        """Checks whether a given backend is reachable (without loading models)."""
         try:
             if backend == "xtts":
                 resp = requests.get(f"{self.xtts_url}/docs", timeout=5)
@@ -485,14 +380,12 @@ class TTSService:
             elif backend == "f5":
                 resp = requests.get(self.f5_url, timeout=5)
                 return resp.status_code == 200
-            elif backend == "comfyui":
-                return bool(self._pick_comfyui_url())
             return False
         except Exception:
             return False
 
     def is_available(self) -> bool:
-        """Prueft ob das konfigurierte TTS-Backend erreichbar ist."""
+        """Checks whether the configured TTS backend is reachable."""
         if not self.enabled:
             self._available = False
             return False
@@ -504,8 +397,6 @@ class TTSService:
             elif self.backend == "magpie":
                 resp = requests.get(self.magpie_url, timeout=5)
                 self._available = resp.status_code < 500
-            elif self.backend == "comfyui":
-                self._available = bool(self._pick_comfyui_url())
             elif self.backend == "f5":
                 resp = requests.get(self.f5_url, timeout=5)
                 self._available = resp.status_code == 200
@@ -524,29 +415,27 @@ class TTSService:
             self._available = False
 
         if not self._available and self.fallback_backend and self.fallback_backend != self.backend:
-            logger.warning("Primaeres Backend '%s' nicht erreichbar, pruefe Fallback '%s'...",
+            logger.warning("Primary backend '%s' not reachable, checking fallback '%s'...",
                           self.backend, self.fallback_backend)
             if self._check_backend_reachable(self.fallback_backend):
-                logger.info("Fallback '%s' ist verfuegbar", self.fallback_backend)
+                logger.info("Fallback '%s' is available", self.fallback_backend)
                 self._available = True
             else:
-                logger.warning("Auch Fallback '%s' nicht erreichbar", self.fallback_backend)
+                logger.warning("Fallback '%s' also not reachable", self.fallback_backend)
 
         return self._available
 
     def get_character_config(self, agent_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Merged globale + per-character TTS-Einstellungen.
+        """Merges global + per-character TTS settings.
 
         Per-character values override global defaults.
         """
-        # speaker_wav default haengt vom Backend ab
+        # speaker_wav default depends on the backend
         if self.backend == "f5":
             default_speaker = self.f5_ref_audio
-        elif self.backend == "comfyui":
-            default_speaker = ""  # per Character konfiguriert (tts_speaker_wav)
         else:
             default_speaker = self.xtts_speaker_wav
-        # voice default: Magpie hat eigene benannte Voices
+        # voice default: Magpie has its own named voices
         if self.backend == "magpie":
             default_voice = self.magpie_voice
             default_language = self.magpie_language
@@ -559,9 +448,6 @@ class TTSService:
             "voice": agent_config.get("tts_voice", "") or default_voice,
             "speaker_wav": agent_config.get("tts_speaker_wav", "") or default_speaker,
             "language": agent_config.get("tts_language", "") or default_language,
-            "voice_description": agent_config.get("tts_voice_description", ""),
-            "character_name": agent_config.get("name", ""),
-            "comfyui_mode": agent_config.get("tts_comfyui_mode", "") or self.comfyui_mode,
         }
 
     def _generate_with_backend(
@@ -570,11 +456,8 @@ class TTSService:
         text: str,
         voice: str = "",
         speaker_wav: str = "",
-        language: str = "",
-        voice_description: str = "",
-        character_name: str = "",
-        comfyui_mode: str = "") -> Optional[Path]:
-        """Generiert Audio mit einem bestimmten Backend."""
+        language: str = "") -> Optional[Path]:
+        """Generates audio with a specific backend."""
         if backend == "xtts":
             return self._generate_xtts(
                 text,
@@ -587,23 +470,16 @@ class TTSService:
                 language or self.magpie_language)
         elif backend == "f5":
             effective_language = language or self.xtts_language
-            # Thread-Lock: Model-Switch + Generierung atomar
+            # Thread lock: model switch + generation are atomic
             with self._f5_model_lock:
                 if not self._ensure_f5_model(effective_language):
-                    logger.warning("F5-TTS: Model-Switch fuer '%s' fehlgeschlagen, "
-                                  "versuche Generierung mit aktuellem Modell", effective_language)
+                    logger.warning("F5-TTS: model switch for '%s' failed, "
+                                  "trying generation with the current model", effective_language)
                 return self._generate_f5(
                     text,
                     speaker_wav or self.f5_ref_audio,
                     self.f5_ref_text,
                     effective_language)
-        elif backend == "comfyui":
-            return self._generate_comfyui_tts(
-                text,
-                speaker_wav,
-                voice_description,
-                character_name,
-                comfyui_mode=comfyui_mode)
         else:
             logger.error("Unknown backend: %s", backend)
             return None
@@ -613,281 +489,43 @@ class TTSService:
         text: str,
         voice: str = "",
         speaker_wav: str = "",
-        language: str = "",
-        voice_description: str = "",
-        character_name: str = "",
-        comfyui_mode: str = "") -> Optional[Path]:
-        """Generiert eine Audio-Datei via konfiguriertem Backend.
+        language: str = "") -> Optional[Path]:
+        """Generates an audio file via the configured backend.
 
-        Versucht zunaechst das primaere Backend. Bei Fehler wird, falls konfiguriert,
-        das Fallback-Backend (TTS_FALLBACK_BACKEND) verwendet.
+        Tries the primary backend first. On failure, the fallback backend
+        (TTS_FALLBACK_BACKEND) is used if configured.
 
         Args:
-            text: Bereinigter Text fuer TTS.
-            voice: Stimmenname fuer Magpie (override).
-            speaker_wav: XTTS/F5-TTS Referenz-Audio (override).
-            language: Sprache (fuer XTTS und F5-TTS Modellwahl).
+            text: Cleaned text for TTS.
+            voice: Voice name for Magpie (override).
+            speaker_wav: XTTS/F5-TTS reference audio (override).
+            language: Language (for XTTS and F5-TTS model selection).
 
         Returns:
-            Pfad zur generierten Audio-Datei oder None bei Fehler.
+            Path to the generated audio file, or None on failure.
         """
         if not text.strip():
             return None
 
         (_get_storage_dir() / "tmp" / "tts_audio").mkdir(parents=True, exist_ok=True)
 
-        logger.debug("Text an TTS (%s): %s%s", self.backend, text[:500], '...' if len(text) > 500 else '')
+        logger.debug("Text to TTS (%s): %s%s", self.backend, text[:500], '...' if len(text) > 500 else '')
 
-        result = self._generate_with_backend(self.backend, text, voice, speaker_wav, language, voice_description, character_name, comfyui_mode=comfyui_mode)
+        result = self._generate_with_backend(self.backend, text, voice, speaker_wav, language)
 
         if result is None and self.fallback_backend and self.fallback_backend != self.backend:
-            logger.warning("Primaeres Backend '%s' fehlgeschlagen, versuche Fallback '%s'...",
+            logger.warning("Primary backend '%s' failed, trying fallback '%s'...",
                           self.backend, self.fallback_backend)
-            result = self._generate_with_backend(self.fallback_backend, text, voice, speaker_wav, language, voice_description, character_name, comfyui_mode=comfyui_mode)
+            result = self._generate_with_backend(self.fallback_backend, text, voice, speaker_wav, language)
             if result:
-                logger.info("Fallback '%s' erfolgreich", self.fallback_backend)
+                logger.info("Fallback '%s' succeeded", self.fallback_backend)
 
         return result
-
-    def _comfyui_find_node_by_title(self, workflow: Dict, title: str) -> Optional[str]:
-        """Findet Node-ID anhand des _meta.title."""
-        for node_id, node in workflow.items():
-            if node.get("_meta", {}).get("title") == title:
-                return node_id
-        return None
-
-    def _generate_comfyui_tts(
-        self, text: str, ref_audio: str = "", voice_description: str = "",
-        character_name: str = "", comfyui_mode: str = "") -> Optional[Path]:
-        """Generiert Audio via ComfyUI TTS Workflow.
-
-        Modus (TTS_COMFYUI_MODE):
-          voiceclone: ref_audio (WAV) als Referenzstimme → FB_Qwen3TTSVoiceClone
-          voicedesc:  voice_description → Qwen3TTSVoiceDesignerNode (speichert Stimme als {character_name}.wav)
-          voicename:  {character_name}.wav als gespeicherte Stimme → UnifiedTTSTextNode
-          auto:       voicedesc beim ersten Mal oder bei Description-Aenderung, danach voicename
-        """
-        import copy
-        import time as _time
-
-        mode = comfyui_mode or self.comfyui_mode
-
-        # Auto-Modus: Entscheidet zwischen voicedesc und voicename
-        _is_auto = mode == "auto"
-        if _is_auto:
-            if not character_name or not voice_description:
-                # Ohne Character-Name oder Description kann auto nicht arbeiten
-                if ref_audio and Path(ref_audio).exists():
-                    mode = "voiceclone"
-                    logger.info("ComfyUI TTS auto: Kein character_name/voice_description, Fallback auf voiceclone")
-                else:
-                    logger.error("ComfyUI TTS auto: Weder voice_description+character_name noch ref_audio vorhanden")
-                    return None
-            else:
-                desc_hash = _hash_voice_desc(voice_description)
-                cache = _load_voice_desc_cache()
-                cached_hash = cache.get(character_name, "")
-                if cached_hash == desc_hash:
-                    # Stimme wurde schon mit dieser Description generiert → voicename
-                    mode = "voicename"
-                    logger.info("ComfyUI TTS auto: Voice fuer '%s' existiert (Hash match) → voicename", character_name)
-                else:
-                    # Neue/geaenderte Description → voicedesc (generiert + speichert Stimme)
-                    mode = "voicedesc"
-                    if cached_hash:
-                        logger.info("ComfyUI TTS auto: Voice-Description geaendert fuer '%s' → voicedesc", character_name)
-                    else:
-                        logger.info("ComfyUI TTS auto: Keine Voice fuer '%s' cached → voicedesc", character_name)
-
-        if mode == "voiceclone":
-            workflow_file = self.comfyui_workflow_voiceclone
-        elif mode == "voicename":
-            workflow_file = self.comfyui_workflow_voicename
-        else:
-            workflow_file = self.comfyui_workflow_voicedesc
-
-        if not workflow_file or not Path(workflow_file).exists():
-            logger.error("ComfyUI TTS: Workflow-Datei nicht gefunden: %s", workflow_file)
-            return None
-
-        # Einen ComfyUI-Backend fuer die gesamte Generierung pinnen (Upload + Submit +
-        # Poll + Download muessen auf derselben Instanz laufen).
-        comfyui_backend_name, comfyui_url = self._pick_comfyui_backend()
-        if not comfyui_url:
-            logger.error("ComfyUI TTS: Kein erreichbares Backend in %s",
-                         [n for n, _u in self.comfyui_candidates])
-            return None
-
-        with open(workflow_file) as f:
-            workflow = copy.deepcopy(json.load(f))
-
-        # Eingabe-Text setzen
-        text_node = self._comfyui_find_node_by_title(workflow, "input_text")
-        if not text_node:
-            logger.error("ComfyUI TTS: Node 'input_text' nicht gefunden")
-            return None
-        workflow[text_node]["inputs"]["value"] = text
-
-        if mode == "voiceclone":
-            if not ref_audio or not Path(ref_audio).exists():
-                logger.error("ComfyUI TTS: ref_audio nicht gefunden: %s", ref_audio)
-                return None
-            # Referenz-Audio zu ComfyUI hochladen
-            audio_node = self._comfyui_find_node_by_title(workflow, "input_reference_audio")
-            if not audio_node:
-                logger.error("ComfyUI TTS: Node 'input_reference_audio' nicht gefunden")
-                return None
-            try:
-                with open(ref_audio, "rb") as af:
-                    upload_resp = requests.post(
-                        f"{comfyui_url}/upload/image",
-                        files={"image": (Path(ref_audio).name, af, "audio/wav")},
-                        timeout=30)
-                if upload_resp.status_code != 200:
-                    logger.error("ComfyUI TTS: Audio-Upload fehlgeschlagen: %s", upload_resp.text[:200])
-                    return None
-                uploaded_name = upload_resp.json().get("name", "")
-                if not uploaded_name:
-                    logger.error("ComfyUI TTS: Kein Name in Upload-Response")
-                    return None
-                workflow[audio_node]["inputs"]["audio"] = uploaded_name
-                logger.debug("ComfyUI TTS: Ref-Audio hochgeladen: %s", uploaded_name)
-            except Exception as e:
-                logger.error("ComfyUI TTS: Audio-Upload Fehler: %s", e)
-                return None
-        elif mode == "voicename":
-            # VoiceName: gespeicherte Stimme per Character-Name referenzieren
-            if not character_name:
-                logger.error("ComfyUI TTS (voicename): character_name nicht gesetzt")
-                return None
-            narrator_wav = f"{character_name}.wav"
-            # UnifiedTTSTextNode hat narrator_voice als direkten Widget-Input
-            for node_id, node in workflow.items():
-                if node.get("class_type") == "UnifiedTTSTextNode":
-                    node["inputs"]["narrator_voice"] = narrator_wav
-                    break
-            else:
-                logger.error("ComfyUI TTS (voicename): UnifiedTTSTextNode nicht gefunden")
-                return None
-            logger.debug("ComfyUI TTS (voicename): narrator_voice=%s", narrator_wav)
-        else:
-            # VoiceDesign: Stimmbeschreibung + Character-Name setzen
-            desc_node = self._comfyui_find_node_by_title(workflow, "input_voice_description")
-            if desc_node and voice_description:
-                workflow[desc_node]["inputs"]["value"] = voice_description
-            name_node = self._comfyui_find_node_by_title(workflow, "input_voice_name")
-            if name_node and character_name:
-                workflow[name_node]["inputs"]["value"] = character_name
-
-        # Core execution: submit + poll + download (runs inside GPU task or directly)
-        def _comfyui_tts_execute() -> Optional[Path]:
-            try:
-                resp = requests.post(f"{comfyui_url}/prompt", json={"prompt": workflow}, timeout=30)
-            except Exception as e:
-                logger.error("ComfyUI TTS: Submit-Fehler: %s", e)
-                return None
-            if resp.status_code != 200:
-                logger.error("ComfyUI TTS: HTTP %d: %s", resp.status_code, resp.text[:500])
-                # Auto-Fallback: voicename fehlgeschlagen → voicedesc retry
-                if _is_auto and mode == "voicename" and voice_description and character_name:
-                    logger.info("ComfyUI TTS auto: voicename fehlgeschlagen, Fallback auf voicedesc")
-                    _save_voice_desc_cache(character_name, "")
-                    return self._generate_comfyui_tts(
-                        text, ref_audio, voice_description, character_name, comfyui_mode="voicedesc")
-                return None
-            prompt_id = resp.json().get("prompt_id", "")
-            if not prompt_id:
-                logger.error("ComfyUI TTS: Keine prompt_id in Response")
-                return None
-            logger.info("ComfyUI TTS: Queued (mode=%s, prompt_id=%s)", mode, prompt_id)
-
-            # Polling
-            start = _time.time()
-            outputs = {}
-            while _time.time() - start < self.comfyui_max_wait:
-                _time.sleep(self.comfyui_poll_interval)
-                try:
-                    hist = requests.get(f"{comfyui_url}/history/{prompt_id}", timeout=10).json()
-                    if prompt_id not in hist:
-                        continue
-                    status = hist[prompt_id].get("status", {})
-                    if status.get("status_str") == "error":
-                        messages = status.get("messages", [])
-                        err_detail = ""
-                        for msg in messages:
-                            if isinstance(msg, (list, tuple)) and len(msg) >= 2 and msg[0] == "execution_error":
-                                detail = msg[1] if isinstance(msg[1], dict) else {}
-                                err_detail = detail.get("exception_message", "")
-                                node_type = detail.get("node_type", "")
-                                if node_type:
-                                    err_detail = f"[{node_type}] {err_detail}"
-                                break
-                        err = err_detail or str(messages)[:500]
-                        logger.error("ComfyUI TTS: Fehler: %s", err)
-                        return None
-                    outputs = hist[prompt_id].get("outputs", {})
-                    if outputs:
-                        logger.info("ComfyUI TTS: Fertig nach %.1fs", _time.time() - start)
-                        break
-                except Exception as e:
-                    logger.warning("ComfyUI TTS: Poll-Fehler: %s", e)
-            else:
-                logger.error("ComfyUI TTS: Timeout nach %ds", self.comfyui_max_wait)
-                return None
-
-            # Audio aus output_audio Node herunterladen
-            output_node = self._comfyui_find_node_by_title(workflow, "output_audio")
-            if output_node and output_node in outputs:
-                target_outputs = {output_node: outputs[output_node]}
-            else:
-                target_outputs = outputs
-
-            for node_id, node_output in target_outputs.items():
-                for audio_info in node_output.get("audio", []):
-                    filename = audio_info.get("filename", "")
-                    if not filename:
-                        continue
-                    dl_params = {"filename": filename, "type": audio_info.get("type", "output")}
-                    subfolder = audio_info.get("subfolder", "")
-                    if subfolder:
-                        dl_params["subfolder"] = subfolder
-                    try:
-                        audio_resp = requests.get(f"{comfyui_url}/view", params=dl_params, timeout=60)
-                        if audio_resp.status_code == 200:
-                            (_get_storage_dir() / "tmp" / "tts_audio").mkdir(parents=True, exist_ok=True)
-                            out_path = (_get_storage_dir() / "tmp" / "tts_audio") / f"{uuid.uuid4().hex}.wav"
-                            out_path.write_bytes(audio_resp.content)
-                            logger.info("ComfyUI TTS: %d bytes -> %s", len(audio_resp.content), out_path.name)
-                            if _is_auto and mode == "voicedesc" and character_name and voice_description:
-                                _save_voice_desc_cache(character_name, _hash_voice_desc(voice_description))
-                                logger.info("ComfyUI TTS auto: Voice-Cache gespeichert fuer '%s'", character_name)
-                            return out_path
-                    except Exception as e:
-                        logger.error("ComfyUI TTS: Download-Fehler: %s", e)
-
-            logger.warning("ComfyUI TTS: Kein Audio-Ergebnis gefunden")
-            return None
-
-        # Route through GPU task queue (dynamic channel routing)
-        try:
-            from app.core.llm_queue import get_llm_queue
-            mode_label = {"voiceclone": "Voice Clone", "voicedesc": "Voice Design", "voicename": "Voice Name"}.get(mode, mode)
-            return get_llm_queue().submit_gpu_task(
-                provider_name=comfyui_backend_name,
-                task_type="tts_comfyui",
-                priority=5,
-                callable_fn=_comfyui_tts_execute,
-                agent_name=character_name,
-                label=f"TTS {mode_label}",
-                gpu_type="comfyui")
-        except Exception as e:
-            logger.error("ComfyUI TTS: GPU-Task-Fehler: %s", e)
-            return None
 
     def _generate_xtts(
         self, text: str, speaker_wav: str, language: str
     ) -> Optional[Path]:
-        """XTTS v2: Sendet Text + Speaker-Referenz an xtts-api-server."""
+        """XTTS v2: Sends text + speaker reference to xtts-api-server."""
         if not speaker_wav:
             logger.error("XTTS error: speaker_wav is required but not configured. Set TTS_XTTS_SPEAKER_WAV.")
             return None
@@ -916,8 +554,8 @@ class TTSService:
             logger.error("XTTS error: %s", e)
             return None
 
-    # Explizite Allowlist fuer Magpie TTS - nur diese Zeichen werden durchgelassen.
-    # Magpie's character_mapping kennt keine Ziffern, Sonderzeichen wie % @ # etc.
+    # Explicit allowlist for Magpie TTS - only these characters pass through.
+    # Magpie's character_mapping has no digits or special chars like % @ # etc.
     _MAGPIE_ALLOWED = frozenset(
         "abcdefghijklmnopqrstuvwxyz"
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -970,7 +608,7 @@ class TTSService:
         for old, new in replacements.items():
             text = text.replace(old, new)
 
-        # Allowlist-Filter: alle nicht erlaubten Zeichen durch Leerzeichen ersetzen
+        # Allowlist filter: replace all disallowed characters with spaces
         text = ''.join(c if c in TTSService._MAGPIE_ALLOWED else ' ' for c in text)
 
         # Collapse multiple spaces/newlines
@@ -1063,7 +701,7 @@ class TTSService:
     def _generate_magpie(
         self, text: str, voice: str, language: str
     ) -> Optional[Path]:
-        """Magpie TTS: Sendet Text via multipart form an Magpie REST API."""
+        """Magpie TTS: Sends text via multipart form to the Magpie REST API."""
         if not voice:
             logger.error("Magpie error: voice is required. Set TTS_MAGPIE_VOICE.")
             return None
@@ -1074,13 +712,13 @@ class TTSService:
                 logger.warning("Magpie: empty text after cleanup, skipping")
                 return None
 
-            # Magpie braucht Locale-Format "de-DE" (lowercase-UPPERCASE).
-            # Sprache aus Voice-Name extrahieren (Magpie-Multilingual.DE-DE.Name)
-            # oder Kurzform zu Locale mappen.
+            # Magpie needs locale format "de-DE" (lowercase-UPPERCASE).
+            # Extract language from the voice name (Magpie-Multilingual.DE-DE.Name)
+            # or map a short form to a locale.
             effective_lang = language
             parts = voice.split(".")
             if len(parts) >= 2:
-                raw_lang = parts[1]  # z.B. "DE-DE" aus "Magpie-Multilingual.DE-DE.Sofia"
+                raw_lang = parts[1]  # e.g. "DE-DE" from "Magpie-Multilingual.DE-DE.Sofia"
                 lang_parts = raw_lang.split("-")
                 if len(lang_parts) == 2:
                     effective_lang = f"{lang_parts[0].lower()}-{lang_parts[1].upper()}"
@@ -1140,10 +778,10 @@ class TTSService:
             return None
 
     def _ensure_f5_model(self, language: str) -> bool:
-        """Stellt sicher, dass das richtige F5-TTS Modell fuer die Sprache geladen ist.
+        """Ensures the correct F5-TTS model for the language is loaded.
 
-        Ueberspringt den Switch wenn die Sprache bereits aktiv ist.
-        Returns True wenn Modell bereit, False bei Fehler.
+        Skips the switch if the language is already active.
+        Returns True when the model is ready, False on error.
         """
         lang_key = language.lower() if language else ""
 
@@ -1151,29 +789,29 @@ class TTSService:
             if "_legacy" in self._f5_language_models:
                 lang_key = "_legacy"
             else:
-                # Keine Sprach-Config und kein Legacy -> Standard F5-TTS_v1
+                # No language config and no legacy -> standard F5-TTS_v1
                 if self._f5_current_language == "_standard":
                     return True
                 return self._switch_to_standard_f5()
 
-        # Bereits geladen?
+        # Already loaded?
         if self._f5_current_language == lang_key:
             return True
 
         model_info = self._f5_language_models[lang_key]
         ckpt = model_info["ckpt"]
 
-        # Leerer ckpt = Standard F5-TTS_v1 (kein Custom-Modell)
+        # Empty ckpt = standard F5-TTS_v1 (no custom model)
         if not ckpt:
             return self._switch_to_standard_f5()
 
-        # Custom-Modell laden
+        # Load custom model
         try:
             client = self._get_f5_client()
-            logger.info("F5-TTS: Lade Modell fuer Sprache '%s': %s", lang_key, ckpt.split('/')[-1][:60])
+            logger.info("F5-TTS: loading model for language '%s': %s", lang_key, ckpt.split('/')[-1][:60])
             # Choices: F5-TTS_v1, E2-TTS, Custom
             client.predict(new_choice="Custom", api_name="/switch_tts_model")
-            # Base-Architektur Config als Standard
+            # Base architecture config as default
             cfg = model_info.get("cfg") or self.f5_custom_cfg or (
                 '{"dim": 1024, "depth": 22, "heads": 16, "ff_mult": 2, '
                 '"text_dim": 512, "text_mask_padding": false, "conv_layers": 4, '
@@ -1185,25 +823,25 @@ class TTSService:
                 custom_model_cfg=cfg,
                 api_name="/set_custom_model")
             self._f5_current_language = lang_key
-            logger.info("F5-TTS: Modell fuer '%s' geladen.", lang_key)
+            logger.info("F5-TTS: model for '%s' loaded.", lang_key)
             return True
         except Exception as e:
-            logger.error("F5-TTS: Modell-Switch fuer '%s' fehlgeschlagen: %s", lang_key, e)
+            logger.error("F5-TTS: model switch for '%s' failed: %s", lang_key, e)
             self._f5_client = None
             self._f5_current_language = None
             return False
 
     def _switch_to_standard_f5(self) -> bool:
-        """Wechselt zum Standard F5-TTS_v1 Modell (kein Custom-Modell)."""
+        """Switches to the standard F5-TTS_v1 model (no custom model)."""
         try:
             client = self._get_f5_client()
-            logger.info("F5-TTS: Wechsle zu Standard F5-TTS_v1")
+            logger.info("F5-TTS: switching to standard F5-TTS_v1")
             client.predict(new_choice="F5-TTS_v1", api_name="/switch_tts_model")
             self._f5_current_language = "_standard"
-            logger.info("F5-TTS: Standard F5-TTS_v1 aktiv.")
+            logger.info("F5-TTS: standard F5-TTS_v1 active.")
             return True
         except Exception as e:
-            logger.error("F5-TTS: Wechsel zu Standard-Modell fehlgeschlagen: %s", e)
+            logger.error("F5-TTS: switch to standard model failed: %s", e)
             self._f5_client = None
             self._f5_current_language = None
             return False
@@ -1216,35 +854,35 @@ class TTSService:
         return self._f5_client
 
     def _transcribe_ref_audio(self, audio_path: str, language: str = "de") -> str:
-        """Transkribiert Referenz-Audio mit faster-whisper. Ergebnis wird gecacht."""
+        """Transcribes reference audio with faster-whisper. Result is cached."""
         cache_key = f"{audio_path}:{language}"
         if cache_key in self._f5_ref_text_cache:
             return self._f5_ref_text_cache[cache_key]
         try:
             from faster_whisper import WhisperModel
-            logger.debug("F5-TTS: Transkribiere Referenz-Audio '%s' (lang=%s) ...", audio_path, language)
+            logger.debug("F5-TTS: transcribing reference audio '%s' (lang=%s) ...", audio_path, language)
             model = WhisperModel("small", device="cpu", compute_type="int8")
             segments, info = model.transcribe(audio_path, language=language or "de")
             text = " ".join(s.text.strip() for s in segments)
-            logger.debug("F5-TTS: Transkription: '%s...'", text[:100])
+            logger.debug("F5-TTS: transcription: '%s...'", text[:100])
             self._f5_ref_text_cache[cache_key] = text
             return text
         except Exception as e:
-            logger.error("F5-TTS: Auto-Transkription fehlgeschlagen: %s", e)
+            logger.error("F5-TTS: auto-transcription failed: %s", e)
             return ""
 
     def _generate_f5(self, text: str, ref_audio: str, ref_text: str, language: str = "de") -> Optional[Path]:
-        """F5-TTS: Sendet Text an F5-TTS Gradio Server via gradio_client."""
+        """F5-TTS: Sends text to the F5-TTS Gradio server via gradio_client."""
         if not ref_audio:
             logger.error("F5-TTS error: ref_audio is required. Set TTS_F5_REF_AUDIO.")
             return None
         ref_audio = _normalize_reference_audio(ref_audio)
 
-        # Auto-Transkription wenn ref_text leer ist
+        # Auto-transcription when ref_text is empty
         if not ref_text.strip() and Path(ref_audio).exists():
             ref_text = self._transcribe_ref_audio(ref_audio, language)
             if not ref_text:
-                logger.warning("F5-TTS: ref_text leer, F5-TTS versucht server-seitige Transkription.")
+                logger.warning("F5-TTS: ref_text empty, F5-TTS attempts server-side transcription.")
 
         try:
             from gradio_client import handle_file
@@ -1285,10 +923,7 @@ class TTSService:
 
     def status_info(self) -> Dict[str, Any]:
         """Returns status info for availability summary."""
-        if self.backend == "comfyui":
-            url = ",".join(n for n, _u in self.comfyui_candidates) or self.comfyui_skill
-            voice = f"comfyui-tts ({self.comfyui_mode})"
-        elif self.backend == "f5":
+        if self.backend == "f5":
             url = self.f5_url
             if self._f5_language_models:
                 langs = [k for k in self._f5_language_models if k != "_legacy"]
@@ -1353,7 +988,7 @@ def reload_tts_service() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Chunked TTS Handler — deduplizierte Streaming-TTS-Logik
+# Chunked TTS Handler — deduplicated streaming TTS logic
 # ---------------------------------------------------------------------------
 
 class ChunkedTTSHandler:
@@ -1394,10 +1029,7 @@ class ChunkedTTSHandler:
             text=text,
             voice=self._cfg.get("voice", ""),
             speaker_wav=self._cfg.get("speaker_wav", ""),
-            language=self._cfg.get("language", "de"),
-            voice_description=self._cfg.get("voice_description", ""),
-            character_name=self._cfg.get("character_name", ""),
-            comfyui_mode=self._cfg.get("comfyui_mode", "")))
+            language=self._cfg.get("language", "de")))
 
     @staticmethod
     def _audio_sse(url: str, index: int, final: bool) -> str:

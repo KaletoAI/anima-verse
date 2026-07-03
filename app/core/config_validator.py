@@ -265,23 +265,6 @@ def _check_tts(config: dict) -> list:
         if not magpie.get("voice"):
             issues.append(_warn("tts", "Magpie: Keine Stimme konfiguriert"))
 
-    elif backend == "comfyui":
-        comfy_tts = tts.get("comfyui", {})
-        skill = comfy_tts.get("skill", "")
-        if not skill:
-            issues.append(_err("tts", "ComfyUI TTS: Kein Backend konfiguriert"))
-        else:
-            ig = config.get("image_generation", {})
-            ig_backends = ig.get("backends", [])
-            # skill can be comma-separated list of backend names
-            skill_names = [s.strip() for s in skill.split(",") if s.strip()] if isinstance(skill, str) else skill if isinstance(skill, list) else []
-            for sn in skill_names:
-                be = next((b for b in ig_backends if b.get("name") == sn), None)
-                if not be:
-                    issues.append(_err("tts", f"ComfyUI TTS: Backend '{sn}' existiert nicht"))
-                elif be.get("api_type") != "comfyui":
-                    issues.append(_err("tts", f"ComfyUI TTS: Backend '{sn}' ist kein ComfyUI-Backend (Typ: {be.get('api_type', '?')})"))
-
     return issues
 
 

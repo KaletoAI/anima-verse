@@ -25,12 +25,12 @@ def tts_status() -> Dict[str, Any]:
 
 @router.post("/speak")
 async def speak(request: Request) -> Dict[str, Any]:
-    """Generiert Audio on-demand (Button-Klick).
+    """Generates audio on demand (button click).
 
     Request body:
-        text: Zu sprechender Text
-        user_id: User-ID
-        character_name: Character-Name
+        text: Text to speak
+        user_id: User ID
+        character_name: Character name
     """
     data = await request.json()
     text = data.get("text", "")
@@ -59,10 +59,7 @@ async def speak(request: Request) -> Dict[str, Any]:
         text=clean_text,
         voice=tts_config.get("voice", ""),
         speaker_wav=tts_config.get("speaker_wav", ""),
-        language=tts_config.get("language", "de"),
-        voice_description=tts_config.get("voice_description", ""),
-        character_name=tts_config.get("character_name", ""),
-        comfyui_mode=tts_config.get("comfyui_mode", ""))
+        language=tts_config.get("language", "de"))
 
     if audio_path and audio_path.exists():
         return {"audio_url": f"/tts/tmp/{audio_path.name}"}
@@ -72,14 +69,14 @@ async def speak(request: Request) -> Dict[str, Any]:
 
 @router.get("/tmp/{filename}")
 def serve_tts_audio(filename: str):
-    """Liefert eine temporaere TTS-Audio-Datei aus."""
-    # Sicherheit: nur Dateiname, kein Pfad-Traversal
+    """Serves a temporary TTS audio file."""
+    # Security: filename only, no path traversal
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     path = get_storage_dir() / "tmp" / "tts_audio" / filename
     if not path.exists():
-        raise HTTPException(status_code=404, detail="Audio nicht gefunden")
+        raise HTTPException(status_code=404, detail="Audio not found")
 
     media_type = "audio/wav"
     if filename.endswith(".mp3"):

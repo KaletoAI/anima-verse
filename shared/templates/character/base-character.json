@@ -694,44 +694,8 @@
           "type": "select",
           "source": "tts_speakers",
           "store": "config",
-          "hint": "Reference voice for XTTS / F5-TTS / ComfyUI TTS (voiceclone)",
-          "hint_de": "Referenz-Stimme für XTTS / F5-TTS / ComfyUI TTS (voiceclone)"
-        },
-        {
-          "key": "tts_voice_description",
-          "label": "Voice Description",
-          "label_de": "Stimmbeschreibung",
-          "type": "text",
-          "multiline": true,
-          "store": "config",
-          "hint": "Voice description for ComfyUI TTS (voicedesc mode), e.g. 'Young woman, warm and slightly husky voice, calm and confident'",
-          "hint_de": "Stimmbeschreibung für ComfyUI TTS (voicedesc), z.B. 'Junge Frau, warme und leicht raue Stimme, ruhig und selbstbewusst'"
-        },
-        {
-          "key": "tts_comfyui_mode",
-          "label": "ComfyUI TTS Mode",
-          "label_de": "ComfyUI TTS Modus",
-          "type": "select",
-          "options": [
-            {
-              "value": "",
-              "label": "Default (from .env)",
-              "label_de": "Standard (aus .env)"
-            },
-            {
-              "value": "voiceclone",
-              "label": "Voice Clone (reference audio)",
-              "label_de": "Voice Clone (Referenz-Audio)"
-            },
-            {
-              "value": "auto",
-              "label": "Voice Name (from description)",
-              "label_de": "Voice Name (aus Beschreibung)"
-            }
-          ],
-          "store": "config",
-          "hint": "Voice Clone uses a WAV reference. Voice Name generates a voice from the description above and reuses it (regenerates only when description changes).",
-          "hint_de": "Voice Clone nutzt eine WAV-Referenz. Voice Name erzeugt eine Stimme aus der Beschreibung oben und verwendet sie wieder (nur bei Änderung neu generiert)."
+          "hint": "Reference voice for XTTS / F5-TTS",
+          "hint_de": "Referenz-Stimme für XTTS / F5-TTS"
         }
       ]
     },
