@@ -197,63 +197,6 @@ async def list_animate_services() -> List[Dict[str, Any]]:
     return get_animate_services()
 
 
-@router.get("/animate/available-loras")
-def get_animate_available_loras() -> Dict[str, Any]:
-    """Gibt verfuegbare LoRAs fuer Animation zurueck (WAN* gefiltert)."""
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        return {"loras": ["None"]}
-    all_loras = imagegen.get_cached_loras()
-    # Nur LoRAs die mit WAN beginnen (case-insensitive)
-    wan_loras = [l for l in all_loras if l.lower().startswith("wan")]
-    return {"loras": ["None"] + wan_loras}
-
-
-@router.get("/{character_name}/animate/loras")
-def get_animate_loras(character_name: str) -> Dict[str, Any]:
-    """Laedt gespeicherte Animation-LoRAs fuer einen Character."""
-    config = get_character_skill_config(character_name, "animate") or {}
-    return {
-        "loras_high": config.get("loras_high"),
-        "loras_low": config.get("loras_low"),
-    }
-
-
-@router.post("/{character_name}/animate/loras")
-async def save_animate_loras(character_name: str, request: Request) -> Dict[str, Any]:
-    """Speichert Animation-LoRAs (High + Low) pro Character.
-
-    Body: {user_id, loras_high: [{name, strength}, ...], loras_low: [{name, strength}, ...]}
-    """
-    data = await request.json()
-    user_id = data.get("user_id", "").strip()
-
-    def _normalize(loras):
-        if not loras:
-            return None
-        out = []
-        for l in loras:
-            name = (l.get("name") or "").strip() or "None"
-            try:
-                strength = float(l.get("strength", 1.0))
-            except (TypeError, ValueError):
-                strength = 1.0
-            out.append({"name": name, "strength": strength})
-        return out
-
-    config = get_character_skill_config(character_name, "animate") or {}
-    loras_high = _normalize(data.get("loras_high"))
-    loras_low = _normalize(data.get("loras_low"))
-    if loras_high is not None:
-        config["loras_high"] = loras_high
-    if loras_low is not None:
-        config["loras_low"] = loras_low
-    save_character_skill_config(character_name, "animate", config)
-
-    return {"status": "success"}
-
-
 DEFAULT_NEW_CHARACTER_SKILLS = (
     # Skill-IDs aus app/skills/skill_manager.py:SKILL_REGISTRY.
     # Defaults fuer neu angelegte Characters — Liste entspricht den Haken
@@ -3512,7 +3455,7 @@ async def suggest_animate_prompt(character_name: str, image_name: str, request: 
 
 @router.post("/{character_name}/images/{image_name}/animate")
 async def animate_character_image(character_name: str, image_name: str, request: Request) -> Dict[str, Any]:
-    """Animiert ein Galerie-Bild als Video via img2video ComfyUI Workflow."""
+    """Animiert ein Galerie-Bild als Video."""
     body = await request.json()
     user_id = body.get("user_id", "")
     if ".." in image_name or "/" in image_name:
@@ -3531,8 +3474,6 @@ async def animate_character_image(character_name: str, image_name: str, request:
         raise HTTPException(status_code=422, detail="Kein Prompt angegeben")
 
     service = body.get("service", "").strip()
-    loras_high = body.get("loras_high")  # [{name, strength}, ...] oder None
-    loras_low = body.get("loras_low")    # [{name, strength}, ...] oder None
 
     from app.core.task_queue import get_task_queue
     _tq = get_task_queue()
@@ -3557,8 +3498,7 @@ async def animate_character_image(character_name: str, image_name: str, request:
                 task_type="image_animate",
                 priority=_P.IMAGE_GEN,
                 callable_fn=lambda: animate_image(
-                    str(image_path), prompt, output_path,
-                    service=service, loras_high=loras_high, loras_low=loras_low),
+                    str(image_path), prompt, output_path, service=service),
                 agent_name=character_name,
                 label="Animation",
                 gpu_type="comfyui")
@@ -3887,11 +3827,6 @@ def get_videogen_options(character_name: str) -> Dict[str, Any]:
     # --- Animation Optionen ---
     from app.skills.animate import get_animate_services
     animate_services = get_animate_services()
-    # Animate LoRAs (WAN-gefiltert)
-    animate_loras = ["None"]
-    if imagegen:
-        wan_loras = [l for l in imagegen.get_cached_loras() if l.lower().startswith("wan")]
-        animate_loras = ["None"] + wan_loras
 
     # --- Aktuelle per-Character Config ---
     current_config = get_character_skill_config(character_name, "video_generation") or {}
@@ -3904,15 +3839,12 @@ def get_videogen_options(character_name: str) -> Dict[str, Any]:
         "models_unet_by_service": models_unet_by_service,
         "imagegen_loras": imagegen_loras,
         "animate_services": animate_services,
-        "animate_loras": animate_loras,
         "current_config": {
             "imagegen_backend": current_config.get("imagegen_backend", ""),
             "imagegen_workflow": current_config.get("imagegen_workflow", ""),
             "imagegen_model": current_config.get("imagegen_model", ""),
             "imagegen_loras": current_config.get("imagegen_loras", []),
             "animate_service": current_config.get("animate_service", ""),
-            "animate_loras_high": current_config.get("animate_loras_high", []),
-            "animate_loras_low": current_config.get("animate_loras_low", []),
         },
     }
 
@@ -3944,7 +3876,7 @@ async def save_videogen_config(character_name: str, request: Request) -> Dict[st
             out.append({"name": name, "strength": strength})
         return out
 
-    for key in ("imagegen_loras", "animate_loras_high", "animate_loras_low"):
+    for key in ("imagegen_loras",):
         if key in data:
             config[key] = _normalize_loras(data[key])
 

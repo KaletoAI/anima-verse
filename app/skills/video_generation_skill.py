@@ -2,16 +2,14 @@
 
 Ablauf:
   1. Bild generieren via ImageGenerationSkill (voller Flow inkl. Analyse)
-  2. Bild mit dem Animation Service animieren (ComfyUI lokal oder Together.ai)
+  2. Bild mit dem Animation Service animieren (Together.ai)
 
 Per-Character Konfiguration (skills/video_generation.json):
   - imagegen_backend:    Backend-Name fuer die Bildgenerierung
   - imagegen_workflow:   Workflow-Name fuer die Bildgenerierung
   - imagegen_model:      Model-Override fuer die Bildgenerierung
   - imagegen_loras:      LoRA-Liste fuer die Bildgenerierung [{name, strength}, ...]
-  - animate_service:     Animation-Service ("comfy" oder "together")
-  - animate_loras_high:  LoRA-Liste fuer Animation High-Lighting [{name, strength}, ...]
-  - animate_loras_low:   LoRA-Liste fuer Animation Low-Lighting [{name, strength}, ...]
+  - animate_service:     Animation-Service ("together")
 """
 
 import json
@@ -62,8 +60,6 @@ class VideoGenerationSkill(BaseSkill):
             "imagegen_model": "",
             "imagegen_loras": [],
             "animate_service": "",
-            "animate_loras_high": [],
-            "animate_loras_low": [],
         }
 
     # ------------------------------------------------------------------
@@ -213,17 +209,13 @@ class VideoGenerationSkill(BaseSkill):
             video_path = images_dir / video_filename
 
             animate_service = cfg.get("animate_service", "")
-            animate_loras_high = cfg.get("animate_loras_high") or None
-            animate_loras_low = cfg.get("animate_loras_low") or None
 
             _anim_start = time.time()
             success = animate_image(
                 source_image_path=str(image_path),
                 prompt=action_prompt,
                 output_path=str(video_path),
-                service=animate_service,
-                loras_high=animate_loras_high,
-                loras_low=animate_loras_low)
+                service=animate_service)
             _anim_duration = time.time() - _anim_start
 
             if not success:

@@ -448,7 +448,7 @@ async def suggest_instagram_animate_prompt(post_id: str, request: Request) -> Di
 
 @router.post("/post/{post_id}/animate")
 async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, Any]:
-    """Animiert ein Instagram-Bild als Video via img2video ComfyUI Workflow."""
+    """Animates an Instagram image as a video."""
     data = await request.json()
     user_id = data.get("user_id", "")
 
@@ -471,8 +471,6 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
         raise HTTPException(status_code=422, detail="Kein Prompt angegeben")
 
     service = data.get("service", "").strip()
-    loras_high = data.get("loras_high")
-    loras_low = data.get("loras_low")
 
     from app.core.task_queue import get_task_queue
     _tq = get_task_queue()
@@ -499,8 +497,7 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
                 task_type="image_animate",
                 priority=_P.IMAGE_GEN,
                 callable_fn=lambda: animate_image(
-                    str(image_path), prompt, output_path,
-                    service=service, loras_high=loras_high, loras_low=loras_low),
+                    str(image_path), prompt, output_path, service=service),
                 agent_name=character_name,
                 label="Instagram Animation",
                 gpu_type="comfyui")

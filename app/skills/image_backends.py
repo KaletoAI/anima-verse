@@ -14,62 +14,6 @@ from app.core.log import get_logger
 logger = get_logger("image_backends")
 
 
-_comfyui_url_cache: dict = {"url": None, "expires": 0.0}
-_COMFYUI_CACHE_TTL = 60.0
-
-
-def get_active_comfyui_url() -> str:
-    """Gibt die URL des ersten erreichbaren ComfyUI Image-Gen-Dienstes zurueck.
-
-    Durchsucht SKILL_IMAGEGEN_1_*, SKILL_IMAGEGEN_2_*, ... und testet jeden
-    aktivierten ComfyUI-Dienst auf Erreichbarkeit. Gibt die URL des ersten
-    antwortenden Dienstes zurueck. Ergebnis wird 60s gecacht.
-
-    Returns:
-        API-URL ohne trailing slash, oder "" wenn kein ComfyUI-Dienst erreichbar.
-    """
-    global _comfyui_url_cache
-    import time as _t
-    now = _t.time()
-    if _comfyui_url_cache["url"] is not None and now < _comfyui_url_cache["expires"]:
-        return _comfyui_url_cache["url"]
-
-    i = 1
-    while True:
-        name = os.environ.get(f"SKILL_IMAGEGEN_{i}_NAME")
-        if name is None:
-            break
-        enabled = os.environ.get(f"SKILL_IMAGEGEN_{i}_ENABLED", "true").strip().lower() in ("true", "1", "yes")
-        api_type = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_TYPE", "").strip().lower()
-        if enabled and api_type == "comfyui":
-            url = os.environ.get(f"SKILL_IMAGEGEN_{i}_API_URL", "").strip().rstrip("/")
-            if url:
-                try:
-                    resp = requests.get(f"{url}/system_stats", timeout=3)
-                    if resp.status_code == 200:
-                        logger.info(f"Aktiver Dienst: {name} ({url})")
-                        _comfyui_url_cache["url"] = url
-                        _comfyui_url_cache["expires"] = now + _COMFYUI_CACHE_TTL
-                        return url
-                    # /system_stats kann 500 werfen (kaputter Custom-Node);
-                    # Fallback /queue probieren bevor wir den Dienst aufgeben.
-                    q_resp = requests.get(f"{url}/queue", timeout=3)
-                    if q_resp.status_code == 200:
-                        logger.info(f"Aktiver Dienst: {name} ({url}) — via /queue, /system_stats wirft {resp.status_code}")
-                        _comfyui_url_cache["url"] = url
-                        _comfyui_url_cache["expires"] = now + _COMFYUI_CACHE_TTL
-                        return url
-                    logger.warning(f"{name} ({url}): HTTP {resp.status_code}, uebersprungen")
-                except Exception:
-                    logger.warning(f"{name} ({url}): nicht erreichbar, uebersprungen")
-        i += 1
-
-    logger.warning("Kein erreichbarer ComfyUI-Dienst gefunden")
-    _comfyui_url_cache["url"] = ""
-    _comfyui_url_cache["expires"] = now + _COMFYUI_CACHE_TTL
-    return ""
-
-
 class ImageBackend(ABC):
     """
     Basisklasse fuer Image Generation Backends.

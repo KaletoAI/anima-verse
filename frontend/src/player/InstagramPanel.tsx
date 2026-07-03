@@ -513,7 +513,6 @@ export function InstagramPanel() {
           title={animatePost.video_url ? t('Re-animate') : t('Animate image')}
           sourceImageUrl={animatePost.image_url || `/instagram/images/${animatePost.image_filename}`}
           defaultPrompt={animatePost.image_meta?.image_analysis || ''}
-          characterName={animatePost.agent_name || ''}
           onSuggest={suggestAnimate}
           onSubmit={submitAnimate}
           onClose={() => setAnimatePost(null)}

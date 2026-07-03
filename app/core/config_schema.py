@@ -521,22 +521,6 @@ SECTIONS = {
         "label": "Animation (Video)",
         "icon": "🎬",
         "subsections": {
-            "comfy": {
-                "label": "ComfyUI Animation",
-                "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": False},
-                    "workflow_file": {"type": "str", "label": "Workflow Datei", "default": "./workflows/img2video_workflow_lowram_api.json"},
-                    "backend": {"type": "comfyui_backend_select", "label": "ComfyUI Backend"},
-                    "unet_high": {"type": "comfyui_model_select", "label": "UNet High Lighting"},
-                    "unet_low": {"type": "comfyui_model_select", "label": "UNet Low Lighting"},
-                    "clip": {"type": "comfyui_clip_select", "label": "CLIP Model"},
-                    "clip2": {"type": "comfyui_clip_select", "label": "CLIP Model 2", "description": "Nur fuer DualCLIPLoader-Workflows (z.B. Flux Inpaint): clip_name2."},
-                    "width": {"type": "int", "label": "Breite", "default": 640, "min": 64, "max": 4096},
-                    "height": {"type": "int", "label": "Höhe", "default": 640, "min": 64, "max": 4096},
-                    "poll_interval": {"type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5},
-                    "max_wait": {"type": "int", "label": "Max Wait (s)", "default": 600, "min": 60},
-                },
-            },
             "together": {
                 "label": "Together.ai Animation",
                 "fields": {

@@ -776,22 +776,6 @@ def _flatten_to_env(config: dict) -> None:
 
     # Animation
     anim = config.get("animation", {})
-    comfy_a = anim.get("comfy", {})
-    _set(env, "COMFY_ANIMATE_ENABLED", comfy_a.get("enabled", False))
-    _set(env, "COMFY_ANIMATE_WORKFLOW_FILE", comfy_a.get("workflow_file", ""))
-    _set(env, "COMFY_ANIMATE_BACKEND", comfy_a.get("backend", ""))
-    _set(env, "COMFY_ANIMATE_UNET_HIGH", comfy_a.get("unet_high", ""))
-    _set(env, "COMFY_ANIMATE_UNET_LOW", comfy_a.get("unet_low", ""))
-    _set(env, "COMFY_ANIMATE_CLIP", comfy_a.get("clip", ""))
-    _set(env, "COMFY_ANIMATE_WIDTH", comfy_a.get("width", 640))
-    _set(env, "COMFY_ANIMATE_HEIGHT", comfy_a.get("height", 640))
-    _set(env, "COMFY_ANIMATE_POLL_INTERVAL", comfy_a.get("poll_interval", 3.0))
-    _set(env, "COMFY_ANIMATE_MAX_WAIT", comfy_a.get("max_wait", 600))
-    for variant in ["high", "low"]:
-        for idx, lora in enumerate(comfy_a.get(f"loras_{variant}", []), start=1):
-            _set(env, f"COMFY_ANIMATE_LORA_{variant.upper()}_{idx:02d}", lora.get("file", ""))
-            _set(env, f"COMFY_ANIMATE_LORA_{variant.upper()}_{idx:02d}_STRENGTH", lora.get("strength", 1))
-
     tog = anim.get("together", {})
     _set(env, "TOGETHER_ANIMATE_ENABLED", tog.get("enabled", False))
     _set(env, "TOGETHER_ANIMATE_LABEL", tog.get("label", ""))
