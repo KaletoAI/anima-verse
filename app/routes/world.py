@@ -25,6 +25,7 @@ from app.models.world import (
     set_gallery_image_meta, get_gallery_image_metas,
     get_room_by_id,
     clear_room_prompt_changed, clear_location_prompt_changed)
+from app.core import world_ops
 
 router = APIRouter(prefix="/world", tags=["world"])
 
@@ -53,51 +54,7 @@ def avatar_neighbors_route() -> Dict[str, Any]:
     Damit kann das Direction-Pad nicht-erreichbare Richtungen ausblenden,
     statt erst auf der 404-Antwort zu reagieren.
     """
-    from app.models.account import get_active_character
-    from app.models.character import (
-        get_character_current_location, get_character_current_room)
-
-    out = {"north": None, "south": None, "east": None, "west": None,
-           "current_location_id": "", "current_location_name": "",
-           "at_entry_room": True, "entry_room_name": ""}
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        return out
-    cur_loc_id = (get_character_current_location(avatar) or "").strip()
-    if not cur_loc_id:
-        return out
-    cur = get_location_by_id(cur_loc_id)
-    if not cur:
-        return out
-    out["current_location_id"] = cur.get("id", "") or ""
-    out["current_location_name"] = cur.get("name", "") or ""
-
-    # Departure-Gate: Frontend kann die Richtungs-Pfeile ausblenden, wenn der
-    # Avatar nicht im Entry-Room steht. Server-seitige Sperre liegt im
-    # avatar_step_route.
-    cur_entry = get_entry_room_id(cur)
-    cur_room = (get_character_current_room(avatar) or "").strip()
-    if cur_entry and cur_room and cur_room != cur_entry:
-        out["at_entry_room"] = False
-    for _r in (cur.get("rooms") or []):
-        if isinstance(_r, dict) and _r.get("id") == cur_entry:
-            out["entry_room_name"] = _r.get("name", "") or ""
-            break
-
-    cx = int(cur.get("grid_x") or 0)
-    cy = int(cur.get("grid_y") or 0)
-    deltas = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
-    targets = {(cx + dx, cy + dy): direction
-               for direction, (dx, dy) in deltas.items()}
-    for loc in list_locations():
-        key = (int(loc.get("grid_x") or 0), int(loc.get("grid_y") or 0))
-        direction = targets.get(key)
-        if direction and not out[direction]:
-            out[direction] = {
-                "id": loc.get("id", "") or "",
-                "name": loc.get("name", "") or "",
-            }
-    return out
+    return world_ops.compute_avatar_neighbors()
 
 
 @router.post("/avatar/step")
@@ -111,107 +68,7 @@ async def avatar_step_route(request: Request) -> Dict[str, Any]:
     """
     data = await request.json()
     direction = (data.get("direction") or "").strip().lower()
-    deltas = {
-        "north": (0, -1),  # screen-up = decreasing grid_y
-        "south": (0, 1),
-        "east": (1, 0),
-        "west": (-1, 0),
-    }
-    if direction not in deltas:
-        raise HTTPException(status_code=400, detail="invalid direction")
-
-    from app.models.account import get_active_character
-    from app.models.character import (
-        get_character_current_location,
-        get_character_current_room,
-        clear_pose_intent,
-        save_character_current_location,
-        save_character_current_room,
-    )
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
-
-    # Party-Follower: der Avatar folgt dem Leader und kann sich nicht selbst
-    # bewegen (UI blendet den Kompass aus, hier der harte Backstop).
-    from app.core.party_engine import is_party_follower
-    if is_party_follower(avatar):
-        raise HTTPException(status_code=403, detail={
-            "reason": "party_follower",
-            "message": "Du bist Teil einer Party und wirst vom Leader mitgenommen — eigene Bewegung gesperrt."})
-
-    cur_loc_id = (get_character_current_location(avatar) or "").strip()
-    if not cur_loc_id:
-        raise HTTPException(status_code=400, detail="avatar has no current location")
-
-    cur = get_location_by_id(cur_loc_id)
-    if not cur:
-        raise HTTPException(status_code=404, detail="current location not found")
-
-    # Departure-Gate: Avatar darf eine Location nur ueber den Entry-Room verlassen.
-    cur_entry = get_entry_room_id(cur)
-    cur_room = (get_character_current_room(avatar) or "").strip()
-    if cur_entry and cur_room and cur_room != cur_entry:
-        # Entry-Room-Name zur Meldung holen
-        _entry_name = ""
-        for _r in (cur.get("rooms") or []):
-            if isinstance(_r, dict) and _r.get("id") == cur_entry:
-                _entry_name = _r.get("name", "") or ""
-                break
-        raise HTTPException(status_code=403,
-            detail={"reason": "not_at_entry_room",
-                    "message": f"Du musst zuerst zum Entry-Room ({_entry_name or cur_entry}) gehen, um diesen Ort zu verlassen."})
-
-    cur_x = int(cur.get("grid_x") or 0)
-    cur_y = int(cur.get("grid_y") or 0)
-    dx, dy = deltas[direction]
-    target_x, target_y = cur_x + dx, cur_y + dy
-
-    # Nachbar-Location suchen
-    target = None
-    for loc in list_locations():
-        if int(loc.get("grid_x") or 0) == target_x and int(loc.get("grid_y") or 0) == target_y:
-            target = loc
-            break
-    if not target:
-        raise HTTPException(status_code=404, detail="no location in that direction")
-
-    target_id = target.get("id") or ""
-
-    # Block-Regeln: Avatar unterliegt denselben Restrictions wie NPCs.
-    target_entry_room = get_entry_room_id(target)
-    from app.models.rules import check_leave, check_access
-    ok_leave, leave_msg = check_leave(avatar)
-    if not ok_leave:
-        raise HTTPException(status_code=403,
-            detail={"reason": "block_leave", "message": leave_msg})
-    ok_enter, enter_msg = check_access(avatar, target_id, room_id=target_entry_room)
-    if not ok_enter:
-        raise HTTPException(status_code=403,
-            detail={"reason": "block_enter", "message": enter_msg})
-
-    save_character_current_location(avatar, target_id)
-    if target_entry_room:
-        save_character_current_room(avatar, target_entry_room)
-    # Ortswechsel unterbricht die laufende Pose (sonst bleibt die alte am
-    # neuen Ort stehen). Avatar ist spielergesteuert → leeren, nicht neu zuweisen.
-    clear_pose_intent(avatar)
-
-    # Roll-on-Entry: bei Eintritt an einer Location sofort wuerfeln, ob ein
-    # Event fuer den Avatar entsteht (z.B. "Wölfe versperren den Weg").
-    try:
-        from app.core.random_events import try_roll_on_entry
-        try_roll_on_entry(avatar, target_id, target)
-    except Exception as _re:
-        logger.debug("try_roll_on_entry fehlgeschlagen: %s", _re)
-
-    return {
-        "ok": True,
-        "direction": direction,
-        "location_id": target_id,
-        "location_name": target.get("name", ""),
-        "room_id": target_entry_room,
-    }
+    return world_ops.move_avatar_step(direction)
 
 
 # === Orte ===
@@ -227,39 +84,7 @@ def get_locations_route(character_name: str = Query("", alias="agent_name")
     (accessible_when schlaegt fehl) bekommen ein `accessible: false` Flag.
     Ohne `character_name` werden alle Orte ungefiltert zurueckgegeben (Admin-View).
     """
-    locations = list_locations()
-
-    if character_name:
-        from app.core.activity_engine import evaluate_condition
-
-        def _all_pass(conditions, char: str, loc_id: str) -> bool:
-            if not conditions:
-                return True
-            if isinstance(conditions, str):
-                conditions = [conditions]
-            for c in conditions:
-                if not c:
-                    continue
-                ok, _ = evaluate_condition(str(c), char, loc_id)
-                if not ok:
-                    return False
-            return True
-
-        filtered = []
-        for loc in locations:
-            loc_id = loc.get("id", "")
-            vw = loc.get("visible_when") or []
-            if vw and not _all_pass(vw, character_name, loc_id):
-                continue  # Ort nicht sichtbar
-            aw = loc.get("accessible_when") or []
-            loc["accessible"] = _all_pass(aw, character_name, loc_id) if aw else True
-            filtered.append(loc)
-        locations = filtered
-
-    for loc in locations:
-        loc_id = loc.get("id", "")
-        loc["image_count"] = len(list_gallery_images(loc_id)) if loc_id else 0
-    return {"locations": locations}
+    return world_ops.build_locations_payload(character_name)
 
 
 @router.post("/locations")
@@ -267,80 +92,7 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
     """Erstellt oder aktualisiert einen Ort."""
     try:
         data = await request.json()
-        user_id = data.get("user_id", "").strip()
-        location_name = data.get("name", "").strip()
-        description = data.get("description", "").strip()
-        rooms = data.get("rooms", [])
-        image_prompt_day = data.get("image_prompt_day")
-        image_prompt_night = data.get("image_prompt_night")
-        image_prompt_map = data.get("image_prompt_map")
-        image_prompt_map_2d = data.get("image_prompt_map_2d")
-        danger_level = data.get("danger_level")
-        event_settings = data.get("event_settings")
-        outfit_type = data.get("outfit_type")
-        decency = data.get("decency")
-        style_hint = data.get("style_hint")
-        swim_allowed = data.get("swim_allowed")
-        activity_hint = data.get("activity_hint")
-        knowledge_item_id = data.get("knowledge_item_id")
-        passable = data.get("passable")
-        entry_room = data.get("entry_room")
-        indoor = data.get("indoor")
-        if not location_name:
-            raise HTTPException(status_code=400, detail="Name fehlt")
-        if not isinstance(rooms, list):
-            raise HTTPException(status_code=400, detail="rooms muss eine Liste sein")
-
-        location = add_location(location_name, description, rooms=rooms,
-                                image_prompt_day=image_prompt_day,
-                                image_prompt_night=image_prompt_night,
-                                image_prompt_map=image_prompt_map,
-                                image_prompt_map_2d=image_prompt_map_2d)
-
-        # Extra-Felder direkt in der Location setzen
-        _has_extra = (danger_level is not None or event_settings is not None
-                      or outfit_type is not None or knowledge_item_id is not None
-                      or passable is not None
-                      or entry_room is not None or indoor is not None
-                      or decency is not None or style_hint is not None
-                      or swim_allowed is not None or activity_hint is not None)
-        if _has_extra and location:
-            from app.models.world import _load_world_data, _save_world_data
-            wdata = _load_world_data()
-            for _l in wdata.get("locations", []):
-                if _l.get("id") == location.get("id"):
-                    if danger_level is not None:
-                        try:
-                            _l["danger_level"] = max(0, min(5, int(danger_level)))
-                        except (TypeError, ValueError):
-                            pass
-                    if event_settings is not None:
-                        _l["event_settings"] = event_settings
-                    if outfit_type is not None:
-                        _l["outfit_type"] = (outfit_type or "").strip()
-                    if decency is not None:
-                        _v = (decency or "").strip().lower()
-                        _l["decency"] = _v if _v in ("public", "private", "nude_ok") else ""
-                    if style_hint is not None:
-                        _l["style_hint"] = (style_hint or "").strip()
-                    if swim_allowed is not None:
-                        _l["swim_allowed"] = bool(swim_allowed)
-                    if activity_hint is not None:
-                        _l["activity_hint"] = (activity_hint or "").strip()
-                    if knowledge_item_id is not None:
-                        _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
-                    if passable is not None:
-                        _l["passable"] = bool(passable)
-                    if entry_room is not None:
-                        _l["entry_room"] = (entry_room or "").strip()
-                    if indoor is not None:
-                        _v = (indoor or "").strip().lower()
-                        _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
-                    break
-            _save_world_data(wdata)
-            location = get_location_by_id(location["id"])
-
-        return {"status": "success", "location": location}
+        return world_ops.create_location_with_extras(data)
     except HTTPException:
         raise
     except Exception as e:
@@ -352,91 +104,7 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
     """Aktualisiert einen Ort (Umbenennung per ID)."""
     try:
         data = await request.json()
-        user_id = data.get("user_id", "").strip()
-        new_name = data.get("name", "").strip()
-        description = data.get("description")
-        rooms = data.get("rooms")
-        image_prompt_day = data.get("image_prompt_day")
-        image_prompt_night = data.get("image_prompt_night")
-        image_prompt_map = data.get("image_prompt_map")
-        image_prompt_map_2d = data.get("image_prompt_map_2d")
-        danger_level = data.get("danger_level")
-        event_settings = data.get("event_settings")
-        outfit_type = data.get("outfit_type")
-        decency = data.get("decency")
-        style_hint = data.get("style_hint")
-        swim_allowed = data.get("swim_allowed")
-        activity_hint = data.get("activity_hint")
-        knowledge_item_id = data.get("knowledge_item_id")
-        passable = data.get("passable")
-        entry_room = data.get("entry_room")
-        indoor = data.get("indoor")
-
-        loc = get_location_by_id(location_id)
-        if not loc:
-            raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-
-        if new_name:
-            rename_location(location_id, new_name)
-
-        # Description, Rooms und Image-Prompts aktualisieren falls mitgegeben
-        has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map, image_prompt_map_2d])
-        if has_updates:
-            loc = get_location_by_id(location_id)
-            if loc:
-                add_location(loc["name"],
-                    description if description is not None else loc.get("description", ""),
-                    rooms=rooms if rooms is not None else loc.get("rooms", []),
-                    image_prompt_day=image_prompt_day if image_prompt_day is not None else loc.get("image_prompt_day", ""),
-                    image_prompt_night=image_prompt_night if image_prompt_night is not None else loc.get("image_prompt_night", ""),
-                    image_prompt_map=image_prompt_map if image_prompt_map is not None else loc.get("image_prompt_map", ""),
-                    image_prompt_map_2d=image_prompt_map_2d if image_prompt_map_2d is not None else loc.get("image_prompt_map_2d", ""),
-                    location_id=location_id)  # per ID updaten — eindeutig bei doppelten Namen
-
-        # Extra-Felder (inkl. knowledge_item_id) direkt in der Location setzen
-        _has_extra = (danger_level is not None or event_settings is not None
-                      or outfit_type is not None or knowledge_item_id is not None
-                      or passable is not None
-                      or entry_room is not None or indoor is not None
-                      or decency is not None or style_hint is not None
-                      or swim_allowed is not None or activity_hint is not None)
-        if _has_extra:
-            from app.models.world import _load_world_data, _save_world_data
-            wdata = _load_world_data()
-            for _l in wdata.get("locations", []):
-                if _l.get("id") == location_id:
-                    if danger_level is not None:
-                        try:
-                            _l["danger_level"] = max(0, min(5, int(danger_level)))
-                        except (TypeError, ValueError):
-                            pass
-                    if event_settings is not None:
-                        _l["event_settings"] = event_settings
-                    if outfit_type is not None:
-                        _l["outfit_type"] = (outfit_type or "").strip()
-                    if decency is not None:
-                        _v = (decency or "").strip().lower()
-                        _l["decency"] = _v if _v in ("public", "private", "nude_ok") else ""
-                    if style_hint is not None:
-                        _l["style_hint"] = (style_hint or "").strip()
-                    if swim_allowed is not None:
-                        _l["swim_allowed"] = bool(swim_allowed)
-                    if activity_hint is not None:
-                        _l["activity_hint"] = (activity_hint or "").strip()
-                    if knowledge_item_id is not None:
-                        _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
-                    if passable is not None:
-                        _l["passable"] = bool(passable)
-                    if entry_room is not None:
-                        _l["entry_room"] = (entry_room or "").strip()
-                    if indoor is not None:
-                        _v = (indoor or "").strip().lower()
-                        _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
-                    break
-            _save_world_data(wdata)
-
-        updated = get_location_by_id(location_id)
-        return {"status": "success", "location": updated}
+        return world_ops.update_location_with_extras(location_id, data)
     except HTTPException:
         raise
     except Exception as e:
@@ -507,82 +175,14 @@ async def unfreeze_world(
 @router.get("/settings")
 async def get_world_settings() -> Dict[str, Any]:
     """Gibt Welt-Settings + Pose-Settings zurueck."""
-    from app.models.world import (
-        get_world_temperature, get_world_weather,
-        get_world_setting, is_pose_system_active,
-        WORLD_TEMPERATURE_VALUES, WORLD_WEATHER_VALUES,
-    )
-    return {
-        "world": {
-            "temperature": get_world_temperature(),
-            "weather": get_world_weather(),
-        },
-        "pose": {
-            "system_active": is_pose_system_active(),
-            "variant_match_threshold": float(
-                get_world_setting("pose.variant_match_threshold", "0.75")
-                or "0.75"
-            ),
-            "max_variants_per_char": int(
-                get_world_setting("pose.max_variants_per_char", "20")
-                or "20"
-            ),
-        },
-        "news": {
-            # Praesentations-Stil des Player-News-Channels.
-            "style": get_world_setting("news.style", "modern") or "modern",
-            "title": get_world_setting("news.title", "") or "",
-        },
-        "choices": {
-            "temperature": list(WORLD_TEMPERATURE_VALUES),
-            "weather":     list(WORLD_WEATHER_VALUES),
-            "news_style":  ["modern", "newspaper", "flyer"],
-        },
-    }
+    return world_ops.build_world_settings_payload()
 
 
 @router.put("/settings")
 async def put_world_settings(request: Request) -> Dict[str, Any]:
     """Setzt Welt-Settings + Pose-Settings."""
-    from app.models.world import (
-        set_world_temperature, set_world_weather, set_pose_system_active,
-        set_world_setting, WORLD_TEMPERATURE_VALUES, WORLD_WEATHER_VALUES,
-    )
     data = await request.json()
-    world = data.get("world") or {}
-    pose = data.get("pose") or {}
-    news = data.get("news") or {}
-    if "style" in news:
-        v = (news.get("style") or "").strip().lower()
-        if v in ("modern", "newspaper", "flyer"):
-            set_world_setting("news.style", v)
-    if "title" in news:
-        set_world_setting("news.title", (news.get("title") or "").strip())
-    if "temperature" in world:
-        v = (world.get("temperature") or "").strip().lower()
-        if v in WORLD_TEMPERATURE_VALUES:
-            set_world_temperature(v)
-    if "weather" in world:
-        v = (world.get("weather") or "").strip().lower()
-        if v in WORLD_WEATHER_VALUES:
-            set_world_weather(v)
-    if "system_active" in pose:
-        set_pose_system_active(bool(pose.get("system_active")))
-    if "variant_match_threshold" in pose:
-        try:
-            t = float(pose.get("variant_match_threshold"))
-            t = max(0.0, min(1.0, t))
-            set_world_setting("pose.variant_match_threshold", str(t))
-        except (TypeError, ValueError):
-            pass
-    if "max_variants_per_char" in pose:
-        try:
-            n = int(pose.get("max_variants_per_char"))
-            n = max(1, min(200, n))
-            set_world_setting("pose.max_variants_per_char", str(n))
-        except (TypeError, ValueError):
-            pass
-    return {"status": "ok"}
+    return world_ops.apply_world_settings(data)
 
 
 @router.patch("/locations/{location_id}/position")
@@ -690,20 +290,7 @@ def list_conditions() -> Dict[str, Any]:
 
     Returns: {"conditions": [{"name": "drunk", "label": "...", "icon": "🍺"}, ...]}
     """
-    from app.core.prompt_filters import load_filters
-    seen: Dict[str, Dict[str, Any]] = {}
-    for f in load_filters():
-        if not f.get("enabled", True):
-            continue
-        fid = (f.get("id") or "").strip().lower()
-        if not fid or fid in seen:
-            continue
-        seen[fid] = {
-            "name": fid,
-            "label": (f.get("label") or "").strip(),
-            "icon": (f.get("icon") or "").strip(),
-        }
-    return {"conditions": sorted(seen.values(), key=lambda e: e["name"])}
+    return world_ops.list_condition_filters()
 
 
 # === Hintergrundbilder ===
@@ -1573,32 +1160,7 @@ async def delete_location_background(request: Request, location_name: str) -> Di
 def get_location_gallery(
     location_name: str) -> Dict[str, Any]:
     """Listet alle Galerie-Bilder eines Ortes auf (mit Hintergrund-Status)."""
-    loc = resolve_location(location_name)
-    loc_id = loc["id"] if loc and loc.get("id") else location_name
-    images = list_gallery_images(location_name)
-    bg_images = get_background_images(loc_id)
-    image_rooms = get_gallery_image_rooms(loc_id)
-    image_types = get_gallery_image_types(loc_id)
-    image_metas = get_gallery_image_metas(loc_id)
-    prompts = get_all_gallery_prompts(loc_id)
-    # Raeume fuer Dropdown im Frontend
-    location_rooms = []
-    if loc:
-        for room in loc.get("rooms", []):
-            location_rooms.append({
-                "id": room.get("id", ""),
-                "name": room.get("name", ""),
-            })
-    return {
-        "images": images,
-        "background_images": bg_images,
-        "image_prompts": prompts,
-        "image_rooms": image_rooms,
-        "image_types": image_types,
-        "image_metas": image_metas,
-        "location_rooms": location_rooms,
-        "location": location_name,
-    }
+    return world_ops.build_gallery_payload(location_name)
 
 
 @router.get("/locations/{location_name}/gallery/{image_name}")
@@ -1624,78 +1186,7 @@ def get_gallery_image(
 @router.get("/imagegen-options")
 def get_imagegen_options() -> Dict[str, Any]:
     """Returns available image-generation backends (without character binding)."""
-    from app.core.dependencies import get_skill_manager
-    from app.core.prompt_adapters import get_target_model
-
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        return {"options": []}
-
-    options = []
-    # Backends (CivitAI, Together, LocalAI, …). Every ENABLED backend is
-    # offered — availability is resolved by the server at generation time via
-    # match_backend. Do NOT pre-filter on b.available, otherwise a freshly
-    # configured / not-yet-probed cloud backend disappears from the
-    # "Service (match)" selection.
-    for b in imagegen.backends:
-        if not b.instance_enabled:
-            continue
-        opt = {
-            "type": "backend",
-            "name": b.name,
-            "label": b.name if b.available else f"{b.name} (offline?)",
-            "available": b.available,
-            # Purpose category (e.g. "inpaint") + default prompt — lets the
-            # Fit/Edge dialog offer inpaint backends and prefill the prompt.
-            "category": getattr(b, "category", "") or "",
-            "image_family": getattr(b, "image_family", "") or "",
-            "prompt": getattr(b, "default_prompt", "") or "",
-            "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
-            "target_model": get_target_model(
-                getattr(b, "image_family", "") or "", getattr(b, "model", "") or ""),
-            # Terrain-hint parameter — the dialog only appends the hint if True.
-            "terrain_hint": bool(getattr(b, "terrain_hint", False)),
-        }
-        # Backend with a model list (e.g. Together.ai) — offer as a selection.
-        backend_models = getattr(b, 'available_models', [])
-        if backend_models:
-            opt["models"] = backend_models
-            opt["default_model"] = getattr(b, 'model', backend_models[0])
-        # LoRA selection in the image-gen dialog. Source: with lora_url set, the
-        # LoRAs fetched from the backend endpoint, otherwise the per-world
-        # LoRA library (endpoint-filtered). Transfer: localai as <lora:> prompt
-        # tag, openai_diffusion dynamically as lora_NN/strength_NN params.
-        if b.api_type in ("localai", "openai_diffusion"):
-            opt["has_loras"] = True
-            _be_loras = getattr(b, "available_loras", None)
-            if getattr(b, "lora_url", "") and _be_loras:
-                opt["lora_options"] = _be_loras
-            else:
-                from app.core.config import get_lora_library_names
-                opt["lora_options"] = get_lora_library_names(b.name)
-        options.append(opt)
-    # mapfit default prompts per family — the Fit/Edge dialog prefills the
-    # prompt field with these (instead of the former terrain/edge hint).
-    from app.core import config as _cfg
-    mapfit_prompts = {}
-    for _fam in ("natural", "keywords"):
-        try:
-            _r = _cfg.resolve_use_case_style("mapfit", _fam)
-            mapfit_prompts[_fam] = _r.get("prompt_style", "")
-        except Exception:
-            mapfit_prompts[_fam] = ""
-    # Default preselection for locations
-    loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
-    result = {"options": options, "mapfit_prompts": mapfit_prompts}
-    # Fit/match-edges: imagegen target (backend match spec, read-only in the Fit dialog).
-    result["mapfit_imagegen_default"] = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "").strip()
-    # Globaler Outfit-Default (Match-Spec, z.B. "backend:LocalAI-Flux") — die
-    # Character-Render-Match-UI zeigt ihn an, wenn kein Override gesetzt ist.
-    result["outfit_imagegen_default"] = (os.environ.get("OUTFIT_IMAGEGEN_DEFAULT") or "").strip()
-    if loc_default:
-        result["default_location"] = loc_default
-    return result
+    return world_ops.build_imagegen_options()
 
 
 @router.post("/imagegen-enhance-prompt")
@@ -2376,27 +1867,7 @@ async def delete_gallery_image(
     """Loescht ein Galerie-Bild (per ID oder Name)."""
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-
-    loc = resolve_location(location_name)
-    loc_id = loc["id"] if loc and loc.get("id") else location_name
-
-    gallery_dir = get_gallery_dir(loc_id)
-    image_path = gallery_dir / image_name
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
-
-    image_path.unlink()
-
-    # Falls das Bild als Hintergrund markiert war, Markierung entfernen
-    remove_background_image(loc_id, image_name)
-    remove_gallery_image_room(loc_id, image_name)
-    remove_gallery_image_type(loc_id, image_name)
-    # Haengende map_image/map_image_2d-Wahl auf dieses Bild aus allen Zellen loesen
-    # (sonst zeigt die Zelle danach das erste statt des gewollten Tiles).
-    from app.models.world import clear_map_image_references
-    clear_map_image_references(image_name)
-
-    return {"status": "success", "deleted": image_name}
+    return world_ops.delete_gallery_image(location_name, image_name)
 
 
 @router.post("/locations/{location_name}/gallery/{image_name}/move")
@@ -2430,18 +1901,7 @@ async def toggle_gallery_background(
     user_id = body.get("user_id", "").strip()
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-
-    loc = resolve_location(location_name)
-    loc_id = loc["id"] if loc and loc.get("id") else location_name
-
-    gallery_dir = get_gallery_dir(loc_id)
-    image_path = gallery_dir / image_name
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
-
-    is_eligible = toggle_background_image(loc_id, image_name)
-
-    return {"status": "success", "image": image_name, "is_background": is_eligible}
+    return world_ops.toggle_gallery_background(location_name, image_name)
 
 
 @router.post("/locations/{location_name}/gallery/{image_name}/room")
@@ -2455,17 +1915,7 @@ async def set_gallery_image_room_route(
     room_id = body.get("room", "").strip()
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-
-    loc = resolve_location(location_name)
-    loc_id = loc["id"] if loc and loc.get("id") else location_name
-
-    gallery_dir = get_gallery_dir(loc_id)
-    image_path = gallery_dir / image_name
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
-
-    set_gallery_image_room(loc_id, image_name, room_id)
-    return {"status": "success", "image": image_name, "room": room_id}
+    return world_ops.assign_gallery_image_room(location_name, image_name, room_id)
 
 
 @router.post("/locations/{location_name}/gallery/{image_name}/type")
@@ -2479,19 +1929,7 @@ async def set_gallery_image_type_route(
     image_type = body.get("type", "").strip()
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-    if image_type and image_type not in ("day", "night", "map_2d"):
-        raise HTTPException(status_code=400, detail="Typ muss 'day', 'night', 'map_2d' oder leer sein")
-
-    loc = resolve_location(location_name)
-    loc_id = loc["id"] if loc and loc.get("id") else location_name
-
-    gallery_dir = get_gallery_dir(loc_id)
-    image_path = gallery_dir / image_name
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
-
-    set_gallery_image_type(loc_id, image_name, image_type)
-    return {"status": "success", "image": image_name, "type": image_type}
+    return world_ops.assign_gallery_image_type(location_name, image_name, image_type)
 
 
 @router.post("/locations/{location_name}/gallery/{image_name}/time-variant")

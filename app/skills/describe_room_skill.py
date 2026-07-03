@@ -241,7 +241,7 @@ class DescribeRoomSkill(BaseSkill):
             try:
                 from app.core.dependencies import get_skill_manager
                 from app.models.world import get_location_by_id, get_room_by_id
-                from app.routes.world import get_gallery_dir, save_gallery_prompt, \
+                from app.models.world import get_gallery_dir, save_gallery_prompt, \
                     toggle_background_image, set_gallery_image_room
                 from app.models.world import set_gallery_image_meta
 
