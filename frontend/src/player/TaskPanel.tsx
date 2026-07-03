@@ -4,7 +4,7 @@
  *
  * Zwei Gruppen aus GET /queue/status (via useQueue):
  *   • LLM-Calls (providers[*].chat_active) — die "X denkt …"-Einträge mit
- *     Label, Modell, GPU, laufender Dauer, Schätzung und Iteration.
+ *     Label, Modell, laufender Dauer, Schätzung und Iteration.
  *   • Getrackte Tasks (active_tasks) — Bild-/Video-/TTS-/GPU-Tasks.
  * Read-only, Poll alle 2 s; laufende Dauer tickt sekündlich lokal.
  */
@@ -198,7 +198,7 @@ export function TaskPanel() {
               : ch.type === 'a1111' ? 'Automatic1111'
               : t('Image backend')
             return (
-              <span key={ch.key} title={`${typeName}${ch.gpu ? ` · GPU ${ch.gpu}` : ''} · ${state}`}
+              <span key={ch.key} title={`${typeName}${ch.group ? ` · Group ${ch.group}` : ''} · ${state}`}
                 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8em', minWidth: 0 }}>
                 {/* Icon codiert den Typ, color (via currentColor) den Status. */}
                 <span style={{ flex: '0 0 auto', color, display: 'flex' }}>
@@ -209,7 +209,7 @@ export function TaskPanel() {
                   whiteSpace: 'nowrap',
                   opacity: ch.healthy ? 0.85 : 0.55,
                   fontStyle: ch.kind === 'image' ? 'italic' : 'normal',
-                }}>{ch.gpu ? <span style={{ opacity: 0.6 }}>({ch.gpu}) </span> : null}{ch.name}</span>
+                }}>{ch.group ? <span style={{ opacity: 0.6 }}>({ch.group}) </span> : null}{ch.name}</span>
                 {ch.running > 0 || ch.waiting > 0 ? (
                   <span style={{ flex: '0 0 auto', opacity: 0.55, fontVariantNumeric: 'tabular-nums' }}>
                     {ch.running > 0 ? `▶${ch.running}` : ''}

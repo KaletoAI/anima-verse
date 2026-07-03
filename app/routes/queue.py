@@ -23,8 +23,8 @@ async def queue_status() -> Dict[str, Any]:
     from app.core.task_queue import get_task_queue
 
     pm = get_provider_manager()
-    # get_combined_status() macht synchrone HTTP-Calls (Beszel) — im Threadpool laufen
-    # lassen, sonst blockiert der Event-Loop bei langsamem Beszel.
+    # get_combined_status() takes per-channel locks — run in the threadpool
+    # so a contended lock never blocks the event loop.
     combined = await asyncio.to_thread(pm.get_combined_status)
     tq = get_task_queue()
     tq_status = tq.get_status()
@@ -102,14 +102,6 @@ async def force_resume_queues() -> Dict[str, Any]:
     if resumed:
         return {"status": "resumed", "cleared": resumed}
     return {"status": "ok", "message": "Keine pausierten Queues gefunden"}
-
-
-@router.get("/vram")
-async def vram_status() -> Dict[str, Any]:
-    """VRAM-Status aller Ollama-Provider (via /api/ps)."""
-    from app.core.provider_manager import get_provider_manager
-    pm = get_provider_manager()
-    return pm.poll_all_vram()
 
 
 # ---------------------------------------------------------------------------

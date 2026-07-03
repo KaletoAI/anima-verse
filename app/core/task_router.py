@@ -24,30 +24,23 @@ def resolve_queue(
 
 
 def match_queue_name(name: str) -> Optional[str]:
-    """Resolve a provider/channel name to a channel key.
+    """Resolve a provider/backend name to a channel key.
 
-    Handles formats: "Provider:gpuN" (exact), "Provider:N" → "Provider:gpuN",
-    "Provider" → first matching channel.
+    Channel keys are the provider name (LLM providers) or
+    ``backend:<name>`` (image backends).
     """
     if not name:
         return None
     try:
         from app.core.provider_manager import get_provider_manager
         pm = get_provider_manager()
-        # Exact channel match
+        # Exact channel match (provider name or full "backend:<name>" key)
         if name in pm.channels:
             return name
-        # "Provider:N" → "Provider:gpuN"
-        if ":" in name:
-            parts = name.split(":", 1)
-            gpu_key = f"{parts[0]}:gpu{parts[1]}"
-            if gpu_key in pm.channels:
-                return gpu_key
-        # Provider name → first channel for this provider
-        for key in pm.channels:
-            prov = key.split(":")[0] if ":" in key else key
-            if prov == name:
-                return key
+        # Image-backend name → "backend:<name>"
+        backend_key = f"backend:{name}"
+        if backend_key in pm.channels:
+            return backend_key
     except Exception:
         pass
     return None

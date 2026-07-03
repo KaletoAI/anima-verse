@@ -1453,7 +1453,6 @@ class ImageGenerationSkill(BaseSkill):
             }
             def _op(b):
                 _p, _n = _prepare_for_backend(b)
-                _is_local = b.api_type in ("comfyui", "a1111")
 
                 def _gen():
                     # Tracker erst hier aktivieren: laeuft im Channel-Worker,
@@ -1481,7 +1480,7 @@ class ImageGenerationSkill(BaseSkill):
                     priority=_P.IMAGE_GEN,
                     callable_fn=_gen,
                     agent_name=character_name, label=b.name,
-                    gpu_type=("comfyui" if _is_local else b.api_type))
+                    gpu_type=b.api_type)
 
             # Re-Check anderer Backends, falls sie beim Start unavailable waren
             for b in self.backends:

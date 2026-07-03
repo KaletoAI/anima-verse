@@ -3483,7 +3483,9 @@ async def animate_character_image(character_name: str, image_name: str, request:
             video_name = f"{stem}.mp4"
             output_path = str(images_dir / video_name)
 
-            # Ueber Provider-Queue ausfuehren (GPU-Serialisierung + Queue-Panel)
+            # Run via provider queue (serialization + queue-panel visibility).
+            # gpu_type = the animation service id ("together"), which matches
+            # a channel of the same type if one exists.
             success = get_llm_queue().submit_gpu_task(
                 provider_name=service,
                 task_type="image_animate",
@@ -3492,7 +3494,7 @@ async def animate_character_image(character_name: str, image_name: str, request:
                     str(image_path), prompt, output_path, service=service),
                 agent_name=character_name,
                 label="Animation",
-                gpu_type="comfyui")
+                gpu_type=service)
 
             if not success:
                 _tq.track_finish(_track_id, error="Animation fehlgeschlagen")

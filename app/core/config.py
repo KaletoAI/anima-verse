@@ -693,11 +693,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "JWT_SECRET", server.get("jwt_secret", ""))
     _set(env, "STORAGE_DIR", server.get("storage_dir", "./storage"))
 
-    # Beszel
-    beszel = config.get("beszel", {})
-    _set(env, "BESZEL_URL", beszel.get("url", ""))
-    _set(env, "BESZEL_TOKEN", beszel.get("token", ""))
-
     # Providers (1-indexed)
     for i, prov in enumerate(config.get("providers", []), start=1):
         p = f"PROVIDER_{i}_"
@@ -707,16 +702,7 @@ def _flatten_to_env(config: dict) -> None:
         _set(env, f"{p}API_KEY", prov.get("api_key", ""))
         _set(env, f"{p}TIMEOUT", prov.get("timeout", 120))
         _set(env, f"{p}MAX_CONCURRENT", prov.get("max_concurrent", 1))
-        _set(env, f"{p}BESZEL_SYSTEM_ID", prov.get("beszel_system_id", ""))
-        for g, gpu in enumerate(prov.get("gpus", [])):
-            gp = f"{p}GPU{g}_"
-            _set(env, f"{gp}VRAM", gpu.get("vram_gb", 0))
-            _set(env, f"{gp}DEVICE", gpu.get("device", str(g)))
-            types = gpu.get("types", [])
-            _set(env, f"{gp}TYPE", ",".join(types) if isinstance(types, list) else types)
-            _set(env, f"{gp}LABEL", gpu.get("label", ""))
-            _set(env, f"{gp}MATCH_NAME", gpu.get("match_name", ""))
-            _set(env, f"{gp}MAX_CONCURRENT", gpu.get("max_concurrent", 1))
+        _set(env, f"{p}SERIALIZE_GROUP", prov.get("serialize_group", ""))
 
     # Memory Thresholds (3-Stufen-System)
     memory = config.get("memory", {})
@@ -757,22 +743,16 @@ def _flatten_to_env(config: dict) -> None:
                      "sampling_method", "schedule_type",
                      "checkpoint", "poll_interval", "max_wait", "disable_safety",
                      "scheduler", "clip_skip", "image_family", "timeout",
-                     "max_concurrent", "beszel_system_id",
+                     "max_concurrent", "serialize_group",
                      "response_format", "extra_params", "category", "prompt",
                      "ref_slot_count",
                      "full_mask", "terrain_hint", "mask_grow", "inner_crop",
                      "mask_format", "lora_url"]:
             val = be.get(key, "")
-            # extra_params kann ein Dict sein (JSON-Editor) — als JSON-String bruecken.
+            # extra_params can be a dict (JSON editor) — bridge as JSON string.
             if key == "extra_params" and isinstance(val, (dict, list)):
                 val = json.dumps(val)
             _set(env, f"{p}{key.upper()}", val)
-        for gi, g in enumerate(be.get("gpus", []) or []):
-            gp = f"{p}GPU{gi}_"
-            _set(env, f"{gp}VRAM", g.get("vram_gb", "") or "")
-            _set(env, f"{gp}DEVICE", g.get("device", "") or "")
-            _set(env, f"{gp}LABEL", g.get("label", "") or "")
-            _set(env, f"{gp}MATCH_NAME", g.get("match_name", "") or "")
 
     # Animation
     anim = config.get("animation", {})

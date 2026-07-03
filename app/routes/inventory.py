@@ -426,7 +426,7 @@ def generate_item_image_sync(
                 callable_fn=lambda: backend.generate(prompt_text, negative, params),
                 agent_name=item.get("name", item_id),
                 label=f"Item: {item.get('name', item_id)}",
-                gpu_type="comfyui")
+                gpu_type=backend.api_type)
         else:
             images = backend.generate(prompt_text, negative, params)
     except Exception as e:

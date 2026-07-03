@@ -1512,7 +1512,7 @@ async def generate_location_background(location_name: str, request: Request) -> 
                 return get_llm_queue().submit_gpu_task(
                     provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
                     callable_fn=lambda: b.generate(full_prompt, negative, params),
-                    agent_name=location.get("name", location_name), gpu_type="comfyui")
+                    agent_name=location.get("name", location_name), gpu_type=b.api_type)
             return b.generate(full_prompt, negative, params)
         try:
             images, backend = await asyncio.to_thread(
@@ -2190,7 +2190,7 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                     return get_llm_queue().submit_gpu_task(
                         provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
                         callable_fn=_gen, agent_name=location.get("name", location_name),
-                        gpu_type="comfyui")
+                        gpu_type=b.api_type)
                 return _gen()
             try:
                 images, backend = await asyncio.to_thread(
@@ -2700,7 +2700,7 @@ async def generate_time_variant(
                     return get_llm_queue().submit_gpu_task(
                         provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
                         callable_fn=_gen, agent_name=location.get("name", location_name),
-                        gpu_type="comfyui")
+                        gpu_type=b.api_type)
                 return _gen()
             try:
                 images, backend = await asyncio.to_thread(

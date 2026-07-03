@@ -357,7 +357,7 @@ def regenerate_image(character_name: str,
                     priority=Priority.NORMAL,
                     callable_fn=lambda: b.generate(_gen_prompt, _gen_neg, _bp, log_meta=_log_meta),
                     agent_name=character_name,
-                    gpu_type="comfyui")
+                    gpu_type=b.api_type)
             return b.generate(_gen_prompt, _gen_neg, _bp, log_meta=_log_meta)
         return _op
 

@@ -1,7 +1,7 @@
 """LLM Provider - represents a single API endpoint (e.g. Ollama server, OpenAI API).
 
-Multiple LLM instances can share one provider. Each provider has its own queue,
-configurable VRAM budget, and concurrency settings.
+Multiple LLM instances can share one provider. Each provider has its own queue
+and concurrency settings.
 """
 import time
 import requests
@@ -14,31 +14,14 @@ logger = get_logger("provider")
 
 
 @dataclass
-class GpuConfig:
-    """Per-GPU configuration from PROVIDER_X_GPUN_* env vars."""
-    index: int                          # 0, 1, 2, ...
-    vram_mb: int                        # VRAM in MB
-    device: str = ""                    # Beszel device key (e.g. "0", "card0") — Fallback wenn kein match_name greift
-    types: List[str] = field(default_factory=list)  # ["ollama"], ["openai"]
-    label: str = ""                     # Display name (e.g. "RTX 4090 #1")
-    match_name: str = ""                # Case-insensitive Substring im Beszel-Namen (stabil ueber Reboots)
-    max_concurrent: int = 1             # Max parallel tasks on this GPU
-
-
-@dataclass
 class Provider:
     """Represents a single LLM API endpoint."""
     name: str                           # e.g. "OllamaLocal"
     type: str                           # "ollama", "openai", etc.
     api_base: str                       # e.g. "http://localhost:11434/v1"
     api_key: str
-    vram_mb: Optional[int] = None       # Total LLM VRAM budget in MB (auto-computed from gpu_configs)
     max_concurrent: int = 1             # Max parallel requests
     timeout: Optional[int] = None       # Request timeout in seconds (None = use global default)
-    beszel_system_id: str = ""          # Beszel system ID for GPU VRAM monitoring
-    gpu_configs: List[GpuConfig] = field(default_factory=list)  # Per-GPU config
-    system: str = ""                    # Physical system name (e.g. "ASUS-GX10") for dashboard grouping
-    system_specs: str = ""              # Human-readable specs (e.g. "128 GB Unified RAM")
     available: bool = False
     # Cooldown gate set by upstream-failure detector (5xx, connection drop,
     # process-crash). check_availability() respects this without re-probing,
@@ -47,21 +30,9 @@ class Provider:
     _cooldown_until: float = field(default=0.0, repr=False)
     _cooldown_reason: str = field(default="", repr=False)
 
-    # VRAM tracking state (Ollama only)
-    vram_used_mb: int = 0
-    loaded_models: List[Dict[str, Any]] = field(default_factory=list)
-
-    # VRAM poll cache
-    _vram_cache_time: float = field(default=0.0, repr=False)
-
     # Model list cache
     _models_cache: List[Dict[str, Any]] = field(default_factory=list, repr=False)
     _models_cache_time: float = field(default=0.0, repr=False)
-
-    @property
-    def gpu_vram_overrides(self) -> Dict[str, int]:
-        """Derives Beszel device -> VRAM overrides from gpu_configs."""
-        return {g.device: g.vram_mb for g in self.gpu_configs if g.device}
 
     def get_native_api_base(self) -> str:
         """Returns API base without /v1 suffix (for native Ollama API calls)."""
@@ -161,104 +132,8 @@ class Provider:
 
         return self.available
 
-    def poll_vram_usage(self, cache_ttl: float = 10.0) -> Dict[str, Any]:
-        """Polls VRAM usage.
-
-        Ollama: via /api/ps.
-        Returns dict with vram_total_mb, vram_used_mb, vram_free_mb, loaded_models.
-        Cached for cache_ttl seconds.
-        """
-        if self.type != "ollama":
-            return {}
-
-        now = time.monotonic()
-        if (now - self._vram_cache_time) < cache_ttl and self.loaded_models is not None:
-            return {
-                "vram_total_mb": self.vram_mb,
-                "vram_used_mb": self.vram_used_mb,
-                "vram_free_mb": (self.vram_mb - self.vram_used_mb) if self.vram_mb else None,
-                "loaded_models": self.loaded_models,
-            }
-
-        try:
-            native = self.get_native_api_base()
-            resp = requests.get(f"{native}/api/ps", timeout=5)
-            if resp.status_code != 200:
-                return {}
-
-            data = resp.json()
-            models = data.get("models", [])
-            total_vram = 0
-            loaded = []
-
-            for m in models:
-                size = m.get("size_vram", 0)  # Ollama reports in bytes
-                size_mb = size // (1024 * 1024)
-                total_vram += size_mb
-                loaded.append({
-                    "name": m.get("name", ""),
-                    "size_mb": size_mb,
-                    "digest": m.get("digest", "")[:12],
-                })
-
-            self.vram_used_mb = total_vram
-            self.loaded_models = loaded
-            self._vram_cache_time = now
-
-            return {
-                "vram_total_mb": self.vram_mb,
-                "vram_used_mb": total_vram,
-                "vram_free_mb": (self.vram_mb - total_vram) if self.vram_mb else None,
-                "loaded_models": loaded,
-            }
-
-        except Exception as e:
-            logger.error("VRAM poll failed for %s: %s", self.name, e)
-            return {}
-
-    def get_free_vram_mb(self) -> Optional[int]:
-        """Returns free VRAM in MB, or None if unknown.
-
-        Tries multiple sources:
-        1. Ollama /api/ps (if type=ollama)
-        2. Beszel GPU monitoring (if beszel_system_id configured)
-        """
-        # Ollama: direct VRAM query
-        if self.type == "ollama" and self.vram_mb:
-            vram = self.poll_vram_usage(cache_ttl=5.0)
-            if vram and vram.get("vram_free_mb") is not None:
-                return vram["vram_free_mb"]
-
-        # Beszel: real-time GPU stats
-        if self.beszel_system_id:
-            try:
-                from app.core.beszel import get_gpu_stats
-                stats = get_gpu_stats(self.beszel_system_id, self.gpu_vram_overrides)
-                if stats and stats.get("gpu_free_mb") is not None:
-                    return stats["gpu_free_mb"]
-            except Exception as e:
-                logger.debug("[%s] Beszel VRAM query failed: %s", self.name, e)
-
-        return None
-
-    def can_accommodate(self, vram_mb: int) -> bool:
-        """Checks if this provider currently has enough free VRAM.
-
-        Args:
-            vram_mb: Required VRAM in MB. 0 = always True.
-
-        Returns:
-            True if enough free VRAM (or unknown/unmanaged).
-        """
-        if vram_mb <= 0:
-            return True
-        free = self.get_free_vram_mb()
-        if free is None:
-            return True  # Unknown = optimistic
-        return free >= vram_mb
-
     def _do_unload(self, timeout: int = 30) -> bool:
-        """Actually unloads all models via /unload endpoint."""
+        """Unloads all models via the /unload endpoint (used by the GPU-OOM retry)."""
         native = self.get_native_api_base()
         url = f"{native}/unload"
         try:
@@ -266,7 +141,6 @@ class Provider:
             resp = requests.get(url, timeout=timeout)
             if resp.status_code == 200:
                 logger.info("[%s] Models unloaded (VRAM freed)", self.name)
-                self._vram_cache_time = 0.0  # invalidate cache
                 return True
             else:
                 logger.warning("[%s] Unload returned HTTP %d", self.name, resp.status_code)

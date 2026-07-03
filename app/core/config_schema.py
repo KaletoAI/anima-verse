@@ -74,14 +74,6 @@ SECTIONS = {
             },
         },
     },
-    "beszel": {
-        "label": "Beszel GPU Monitoring",
-        "icon": "📊",
-        "fields": {
-            "url": {"type": "str", "label": "Beszel URL", "placeholder": "http://host:8090", "description": "Fuer intelligentes VRAM-Management: Models nur entladen wenn VRAM knapp"},
-            "token": {"type": "password", "label": "API Token", "sensitive": True, "description": "Read-only API token (Beszel UI -> Settings -> Tokens)"},
-        },
-    },
     "providers": {
         "label": "LLM Providers",
         "icon": "🤖",
@@ -100,23 +92,7 @@ SECTIONS = {
             "api_key": {"type": "password", "label": "API Key", "sensitive": True, "default": "not-needed", "description": "API Key (bei lokalen Providern: 'not-needed')"},
             "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request Timeout in Sekunden"},
             "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Maximale gleichzeitige Anfragen"},
-            "beszel_system_id": {"type": "str", "label": "Beszel System-ID", "description": "System-ID fuer GPU VRAM-Ueberwachung via Beszel"},
-            "gpus": {
-                "type": "array",
-                "label": "GPUs",
-                "item_fields": {
-                    "label": {"type": "str", "label": "Label", "description": "Anzeigename der GPU (z.B. 'RTX 4090 #1'). WICHTIG: gleiches Label hier UND an einem Image-Backend = dieselbe physische GPU → Chat + Bild serialisieren (nur einer gleichzeitig). Leer = keine Serialisierung."},
-                    "vram_gb": {"type": "int", "label": "VRAM (GB)", "min": 0, "max": 512},
-                    "device": {"type": "str", "label": "Device", "default": "0", "description": "Beszel GPU-Key (optional, fuer Monitoring)"},
-                    "types": {
-                        "type": "str",
-                        "label": "Nutzung",
-                        "description": "Comma-separated: ollama, openai. Image-generation runs are routed through the per-backend channel under Image Generation → Backends.",
-                        "default": "openai",
-                    },
-                    "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Max gleichzeitige Aufgaben auf dieser GPU"},
-                },
-            },
+            "serialize_group": {"type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
         },
     },
     "llm_retry": {
@@ -432,18 +408,7 @@ SECTIONS = {
                     "max_wait": {"type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed.", "applicable_for": ["civitai", "together"]},
                     "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request-Timeout fuer die Bild-Generierung (HTTP). Bei langsamen Modellen/grossen Bildern hochsetzen — fuer das synchrone Gateway grosszuegig (z.B. 300). Gilt fuer together/openai_diffusion/localai/openai_chat.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat"]},
                     "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallele Jobs auf dieser Backend-Queue. Mehr gleichzeitige Anfragen warten, bis ein Slot frei wird. Gilt fuer alle Backend-Typen (auch Cloud/OpenAI)."},
-                    "beszel_system_id": {"type": "str", "label": "Beszel System-ID", "description": "Optional: Beszel system for the VRAM display in the queue panel.", "applicable_for": ["a1111"]},
-                    "gpus": {
-                        "type": "array",
-                        "label": "GPUs (optional)",
-                        "applicable_for": ["a1111", "openai_diffusion", "localai", "openai_chat", "together", "civitai"],
-                        "item_fields": {
-                            "label": {"type": "str", "label": "Label", "description": "Anzeigename, z.B. 'RTX 3090'. WICHTIG: gleiches Label auf einem LLM-Provider UND einem Image-Backend = dieselbe physische GPU → die Calls (Chat + Bild) serialisieren (nur einer gleichzeitig). Leer = keine Serialisierung."},
-                            "vram_gb": {"type": "int", "label": "VRAM (GB)", "min": 0, "max": 512},
-                            "device": {"type": "str", "label": "Device", "default": "0", "description": "Beszel GPU-Key (Fallback wenn match_name nicht greift)"},
-                            "match_name": {"type": "str", "label": "Match Name", "description": "Substring im Beszel-GPU-Namen — stabil ueber Reboots"},
-                        },
-                    },
+                    "serialize_group": {"type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
                 },
             },
         },

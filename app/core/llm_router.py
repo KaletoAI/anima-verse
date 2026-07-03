@@ -177,6 +177,13 @@ async def _warmup_one(entry: dict) -> None:
     model = (entry.get("model") or "").strip()
     if not provider_name or not model:
         return
+    # Entries that ONLY serve pose_embedding are embedding models — a chat
+    # completion ping would hit a non-chat model. Skip them.
+    _tasks = [t.get("task") for t in (entry.get("tasks") or []) if isinstance(t, dict)]
+    if _tasks and all(t == "pose_embedding" for t in _tasks):
+        logger.info("Preload skip: %s/%s — embedding-only entry (pose_embedding)",
+                    provider_name, model)
+        return
     pm = get_provider_manager()
     provider = pm.get_provider(provider_name)
     if not provider:

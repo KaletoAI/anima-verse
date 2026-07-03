@@ -3,7 +3,7 @@
  * die Player-UI braucht:
  *   • llmTasks    — laufende LLM-Calls (Chat/Thought/Respond) aus
  *                   providers[*].chat_active. Das sind die "X denkt …"-Einträge
- *                   mit Modell, GPU, Iteration und Dauer-Schätzung.
+ *                   mit Modell, Iteration und Dauer-Schätzung.
  *   • trackedTasks — getrackte Bild-/Video-/TTS-/GPU-Tasks (active_tasks).
  *   • thinkingAgents — Set der agent_names mit aktivem LLM-Call (für den
  *                      "denkt …"-Indikator in der Szene / am Figuren-Avatar).
@@ -61,7 +61,7 @@ export interface RecentTaskInfo {
 interface ProviderChannel {
   provider?: string
   type?: string
-  gpu?: string
+  serialize_group?: string
   healthy?: boolean
   chat_active?: LLMTaskInfo | LLMTaskInfo[] | null
   current_tasks?: LLMTaskInfo[]
@@ -79,8 +79,9 @@ export interface ChannelStatus {
   /** Raw backend/provider type (civitai/together/openai_chat/
    *  openai_diffusion/a1111/…) for type-specific symbols in the panel. */
   type: string
-  /** GPU label(s) of the channel (empty = no labelled GPU). */
-  gpu: string
+  /** Serialize group of the channel (empty = no group). Channels with the
+   *  same group run strictly one at a time. */
+  group: string
   running: number
   waiting: number
 }
@@ -216,7 +217,7 @@ function collectChannels(providers: Record<string, ProviderChannel> | undefined,
     const waiting = (ch?.pending?.length || 0) + trackedWaiting
     out.push({ key, name, healthy: !!ch?.healthy,
                busy: running > 0, kind: isImage ? 'image' : 'llm', type,
-               gpu: (ch?.gpu || '').trim(), running, waiting })
+               group: (ch?.serialize_group || '').trim(), running, waiting })
   }
   // LLM-Provider zuerst, dann Image-Backends; innerhalb der Gruppe alphabetisch.
   out.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name)

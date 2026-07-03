@@ -156,9 +156,8 @@ def reload_skill_manager() -> Dict[str, Any]:
         pm = get_provider_manager()
         for prov in pm.providers.values():
             status = "OK" if prov.available else "FAIL"
-            vram = f", vram={prov.vram_mb}MB" if prov.vram_mb else ""
-            logger.info("  Prov  %s  %s (%s, concurrent=%d%s)",
-                        status, prov.name, prov.type, prov.max_concurrent, vram)
+            logger.info("  Prov  %s  %s (%s, concurrent=%d)",
+                        status, prov.name, prov.type, prov.max_concurrent)
         if not pm.providers:
             logger.info("  Prov  --    No providers configured")
     except Exception:

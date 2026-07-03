@@ -641,8 +641,8 @@ def _apply_section_reloads(changed_keys: list) -> list:
         except Exception as e:
             _log.warning("settings_save: reload '%s' failed: %s", label, e)
 
-    # Provider-Manager: providers + image_generation (Backends sind ueber
-    # SKILL_IMAGEGEN_N_GPU_PROVIDER an Provider-GPUs gebunden).
+    # Provider manager: providers + image_generation (image backends get
+    # their own channels, so both sections affect the channel setup).
     if "providers" in changed_keys or "image_generation" in changed_keys:
         from app.core.provider_manager import reload_provider_manager
         _run("providers", reload_provider_manager)
@@ -1965,9 +1965,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .lora-row input:first-child { flex: 3; }
 .lora-row input:last-child { flex: 1; max-width: 80px; }
 
-/* GPU rows */
-.gpu-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
-.gpu-row input, .gpu-row select { flex: 1; }
+/* Inline field rows (task-order editor) */
+.flex-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
+.flex-row input, .flex-row select { flex: 1; }
 
 /* ── Toast ── */
 .toast {
@@ -2938,10 +2938,6 @@ function renderFields(fields, data, path) {
             html += '</div></div>';
             continue;
         }
-        if (f.type === 'array' && fKey === 'gpus') {
-            html += renderGpuField(data[fKey] || [], path + '.' + fKey);
-            continue;
-        }
         if (f.type === 'task_order_list') {
             html += renderTaskOrderList(data[fKey] || [], path + '.' + fKey, f);
             continue;
@@ -2992,8 +2988,6 @@ function renderInput(f, val, path) {
             return '<textarea id="' + id + '" onchange="setVal(\\'' + path + '\\', this.value)">' + esc(val) + '</textarea>';
         case 'provider_select':
             return renderProviderSelect(val, path);
-        case 'gpu_select':
-            return renderGpuSelect(val, path);
         case 'model_select':
             return renderModelSelect(val, path);
         case 'imagegen_select':
@@ -3020,22 +3014,6 @@ function renderProviderSelect(val, path) {
         opts += '<option value="' + esc(p.name) + '"' + (p.name === val ? ' selected' : '') + '>' + esc(p.name) + ' (' + p.type + ')</option>';
     }
     return '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value); refreshModelSelect(\\'' + path + '\\')">' + opts + '</select>';
-}
-
-function renderGpuSelect(val, path) {
-    const providers = CONFIG.providers || [];
-    let opts = '<option value="">— None —</option>';
-    for (const p of providers) {
-        const gpus = p.gpus || [];
-        for (let i = 0; i < gpus.length; i++) {
-            const g = gpus[i];
-            const key = p.name + ':' + i;
-            const label = g.label || ('GPU ' + i);
-            const vram = g.vram_gb ? ' — ' + g.vram_gb + ' GB' : '';
-            opts += '<option value="' + esc(key) + '"' + (key === val ? ' selected' : '') + '>' + esc(p.name) + ' / ' + esc(label) + vram + '</option>';
-        }
-    }
-    return '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">' + opts + '</select>';
 }
 
 function renderModelSelect(val, path) {
@@ -3420,7 +3398,7 @@ function renderTaskOrderList(items, path, f) {
 function renderTaskOrderRow(item, path, i) {
     const task = item.task || '';
     const order = (item.order !== undefined ? item.order : 1);
-    let html = '<div class="gpu-row" id="taskrow-' + path + '-' + i + '">';
+    let html = '<div class="flex-row" id="taskrow-' + path + '-' + i + '">';
     html += '<select data-taskrow="' + path + '-' + i + '" style="flex:3;" onchange="setVal(\\'' + path + '[' + i + '].task\\', this.value)">';
     html += '<option value="' + esc(task) + '" selected>' + esc(task || '— select —') + '</option>';
     html += '</select>';
@@ -3574,36 +3552,6 @@ function rerenderTaskOrderList(path) {
     }
 }
 
-// ── GPU Field ──
-function renderGpuField(gpus, path) {
-    // Backend-Kontext: image_generation.backends[N].gpus — die GPU dort ist nur
-    // Anzeige/Beszel-Mapping (kein types-Feld, max_concurrent lebt auf dem
-    // Backend selbst), deshalb die Spalten weglassen.
-    const isBackend = path.indexOf('image_generation.backends') !== -1;
-    const label = isBackend ? 'GPUs (optional — Anzeige/Beszel)' : 'GPUs';
-    let html = '<div class="field"><label>' + label + '</label><div class="input-wrap">';
-    html += '<div id="gpu-' + path + '">';
-    for (let i = 0; i < gpus.length; i++) {
-        const g = gpus[i];
-        html += '<div class="gpu-row">';
-        html += '<input type="text" value="' + esc(g.label || '') + '" placeholder="Label" style="max-width:120px;" onchange="setVal(\\'' + path + '[' + i + '].label\\', this.value)">';
-        html += '<input type="number" value="' + (g.vram_gb || 0) + '" placeholder="VRAM GB" style="max-width:80px;" onchange="setVal(\\'' + path + '[' + i + '].vram_gb\\', parseInt(this.value))">';
-        html += '<input type="text" value="' + esc(g.match_name || '') + '" placeholder="Match-Name (z.B. 4070)" title="Case-insensitive Substring im Beszel-GPU-Namen — wird zuerst probiert (stabil ueber Reboots)" style="max-width:140px;" onchange="setVal(\\'' + path + '[' + i + '].match_name\\', this.value)">';
-        html += '<input type="text" value="' + esc(g.device || '') + '" placeholder="Device (Fallback)" title="Beszel device-id — nur noetig wenn Match-Name nicht eindeutig greift (z.B. zwei gleiche Modelle, oder Beszel meldet falschen Namen)" style="max-width:100px;opacity:0.7;" onchange="setVal(\\'' + path + '[' + i + '].device\\', this.value)">';
-        if (!isBackend) {
-            const typesStr = Array.isArray(g.types) ? g.types.join(',') : (g.types || '');
-            html += '<input type="text" value="' + esc(typesStr) + '" placeholder="ollama,openai" onchange="setVal(\\'' + path + '[' + i + '].types\\', this.value.split(\\',\\').map(s=>s.trim()))">';
-            html += '<input type="number" value="' + (g.max_concurrent || 1) + '" placeholder="MC" title="Max Concurrent" min="1" max="50" style="max-width:55px;" onchange="setVal(\\'' + path + '[' + i + '].max_concurrent\\', parseInt(this.value) || 1)">';
-        }
-        html += '<button class="btn btn-sm btn-danger" onclick="removeSubItem(\\'' + path + '\\', ' + i + ')">✕</button>';
-        html += '</div>';
-    }
-    html += '</div>';
-    html += '<button class="btn btn-sm" style="margin-top:4px;" onclick="addGpu(\\'' + path + '\\')">+ GPU</button>';
-    html += '</div></div>';
-    return html;
-}
-
 // ── Data Access ──
 function setVal(path, value) {
     const parts = parsePath(path);
@@ -3693,7 +3641,7 @@ function addArrayItem(path, type) {
         } else if (path === 'content_marketplace.catalogs') {
             obj.push({ name: '', url: '', auth_token: '', enabled: true });
         } else {
-            obj.push({ name: 'New', enabled: true, gpus: [] });
+            obj.push({ name: 'New', enabled: true });
         }
         SELECTED_ITEM[path] = path + '[' + (obj.length - 1) + ']';
     }
@@ -3764,21 +3712,6 @@ function removeSubItem(path, index) {
     let obj = CONFIG;
     for (const p of parts) obj = obj[p];
     obj.splice(index, 1);
-    renderSection(ACTIVE_SECTION);
-}
-
-function addGpu(path) {
-    const parts = parsePath(path);
-    let obj = CONFIG;
-    for (const p of parts) {
-        if (obj[p] === undefined) obj[p] = [];
-        obj = obj[p];
-    }
-    const isBackend = path.indexOf('image_generation.backends') !== -1;
-    const item = isBackend
-        ? { vram_gb: 0, label: '', match_name: '', device: '' }
-        : { vram_gb: 0, types: ['openai'], match_name: '', device: '' };
-    obj.push(item);
     renderSection(ACTIVE_SECTION);
 }
 

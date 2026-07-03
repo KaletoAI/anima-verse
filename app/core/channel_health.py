@@ -47,7 +47,7 @@ class ChannelHealthMonitor:
         self._thread.start()
         logger.info("ChannelHealthMonitor started (poll every %ds)", POLL_INTERVAL_S)
 
-    def is_healthy(self, channel_key: str, gpu_type: str = "") -> bool:
+    def is_healthy(self, channel_key: str) -> bool:
         """True when the channel is usable.
 
         ``backend:<name>`` channels report the cached reachability of their
@@ -164,9 +164,9 @@ def get_monitor() -> ChannelHealthMonitor:
     return _monitor
 
 
-def is_healthy(channel_key: str, gpu_type: str = "") -> bool:
+def is_healthy(channel_key: str) -> bool:
     """Public API for find_channel (and tests)."""
-    return get_monitor().is_healthy(channel_key, gpu_type)
+    return get_monitor().is_healthy(channel_key)
 
 
 def start() -> None:

@@ -198,10 +198,9 @@ async def lifespan(app: FastAPI):
     _summary_lines = ["-" * 80, "AVAILABILITY SUMMARY", "-" * 80]
     for prov in provider_manager.providers.values():
         status = "OK" if prov.available else "FAIL"
-        vram = f", vram={prov.vram_mb}MB" if prov.vram_mb else ""
         _summary_lines.append(
             f"  Prov  {status:4s}  {prov.name} "
-            f"({prov.type}, concurrent={prov.max_concurrent}{vram})")
+            f"({prov.type}, concurrent={prov.max_concurrent})")
     if not provider_manager.providers:
         _summary_lines.append("  Prov  --    No providers configured")
     for _entry in _routing:
@@ -223,15 +222,6 @@ async def lifespan(app: FastAPI):
     else:
         _summary_lines.append(f"  TTS   --    Disabled")
     _summary_lines.append(f"  Tele  OK    Telegram Channel (per-agent bot tokens)")
-    from app.core.beszel import check_status as _beszel_check_status
-    _beszel = _beszel_check_status()
-    if not _beszel["configured"]:
-        _summary_lines.append(f"  Beszl --    Not configured")
-    elif _beszel["ok"]:
-        _summary_lines.append(f"  Beszl OK    GPU Monitoring ({_beszel['url']})")
-    else:
-        _summary_lines.append(
-            f"  Beszl FAIL  GPU Monitoring ({_beszel['url']}) — {_beszel['error']}")
     _summary_lines.append("-" * 80)
     logger.info("\n%s", "\n".join(_summary_lines))
 

@@ -33,11 +33,12 @@ Infermatic) in the [README](../README.md#getting-started).
 
    - **Server** — set a real `JWT Secret`.
    - **LLM Providers** — at least one provider (Ollama, OpenAI-compatible, Anthropic) with `name`,
-     `type`, `api_base` and (for local providers) GPU/VRAM info.
+     `type` and `api_base`. Optional `serialize_group`: give the provider and any image backend
+     sharing the same physical GPU the same group name so their calls run one at a time.
    - **LLM Models (Simple)** — pick a provider + model per job category (chat / tools / helper /
      vision / embedding). This fills the advanced routing automatically. Embedding can run built-in
      ("Internal") with no external endpoint.
-   - *(optional)* **Image Backends**, **TTS**, **Beszel** — only for the corresponding features.
+   - *(optional)* **Image Backends**, **TTS** — only for the corresponding features.
 
    API keys, the JWT secret and passwords are written to a separate **`secrets.json`** next to
    `config.json` (gitignored), so the demo world can ship with an empty `config.json` and each user

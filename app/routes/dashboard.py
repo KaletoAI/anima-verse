@@ -469,16 +469,13 @@ const COLORS = {
 let _data = null;
 let _hours = 24;
 let _systemMap = {};  // provider/backend name -> system name
-let _systemSpecs = {};  // system name -> specs string
 let loadChart = null, concChart = null, taskChart = null, provChart = null, modelDurChart = null, modelAvgChart = null, modelTokChart = null;
 let _sortCol = 'starttime', _sortAsc = false;
 
 // --- System Mapping ---
 function _buildSystemMap(systems) {
     _systemMap = {};
-    _systemSpecs = {};
     for (const sys of systems) {
-        _systemSpecs[sys.name] = sys.specs || '';
         for (const p of (sys.providers || [])) _systemMap[p] = sys.name;
         for (const b of (sys.image_backends || [])) _systemMap[b] = sys.name;
     }
@@ -550,12 +547,11 @@ function renderCards() {
     for (const [name, s] of Object.entries(sysStats).sort((a,b) => (b[1].llmDur + b[1].imgDur) - (a[1].llmDur + a[1].imgDur))) {
         if (name === 'Extern') continue;
         const color = COLORS.get(name);
-        const specs = _systemSpecs[name] || '';
         const totalDur = (s.llmDur + s.imgDur).toFixed(0);
         sysCardsHtml += `<div class="card" style="border-left:3px solid ${color}">
             <div class="card-label" style="color:${color}">${_esc(name)}</div>
             <div class="card-value" style="color:${color};font-size:20px;">${totalDur}s</div>
-            <div class="card-sub">${specs ? specs + '<br>' : ''}LLM: ${s.llmCount} (${s.llmDur.toFixed(0)}s) | Bild: ${s.imgCount} (${s.imgDur.toFixed(0)}s)</div>
+            <div class="card-sub">LLM: ${s.llmCount} (${s.llmDur.toFixed(0)}s) | Bild: ${s.imgCount} (${s.imgDur.toFixed(0)}s)</div>
         </div>`;
     }
 

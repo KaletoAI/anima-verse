@@ -287,7 +287,7 @@ def _do_generate(event_id: str,
                 callable_fn=lambda: backend.generate(full_prompt, negative, params),
                 agent_name="system",
                 label=f"Event: {event_id}{' (after)' if resolved else ''}",
-                gpu_type="comfyui")
+                gpu_type=backend.api_type)
         else:
             images = backend.generate(full_prompt, negative, params)
     except Exception as e:
