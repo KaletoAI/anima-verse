@@ -16,6 +16,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useAuth } from '../lib/AuthGate'
 import { useAvatarSwitch } from './AvatarGate'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../lib/api'
+import { usePoll } from './usePolling'
 import { useToast } from '../lib/Toast'
 import { ChatGalleryPicker } from './ChatGalleryPicker'
 import { GiftPicker, type GiftResult } from './GiftPicker'
@@ -500,27 +501,18 @@ export function PlayerApp() {
     return null
   }
 
-  const load = useCallback(async () => {
-    try {
-      setData(await apiGet<SceneData>('/play/scene'))
-    } catch {
-      /* api.ts redirects to login on 401/403 */
-    }
-  }, [])
+  // Scene poll via the shared hub; `load` stays as a thin refresh wrapper so
+  // the many `await load()` callers (send, step, enter-room, party) work as before.
+  const { data: sceneData, refresh: refreshScene } = usePoll<SceneData>(
+    'play-scene', () => apiGet<SceneData>('/play/scene'), { intervalMs: 5000 })
+  useEffect(() => { if (sceneData) setData(sceneData) }, [sceneData])
+  const load = refreshScene
 
-  useEffect(() => {
-    load()
-    const id = setInterval(load, 5000)
-    return () => clearInterval(id)
-  }, [load])
-
-  // Badges: gemerkten IG-Stand laden, dann langsam pollen (offene Themen).
+  // Badges: remember the seen IG id once, then poll slowly (open topics).
   useEffect(() => {
     try { igSeenRef.current = localStorage.getItem('play.ig.seen') } catch { /* ignore */ }
-    refreshBadges()
-    const id = setInterval(refreshBadges, 20000)
-    return () => clearInterval(id)
-  }, [refreshBadges])
+  }, [])
+  usePoll('play-badges', refreshBadges, { intervalMs: 20000 })
 
   const toggleAddressee = useCallback((name: string) => {
     setAddressees((prev) =>
@@ -611,7 +603,6 @@ export function PlayerApp() {
     if (hasOthers) {
       setOrder((o) => (o[o.length - 1] === 'others' ? o : [...o.filter((x) => x !== 'others'), 'others']))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasOthers])
   // Szene-Indikator: NUR Antworten ("X antwortet …"), keine Hintergrund-Gedanken.
   // Das Task-Panel zeigt unabhängig davon alle LLM-Calls (auch Gedanken).

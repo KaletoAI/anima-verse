@@ -10,8 +10,9 @@
  *
  * plan-room-conversation Phase 3 (Feedback-Schleife sichtbar machen).
  */
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
 import { apiGet } from '../lib/api'
+import { usePoll } from './usePolling'
 
 export interface LLMTaskInfo {
   task_id?: string
@@ -225,42 +226,32 @@ function collectChannels(providers: Record<string, ProviderChannel> | undefined,
   return out
 }
 
+// One shared /queue/status feed for all consumers (TaskPanel, GenerationIndicator)
+// via the central poll hub — a single fetch, visibility pause and error backoff.
+// The fastest registered interval wins; TaskPanel passes 3000, the indicator 3000.
 export function useQueue(intervalMs = 2000): QueueSnapshot {
-  const [snap, setSnap] = useState<QueueSnapshot>(EMPTY)
+  const { data } = usePoll<QueueStatus>(
+    'queue-status', () => apiGet<QueueStatus>('/queue/status'), { intervalMs })
 
-  useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      try {
-        const d = await apiGet<QueueStatus>('/queue/status')
-        if (!alive) return
-        const llmTasks = collectLLM(d.providers)
-        const agentActivity: Record<string, AgentActivity> = {}
-        for (const tk of llmTasks) {
-          const name = (tk.agent_name || '').trim()
-          if (!name) continue
-          const responding = RESPONDING_TYPES.has(tk.task_type || '')
-          // "antwortet" gewinnt gegen "denkt", falls beides für denselben Agent läuft
-          if (!agentActivity[name] || responding) {
-            agentActivity[name] = { responding, label: tk.label }
-          }
-        }
-        setSnap({ llmTasks, pendingLLM: collectPendingLLM(d.providers),
-                  trackedTasks: d.active_tasks || [], recent: collectRecent(d), agentActivity,
-                  channels: collectChannels(d.providers, d.active_tasks || []) })
-      } catch {
-        /* ignore poll errors (api.ts handles auth redirect) */
+  return useMemo<QueueSnapshot>(() => {
+    if (!data) return EMPTY
+    const llmTasks = collectLLM(data.providers)
+    const agentActivity: Record<string, AgentActivity> = {}
+    for (const tk of llmTasks) {
+      const name = (tk.agent_name || '').trim()
+      if (!name) continue
+      const responding = RESPONDING_TYPES.has(tk.task_type || '')
+      // "responding" beats "thinking" if both run for the same agent
+      if (!agentActivity[name] || responding) {
+        agentActivity[name] = { responding, label: tk.label }
       }
     }
-    tick()
-    const id = setInterval(tick, intervalMs)
-    return () => {
-      alive = false
-      clearInterval(id)
+    return {
+      llmTasks, pendingLLM: collectPendingLLM(data.providers),
+      trackedTasks: data.active_tasks || [], recent: collectRecent(data), agentActivity,
+      channels: collectChannels(data.providers, data.active_tasks || []),
     }
-  }, [intervalMs])
-
-  return snap
+  }, [data])
 }
 
 /** Sekunden seit started_at (UTC-ISO), oder null wenn unbekannt. */

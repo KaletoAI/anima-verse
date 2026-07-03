@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
+import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
@@ -74,17 +75,8 @@ function StatBars({ c }: { c: CharState }) {
 
 export function OthersPanel() {
   const { t } = useI18n()
-  const [data, setData] = useState<Others | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      try { const d = await apiGet<Others>('/play/others'); if (alive) setData(d) } catch { /* auth handled */ }
-    }
-    tick()
-    const id = setInterval(tick, 5000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
+  const { data } = usePoll<Others>(
+    'play-others', () => apiGet<Others>('/play/others'), { intervalMs: 5000 })
 
   if (!data) return <EmptyState small title={t('Loading…')} />
   if (!data.characters.length) {

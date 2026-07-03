@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 
 // Anker-Positionen (x%, y%) im KOORDINATENSYSTEM DES BILDES (silhouette.svg ist
@@ -95,24 +96,19 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
     return () => ro.disconnect()
   }, [avatarReady])
 
-  const load = useCallback(async () => {
-    try { setData(await apiGet<Belongings>('/play/belongings')) } catch { /* auth handled */ }
-  }, [])
-  useEffect(() => {
-    load()
-    const id = setInterval(load, 5000)
-    return () => clearInterval(id)
-  }, [load])
+  const { data: polled, refresh } = usePoll<Belongings>(
+    'play-belongings', () => apiGet<Belongings>('/play/belongings'), { intervalMs: 5000 })
+  useEffect(() => { if (polled) setData(polled) }, [polled])
 
   const act = useCallback(async (url: string, body: Record<string, unknown>, closeAfter = false) => {
     if (busy) return
     setBusy(true)
     try {
       await apiPost(url, body)
-      await load()
-      if (closeAfter) onClose?.()  // z.B. Inventar nach Self-Cast schließen (wie alte UI)
+      await refresh()
+      if (closeAfter) onClose?.()  // e.g. close inventory after self-cast (like the old UI)
     } catch { /* ignore */ } finally { setBusy(false) }
-  }, [busy, load, onClose])
+  }, [busy, refresh, onClose])
 
   const filtered = useMemo(() => {
     let list = data.items

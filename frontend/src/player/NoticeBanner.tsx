@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { usePoll } from './usePolling'
 
 interface NoticeEvent { id: string; category: string; text: string }
 interface NoticeItem { id: number; kind: string; body: string }
@@ -30,16 +31,12 @@ const EMPTY: Notices = { avatar: '', events: [], leave_blocked: null, force_warn
 export function NoticeBanner() {
   const { t } = useI18n()
   const [n, setN] = useState<Notices>(EMPTY)
+  const { data } = usePoll<Notices>(
+    'play-notices', () => apiGet<Notices>('/play/notices'), { intervalMs: 5000 })
 
-  const load = useCallback(async () => {
-    try { setN(await apiGet<Notices>('/play/notices')) } catch { /* auth handled */ }
-  }, [])
-
-  useEffect(() => {
-    load()
-    const id = setInterval(load, 5000)
-    return () => clearInterval(id)
-  }, [load])
+  // Polled state is authoritative; dismiss/leaveParty below patch it
+  // optimistically until the next poll (same net behavior as before).
+  useEffect(() => { if (data) setN(data) }, [data])
 
   const dismiss = useCallback(async (id: number) => {
     try { await apiPost(`/notifications/${id}/read`, {}) } catch { /* ignore */ }

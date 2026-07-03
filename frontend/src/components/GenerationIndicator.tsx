@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
+import { usePoll } from '../player/usePolling'
 
 /**
- * Kompakter Header-Indikator für laufende/wartende Generierungen (Bild/Video/
- * TTS/GPU-Tasks). Pollt /queue/status (gleiche Quelle wie das Player-TaskPanel)
- * und zeigt „▶ N / ⏳ M"; Tooltip listet die einzelnen Titel. Unsichtbar, wenn
- * nichts läuft.
+ * Compact header indicator for running/pending generations (image/video/TTS/
+ * GPU tasks). Shares the /queue/status poll with the player TaskPanel (same
+ * hub key = one fetch) and shows "▶ N / ⏳ M"; the tooltip lists the titles.
+ * Invisible when nothing runs.
  */
 interface ActiveTask {
   task_id?: string
@@ -19,20 +19,10 @@ interface ActiveTask {
 
 export function GenerationIndicator() {
   const { t } = useI18n()
-  const [tasks, setTasks] = useState<ActiveTask[]>([])
-
-  useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      try {
-        const d = await apiGet<{ active_tasks?: ActiveTask[] }>('/queue/status')
-        if (alive) setTasks(d.active_tasks || [])
-      } catch { /* ignore — header indicator is best-effort */ }
-    }
-    tick()
-    const id = setInterval(tick, 3000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
+  const { data } = usePoll<{ active_tasks?: ActiveTask[] }>(
+    'queue-status', () => apiGet<{ active_tasks?: ActiveTask[] }>('/queue/status'),
+    { intervalMs: 3000 })
+  const tasks = data?.active_tasks || []
 
   if (!tasks.length) return null
 

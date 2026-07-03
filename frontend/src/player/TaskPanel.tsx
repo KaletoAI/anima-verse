@@ -157,12 +157,14 @@ function TrackedRow({ tk, nowMs }: { tk: TrackedTaskInfo; nowMs: number }) {
 
 export function TaskPanel() {
   const { t } = useI18n()
-  const { llmTasks, pendingLLM, trackedTasks, recent, channels } = useQueue(2000)
+  // Shared /queue/status feed via the poll hub (one fetch, visibility pause,
+  // error backoff). GenerationIndicator subscribes to the same key.
+  const { llmTasks, pendingLLM, trackedTasks, recent, channels } = useQueue(3000)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [showRecent, setShowRecent] = useState(false)
 
-  // Sekündlicher Tick, solange irgendwas mit mitlaufender Dauer/Wartezeit
-  // angezeigt wird (laufende + wartende LLM-Calls + getrackte Tasks).
+  // One-second UI clock (local, not a network poll) while anything with a
+  // running duration / wait time is shown (running + pending LLM + tracked).
   const anyLive = llmTasks.length > 0 || pendingLLM.length > 0 || trackedTasks.length > 0
   useEffect(() => {
     if (!anyLive) return

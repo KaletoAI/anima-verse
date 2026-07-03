@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
@@ -23,7 +24,8 @@ interface SelfData {
 
 export function SelfPanel() {
   const { t } = useI18n()
-  const [data, setData] = useState<SelfData | null>(null)
+  const { data, refresh } = usePoll<SelfData>(
+    'play-self', () => apiGet<SelfData>('/play/self'), { intervalMs: 5000 })
   const [moodDraft, setMoodDraft] = useState('')
   const [moodFocused, setMoodFocused] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -44,26 +46,17 @@ export function SelfPanel() {
     // frueher Return ohne rootRef; erst nach dem Laden ist das Div da).
   }, [data?.avatar])
 
-  const load = useCallback(async () => {
-    try {
-      const d = await apiGet<SelfData>('/play/self')
-      setData(d)
-      if (!moodFocused) setMoodDraft(d.mood || '')
-    } catch { /* api handles auth redirect */ }
-  }, [moodFocused])
-
+  // Mirror the polled mood into the draft while the field is not focused.
   useEffect(() => {
-    load()
-    const id = setInterval(load, 5000)
-    return () => clearInterval(id)
-  }, [load])
+    if (data && !moodFocused) setMoodDraft(data.mood || '')
+  }, [data, moodFocused])
 
   const setMood = useCallback(async () => {
     if (busy) return
     setBusy(true)
-    try { await apiPost('/play/self/mood', { mood: moodDraft.trim() }); await load() }
+    try { await apiPost('/play/self/mood', { mood: moodDraft.trim() }); await refresh() }
     catch { /* ignore */ } finally { setBusy(false) }
-  }, [busy, moodDraft, load])
+  }, [busy, moodDraft, refresh])
 
   if (!data || !data.avatar) {
     return <EmptyState icon="self" title={t('No active avatar')} />
