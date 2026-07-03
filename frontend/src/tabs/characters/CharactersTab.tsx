@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
-import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
+import { ExportButton, PublishButton } from '../../components/ImportExport'
 import {
   loadActivities,
   loadCharacters,
@@ -15,7 +14,6 @@ import {
   type RoomRef,
 } from '../../lib/refs'
 import { SoulEditor } from './SoulEditor'
-import { DailyScheduleGrid } from './DailyScheduleGrid'
 import { ImageOverrides } from './ImageOverrides'
 import { GalleryTab } from './GalleryTab'
 import { ExpressionsTab } from './ExpressionsTab'
@@ -28,6 +26,10 @@ import { SkillsTab } from './SkillsTab'
 import { WardrobeTab } from './WardrobeTab'
 import { KnownLocationsEditor } from './KnownLocationsEditor'
 import { NewCharacterDialog } from './NewCharacterDialog'
+import { FieldSet } from './FieldSet'
+import { PlacementEditor } from './PlacementEditor'
+import { ActivityHomeTab } from './ActivityHomeTab'
+import { CharacterListPanel } from './CharacterListPanel'
 
 /**
  * Game-Admin "Characters" tab — list-detail like Activities / Rules /
@@ -37,7 +39,7 @@ import { NewCharacterDialog } from './NewCharacterDialog'
  * an admin needs day-to-day.
  */
 
-interface CurrentLocation {
+export interface CurrentLocation {
   character: string
   current_location: string
   current_location_id: string
@@ -46,40 +48,19 @@ interface CurrentLocation {
   current_room_name: string
 }
 
-interface DraftPlacement {
+export interface DraftPlacement {
   locationId: string
   roomId: string
   activity: string
   feeling: string
 }
 
-// Canonical moods — kept in sync with shared/config/moods.json. Updating
-// the file requires updating this list, but moods rarely change so the
-// duplication is acceptable; alternative would be a /moods endpoint.
-const MOODS: Array<{ id: string; label: string }> = [
-  { id: 'pleased', label: 'pleased' },
-  { id: 'happy', label: 'happy' },
-  { id: 'relaxed', label: 'relaxed' },
-  { id: 'refreshed', label: 'refreshed' },
-  { id: 'creative', label: 'creative' },
-  { id: 'chatty', label: 'chatty' },
-  { id: 'chatting', label: 'chatting' },
-  { id: 'exuberant', label: 'exuberant' },
-  { id: 'euphoric', label: 'euphoric' },
-  { id: 'exhausted', label: 'exhausted' },
-  { id: 'drunk', label: 'drunk' },
-  { id: 'sweating', label: 'sweating' },
-]
-
-interface ScheduleSlot {
+export interface ScheduleSlot {
   hour: number
   location: string
   role: string
   sleep: boolean
 }
-
-// Sentinel home_location value: character sleeps off the map (not in any room).
-const OFFMAP_SLEEP = '__offmap__'
 
 // Spezial-Tabs mit dedizierter UI (keine reinen Template-Feld-Sektionen). Die
 // Feld-Tabs (General/Aussehen/Config/…) kommen generisch aus `template.tabs`
@@ -119,16 +100,6 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
   if (s.special) return false
   const fs = (s.fields || []).filter((f) => f.editor_visible !== false && !f.source_file)
   return fs.some((f) => !f.readonly)
-}
-
-// Framed group of related fields with an uppercase title.
-function FieldSet({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="ga-fieldset">
-      <div className="ga-fieldset-title">{title}</div>
-      {children}
-    </div>
-  )
 }
 
 export function CharactersTab() {
@@ -452,156 +423,33 @@ export function CharactersTab() {
     [ttsVoices, ttsSpeakers, sortedCharacters],
   )
 
-  // Editierbare „Aktueller Zustand"-Platzierung — wird als Spezial-Slot
-  // (section.special === "placement") in Spalte 3 des General-Tabs gerendert.
+  // Editable "current state" placement — rendered as a special slot
+  // (section.special === "placement") in column 3 of the General tab.
   const placementUI =
     current && draft ? (
-      <>
-        <div className="ga-form-row">
-          <Field
-            label={t('Location')}
-            hint={
-              current.current_location
-                ? t('Currently at: {name}').replace('{name}', current.current_location)
-                : t('Currently nowhere — pick a location to place the character.')
-            }
-          >
-            <select
-              className="ga-input"
-              value={draft.locationId}
-              onChange={(e) => setDraft({ ...draft, locationId: e.target.value, roomId: '' })}
-            >
-              <option value="">— {t('nowhere')} —</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name || l.id}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label={t('Room')}
-            hint={
-              rooms.length === 0
-                ? t('Pick a location with rooms to choose a room.')
-                : current.current_room_name
-                  ? t('Currently in: {name}').replace('{name}', current.current_room_name)
-                  : t('Optional — leave empty for "anywhere in this location".')
-            }
-          >
-            <select
-              className="ga-input"
-              value={draft.roomId}
-              onChange={(e) => setDraft({ ...draft, roomId: e.target.value })}
-              disabled={rooms.length === 0}
-            >
-              <option value="">— {t('any room')} —</option>
-              {rooms.map((r) => (
-                <option key={r.id} value={r.id || ''}>
-                  {r.name || r.id}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <div className="ga-form-row">
-          <Field
-            label={t('Mood')}
-            hint={
-              currentFeeling
-                ? t('Currently: {name}').replace('{name}', currentFeeling)
-                : t('Canonical mood id from shared/config/moods.json. Empty clears the mood.')
-            }
-          >
-            <select
-              className="ga-input"
-              value={draft.feeling}
-              onChange={(e) => setDraft({ ...draft, feeling: e.target.value })}
-            >
-              <option value="">— {t('none')} —</option>
-              {draft.feeling && !MOODS.some((m) => m.id === draft.feeling) ? (
-                <option value={draft.feeling}>{draft.feeling}</option>
-              ) : null}
-              {MOODS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label={t('Activity')}
-            hint={
-              current.current_activity
-                ? t('Currently: {name}').replace('{name}', current.current_activity)
-                : t('Setting an activity may auto-move the character into a matching room.')
-            }
-          >
-            <select
-              className="ga-input"
-              value={draft.activity}
-              onChange={(e) => setDraft({ ...draft, activity: e.target.value })}
-            >
-              <option value="">— {t('none')} —</option>
-              {draft.activity && !activities.some((a) => a.id === draft.activity) ? (
-                <option value={draft.activity}>{draft.activity}</option>
-              ) : null}
-              {activitiesByGroup.map(([group, list]) => (
-                <optgroup key={group} label={group}>
-                  {list.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name || a.id}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </Field>
-        </div>
-      </>
+      <PlacementEditor
+        current={current}
+        draft={draft}
+        setDraft={setDraft}
+        currentFeeling={currentFeeling}
+        locations={locations}
+        rooms={rooms}
+        activities={activities}
+        activitiesByGroup={activitiesByGroup}
+      />
     ) : null
 
   return (
     <div className="ga-twocol">
-      <aside className="ga-twocol-left">
-        <div className="ga-twocol-header">
-          <h3>{t('Characters')}</h3>
-          <div className="ga-twocol-header-actions">
-            <button type="button" className="ga-btn ga-btn-primary" onClick={() => setCreating(true)}>
-              {t('New character')}
-            </button>
-            <ImportButton
-              endpoint="/characters/import"
-              overwriteSupported
-              onImported={() => {
-                loadCharacters().then(setCharacters).catch(() => {})
-              }}
-            />
-          </div>
-        </div>
-        <ul className="ga-list">
-          {sortedCharacters.length === 0 ? (
-            <li className="ga-list-empty">{t('No characters')}</li>
-          ) : (
-            sortedCharacters.map((c) => {
-              const isActive = c.name === selected
-              return (
-                <li key={c.name}>
-                  <button
-                    type="button"
-                    className={`ga-list-row${isActive ? ' is-active' : ''}`}
-                    onClick={() => onSelect(c.name)}
-                  >
-                    <span className="ga-list-row-main">
-                      <strong>{c.display_name || c.name}</strong>
-                    </span>
-                  </button>
-                </li>
-              )
-            })
-          )}
-        </ul>
-      </aside>
+      <CharacterListPanel
+        characters={sortedCharacters}
+        selected={selected}
+        onSelect={onSelect}
+        onNew={() => setCreating(true)}
+        onImported={() => {
+          loadCharacters().then(setCharacters).catch(() => {})
+        }}
+      />
       <section className="ga-twocol-right">
         {!selected ? (
           <div className="ga-placeholder">{t('Pick a character to edit their settings.')}</div>
@@ -688,78 +536,16 @@ export function CharactersTab() {
                 </FieldSet>
               </div>
             ) : subTab === 'home' ? (
-              homeLoading ? (
-                <div className="ga-loading">{t('Loading…')}</div>
-              ) : (
-                <div className="ga-form">
-                  <FieldSet title={t('Home / sleep location')}>
-                  <div className="ga-form-row">
-                    <Field
-                      label={t('Home location')}
-                      hint={t('Where the character lives and returns to sleep. “Off-map” takes them off the grid while sleeping.')}
-                    >
-                      <select
-                        className="ga-input"
-                        value={homeLoc.home_location}
-                        disabled={savingField === 'home_location'}
-                        onChange={(e) =>
-                          saveHome({ home_location: e.target.value, home_room: '' })
-                        }
-                      >
-                        <option value="">— {t('none')} —</option>
-                        <option value={OFFMAP_SLEEP}>{t('Off-map (sleeps away)')}</option>
-                        {/* Nur echte Wohn-Orte — Durchgangs-/Terrain-Locations
-                            (passable) sind keine Heimat/Schlafplätze. */}
-                        {locations.filter((l) => !l.passable).map((l) => (
-                          <option key={l.id} value={l.id}>
-                            {l.name || l.id}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field
-                      label={t('Home room')}
-                      hint={t('Optional room within the home location.')}
-                    >
-                      <select
-                        className="ga-input"
-                        value={homeLoc.home_room}
-                        disabled={
-                          savingField === 'home_location' ||
-                          homeLoc.home_location === OFFMAP_SLEEP ||
-                          !homeLoc.home_location
-                        }
-                        onChange={(e) =>
-                          saveHome({ home_location: homeLoc.home_location, home_room: e.target.value })
-                        }
-                      >
-                        <option value="">— {t('any room')} —</option>
-                        {(locations.find((l) => l.id === homeLoc.home_location)?.rooms || []).map(
-                          (r) => (
-                            <option key={r.id} value={r.id || ''}>
-                              {r.name || r.id}
-                            </option>
-                          ),
-                        )}
-                      </select>
-                    </Field>
-                  </div>
-                  </FieldSet>
-
-                  <FieldSet title={t('Daily rhythm')}>
-                  <DailyScheduleGrid
-                    character={selected}
-                    locations={locations}
-                    roles={String(cfg.roles ?? '')
-                      .split(',')
-                      .map((r) => r.trim())
-                      .filter(Boolean)}
-                    initialEnabled={schedule.enabled}
-                    initialSlots={schedule.slots}
-                  />
-                  </FieldSet>
-                </div>
-              )
+              <ActivityHomeTab
+                selected={selected}
+                locations={locations}
+                homeLoc={homeLoc}
+                savingField={savingField}
+                saveHome={saveHome}
+                schedule={schedule}
+                cfg={cfg}
+                homeLoading={homeLoading}
+              />
             ) : subTab === 'locations' ? (
               <KnownLocationsEditor character={selected} />
             ) : subTab === 'image' ? (
