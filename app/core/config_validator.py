@@ -16,7 +16,6 @@ def validate_config(config: dict) -> List[Dict[str, Any]]:
     issues.extend(_check_providers(config))
     issues.extend(_check_llm_routing(config))
     issues.extend(_check_image_backends(config))
-    issues.extend(_check_comfyui_workflows(config))
     issues.extend(_check_animation(config))
     issues.extend(_check_tts(config))
     issues.extend(_check_skills(config))
@@ -154,7 +153,6 @@ def _check_image_backends(config: dict) -> list:
     issues = []
     ig = config.get("image_generation", {})
     backends = ig.get("backends", [])
-    providers = config.get("providers", [])
 
     for be in backends:
         name = be.get("name", "?")
@@ -174,77 +172,7 @@ def _check_image_backends(config: dict) -> list:
         if api_type in ("civitai", "together") and not api_key:
             issues.append(_err("image_generation", f"Backend '{name}': API Key fehlt (Cloud-Backend '{api_type}')"))
 
-    # Hinweis: LLM-Provider-GPUs vom Typ 'comfyui' sind veraltet — die Queue
-    # lebt jetzt pro ImageGen-Backend. Ein Warnhinweis hilft beim Aufraeumen.
-    legacy_comfy_gpus = []
-    for p in providers:
-        for g in (p.get("gpus") or []):
-            if "comfyui" in (g.get("types") or []):
-                legacy_comfy_gpus.append(p.get("name", "?"))
-                break
-    if legacy_comfy_gpus:
-        issues.append(_warn(
-            "providers",
-            f"Provider mit GPU-Typ 'comfyui' gefunden ({', '.join(legacy_comfy_gpus)}): "
-            "wird nicht mehr fuer Routing genutzt. Typ aus den GPU-Eintraegen entfernen — "
-            "jedes ComfyUI-Backend hat jetzt seinen eigenen Channel."))
-
-    return issues
-
-
-# ── ComfyUI Workflow Checks ──
-
-def _check_comfyui_workflows(config: dict) -> list:
-    issues = []
-    ig = config.get("image_generation", {})
-    workflows = ig.get("comfyui_workflows", {})
-    backends = ig.get("backends", [])
-    comfy_backend_names = {b.get("name", "") for b in backends if b.get("api_type") == "comfyui"}
-
-    # Das Feld ist ein Match-Glob (z.B. "Flux2*"), zur Laufzeit via fnmatch in
-    # match_workflow aufgeloest — also auch hier als Glob pruefen, nicht exakt.
-    # Ein Name ohne Wildcard ist ein Glob der sich selbst matcht.
-    default_wf = ig.get("comfy_default_workflow", "")
-    if default_wf:
-        import fnmatch
-        wf_names = {wid: wf.get("name", wid) for wid, wf in workflows.items()}
-        pat = default_wf.lower()
-        match = default_wf in workflows or any(
-            fnmatch.fnmatch(n.lower(), pat) for n in wf_names.values()
-        )
-        if not match:
-            available = ", ".join(wf_names.values()) if wf_names else "keine"
-            issues.append(_warn("image_generation", f"Default ComfyUI Workflow-Glob '{default_wf}' matcht keinen Workflow (verfuegbar: {available})"))
-
-    for wid, wf in workflows.items():
-        name = wf.get("name", wid)
-        wf_file = wf.get("workflow_file", "")
-
-        # Punkte im Key brechen den Admin-Editor (Felder werden per Dot-Notation
-        # adressiert, ..comfyui_workflows.<KEY>.<feld>, und split('.') zerlegt).
-        # Keys werden beim Load auto-migriert; Namen muss der Admin selbst aendern.
-        if "." in wid:
-            issues.append(_err("image_generation", f"Workflow-Key '{wid}' enthaelt einen Punkt — das bricht den Admin-Editor. Bitte ohne Punkt benennen."))
-        if "." in name:
-            issues.append(_err("image_generation", f"Workflow '{name}': Der Name enthaelt einen Punkt — bitte ohne Punkt benennen (z.B. 'Flux 1 Dev' statt 'Flux.1 Dev')."))
-
-        # Workflow file exists?
-        if wf_file and not Path(wf_file).exists():
-            issues.append(_err("image_generation", f"Workflow '{name}': Datei '{wf_file}' nicht gefunden"))
-
-        # Backend reference
-        skill = wf.get("skill", "")
-        if skill and skill not in comfy_backend_names:
-            issues.append(_warn("image_generation", f"Workflow '{name}': Backend '{skill}' ist kein ComfyUI-Backend"))
-
-        # Model set? Nur relevant, wenn ueberhaupt ein ComfyUI-Backend existiert,
-        # das den Workflow ausfuehren koennte. Ohne ComfyUI-Backend sind die
-        # (Default-)Workflows inert — dann keine Warnung (viele liefern ihr Modell
-        # ohnehin ueber input-Nodes im Workflow-File, nicht ueber die Config).
-        if comfy_backend_names and not wf.get("model", ""):
-            issues.append(_warn("image_generation", f"Workflow '{name}': Kein Model konfiguriert"))
-
-    # Check imagegen_default references
+    # Use-case default render targets (backend globs)
     for field_name, label in [
         ("outfit_imagegen_default", "Outfit"),
         ("expression_imagegen_default", "Expression"),
@@ -252,33 +180,39 @@ def _check_comfyui_workflows(config: dict) -> list:
     ]:
         val = ig.get(field_name, "")
         if val:
-            _check_imagegen_ref(val, workflows, backends, "image_generation", label, issues)
+            _check_imagegen_ref(val, backends, "image_generation", label, issues)
 
     return issues
 
 
-def _check_imagegen_ref(val: str, workflows: dict, backends: list, section: str, label: str, issues: list):
-    """Validate a 'workflow:<glob>' or 'backend:<glob>' reference.
+def _check_imagegen_ref(val: str, backends: list, section: str, label: str, issues: list):
+    """Validate a render-target spec against the configured backend names.
 
-    Match-Konzept: der Name-Teil ist ein Glob (z.B. "Qwen*"); gueltig, wenn er
-    auf mindestens einen Workflow- bzw. Backend-Namen passt (fnmatch, case-
-    insensitive). Ein exakter Name matcht sich selbst.
+    Match concept: the name part is a glob (e.g. "Qwen*"); valid when it
+    matches at least one backend name (fnmatch, case-insensitive). An exact
+    name matches itself. Accepted formats: ``backend:<glob>`` or a bare
+    glob. Legacy ``workflow:<glob>`` specs are reported — ComfyUI was
+    removed and such specs are ignored at runtime.
     """
-    if ":" not in val:
-        return
     import fnmatch
-    ref_type, ref_name = val.split(":", 1)
-    pat = ref_name.strip().lower()
+    if ":" in val:
+        ref_type, ref_name = val.split(":", 1)
+        if ref_type == "workflow":
+            issues.append(_warn(
+                section,
+                f"{label} Default '{val}': ComfyUI entfernt — auf 'backend:<glob>' umstellen"))
+            return
+        if ref_type != "backend":
+            return
+        pat = ref_name.strip()
+    else:
+        pat = val.strip()
     if not pat:
         return
-    if ref_type == "workflow":
-        names = {wf.get("name", k) for k, wf in workflows.items()} | set(workflows.keys())
-        if not any(fnmatch.fnmatch(str(n).lower(), pat) for n in names):
-            issues.append(_warn(section, f"{label} Default: kein Workflow passt auf '{ref_name}'"))
-    elif ref_type == "backend":
-        be_names = {b.get("name", "") for b in backends}
-        if not any(fnmatch.fnmatch(str(n).lower(), pat) for n in be_names):
-            issues.append(_warn(section, f"{label} Default: kein Backend passt auf '{ref_name}'"))
+    pl = pat.lower()
+    be_names = {b.get("name", "") for b in backends}
+    if not any(fnmatch.fnmatch(str(n).lower(), pl) for n in be_names):
+        issues.append(_warn(section, f"{label} Default: kein Backend passt auf '{pat}'"))
 
 
 # ── Animation Checks ──
@@ -380,7 +314,7 @@ def _check_server(config: dict) -> list:
         val = se.get("imagegen_default", "")
         if val:
             ig = config.get("image_generation", {})
-            _check_imagegen_ref(val, ig.get("comfyui_workflows", {}), ig.get("backends", []), "story_engine", "Story Engine", issues)
+            _check_imagegen_ref(val, ig.get("backends", []), "story_engine", "Story Engine", issues)
 
     # Instagram reference
     insta = config.get("skills", {}).get("instagram", {})
@@ -388,6 +322,6 @@ def _check_server(config: dict) -> list:
         val = insta.get("imagegen_default", "")
         if val:
             ig = config.get("image_generation", {})
-            _check_imagegen_ref(val, ig.get("comfyui_workflows", {}), ig.get("backends", []), "skills", "Instagram", issues)
+            _check_imagegen_ref(val, ig.get("backends", []), "skills", "Instagram", issues)
 
     return issues

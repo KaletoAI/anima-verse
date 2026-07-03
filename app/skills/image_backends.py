@@ -78,11 +78,16 @@ class ImageBackend(ABC):
     (z.B. A1111/Forge, Mammouth/OpenAI-kompatibel).
     """
 
-    # Throttle fuer "nicht erreichbar"-Warnungen — log spam vermeiden bei
-    # dauerhaft offline Backends. Erstes Mal WARNING, dann fuer
-    # _UNREACHABLE_THROTTLE_SEC Sekunden auf DEBUG reduziert. Wiederkehr
-    # (avail True nach False) wird als INFO geloggt.
+    # Throttle for "unreachable" warnings — avoid log spam for permanently
+    # offline backends. First time WARNING, then reduced to DEBUG for
+    # _UNREACHABLE_THROTTLE_SEC seconds. Recovery (avail True after False)
+    # is logged as INFO.
     _UNREACHABLE_THROTTLE_SEC = 300
+
+    # How many reference-image slots (params['reference_images']) this backend
+    # type can consume. 0 = backend takes no reference images. Overridable per
+    # instance via {env_prefix}REF_SLOT_COUNT (config field ref_slot_count).
+    DEFAULT_REF_SLOT_COUNT = 0
 
     def __init__(self, name: str, api_url: str, cost: float, api_type: str, env_prefix: str):
         self.name = name
@@ -109,9 +114,16 @@ class ImageBackend(ABC):
         # Instanz-Enabled aus .env (globaler Default)
         self.instance_enabled = os.environ.get(f"{env_prefix}ENABLED", "true").strip().lower() in ("true", "1", "yes")
 
-        # Image Family (natural/keywords) — fuer Cloud-Backends ohne Workflow.
-        # Style/Negative gehoeren in die Use-Cases, nicht ans Backend.
+        # Image family (natural/keywords) — how the model wants its prompts.
+        # Style/negative belong to the use cases, not to the backend.
         self.image_family = os.environ.get(f"{env_prefix}IMAGE_FAMILY", "").strip()
+
+        # Reference-image slot budget (see DEFAULT_REF_SLOT_COUNT).
+        _slots_str = os.environ.get(f"{env_prefix}REF_SLOT_COUNT", "").strip()
+        try:
+            self.ref_slot_count = int(_slots_str) if _slots_str else self.DEFAULT_REF_SLOT_COUNT
+        except ValueError:
+            self.ref_slot_count = self.DEFAULT_REF_SLOT_COUNT
 
         # Statische Fallback-Konfiguration (fallback_mode/fallback_specific)
         # entfernt: bei Ausfall waehlt run_with_fallback dynamisch das naechste
@@ -1223,6 +1235,10 @@ class LocalAIBackend(TogetherBackend):
 
     Erbt _post_with_retry / _rate_limit_wait von TogetherBackend (gleicher Endpoint).
     """
+
+    # Reference-image conditioning: agent + room + others/items (see
+    # _collect_ref_images). OpenAIDiffusionBackend inherits this budget.
+    DEFAULT_REF_SLOT_COUNT = 4
 
     def __init__(self, name: str, api_url: str, cost: float, env_prefix: str,
                  api_key: str = "", model: str = ""):

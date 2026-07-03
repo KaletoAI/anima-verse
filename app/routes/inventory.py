@@ -335,17 +335,16 @@ def _alpha_coverage_too_low(image_path: Path, threshold_pct: float = 5.0) -> boo
 def generate_item_image_sync(
     item_id: str,
     overrides: Dict[str, Any] | None = None) -> bool:
-    """Synchrone Item-Bild-Generierung (fuer Background-Threads).
+    """Synchronous item-image generation (for background threads).
 
-    Nutzt Default-Workflow + guenstigstes Backend, sofern keine ``overrides``
-    uebergeben werden. ``overrides`` kommt aus dem Game-Admin Generate-Image
-    Dialog und kann enthalten:
-        - workflow:        Name eines konfigurierten ComfyUI-Workflows
-        - backend:         Name eines Image-Backends
-        - model_override:  ModellName/Datei (ueberschreibt workflow-Default)
-        - loras:           Liste von {file, strength} oder Dicts
-        - prompt:          Komplett-Prompt (ueberschreibt die Auto-Variante)
-        - negative_prompt: Negative-Prompt (ueberschreibt Backend-Default)
+    Uses the cheapest available backend unless ``overrides`` are passed.
+    ``overrides`` comes from the Game-Admin generate-image dialog and may
+    contain:
+        - backend:         name/glob of an image backend
+        - model_override:  model name (overrides the backend default)
+        - loras:           list of {name, strength} dicts
+        - prompt:          full prompt (overrides the auto variant)
+        - negative_prompt: negative prompt (overrides the backend default)
     """
     overrides = overrides or {}
     item = get_item(item_id)
@@ -375,18 +374,7 @@ def generate_item_image_sync(
         logger.warning("Item-Bild [%s]: ImageGeneration Skill nicht verfuegbar", item_id)
         return False
 
-    # Workflow-Override: Match-Glob (z.B. "Flux*") nach Verfuegbarkeit, sonst Default.
-    active_wf = None
-    wf_name = (overrides.get("workflow") or "").strip()
-    if wf_name:
-        active_wf = img_skill.match_workflow(wf_name)
-        if not active_wf:
-            logger.warning("Item-Bild [%s]: Override-Workflow '%s' nicht gefunden — Default",
-                           item_id, wf_name)
-    if not active_wf:
-        active_wf = getattr(img_skill, '_default_workflow', None)
-
-    # Backend-Override: Match-Glob (z.B. "Together.ai" / "Together*"), sonst Auto-Auswahl.
+    # Backend override: match glob (e.g. "Together.ai" / "Together*"), else auto-select.
     backend = None
     backend_name = (overrides.get("backend") or "").strip()
     if backend_name:
@@ -402,43 +390,34 @@ def generate_item_image_sync(
 
     from app.core import config as _cfg
     _ucp = _cfg.resolve_use_case_style(
-        "item",
-        getattr(active_wf, "image_family", "") if active_wf else "",
-        getattr(active_wf, "workflow_file", "") if active_wf else "",
-        getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+        "item", getattr(backend, "image_family", "") or "",
+        backend_model=getattr(backend, "model", "") or "")
     if _ucp.get("prompt_style") and not custom_prompt:
         prompt_text = f"{_ucp['prompt_style']}, {prompt_text}"
     negative = (overrides.get("negative_prompt") or "").strip() or _ucp.get("prompt_negative", "")
 
-    # Items werden mit der Default-Aufloesung des Workflows generiert
-    # (kleinere Sizes crashen ComfyUI). Die spaetere Downscale-Pipeline
-    # rechnet das Ergebnis auf ui.downscale_item_max_dim runter.
+    # Items are generated at the backend's default resolution. The later
+    # downscale pipeline shrinks the result to ui.downscale_item_max_dim.
     params = {"image_use_case": "item"}
-    if backend.api_type == "comfyui" and active_wf:
-        if active_wf.workflow_file:
-            params["workflow_file"] = active_wf.workflow_file
-        _model_key = "unet" if (active_wf.has_input_unet or active_wf.has_input_safetensors) else "model"
-        # Model-Override: aus overrides oder Workflow-Default
-        _model_val = (overrides.get("model_override") or "").strip() or active_wf.model
-        if _model_val:
-            params[_model_key] = _model_val
-        if active_wf.clip:
-            params["clip_name"] = active_wf.clip
-        # LoRA-Overrides: Liste von {file, strength} oder String-Tupeln
-        _loras = overrides.get("loras")
-        if isinstance(_loras, list) and _loras:
-            _clean_loras = []
-            for l in _loras:
-                if isinstance(l, dict):
-                    _f = (l.get("file") or "").strip()
-                    if _f:
-                        _clean_loras.append({"file": _f, "strength": float(l.get("strength") or 1.0)})
-            if _clean_loras:
-                params["loras"] = _clean_loras
+    # Model override from the dialog — backends read params["model"].
+    _model_val = (overrides.get("model_override") or "").strip()
+    if _model_val:
+        params["model"] = _model_val
+    # LoRA overrides: list of {name|file, strength} dicts from the dialog.
+    _loras = overrides.get("loras")
+    if isinstance(_loras, list) and _loras:
+        _clean_loras = []
+        for l in _loras:
+            if isinstance(l, dict):
+                _f = (l.get("name") or l.get("file") or "").strip()
+                if _f:
+                    _clean_loras.append({"name": _f, "strength": float(l.get("strength") or 1.0)})
+        if _clean_loras:
+            params["lora_inputs"] = _clean_loras
 
     try:
         from app.core.llm_queue import get_llm_queue, Priority as _P
-        _is_local = backend.api_type in ("comfyui", "a1111")
+        _is_local = backend.api_type == "a1111"
         if _is_local:
             images = get_llm_queue().submit_gpu_task(
                 provider_name=backend.name,
@@ -455,7 +434,7 @@ def generate_item_image_sync(
         return False
 
     if images == "NO_NEW_IMAGE":
-        logger.warning("Item-Bild [%s]: ComfyUI Cache-Hit — uebersprungen", item_id)
+        logger.warning("Item-Bild [%s]: Backend Cache-Hit — uebersprungen", item_id)
         return False
     if not images:
         return False
@@ -515,19 +494,19 @@ async def generate_item_image_route(item_id: str, request: Request) -> Dict[str,
     Gibt sofort 202 zurueck, Generierung laeuft im Background-Thread
     ueber die GPU-Queue. User kann mehrere Items hintereinander anklicken.
 
-    Optional Overrides aus dem Game-Admin Regenerate-Dialog:
-        workflow, backend, model_override, loras, prompt, negative_prompt
+    Optional overrides from the Game-Admin regenerate dialog:
+        backend, model_override, loras, prompt, negative_prompt
     """
     item = get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    # Body lesen — Dialog-Overrides; leerer Body ist OK (Auto-Auswahl)
+    # Read body — dialog overrides; an empty body is OK (auto selection)
     overrides: Dict[str, Any] = {}
     try:
         body = await request.json()
         if isinstance(body, dict):
-            for k in ("workflow", "backend", "model_override",
+            for k in ("backend", "model_override",
                       "loras", "prompt", "negative_prompt"):
                 if k in body:
                     overrides[k] = body[k]

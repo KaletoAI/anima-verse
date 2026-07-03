@@ -857,10 +857,9 @@ async def settings_use_case_defaults(user=Depends(require_admin)):
 
 @router.get("/settings/imagegen-targets")
 async def imagegen_targets(user=Depends(require_admin)):
-    """Liefert die kombinierte Liste der Image-Gen-Targets fuer Admin-Selects:
-    ComfyUI-Workflows + Cloud-Backends (Together/CivitAI/Mammouth).
+    """Returns the list of image-gen targets for admin selects (backends only).
 
-    Format: [{"value": "workflow:Z-Image", "label": "...", "type": "workflow", "available": True}, ...]
+    Format: [{"value": "backend:CivitAI", "label": "...", "type": "backend", "available": True}, ...]
     """
     try:
         from app.core.dependencies import get_skill_manager
@@ -872,31 +871,7 @@ async def imagegen_targets(user=Depends(require_admin)):
         return {"targets": [], "error": str(e)}
 
     out = []
-    # ComfyUI-Workflows zuerst (sortiert nach Name)
-    for wf in sorted(img.comfy_workflows, key=lambda w: w.name.lower()):
-        # Verfuegbarkeit: existiert mind. 1 kompatibles, available, instance_enabled Backend?
-        compat = wf.compatible_backends or []
-        avail = False
-        for b in img.backends:
-            if not b.instance_enabled or not b.available:
-                continue
-            if b.api_type != "comfyui":
-                continue
-            # skill/compat LEER = deaktiviert -> kein Backend zugeordnet.
-            if b.name not in compat:
-                continue
-            avail = True
-            break
-        out.append({
-            "value": f"workflow:{wf.name}",
-            "label": f"ComfyUI: {wf.name}",
-            "type": "workflow",
-            "available": avail,
-        })
-    # Cloud-Backends (non-comfyui)
     for b in img.backends:
-        if b.api_type == "comfyui":
-            continue
         if not b.instance_enabled:
             continue
         out.append({
@@ -1175,15 +1150,14 @@ async def comfyui_models_all(user=Depends(require_admin)):
 async def imagegen_backend_models(backend_name: str,
                                   api_type: str = "", api_url: str = "", api_key: str = "",
                                   user=Depends(require_admin)):
-    """Liefert Modellliste fuer ein Image-Generation-Backend (Cloud).
+    """Returns the model list for an image-generation backend (cloud).
 
-    - Together / openai_diffusion / localai / openai_chat: Live-Liste via /v1/models
-    - CivitAI: aktuell nur das konfigurierte backend.model (kein API-Listing)
-    - ComfyUI: leitet auf comfyui-models um
+    - Together / openai_diffusion / localai / openai_chat: live list via /v1/models
+    - CivitAI: currently only the configured backend.model (no API listing)
 
-    Optionale Query-Params (api_type/api_url/api_key) ueberschreiben die
-    gespeicherte Config — so kann die UI die Modelle direkt nach URL-Eingabe
-    laden, ohne vorher zu speichern.
+    Optional query params (api_type/api_url/api_key) override the saved
+    config — so the UI can load models right after entering a URL,
+    without saving first.
     """
     img_gen = config.get("image_generation", {}) or {}
     backends = img_gen.get("backends", []) or []
@@ -1218,25 +1192,10 @@ async def imagegen_backend_models(backend_name: str,
                             models.append(mid)
             models.sort()
         elif api_type == "civitai":
-            # CivitAI hat keine sinnvolle Modell-Liste via API — nur das
-            # konfigurierte AIR URN als einzige Option zurueckgeben.
+            # CivitAI has no useful model listing via API — return only the
+            # configured AIR URN as the single option.
             if cur_model:
                 models = [cur_model]
-        elif api_type == "comfyui":
-            # ComfyUI: Modelle (Checkpoints + UNets) aus dem ImageGen-Skill
-            # Cache holen — der enthaelt die per-Backend gescannten Modelle.
-            try:
-                from app.core.dependencies import get_skill_manager
-                _sm = get_skill_manager()
-                _img = _sm.get_skill("image_generation")
-                if _img and getattr(_img, "_model_cache_loaded", False):
-                    _ckpt = _img._cached_checkpoints_by_service.get(backend_name, [])
-                    _unet = _img._cached_unet_models_by_service.get(backend_name, [])
-                    models = sorted(set(_ckpt + _unet))
-                    clip = sorted(set(_img._cached_clip_models_by_service.get(backend_name, [])))
-                    vae = sorted(set(_img._cached_vae_models_by_service.get(backend_name, [])))
-            except Exception as _e:
-                logger.warning("ComfyUI-Models-Cache nicht lesbar: %s", _e)
     except Exception as e:
         return {"backend": backend_name, "models": [], "clip": [], "vae": [], "error": str(e)}
     # cur_model immer dabei haben (auch wenn es nicht in der Liste ist)
@@ -3166,7 +3125,7 @@ function workflowHasActiveBackend(wf) {
 
 function renderWorkflowSelect(val, path) {
     // Default-MATCH statt fester Auswahl: Combobox mit Glob-Vorschlaegen
-    // (Workflow-filter, z.B. "Qwen*") + Freitext. Aufloesung: match_workflow.
+    // (Workflow-filter, z.B. "Qwen*") + Freitext.
     const workflows = CONFIG.image_generation?.comfyui_workflows || {};
     const globs = new Set();
     for (const [wid, wf] of Object.entries(workflows)) {
@@ -3182,7 +3141,7 @@ function renderWorkflowSelect(val, path) {
 function renderImagegenSelect(val, path) {
     // Default-MATCH: Combobox mit Glob-Vorschlaegen "workflow:<filter>" und
     // "backend:<name>" + Freitext (z.B. "backend:ComfyUI*"). Aufloesung ueber
-    // resolve_imagegen_target -> match_workflow / match_backend (nach Verfuegbarkeit).
+    // resolve_imagegen_target -> match_backend (nach Verfuegbarkeit).
     const workflows = CONFIG.image_generation?.comfyui_workflows || {};
     const backends = CONFIG.image_generation?.backends || [];
     const sugg = new Set();

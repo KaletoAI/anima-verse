@@ -1055,76 +1055,33 @@ async def save_home_location_route(character_name: str, request: Request) -> Dic
 
 @router.get("/outfit-lora-options")
 def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
-    """Liefert die LoRA-Liste fuer den Outfit-Piece-Editor, gefiltert nach
-    dem aktiven Outfit-Image-Workflow.
-
-    Workflow-Aufloesung (in Reihenfolge):
-    1. Character-Override profile.outfit_imagegen.workflow (wenn character_name uebergeben)
-    2. Erster verfuegbarer Comfy-Workflow als Default
+    """Returns the LoRA list for the outfit-piece editor.
 
     Response:
-        workflow: name des aufgeloesten Workflows
-        filter: Glob-Filter dieses Workflows (informativ)
-        loras: gefilterte LoRA-Liste (ohne 'None')
+        workflow: "" (legacy key, workflows are gone — dropped with the UI cleanup)
+        filter: "" (legacy key)
+        loras: LoRA list (without 'None')
     """
-    import fnmatch
     sm = get_skill_manager()
     imagegen = sm.get_skill("image_generation")
     if not imagegen:
         return {"workflow": "", "filter": "", "loras": []}
-    workflows = imagegen.get_comfy_workflows() or []
 
-    # Workflow-Aufloesung
-    active_wf_name = ""
-    if character_name:
-        try:
-            from app.models.character import get_character_profile
-            prof = get_character_profile(character_name) or {}
-            active_wf_name = ((prof.get("outfit_imagegen") or {}).get("workflow") or "").strip()
-            # Glob-Pattern (z.B. "Qwen*") → konkreter Workflow-Name
-            if active_wf_name:
-                _m = imagegen.match_workflow(active_wf_name, character_name)
-                if _m:
-                    active_wf_name = _m.name
-        except Exception:
-            pass
-    if not active_wf_name:
-        # Ersten verfuegbaren Workflow waehlen — unverfuegbare ueberspringen
-        for wf in workflows:
-            if wf.get("available", True):
-                active_wf_name = wf.get("name", "")
-                break
-        if not active_wf_name and workflows:
-            active_wf_name = workflows[0].get("name", "")
+    all_loras = list(imagegen.get_cached_loras() or [])
 
-    # Filter holen
-    flt = ""
-    for wf in workflows:
-        if wf.get("name") == active_wf_name:
-            flt = (wf.get("filter") or "").strip()
-            break
-
-    all_loras = imagegen.get_cached_loras() or []
-    if flt:
-        filtered = [l for l in all_loras if fnmatch.fnmatch(l, flt)]
-    else:
-        filtered = list(all_loras)
-
-    # LoRA-Library-Eintraege fuer das Backend, das fuer diesen Character zur
-    # Gen-Zeit aufgeloest wird (Endpoint-gefiltert) — so bietet die Auswahl auch
-    # bei Cloud-/OpenAI-Backends (ohne ComfyUI-Scan) passende LoRAs, und nie die
-    # eines fremden Backends.
+    # LoRA-library entries for the backend resolved for this character at
+    # generation time (endpoint-filtered) — never the LoRAs of a foreign backend.
     try:
         from app.core.config import get_lora_library_names
         eff = imagegen._select_backend_for_agent(character_name) if character_name else None
         lib_names = get_lora_library_names(eff.name if eff else None)
     except Exception:
         lib_names = []
-    merged = list(dict.fromkeys(filtered + lib_names))
+    merged = list(dict.fromkeys(all_loras + lib_names))
 
     return {
-        "workflow": active_wf_name,
-        "filter": flt,
+        "workflow": "",
+        "filter": "",
         "loras": merged,
     }
 
@@ -1423,18 +1380,10 @@ async def generate_outfit_image_route(character_name: str, outfit_id: str, reque
             workflow_name = _outfit_default[len("workflow:"):].strip()
         elif _outfit_default.startswith("backend:"):
             backend_name = _outfit_default[len("backend:"):].strip()
-    # Glob-Pattern (z.B. "Qwen*") → konkreter Workflow, Wahl nach Verfuegbarkeit.
-    # Greift fuer Override UND expliziten Dialog-Workflow (Render-Match ueberall).
-    if workflow_name:
-        try:
-            _ig = get_skill_manager().get_skill("image_generation")
-            _m = _ig.match_workflow(workflow_name, character_name) if _ig else None
-            if _m:
-                workflow_name = _m.name
-        except Exception as _me:
-            logger.debug("workflow glob resolve failed: %s", _me)
+    # The spec (glob) is resolved by the skill itself at generation time
+    # (resolve_imagegen_target) — no pre-resolution here.
 
-    # Auflösung aus .env (Hochformat für Ganzkörper-Outfits)
+    # Resolution from .env (portrait format for full-body outfits)
     outfit_w = int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None
     outfit_h = int(os.environ.get("OUTFIT_IMAGE_HEIGHT", 0) or 0) or None
 
@@ -3324,13 +3273,13 @@ async def enhance_image_prompt(character_name: str, request: Request) -> Dict[st
 
 @router.post("/{character_name}/rebuild-image-prompt")
 async def rebuild_image_prompt(character_name: str, request: Request) -> Dict[str, Any]:
-    """Baut den Image-Prompt neu auf basierend auf dem Adapter des gewaehlten Workflows.
+    """Rebuilds the image prompt based on the adapter of the target backend.
 
-    Quelle der Source-Werte (mood, outfit, expression, location, ...):
-      1. PRIMAER: gespeichertes `canonical`-Dict aus dem image.json (vom Erstellungszeitpunkt)
-      2. FALLBACK: aktueller Character-State (nur fuer alte Bilder ohne canonical)
+    Source of the values (mood, outfit, expression, location, ...):
+      1. PRIMARY: saved `canonical` dict from the image.json (from creation time)
+      2. FALLBACK: current character state (only for old images without canonical)
 
-    Body: { user_id, workflow?, canonical?, scene_text? }
+    Body: { user_id, workflow? (backend match spec), canonical?, scene_text? }
     Returns: { prompt, target_model, source: "saved"|"current" }
     """
     import asyncio
@@ -3373,22 +3322,18 @@ async def rebuild_image_prompt(character_name: str, request: Request) -> Dict[st
         if not img_skill:
             raise HTTPException(status_code=503, detail="ImageGenerationSkill nicht verfuegbar")
 
-        # Workflow + Target-Model bestimmen
-        active_wf = None
-        if workflow_name:
-            active_wf = next(
-                (wf for wf in getattr(img_skill, "comfy_workflows", []) if wf.name == workflow_name),
-                None)
-        if not active_wf:
-            active_wf = getattr(img_skill, "_default_workflow", None)
-
         from app.core.prompt_adapters import (
             get_target_model, render as adapter_render,
             maybe_enhance_via_llm, dict_to_canonical)
 
-        wf_image_family = getattr(active_wf, "image_family", "") if active_wf else ""
-        wf_file = getattr(active_wf, "workflow_file", "") if active_wf else ""
-        target_model = get_target_model(wf_image_model, wf_file)
+        # Target model from the backend that would render for this character
+        # (explicit spec from the request wins, otherwise the agent's backend).
+        _be = img_skill.resolve_imagegen_target(workflow_name) if workflow_name else None
+        if not _be:
+            _be = img_skill._select_backend_for_agent(character_name)
+        target_model = get_target_model(
+            getattr(_be, "image_family", "") if _be else "",
+            getattr(_be, "model", "") if _be else "")
 
         # 1) PRIMAERE Quelle: gespeichertes canonical
         if saved_canonical and isinstance(saved_canonical, dict):
@@ -3461,8 +3406,10 @@ async def rebuild_image_prompt(character_name: str, request: Request) -> Dict[st
                 set_profile=False)
             if scene_text:
                 pv.scene_prompt = builder.sanitize_scene_prompt(scene_text, pv)
-            pv.prompt_style = (active_wf.prompt_style if active_wf and active_wf.prompt_style else "") or "photorealistic"
-            pv.negative_prompt = active_wf.negative_prompt if active_wf and active_wf.negative_prompt else ""
+            # The final style/negative comes from the use-case at real
+            # generation time (image_generation_skill) — plain default here.
+            pv.prompt_style = "photorealistic"
+            pv.negative_prompt = ""
             source = "current"
 
             # Outfit-Enrichment auch im current-state Pfad: bei Bildern ohne canonical
@@ -3488,12 +3435,12 @@ async def rebuild_image_prompt(character_name: str, request: Request) -> Dict[st
         assembled = adapter_render(pv, target_model)
         template_prompt = assembled["input_prompt_positiv"]
 
-        # Optional LLM-Enhancement (zentral via Workflow-Config)
-        wf_instruction = getattr(active_wf, "prompt_instruction", "") if active_wf else ""
+        # No LLM enhancement for the rebuild preview — the instruction lives
+        # in the use-case config and is applied at real generation time.
         final_prompt, _method = maybe_enhance_via_llm(
             template_prompt, pv,
             target_model=target_model,
-            prompt_instruction=wf_instruction)
+            prompt_instruction="")
         return {"prompt": final_prompt, "target_model": target_model, "source": source}
 
     return await asyncio.to_thread(_build)
@@ -3713,23 +3660,21 @@ async def import_character(
         raise HTTPException(status_code=500, detail=f"Import failed: {e}")
 
 
-# --- ComfyUI Workflow Endpoints ---
+# --- Image-Generation Option Endpoints ---
 
 @router.get("/{character_name}/skills/image_generation/workflows")
 def get_imagegen_workflows(character_name: str) -> Dict[str, Any]:
-    """Gibt alle verfuegbaren Generierungs-Optionen zurueck:
-    ComfyUI-Workflows + andere Backends (A1111, Mammouth, CivitAI, etc.)."""
+    """Returns all available generation options (image backends)."""
     sm = get_skill_manager()
     imagegen = sm.get_skill("image_generation")
     if not imagegen:
         raise HTTPException(status_code=404, detail="ImageGeneration skill not found")
 
-    # Aktuell unavailable Backends frisch pruefen — sonst zeigt der Dialog
-    # einen Backend dauerhaft als "nicht verfuegbar" an, obwohl der Service
-    # zwischenzeitlich wieder online gegangen ist (z.B. ComfyUI-3090 nach
-    # Restart). Recovery-Hook in check_availability triggert auch
-    # channel_health.force_poll(), sodass nachgelagerte GPU-Routing-Entscheidungen
-    # ebenfalls den frischen Status sehen.
+    # Re-probe currently unavailable backends — otherwise the dialog keeps
+    # showing a backend as "not available" even though the service came back
+    # online in the meantime. The recovery hook in check_availability also
+    # triggers channel_health.force_poll(), so downstream GPU routing
+    # decisions see the fresh status too.
     for _b in imagegen.backends:
         if _b.instance_enabled and not _b.available:
             try:
@@ -3737,77 +3682,25 @@ def get_imagegen_workflows(character_name: str) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    # Nur Workflows mit erreichbarem ComfyUI-Backend anbieten — ohne verfuegbares
-    # Backend koennen sie nicht laufen und gehoeren nicht in den Auswahl-Dialog.
-    workflows = imagegen.get_comfy_workflows(only_available=True)
     agent_config = get_character_skill_config(character_name, "image_generation") or {}
-    active = agent_config.get("comfy_workflow", workflows[0]["name"] if workflows else "")
-    workflow_models = agent_config.get("workflow_models", {})
-    workflow_loras = agent_config.get("workflow_loras", {})
-    comfy_seed = int(agent_config.get("comfy_seed", 0))
 
-    # Alle verfuegbaren Generierungs-Optionen sammeln
+    # Collect all available generation options (backends only).
     options = []
-
-    # ComfyUI-Workflows als Optionen.
-    # Cost = guenstigstes verfuegbares Backend fuer diesen Workflow
-    # (live, beruecksichtigt per-Agent enabled). Wenn keins verfuegbar,
-    # wird die Option als unavailable=True markiert — UI kann das ausgrauen.
-    workflow_objs = imagegen.comfy_workflows
-    for wf in workflows:
-        wf_name = wf["name"]
-        char_model = workflow_models.get(wf_name, "")
-        wf_obj = next((w for w in workflow_objs if w.name == wf_name), None)
-        wf_backends = imagegen.list_available_backends(
-            character_name=character_name, workflow=wf_obj) if wf_obj else []
-        wf_cost = wf_backends[0].cost if wf_backends else None
-        # Target-Style fuer UI-Hinweis (Workflow.image_model > Dateiname > Default)
-        try:
-            from app.core.prompt_adapters import get_target_model as _gtm
-            _target_style = _gtm(
-                getattr(wf_obj, "image_family", "") if wf_obj else "",
-                wf.get("workflow_file", "") if isinstance(wf, dict) else getattr(wf_obj, "workflow_file", ""),
-                "")
-        except Exception:
-            _target_style = "z_image"
-        options.append({
-            "type": "workflow",
-            "name": wf_name,
-            "label": f"ComfyUI: {wf_name}",
-            "has_loras": wf.get("has_loras", False),
-            "has_seed": wf.get("has_seed", False),
-            "default_loras": wf.get("default_loras", []),
-            "model_type": wf.get("model_type", ""),
-            "default_model": char_model or wf.get("default_model", ""),
-            "env_model": wf.get("default_model", ""),
-            "char_model": char_model,
-            "char_loras": workflow_loras.get(wf_name),
-            "comfy_seed": comfy_seed,
-            "filter": wf.get("filter", ""),
-            "negative_prompt": wf.get("negative_prompt", ""),
-            "cost": wf_cost,
-            "available": bool(wf_backends),
-            "available_backends": [b.name for b in wf_backends],
-            "target_model": _target_style,
-        })
-
-    # Nicht-ComfyUI Backends als Optionen
     agent_instances = agent_config.get("instances", {})
     for b in imagegen.backends:
-        if b.api_type == "comfyui":
-            continue
         if not b.available:
             continue
-        # Per-Agent enabled check
+        # Per-agent enabled check
         agent_inst = agent_instances.get(b.name, {})
         is_enabled = bool(agent_inst["enabled"]) if "enabled" in agent_inst else b.instance_enabled
         if not is_enabled:
             continue
-        # Target-Style aus Backend-Modellname ableiten (z.B. Qwen-Image -> qwen,
-        # FLUX -> flux, Z-Image-URN -> z_image). UI kann das als Hinweis anzeigen.
+        # Derive target style from image family / backend model name (e.g.
+        # Qwen-Image -> qwen, FLUX -> flux, Z-Image URN -> z_image).
         try:
             from app.core.prompt_adapters import get_target_model as _gtm
-            _target_style = _gtm("", "", getattr(b, 'model', ""))
+            _target_style = _gtm(
+                getattr(b, "image_family", "") or "", getattr(b, 'model', "") or "")
         except Exception:
             _target_style = "z_image"
         opt = {
@@ -3818,18 +3711,19 @@ def get_imagegen_workflows(character_name: str) -> Dict[str, Any]:
             "cost": b.cost,
             "available": True,
             "target_model": _target_style,
+            "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
         }
-        # Backend mit Modellliste (z.B. Together.ai) — direkt als Auswahl anbieten
+        # Backend with a model list (e.g. Together.ai) — offer as a selection.
         backend_models = getattr(b, 'available_models', [])
         if backend_models:
             opt["models"] = backend_models
             opt["default_model"] = getattr(b, 'model', backend_models[0])
         options.append(opt)
 
-    # Nach Cost sortieren — UI kann "billigster zuerst" anzeigen
+    # Sort by cost — the UI can show "cheapest first".
     options.sort(key=lambda o: (o.get("cost") if o.get("cost") is not None else 999999, o.get("label", "")))
 
-    # Default-Vorauswahl pro Bereich aus .env
+    # Default preselection per area from .env
     defaults = {}
     for env_key, area in [
         ("OUTFIT_IMAGEGEN_DEFAULT", "outfit"),
@@ -3839,12 +3733,14 @@ def get_imagegen_workflows(character_name: str) -> Dict[str, Any]:
     ]:
         val = os.environ.get(env_key, "").strip()
         if val:
-            defaults[area] = val  # z.B. "workflow:Z-Image" oder "backend:CivitAI"
+            defaults[area] = val  # e.g. "backend:CivitAI"
 
     return {
         "character": character_name,
-        "workflows": workflows,
-        "active_workflow": active,
+        # Legacy keys — workflows are gone; kept empty until the frontend
+        # drops them (step 1f).
+        "workflows": [],
+        "active_workflow": "",
         "options": options,
         "defaults": defaults,
     }
@@ -3881,35 +3777,6 @@ def get_available_checkpoints(character_name: str, model_type: str = "") -> Dict
     models = imagegen.get_cached_checkpoints(model_type)
     models_by_service = imagegen.get_cached_checkpoints_by_service(model_type)
     return {"models": models, "models_by_service": models_by_service}
-
-
-@router.put("/{character_name}/skills/image_generation/workflow")
-def set_imagegen_workflow(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """Setzt den aktiven ComfyUI-Workflow fuer einen Character."""
-    user_id = body.get("user_id", "")
-    workflow_name = body.get("workflow", "")
-    if not workflow_name:
-        raise HTTPException(status_code=400, detail="user_id and workflow required")
-
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        raise HTTPException(status_code=404, detail="ImageGeneration skill not found")
-
-    # Validate workflow name
-    valid_names = [wf["name"] for wf in imagegen.get_comfy_workflows()]
-    if workflow_name not in valid_names:
-        raise HTTPException(status_code=400, detail=f"Unknown workflow: {workflow_name}")
-
-    agent_config = get_character_skill_config(character_name, "image_generation") or {}
-    agent_config["comfy_workflow"] = workflow_name
-    save_character_skill_config(character_name, "image_generation", agent_config)
-
-    return {
-        "status": "success",
-        "character": character_name,
-        "active_workflow": workflow_name,
-    }
 
 
 @router.post("/{character_name}/skills/image_generation/workflow-model")
@@ -3984,35 +3851,21 @@ async def set_comfy_seed(character_name: str, request: Request) -> Dict[str, Any
 
 @router.get("/{character_name}/skills/video_generation/options")
 def get_videogen_options(character_name: str) -> Dict[str, Any]:
-    """Gibt alle Auswahl-Optionen fuer die VideoGen-Config zurueck:
-    ImageGen Backends/Workflows/Models/LoRAs + Animation Services/LoRAs."""
+    """Returns all selection options for the VideoGen config:
+    ImageGen backends/models/LoRAs + animation services/LoRAs."""
     sm = get_skill_manager()
 
-    # --- ImageGen Optionen (Workflows + Backends) ---
+    # --- ImageGen options (backends) ---
     imagegen = sm.get_skill("image_generation")
     imagegen_options = []
-    all_models = []
     imagegen_loras = ["None"]
     models_checkpoint = []
     models_unet = []
     models_checkpoint_by_service = {}
     models_unet_by_service = {}
     if imagegen:
-        # Workflows
-        for wf in imagegen.get_comfy_workflows():
-            imagegen_options.append({
-                "type": "workflow",
-                "name": wf["name"],
-                "label": f"ComfyUI: {wf['name']}",
-                "has_loras": wf.get("has_loras", False),
-                "default_loras": wf.get("default_loras", []),
-                "model_type": wf.get("model_type", ""),
-                "default_model": wf.get("default_model", ""),
-                "filter": wf.get("filter", ""),
-            })
-        # Nicht-ComfyUI Backends
         for b in imagegen.backends:
-            if b.api_type == "comfyui" or not b.available:
+            if not b.available:
                 continue
             opt: Dict[str, Any] = {
                 "type": "backend",
@@ -4024,7 +3877,7 @@ def get_videogen_options(character_name: str) -> Dict[str, Any]:
                 opt["models"] = backend_models
                 opt["default_model"] = getattr(b, 'model', backend_models[0])
             imagegen_options.append(opt)
-        # Modelle nach Typ getrennt + LoRAs
+        # Models split by type + LoRAs (cached lists; empty without a scanner)
         models_checkpoint = imagegen.get_cached_checkpoints("checkpoint")
         models_unet = imagegen.get_cached_checkpoints("unet")
         models_checkpoint_by_service = imagegen.get_cached_checkpoints_by_service("checkpoint")

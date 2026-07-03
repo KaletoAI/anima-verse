@@ -1487,48 +1487,27 @@ async def generate_location_background(location_name: str, request: Request) -> 
         if not backend:
             raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
 
-        # Bild generieren (blockierend in Thread) — Style/Negative aus Use-Case.
+        # Generate image (blocking, in a thread) — style/negative from the use case.
         from app.core import config as _cfg
         _ucp = _cfg.resolve_use_case_style(
-            "location", "", "", getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+            "location", getattr(backend, "image_family", "") or "",
+            backend_model=getattr(backend, "model", "") or "")
         full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
         negative = _ucp.get("prompt_negative", "")
         # Location-Background: volle Aufloesung — wird als Hintergrund-Szenenbild
         # genutzt, kein Downscale.
         params = {"width": _location_image_width(), "height": _location_image_height()}
-        # Default-Workflow und Model ermitteln
-        active_wf = getattr(img_skill, '_default_workflow', None)
-        if active_wf and active_wf.workflow_file:
-            params["workflow_file"] = active_wf.workflow_file
-        # Model setzen (input_unet vs input_model)
-        if active_wf and active_wf.model:
-            _model_key = "unet" if (active_wf.has_input_unet or active_wf.has_input_safetensors) else "model"
-            params[_model_key] = active_wf.model
-            # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
-            _resolved = img_skill.resolve_model_for_backend(
-                params[_model_key], backend, active_wf.model_type if active_wf else "")
-            if _resolved and _resolved != params[_model_key]:
-                logger.info("Model-Resolve: %s -> %s (Backend: %s)", params[_model_key], _resolved, backend.name)
-                params[_model_key] = _resolved
-        # CLIP-Pairing fuer Flux2-Workflows
-        if active_wf and active_wf.clip:
-            params["clip_name"] = active_wf.clip
-        if active_wf and getattr(active_wf, "clip_type", ""):
-            params["clip_type"] = active_wf.clip_type
-        if active_wf and getattr(active_wf, "vae", ""):
-            params["vae_name"] = active_wf.vae
 
-        # Frischer Seed pro Aufruf gegen ComfyUI Cache-Hit
-        # (Memory feedback_no_new_image_sentinel).
-        if active_wf and active_wf.has_seed:
-            import random as _rnd
-            params["seed"] = _rnd.randint(1, 2**31 - 1)
+        # Fresh seed per call — avoids backend-side cache hits
+        # (memory: feedback_no_new_image_sentinel).
+        import random as _rnd
+        params["seed"] = _rnd.randint(1, 2**31 - 1)
 
-        # Backend-Fallback-Engine: probiert primary, faellt bei Fehler auf
-        # backend.fallback_mode (none/next_cheaper/specific) zurueck. Lokale
-        # Backends ueber die GPU-Provider-Queue → nie zwei parallel pro Backend.
+        # Backend fallback engine: tries primary, falls back to the next
+        # available backend on failure. Local GPU backends go through the
+        # GPU provider queue → never two in parallel per backend.
         def _op(b):
-            if getattr(b, "api_type", "") in ("comfyui", "a1111"):
+            if getattr(b, "api_type", "") == "a1111":
                 from app.core.llm_queue import get_llm_queue, Priority as _P
                 return get_llm_queue().submit_gpu_task(
                     provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
@@ -1540,16 +1519,15 @@ async def generate_location_background(location_name: str, request: Request) -> 
                 lambda: img_skill.run_with_fallback(
                     primary_backend=backend,
                     op=_op,
-                    workflow=active_wf,
                     character_name=""))
         except RuntimeError as _err:
             raise HTTPException(status_code=500, detail=str(_err))
 
-        # ComfyUI Cache-Hit: Backend gibt String-Sentinel zurueck.
+        # Cache hit: backend returns the string sentinel instead of images.
         if images == "NO_NEW_IMAGE":
             raise HTTPException(
                 status_code=409,
-                detail="ComfyUI hat das Bild bereits mit diesem Seed/Model erzeugt "
+                detail="Das Backend hat das Bild bereits mit diesem Seed/Model erzeugt "
                        "(Cache-Hit). Erneut versuchen oder Backend neu starten.")
 
         if not images:
@@ -1652,8 +1630,9 @@ def get_gallery_image(
 
 @router.get("/imagegen-options")
 def get_imagegen_options() -> Dict[str, Any]:
-    """Gibt verfuegbare Image-Generation-Backends/Workflows zurueck (ohne Character-Bindung)."""
+    """Returns available image-generation backends (without character binding)."""
     from app.core.dependencies import get_skill_manager
+    from app.core.prompt_adapters import get_target_model
 
     sm = get_skill_manager()
     imagegen = sm.get_skill("image_generation")
@@ -1661,43 +1640,12 @@ def get_imagegen_options() -> Dict[str, Any]:
         return {"options": []}
 
     options = []
-    # ComfyUI-Workflows — nur die, deren kompatible ComfyUI-Backends auch
-    # erreichbar sind. Ohne verfuegbares ComfyUI-Backend koennen sie nicht laufen
-    # und gehoeren nicht in den Image-Gen-Dialog (sonst waehlt man ein totes Ziel).
-    for wf in imagegen.get_comfy_workflows(only_available=True):
-        options.append({
-            "type": "workflow",
-            "name": wf["name"],
-            "label": f"ComfyUI: {wf['name']}",
-            "has_loras": wf.get("has_loras", False),
-            "default_loras": wf.get("default_loras", []),
-            "model_type": wf.get("model_type", ""),
-            "default_model": wf.get("model", ""),
-            "filter": wf.get("filter", ""),
-            "ref_slot_count": wf.get("ref_slot_count", 0),
-            # Zweck-Kategorie (z.B. "inpaint") — steuert, welche Workflows in
-            # Spezial-Dialogen (Fit/Edge) angeboten werden.
-            "category": wf.get("category", ""),
-            # Style-Familie (natural/keywords) — Fallback fuer den mapfit-Default-
-            # Prompt, falls der Workflow keinen eigenen prompt hat.
-            "image_family": wf.get("image_family", ""),
-            # Per-Workflow Default-Prompt fuer den Fit/Edge-Dialog (leer = Fallback).
-            "prompt": wf.get("prompt", ""),
-            # Edit-Modell-Inpaint (Qwen): kein dynamischer Terrain-Hint anhaengen
-            # (das Modell sieht die Umgebung im grauen Canvas selbst).
-            "inpaint_gray": wf.get("inpaint_gray", False),
-            # Kompatible ComfyUI-Instanzen (leer = alle) — fuer die „gepinnter
-            # Endpoint"-Eintraege im Dialog.
-            "compatible_backends": wf.get("compatible_backends", []),
-        })
-    # Nicht-ComfyUI Backends (CivitAI, Together, …). Symmetrisch zu den Workflows
-    # oben: angeboten wird jedes AKTIVIERTE Backend — die Verfuegbarkeit loest der
-    # Server beim Generieren via match_backend (Match) auf. NICHT auf b.available
-    # vorfiltern, sonst verschwindet ein frisch konfiguriertes/noch nicht
-    # geprobtes Cloud-Backend aus der "Service (match)"-Auswahl.
+    # Backends (CivitAI, Together, LocalAI, …). Every ENABLED backend is
+    # offered — availability is resolved by the server at generation time via
+    # match_backend. Do NOT pre-filter on b.available, otherwise a freshly
+    # configured / not-yet-probed cloud backend disappears from the
+    # "Service (match)" selection.
     for b in imagegen.backends:
-        if b.api_type == "comfyui":
-            continue
         if not b.instance_enabled:
             continue
         opt = {
@@ -1705,23 +1653,26 @@ def get_imagegen_options() -> Dict[str, Any]:
             "name": b.name,
             "label": b.name if b.available else f"{b.name} (offline?)",
             "available": b.available,
-            # Zweck-Kategorie (z.B. "inpaint") + Default-Prompt — wie bei Workflows,
-            # damit der Fit/Edge-Dialog Inpaint-Backends anbietet und vorbelegt.
+            # Purpose category (e.g. "inpaint") + default prompt — lets the
+            # Fit/Edge dialog offer inpaint backends and prefill the prompt.
             "category": getattr(b, "category", "") or "",
             "image_family": getattr(b, "image_family", "") or "",
             "prompt": getattr(b, "default_prompt", "") or "",
-            # Terrain-Hint-Parameter — der Dialog haengt den Hint nur an, wenn True.
+            "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
+            "target_model": get_target_model(
+                getattr(b, "image_family", "") or "", getattr(b, "model", "") or ""),
+            # Terrain-hint parameter — the dialog only appends the hint if True.
             "terrain_hint": bool(getattr(b, "terrain_hint", False)),
         }
-        # Backend mit Modellliste (z.B. Together.ai) — direkt als Auswahl anbieten
+        # Backend with a model list (e.g. Together.ai) — offer as a selection.
         backend_models = getattr(b, 'available_models', [])
         if backend_models:
             opt["models"] = backend_models
             opt["default_model"] = getattr(b, 'model', backend_models[0])
-        # LoRA-Auswahl im Image-Gen-Dialog. Quelle: bei gesetztem lora_url die vom
-        # Backend-Endpoint geholten LoRAs (analog ComfyUI), sonst die per-Welt
-        # LoRA-Library (endpoint-gefiltert). Uebertragung: localai als <lora:>-Prompt,
-        # openai_diffusion dynamisch als lora_NN/strength_NN-Params.
+        # LoRA selection in the image-gen dialog. Source: with lora_url set, the
+        # LoRAs fetched from the backend endpoint, otherwise the per-world
+        # LoRA library (endpoint-filtered). Transfer: localai as <lora:> prompt
+        # tag, openai_diffusion dynamically as lora_NN/strength_NN params.
         if b.api_type in ("localai", "openai_diffusion"):
             opt["has_loras"] = True
             _be_loras = getattr(b, "available_loras", None)
@@ -1731,19 +1682,15 @@ def get_imagegen_options() -> Dict[str, Any]:
                 from app.core.config import get_lora_library_names
                 opt["lora_options"] = get_lora_library_names(b.name)
         options.append(opt)
-    # Konkrete ComfyUI-Instanzen (fuer „gepinnter Endpoint"-Eintraege im Dialog).
-    comfy_backends = [
-        {"name": b.name, "available": bool(getattr(b, "available", False))}
-        for b in imagegen.backends
-        if b.api_type == "comfyui" and b.instance_enabled
-    ]
+    # ComfyUI is gone — key kept until the frontend drops it (step 1f).
+    comfy_backends: list = []
     # mapfit-Default-Prompts pro Familie — der Fit/Edge-Dialog belegt damit das
     # Prompt-Feld vor (statt des frueheren Terrain-/Edge-Hints).
     from app.core import config as _cfg
     mapfit_prompts = {}
     for _fam in ("natural", "keywords"):
         try:
-            _r = _cfg.resolve_use_case_style("mapfit", _fam, "", "", "")
+            _r = _cfg.resolve_use_case_style("mapfit", _fam)
             mapfit_prompts[_fam] = _r.get("prompt_style", "")
         except Exception:
             mapfit_prompts[_fam] = ""
@@ -1751,8 +1698,8 @@ def get_imagegen_options() -> Dict[str, Any]:
     loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
     result = {"options": options, "comfy_backends": comfy_backends,
               "mapfit_prompts": mapfit_prompts}
-    # Fit/Match-edges: imagegen-Target (Match-Spec, read-only im Fit-Dialog).
-    result["mapfit_imagegen_default"] = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip()
+    # Fit/match-edges: imagegen target (backend match spec, read-only in the Fit dialog).
+    result["mapfit_imagegen_default"] = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "").strip()
     # Globaler Outfit-Default (Match-Spec, z.B. "backend:LocalAI-Flux") — die
     # Character-Render-Match-UI zeigt ihn an, wenn kein Override gesetzt ist.
     result["outfit_imagegen_default"] = (os.environ.get("OUTFIT_IMAGEGEN_DEFAULT") or "").strip()
@@ -2019,46 +1966,46 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             lambda: [b.check_availability()
                      for b in img_skill.backends if b.instance_enabled])
 
-        # Backend-Auswahl: explizit > Workflow > Auto (guenstigster)
+        # Backend selection: map-blend (inpaint) > match spec > explicit > auto (cheapest)
         backend = None
-        active_wf = None  # via Match aufgeloester Workflow — unten fuer workflow_file wiederverwendet
         if _map_blend:
-            # Fit UND Kanten-Angleich nutzen das normale ComfyUI-Workflow-Matching.
-            # Der im Dialog gewaehlte Inpaint-Workflow (data["workflow"], category=
-            # "inpaint") hat Vorrang; ohne Auswahl Fallback auf MAPFIT_IMAGEGEN_DEFAULT.
-            # Der Workflow muss die Inpaint-Nodes haben (input_reference_image=Canvas,
-            # input_mask, input_crop, output_final).
+            # Fit AND edge blending need an inpaint-capable backend. The spec
+            # picked in the dialog (data["workflow"]) has priority; without a
+            # pick fall back to MAPFIT_IMAGEGEN_DEFAULT (a backend match spec).
+            # Legacy "workflow:*" specs resolve to None and drop through.
             _fit_spec = ((data.get("workflow") or "").strip()
-                         or (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "workflow:Flux Inpaint*").strip())
-            backend, active_wf = img_skill.resolve_imagegen_target(
-                _fit_spec, rotation_prefix="mapfit")
-            if active_wf and not backend:
+                         or (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "").strip())
+            if _fit_spec:
+                backend = img_skill.resolve_imagegen_target(_fit_spec)
+            if not backend:
+                # No (usable) spec — cheapest available inpaint-category backend.
+                _inpaint = [b for b in img_skill.backends
+                            if b.available and b.instance_enabled
+                            and (getattr(b, "category", "") or "") == "inpaint"]
+                backend = img_skill.pick_lowest_cost(_inpaint, rotation_key="mapfit")
+            if not backend:
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Kein ComfyUI-Backend fuer Map-Fit-Workflow '{active_wf.name}' verfuegbar")
-            logger.info("Map-Blend (%s): spec=%s -> Workflow=%s Backend=%s",
-                        "edge" if edge_match else "fit", _fit_spec,
-                        active_wf.name if active_wf else "-",
-                        backend.name if backend else "-")
+                    detail="Kein Inpaint-faehiges Backend fuer Map-Fit/Edge verfuegbar")
+            logger.info("Map-Blend (%s): spec=%s -> Backend=%s",
+                        "edge" if edge_match else "fit", _fit_spec, backend.name)
         elif workflow_name:
-            # Match-Konzept: Glob + Verfuegbarkeit statt exaktem Workflow-Namen.
-            # Wird zusaetzlich ein explizites Backend gewaehlt (gepinnter Endpoint),
-            # bleibt der Workflow-Match, aber diese Instanz wird erzwungen.
-            backend, active_wf = img_skill.resolve_imagegen_target(
-                workflow_name, rotation_prefix="world_image",
-                preferred_backend=backend_name)
-            if active_wf and not backend:
-                _pin = f" auf Endpoint '{backend_name}'" if backend_name else ""
+            # Match concept: glob + availability instead of an exact name.
+            # An additionally pinned endpoint (backend_name) forces that instance.
+            backend = img_skill.resolve_imagegen_target(
+                workflow_name, preferred_backend=backend_name)
+            if not backend and backend_name:
+                # Explicitly pinned endpoint not available -> CLEAR error
+                # instead of a silent fallback to another instance.
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Kein ComfyUI-Backend fuer Workflow '{active_wf.name}'{_pin} verfuegbar")
-            if not active_wf:
+                    detail=f"Gewaehltes Backend '{backend_name}' ist nicht verfuegbar")
+            if not backend:
                 logger.warning(
-                    "Workflow '%s' nicht gefunden, verfuegbar: [%s]",
-                    workflow_name, ", ".join(w.name for w in img_skill.comfy_workflows))
+                    "Imagegen-Spec '%s' ergab kein verfuegbares Backend", workflow_name)
             else:
-                logger.info("Workflow (match): %s -> %s -> Backend: %s",
-                            workflow_name, active_wf.name, backend.name if backend else "-")
+                logger.info("Imagegen-Spec (match): %s -> Backend: %s",
+                            workflow_name, backend.name)
         elif backend_name:
             # Backend-Glob via Match-Konzept. _wait_for_explicit_backend probt die
             # passenden Backends FRISCH (statt auf stale b.available zu vertrauen) —
@@ -2116,10 +2063,8 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         from app.core import config as _cfg
         _uc_name = "mapfit" if _map_blend else ("map" if prompt_type == "map_2d" else "location")
         _ucp = _cfg.resolve_use_case_style(
-            _uc_name,
-            getattr(active_wf, "image_family", "") if active_wf else "",
-            getattr(active_wf, "workflow_file", "") if active_wf else "",
-            getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+            _uc_name, getattr(backend, "image_family", "") or "",
+            backend_model=getattr(backend, "model", "") or "")
         if _is_regen:
             full_prompt = prompt
             negative = ""
@@ -2143,57 +2088,24 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             # im 16:9 Location-Format — fuellt das Tile. Sonst Querformat.
             params["width"] = 1024
             params["height"] = 1024
-        # Workflow-File + Model/CLIP/LoRA — config-getrieben, fuer Map-Blend
-        # (Inpaint) GENAUSO wie fuer normale Generierung. Map-Blend hat active_wf
-        # schon via MAPFIT_IMAGEGEN_DEFAULT aufgeloest; sonst ohne expliziten
-        # Workflow den Default-Workflow nehmen. Ist ein Config-Wert leer (z.B. ein
-        # bewusst leeres NSFW-Model), bleibt der im Workflow-File gebackene Wert.
-        if not _map_blend and not workflow_name:
-            active_wf = getattr(img_skill, '_default_workflow', None)
-        if active_wf and active_wf.workflow_file:
-            params["workflow_file"] = active_wf.workflow_file
-        # Model-Override (input_unet/safetensors Workflows brauchen "unet" statt "model")
-        _model_key = "unet" if (active_wf and (active_wf.has_input_unet or active_wf.has_input_safetensors)) else "model"
+        # Model override from the dialog — backends read params["model"].
         if model_override:
-            params[_model_key] = model_override
-        elif active_wf and active_wf.model:
-            params[_model_key] = active_wf.model
-        # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
-        _current_model = params.get(_model_key, "")
-        if _current_model and backend.api_type == "comfyui" and img_skill:
-            _resolved = img_skill.resolve_model_for_backend(
-                _current_model, backend, active_wf.model_type if active_wf else "")
-            if _resolved and _resolved != _current_model:
-                logger.info("Model-Resolve: %s -> %s (Backend: %s)", _current_model, _resolved, backend.name)
-                params[_model_key] = _resolved
-        # CLIP (clip_name1 + clip_name2 fuer DualCLIPLoader, z.B. Flux Inpaint)
-        if active_wf and active_wf.clip:
-            params["clip_name"] = active_wf.clip
-        if active_wf and active_wf.clip2:
-            params["clip_name2"] = active_wf.clip2
-        if active_wf and getattr(active_wf, "clip_type", ""):
-            params["clip_type"] = active_wf.clip_type
-        if active_wf and getattr(active_wf, "vae", ""):
-            params["vae_name"] = active_wf.vae
-        # LoRA-Inputs
-        if active_wf and active_wf.has_loras:
-            if loras_override is not None:
-                params["lora_inputs"] = loras_override
-            elif active_wf.default_loras:
-                params["lora_inputs"] = active_wf.default_loras
+            params["model"] = model_override
+        # LoRA selection from the dialog.
+        if loras_override is not None:
+            params["lora_inputs"] = loras_override
 
-        # Frischer Seed pro Aufruf — sonst gibt ComfyUI bei identischem Prompt+Seed
-        # den NO_NEW_IMAGE-Sentinel (Memory feedback_no_new_image_sentinel). Bei
-        # Map-Blend IMMER neu, sonst wenn der Workflow einen input_seed-Node hat.
-        if _map_blend or (active_wf and active_wf.has_seed):
-            import random as _rnd
-            params["seed"] = _rnd.randint(1, 2**31 - 1)
+        # Fresh seed per call — otherwise a backend may return the
+        # NO_NEW_IMAGE sentinel on an identical prompt+seed cache hit
+        # (memory: feedback_no_new_image_sentinel).
+        import random as _rnd
+        params["seed"] = _rnd.randint(1, 2**31 - 1)
 
-        # Selbst-Referenz: das bestehende (Karten-)Bild als Referenz in Slot 1 —
-        # fuer „Regenerate mit aktuellem Bild" (z.B. damit 2D-Tiles besser
-        # zusammenpassen). Nur wenn der Workflow Ref-Slots hat.
+        # Self-reference: the existing (map) image as reference in slot 1 —
+        # for "regenerate with current image" (e.g. so 2D tiles fit together
+        # better). Only if the backend has reference slots.
         if (data.get("use_source_as_reference") and data.get("reference_image")
-                and active_wf and active_wf.ref_slot_count):
+                and int(getattr(backend, "ref_slot_count", 0) or 0) >= 1):
             _ref_name = (data.get("reference_image") or "").strip()
             if _ref_name and "/" not in _ref_name and ".." not in _ref_name:
                 # get_gallery_dir ist modulweit importiert (oben). KEIN lokaler
@@ -2211,18 +2123,16 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         _fit_comp = None
         _edge_pair = None
         _cpath = _mpath = None
-        # Inpaint-Maskenparameter kommen rein aus den Backend-Feldern (kein Flag,
-        # keine Modell-Sonderlogik). Greift nur, wenn das Backend ein Inpaint-Backend
-        # ist (category=="inpaint"). ComfyUI-Workflows (Legacy) + Nicht-Inpaint-Fallback
-        # nutzen weiter active_wf.inpaint_gray, bis ComfyUI entfernt ist.
-        _wf_gray = bool(active_wf and getattr(active_wf, "inpaint_gray", False))
+        # Inpaint mask parameters come purely from the backend fields (no flag,
+        # no per-model special casing). Only applies when the backend is an
+        # inpaint backend (category=="inpaint").
         if getattr(backend, "category", "") == "inpaint":
             _grow = float(getattr(backend, "mask_grow", MAP_BLEND_MASK_GROW_GRAY))
             _full = bool(getattr(backend, "full_mask", True))
             _inner = float(getattr(backend, "inner_crop", MAP_FIT_INNER_CROP))
         else:
-            _grow = MAP_BLEND_MASK_GROW_GRAY if _wf_gray else MAP_BLEND_MASK_GROW_FILL
-            _full = _wf_gray
+            _grow = MAP_BLEND_MASK_GROW_FILL
+            _full = False
             _inner = MAP_FIT_INNER_CROP
         if edge_match:
             # GENAU zwei benachbarte Tiles, EINE Kante. Naht hart grau, Maske =
@@ -2307,7 +2217,7 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                     except Exception:
                         pass
                     return b.generate(full_prompt, negative, params, log_meta=_log_meta)
-                if getattr(b, "api_type", "") in ("comfyui", "a1111"):
+                if getattr(b, "api_type", "") == "a1111":
                     from app.core.llm_queue import get_llm_queue, Priority as _P
                     return get_llm_queue().submit_gpu_task(
                         provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
@@ -2318,19 +2228,19 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
                 images, backend = await asyncio.to_thread(
                     lambda: img_skill.run_with_fallback(
                         primary_backend=backend, op=_op,
-                        workflow=active_wf, character_name=""))
+                        character_name=""))
             except RuntimeError as _err:
                 _tq.track_finish(_track_id, error=str(_err)[:200])
                 raise HTTPException(status_code=500, detail=str(_err))
 
-            # ComfyUI Cache-Hit: Backend gibt String-Sentinel zurueck. Ohne diese
-            # Pruefung wuerde write_bytes(images[0]) ein einzelnes Char schreiben
-            # und einen memoryview-TypeError werfen.
+            # Cache hit: backend returns the string sentinel. Without this
+            # check, write_bytes(images[0]) would write a single char and
+            # raise a memoryview TypeError.
             if images == "NO_NEW_IMAGE":
                 _tq.track_finish(_track_id, error="Duplikat")
                 raise HTTPException(
                     status_code=409,
-                    detail="ComfyUI hat das Bild bereits mit diesem Seed/Model erzeugt "
+                    detail="Das Backend hat das Bild bereits mit diesem Seed/Model erzeugt "
                            "(Cache-Hit). Erneut versuchen oder Backend neu starten.")
 
             if not images:
@@ -2640,10 +2550,10 @@ async def generate_time_variant(
     location_name: str,
     image_name: str,
     request: Request) -> Dict[str, Any]:
-    """Erzeugt eine Tag- oder Nachtansicht aus einem bestehenden Bild per img2img (Referenzbild).
+    """Creates a day or night variant from an existing image via img2img (reference image).
 
-    Nutzt einen Qwen-kompatiblen Workflow mit dem Originalbild als Referenz.
-    Body-Parameter 'target_type': 'night' (default) oder 'day'.
+    Uses a reference-capable image backend with the original image as reference.
+    Body parameter 'target_type': 'night' (default) or 'day'.
     """
     import time
 
@@ -2741,118 +2651,59 @@ async def generate_time_variant(
             lambda: [b.check_availability()
                      for b in img_skill.backends if b.instance_enabled])
 
-        # Backend-Auswahl: explizit > Workflow > Qwen-faehig > Auto
+        # Backend selection: explicit spec > explicit backend > reference-capable auto
         backend = None
-        active_wf = None
         if workflow_name:
-            # Match-Konzept: Glob + Verfuegbarkeit statt exaktem Namen.
-            backend, active_wf = img_skill.resolve_imagegen_target(
-                workflow_name, rotation_prefix="time_variant")
+            # Match concept: glob + availability instead of an exact name.
+            # Legacy "workflow:*" specs resolve to None and drop through.
+            backend = img_skill.resolve_imagegen_target(workflow_name)
         elif backend_name:
-            backend = img_skill.match_backend(backend_name)  # Backend-Glob via Match-Konzept
+            backend = img_skill.match_backend(backend_name)  # backend glob via match concept
 
         if not backend:
-            # Edit-Workflow mit Referenzbild-Slot bevorzugen (Qwen). KEINE
-            # Inpaint-Workflows: die brauchen input_mask/input_crop, die der
-            # Tag/Nacht-Convert nicht liefert → ComfyUI ResizeImageMaskNode wirft
-            # "required_input_missing".
-            for wf in img_skill.comfy_workflows:
-                if ("qwen" in wf.name.lower()
-                        and (wf.category or "") != "inpaint"
-                        and (wf.ref_slot_count or 0) >= 1):
-                    compat = wf.compatible_backends or []
-                    # skill/compat LEER = deaktiviert -> kein Backend zugeordnet.
-                    candidates = [b for b in img_skill.backends if b.available and b.instance_enabled
-                                  and b.api_type == "comfyui"
-                                  and b.name in compat]
-                    _picked = img_skill.pick_lowest_cost(
-                        candidates, rotation_key=f"time_variant:{wf.name}")
-                    if _picked:
-                        backend = _picked
-                        active_wf = wf
-                        break
+            # Prefer an edit-capable backend with at least one reference-image
+            # slot. NO inpaint backends: they expect a mask, which the
+            # day/night convert does not provide.
+            candidates = [b for b in img_skill.list_available_backends()
+                          if int(getattr(b, "ref_slot_count", 0) or 0) >= 1
+                          and (getattr(b, "category", "") or "") != "inpaint"]
+            backend = img_skill.pick_lowest_cost(candidates, rotation_key="time_variant")
 
-        # Kein Fallback auf Nicht-ComfyUI Backends — Time-Variant-Convert braucht
-        # zwingend ein Backend mit Reference-Image-Support (Qwen via ComfyUI).
-        # Cloud-Backends wie Together-Flux koennen kein img2img mit lokalem
-        # Reference-Bild + ComfyUI-Workflow.
+        # No fallback to backends without reference-image support — the
+        # time-variant convert strictly needs img2img with a local reference image.
         if not backend:
             raise HTTPException(
                 status_code=503,
-                detail="Kein ComfyUI-Backend mit Referenzbild-Support verfuegbar "
-                       "(z.B. Qwen-Workflow). Bitte ComfyUI-Backend starten.")
+                detail="Kein Image-Backend mit Referenzbild-Support verfuegbar. "
+                       "Bitte ein Backend mit Referenz-Slots konfigurieren/starten.")
 
-        # Time-Variant braucht einen Edit-Workflow mit Referenzbild-Slot
-        # (input_reference_image_1). Ein Inpaint-Workflow (input_mask/input_crop)
-        # passt NICHT — sonst scheitert ComfyUI an fehlenden Masken-Inputs.
-        if active_wf and ((active_wf.category or "") == "inpaint"
-                          or (active_wf.ref_slot_count or 0) < 1):
+        # The time variant needs an edit backend with a reference-image slot.
+        # An inpaint backend does NOT fit — it expects mask inputs.
+        if ((getattr(backend, "category", "") or "") == "inpaint"
+                or int(getattr(backend, "ref_slot_count", 0) or 0) < 1):
             raise HTTPException(
                 status_code=400,
-                detail=(f"Workflow '{active_wf.name}' ist fuer Tag/Nacht-Varianten "
-                        "ungeeignet (Inpaint bzw. ohne Referenzbild-Slot). Bitte einen "
-                        "Qwen-Edit-Workflow mit input_reference_image_1 waehlen."))
+                detail=(f"Backend '{backend.name}' ist fuer Tag/Nacht-Varianten "
+                        "ungeeignet (Inpaint bzw. ohne Referenzbild-Slot)."))
 
         from app.core import config as _cfg
         _ucp = _cfg.resolve_use_case_style(
-            "location",
-            getattr(active_wf, "image_family", "") if active_wf else "",
-            getattr(active_wf, "workflow_file", "") if active_wf else "",
-            getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+            "location", getattr(backend, "image_family", "") or "",
+            backend_model=getattr(backend, "model", "") or "")
         full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
         negative = _ucp.get("prompt_negative", "")
-        # Day/Night-Variants sind Hintergrund-Bilder — voll, kein Downscale.
+        # Day/night variants are background images — full size, no downscale.
         params = {"width": _location_image_width(), "height": _location_image_height()}
 
-        # Workflow-Datei setzen
-        if active_wf and active_wf.workflow_file:
-            params["workflow_file"] = active_wf.workflow_file
-        elif not workflow_name:
-            _default_wf = getattr(img_skill, '_default_workflow', None)
-            if _default_wf and _default_wf.workflow_file:
-                active_wf = _default_wf
-                params["workflow_file"] = _default_wf.workflow_file
+        # Fresh seed per call — the time variant should always produce a new
+        # image instead of hitting a backend-side prompt+seed cache.
+        import random as _rnd
+        params["seed"] = _rnd.randint(1, 2**31 - 1)
 
-        # Model (input_unet Workflows brauchen "unet" statt "model")
-        _model_key = "unet" if (active_wf and (active_wf.has_input_unet or active_wf.has_input_safetensors)) else "model"
-        if active_wf and active_wf.model:
-            params[_model_key] = active_wf.model
-        # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
-        _current_model = params.get(_model_key, "")
-        if _current_model and backend.api_type == "comfyui" and img_skill:
-            _resolved = img_skill.resolve_model_for_backend(
-                _current_model, backend, active_wf.model_type if active_wf else "")
-            if _resolved and _resolved != _current_model:
-                logger.info("Model-Resolve: %s -> %s (Backend: %s)", _current_model, _resolved, backend.name)
-                params[_model_key] = _resolved
-
-        # CLIP — sonst scheitert ComfyUI mit value_not_in_list bei input_clip
-        if active_wf and active_wf.clip:
-            params["clip_name"] = active_wf.clip
-        if active_wf and getattr(active_wf, "clip_type", ""):
-            params["clip_type"] = active_wf.clip_type
-        if active_wf and getattr(active_wf, "vae", ""):
-            params["vae_name"] = active_wf.vae
-
-        # LoRAs
-        if active_wf and active_wf.has_loras and active_wf.default_loras:
-            params["lora_inputs"] = active_wf.default_loras
-
-        # Frischer Seed pro Aufruf — Time-Variant soll immer ein neues Bild
-        # erzeugen, sonst cached ComfyUI bei identischem Prompt+Seed.
-        if active_wf and active_wf.has_seed:
-            import random as _rnd
-            params["seed"] = _rnd.randint(1, 2**31 - 1)
-
-        # Das Source-Bild ist das zu editierende Bild (primaere Edit-Referenz).
-        # Qwen erwartet primary Edit-Referenzen auf image1 (Node
-        # input_reference_image_1). Slot 4 ist laut Spec fuer separate
-        # Location-Referenzen — hier ist das Bild selbst die Location.
+        # The source image is the image being edited (primary edit reference)
+        # in reference slot 1.
         params["reference_images"] = {
             "input_reference_image_1": str(source_path),
-        }
-        params["string_inputs"] = {
-            "input_reference_image_1_type": "location",
         }
 
         from app.core.task_queue import get_task_queue
@@ -2876,7 +2727,7 @@ async def generate_time_variant(
                     except Exception:
                         pass
                     return b.generate(full_prompt, negative, params, log_meta=_log_meta)
-                if getattr(b, "api_type", "") in ("comfyui", "a1111"):
+                if getattr(b, "api_type", "") == "a1111":
                     from app.core.llm_queue import get_llm_queue, Priority as _P
                     return get_llm_queue().submit_gpu_task(
                         provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
@@ -2887,19 +2738,19 @@ async def generate_time_variant(
                 images, backend = await asyncio.to_thread(
                     lambda: img_skill.run_with_fallback(
                         primary_backend=backend, op=_op,
-                        workflow=active_wf, character_name=""))
+                        character_name=""))
             except RuntimeError as _err:
                 _tq.track_finish(_track_id, error=str(_err)[:200])
                 raise HTTPException(status_code=500, detail=str(_err))
 
-            # ComfyUI Cache-Hit: Backend gibt String-Sentinel zurueck. Ohne diese
-            # Pruefung wuerde write_bytes(images[0]) ein einzelnes Char schreiben
-            # und einen memoryview-TypeError werfen.
+            # Cache hit: backend returns the string sentinel. Without this
+            # check, write_bytes(images[0]) would write a single char and
+            # raise a memoryview TypeError.
             if images == "NO_NEW_IMAGE":
                 _tq.track_finish(_track_id, error="Duplikat")
                 raise HTTPException(
                     status_code=409,
-                    detail="ComfyUI hat das Bild bereits mit diesem Seed/Model erzeugt "
+                    detail="Das Backend hat das Bild bereits mit diesem Seed/Model erzeugt "
                            "(Cache-Hit). Erneut versuchen oder Backend neu starten.")
 
             if not images:

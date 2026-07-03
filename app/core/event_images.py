@@ -16,9 +16,8 @@ Ablauf:
    wird — Event-Bild bei aktivem ungeloesten Event, Resolved-Bild im
    Linger-Fenster, sonst normaler Location-Background.
 
-Per-Welt-Default: ``EVENT_IMAGEGEN_DEFAULT`` aus config.json wird wie bei
-Location-/Outfit-Bildern aufgeloest (Format ``workflow:<name>`` oder
-``backend:<name>``).
+Per-world default: ``EVENT_IMAGEGEN_DEFAULT`` from config.json is resolved
+like location/outfit images (format ``backend:<glob>``).
 """
 
 from __future__ import annotations
@@ -58,38 +57,34 @@ def _event_image_path(event_id: str, resolved: bool) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Backend / Workflow Auswahl
+# Backend selection
 # ---------------------------------------------------------------------------
 
-def _resolve_backend_and_workflow():
-    """Resolves backend + workflow from ``EVENT_IMAGEGEN_DEFAULT`` env.
+def _resolve_backend():
+    """Resolves the image backend from the ``EVENT_IMAGEGEN_DEFAULT`` spec.
 
-    Falls auf Location-Default zurueck (Backgrounds), wenn nichts gesetzt
-    ist. Liefert ``(backend, workflow)``; ``workflow`` kann None sein
-    (z.B. Cloud-Backend ohne ComfyUI).
+    Falls back to the location default (backgrounds) when nothing is set,
+    and finally to the cheapest available backend. Returns None when no
+    backend is available.
     """
     try:
         from app.core.dependencies import get_skill_manager
     except Exception:
-        return None, None
+        return None
 
     sm = get_skill_manager()
     img_skill = sm.get_skill("image_generation") if sm else None
     if not img_skill:
-        return None, None
+        return None
 
     default = (os.environ.get("EVENT_IMAGEGEN_DEFAULT", "").strip()
                or os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip())
-    # Match-Konzept: Glob + Verfuegbarkeit statt exaktem Workflow-Namen.
-    backend, workflow = img_skill.resolve_imagegen_target(
-        default, rotation_prefix="event_image")
+    # Match concept: glob + availability instead of an exact backend name.
+    backend = img_skill.resolve_imagegen_target(default)
 
     if not backend:
         backend = img_skill._select_backend()
-    if backend and not workflow and backend.api_type == "comfyui":
-        workflow = getattr(img_skill, "_default_workflow", None)
-
-    return backend, workflow
+    return backend
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +217,7 @@ def _read_image_dimensions(path: Path) -> Optional[tuple]:
 
 
 def _safe_dims(width: int, height: int) -> tuple:
-    """Snap auf 8er-Vielfache (ComfyUI/Latents-Constraint), Cap auf 2048."""
+    """Snap to multiples of 8 (diffusion latent constraint), cap at 2048."""
     w = max(64, min(2048, (width // 8) * 8))
     h = max(64, min(2048, (height // 8) * 8))
     return w, h
@@ -256,7 +251,7 @@ def _do_generate(event_id: str,
         return None
     w, h = _safe_dims(*dims)
 
-    backend, active_workflow = _resolve_backend_and_workflow()
+    backend = _resolve_backend()
     if not backend:
         logger.warning("Event-Bild [%s]: kein Backend verfuegbar", event_id)
         return None
@@ -264,49 +259,26 @@ def _do_generate(event_id: str,
     from app.core import config as _cfg
     _ucp = _cfg.resolve_use_case_style(
         "event",
-        getattr(active_workflow, "image_family", "") if active_workflow else "",
-        getattr(active_workflow, "workflow_file", "") if active_workflow else "",
-        getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+        backend_model=getattr(backend, "model", "") or "",
+        backend_family=getattr(backend, "image_family", ""))
     full_prompt = image_prompt.strip()
     if _ucp.get("prompt_style"):
         full_prompt = f"{_ucp['prompt_style']}, {full_prompt}"
     negative = _ucp.get("prompt_negative", "")
 
-    try:
-        denoise = float(os.environ.get("EVENT_IMAGE_DENOISE_STRENGTH", "0.7"))
-    except (TypeError, ValueError):
-        denoise = 0.7
-
     params: Dict[str, Any] = {
         "width": w,
         "height": h,
-        # Bild-Generierung soll nicht aus Cache kommen — neuer Seed pro Run.
+        # The generation must not come from a cache — fresh seed per run.
         "seed": random.randint(1, 2**31 - 1),
     }
 
-    if active_workflow and active_workflow.workflow_file:
-        params["workflow_file"] = active_workflow.workflow_file
-        if active_workflow.model:
-            _model_key = "unet" if (active_workflow.has_input_unet or active_workflow.has_input_safetensors) else "model"
-            params[_model_key] = active_workflow.model
-        if active_workflow.clip:
-            params["clip_name"] = active_workflow.clip
-
-    # Reference-Image als Background-Slot. Workflows die einen einzelnen
-    # Slot mit Titel ``input_reference_image`` haben (ohne Suffix) werden
-    # vom Backend auf den Slot-1-Eintrag im reference_images-Dict
-    # gemapped. Per-Workflow Switch ``input_reference_image_use`` wird
-    # automatisch auf boolean=True gesetzt.
+    # Reference image (current location background) as slot 1.
     params["reference_images"] = {"input_reference_image_1": str(bg_path)}
-
-    # Denoise-Strength: PrimitiveFloat-Node ``input_denoise_strength``
-    # (vom User im Workflow zu definieren). Falls der Workflow keinen
-    # solchen Node hat, ignoriert das Backend den Wert.
-    params["float_inputs"] = {"input_denoise_strength": denoise}
 
     try:
         from app.core.llm_queue import get_llm_queue, Priority as _P
-        is_local = backend.api_type in ("comfyui", "a1111")
+        is_local = backend.api_type == "a1111"
         if is_local:
             images = get_llm_queue().submit_gpu_task(
                 provider_name=backend.name,
@@ -323,7 +295,7 @@ def _do_generate(event_id: str,
         return None
 
     if images == "NO_NEW_IMAGE":
-        logger.warning("Event-Bild [%s]: ComfyUI Cache-Hit — skip", event_id)
+        logger.warning("Event-Bild [%s]: Cache-Hit (NO_NEW_IMAGE) — skip", event_id)
         return None
     if not images:
         logger.warning("Event-Bild [%s]: leeres Backend-Ergebnis", event_id)

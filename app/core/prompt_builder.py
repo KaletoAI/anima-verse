@@ -853,44 +853,30 @@ class PromptBuilder:
         self,
         variables: PromptVariables,
         *,
-        kind: Optional[str] = None,
-        has_style_conditioning: bool = False,
-        max_slots: Optional[int] = None) -> PromptVariables:
-        """Wendet Workflow-abhaengige Ausschlussregeln an.
+        max_slots: int = 0) -> PromptVariables:
+        """Applies reference-slot exclusion rules.
 
-        Das Personen-Referenzbild liefert nur das *Aussehen* (Identitaet). Outfit
-        UND Aktivitaet bleiben deshalb immer im Text — das Ref-Bild zeigt nicht
-        das gewuenschte Outfit oder die Handlung. Einzig die *Location* entfaellt,
-        und auch nur, wenn ein Raum-Referenzbild tatsaechlich in einem Slot liegt
-        (dann zeigt das Bild die Location und der Text waere redundant).
-
-        Bei FLUX_BG/Z_IMAGE bleibt alles im Text.
+        A person reference image only supplies the *appearance* (identity).
+        Outfit AND activity therefore always stay in the text — the ref image
+        does not show the desired outfit or action. Only the *location* is
+        dropped, and only when a room reference image actually ends up in a
+        slot (then the image shows the location and the text would be
+        redundant).
 
         Args:
-            variables: Gesammelte Prompt-Variablen.
-            kind: WorkflowKind als String (qwen_style/flux_bg/z_image).
-                  None -> abgeleitet aus has_style_conditioning (Backward-Compat).
-            has_style_conditioning: Backward-Compat-Flag fuer Caller, die noch
-                  kein kind durchreichen. Wenn True -> wie QWEN_STYLE behandeln.
-            max_slots: Anzahl Ref-Slots des Workflows. Bestimmt ueber den
-                  Prio-Plan, ob der Raum ueberhaupt einen Slot bekommt. None ->
-                  Backward-Compat: Raum gilt als geslottet, sobald ein Raum-Ref
-                  existiert.
+            variables: Collected prompt variables.
+            max_slots: Number of reference slots of the target backend
+                  (``backend.ref_slot_count``). <= 0 means the backend takes
+                  no reference images — everything stays in the text.
         """
-        kind_value = (kind or "").strip().lower()
-        if not kind_value:
-            kind_value = "qwen_style" if has_style_conditioning else ""
-
-        if kind_value != "qwen_style":
+        if max_slots <= 0:
             return variables
 
-        # Location entfaellt NUR wenn ein Raum-Referenzbild wirklich in einem Slot
-        # landet (Prio-Plan). Outfit und Aktivitaet bleiben bewusst im Text.
-        if max_slots is not None:
-            room_slotted = any(
-                e["kind"] == "room" for e in self._plan_qwen_slots(variables, max_slots))
-        else:
-            room_slotted = bool(variables.ref_image_room)
+        # The location is dropped ONLY when a room reference image really
+        # lands in a slot (priority plan). Outfit and activity deliberately
+        # stay in the text.
+        room_slotted = any(
+            e["kind"] == "room" for e in self._plan_qwen_slots(variables, max_slots))
 
         if room_slotted and variables.prompt_location:
             logger.debug("Ausschluss: prompt_location entfernt (Raum-Ref im Slot)")
@@ -1125,40 +1111,24 @@ class PromptBuilder:
     def resolve_reference_slots(
         self,
         variables: PromptVariables,
-        max_slots: int = 4,
-        *,
-        kind: Optional[str] = None) -> Dict[str, Any]:
-        """Baut die Reference-Image Slot-Map fuer ComfyUI-Workflows.
+        max_slots: int = 4) -> Dict[str, Any]:
+        """Builds the reference-image slot map for the target backend.
 
-        Dispatch je nach WorkflowKind:
-            QWEN_STYLE:  Slots nach Prioritaet — 1 erstellender Character,
-                         2 Raum, 3 andere Charaktere, 4 Items (bis Slots voll)
-            FLUX_BG:     ein Background-Slot mit Use-Schalter
-            Z_IMAGE:     keine Ref-Slots
+        Slots are filled by priority — 1 creating character, 2 room,
+        3 other characters, 4 items (until slots are full).
 
         Args:
-            variables: Gesammelte Prompt-Variablen.
-            max_slots: Anzahl Ref-Slots (nur QWEN_STYLE relevant) — aus dem
-                Workflow abgeleitet (ComfyWorkflow.ref_slot_count).
-            kind: WorkflowKind-Wert. None -> wie QWEN_STYLE (Backward-Compat).
+            variables: Collected prompt variables.
+            max_slots: Number of reference slots of the target backend
+                (``backend.ref_slot_count``). <= 0 means no slots.
 
         Returns:
-            Dict mit keys:
-                reference_images: {node_title: file_path}
-                boolean_inputs:   {node_title: bool}
-                string_inputs:    {node_title: str}
-                has_reference_slots: bool   (True wenn Personen-Slots belegt)
+            Dict with keys:
+                reference_images: {slot_name: file_path}
+                has_reference_slots: bool   (True when person slots are used)
         """
-        # WorkflowKind-Werte werden als String uebergeben (vermeidet Import-Zyklus
-        # zu image_generation_skill.WorkflowKind). Default: Qwen-Style.
-        kind_value = (kind or "").strip().lower() or "qwen_style"
-
-        if kind_value == "flux_bg":
-            return self._resolve_flux_bg_slots(variables)
-        if kind_value == "z_image":
-            return {
-                "reference_images": {}, "boolean_inputs": {},
-                "string_inputs": {}, "has_reference_slots": False}
+        if max_slots <= 0:
+            return {"reference_images": {}, "has_reference_slots": False}
 
         return self._resolve_qwen_slots(variables, max_slots)
 
@@ -1217,33 +1187,25 @@ class PromptBuilder:
 
     def _resolve_qwen_slots(
         self, variables: PromptVariables, max_slots: int) -> Dict[str, Any]:
-        """QWEN_STYLE: Referenzbilder nach Prioritaet auf die Slots verteilen.
+        """Distributes reference images onto the slots by priority.
 
-        Slot-Reihenfolge = Prioritaet (siehe _plan_qwen_slots): erstellender
-        Character zuerst, dann Raum, dann andere Charaktere, dann Items.
+        Slot order = priority (see _plan_qwen_slots): creating character
+        first, then room, then other characters, then items.
         """
         reference_images: Dict[str, str] = {}
-        boolean_inputs: Dict[str, bool] = {}
-        string_inputs: Dict[str, str] = {}
         has_reference_slots = False
 
         for slot, entry in enumerate(self._plan_qwen_slots(variables, max_slots), 1):
             key = f"input_reference_image_{slot}"
             reference_images[key] = entry["path"]
             if entry["kind"] == "person":
-                boolean_inputs[f"input_person_ref_{slot}"] = True
-                string_inputs[f"{key}_type"] = entry["gender"] or "no"
                 has_reference_slots = True
                 logger.debug("RefSlot %d: %s (gender=%s)%s", slot, entry["name"],
                              entry["gender"] or "no",
                              " [Agent]" if entry.get("is_agent") else "")
             elif entry["kind"] == "room":
-                boolean_inputs[f"input_person_ref_{slot}"] = False
-                string_inputs[f"{key}_type"] = "location"
                 logger.debug("RefSlot %d: Room/Location", slot)
             else:  # item
-                boolean_inputs[f"input_person_ref_{slot}"] = False
-                string_inputs[f"{key}_type"] = "item"
                 logger.info("RefSlot %d: Item '%s'", slot, entry.get("name", "?"))
 
         logger.debug("RefSlots: %d belegt (Prio Agent>Raum>andere>Items)",
@@ -1251,55 +1213,7 @@ class PromptBuilder:
 
         return {
             "reference_images": reference_images,
-            "boolean_inputs": boolean_inputs,
-            "string_inputs": string_inputs,
             "has_reference_slots": has_reference_slots,
-        }
-
-    def _resolve_flux_bg_slots(self, variables: PromptVariables) -> Dict[str, Any]:
-        """FLUX_BG: ein einzelner Referenz-Slot (input_reference_image_background).
-
-        Der Slot ist derselbe, nur die Quelle unterscheidet sich:
-          - Normale Bilder mit Location: das Background-/Location-Bild.
-          - Variant-/Portrait-Bilder ohne Location: das Personen-Profilbild
-            als Identitaets-Referenz (Profilbild kommt ueber variables.ref_images).
-        Ist keine der beiden Quellen vorhanden, bleibt reference_images leer; das
-        Backend laedt das 8x8-Placeholder und setzt input_reference_image_use=False.
-        """
-        reference_images: Dict[str, str] = {}
-        boolean_inputs: Dict[str, bool] = {}
-        used_person_ref = False
-
-        ref_path = ""
-        if variables.ref_image_room and Path(variables.ref_image_room).exists():
-            ref_path = variables.ref_image_room
-            logger.debug("FLUX_BG: Background-Slot = Location: %s", Path(ref_path).name)
-        else:
-            # Keine Location (z.B. Variant/Portrait): erstes Personen-Refbild
-            # (Profilbild) als Identitaets-Referenz in denselben Slot legen.
-            for idx in sorted(variables.ref_images):
-                cand = variables.ref_images.get(idx, "")
-                if cand and Path(cand).exists():
-                    ref_path = cand
-                    used_person_ref = True
-                    logger.debug("FLUX_BG: Background-Slot = Personen-Ref: %s", Path(ref_path).name)
-                    break
-
-        if ref_path:
-            reference_images["input_reference_image_background"] = ref_path
-            # input_reference_image_use wird vom Backend automatisch aktiviert,
-            # sobald ein Switch-Node mit dem Title gefunden wird (siehe
-            # image_backends._activated_switches Logik).
-        else:
-            # Keine Referenz -> Use-Switch explizit auf False
-            boolean_inputs["input_reference_image_use"] = False
-            logger.debug("FLUX_BG: kein Referenzbild, use=False")
-
-        return {
-            "reference_images": reference_images,
-            "boolean_inputs": boolean_inputs,
-            "string_inputs": {},
-            "has_reference_slots": used_person_ref,
         }
 
     @staticmethod

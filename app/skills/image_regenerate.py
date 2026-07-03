@@ -118,8 +118,8 @@ def regenerate_image(character_name: str,
         output_path: Pfad der zu ueberschreibenden Bilddatei
         original_prompt: Gespeicherter Image-Prompt
         improvement_request: Optionaler Verbesserungswunsch
-        workflow_name: Optionaler ComfyUI-Workflow-Name
-        backend_name: Optionaler Backend-Name (direkte Backend-Auswahl, nicht-ComfyUI)
+        workflow_name: Legacy parameter (ComfyUI removed) — ignored
+        backend_name: Optional backend name/glob (direct backend selection)
         agent_config: Per-Agent Config (fuer LLM-Override)
 
     Returns:
@@ -159,35 +159,22 @@ def regenerate_image(character_name: str,
     if not skill:
         raise RuntimeError("ImageGenerationSkill nicht verfuegbar")
 
-    # 3. Backend + Workflow bestimmen
-    active_workflow = None
+    # 3. Determine backend (backend-only; the ComfyUI workflow axis is gone)
     backend = None
 
+    if workflow_name:
+        logger.warning(
+            "Legacy workflow selection '%s' ignoriert (ComfyUI entfernt) — "
+            "Backend-Auswahl wird verwendet", workflow_name)
+
     if backend_name:
-        # Provider-Auswahl via Match-Glob (z.B. "Together.ai" / "Together*"),
-        # nach Verfuegbarkeit aufgeloest — wie das Admin-Default-Match.
+        # Provider selection via match glob (e.g. "Together.ai" / "Together*"),
+        # resolved by availability — same as the admin default match.
         backend = skill.match_backend(backend_name)
         if not backend:
             raise RuntimeError(f"Backend '{backend_name}' nicht verfuegbar")
     else:
-        # Workflow-Auswahl via Match-Glob (z.B. "Flux*"), nach Verfuegbarkeit.
-        if workflow_name and skill.comfy_workflows:
-            active_workflow = skill.match_workflow(workflow_name, character_name)
-        if not active_workflow and skill.comfy_workflows:
-            active_workflow = skill._get_active_workflow(character_name) if character_name else skill.comfy_workflows[0]
-
-        if active_workflow:
-            backend = skill._select_backend_for_workflow(active_workflow, character_name)
-            if not backend:
-                # Retry nach Availability-Refresh (Backend evtl. seit Init wieder online)
-                for b in skill.backends:
-                    if b.api_type == "comfyui" and b.instance_enabled and not b.available:
-                        b.check_availability()
-                backend = skill._select_backend_for_workflow(active_workflow, character_name)
-            if not backend:
-                raise RuntimeError(f"Kein kompatibles ComfyUI-Backend fuer Workflow '{active_workflow.name}' verfuegbar")
-        if not backend:
-            backend = skill._select_backend_for_agent(character_name)
+        backend = skill._wait_for_backend(character_name)
 
     if not backend:
         raise RuntimeError("Kein Backend verfuegbar")
@@ -200,63 +187,21 @@ def regenerate_image(character_name: str,
         "width": cfg.get("width", getattr(backend, "width", 1024)),
         "height": cfg.get("height", getattr(backend, "height", 1024)),
     }
-    if active_workflow:
-        params["workflow_file"] = active_workflow.workflow_file
-        # Param-Key: bei input_unet/input_safetensors Workflows -> "unet", sonst "model"
-        _model_key = "unet" if (active_workflow.has_input_unet or active_workflow.has_input_safetensors) else "model"
-        if active_workflow.model:
-            params[_model_key] = active_workflow.model
-        # Per-Character Model-Override (aus Skill-Config, ueberschreibt .env Default)
-        from app.models.character import get_character_skill_config
-        _agent_cfg = get_character_skill_config(character_name, "image_generation") or {}
-        _char_model = (_agent_cfg.get("workflow_models") or {}).get(active_workflow.name, "").strip()
-        if _char_model:
-            params[_model_key] = _char_model
-            logger.info("Per-Character Model: %s", _char_model)
-        # LoRA-Inputs: User-Override oder Workflow-Defaults
-        if active_workflow.has_loras:
-            if loras is not None:
-                params["lora_inputs"] = loras
-            elif active_workflow.default_loras:
-                params["lora_inputs"] = active_workflow.default_loras
-        # Model-Override (User-Auswahl im Dialog, hoechste Prioritaet)
-        if model_override:
-            params[_model_key] = model_override
-        # Model-Verfuegbarkeit pruefen und ggf. aehnlichstes Modell finden
-        _current_model = params.get(_model_key, "")
-        if _current_model and backend.api_type == "comfyui" and skill:
-            _resolved = skill.resolve_model_for_backend(
-                _current_model, backend, active_workflow.model_type if active_workflow else "")
-            if _resolved and _resolved != _current_model:
-                logger.info("Model-Resolve: %s -> %s (Backend: %s)", _current_model, _resolved, backend.name)
-                params[_model_key] = _resolved
-        # Allowed-Models-Liste mitgeben — der Backend-Code braucht sie um
-        # bei Multi-Loader-Workflows (z.B. Qwen safetensors+gguf) die jeweils
-        # ungenutzten Loader auf eine vorhandene Datei zu setzen. ComfyUI
-        # validiert sonst den ungenutzten Workflow-Default und lehnt ab.
-        if backend.api_type == "comfyui" and skill and getattr(skill, "_model_cache_loaded", False):
-            _all_unet = skill._cached_unet_models_by_service.get(backend.name, [])
-            _all_ckpt = skill._cached_checkpoints_by_service.get(backend.name, [])
-            params["allowed_models"] = sorted(set(_all_unet + _all_ckpt))
-        # CLIP-Model setzen wenn im Workflow konfiguriert
-        if active_workflow.clip:
-            params["clip_name"] = active_workflow.clip
-            logger.info("CLIP: %s", active_workflow.clip)
-    else:
-        # Cloud-Backend ohne Workflow (Together.ai, CivitAI, Mammouth):
-        # Dialog-Auswahl (model_override) muss auch hier wirken, sonst
-        # bleibt das im Backend konfigurierte Default-Modell aktiv.
-        if model_override:
-            params["model"] = model_override
-            logger.info("Model-Override (Cloud-Backend): %s", model_override)
+    # Model override (user selection in the dialog, highest priority) —
+    # otherwise the backend's configured default model stays active.
+    if model_override:
+        params["model"] = model_override
+        logger.info("Model-Override: %s", model_override)
+    # LoRA inputs: user override from the dialog
+    if loras is not None:
+        params["lora_inputs"] = loras
 
-    # 6. Referenzbilder aufloesen (fuer die Generierung; kein Post-Processing mehr)
-    face_refs = {"reference_images": {}, "boolean_inputs": {}, "string_inputs": {}, "has_reference_slots": False}
+    # 6. Resolve reference images (for the generation; no post-processing here)
+    face_refs = {"reference_images": {}, "has_reference_slots": False}
     appearances: list = []
 
-    # Personen-Detection laeuft IMMER wenn character_name vorhanden — auch
-    # ohne ComfyUI-Workflow (z.B. CivitAI/Together direkt). Das externe
-    # Post-Processing braucht appearances, um die Personen aufzuloesen.
+    # Person detection ALWAYS runs when character_name is present — the
+    # external post-processing needs appearances to resolve the persons.
     if character_name:
         try:
             from app.core.prompt_builder import PromptBuilder
@@ -272,11 +217,11 @@ def regenerate_image(character_name: str,
         except Exception as _ape:
             logger.warning("Appearance-Detection fehlgeschlagen: %s", _ape)
 
-    if active_workflow and character_name:
+    if character_name:
         try:
             from app.core.prompt_builder import PromptBuilder, PromptVariables
             _regen_builder = PromptBuilder(character_name)
-            # persons fuer Workflow-Slots erneut aufloesen (mit ref_images etc.)
+            # Resolve persons again for the reference slots (with ref_images etc.)
             if character_names is not None:
                 persons = _regen_builder.detect_persons(final_prompt, character_names=character_names)
             else:
@@ -291,17 +236,16 @@ def regenerate_image(character_name: str,
                     _regen_pv.ref_images[idx] = ref
             _regen_builder._collect_location(_regen_pv)
 
-            # Room-Override: Hintergrundbild fuer gewaehlten Raum einsetzen.
-            # Wird VOR resolve_reference_slots gesetzt, damit der Slot
-            # korrekt fuer den Workflow-Kind gemappt wird (Qwen: Slot 4,
-            # Flux: input_reference_image_background).
+            # Room override: inject the background image for the chosen room.
+            # Set BEFORE resolve_reference_slots so the room lands in its
+            # slot according to the priority plan.
             #
-            # strict_room=True: wenn der gewaehlte Raum keine dedizierten
-            # Gallery-Bilder hat, fallen wir NICHT auf Location-Default
-            # zurueck. Stattdessen: ref_image_room leeren, der Workflow
-            # generiert den Hintergrund rein aus dem Text-Prompt. Sonst
-            # wuerde der User die Raumaenderung im Dialog nicht bemerken,
-            # weil das vorher gewaehlte Default-Bild erneut zurueckkommt.
+            # strict_room=True: when the chosen room has no dedicated
+            # gallery images we do NOT fall back to the location default.
+            # Instead ref_image_room is cleared and the background is
+            # generated purely from the text prompt. Otherwise the user
+            # would not notice the room change in the dialog because the
+            # previously chosen default image comes back again.
             if room_id:
                 from app.models.world import get_background_path
                 from app.models.character import get_character_current_location
@@ -320,26 +264,24 @@ def regenerate_image(character_name: str,
                                     "kommt aus dem Text-Prompt)",
                                     character_name, room_id)
 
-            # Raum-Referenz nur wenn im Dialog angewaehlt — sonst Slot freigeben
-            # (z.B. damit die Selbst-Referenz oder eine weitere Person reinpasst).
+            # Room reference only when selected in the dialog — otherwise free
+            # the slot (e.g. for the self-reference or another person).
             if not use_room:
                 _regen_pv.ref_image_room = ""
 
-            from app.skills.image_generation_skill import WorkflowKind
-            _wf_kind = active_workflow.kind.value if active_workflow else None
-            _wf_slots = active_workflow.ref_slot_count if active_workflow and active_workflow.ref_slot_count else 4
-            face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_wf_slots, kind=_wf_kind)
+            _ref_slots = getattr(backend, "ref_slot_count", 0)
+            face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_ref_slots)
 
-            # Selbst-Referenz (aktuelles Bild) in den ersten freien Slot — der
-            # Dialog deckelt die Auswahl bereits aufs Slot-Budget, hier nur noch
-            # einsetzen wenn tatsaechlich Platz ist.
+            # Self-reference (current image) into the first free slot — the
+            # dialog already caps the selection to the slot budget, here it
+            # is only inserted when there is actually room.
             if use_source_as_reference and source_image_path:
                 import re as _re
                 if Path(source_image_path).exists():
                     _refs = face_refs.get("reference_images") or {}
                     _used = {int(_m.group(1)) for _k in _refs
                              if (_m := _re.match(r"input_reference_image_(\d+)$", _k))}
-                    for _n in range(1, _wf_slots + 1):
+                    for _n in range(1, _ref_slots + 1):
                         if _n not in _used:
                             _refs[f"input_reference_image_{_n}"] = source_image_path
                             face_refs["reference_images"] = _refs
@@ -347,37 +289,25 @@ def regenerate_image(character_name: str,
                             logger.info("Selbst-Referenz in Slot %d: %s", _n, Path(source_image_path).name)
                             break
                     else:
-                        logger.info("Selbst-Referenz: kein freier Ref-Slot (max %d)", _wf_slots)
+                        logger.info("Selbst-Referenz: kein freier Ref-Slot (max %d)", _ref_slots)
 
-            if active_workflow.kind == WorkflowKind.QWEN_STYLE:
-                # Style-Conditioning: Referenzen direkt in die Generierung injizieren
-                params["reference_images"] = face_refs["reference_images"]
-                params["boolean_inputs"] = face_refs["boolean_inputs"]
-                params["string_inputs"] = face_refs["string_inputs"]
-            else:
-                # FLUX_BG / Z_IMAGE: Charaktere kommen ueber Post-Processing.
-                # Bei FLUX_BG wird zusaetzlich das Background-Ref-Bild via
-                # face_refs in die Generierung injiziert (siehe unten).
-                if active_workflow.kind == WorkflowKind.FLUX_BG:
-                    params["reference_images"] = face_refs["reference_images"]
-                    params["boolean_inputs"] = face_refs["boolean_inputs"]
-                # Post-Processing laeuft extern (Pull-Modell). Hier werden nur
-                # die Referenzen fuer die Generierung gesetzt.
+            # Inject the references directly into the generation request.
+            # Backends without reference slots simply get an empty dict.
+            params["reference_images"] = face_refs["reference_images"]
         except Exception as e:
             logger.warning(f"Referenz-Aufloesung Fehler: {e}")
 
-    # 6b. Use-Case-Style anwenden (Prompt wird ohne Affixe gespeichert).
+    # 6b. Apply use-case style (the prompt is stored without affixes).
     from app.core import config as _cfg
     _ucp = _cfg.resolve_use_case_style(
         "character",
-        getattr(active_workflow, "image_family", "") if active_workflow else "",
-        getattr(active_workflow, "workflow_file", "") if active_workflow else "",
-        getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+        backend_model=getattr(backend, "model", "") or "",
+        backend_family=getattr(backend, "image_family", ""))
     generation_prompt = final_prompt
     if _ucp.get("prompt_style"):
         generation_prompt = f"{_ucp['prompt_style']} {generation_prompt}"
 
-    logger.info(f"Backend={backend.name}, Workflow={active_workflow.name if active_workflow else 'default'}")
+    logger.info(f"Backend={backend.name}")
     logger.info(f"Prompt (clean): {final_prompt[:120]}...")
     if generation_prompt != final_prompt:
         logger.info(f"Prompt (with affixes): {generation_prompt[:120]}...")
@@ -398,38 +328,27 @@ def regenerate_image(character_name: str,
             except Exception:
                 pass
 
-    # Backend-Fallback-Engine: bei Fehler des primaeren Backends wird
-    # automatisch auf Fallback (per backend.fallback_mode) gewechselt.
-    # Der op-Callback adaptiert generation_prompt/params pro Backend —
-    # wichtig wenn ein "specific" Fallback einen anderen api_type hat.
-    def _build_op(_orig_prompt: str, _orig_neg: str, _orig_params: dict, _orig_wf):
+    # Backend fallback engine: on a failure of the primary backend the op
+    # automatically switches to the next available backend. The op callback
+    # adapts generation_prompt/params per backend — important when the
+    # fallback has a different api_type.
+    def _build_op(_orig_prompt: str, _orig_neg: str, _orig_params: dict):
         def _op(b):
             _activate_track(getattr(b, "name", ""))
-            # Use-Case-Style pro Backend (Familie aus Workflow/Backend-Modell).
+            # Use-case style per backend (family from the backend model).
             from app.core import config as _cfg
             _bucp = _cfg.resolve_use_case_style(
                 "character",
-                getattr(_orig_wf, "image_family", "") if _orig_wf else "",
-                getattr(_orig_wf, "workflow_file", "") if _orig_wf else "",
-                getattr(b, "model", "") or "", getattr(b, "image_family", ""))
+                backend_model=getattr(b, "model", "") or "",
+                backend_family=getattr(b, "image_family", ""))
             _gen_prompt = _orig_prompt
             if _bucp.get("prompt_style"):
                 _gen_prompt = f"{_bucp['prompt_style']} {_gen_prompt}"
-            # Negative: Aufruf-Override gewinnt, sonst Use-Case
+            # Negative: call override wins, otherwise use-case
             _gen_neg = _orig_neg or _bucp.get("prompt_negative", "")
-            # Params: Modell-Resolve fuer dieses Backend
             _bp = dict(_orig_params)
-            _model_key = "unet" if (_orig_wf and (_orig_wf.has_input_unet or _orig_wf.has_input_safetensors)) else "model"
-            _cur_model = _bp.get(_model_key, "")
-            if _cur_model and b.api_type == "comfyui" and skill:
-                _resolved = skill.resolve_model_for_backend(
-                    _cur_model, b, _orig_wf.model_type if _orig_wf else "")
-                if _resolved and _resolved != _cur_model:
-                    logger.info("Regen-Fallback Model-Resolve: %s -> %s (Backend: %s)",
-                                _cur_model, _resolved, b.name)
-                    _bp[_model_key] = _resolved
-            # GPU-Queue fuer lokale Backends, direkt sonst
-            if getattr(b, "api_type", "") in ("comfyui", "a1111"):
+            # GPU queue for local backends, direct otherwise
+            if getattr(b, "api_type", "") == "a1111":
                 from app.core.llm_queue import get_llm_queue, Priority
                 logger.info("GPU-Task (Backend=%s)", b.name)
                 return get_llm_queue().submit_gpu_task(
@@ -447,12 +366,11 @@ def regenerate_image(character_name: str,
     _log_meta = {"agent_name": character_name, "original_prompt": original_prompt,
                  "auto_enhance": bool(improvement_request)}
     try:
-        _op = _build_op(final_prompt, negative_prompt, params, active_workflow)
+        _op = _build_op(final_prompt, negative_prompt, params)
         try:
             images, backend = skill.run_with_fallback(
                 primary_backend=backend,
                 op=_op,
-                workflow=active_workflow,
                 character_name=character_name)
         except RuntimeError as _fb_err:
             msg = str(_fb_err)
@@ -486,11 +404,9 @@ def regenerate_image(character_name: str,
         # Post-Processing laeuft extern (Pull-Modell). Die Regenerierung
         # schreibt nur das Bild; ein externer Dienst uebernimmt die Nachbearbeitung.
 
-        # Metadaten aktualisieren (Backend, Workflow, Duration)
-        _wf_name = active_workflow.name if active_workflow else ""
+        # Update metadata (backend, duration)
         import os as _os
         from app.models.character import get_character_current_location
-        # Referenzen liegen je nach Workflow in face_refs statt params
         _ref_source = params.get("reference_images") or face_refs.get("reference_images") or {}
         _ref_meta = {}
         for _rk, _rv in _ref_source.items():
@@ -524,7 +440,6 @@ def regenerate_image(character_name: str,
             "negative_prompt": negative_prompt,
             "backend": backend.name,
             "backend_type": backend.api_type,
-            "workflow": _wf_name,
             "guidance_scale": params.get("guidance_scale"),
             "num_inference_steps": params.get("num_inference_steps") or params.get("steps"),
             "duration_s": round(_gen_duration, 1),
@@ -534,11 +449,10 @@ def regenerate_image(character_name: str,
             "room_id": room_id or _orig_meta.get("room_id", ""),
             "location": _location_val,
             "seed": params.get("seed", 0),
-            # Model: Dialog-Override > backend.model > backend.last_used_checkpoint
-            # — auch fuer Together/CivitAI sichtbar in der Bild-Info.
+            # Model: dialog override > backend.model > backend.last_used_checkpoint
+            # — visible in the image info for cloud backends too.
             "model": (
-                params.get("unet")
-                or params.get("model")
+                params.get("model")
                 or getattr(backend, "model", "")
                 or getattr(backend, "last_used_checkpoint", "")
                 or getattr(backend, "checkpoint", "")
@@ -569,14 +483,14 @@ def regenerate_image(character_name: str,
                 existing_meta = load_image_meta(_regen_filename) or {}
                 existing_meta.update(_regen_meta)
                 save_image_meta(_regen_filename, existing_meta)
-                logger.info("Instagram-Meta aktualisiert: workflow=%s, backend=%s", _wf_name, backend.name)
+                logger.info("Instagram-Meta aktualisiert: backend=%s", backend.name)
             except Exception as meta_err:
                 logger.warning("Instagram-Meta Update fehlgeschlagen: %s", meta_err)
         elif character_name:
             try:
                 from app.models.character import add_character_image_metadata
                 add_character_image_metadata(character_name, _regen_filename, _regen_meta)
-                logger.info("Character-Image-Meta aktualisiert: workflow=%s, backend=%s", _wf_name, backend.name)
+                logger.info("Character-Image-Meta aktualisiert: backend=%s", backend.name)
             except Exception as meta_err:
                 logger.warning("Character-Image-Meta Update fehlgeschlagen: %s", meta_err)
 

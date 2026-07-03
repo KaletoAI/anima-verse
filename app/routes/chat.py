@@ -438,18 +438,22 @@ async def visualize(request: Request) -> Dict[str, Any]:
 
     setting_context = "Setting: " + ", ".join(scene_parts) if scene_parts else ""
 
-    # 3. Workflow-spezifische Prompt-Anweisungen ermitteln
+    # 3. Determine backend-specific prompt instructions (image family from
+    #    the backend the spec resolves to).
     workflow_instruction = ""
     workflow_image_model = ""
     if workflow:
         sm = get_skill_manager()
         for skill in sm.skills:
             if skill.__class__.__name__ == "ImageGenerationSkill":
-                for wf in getattr(skill, "comfy_workflows", []):
-                    if wf.name == workflow:
-                        workflow_image_model = wf.image_family
-                        from app.core.config import get_use_case_prompts as _gucp
-                        workflow_instruction = _gucp("character", wf.image_family).get("prompt_instruction", "")
+                _be = skill.resolve_imagegen_target(workflow)
+                if _be:
+                    from app.core import config as _cfg
+                    workflow_image_model = getattr(_be, "image_family", "") or ""
+                    workflow_instruction = _cfg.resolve_use_case_style(
+                        "character", workflow_image_model,
+                        backend_model=getattr(_be, "model", "") or "",
+                    ).get("prompt_instruction", "")
                 break
 
     # Image-Prompt via LLM generieren (mit Szenen-Kontext)

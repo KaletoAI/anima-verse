@@ -587,7 +587,7 @@
         "endpoint": "LocalAI-Flux1-Dev"
       }
     ],
-    "mapfit_imagegen_default": "workflow:Flux Inpaint*"
+    "mapfit_imagegen_default": ""
   },
   "log_level": "INFO",
   "storage_dir": "./storage",

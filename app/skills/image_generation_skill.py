@@ -1,6 +1,5 @@
 """Image Generation Skill - Multi-Instance Dispatcher mit Kosten-basierter Auswahl"""
 import base64
-import enum
 import json
 import os
 import re
@@ -15,54 +14,11 @@ _re_4xx = re.compile(r"\b(?:HTTP\s*)?4(?:00|01|03|04|05|22)\b|Bad Request|Unproc
 # Spiegelt den LLM-Provider-Cooldown: ein gescheitertes Backend wird fuer diese
 # Zeit aus der Match-Auswahl genommen und danach automatisch wieder probiert.
 _BACKEND_COOLDOWN_SECONDS = 300.0
-from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-
-class WorkflowKind(str, enum.Enum):
-    """Workflow-Familie. Bestimmt Ref-Slot-Layout, Exclusion-Regeln und Post-Processing.
-
-    QWEN_STYLE: Style-Conditioning ueber input_reference_image_1..4
-                (Slots 1-3 = Personen, Slot 4 = Location).
-    FLUX_BG:    input_reference_image_background + input_reference_image_use.
-                Background-only. Charaktere kommen ueber externes Post-Processing.
-    Z_IMAGE:    Keine Ref-Slots. Charaktere kommen ueber externes Post-Processing.
-    """
-    QWEN_STYLE = "qwen_style"
-    FLUX_BG = "flux_bg"
-    Z_IMAGE = "z_image"
-
-
-@dataclass
-class ComfyWorkflow:
-    """Definition eines ComfyUI-Workflows (entkoppelt von Backends)."""
-    name: str
-    workflow_file: str
-    model: str
-    kind: WorkflowKind = WorkflowKind.Z_IMAGE  # erkannt aus Workflow-JSON-Nodes
-    ref_slot_count: int = 0     # hoechster input_reference_image_N Slot (QWEN_STYLE) — Slot N = Location, 1..N-1 = Personen
-    compatible_backends: list = field(default_factory=list)  # Backend-Namen (skill); LEER = DEAKTIVIERT (kein Backend zugeordnet)
-    image_family: str = ""      # natural/keywords — wie das Modell Prompts will
-    category: str = ""          # Zweck-Kategorie (z.B. "inpaint") — user-konfiguriert, fuer Spezial-Dialoge
-    prompt: str = ""            # Per-Workflow Default-Prompt (Fit/Edge-Dialog) — z.B. Edit-Instruktion vs. Fill-Beschreibung
-    has_input_unet: bool = False  # Workflow hat eigenen input_unet Node (nicht input_model)
-    has_input_safetensors: bool = False  # Workflow hat input_safetensors Node (z.B. Flux2 UNETLoader)
-    inpaint_gray: bool = False  # Edit-Modell-Inpaint (Qwen-Edit): Inpaint-Stellen GRAU ins Referenzbild
-    clip: str = ""              # CLIP-Modell fuer den Workflow (clip_name1 bei DualCLIPLoader)
-    clip2: str = ""             # 2. CLIP-Modell (clip_name2) fuer DualCLIPLoader-Nodes
-    vae: str = ""               # VAE-Modell fuer den Workflow (vae_name an input_vae/VAELoader)
-    clip_type: str = ""         # type-Param des CLIP-Loaders (flux2/qwen_image/...) an input_clip
-    has_loras: bool = False     # Workflow hat input_loras/input_lora Node
-    default_loras: list = field(default_factory=list)  # [{name, strength}, ...] aus .env
-    model_type: str = ""        # "unet" | "checkpoint" | "" — erkannt aus input_model/input_unet Node
-    has_seed: bool = False      # Workflow hat input_seed Node
-    has_separated_prompt: bool = False  # Workflow hat input_prompt_character/pose/expression Nodes
-    width: int = 0              # Default-Breite (0 = Backend-Default nutzen)
-    height: int = 0             # Default-Hoehe (0 = Backend-Default nutzen)
-    filter: str = ""            # Glob-Pattern fuer Model/LoRA-Filterung im Frontend (z.B. "Z-Image*")
 
 import requests
 
@@ -187,12 +143,6 @@ class ImageGenerationSkill(BaseSkill):
         else:
             logger.info("%d/%d Instanz(en) verfuegbar", available_count, len(self.backends))
 
-        # Lade ComfyUI-Workflow-Definitionen (entkoppelt von Backends)
-        self.comfy_workflows: List[ComfyWorkflow] = self._load_comfy_workflows()
-
-        # Default-Workflow aus .env lesen (COMFY_IMAGEGEN_DEFAULT), Fallback auf ersten Workflow
-        self._default_workflow: Optional[ComfyWorkflow] = self._resolve_default_workflow()
-
         # ImageGen nutzt ein eigenes per-Instanz Config-System (_get_instance_config)
         # statt der generischen BaseSkill._defaults. Daher keine _defaults fuer
         # get_config_fields() — die Konfiguration geschieht ueber die instanzbasierte
@@ -251,190 +201,6 @@ class ImageGenerationSkill(BaseSkill):
                 logger.error("Fehler beim Laden von Instanz %d (%s): %s", n, name, e)
 
         return instances
-
-    def _load_comfy_workflows(self) -> List[ComfyWorkflow]:
-        """Scannt .env nach COMFY_IMAGEGEN_{ID}_* Bloecken und erstellt ComfyWorkflow-Objekte."""
-        workflows = []
-        # Sammle alle Workflow-IDs aus Umgebungsvariablen (numerisch oder benannt)
-        import re as _re
-        _wf_ids = set()
-        for key in os.environ:
-            m = _re.match(r"^COMFY_IMAGEGEN_(.+?)_NAME$", key)
-            if m:
-                _wf_ids.add(m.group(1))
-        for wf_id in sorted(_wf_ids):
-            prefix = f"COMFY_IMAGEGEN_{wf_id}_"
-            wf_name = os.environ.get(f"{prefix}NAME", "").strip()
-            if not wf_name:
-                continue
-            wf_file = os.environ.get(f"{prefix}WORKFLOW_FILE", "").strip()
-            if not wf_file:
-                logger.warning("ComfyWorkflow %s (%s): Kein WORKFLOW_FILE, ueberspringe", wf_id, wf_name)
-                continue
-            wf_model = os.environ.get(f"{prefix}MODEL", "").strip()
-            wf_image_family = os.environ.get(f"{prefix}IMAGE_FAMILY", "").strip()
-            wf_category = os.environ.get(f"{prefix}CATEGORY", "").strip()
-            wf_prompt = os.environ.get(f"{prefix}PROMPT", "").strip()
-            # Zugeordnete Backends (kommasepariert); LEER = deaktiviert
-            raw_skills = os.environ.get(f"{prefix}SKILL", "").strip()
-            compatible = [s.strip() for s in raw_skills.split(",") if s.strip()] if raw_skills else []
-            # Bildgroesse pro Workflow (ueberschreibt Backend-Default)
-            wf_width = int(os.environ.get(f"{prefix}WIDTH", "0").strip() or 0)
-            wf_height = int(os.environ.get(f"{prefix}HEIGHT", "0").strip() or 0)
-            # LoRA-Defaults aus .env + has_loras-Flag durch Workflow-JSON-Check
-            default_loras = []
-            for i in range(1, 5):
-                lora_name = os.environ.get(f"{prefix}LORA_0{i}", "").strip() or "None"
-                strength_str = os.environ.get(f"{prefix}LORA_0{i}_STRENGTH", "1").strip()
-                try:
-                    strength = float(strength_str) if strength_str else 1.0
-                except ValueError:
-                    strength = 1.0
-                default_loras.append({"name": lora_name, "strength": strength})
-            # Filter-Pattern fuer Model/LoRA-Auswahl im Frontend (Glob-Syntax, z.B. "Z-Image*")
-            wf_filter = os.environ.get(f"{prefix}FILTER", "").strip()
-            # Workflow-JSON pruefen ob input_loras/input_lora Node vorhanden + model_type ermitteln
-            has_loras = False
-            has_seed = False
-            has_separated_prompt = False
-            has_input_unet = False
-            has_input_safetensors = False
-            inpaint_gray = False  # Edit-Modell (Qwen-Edit) -> Inpaint-Stellen GRAU ins Bild
-            model_type = ""
-            kind = WorkflowKind.Z_IMAGE
-            ref_slot_count = 0
-            try:
-                import json as _json
-                _wf_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "../../", wf_file))
-                if os.path.exists(_wf_path):
-                    with open(_wf_path) as _f:
-                        _wf_data = _json.load(_f)
-                    _titles = {
-                        node.get("_meta", {}).get("title", "")
-                        for node in _wf_data.values() if isinstance(node, dict)
-                    }
-                    # Edit-Modell-Inpaint (z.B. Qwen-Edit: TextEncodeQwenImageEditPlus):
-                    # die Inpaint-Stellen muessen GRAU im Referenzbild sein ("ergaenze
-                    # die grauen Flaechen"). Fill-Modelle (Flux DevFill) nutzen die
-                    # separate Maske und behalten den echten Bildinhalt -> KEIN Grau.
-                    inpaint_gray = any(
-                        "imageedit" in (node.get("class_type", "") or "").lower()
-                        for node in _wf_data.values() if isinstance(node, dict))
-                    has_loras = bool(_titles & {"input_loras", "input_lora"})
-                    has_seed = "input_seed" in _titles
-                    has_separated_prompt = {
-                        "input_prompt_character", "input_prompt_pose",
-                        "input_prompt_expression"
-                    }.issubset(_titles)
-                    # Anzahl nummerierter Reference-Slots (input_reference_image_N)
-                    # aus dem Workflow ableiten — der hoechste N ist der Location-
-                    # Slot, 1..N-1 sind Personen-Slots. So passt sich der Code an,
-                    # wenn der Workflow z.B. von 4 auf 3 Slots geaendert wird.
-                    _ref_nums = [
-                        int(t.rsplit("_", 1)[1]) for t in _titles
-                        if t.startswith("input_reference_image_")
-                        and t.rsplit("_", 1)[1].isdigit()
-                    ]
-                    ref_slot_count = max(_ref_nums) if _ref_nums else 0
-                    # Workflow-Familie klassifizieren:
-                    # QWEN_STYLE hat nummerierte Person/Location-Slots (input_reference_image_N).
-                    # FLUX_BG hat einen einzelnen Background-Slot mit Use-Schalter.
-                    # Sonst Z_IMAGE (keine Ref-Slots).
-                    if ref_slot_count >= 1:
-                        kind = WorkflowKind.QWEN_STYLE
-                    elif "input_reference_image_background" in _titles:
-                        kind = WorkflowKind.FLUX_BG
-                    else:
-                        kind = WorkflowKind.Z_IMAGE
-                    # category default: Workflows mit Inpaint-Maske gelten als
-                    # "inpaint" (Map-Fit/Edge), sofern die Config nichts setzt —
-                    # so erscheinen sie ohne Handarbeit im Fit/Edge-Dialog.
-                    if not wf_category and "input_mask" in _titles:
-                        wf_category = "inpaint"
-                    _model_node = next(
-                        (node for node in _wf_data.values()
-                         if isinstance(node, dict) and node.get("_meta", {}).get("title") == "input_model"),
-                        None)
-                    if _model_node:
-                        _ct = _model_node.get("class_type", "")
-                        if _ct == "UNETLoader":
-                            model_type = "unet"
-                        elif _ct in ("CheckpointLoaderSimple", "CheckpointLoader"):
-                            model_type = "checkpoint"
-                    # input_unet Node erkennen (z.B. UnetLoaderGGUF)
-                    if not model_type:
-                        _unet_node = next(
-                            (node for node in _wf_data.values()
-                             if isinstance(node, dict) and node.get("_meta", {}).get("title") == "input_unet"),
-                            None)
-                        if _unet_node:
-                            model_type = "unet"
-                            has_input_unet = True
-                    # input_safetensors Node erkennen (z.B. Flux2 UNETLoader)
-                    if not model_type:
-                        _st_node = next(
-                            (node for node in _wf_data.values()
-                             if isinstance(node, dict) and node.get("_meta", {}).get("title") == "input_safetensors"),
-                            None)
-                        if _st_node:
-                            model_type = "unet"
-                            has_input_safetensors = True
-            except Exception as _e:
-                logger.debug("Workflow-JSON Check fehlgeschlagen fuer %s: %s", wf_file, _e)
-            wf_clip = os.environ.get(f"{prefix}CLIP", "").strip()
-            wf_clip2 = os.environ.get(f"{prefix}CLIP2", "").strip()
-            wf_vae = os.environ.get(f"{prefix}VAE", "").strip()
-            wf_clip_type = os.environ.get(f"{prefix}CLIP_TYPE", "").strip()
-            wf = ComfyWorkflow(
-                name=wf_name,
-                workflow_file=wf_file,
-                model=wf_model,
-                kind=kind,
-                ref_slot_count=ref_slot_count,
-                has_input_unet=has_input_unet,
-                has_input_safetensors=has_input_safetensors,
-                inpaint_gray=inpaint_gray,
-                clip=wf_clip,
-                clip2=wf_clip2,
-                vae=wf_vae,
-                clip_type=wf_clip_type,
-                compatible_backends=compatible,
-                image_family=wf_image_family,
-                category=wf_category,
-                prompt=wf_prompt,
-                has_loras=has_loras,
-                has_seed=has_seed,
-                has_separated_prompt=has_separated_prompt,
-                default_loras=default_loras,
-                model_type=model_type,
-                width=wf_width,
-                height=wf_height,
-                filter=wf_filter)
-            workflows.append(wf)
-            _size_info = f", size={wf_width}x{wf_height}" if wf_width or wf_height else ""
-            _filter_info = f", filter={wf_filter}" if wf_filter else ""
-            logger.info("ComfyWorkflow geladen: '%s' (file=%s, kind=%s, model=%s%s%s, backends=%s)", wf_name, wf_file, kind.value, wf_model, _size_info, _filter_info, compatible or "alle")
-        if workflows:
-            logger.info("%d ComfyUI-Workflow(s) geladen", len(workflows))
-        return workflows
-
-    def _resolve_default_workflow(self) -> Optional[ComfyWorkflow]:
-        """Liest COMFY_IMAGEGEN_DEFAULT aus .env und loest ihn ueber das
-        Match-Konzept auf (Glob + Verfuegbarkeit; exakter/case-insensitiver Name
-        matcht sich selbst). Fallback auf ersten Workflow wenn nicht gesetzt oder
-        kein Treffer."""
-        if not self.comfy_workflows:
-            return None
-        default_name = os.environ.get("COMFY_IMAGEGEN_DEFAULT", "").strip()
-        if default_name:
-            wf = self.match_workflow(default_name)
-            if wf:
-                logger.info("Default-Workflow: '%s' (matched '%s')", wf.name, default_name)
-                return wf
-            logger.warning(
-                "COMFY_IMAGEGEN_DEFAULT='%s' nicht gefunden (verfuegbar: %s), nutze ersten Workflow",
-                default_name, ", ".join(w.name for w in self.comfy_workflows))
-        return self.comfy_workflows[0]
 
     def get_cached_checkpoints(self, model_type: str = "") -> List[str]:
         """Gibt alle gecachten Modelle zurueck (ueber alle Services kombiniert), gefiltert nach model_type."""
@@ -559,36 +325,6 @@ class ImageGenerationSkill(BaseSkill):
                         target, best_match, best_ratio * 100)
         return ""
 
-    def resolve_model_for_backend(self, model_name: str, backend: 'ImageBackend', model_type: str = "") -> str:
-        """Prueft ob ein Modell auf dem Ziel-Backend verfuegbar ist und findet ggf. das aehnlichste.
-
-        Nutzt den Cache fuer den Abgleich. Gibt den aufgeloesten Modellnamen zurueck.
-        """
-        if not model_name or not self._model_cache_loaded:
-            return model_name
-        svc_name = backend.name
-        # Modelle dieses Backends aus Cache holen
-        if model_type == "unet":
-            svc_models = self._cached_unet_models_by_service.get(svc_name, [])
-        elif model_type == "checkpoint":
-            svc_models = self._cached_checkpoints_by_service.get(svc_name, [])
-        else:
-            svc_models = sorted(set(
-                self._cached_checkpoints_by_service.get(svc_name, []) +
-                self._cached_unet_models_by_service.get(svc_name, [])
-            ))
-        if not svc_models:
-            return model_name  # Kein Cache fuer dieses Backend
-        if model_name in svc_models:
-            return model_name  # Modell direkt verfuegbar
-        # Aehnlichstes Modell suchen
-        resolved = self.find_closest_model(model_name, svc_models)
-        if not resolved:
-            logger.warning("resolve_model_for_backend: Modell '%s' nicht auf Backend '%s' verfuegbar und kein aehnliches gefunden — verwende erstes verfuegbares: '%s'",
-                           model_name, svc_name, svc_models[0])
-            return svc_models[0]
-        return resolved
-
     def pick_lowest_cost(
         self,
         candidates: List[ImageBackend],
@@ -644,11 +380,6 @@ class ImageGenerationSkill(BaseSkill):
                         agent_config["instances"][b.name] = self._get_backend_defaults(b)
                         logger.info("Auto-Config: Backend '%s' fuer %s hinzugefuegt", b.name, character_name)
                 changed = True
-            # Auto-Migration: comfy_workflow Feld hinzufuegen falls fehlend
-            if self._default_workflow and "comfy_workflow" not in agent_config:
-                agent_config["comfy_workflow"] = self._default_workflow.name
-                logger.info("Auto-Config: comfy_workflow='%s' fuer %s", self._default_workflow.name, character_name)
-                changed = True
             if changed:
                 save_character_skill_config(character_name, self.SKILL_ID, agent_config)
             return agent_config
@@ -659,9 +390,6 @@ class ImageGenerationSkill(BaseSkill):
         }
         for b in self.backends:
             agent_config["instances"][b.name] = self._get_backend_defaults(b)
-        # ComfyUI-Workflow Default setzen
-        if self._default_workflow:
-            agent_config["comfy_workflow"] = self._default_workflow.name
 
         save_character_skill_config(character_name, self.SKILL_ID, agent_config)
         logger.info("Auto-Config fuer %s erstellt: %s", character_name, list(agent_config["instances"].keys()))
@@ -683,9 +411,6 @@ class ImageGenerationSkill(BaseSkill):
             else:
                 is_enabled = b.instance_enabled
             if is_enabled:
-                # ComfyUI-Backends ohne Workflow und ohne Default-Workflow ueberspringen
-                if b.api_type == "comfyui" and not getattr(b, 'workflow_file', "") and not self._default_workflow:
-                    continue
                 # Inpaint-Backends nie ins normale Agent-Render-Matching
                 if self._is_inpaint_backend(b):
                     continue
@@ -694,129 +419,47 @@ class ImageGenerationSkill(BaseSkill):
         return self.pick_lowest_cost(
             available, rotation_key=f"agent:{character_name}")
 
-    def _get_active_workflow(self, character_name: str) -> Optional[ComfyWorkflow]:
-        """Liest den aktiven ComfyUI-Workflow fuer diesen Agent aus der per-Agent Config."""
-        if not self.comfy_workflows:
-            return None
-        agent_config = get_character_skill_config(character_name, self.SKILL_ID)
-        wf_name = (agent_config or {}).get("comfy_workflow", "")
-        if wf_name:
-            # Glob-faehig: exakter Name ist ein Glob ohne Wildcard.
-            wf = self.match_workflow(wf_name, character_name)
-            if wf:
-                return wf
-            logger.warning(
-                "Konfigurierter Workflow '%s' fuer %s nicht gefunden "
-                "(verfuegbar: %s)",
-                wf_name, character_name,
-                ", ".join(wf.name for wf in self.comfy_workflows))
-            return None
-        # Per-Character Render-Pattern (profile.outfit_imagegen.workflow, Glob) —
-        # dasselbe Match-Konzept wie Outfit/Expression, damit Dialog/Chat-Gen
-        # denselben Workflow waehlen (plan-intents-unified … Render-Match).
-        try:
-            from app.models.character import get_character_profile as _gcp
-            _pat = ((_gcp(character_name) or {}).get("outfit_imagegen") or {}).get("workflow", "")
-            wf = self.match_workflow(_pat, character_name)
-            if wf:
-                return wf
-        except Exception as _e:
-            logger.debug("outfit_imagegen-Pattern lesen fehlgeschlagen: %s", _e)
-        # Sonst Default aus .env (COMFY_IMAGEGEN_DEFAULT) — aber nur wenn er einem
-        # verfuegbaren Backend zugeordnet ist (skill leer = deaktiviert -> None,
-        # damit die Generierung auf ein Nicht-ComfyUI-Backend ausweicht).
-        if self._default_workflow and self._workflow_has_available_backend(self._default_workflow):
-            return self._default_workflow
-        return None
-
-    def match_workflow(self, pattern: str,
-                       character_name: str = "") -> Optional[ComfyWorkflow]:
-        """Loest ein per-Character Workflow-Glob (z.B. ``Qwen*``) zu einem
-        konkreten ComfyWorkflow auf — Auswahl unter mehreren Treffern nach
-        Backend-Verfuegbarkeit.
-
-        Unabhaengig vom globalen Default/Fallback. Greift case-insensitiv per
-        ``fnmatch``; ein exakter Name ist ein Glob ohne Wildcard, explizite
-        Auswahl funktioniert also weiter. Bei mehreren Treffern gewinnt der
-        Workflow, dessen guenstigster *verfuegbarer* Backend am billigsten ist
-        (≈ freier GPU-Kanal); hat keiner gerade einen freien Backend, faellt es
-        auf den ersten Treffer zurueck. ``None`` wenn leer / kein Treffer.
-        """
-        import fnmatch
-        pat = (pattern or "").strip()
-        if not pat or not self.comfy_workflows:
-            return None
-        pl = pat.lower()
-        matches = [wf for wf in self.comfy_workflows
-                   if fnmatch.fnmatch(wf.name.lower(), pl)]
-        if not matches:
-            return None
-        best = None
-        best_cost = None
-        for wf in matches:
-            avail = self.list_available_backends(character_name=character_name, workflow=wf)
-            if avail:
-                cost = avail[0].effective_cost
-                if best_cost is None or cost < best_cost:
-                    best_cost = cost
-                    best = wf
-        # Kein Treffer mit zugeordnetem, verfuegbarem Backend -> None (deaktiviert),
-        # NICHT auf matches[0] zurueckfallen (das waere ein deaktivierter Workflow).
-        return best
-
-    def resolve_imagegen_target(self, spec: str, character_name: str = "",
-                                rotation_prefix: str = "img",
+    def resolve_imagegen_target(self, spec: str,
                                 preferred_backend: str = ""
-                                ) -> Tuple[Optional[ImageBackend], Optional[ComfyWorkflow]]:
-        """Loest einen Config-/Explizit-Workflow-Spec ueber das Match-Konzept auf.
+                                ) -> Optional[ImageBackend]:
+        """Resolves a config/explicit backend spec via the match concept.
 
-        Ein Spec ist eines von:
-          - ``"workflow:<glob>"`` → ``match_workflow`` (Glob + Verfuegbarkeit),
-            danach das guenstigste verfuegbare kompatible ComfyUI-Backend.
-          - ``"backend:<glob>"``  → ``match_backend`` (Glob ueber Backend-Namen,
-            guenstigstes verfuegbares; exakter Name matcht sich selbst).
-          - ``"<glob>"`` (bare)   → wird als Workflow-Glob behandelt.
+        A spec is one of:
+          - ``"backend:<glob>"`` → ``match_backend`` (glob over backend names,
+            cheapest available; an exact name matches itself).
+          - ``"<glob>"`` (bare)  → treated as a backend glob.
+          - ``"workflow:<glob>"`` → legacy ComfyUI spec; logs a warning and
+            resolves to None so callers fall back to their defaults.
 
-        ``preferred_backend``: exakter ComfyUI-Instanz-Name, der den Match
-        ueberschreibt — der Workflow wird normal aufgeloest, aber dieses Backend
-        gepinnt (z.B. um gezielt eine bestimmte GPU/Endpoint anzusprechen). Muss
-        verfuegbar UND kompatibel sein, sonst ``(None, workflow)`` (KEIN stiller
-        Fallback auf eine andere Instanz).
-
-        Liefert ``(backend, workflow)`` — beide koennen ``None`` sein. Kein
-        exakter Hard-Fail mehr: beide Teile laufen durch das Match-Konzept.
-        Ersetzt die frueher mehrfach kopierte ``next(w.name == …)``-Logik.
+        ``preferred_backend``: exact instance name that overrides the match —
+        must be available and enabled, otherwise ``None`` (no silent fallback
+        to another instance).
         """
         s = (spec or "").strip()
         if not s:
-            return None, None
-        if s.startswith("backend:"):
-            return self.match_backend(s[len("backend:"):].strip()), None
-        wf_pat = s[len("workflow:"):].strip() if s.startswith("workflow:") else s
-        workflow = self.match_workflow(wf_pat, character_name)
-        if not workflow:
-            return None, None
-        compat = workflow.compatible_backends or []
-        candidates = [b for b in self.backends
-                      if b.available and b.instance_enabled
-                      and b.api_type == "comfyui"
-                      and (not compat or b.name in compat)]
+            return None
+        if s.startswith("workflow:"):
+            logger.warning(
+                "Legacy workflow spec '%s' ignoriert (ComfyUI entfernt) — "
+                "bitte auf 'backend:<glob>' umstellen", s)
+            return None
+        pat = s[len("backend:"):].strip() if s.startswith("backend:") else s
         pref = (preferred_backend or "").strip()
         if pref:
-            forced = next((b for b in candidates if b.name == pref), None)
+            forced = next(
+                (b for b in self.backends
+                 if b.name == pref and b.available and b.instance_enabled),
+                None)
             if not forced:
                 logger.warning(
-                    "Explizites Backend '%s' nicht verfuegbar/kompatibel fuer Workflow '%s'",
-                    pref, workflow.name)
-            return forced, workflow
-        backend = self.pick_lowest_cost(
-            candidates, rotation_key=f"{rotation_prefix}:{workflow.name}")
-        return backend, workflow
+                    "Explizites Backend '%s' nicht verfuegbar/aktiviert", pref)
+            return forced
+        return self.match_backend(pat)
 
     def match_backend(self, pattern: str) -> Optional[ImageBackend]:
         """Loest ein Backend-Glob (z.B. ``"ComfyUI*"``, ``"Together*"``, ``"*"``)
         zu einem konkreten, verfuegbaren Backend auf — Auswahl unter mehreren
-        Treffern nach Kosten (wie ``match_workflow``, aber fuer Backends). Ein
+        Treffern nach Kosten. Ein
         exakter Name matcht sich selbst. ``None`` wenn leer / kein verfuegbarer
         Treffer. So ist auch der Backend-Default ein Match statt fester Instanz.
         """
@@ -836,57 +479,20 @@ class ImageGenerationSkill(BaseSkill):
             return None
         return self.pick_lowest_cost(matches, rotation_key=f"backend_match:{pat}")
 
-    def _select_backend_for_workflow(self, workflow: ComfyWorkflow, character_name: str) -> Optional[ImageBackend]:
-        """Waehlt den guenstigsten verfuegbaren Backend fuer einen Workflow.
-
-        Beruecksichtigt kompatible Backends (workflow.compatible_backends),
-        per-Agent enabled-Flags und globale Verfuegbarkeit.
-        Bei mehreren gleich-cost Backends -> Round-Robin pro Workflow.
-        """
-        agent_config = self._ensure_agent_config(character_name)
-        agent_instances = agent_config.get("instances", {})
-
-        available = []
-        for b in self.backends:
-            if not b.available:
-                continue
-            # Nur ComfyUI-Backends kommen in Frage
-            if b.api_type != "comfyui":
-                continue
-            # Kompatibilitaet: Backend muss dem Workflow zugeordnet sein
-            # (skill/compatible_backends LEER = deaktiviert -> kein Backend passt).
-            if b.name not in (workflow.compatible_backends or []):
-                continue
-            # Per-Agent Override hat Vorrang
-            agent_inst = agent_instances.get(b.name, {})
-            if "enabled" in agent_inst:
-                is_enabled = bool(agent_inst["enabled"])
-            else:
-                is_enabled = b.instance_enabled
-            if is_enabled:
-                available.append(b)
-
-        return self.pick_lowest_cost(
-            available, rotation_key=f"workflow:{workflow.name}")
-
     def list_available_backends(
         self,
         character_name: str = "",
-        workflow: Optional[ComfyWorkflow] = None,
-        comfyui_only: bool = False,
     ) -> List[ImageBackend]:
-        """Liste aller verfuegbaren Backends fuer Helper-API + Engine.
+        """List of all available backends for helper API + engine.
 
-        Filter:
-        - b.available (live-status; channel_health setzt das ggf. False)
-        - b.instance_enabled (.env Flag)
-        - per-Agent Override (agent_config.instances[name].enabled)
-        - workflow.compatible_backends (wenn workflow gegeben + Liste nicht leer)
-        - api_type = comfyui wenn comfyui_only=True ODER workflow gegeben
+        Filters:
+        - b.available (live status; channel_health may set this False)
+        - b.instance_enabled (.env flag)
+        - per-agent override (agent_config.instances[name].enabled)
 
-        Sortiert aufsteigend nach effective_cost. KEIN Round-Robin hier —
-        Selektor (oder UI) kuemmert sich um Verteilung. Diese Liste ist
-        fuer Display und Engine gedacht.
+        Sorted ascending by effective_cost. NO round-robin here — the
+        selector (or UI) takes care of distribution. This list is meant
+        for display and engine use.
         """
         agent_instances: Dict[str, Any] = {}
         if character_name:
@@ -896,12 +502,6 @@ class ImageGenerationSkill(BaseSkill):
         out: List[ImageBackend] = []
         for b in self.backends:
             if not b.available:
-                continue
-            if comfyui_only or workflow is not None:
-                if b.api_type != "comfyui":
-                    continue
-            # Workflow gegeben: Backend muss zugeordnet sein (LEER = deaktiviert).
-            if workflow is not None and b.name not in (workflow.compatible_backends or []):
                 continue
             agent_inst = agent_instances.get(b.name, {})
             if "enabled" in agent_inst:
@@ -921,43 +521,16 @@ class ImageGenerationSkill(BaseSkill):
     def _pick_fallback_backend(
         self,
         failed: ImageBackend,
-        workflow: Optional[ComfyWorkflow],
         character_name: str,
         exclude: Set[str],
     ) -> Optional[ImageBackend]:
-        """Naechstes verfuegbares Backend — die Match-/Verfuegbarkeits-Logik IST
-        der Fallback (kein statisches fallback_mode/fallback_specific mehr).
-
-        Bei ComfyUI-Primary bleibt die Auswahl workflow-kompatibel; sonst sind
-        alle verfuegbaren Backends gleichwertig. Sind keine ComfyUI-Backends mehr
-        da, ist die Kette aus (kein Cross-Typ-Sprung auf Cloud) — bewusst, weil
-        ein ComfyUI-Workflow auf einem Nicht-ComfyUI-Backend nicht laeuft.
+        """Next available backend — the match/availability logic IS the
+        fallback (no static fallback_mode/fallback_specific anymore).
         """
-        # Workflow-Compat respektieren wenn primary ein ComfyUI war und
-        # wir auf ComfyUI bleiben wollen. Bei anderen Backend-Typen
-        # (CivitAI, Together) gibt's keinen Workflow -> alle gleichwertig.
-        if workflow is not None and failed.api_type == "comfyui":
-            candidates = self.list_available_backends(
-                character_name=character_name, workflow=workflow)
-            candidates = [b for b in candidates if b.name not in exclude]
-            if not candidates:
-                # Match lockern: keine workflow-kompatiblen Backends mehr uebrig
-                # (z.B. Workflow auf ein defektes Backend gepinnt). Statt
-                # abzubrechen auf IRGENDEIN verfuegbares ComfyUI ausweichen —
-                # das Modell wird in _prepare_for_backend pro Backend neu
-                # aufgeloest, der Workflow laeuft also auch dort.
-                relaxed = self.list_available_backends(
-                    character_name=character_name, comfyui_only=True)
-                candidates = [b for b in relaxed if b.name not in exclude]
-                if candidates:
-                    logger.info(
-                        "Fallback: keine workflow-kompatiblen Backends mehr — "
-                        "weiche auf anderes ComfyUI aus: %s", candidates[0].name)
-        else:
-            candidates = self.list_available_backends(character_name=character_name)
-            candidates = [b for b in candidates if b.name not in exclude]
-        # Inpaint-Backends sind kein Fallback fuer normale Renders. Nur wenn das
-        # fehlgeschlagene Backend selbst Inpaint war, bleibt die Kette bei Inpaint.
+        candidates = self.list_available_backends(character_name=character_name)
+        candidates = [b for b in candidates if b.name not in exclude]
+        # Inpaint backends are no fallback for normal renders. Only if the
+        # failed backend itself was inpaint, the chain stays on inpaint.
         if not self._is_inpaint_backend(failed):
             candidates = [b for b in candidates if not self._is_inpaint_backend(b)]
         return candidates[0] if candidates else None
@@ -966,7 +539,6 @@ class ImageGenerationSkill(BaseSkill):
         self,
         primary_backend: ImageBackend,
         op: Callable[[ImageBackend], Any],
-        workflow: Optional[ComfyWorkflow] = None,
         character_name: str = "",
         max_attempts: int = 3,
     ) -> Tuple[Any, ImageBackend]:
@@ -1026,7 +598,7 @@ class ImageGenerationSkill(BaseSkill):
                         f"generate failed: {type(e).__name__}: {_err_str[:120]}",
                         _BACKEND_COOLDOWN_SECONDS)
                 current = self._pick_fallback_backend(
-                    current, workflow, character_name, tried)
+                    current, character_name, tried)
                 continue
 
             # Cache-Hit-Sentinel: erfolgreich, kein Fail
@@ -1043,33 +615,21 @@ class ImageGenerationSkill(BaseSkill):
             current.mark_unhealthy("generate returned empty result",
                                    _BACKEND_COOLDOWN_SECONDS)
             current = self._pick_fallback_backend(
-                current, workflow, character_name, tried)
+                current, character_name, tried)
 
         _err_suffix = f" (letzter Fehler: {type(last_error).__name__}: {last_error})" if last_error else ""
         raise RuntimeError(
             f"Fallback-Engine: alle {len(tried)} probierten Backends fehlgeschlagen "
             f"({', '.join(sorted(tried))}){_err_suffix}")
 
-    _BACKEND_WAIT_INTERVAL = 10   # Sekunden zwischen Retry-Checks
-    _BACKEND_WAIT_MAX = 120        # Max. Wartezeit in Sekunden
+    def _wait_for_backend(self, character_name: str):
+        """Picks an available backend for this agent.
 
-    def _wait_for_backend(
-        self, workflow, character_name: str, workflow_only: bool = False):
-        """Wartet bis ein passendes Backend verfuegbar wird.
-
-        Args:
-            workflow: ComfyWorkflow (oder None fuer beliebiges Backend)
-            workflow_only: True = nur ComfyUI-Backends fuer Workflow pruefen
-
-        Fail-fast: Wenn KEIN passendes Backend ueberhaupt instance_enabled ist
-        (also nicht "gerade unavailable" sondern strukturell nicht konfiguriert),
-        wird sofort abgebrochen — sonst stapeln sich Hintergrund-Threads
-        (z.B. expression_regen) jeweils 120s lang an einer dauerhaft
-        unmoeglichen Bedingung.
+        Fail-fast: if NO backend is instance_enabled at all (i.e. structurally
+        not configured rather than "currently unavailable"), abort immediately —
+        otherwise background threads (e.g. expression_regen) would each stall
+        at a permanently impossible condition.
         """
-        # Fail-fast: gibt es ueberhaupt ein Backend das fuer Workflow+Agent
-        # in Frage kaeme, wenn alle "verfuegbar" waeren?
-        compat = workflow.compatible_backends if workflow else []
         agent_instances: Dict[str, Any] = {}
         if character_name:
             try:
@@ -1081,10 +641,6 @@ class ImageGenerationSkill(BaseSkill):
         for b in self.backends:
             if not b.instance_enabled:
                 continue
-            if workflow_only and b.api_type != "comfyui":
-                continue
-            if compat and b.name not in compat:
-                continue
             agent_inst = agent_instances.get(b.name, {})
             if "enabled" in agent_inst and not agent_inst["enabled"]:
                 continue
@@ -1092,29 +648,21 @@ class ImageGenerationSkill(BaseSkill):
         if not plausible:
             logger.warning(
                 "_wait_for_backend: kein konfiguriertes Backend kann diesen "
-                "Workflow/Agent jemals erfuellen (workflow=%s, agent=%s) — "
-                "fail-fast statt %ds Warten",
-                getattr(workflow, "name", None), character_name or "n/a",
-                self._BACKEND_WAIT_MAX)
+                "Agent jemals erfuellen (agent=%s) — fail-fast",
+                character_name or "n/a")
             return None
 
-        # Eine einzige Pruefrunde — kein 120s-Polling mehr.
-        # Hintergrund-Poller (channel_health) erkennt Recovery alle 30s
-        # automatisch; der naechste Generate-Aufruf sieht den frischen
-        # Status. Es bringt nichts, hier 12x in Serie zu pollen waehrend
-        # man dem User die Hand auf den Spawn legt.
+        # One single check round — no 120s polling. The background poller
+        # (channel_health) detects recovery every 30s; the next generate
+        # call sees the fresh status.
         for b in plausible:
             b.check_availability()
-        if workflow:
-            backend = self._select_backend_for_workflow(workflow, character_name)
-        else:
-            backend = self._select_backend_for_agent(character_name)
+        backend = self._select_backend_for_agent(character_name)
         if backend:
             return backend
         logger.warning(
-            "_wait_for_backend: kein Backend verfuegbar (workflow=%s) — fail-fast "
-            "(channel_health pollt im Hintergrund weiter, naechster Versuch sieht aktuellen Status)",
-            getattr(workflow, "name", None))
+            "_wait_for_backend: kein Backend verfuegbar — fail-fast "
+            "(channel_health pollt im Hintergrund weiter)")
         return None
 
     def _wait_for_explicit_backend(self, backend_name: str):
@@ -1133,54 +681,6 @@ class ImageGenerationSkill(BaseSkill):
         if not target:
             logger.warning("Backend '%s' nicht verfuegbar/kein Treffer — fail-fast", backend_name)
         return target
-
-    def get_comfy_workflows(self, only_available: bool = False) -> List[Dict[str, Any]]:
-        """Public: Gibt Liste aller definierten ComfyUI-Workflows zurueck (fuer API).
-
-        only_available=True filtert Workflows aus, deren kompatible Backends
-        alle nicht erreichbar sind.
-        """
-        result = []
-        for wf in self.comfy_workflows:
-            wf_available = self._workflow_has_available_backend(wf)
-            if only_available and not wf_available:
-                continue
-            result.append({
-                "name": wf.name,
-                "workflow_file": wf.workflow_file,
-                "model": wf.model,
-                "compatible_backends": wf.compatible_backends,
-                "has_loras": wf.has_loras,
-                "has_seed": wf.has_seed,
-                "default_loras": wf.default_loras,
-                "model_type": wf.model_type,
-                "default_model": wf.model,
-                "width": wf.width,
-                "height": wf.height,
-                "filter": wf.filter,
-                "ref_slot_count": wf.ref_slot_count,
-                "category": wf.category,
-                "image_family": wf.image_family,
-                "prompt": wf.prompt,
-                "inpaint_gray": wf.inpaint_gray,
-                "available": wf_available,
-            })
-        return result
-
-    def _workflow_has_available_backend(self, workflow: "ComfyWorkflow") -> bool:
-        """True wenn mindestens ein kompatibles Backend des Workflows erreichbar ist."""
-        for b in self.backends:
-            if not b.available:
-                continue
-            if b.api_type != "comfyui":
-                continue
-            if not b.instance_enabled:
-                continue
-            # Backend muss dem Workflow zugeordnet sein (LEER = deaktiviert).
-            if b.name not in (workflow.compatible_backends or []):
-                continue
-            return True
-        return False
 
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:
         """Holt die Instanz-spezifischen Defaults (nur agent-level Overrides).
@@ -1282,9 +782,6 @@ class ImageGenerationSkill(BaseSkill):
         for backend in self.backends:
             instances[backend.name] = {}
         config: Dict[str, Any] = {"instances": instances}
-        # Default-Workflow setzen (aus .env COMFY_IMAGEGEN_DEFAULT)
-        if self._default_workflow:
-            config["comfy_workflow"] = self._default_workflow.name
         return config
 
     def _migrate_flat_config(self, old_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -1316,119 +813,6 @@ class ImageGenerationSkill(BaseSkill):
             if data[4:8] == b'ftyp':
                 return '.mp4'
         return '.png'
-
-    def _merge_piece_loras(self, current_loras: List[Dict[str, Any]],
-                           character_name: str, workflow_name: str,
-                           equipped_override: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
-        """Merged LoRAs aus equipped Outfit-Pieces in freie Workflow-Slots.
-
-        - Quelle: equipped_override falls gesetzt (z.B. Set-Vorschau mit noch
-          nicht angezogenem Set), sonst profile.equipped_pieces.
-        - Filter: lora.model leer ODER == workflow_name
-        - Duplikate (gleicher name): ueberspringen
-        - Fuellt Slots mit name='None' (freie Plaetze), erweitert die Liste nicht
-          ueber ihre urspruengliche Laenge hinaus (Workflow hat feste Slot-Zahl).
-        """
-        if not character_name or not current_loras:
-            return current_loras
-
-        from app.models.character import get_character_profile
-        from app.models.inventory import get_item
-
-        profile = get_character_profile(character_name) or {}
-        equipped = equipped_override if equipped_override is not None else (profile.get("equipped_pieces") or {})
-        if not equipped:
-            return current_loras
-
-        # Bereits belegte LoRA-Namen (Duplikat-Schutz)
-        existing_names = {
-            (l.get("name") or "").strip()
-            for l in current_loras
-            if (l.get("name") or "").strip() and (l.get("name") or "").strip() != "None"
-        }
-
-        # Piece-LoRAs sammeln die passen
-        candidates: List[Dict[str, Any]] = []
-        wf_key = (workflow_name or "").strip()
-        for slot, iid in equipped.items():
-            if not iid:
-                continue
-            it = get_item(iid)
-            if not it:
-                continue
-            op = it.get("outfit_piece") or {}
-            entry = op.get("lora")
-            if not isinstance(entry, dict):
-                continue
-            nm = (entry.get("name") or "").strip()
-            if not nm or nm.lower() == "none":
-                continue
-            if nm in existing_names:
-                continue
-            piece_wf = (entry.get("workflow") or entry.get("model") or "").strip()
-            if piece_wf and piece_wf != wf_key:
-                continue
-            existing_names.add(nm)
-            candidates.append({
-                "name": nm,
-                "strength": float(entry.get("strength", 1.0) or 1.0),
-            })
-
-        # Profil-Slot-Overrides: fuer leere UND nicht-gecoverte Slots
-        # ein LoRA aus profile.slot_overrides[slot].lora anziehen.
-        try:
-            covered = collect_covered_slots(equipped)
-        except Exception:
-            covered = set()
-        slot_overrides = profile.get("slot_overrides") or {}
-        from app.models.inventory import VALID_PIECE_SLOTS
-        for _slot in VALID_PIECE_SLOTS:
-            if equipped.get(_slot):
-                continue
-            if _slot in covered:
-                continue
-            _ov = slot_overrides.get(_slot) or {}
-            if not isinstance(_ov, dict):
-                continue
-            _lora = _ov.get("lora") or {}
-            if not isinstance(_lora, dict):
-                continue
-            nm = (_lora.get("name") or "").strip()
-            if not nm or nm.lower() == "none":
-                continue
-            if nm in existing_names:
-                continue
-            _lora_wf = (_lora.get("workflow") or _lora.get("model") or "").strip()
-            if _lora_wf and _lora_wf != wf_key:
-                continue
-            existing_names.add(nm)
-            candidates.append({
-                "name": nm,
-                "strength": float(_lora.get("strength", 1.0) or 1.0),
-            })
-
-        if not candidates:
-            return current_loras
-
-        # Freie Slots finden (name == 'None' oder leer) und auffuellen
-        merged = list(current_loras)
-        it_cand = iter(candidates)
-        for i, l in enumerate(merged):
-            nm = (l.get("name") or "").strip()
-            if nm == "" or nm == "None":
-                try:
-                    merged[i] = next(it_cand)
-                except StopIteration:
-                    break
-
-        dropped = list(it_cand)
-        if dropped:
-            logger.warning(
-                "Piece-/Slot-LoRAs konnten nicht zugewiesen werden — "
-                "Workflow hat keine freien Slots (alle 4 belegt durch Char-Override/Defaults): %s",
-                [l["name"] for l in dropped])
-        return merged
-
 
     def _get_vision_llm_config(self, character_name: str) -> Dict[str, Any]:
         """Loads Vision LLM config via Router (Task: image_recognition)."""
@@ -1802,105 +1186,46 @@ class ImageGenerationSkill(BaseSkill):
         if not character_name:
             return "Fehler: Agent-Name fehlt fuer Bildspeicherung."
 
-        # Workflow + Backend auswaehlen (explizite Auswahl hat Vorrang)
-        explicit_workflow = input_data.get("workflow", "").strip() if isinstance(input_data, dict) else ""
+        # Pick backend (explicit selection wins)
         explicit_backend = input_data.get("backend", "").strip() if isinstance(input_data, dict) else ""
-        active_workflow = None
         backend = None
 
-        # Render-Target-Spec normalisieren: das "workflow"-Feld kann ein vollwertiges
-        # Match-Spec sein ("backend:<glob>" / "workflow:<glob>" / bare-Glob), z.B. aus
-        # der per-Character Render-Match. "backend:<glob>" gehoert in den Backend-Pfad
-        # (match_backend) — sonst wird der GANZE String "backend:Name" als Workflow-
-        # NAME gesucht, nicht gefunden, und faellt faelschlich auf einen ComfyUI-
-        # Default zurueck. "workflow:<glob>" -> Prefix strippen.
-        if explicit_workflow.lower().startswith("backend:"):
+        # Normalize the render-target spec: the "workflow" field (legacy name)
+        # can be a match spec ("backend:<glob>" / bare glob), e.g. from the
+        # per-character render match. "workflow:<glob>" specs come from old
+        # configs (ComfyUI removed) and are ignored.
+        _target_spec = input_data.get("workflow", "").strip() if isinstance(input_data, dict) else ""
+        _soft_backend = ""
+        if _target_spec.lower().startswith("backend:"):
             if not explicit_backend:
-                explicit_backend = explicit_workflow.split(":", 1)[1].strip()
-            explicit_workflow = ""
-        elif explicit_workflow.lower().startswith("workflow:"):
-            explicit_workflow = explicit_workflow.split(":", 1)[1].strip()
+                explicit_backend = _target_spec.split(":", 1)[1].strip()
+        elif _target_spec.lower().startswith("workflow:"):
+            logger.warning(
+                "Legacy workflow spec '%s' ignoriert (ComfyUI entfernt) — "
+                "bitte auf 'backend:<glob>' umstellen", _target_spec)
+        elif _target_spec:
+            # Bare glob: try as a backend glob, fall back to default selection.
+            _soft_backend = _target_spec
 
-        if explicit_workflow:
-            # Expliziten Workflow ueber das Match-Konzept aufloesen (Glob "Qwen*",
-            # Auswahl nach Backend-Verfuegbarkeit; ein exakter Name matcht sich
-            # selbst). Kein Hard-Fail mehr bei Nicht-Treffer: wie der implizite
-            # Pfad auf Render-Match/Default degradieren, statt den Aufruf (z.B.
-            # einen Instagram-Post) still zu killen.
-            active_workflow = self.match_workflow(explicit_workflow, character_name)
-            if not active_workflow:
-                logger.warning(
-                    "Expliziter Workflow '%s' nicht gefunden — Fallback auf "
-                    "Render-Match/Default", explicit_workflow)
-                active_workflow = self._get_active_workflow(character_name)
-            if not active_workflow:
-                return f"Fehler: Workflow '{explicit_workflow}' nicht gefunden und kein Default verfuegbar."
-            backend = self._wait_for_backend(
-                active_workflow, character_name, workflow_only=True)
-            if not backend:
-                return f"Fehler: Kein ComfyUI-Backend fuer Workflow '{active_workflow.name}' verfuegbar (Timeout)."
-            logger.info("Workflow (explizit→match): %s -> %s", active_workflow.name, backend.name)
-        elif explicit_backend:
-            # Explizites Backend — kein Fallback
+        if explicit_backend:
+            # Explicit backend — no fallback
             backend = self._wait_for_explicit_backend(explicit_backend)
             if not backend:
                 return f"Fehler: Backend '{explicit_backend}' nicht verfuegbar (Timeout)."
             logger.info("Explizites Backend: %s", explicit_backend)
-            # ComfyUI-Backends brauchen ZWINGEND einen Workflow — sonst kennt der
-            # Backend keine Workflow-Datei und _generate scheitert mit "Kein
-            # Workflow konfiguriert". Auto-Pick: erster Workflow, der dieses Backend
-            # in compatible_backends (skill) fuehrt. Keiner -> None = Fehler unten.
-            if backend.api_type == "comfyui" and self.comfy_workflows:
-                active_workflow = next(
-                    (wf for wf in self.comfy_workflows
-                     if backend.name in (wf.compatible_backends or [])),
-                    None)
-                if active_workflow:
-                    logger.info("Auto-Workflow fuer Backend %s: %s",
-                                explicit_backend, active_workflow.name)
-                else:
-                    return (f"Fehler: Backend '{explicit_backend}' ist ComfyUI, "
-                            f"aber kein kompatibler Workflow konfiguriert.")
+        elif _soft_backend:
+            backend = self._wait_for_explicit_backend(_soft_backend)
+            if backend:
+                logger.info("Backend (Render-Match '%s'): %s", _soft_backend, backend.name)
+            else:
+                logger.warning(
+                    "Render-Match '%s' trifft kein verfuegbares Backend — "
+                    "Fallback auf Standard-Auswahl", _soft_backend)
 
         if not backend:
-            # Auto-Auswahl (Standard-Verhalten)
-            active_workflow = self._get_active_workflow(character_name) if self.comfy_workflows else None
-            if active_workflow:
-                backend = self._wait_for_backend(
-                    active_workflow, character_name, workflow_only=True)
-                # Wenn der Workflow-bevorzugte Backend nicht verfuegbar ist
-                # (ComfyUI down, kein Cloud-Match), nicht aufgeben sondern
-                # auf irgendein anderes konfiguriertes Backend ausweichen.
-                # Gilt nur fuer Auto-Auswahl, nicht fuer explizite User-Anfragen.
-                if not backend:
-                    logger.info(
-                        "Workflow-bevorzugtes Backend nicht verfuegbar — "
-                        "auto-Fallback auf beliebiges Backend (Cloud erlaubt)")
-                    active_workflow = None  # Workflow-Bindung loesen
-                    backend = self._wait_for_backend(
-                        None, character_name, workflow_only=False)
-            else:
-                backend = self._wait_for_backend(
-                    None, character_name, workflow_only=False)
+            backend = self._wait_for_backend(character_name)
         if not backend:
             return "Fehler: Keine Image-Generation Instanz ist aktuell verfuegbar (Timeout)."
-
-        # Safety-Net: Auto-Pick eines Workflows fuer ComfyUI-Backends ohne Workflow.
-        # Sonst scheitert _generate mit "Kein Workflow konfiguriert" — das passiert
-        # wenn der Auto-Fallback die Workflow-Bindung loest aber dann doch ein
-        # ComfyUI-Backend findet.
-        if backend.api_type == "comfyui" and not active_workflow and self.comfy_workflows:
-            active_workflow = next(
-                (wf for wf in self.comfy_workflows
-                 if backend.name in (wf.compatible_backends or [])),
-                None)
-            if active_workflow:
-                logger.info("Workflow-Auto-Pick fuer Backend %s: %s",
-                            backend.name, active_workflow.name)
-            else:
-                logger.warning("Backend %s (ComfyUI) hat keinen zugeordneten Workflow "
-                               "(skill leer = deaktiviert) — Generierung wird scheitern",
-                               backend.name)
 
         # Lade per-Agent per-Instanz Config
         cfg = self._get_instance_config(character_name, backend)
@@ -1914,7 +1239,7 @@ class ImageGenerationSkill(BaseSkill):
         # photoreal Character-Style statt eines leeren Styles.
         from app.core import config as _cfg_mod
         _uc_name = (input_data.get("image_use_case") or "character").strip()
-        _uc_img_model = getattr(active_workflow, "image_family", "") if active_workflow else ""
+        _uc_img_model = getattr(backend, "image_family", "") if backend else ""
         _ucp = _cfg_mod.get_use_case_prompts(_uc_name, _uc_img_model)
         prompt_style = _ucp.get("prompt_style", "")
         negative_prompt = _ucp.get("prompt_negative", "")
@@ -2008,15 +1333,10 @@ class ImageGenerationSkill(BaseSkill):
                     set_profile=set_profile,
                     item_ids=_item_ids)
 
-                # Ausschlussregeln per WorkflowKind: bei QWEN_STYLE entfaellt nur
-                # die Location, und auch nur wenn ein Raum-Ref tatsaechlich einen
-                # Slot bekommt (Prio-Plan, max_slots). Outfit + Aktivitaet bleiben
-                # immer im Text. FLUX_BG/Z_IMAGE -> alles im Text.
-                _excl_kind = active_workflow.kind.value if active_workflow else None
-                _excl_slots = (active_workflow.ref_slot_count
-                               if (active_workflow and active_workflow.ref_slot_count)
-                               else None)
-                builder.apply_exclusion_rules(pv, kind=_excl_kind, max_slots=_excl_slots)
+                # Exclusion rules: only the location leaves the text, and only
+                # when a room ref actually gets a slot (priority plan,
+                # max_slots). Outfit + activity always stay in the text.
+                builder.apply_exclusion_rules(pv, max_slots=backend.ref_slot_count)
 
                 # RP-Szene-Kontext als Scene-Prompt anhaengen
                 pv.scene_prompt = prompt_text
@@ -2054,10 +1374,10 @@ class ImageGenerationSkill(BaseSkill):
                 from app.core.prompt_adapters import (
                     get_target_model, render as adapter_render,
                     canonical_to_dict, maybe_enhance_via_llm)
-                _wf_image_model = getattr(active_workflow, "image_family", "") if active_workflow else ""
-                _wf_file = getattr(active_workflow, "workflow_file", "") if active_workflow else ""
                 _backend_model = getattr(backend, "model", "") if backend else ""
-                _target_model = get_target_model(_wf_image_model, _wf_file, _backend_model)
+                _target_model = get_target_model(
+                    getattr(backend, "image_family", "") if backend else "",
+                    _backend_model)
                 assembled = adapter_render(pv, _target_model)
                 template_prompt = assembled["input_prompt_positiv"]
                 prompt_without_style = assembled["prompt_without_style"]
@@ -2122,10 +1442,10 @@ class ImageGenerationSkill(BaseSkill):
                 # mit Adapter rendern kann.
                 from app.core.prompt_adapters import (
                     get_target_model, canonical_to_dict)
-                _wf_image_model = getattr(active_workflow, "image_family", "") if active_workflow else ""
-                _wf_file = getattr(active_workflow, "workflow_file", "") if active_workflow else ""
                 _backend_model = getattr(backend, "model", "") if backend else ""
-                _target_model = get_target_model(_wf_image_model, _wf_file, _backend_model)
+                _target_model = get_target_model(
+                    getattr(backend, "image_family", "") if backend else "",
+                    _backend_model)
                 appearances = [{"name": p.name, "appearance": p.appearance} for p in pv.persons]
                 pv.prompt_style = prompt_style or "photorealistic"
                 pv.scene_prompt = prompt_text
@@ -2161,225 +1481,45 @@ class ImageGenerationSkill(BaseSkill):
             # Start-Zeit fuer Logging merken
             _gen_start = time.time()
 
-            # Generierung ueber Backend
-            # Workflow-File und Model kommen vom aktiven ComfyWorkflow (falls definiert),
-            # sonst Fallback auf Backend-Attribute (Legacy / non-ComfyUI).
-            if active_workflow:
-                workflow_file = active_workflow.workflow_file
-                workflow_model = active_workflow.model
-                logger.info("Workflow: '%s' (model=%s)", active_workflow.name, workflow_model)
-            else:
-                workflow_file = getattr(backend, 'workflow_file', "")
-                workflow_model = getattr(backend, 'model', "")
-            uses_custom_workflow = bool(workflow_file and os.path.exists(workflow_file))
+            # Generation via backend — the model comes from the backend attribute.
+            workflow_model = getattr(backend, 'model', "")
 
             _ow = input_data.get("override_width")
             _oh = input_data.get("override_height")
-            # Prioritaet: override > Workflow > per-Agent Config > Backend > 1024
-            _wf_w = active_workflow.width if active_workflow else 0
-            _wf_h = active_workflow.height if active_workflow else 0
+            # Priority: override > per-agent config > backend > 1024
             params = {
-                "width": _ow or _wf_w or cfg.get("width", getattr(backend, 'width', 1024)),
-                "height": _oh or _wf_h or cfg.get("height", getattr(backend, 'height', 1024)),
-                "workflow_file": workflow_file,
+                "width": _ow or cfg.get("width", getattr(backend, 'width', 1024)),
+                "height": _oh or cfg.get("height", getattr(backend, 'height', 1024)),
             }
             logger.info("Size: %sx%s (override_w=%s, override_h=%s)", params["width"], params["height"], _ow, _oh)
-            # Param-Key: bei input_unet/input_safetensors Workflows -> "unet", sonst "model"
-            _model_key = "unet" if (active_workflow and (active_workflow.has_input_unet or active_workflow.has_input_safetensors)) else "model"
+            _model_key = "model"
             if workflow_model:
                 params[_model_key] = workflow_model
-            elif active_workflow and active_workflow.model_type and self._model_cache_loaded:
-                # Kein Model in .env konfiguriert — Fallback auf erstes Modell aus Cache
-                _fallback_models = self.get_cached_checkpoints(active_workflow.model_type)
-                if _fallback_models:
-                    params[_model_key] = _fallback_models[0]
-                    logger.info("Kein Model konfiguriert, Fallback auf: %s", _fallback_models[0])
-            # Per-Character Model-Override (aus Skill-Config, ueberschreibt .env Default)
-            if active_workflow:
-                _agent_cfg = get_character_skill_config(character_name, self.SKILL_ID) or {}
-                _char_model = (_agent_cfg.get("workflow_models") or {}).get(active_workflow.name, "").strip()
-                if _char_model:
-                    params[_model_key] = _char_model
-                    logger.info("Per-Character Model: %s", _char_model)
-            # Model-Override aus Dialog-Auswahl (hoechste Prioritaet)
+            # Model override from the dialog selection (highest priority)
             model_override = input_data.get("model_override", "").strip()
             if model_override:
-                # Validierung: model_override muss zum model_type des Workflows passen
-                if active_workflow and active_workflow.model_type and self._model_cache_loaded:
-                    _compatible = self.get_cached_checkpoints(active_workflow.model_type)
-                    if _compatible and model_override not in _compatible:
-                        logger.warning(
-                            "model_override '%s' nicht kompatibel mit Workflow '%s' (model_type=%s) — ignoriert",
-                            model_override, active_workflow.name, active_workflow.model_type)
-                        model_override = ""
-                if model_override:
-                    params[_model_key] = model_override
-            # Model-Verfuegbarkeit: Pruefen ob Modell auf dem Ziel-Backend existiert, sonst aehnlichstes finden
-            _current_model = params.get(_model_key, "")
-            if _current_model and backend.api_type == "comfyui":
-                _resolved = self.resolve_model_for_backend(_current_model, backend, active_workflow.model_type if active_workflow else "")
-                if _resolved and _resolved != _current_model:
-                    logger.info("Model-Resolve: %s -> %s (Backend: %s)", _current_model, _resolved, backend.name)
-                    params[_model_key] = _resolved
+                params[_model_key] = model_override
 
-            # Allowed-Models-Liste fuer das Backend mitschicken — der Backend-
-            # Code braucht das, um bei Workflows mit MEHREREN Loader-Nodes
-            # (z.B. Qwen safetensors+gguf) die jeweils ungenutzten Loader auf
-            # eine vorhandene Datei zu setzen. ComfyUI validiert alle Loader,
-            # auch wenn sie ueber einen Switch ausgeblendet werden.
-            if backend.api_type == "comfyui" and self._model_cache_loaded:
-                _all_unet = self._cached_unet_models_by_service.get(backend.name, [])
-                _all_ckpt = self._cached_checkpoints_by_service.get(backend.name, [])
-                params["allowed_models"] = sorted(set(_all_unet + _all_ckpt))
-            # CLIP aus Workflow-Config setzen — gilt fuer alle Workflows die
-            # einen externen CLIPLoader haben (Flux2 UND Z-Image etc.).
-            if active_workflow and active_workflow.clip:
-                params["clip_name"] = active_workflow.clip
-                logger.info("CLIP: %s (Workflow: %s)", active_workflow.clip, active_workflow.name)
-            if active_workflow and active_workflow.clip2:
-                params["clip_name2"] = active_workflow.clip2
-                logger.info("CLIP2: %s (Workflow: %s)", active_workflow.clip2, active_workflow.name)
-            if active_workflow and active_workflow.clip_type:
-                params["clip_type"] = active_workflow.clip_type
-                logger.info("CLIP type: %s (Workflow: %s)", active_workflow.clip_type, active_workflow.name)
-            if active_workflow and active_workflow.vae:
-                params["vae_name"] = active_workflow.vae
-                logger.info("VAE: %s (Workflow: %s)", active_workflow.vae, active_workflow.name)
+            # Sampling params (read by A1111-style backends)
+            if hasattr(backend, 'guidance_scale'):
+                params["guidance_scale"] = backend.guidance_scale
+            if hasattr(backend, 'num_inference_steps'):
+                params["num_inference_steps"] = backend.num_inference_steps
+            if hasattr(backend, 'checkpoint'):
+                params["checkpoint"] = backend.checkpoint
+            if hasattr(backend, 'sampler'):
+                params["sampler"] = backend.sampler
+            if hasattr(backend, 'scheduler'):
+                params["scheduler"] = backend.scheduler
+            if hasattr(backend, 'sampling_method'):
+                params["sampling_method"] = backend.sampling_method
+            if hasattr(backend, 'schedule_type'):
+                params["schedule_type"] = backend.schedule_type
 
-            # weight_dtype fuer den Safetensors/UNET-Loader (global konfigurierbar).
-            # Leer = Workflow-Wert unveraendert. fp8-Modelle brauchen fp8_e4m3fn,
-            # sonst crasht UNETLoader beim state_dict-Laden. Gilt nicht fuer GGUF.
-            # Am model_type haengen (nicht an has_input_*), damit auch ein
-            # input_model-Node mit class_type UNETLoader die Automatik bekommt.
-            if active_workflow and active_workflow.model_type == "unet":
-                try:
-                    from app.core import config as _cfg_mod
-                    _wdt = (_cfg_mod.get("image_generation.unet_weight_dtype") or "").strip()
-                except Exception:
-                    _wdt = ""
-                if _wdt:
-                    params["weight_dtype"] = _wdt
-                    logger.info("UNET weight_dtype: %s", _wdt)
-
-            if not uses_custom_workflow:
-                # Sampling-Params nur fuer Default-/A1111-Workflows relevant
-                if hasattr(backend, 'guidance_scale'):
-                    params["guidance_scale"] = backend.guidance_scale
-                if hasattr(backend, 'num_inference_steps'):
-                    params["num_inference_steps"] = backend.num_inference_steps
-                if hasattr(backend, 'checkpoint'):
-                    params["checkpoint"] = backend.checkpoint
-                if hasattr(backend, 'sampler'):
-                    params["sampler"] = backend.sampler
-                if hasattr(backend, 'scheduler'):
-                    params["scheduler"] = backend.scheduler
-                if hasattr(backend, 'sampling_method'):
-                    params["sampling_method"] = backend.sampling_method
-                if hasattr(backend, 'schedule_type'):
-                    params["schedule_type"] = backend.schedule_type
-
-            # Seed aus Character-Config (input_seed Node)
-            if active_workflow and active_workflow.has_seed:
-                _char_seed = int((_agent_cfg.get("comfy_seed") or 0))
-                if _char_seed == 0:
-                    import random as _rnd
-                    _char_seed = _rnd.randint(1, 2**31 - 1)
-                    _agent_cfg["comfy_seed"] = _char_seed
-                    save_character_skill_config(character_name, self.SKILL_ID, _agent_cfg)
-                    logger.info("Seed auto-generiert und gespeichert: %d", _char_seed)
-                params["seed"] = _char_seed
-                logger.info("Seed: %d", _char_seed)
-
-            # Separated Prompt Workflow (character + pose + expression)
-            if active_workflow and active_workflow.has_separated_prompt:
-                from app.core.expression_pose_maps import DEFAULT_EXPRESSION, DEFAULT_POSE
-                for _sp_key in ("character_prompt", "pose_prompt", "expression_prompt"):
-                    _sp_val = input_data.get(_sp_key)
-                    if _sp_val:
-                        params[_sp_key] = _sp_val
-                # Defaults for standard outfit generation (neutral pose + expression)
-                if "pose_prompt" not in params:
-                    params["pose_prompt"] = DEFAULT_POSE
-                if "expression_prompt" not in params:
-                    params["expression_prompt"] = DEFAULT_EXPRESSION
-                # Aktive Conditions (drunk, exhausted, ...) ersetzen den Expression-Prompt.
-                try:
-                    from app.core.danger_system import get_active_condition_image_modifiers
-                    _cond_mods = get_active_condition_image_modifiers(character_name)
-                    if _cond_mods:
-                        params["expression_prompt"] = _cond_mods
-                        logger.info("Expression durch Condition ersetzt: %s", _cond_mods)
-                except Exception as _cm_err:
-                    logger.debug("Condition image_modifier Fehler: %s", _cm_err)
-                if params.get("character_prompt"):
-                    logger.info("Separated Prompt Workflow: character=%d, pose=%d, expression=%d chars",
-                                len(params.get("character_prompt", "")),
-                                len(params.get("pose_prompt", "")),
-                                len(params.get("expression_prompt", "")))
-
-            # LoRA-Inputs: Prioritaet: 1) input_data (Dialog), 2) per-Character Config, 3) Workflow/.env Defaults
-            if active_workflow and active_workflow.has_loras:
-                loras_override = input_data.get("loras")
-                if loras_override is not None:
-                    params["lora_inputs"] = list(loras_override)
-                else:
-                    # Per-Character LoRA-Override aus Skill-Config
-                    _agent_cfg_lora = get_character_skill_config(character_name, self.SKILL_ID) or {}
-                    _char_loras = (_agent_cfg_lora.get("workflow_loras") or {}).get(active_workflow.name)
-                    if _char_loras is not None:
-                        params["lora_inputs"] = list(_char_loras)
-                        logger.info("Per-Character LoRAs: %s", [l.get("name") for l in _char_loras])
-                    elif active_workflow.default_loras:
-                        params["lora_inputs"] = list(active_workflow.default_loras)
-
-                # Workflow hat feste Slot-Anzahl (lora_01..lora_04). Auf diese
-                # Laenge padden mit 'None'-Plaetzen, damit Piece-LoRAs Platz
-                # finden koennen — Char-Override liefert oft nur nicht-None
-                # Eintraege (z.B. 2) und liesse sonst keine freien Slots.
-                _LORA_SLOT_COUNT = 4
-                _cur = params.get("lora_inputs") or []
-                while len(_cur) < _LORA_SLOT_COUNT:
-                    _cur.append({"name": "None", "strength": 1.0})
-                params["lora_inputs"] = _cur
-
-                # Piece-LoRAs: equipped Outfit-Pieces + profile.slot_overrides
-                # bringen eigene LoRAs mit. Werden in freie Slots (Name='None')
-                # eingefuellt, Duplikate vermeiden, Filter: piece.lora.workflow
-                # leer oder == active_workflow.name.
-                try:
-                    _eq_override = input_data.get("equipped_pieces_override") if isinstance(input_data, dict) else None
-                    params["lora_inputs"] = self._merge_piece_loras(
-                        params.get("lora_inputs") or [],
-                        character_name, active_workflow.name,
-                        equipped_override=_eq_override if isinstance(_eq_override, dict) else None)
-                except Exception as _ple:
-                    logger.debug("Piece-LoRA-Merge fehlgeschlagen: %s", _ple)
-
-                # Final: Log der tatsaechlich verwendeten LoRAs
-                _final_names = [l.get("name") for l in (params.get("lora_inputs") or []) if l.get("name") and l.get("name") != "None"]
-                if _final_names:
-                    logger.info("Final LoRAs (%d/%d): %s", len(_final_names), _LORA_SLOT_COUNT, _final_names)
-
-                # Validierung: LoRAs muessen auf dem ComfyUI-Backend verfuegbar sein
-                if params.get("lora_inputs") and self._model_cache_loaded:
-                    _avail_loras = self.get_cached_loras()
-                    if _avail_loras:
-                        _validated = []
-                        for _l in params["lora_inputs"]:
-                            _ln = _l.get("name", "None")
-                            if _ln == "None" or not _ln or _ln in _avail_loras:
-                                _validated.append(_l)
-                            else:
-                                logger.warning("LoRA '%s' nicht verfuegbar — uebersprungen", _ln)
-                                _validated.append({"name": "None", "strength": 1.0})
-                        params["lora_inputs"] = _validated
-
-            # Cloud-Backends mit LoRA-Library (localai/openai_diffusion) laufen NICHT
-            # ueber den Workflow-Pfad oben — die im Dialog gewaehlten LoRAs (aus der
-            # endpoint-gefilterten per-Welt LoRA-Library) hier direkt nach lora_inputs
-            # uebernehmen, damit das Backend sie dynamisch in den Request uebertraegt
-            # (localai: <lora:>-Prompt, openai_diffusion: lora_NN/strength_NN-Params).
-            elif backend.api_type in ("localai", "openai_diffusion"):
+            # LoRAs: dialog selection (from the endpoint-filtered per-world LoRA
+            # library) goes straight into lora_inputs — localai builds <lora:>
+            # prompt tags from it, openai_diffusion lora_NN/strength_NN params.
+            if backend.api_type in ("localai", "openai_diffusion"):
                 _dialog_loras = input_data.get("loras")
                 if _dialog_loras:
                     params["lora_inputs"] = [
@@ -2391,62 +1531,40 @@ class ImageGenerationSkill(BaseSkill):
             # Workflows mit Referenz-Slots (z.B. QWEN_STYLE) bekommen die
             # aufgeloesten Referenzbilder direkt in die Generierung injiziert.
             if not no_person_detected and pv:
-                _wf_kind = active_workflow.kind.value if active_workflow else None
-                _wf_slots = active_workflow.ref_slot_count if active_workflow and active_workflow.ref_slot_count else 4
-                face_refs = builder.resolve_reference_slots(pv, max_slots=_wf_slots, kind=_wf_kind)
+                face_refs = builder.resolve_reference_slots(
+                    pv, max_slots=backend.ref_slot_count)
                 params["reference_images"] = face_refs["reference_images"]
-                params["boolean_inputs"] = face_refs["boolean_inputs"]
-                params["string_inputs"] = face_refs["string_inputs"]
             else:
                 logger.info("Keine Person erkannt -> keine Referenzbilder")
-                face_refs = {"reference_images": {}, "boolean_inputs": {}, "string_inputs": {}, "has_reference_slots": False}
+                face_refs = {"reference_images": {}, "has_reference_slots": False}
 
-            # Post-Processing passiert extern (Pull-Modell, siehe
-            # postprocess_trigger.py + /api/images). Die Generierung selbst
-            # (inkl. reference_images fuers Conditioning oben) ist davon unberuehrt.
-            _kind = active_workflow.kind if active_workflow else None
+            # Post-processing happens externally (pull model, see
+            # postprocess_trigger.py + /api/images). The generation itself
+            # (incl. reference_images for conditioning above) is unaffected.
 
             _display_model = params.get("model") or getattr(backend, 'model', 'N/A')
             logger.info("Starte Bildgenerierung mit %s (%s)", backend.name, backend.api_url)
-            if active_workflow:
-                logger.info("Workflow: %s", active_workflow.name)
             logger.info("Model: %s", _display_model)
             logger.debug("Params: %s", params)
 
             _primary_backend = backend
 
             def _prepare_for_backend(b):
-                """Passt Model + Negative-Prompt fuer Backend b an (Fallback-Pfad)."""
-                _cur_model = params.get(_model_key, "")
-                if _cur_model and b.api_type == "comfyui":
-                    _resolved = self.resolve_model_for_backend(
-                        _cur_model, b,
-                        active_workflow.model_type if active_workflow else "")
-                    if _resolved and _resolved != _cur_model:
-                        logger.info("Model-Resolve: %s -> %s (Backend: %s)",
-                                    _cur_model, _resolved, b.name)
-                        params[_model_key] = _resolved
-                elif b.api_type != "comfyui":
-                    # Cross-Type-Fallback: lokale ComfyUI-Modellnamen (z.B.
-                    # "Flux2-9B-nvfp4.safetensors") sind auf Cloud-Backends
-                    # (Together/CivitAI/Mammouth) ungueltig. ALLE lokalen
-                    # Modell-/LoRA-Keys raus — egal unter welchem Key sie stehen
-                    # (model/unet/checkpoint/gguf) — der Cloud-Backend nutzt
-                    # seinen eigenen self.model. (Frueher nur an _model_key
-                    # gekoppelt; das wich zwischen world.py und run_with_fallback
-                    # ab → Modell durchgesickert.)
+                """Adjusts model/LoRA params when falling back to another backend."""
+                if b is not _primary_backend:
+                    # Model names from the primary backend are not portable —
+                    # the fallback backend uses its own configured default.
                     _local = [k for k in ("model", "unet", "checkpoint", "gguf")
                               if params.get(k)]
                     if _local:
                         logger.info(
-                            "Cross-Type-Fallback: lokale Modelle %s inkompatibel mit %s, "
+                            "Fallback: Modell-Keys %s nicht portabel zu %s, "
                             "nutze Backend-Default '%s'",
-                            _local, b.api_type, getattr(b, "model", "?"))
+                            _local, b.name, getattr(b, "model", "?"))
                         for _k in ("model", "unet", "checkpoint", "gguf",
                                    "lora_inputs", "loras"):
                             params.pop(_k, None)
-                # Negative kommt aus dem Use-Case (oben aufgeloest) — kein
-                # Backend-Default mehr.
+                # Negative comes from the use case (resolved above).
                 return enhanced_prompt, negative_prompt
 
             # Kontext fuers ZENTRALE Logging in backend.generate() (final_prompt,
@@ -2505,7 +1623,7 @@ class ImageGenerationSkill(BaseSkill):
             try:
                 images, backend = self.run_with_fallback(
                     primary_backend=backend, op=_op,
-                    workflow=active_workflow, character_name=character_name)
+                    character_name=character_name)
             except RuntimeError as _err:
                 logger.error("Bildgenerierung fehlgeschlagen (alle Backends): %s", _err)
                 images = []
@@ -2618,8 +1736,7 @@ class ImageGenerationSkill(BaseSkill):
             # postprocess_trigger), der das fertige Bild zieht, bearbeitet und
             # ueber /api/images zurueckschreibt.
 
-            # Bild-Metadaten speichern (Skill, Backend, Dauer)
-            _wf_name = active_workflow.name if active_workflow else ""
+            # Save image metadata (skill, backend, duration)
             _location = get_character_current_location(character_name) or ""
             _room_id = get_character_current_room(character_name) or ""
             _lora_meta = [
@@ -2641,7 +1758,6 @@ class ImageGenerationSkill(BaseSkill):
             _meta = {
                 "backend": backend.name,
                 "backend_type": backend.api_type,
-                "workflow": _wf_name,
                 "negative_prompt": negative_prompt,
                 "from_character": _from_character,
                 "guidance_scale": params.get("guidance_scale"),

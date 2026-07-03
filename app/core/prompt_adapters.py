@@ -23,35 +23,27 @@ from app.core.prompt_builder import PromptVariables
 logger = get_logger("prompt_adapters")
 
 
-# Gueltige Target-Model-Werte. Wird im Workflow-Config-Feld `image_model` gesetzt.
+# Valid target-model values. Set via the backend config field `image_family`.
 TARGET_MODELS = ("z_image", "qwen", "flux")
 
-# Fallback-Mapping wenn `image_model` im Workflow-Config leer ist.
-WORKFLOW_FILE_FALLBACK: Dict[str, str] = {
-    "text2img_workflow_z-image_api.json": "z_image",
-    "text2img_workflow_qwen_api.json": "qwen",
-    "text2img_workflow_flux2_api.json": "flux",
-}
 
-
-def get_target_model(image_model: str = "", workflow_file: str = "", backend_model: str = "") -> str:
-    """Bestimmt das Target-Model aus Workflow-Config mit Dateinamen-Fallback.
+def get_target_model(image_family: str = "", backend_model: str = "") -> str:
+    """Determines the target model from the backend's image family.
 
     Args:
-        image_model: Wert aus ComfyWorkflow.image_model (Admin-UI).
-        workflow_file: Dateiname des Workflows (fuer Fallback).
-        backend_model: Modell-ID/URN des Backends (fuer Cloud-Backends ohne
-            Workflow, z.B. "Qwen/Qwen-Image-2.0", "black-forest-labs/FLUX.2-pro",
-            "urn:air:zimageturbo:checkpoint:civitai:..."). Wird als letzter
-            Fallback aus dem Modellnamen abgeleitet.
+        image_family: Value from the backend config (natural/keywords).
+        backend_model: Model ID/URN of the backend (e.g.
+            "Qwen/Qwen-Image-2.0", "black-forest-labs/FLUX.2-pro",
+            "urn:air:zimageturbo:checkpoint:civitai:..."). Used as the last
+            fallback, derived from the model name.
 
     Returns:
-        "z_image" | "qwen" | "flux". Default "z_image" wenn unbekannt.
+        "z_image" | "qwen" | "flux". Default "z_image" when unknown.
     """
-    normalized = (image_model or "").strip().lower().replace("-", "_").replace(" ", "_")
-    # Image Family (natural/keywords) -> Render-Target. keywords = Komma-Tags
-    # (z_image-Renderer), natural = Fliesstext/Labeled-Sections (qwen-Renderer,
-    # identisch zu flux).
+    normalized = (image_family or "").strip().lower().replace("-", "_").replace(" ", "_")
+    # Image family (natural/keywords) -> render target. keywords = comma tags
+    # (z_image renderer), natural = prose/labeled sections (qwen renderer,
+    # identical to flux).
     if normalized == "keywords":
         return "z_image"
     if normalized == "natural":
@@ -59,23 +51,10 @@ def get_target_model(image_model: str = "", workflow_file: str = "", backend_mod
     if normalized in TARGET_MODELS:
         return normalized
 
-    # Fallback: aus Dateiname ableiten
-    if workflow_file:
-        base = os.path.basename(workflow_file)
-        if base in WORKFLOW_FILE_FALLBACK:
-            return WORKFLOW_FILE_FALLBACK[base]
-        lower = base.lower()
-        if "qwen" in lower:
-            return "qwen"
-        if "flux" in lower:
-            return "flux"
-        if "z-image" in lower or "z_image" in lower:
-            return "z_image"
-
-    # Fallback: aus Backend-Modellname ableiten (Cloud-Backends ohne Workflow).
-    # WICHTIG: Reihenfolge — z_image vor qwen pruefen, weil Z-Image-Modelle
-    # auf CivitAI URN als "zimage..." erscheinen (NICHT als "qwen") und sonst
-    # faelschlich als qwen klassifiziert werden koennten.
+    # Fallback: derive from the backend model name.
+    # IMPORTANT: order — check z_image before qwen, because Z-Image models
+    # appear on CivitAI URNs as "zimage..." (NOT as "qwen") and would
+    # otherwise be misclassified as qwen.
     if backend_model:
         bm = backend_model.lower()
         if "z_image" in bm or "z-image" in bm or "zimage" in bm:

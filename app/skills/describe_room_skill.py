@@ -271,25 +271,21 @@ class DescribeRoomSkill(BaseSkill):
                     logger.warning("ImageGeneration Skill nicht verfuegbar fuer Raum-Bild")
                     return
 
-                # Backend+Workflow aus LOCATION_IMAGEGEN_DEFAULT aufloesen
-                # (Match-Konzept: Glob + Verfuegbarkeit statt exaktem Namen).
+                # Resolve the backend from LOCATION_IMAGEGEN_DEFAULT
+                # (match concept: glob + availability instead of an exact name).
                 loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
-                backend, active_workflow = img_skill.resolve_imagegen_target(
-                    loc_default, rotation_prefix="describe_room")
+                backend = img_skill.resolve_imagegen_target(loc_default)
                 if not backend:
                     backend = img_skill._select_backend()
                 if not backend:
                     logger.warning("Kein Image-Backend verfuegbar fuer Raum-Bild")
                     return
-                if not active_workflow:
-                    active_workflow = getattr(img_skill, '_default_workflow', None)
 
                 from app.core import config as _cfg
                 _ucp = _cfg.resolve_use_case_style(
                     "location",
-                    getattr(active_workflow, "image_family", "") if active_workflow else "",
-                    getattr(active_workflow, "workflow_file", "") if active_workflow else "",
-                    getattr(backend, "model", "") or "", getattr(backend, "image_family", ""))
+                    backend_model=getattr(backend, "model", "") or "",
+                    backend_family=getattr(backend, "image_family", ""))
                 full_prompt = (f"{_ucp['prompt_style']}, {prompt}"
                                if _ucp.get("prompt_style") else prompt)
                 negative = _ucp.get("prompt_negative", "")
@@ -303,24 +299,15 @@ class DescribeRoomSkill(BaseSkill):
                 except (TypeError, ValueError):
                     _bg_h = 720
                 params = {"width": _bg_w, "height": _bg_h}
-                if active_workflow and active_workflow.workflow_file:
-                    params["workflow_file"] = active_workflow.workflow_file
-                    if active_workflow.model:
-                        _model_key = "unet" if (active_workflow.has_input_unet or active_workflow.has_input_safetensors) else "model"
-                        params[_model_key] = active_workflow.model
-                    # CLIP aus Workflow-Config
-                    if active_workflow.clip:
-                        params["clip_name"] = active_workflow.clip
-                # Frischer Seed gegen ComfyUI Cache-Hit (NO_NEW_IMAGE)
-                # — Memory feedback_no_new_image_sentinel.
-                if active_workflow and active_workflow.has_seed:
-                    import random as _rnd
-                    params["seed"] = _rnd.randint(1, 2**31 - 1)
+                # Fresh seed against backend cache hits (NO_NEW_IMAGE)
+                # — memory feedback_no_new_image_sentinel.
+                import random as _rnd
+                params["seed"] = _rnd.randint(1, 2**31 - 1)
 
                 logger.info("Raum-Bild Generierung gestartet fuer %s/%s", location_id, room_id)
                 images = backend.generate(full_prompt, negative, params)
                 if images == "NO_NEW_IMAGE":
-                    logger.warning("Raum-Bild ComfyUI Cache-Hit fuer %s/%s — uebersprungen", location_id, room_id)
+                    logger.warning("Raum-Bild Cache-Hit (NO_NEW_IMAGE) fuer %s/%s — uebersprungen", location_id, room_id)
                     return
                 if not images:
                     logger.warning("Raum-Bild Generierung fehlgeschlagen fuer %s/%s", location_id, room_id)

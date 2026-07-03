@@ -30,11 +30,10 @@ logger = get_logger(__name__)
 _generating: Set[str] = set()
 _failed: Set[str] = set()  # tracks recently failed generations to avoid retry loops
 _generating_lock = threading.Lock()
-# Per-Character-Mutex. Gleicher Character wird serialisiert (Datei-Kollision
-# im Sidecar-Write und Ref-Bild-Sharing), verschiedene Characters laufen
-# parallel — das erlaubt dass z.B. Kira auf ComfyUI-4070 und Kai auf
-# ComfyUI-3090 gleichzeitig generieren. _select_backend_for_workflow nutzt
-# Round-Robin auf gleich-cost Backends, um die Last gleichmaessig zu verteilen.
+# Per-character mutex. The same character is serialized (file collision in
+# the sidecar write and ref-image sharing); different characters run in
+# parallel so multiple backends can generate at the same time. Backend
+# selection round-robins over equal-cost backends to spread the load.
 _char_generation_mutexes: Dict[str, threading.Lock] = {}
 _char_mutexes_create_lock = threading.Lock()
 
@@ -47,7 +46,7 @@ def _get_char_mutex(character_name: str) -> threading.Lock:
             _char_generation_mutexes[character_name] = mx
         return mx
 
-# Env config — Format: "workflow:Name" oder "backend:Name"
+# Env config — render-target spec format: "backend:<glob>"
 
 
 def _cleanup_stale_temps(expr_dir: Path) -> None:
@@ -949,17 +948,18 @@ def generate_expression_image(character_name: str,
         logger.warning("ImageGenerationSkill nicht verfuegbar")
         return None
 
-    # Per-Character Override frueh lesen — erlaubt Workflow/Model/LoRA-
-    # Overrides pro Character (im Character-Editor konfigurierbar).
+    # Read the per-character override early — allows render/model/LoRA
+    # overrides per character (configurable in the character editor).
     model_override = ""
     loras_override = None
-    char_workflow_override = ""
+    char_render_override = ""
     try:
         from app.models.character import get_character_profile as _gcp
         _prof = _gcp(character_name) or {}
         _char_override = _prof.get("outfit_imagegen") or {}
         if isinstance(_char_override, dict):
-            char_workflow_override = (_char_override.get("workflow") or "").strip()
+            # Legacy field name "workflow" — now a backend glob.
+            char_render_override = (_char_override.get("workflow") or "").strip()
             m = (_char_override.get("model") or "").strip()
             l = _char_override.get("loras")
             if m:
@@ -969,125 +969,59 @@ def generate_expression_image(character_name: str,
     except Exception as _err:
         logger.debug("Outfit-ImageGen-Override lesen fehlgeschlagen: %s", _err)
 
-    # Workflow/Backend: Char-Override -> ENV-Defaults
-    workflow_name = ""
-    backend_name = ""
-    if char_workflow_override:
-        # Glob-Pattern (z.B. "Qwen*") → konkreter Workflow, Wahl nach
-        # Backend-Verfuegbarkeit. Exakter Name matcht sich selbst.
-        _matched = image_skill.match_workflow(char_workflow_override, character_name)
-        workflow_name = _matched.name if _matched else char_workflow_override
-    else:
+    # Backend selection (backend-only; ComfyUI workflows removed):
+    # char override (backend glob) -> env default spec -> agent default.
+    backend = None
+    if char_render_override:
+        backend = image_skill.match_backend(char_render_override)
+        if not backend:
+            logger.warning(
+                "Character-Render-Override '%s' matcht kein verfuegbares Backend",
+                char_render_override)
+    if not backend:
         _expr_default = os.environ.get("EXPRESSION_IMAGEGEN_DEFAULT", "").strip()
         if not _expr_default:
             _expr_default = os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip()
-        _outfit_default = _expr_default
-        if _outfit_default.startswith("workflow:"):
-            workflow_name = _outfit_default[len("workflow:"):].strip()
-        elif _outfit_default.startswith("backend:"):
-            backend_name = _outfit_default[len("backend:"):].strip()
-        if not workflow_name and not backend_name:
-            workflow_name = os.environ.get("COMFY_IMAGEGEN_DEFAULT", "").strip()
-        if not workflow_name and not backend_name:
-            if image_skill.comfy_workflows:
-                workflow_name = image_skill.comfy_workflows[0].name
-    if not workflow_name and not backend_name:
-        logger.warning("Kein Workflow/Backend fuer Expression-Regen verfuegbar")
+        if _expr_default:
+            backend = image_skill.resolve_imagegen_target(_expr_default)
+    if not backend:
+        backend = image_skill._wait_for_backend(character_name)
+    if not backend:
+        logger.warning("Kein Backend fuer Expression-Regen verfuegbar")
         return None
-    logger.info("Expression-Regen: %s (char-override=%s)",
-                f"workflow={workflow_name}" if workflow_name else f"backend={backend_name}",
-                "yes" if char_workflow_override else "no")
+    backend_name = backend.name
+    logger.info("Expression-Regen: backend=%s (char-override=%s)",
+                backend_name, "yes" if char_render_override else "no")
 
-    # Pruefen ob Workflow separated prompt hat — davon haengt Payload-Format ab
-    _target_wf = None
-    _is_separated = False
-    if workflow_name:
-        _target_wf = next((wf for wf in image_skill.comfy_workflows if wf.name == workflow_name), None)
-        _is_separated = _target_wf and _target_wf.has_separated_prompt
-
-    # Validate model_override against current workflow's model_type
-    if model_override and _target_wf and _target_wf.model_type:
-        _compatible = image_skill.get_cached_checkpoints(_target_wf.model_type)
-        if _compatible and model_override not in _compatible:
-            logger.warning(
-                "model_override '%s' nicht kompatibel mit Workflow '%s' (model_type=%s) — ignoriert",
-                model_override, workflow_name, _target_wf.model_type)
-            model_override = ""
-
-    # Validate loras_override against cached LoRA list
-    if loras_override and image_skill._model_cache_loaded:
-        _available_loras = image_skill.get_cached_loras()
-        if _available_loras:
-            _invalid = [l for l in loras_override
-                        if l.get("name") and l["name"] != "None" and l["name"] not in _available_loras]
-            if _invalid:
-                logger.warning(
-                    "LoRA-Override enthaelt inkompatible LoRAs fuer Workflow '%s': %s — ignoriert",
-                    workflow_name, [l["name"] for l in _invalid])
-                loras_override = None
-
-    # Aufloesung aus Admin-Config (image_generation.outfit_image_width/height)
-    # — Expression-Variants nutzen dieselbe Aufloesung wie Garderobe-Outfit-Bilder.
-    # Wenn nicht gesetzt, faellt die Generation auf Workflow-/Backend-Default zurueck.
+    # Resolution from admin config (image_generation.outfit_image_width/height)
+    # — expression variants use the same resolution as wardrobe outfit images.
+    # When unset, generation falls back to the backend default.
     outfit_w = int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None
     outfit_h = int(os.environ.get("OUTFIT_IMAGE_HEIGHT", 0) or 0) or None
 
-    # Prompt + Payload abhaengig vom Workflow-Typ
-    # Aktuell haben alle Workflows (Qwen, Z-Image, Flux.2) nur input_prompt_positiv,
-    # daher ist _is_separated=False. Der Separated-Pfad bleibt fuer zukuenftige Workflows.
-    if _is_separated:
-        # Separated-Prompt Workflow (zukuenftig): character/pose/expression als einzelne Nodes
-        _char_with_outfit = character_prompt
-        if outfit_prompt:
-            _char_with_outfit += f", {outfit_prompt}"
-        full_prompt = ", ".join(p for p in [_prompt_prefix, _char_with_outfit] if p)
-        payload = {
-            "prompt": full_prompt,
-            "input": full_prompt,
-            "character_prompt": _char_with_outfit,
-            "pose_prompt": pose_prompt,
-            "expression_prompt": expression_prompt,
-            "agent_name": character_name,
-            "user_id": "",
-            "set_profile": False,
-            "skip_gallery": True,
-            "auto_enhance": False,
-            "workflow": workflow_name,
-            "equipped_pieces_override": equipped_pieces or {},
-            # Profilbild als input_reference_image_1 (Qwen/Flux: Identitaets-
-            # Konsistenz). profile_only verhindert den Self-Reference-Loop ueber
-            # eine bereits existierende Variante. Z-Image hat keine Ref-Slots
-            # und ignoriert das.
-            "profile_only": True,
-            "appearances": [{"name": character_name, "appearance": appearance or ""}],
-        }
-    else:
-        # Single-Prompt Workflow (Z-Image/Flux.2/SDXL):
-        # prefix + character + outfit + pose + expression in einem String
-        parts = [_prompt_prefix, character_prompt]
-        if outfit_prompt:
-            parts.append(outfit_prompt)
-        parts.append(pose_prompt)
-        parts.append(expression_prompt)
-        full_prompt = ", ".join(p for p in parts if p)
-        payload = {
-            "prompt": full_prompt,
-            "input": full_prompt,
-            "agent_name": character_name,
-            "user_id": "",
-            "set_profile": False,
-            "skip_gallery": True,
-            "auto_enhance": False,
-            "workflow": workflow_name,
-            "backend": backend_name,
-            "equipped_pieces_override": equipped_pieces or {},
-            # Profilbild als input_reference_image_1 (Qwen/Flux). profile_only
-            # verhindert den Self-Reference-Loop ueber eine bereits existierende
-            # Variante. Z-Image hat keine Ref-Slots und ignoriert das.
-            "profile_only": True,
-            "appearances": [{"name": character_name, "appearance": appearance or ""}],
-        }
-        logger.info("Expression-Regen: Single-Prompt Modus")
+    # Single prompt: prefix + character + outfit + pose + expression in one string
+    parts = [_prompt_prefix, character_prompt]
+    if outfit_prompt:
+        parts.append(outfit_prompt)
+    parts.append(pose_prompt)
+    parts.append(expression_prompt)
+    full_prompt = ", ".join(p for p in parts if p)
+    payload = {
+        "prompt": full_prompt,
+        "input": full_prompt,
+        "agent_name": character_name,
+        "user_id": "",
+        "set_profile": False,
+        "skip_gallery": True,
+        "auto_enhance": False,
+        "backend": backend_name,
+        "equipped_pieces_override": equipped_pieces or {},
+        # Profile image as input_reference_image_1 (identity consistency).
+        # profile_only prevents the self-reference loop via an already
+        # existing variant. Backends without ref slots ignore it.
+        "profile_only": True,
+        "appearances": [{"name": character_name, "appearance": appearance or ""}],
+    }
 
     if outfit_w:
         payload["override_width"] = outfit_w
@@ -1103,21 +1037,19 @@ def generate_expression_image(character_name: str,
     try:
         img_result = image_skill.execute(json.dumps(payload))
 
-        # Workflow-Fallback bei Timeout: ist das primaere ComfyUI-Backend nicht
-        # verfuegbar, Workflow/Backend-Bindung loesen und execute() neu auf
-        # Auto-Backend laufen lassen — die Match-/Verfuegbarkeits-Logik IST der
-        # Fallback (der implizite Pfad weicht bei nicht verfuegbarem ComfyUI auch
-        # auf ein Cloud-Backend aus). model_override + loras zuruecksetzen, da der
-        # lokale ComfyUI-Modellname/LoRAs auf einem Cloud-Backend nicht gueltig sind.
-        if isinstance(img_result, str) and "Timeout" in img_result and ("Workflow" in img_result or "verfuegbar" in img_result):
+        # Backend fallback on timeout: when the pinned backend is not
+        # available, drop the backend binding and re-run execute() with
+        # auto selection — the match/availability logic IS the fallback.
+        # model_override + loras are reset because a local model name /
+        # LoRAs are not valid on another backend.
+        if isinstance(img_result, str) and "Timeout" in img_result and "verfuegbar" in img_result:
             payload_fb = dict(payload)
-            payload_fb.pop("workflow", None)
             payload_fb.pop("backend", None)
             payload_fb.pop("model_override", None)
             payload_fb.pop("loras", None)
             logger.warning(
-                "Expression-Regen: Workflow '%s' offline — nutze Auto-Backend",
-                workflow_name or backend_name or "?")
+                "Expression-Regen: Backend '%s' offline — nutze Auto-Backend",
+                backend_name)
             img_result = image_skill.execute(json.dumps(payload_fb))
 
         # Extract filename from result
@@ -1178,7 +1110,7 @@ def generate_expression_image(character_name: str,
             "seed": _gen_meta.get("seed", 0),
             "created_at": _gen_meta.get("created_at", ""),
             "duration_s": _gen_meta.get("duration_s", 0),
-            "workflow": _gen_meta.get("workflow", workflow_name),
+            "workflow": _gen_meta.get("workflow", ""),
             "mood": mood,
             "activity": activity,
             "equipped_pieces": equipped_pieces or {},

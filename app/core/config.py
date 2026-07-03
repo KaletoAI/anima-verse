@@ -39,113 +39,6 @@ def _is_sensitive(key: str) -> bool:
     return key in SENSITIVE_FIELDS
 
 
-# Default-Workflows fuer neue Welten. Werte 1:1 aus den produktiv erprobten
-# Hotopia-Workflows. Beim ersten Load einer Welt ohne `comfyui_workflows`
-# werden diese drei Templates eingespielt — der User muss nur noch Backend
-# (skill) und ggf. Modell-Dateien bestaetigen.
-_DEFAULT_COMFYUI_WORKFLOWS = {
-    "Qwen": {
-        "name": "Qwen",
-        "image_family": "natural",
-        "filter": "Qwen*",
-        "width": 1024,
-        "height": 1024,
-        "workflow_file": "./workflows/text2img_workflow_qwen_api.json",
-        "loras": [{"file": "", "strength": 1} for _ in range(4)],
-    },
-    "Z-Image": {
-        "name": "Z-Image",
-        "image_family": "keywords",
-        "filter": "Z-Image*",
-        "width": 1024,
-        "height": 1024,
-        "workflow_file": "./workflows/text2img_workflow_z-image_api.json",
-        "loras": [{"file": "", "strength": 1} for _ in range(4)],
-    },
-    "Flux": {
-        "name": "Flux",
-        "image_family": "natural",
-        "filter": "Flux.2-9B*",
-        "width": 1024,
-        "height": 1024,
-        "workflow_file": "./workflows/text2img_workflow_flux2_api.json",
-        "loras": [{"file": "", "strength": 1} for _ in range(4)],
-    },
-    "Flux 1 Dev": {
-        "name": "Flux 1 Dev",
-        "image_family": "natural",
-        "filter": "Flux*1*",
-        "width": 1024,
-        "height": 1024,
-        "workflow_file": "./workflows/text2img_workflow_flux1_api.json",
-        "model": "flux1-dev.safetensors",
-        "clip": "clip_l.safetensors",
-        "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
-        "loras": [{"file": "", "strength": 1} for _ in range(4)],
-    },
-    "Flux Inpaint": {
-        "name": "Flux Inpaint",
-        "image_family": "natural",
-        "filter": "Flux Inpaint*",
-        "category": "inpaint",
-        "width": 1024,
-        "height": 1024,
-        "workflow_file": "./workflows/img2img_workflow_flux1_inpaint_api.json",
-        "model": "Flux1-DevFill-Onereward_fp8.safetensors",
-        "clip": "clip_l.safetensors",
-        "clip2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
-        # Flux1-DevFill = Fill-Modell: beschreibender Prompt fuer die Maske.
-        "prompt": "seamless top-down map tile, photorealistic, continue the surrounding terrain, colors and style into the masked area with no visible seam, border or frame",
-        "loras": [{"file": "", "strength": 1} for _ in range(4)],
-    },
-    "Qwen Inpaint": {
-        "name": "Qwen Inpaint",
-        "image_family": "natural",
-        "filter": "Qwen Inpaint*",
-        "category": "inpaint",
-        "width": 1024,
-        "height": 1024,
-        "workflow_file": "./workflows/text2img_workflow_flux-qwen_inpaint_api.json",
-        # Modell bewusst leer: der Workflow-Default ist ein NSFW-Modell — gehoert
-        # nicht in die mitgelieferte Default-Config. Pro Welt im Admin setzen.
-        "model": "",
-        "clip": "Qwen2.5-VL-7B-Instruct-abliterated_merged.safetensors",
-        # CLIP-Loader-Type muss zum Modell passen (qwen_image fuer Qwen-Image,
-        # flux2 fuer Flux.2). Default hier auf den Qwen-Clip abgestimmt.
-        "clip_type": "qwen_image",
-        # Qwen-Edit = Instruktions-Modell: Anweisung statt Beschreibung.
-        "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and photorealistic style with no visible seams, border or frame",
-        "loras": [{"file": "", "strength": 1} for _ in range(4)],
-    },
-    "Flux2 Inpaint": {
-        "name": "Flux2 Inpaint",
-        "image_family": "natural",
-        "filter": "Flux2 Inpaint*",
-        "category": "inpaint",
-        "width": 1024,
-        "height": 1024,
-        "workflow_file": "./workflows/text2img_workflow_flux-qwen_inpaint_api.json",
-        "model": "flux-2-klein-9b-Q8_0.gguf",
-        "clip": "Qwen3-8B-Q8_0.gguf",
-        "clip_type": "flux2",
-        "vae": "flux2-vae.safetensors",
-        "prompt": "complement the gray masked areas and make a seamless map, matching the surrounding terrain, colors and hand-painted style with no visible seams, border or frame",
-        # skill (Backend) bewusst LEER: pro Welt zuweisen (sonst deaktiviert).
-        "loras": [{"file": "", "strength": 1} for _ in range(4)],
-    },
-    "SD15": {
-        "name": "SD15",
-        "image_family": "keywords",
-        "filter": "SD15*",
-        "width": 1024,
-        "height": 1024,
-        "workflow_file": "./workflows/text2img_workflow_sd15_api.json",
-        "model": "SD15-Cyberrealistic-fp32.safetensors",
-        "loras": [{"file": "", "strength": 1} for _ in range(4)],
-    },
-}
-
-
 # ── Use-Case-spezifische Prompt-Styles ──────────────────────────────────────
 # Style/Negative/Instruction gehoeren zum FALL der Generierung (Map-Tile vs
 # Character-Foto vs Item), nicht zum Workflow. Sie haengen an zwei Dimensionen:
@@ -404,16 +297,16 @@ def get_lora_library_names(backend_name=None) -> list:
 
 
 def resolve_use_case_style(use_case: str, image_family: str = "",
-                           workflow_file: str = "", backend_model: str = "",
+                           backend_model: str = "",
                            backend_family: str = "") -> dict:
-    """Bequemer Wrapper fuer alle Generate-Pfade. Familie-Prioritaet:
-    Workflow-``image_family`` → Backend-``image_family`` → Heuristik aus
-    Workflow-Dateiname/Backend-Modellname (get_target_model). Liefert
-    {prompt_style, prompt_negative, prompt_instruction} fuer den Use-Case.
+    """Convenience wrapper for all generate paths. Family priority:
+    explicit ``image_family`` → backend ``image_family`` → heuristic from
+    the backend model name (get_target_model). Returns
+    {prompt_style, prompt_negative, prompt_instruction} for the use case.
     """
     from app.core.prompt_adapters import get_target_model
     fam = (image_family or "").strip() or (backend_family or "").strip()
-    target = get_target_model(fam, workflow_file or "", backend_model or "")
+    target = get_target_model(fam, backend_model or "")
     return get_use_case_prompts(use_case, target)
 
 
@@ -485,24 +378,12 @@ def _seed_default_use_cases(config: dict, config_path: Path) -> bool:
 def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> bool:
     """Entfernt die alten Style-Felder, die jetzt in den Use-Cases leben.
 
-    - Workflows: prompt_style / prompt_negative / prompt_instruction
     - Backends:  prompt_prefix / negative_prompt
     Funktional sind sie bereits tot (kein Env-Mirror/Leser mehr) — das hier
     raeumt nur die config.json auf. Idempotent.
     """
     ig = config.get("image_generation", {})
     changed = False
-    _fam_map = {"z_image": "keywords", "qwen": "natural", "flux": "natural"}
-    for wf in (ig.get("comfyui_workflows", {}) or {}).values():
-        if isinstance(wf, dict):
-            for k in ("prompt_style", "prompt_negative", "prompt_instruction"):
-                if k in wf:
-                    del wf[k]; changed = True
-            # image_model ("Target Prompt Stil") -> image_family (natural/keywords)
-            if "image_model" in wf:
-                _old = (wf.pop("image_model") or "").strip()
-                wf["image_family"] = _fam_map.get(_old, _old if _old in ("natural", "keywords") else "")
-                changed = True
     for be in (ig.get("backends", []) or []):
         if isinstance(be, dict):
             for k in ("prompt_prefix", "negative_prompt"):
@@ -522,92 +403,6 @@ def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> boo
         return True
     except OSError as e:
         logger.error("Failed to strip legacy imagegen fields from %s: %s", config_path, e)
-        return False
-
-
-def _fix_dotted_workflow_keys(config: dict, config_path: Path) -> bool:
-    """Repariert ComfyUI-Workflow-Keys, die einen Punkt enthalten.
-
-    Der Admin-Settings-Editor adressiert Felder per Dot-Notation
-    (image_generation.comfyui_workflows.<KEY>.<feld>) und zerlegt sie mit
-    split('.'). Ein Punkt IM Key (z.B. "Flux.1 Dev") zersplittert den Pfad,
-    wodurch der Workflow nicht mehr editier-/speicherbar ist. Der Anzeige-Name
-    darf den Punkt behalten — nur der Dict-Key wird punktfrei gemacht.
-    Idempotent. Returns True wenn etwas umbenannt wurde.
-    """
-    ig = config.get("image_generation", {})
-    workflows = ig.get("comfyui_workflows", {})
-    if not isinstance(workflows, dict):
-        return False
-    dotted = [k for k in workflows if "." in k or "[" in k or "]" in k]
-    if not dotted:
-        return False
-    for old_key in dotted:
-        wf = workflows[old_key]
-        new_key = old_key.replace(".", " ").replace("[", "").replace("]", "")
-        # Anzeige-Name behaelt den Original-Key (mit Punkt), falls nicht gesetzt.
-        if isinstance(wf, dict) and not wf.get("name"):
-            wf["name"] = old_key
-        # Kollision vermeiden: Suffix anhaengen bis frei.
-        base = new_key
-        n = 2
-        while new_key in workflows and new_key != old_key:
-            new_key = f"{base} {n}"
-            n += 1
-        del workflows[old_key]
-        workflows[new_key] = wf
-        logger.info("ComfyUI-Workflow-Key '%s' -> '%s' (Punkt im Key zerbricht Admin-Editor)", old_key, new_key)
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        return True
-    except OSError as e:
-        logger.error("Failed to write dotted-key fix to %s: %s", config_path, e)
-        return False
-
-
-def _seed_default_workflows(config: dict, config_path: Path) -> bool:
-    """Seedet bei einer neuen Welt die drei Default-Workflows (Qwen/Z-Image/Flux).
-
-    Idempotent: nur wenn `image_generation.comfyui_workflows` gar nicht existiert.
-    Wenn der User die Workflows absichtlich auf {} geleert hat, bleibt es leer.
-    Returns True wenn etwas geschrieben wurde.
-    """
-    import copy
-    ig = config.setdefault("image_generation", {})
-    if "comfyui_workflows" not in ig:
-        ig["comfyui_workflows"] = copy.deepcopy(_DEFAULT_COMFYUI_WORKFLOWS)
-        log_msg = "Default ComfyUI workflows (Qwen/Z-Image/Flux/Flux.1 Dev/Flux Inpaint/Qwen Inpaint) seeded"
-    else:
-        # Backfill: feature-kritische Default-Workflows, die nach ihrer Einfuehrung
-        # dazukamen, in bestehende Welten nachziehen (nur wenn der Key fehlt).
-        backfill = ["Flux Inpaint", "Flux 1 Dev", "Qwen Inpaint"]
-        added = [k for k in backfill if k not in ig["comfyui_workflows"]]
-        for k in added:
-            ig["comfyui_workflows"][k] = copy.deepcopy(_DEFAULT_COMFYUI_WORKFLOWS[k])
-        # Feld-Backfill: das per-Workflow `prompt`-Feld kam nach der Einfuehrung der
-        # Inpaint-Workflows dazu. Bestehende Default-Workflows, die es noch NICHT
-        # haben, bekommen den Default-Prompt nachgezogen (nur wenn fehlend) — sonst
-        # fallen Qwen/Flux Inpaint beide auf denselben mapfit-Fallback und der
-        # Dialog zeigt beim Wechsel denselben Prompt.
-        field_added = []
-        for k, dflt in _DEFAULT_COMFYUI_WORKFLOWS.items():
-            entry = ig["comfyui_workflows"].get(k)
-            if isinstance(entry, dict) and dflt.get("prompt") and "prompt" not in entry:
-                entry["prompt"] = dflt["prompt"]
-                field_added.append(f"{k}.prompt")
-        if not added and not field_added:
-            return False
-        log_msg = "Backfilled ComfyUI workflow(s): " + (", ".join(added) or "-")
-        if field_added:
-            log_msg += " | fields: " + ", ".join(field_added)
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("%s -> %s", log_msg, config_path)
-        return True
-    except OSError as e:
-        logger.error("Failed to seed default workflows to %s: %s", config_path, e)
         return False
 
 
@@ -636,13 +431,6 @@ def load(config_path: Optional[Path] = None) -> dict:
             logger.error("Failed to load config from %s: %s", path, e)
             _CONFIG = {}
 
-    # Punkt-Keys in comfyui_workflows reparieren (zerbrechen den Admin-Editor)
-    # — VOR dem Seeding/Backfill, damit die Key-Praesenz korrekt geprueft wird.
-    _fix_dotted_workflow_keys(_CONFIG, path)
-
-    # Bei einer neuen/leeren Welt: Default-Workflows fuer Qwen/Z-Image/Flux
-    # automatisch eintragen, damit der Admin nicht alles von Hand anlegen muss.
-    _seed_default_workflows(_CONFIG, path)
     _seed_default_use_cases(_CONFIG, path)
     _strip_legacy_imagegen_prompt_fields(_CONFIG, path)
     _seed_default_marketplace_catalogs(_CONFIG, path)
@@ -946,7 +734,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_IMAGEGEN_ENABLED", ig.get("enabled", True))
     _set(env, "SKILL_IMAGEGEN_NAME", ig.get("name", "ImageGenerator"))
     _set(env, "SKILL_IMAGEGEN_DESCRIPTION", ig.get("description", ""))
-    _set(env, "COMFY_IMAGEGEN_DEFAULT", ig.get("comfy_default_workflow", ""))
     _set(env, "OUTFIT_IMAGE_WIDTH", ig.get("outfit_image_width", 832))
     _set(env, "OUTFIT_IMAGE_HEIGHT", ig.get("outfit_image_height", 1216))
     _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", 1280))
@@ -954,9 +741,8 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "OUTFIT_IMAGEGEN_DEFAULT", ig.get("outfit_imagegen_default", ""))
     _set(env, "EXPRESSION_IMAGEGEN_DEFAULT", ig.get("expression_imagegen_default", ""))
     _set(env, "LOCATION_IMAGEGEN_DEFAULT", ig.get("location_imagegen_default", ""))
-    # Map Fit/Edge: imagegen-Target (Match-Spec, z.B. "workflow:Flux Inpaint*")
-    _set(env, "MAPFIT_IMAGEGEN_DEFAULT", ig.get(
-        "mapfit_imagegen_default", "workflow:Flux Inpaint*"))
+    # Map fit/edge: imagegen target (match spec, e.g. "backend:<inpaint-backend>")
+    _set(env, "MAPFIT_IMAGEGEN_DEFAULT", ig.get("mapfit_imagegen_default", ""))
     _set(env, "MAP_TILE_VISION_ANALYSIS", ig.get("map_tile_vision_analysis", False))
     _set(env, "U2NET_HOME", ig.get("u2net_home", "./models/u2net"))
     _set(env, "REBUILD_LLM_SYSTEM_TEMPLATE", ig.get("rebuild_llm_system_template", ""))
@@ -973,6 +759,7 @@ def _flatten_to_env(config: dict) -> None:
                      "scheduler", "clip_skip", "image_family", "timeout",
                      "max_concurrent", "beszel_system_id",
                      "response_format", "extra_params", "category", "prompt",
+                     "ref_slot_count",
                      "full_mask", "terrain_hint", "mask_grow", "inner_crop",
                      "mask_format", "lora_url"]:
             val = be.get(key, "")
@@ -986,20 +773,6 @@ def _flatten_to_env(config: dict) -> None:
             _set(env, f"{gp}DEVICE", g.get("device", "") or "")
             _set(env, f"{gp}LABEL", g.get("label", "") or "")
             _set(env, f"{gp}MATCH_NAME", g.get("match_name", "") or "")
-
-    # ComfyUI Workflows
-    for wid, wf in ig.get("comfyui_workflows", {}).items():
-        p = f"COMFY_IMAGEGEN_{wid}_"
-        for key in ["name", "filter", "skill", "workflow_file",
-                     "model", "image_family", "category", "prompt",
-                     "width", "height",
-                     "clip", "clip2", "vae", "clip_type"]:
-            val = wf.get(key, "")
-            _set(env, f"{p}{key.upper()}", val)
-        # LoRAs
-        for idx, lora in enumerate(wf.get("loras", []), start=1):
-            _set(env, f"{p}LORA_{idx:02d}", lora.get("file", ""))
-            _set(env, f"{p}LORA_{idx:02d}_STRENGTH", lora.get("strength", 1))
 
     # Animation
     anim = config.get("animation", {})
@@ -1159,7 +932,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "EVENT_RESOLUTION_COOLDOWN_MINUTES", re_cfg.get("resolution_cooldown_minutes", 15))
     _set(env, "EVENT_IMAGEGEN_DEFAULT", re_cfg.get("event_imagegen_default", ""))
     _set(env, "EVENT_RESOLVED_IMAGE_LINGER_MINUTES", re_cfg.get("resolved_image_linger_minutes", 30))
-    _set(env, "EVENT_IMAGE_DENOISE_STRENGTH", re_cfg.get("event_image_denoise_strength", 0.7))
 
     # Story Engine
     se = config.get("story_engine", {})
