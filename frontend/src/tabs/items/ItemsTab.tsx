@@ -1,295 +1,55 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { loadCharacters, type CharacterRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
-import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
-import { EffectsEditor } from '../../components/EffectsEditor'
 import { Silhouette } from '../../components/Silhouette'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { ItemForm } from './ItemForm'
+import {
+  CATEGORIES,
+  EMPTY_DRAFT,
+  RARITIES,
+  VALID_PIECE_SLOTS,
+  draftToBody,
+  itemToDraft,
+  type Category,
+  type ConditionOption,
+  type DraftItem,
+  type Item,
+  type Owner,
+  type Rarity,
+} from './itemsModel'
 
-type Category =
-  | 'outfit_piece'
-  | 'key'
-  | 'tool'
-  | 'consumable'
-  | 'evidence'
-  | 'gift'
-  | 'spell'
-  | 'quest'
-  | 'decoration'
-type Rarity = 'common' | 'rare' | 'unique'
-
-interface OutfitPieceMeta {
-  outfit_types?: string[]
-  slots?: string[]
-  covers?: string[]
-  partially_covers?: string[]
+interface ItemRowProps {
+  item: Item
+  isActive: boolean
+  onSelect: (item: Item) => void
 }
 
-interface Item {
-  id: string
-  name?: string
-  description?: string
-  category?: Category
-  rarity?: Rarity
-  stackable?: boolean
-  transferable?: boolean
-  consumable?: boolean
-  image_prompt?: string
-  prompt_fragment?: string
-  outfit_piece?: OutfitPieceMeta
-  // Effects stored as a dict on the server (same as activities). The form
-  // edits a "key: value" text representation; we (de)serialize on edit.
-  effects?: Record<string, number | string> | string
-  apply_condition?: string
-  condition_duration?: number
-  has_image?: boolean
-  image?: string
-  image_meta?: { backend?: string; backend_type?: string; model?: string }
-  _shared?: boolean
-  // Spell / magic / tracker / evidence fields. The spell-section editor
-  // (rendered for category=spell) reads/writes them via `extras`; for
-  // other categories they are passed through untouched on save.
-  incantation?: string
-  spell_mode?: string
-  clone_item_id?: string
-  success_chance?: number
-  copy_on_give?: boolean
-  success_text?: string
-  fail_text?: string
-  cast_activity?: string
-  anchor_item_id?: string
-  teleport_subject?: string
-  tracks_character?: string
-  reveals_secret?: string
-}
-
-interface Owner {
-  character: string
-  quantity: number
-  equipped: boolean
-  obtained_from?: string
-}
-
-interface DraftItem {
-  id: string
-  name: string
-  description: string
-  category: Category
-  rarity: Rarity
-  stackable: boolean
-  transferable: boolean
-  consumable: boolean
-  image_prompt: string
-  prompt_fragment: string
-  outfit_types: string[]
-  slots: string[]
-  covers: string[]
-  partially_covers: string[]
-  effects: string
-  apply_condition: string
-  condition_duration: number
-  // Round-trip storage for the magic / tracker / evidence fields. We
-  // don't show editors for them yet but preserve whatever the server
-  // returns so saving doesn't strip them.
-  extras: Record<string, unknown>
-  isNew: boolean
-  // Where this item currently lives — drives the Move-button label.
-  // Carried on the draft (not looked up against the list) so it stays
-  // correct after save reloads & matches what the server just returned.
-  shared: boolean
-}
-
-// apply_condition + condition_duration_hours live INSIDE the effects
-// dict on the server (see app/models/inventory.py:1303). We pull them
-// out so the form can render them as discrete fields, and re-embed on
-// save. Without this round-trip neither value persists across reloads.
-const CONDITION_KEYS = new Set(['apply_condition', 'condition_duration_hours'])
-
-function effectsToText(eff: Item['effects']): string {
-  if (!eff) return ''
-  if (typeof eff === 'string') return eff
-  return Object.entries(eff)
-    .filter(([k]) => !CONDITION_KEYS.has(k))
-    .map(([k, v]) => `${k}: ${v}`)
-    .join('\n')
-}
-
-function textToEffects(text: string): Record<string, number | string> {
-  const out: Record<string, number | string> = {}
-  for (const line of text.split('\n')) {
-    const m = line.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.+?)\s*$/)
-    if (!m) continue
-    const raw = m[2]
-    const num = Number(raw)
-    out[m[1]] = Number.isFinite(num) && /^[+-]?\d+(?:\.\d+)?$/.test(raw) ? num : raw
-  }
-  return out
-}
-
-function extractConditionFromEffects(eff: Item['effects']): {
-  apply_condition: string
-  condition_duration: number
-} {
-  if (!eff || typeof eff === 'string') {
-    return { apply_condition: '', condition_duration: 2 }
-  }
-  const cond = String(eff.apply_condition ?? '').trim()
-  const durRaw = eff.condition_duration_hours
-  const dur = Number(durRaw)
-  return {
-    apply_condition: cond,
-    condition_duration: Number.isFinite(dur) && dur > 0 ? Math.floor(dur) : 2,
-  }
-}
-
-const EXTRA_KEYS = [
-  'incantation',
-  'spell_mode',
-  'clone_item_id',
-  'success_chance',
-  'copy_on_give',
-  'success_text',
-  'fail_text',
-  'cast_activity',
-  'anchor_item_id',
-  'teleport_subject',
-  'tracks_character',
-  'reveals_secret',
-] as const
-
-const CATEGORIES: Category[] = [
-  'outfit_piece',
-  'key',
-  'tool',
-  'consumable',
-  'evidence',
-  'gift',
-  'spell',
-  'quest',
-  'decoration',
-]
-
-const RARITIES: Rarity[] = ['common', 'rare', 'unique']
-
-const VALID_PIECE_SLOTS = [
-  'head',
-  'neck',
-  'outer',
-  'top',
-  'underwear_top',
-  'bottom',
-  'underwear_bottom',
-  'legs',
-  'feet',
-]
-
-const EMPTY_DRAFT: DraftItem = {
-  id: '',
-  name: '',
-  description: '',
-  category: 'tool',
-  rarity: 'common',
-  stackable: false,
-  transferable: true,
-  consumable: false,
-  image_prompt: '',
-  prompt_fragment: '',
-  outfit_types: [],
-  slots: [],
-  covers: [],
-  partially_covers: [],
-  effects: '',
-  apply_condition: '',
-  condition_duration: 2,
-  extras: {},
-  isNew: true,
-  shared: false,
-}
-
-function itemToDraft(it: Item): DraftItem {
-  const op = it.outfit_piece || {}
-  const extras: Record<string, unknown> = {}
-  const itAny = it as unknown as Record<string, unknown>
-  for (const k of EXTRA_KEYS) {
-    const v = itAny[k]
-    if (v !== undefined && v !== null && v !== '') extras[k] = v
-  }
-  return {
-    id: it.id,
-    name: it.name || '',
-    description: it.description || '',
-    category: (it.category || 'tool') as Category,
-    rarity: (it.rarity || 'common') as Rarity,
-    stackable: !!it.stackable,
-    transferable: it.transferable !== false,
-    consumable: !!it.consumable,
-    image_prompt: it.image_prompt || '',
-    prompt_fragment: it.prompt_fragment || '',
-    outfit_types: [...(op.outfit_types || [])],
-    slots: [...(op.slots || [])],
-    covers: [...(op.covers || [])],
-    partially_covers: [...(op.partially_covers || [])],
-    effects: effectsToText(it.effects),
-    ...extractConditionFromEffects(it.effects),
-    extras,
-    isNew: false,
-    shared: !!it._shared,
-  }
-}
-
-function draftToBody(d: DraftItem): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    name: d.name.trim(),
-    description: d.description,
-    category: d.category,
-    rarity: d.rarity,
-    stackable: d.stackable,
-    transferable: d.transferable,
-    consumable: d.consumable,
-    image_prompt: d.image_prompt,
-    prompt_fragment: d.prompt_fragment,
-  }
-  // ID nur beim Anlegen mitschicken — Backend lehnt Updates der ID ab.
-  if (d.isNew && d.id.trim()) {
-    body.id = d.id.trim()
-  }
-  if (d.category === 'outfit_piece') {
-    body.outfit_piece = {
-      outfit_types: d.outfit_types,
-      slots: d.slots,
-      covers: d.covers,
-      partially_covers: d.partially_covers,
-    }
-  }
-  // "Effect on consume / cast" section: consumables AND spells write
-  // effects. apply_condition + condition_duration_hours live INSIDE the
-  // effects dict (server reads them from there in inventory.py:1303),
-  // so we embed them rather than sending them at the top level.
-  if (d.consumable || d.category === 'spell') {
-    const eff = textToEffects(d.effects)
-    if (d.apply_condition) {
-      eff.apply_condition = d.apply_condition
-      if (d.condition_duration > 0) {
-        eff.condition_duration_hours = d.condition_duration
-      }
-    }
-    body.effects = eff
-  }
-  // Pass-through magic / tracker / evidence fields so editing a spell
-  // item doesn't strip its incantation / spell_mode / etc.
-  for (const k of EXTRA_KEYS) {
-    if (d.extras[k] !== undefined && d.extras[k] !== null && d.extras[k] !== '') {
-      body[k] = d.extras[k]
-    }
-  }
-  return body
-}
+const ItemRow = memo(function ItemRow({ item, isActive, onSelect }: ItemRowProps) {
+  return (
+    <li>
+      <button
+        type="button"
+        className={`ga-list-row ga-cat-${item.category || 'tool'}${isActive ? ' is-active' : ''}`}
+        onClick={() => onSelect(item)}
+      >
+        <span className="ga-list-row-main">
+          <strong>{item.name || item.id}</strong>
+          <span className="ga-list-row-sub">— {item.category || 'tool'}</span>
+        </span>
+        <span className="ga-source ga-source-shared" style={{ visibility: item._shared ? 'visible' : 'hidden' }}>
+          shared
+        </span>
+      </button>
+    </li>
+  )
+})
 
 export function ItemsTab() {
   const { t } = useI18n()
@@ -300,7 +60,7 @@ export function ItemsTab() {
   const [filterCategory, setFilterCategory] = useState<Category | ''>('')
   const [filterRarity, setFilterRarity] = useState<Rarity | ''>('')
   const [filterScope, setFilterScope] = useState<'' | 'world' | 'shared'>('')
-  // Slot-Filter, nur relevant wenn filterCategory === 'outfit_piece'.
+  // Slot filter, only relevant when filterCategory === 'outfit_piece'.
   const [filterSlot, setFilterSlot] = useState('')
   // '' = all, '__none__' = owned by nobody, otherwise a character name.
   const [filterOwner, setFilterOwner] = useState('')
@@ -333,9 +93,9 @@ export function ItemsTab() {
     reload()
     loadOwnership()
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
-    // Schritt 7 (May 2026, plan-outfit-system-rethink.md §1): Outfit-Typen
-    // auf das kurze style_hint-Vokabular reduziert. Items behalten die Tags
-    // damit ChangeOutfit-Skill weiter "show me a business piece" matchen kann.
+    // Step 7 (May 2026, plan-outfit-system-rethink.md §1): outfit types
+    // reduced to the short style_hint vocabulary. Items keep the tags so the
+    // ChangeOutfit skill can still match "show me a business piece".
     setOutfitTypeOptions([...STYLE_HINT_OPTIONS])
     apiGet<{ conditions?: ConditionOption[] }>('/world/conditions/list')
       .then((d) => setConditionOptions(d.conditions || []))
@@ -381,8 +141,8 @@ export function ItemsTab() {
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
   }, [items, search, filterCategory, filterRarity, filterScope, filterSlot, filterOwner, ownership])
 
-  // Belegte Slots aus den vorhandenen Outfit-Pieces ableiten, in kanonischer
-  // Reihenfolge (head→feet) — wie der Slot-Filter im Player-Inventar.
+  // Derive the used slots from the existing outfit pieces, in canonical
+  // order (head→feet) — like the slot filter in the player inventory.
   const slotOptions = useMemo(() => {
     if (!items) return []
     const used = new Set<string>()
@@ -416,8 +176,8 @@ export function ItemsTab() {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
   }, [])
 
-  // Schreibt einen Wert ins extras-Dict (Spell/Tracker/Evidence-Felder).
-  // Leerwerte werden geloescht, damit draftToBody den Key nicht mit-postet.
+  // Writes a value into the extras dict (spell/tracker/evidence fields).
+  // Empty values are deleted so draftToBody doesn't post the key along.
   const updateExtra = useCallback((key: string, value: unknown) => {
     setDraft((prev) => {
       if (!prev) return prev
@@ -712,26 +472,14 @@ export function ItemsTab() {
           {filtered.length === 0 ? (
             <li className="ga-list-empty">{t('No items')}</li>
           ) : (
-            filtered.map((it) => {
-              const isActive = draft && !draft.isNew && draft.id === it.id
-              return (
-                <li key={it.id}>
-                  <button
-                    type="button"
-                    className={`ga-list-row ga-cat-${it.category || 'tool'}${isActive ? ' is-active' : ''}`}
-                    onClick={() => editItem(it)}
-                  >
-                    <span className="ga-list-row-main">
-                      <strong>{it.name || it.id}</strong>
-                      <span className="ga-list-row-sub">— {it.category || 'tool'}</span>
-                    </span>
-                    <span className="ga-source ga-source-shared" style={{ visibility: it._shared ? 'visible' : 'hidden' }}>
-                      shared
-                    </span>
-                  </button>
-                </li>
-              )
-            })
+            filtered.map((it) => (
+              <ItemRow
+                key={it.id}
+                item={it}
+                isActive={!!(draft && !draft.isNew && draft.id === it.id)}
+                onSelect={editItem}
+              />
+            ))
           )}
         </ul>
       </aside>
@@ -863,415 +611,6 @@ export function ItemsTab() {
           <div className="ga-placeholder">{t('Select an item to manage image and owners.')}</div>
         )}
       </aside>
-    </div>
-  )
-}
-
-interface ConditionOption {
-  name: string
-  label?: string
-  icon?: string
-}
-
-interface ItemFormProps {
-  draft: DraftItem
-  items: Item[]
-  outfitTypeOptions: string[]
-  conditionOptions: ConditionOption[]
-  onUpdate: <K extends keyof DraftItem>(key: K, value: DraftItem[K]) => void
-  onUpdateExtra: (key: string, value: unknown) => void
-  onToggleListItem: (key: 'outfit_types' | 'slots' | 'covers' | 'partially_covers', value: string) => void
-}
-
-function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, onUpdate, onUpdateExtra, onToggleListItem }: ItemFormProps) {
-  const { t } = useI18n()
-  const isOutfit = draft.category === 'outfit_piece'
-  const isSpell = draft.category === 'spell'
-  return (
-    <div className="ga-form">
-      {!draft.isNew ? (
-        <Field label={t('Item ID (read-only)')} hint={t('Permanent identifier — set when the item was created. Used in rules as has_item:{id}.').replace('{id}', draft.id)}>
-          <input
-            className="ga-input"
-            value={draft.id}
-            readOnly
-            disabled
-            style={{ fontFamily: 'monospace', opacity: 0.7 }}
-          />
-        </Field>
-      ) : (
-        <Field
-          label={t('Item ID')}
-          hint={t('Used in rule conditions (e.g. has_item:item_holoprojector). Lowercase letters, digits, underscore. Leave empty to derive it from the name.')}
-        >
-          <input
-            className="ga-input"
-            value={draft.id}
-            placeholder="item_holoprojector"
-            onChange={(e) => onUpdate('id', e.target.value)}
-            style={{ fontFamily: 'monospace' }}
-          />
-        </Field>
-      )}
-      <div className="ga-form-row">
-        <Field label={t('Name')} hint={t('English. Also used as display name.')}>
-          <input
-            className="ga-input"
-            value={draft.name}
-            onChange={(e) => onUpdate('name', e.target.value)}
-          />
-        </Field>
-        <Field label={t('Description')}>
-          <input
-            className="ga-input"
-            value={draft.description}
-            onChange={(e) => onUpdate('description', e.target.value)}
-          />
-        </Field>
-      </div>
-
-      <div className="ga-form-row">
-        <Field label={t('Category')}>
-          <select
-            className="ga-input"
-            value={draft.category}
-            onChange={(e) => onUpdate('category', e.target.value as Category)}
-          >
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t('Rarity')}>
-          <select
-            className="ga-input"
-            value={draft.rarity}
-            onChange={(e) => onUpdate('rarity', e.target.value as Rarity)}
-          >
-            {RARITIES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-
-      <Field label={t('Flags')}>
-        <div className="ga-form-row" style={{ gap: 14 }}>
-          <label className="ga-form-check">
-            <input type="checkbox" checked={draft.stackable} onChange={(e) => onUpdate('stackable', e.target.checked)} />
-            {t('Stackable')}
-          </label>
-          <label className="ga-form-check">
-            <input
-              type="checkbox"
-              checked={draft.transferable}
-              onChange={(e) => onUpdate('transferable', e.target.checked)}
-            />
-            {t('Transferable')}
-          </label>
-          <label className="ga-form-check">
-            <input
-              type="checkbox"
-              checked={draft.consumable}
-              onChange={(e) => onUpdate('consumable', e.target.checked)}
-            />
-            {t('Consumable')}
-          </label>
-        </div>
-      </Field>
-
-      <Field label={t('Image prompt')} help="image_prompt" hint={t('Used to generate the item image.')}>
-        <input
-          className="ga-input"
-          value={draft.image_prompt}
-          placeholder={t("e.g. 'silver house key on wooden table, realistic'")}
-          onChange={(e) => onUpdate('image_prompt', e.target.value)}
-        />
-      </Field>
-      <Field label={t('Prompt fragment')} help="image_prompt" hint={t('Used in the character image when this item is held or worn.')}>
-        <input
-          className="ga-input"
-          value={draft.prompt_fragment}
-          placeholder={t("e.g. 'holding a hammer' or 'black leather jacket, slim fit'")}
-          onChange={(e) => onUpdate('prompt_fragment', e.target.value)}
-        />
-      </Field>
-
-      {isOutfit ? (
-        <div className="ga-section">
-          <div className="ga-form-section-label">{t('Outfit piece')}</div>
-          <Field label={t('Outfit types')}>
-            <TagPicker
-              options={outfitTypeOptions}
-              values={draft.outfit_types}
-              onToggle={(v) => onToggleListItem('outfit_types', v)}
-              allowFreeform
-            />
-          </Field>
-          <Field label={t('Slots')} hint={t('Single-slot items wear one slot. Multi-slot items (dress, jumpsuit, thigh-highs) wear several.')}>
-            <TagPicker
-              options={VALID_PIECE_SLOTS}
-              values={draft.slots}
-              onToggle={(v) => onToggleListItem('slots', v)}
-            />
-          </Field>
-          <Field label={t('Fully covers')}>
-            <TagPicker
-              options={VALID_PIECE_SLOTS}
-              values={draft.covers}
-              onToggle={(v) => onToggleListItem('covers', v)}
-            />
-          </Field>
-          <Field label={t('Partially covers')}>
-            <TagPicker
-              options={VALID_PIECE_SLOTS}
-              values={draft.partially_covers}
-              onToggle={(v) => onToggleListItem('partially_covers', v)}
-            />
-          </Field>
-        </div>
-      ) : null}
-
-      {isSpell ? (
-        <div className="ga-section">
-          <div className="ga-form-section-label">{t('Spell')}</div>
-          <Field
-            label={t('Incantation')}
-            hint={t('Trigger phrase the avatar must say in chat. Detected case-insensitively.')}
-          >
-            <input
-              className="ga-input"
-              value={(draft.extras.incantation as string) || ''}
-              placeholder={t("e.g. 'Heimfaden, zieh mich heim'")}
-              onChange={(e) => onUpdateExtra('incantation', e.target.value)}
-            />
-          </Field>
-          <div className="ga-form-row">
-            <Field label={t('Mode')} hint={t('force = spell on target. gift = scroll/potion handed over.')}>
-              <select
-                className="ga-input"
-                value={(draft.extras.spell_mode as string) || 'force'}
-                onChange={(e) => onUpdateExtra('spell_mode', e.target.value)}
-              >
-                <option value="force">force</option>
-                <option value="gift">gift</option>
-              </select>
-            </Field>
-            <Field label={t('Success chance')} hint={t('0–100. Roll above = fail.')}>
-              <input
-                type="number"
-                className="ga-input"
-                style={{ width: 90 }}
-                min={0}
-                max={100}
-                value={(draft.extras.success_chance as number) ?? 100}
-                onChange={(e) => onUpdateExtra('success_chance', parseInt(e.target.value, 10) || 0)}
-              />
-            </Field>
-            <Field label={t('Caster keeps spell')} hint={t('On = learned spell (reusable). Off = scroll/potion (consumed).')}>
-              <label className="ga-form-check" style={{ marginTop: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={!!draft.extras.copy_on_give}
-                  onChange={(e) => onUpdateExtra('copy_on_give', e.target.checked)}
-                />
-                {t('copy_on_give')}
-              </label>
-            </Field>
-          </div>
-          <div className="ga-form-row">
-            <Field label={t('Success text')} hint={t('Hint injected into the target NPC prompt on success.')}>
-              <textarea
-                className="ga-textarea"
-                rows={2}
-                value={(draft.extras.success_text as string) || ''}
-                onChange={(e) => onUpdateExtra('success_text', e.target.value)}
-              />
-            </Field>
-            <Field label={t('Fail text')} hint={t('Hint injected on failure.')}>
-              <textarea
-                className="ga-textarea"
-                rows={2}
-                value={(draft.extras.fail_text as string) || ''}
-                onChange={(e) => onUpdateExtra('fail_text', e.target.value)}
-              />
-            </Field>
-          </div>
-          <div className="ga-form-row">
-            <Field label={t('Cast activity')} hint={t('Optional library activity set on the caster after the cast (cooldown).')}>
-              <input
-                className="ga-input"
-                value={(draft.extras.cast_activity as string) || ''}
-                placeholder={t("e.g. 'channeling'")}
-                onChange={(e) => onUpdateExtra('cast_activity', e.target.value)}
-              />
-            </Field>
-            <Field label={t('Effect item (clone_item_id)')} hint={t('Item handed to the target on success. Defaults to the spell item itself.')}>
-              <select
-                className="ga-input"
-                value={(draft.extras.clone_item_id as string) || ''}
-                onChange={(e) => onUpdateExtra('clone_item_id', e.target.value)}
-              >
-                <option value="">{t('-- spell item itself --')}</option>
-                {items
-                  .filter((it) => it.id !== draft.id)
-                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-                  .map((it) => (
-                    <option key={it.id} value={it.id}>
-                      {it.name || it.id}
-                    </option>
-                  ))}
-              </select>
-            </Field>
-          </div>
-          <div className="ga-form-section-label" style={{ marginTop: 12 }}>{t('Anchor teleport')}</div>
-          <div className="ga-form-row">
-            <Field
-              label={t('Anchor item')}
-              hint={t('When set, casting teleports to wherever this item currently is (a character carrying it, or a room it lies in). Leave empty for non-teleport spells.')}
-            >
-              <select
-                className="ga-input"
-                value={(draft.extras.anchor_item_id as string) || ''}
-                onChange={(e) => onUpdateExtra('anchor_item_id', e.target.value)}
-              >
-                <option value="">{t('-- no anchor (not a teleport) --')}</option>
-                {items
-                  .filter((it) => it.id !== draft.id)
-                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-                  .map((it) => (
-                    <option key={it.id} value={it.id}>
-                      {it.name || it.id} <span>— {it.category || 'tool'}</span>
-                    </option>
-                  ))}
-              </select>
-            </Field>
-            <Field
-              label={t('Direction')}
-              hint={t('caster: caster jumps to the anchor. anchor_holder: anchor carrier is pulled to the caster (only works if a character carries the anchor).')}
-            >
-              <select
-                className="ga-input"
-                value={(draft.extras.teleport_subject as string) || 'caster'}
-                onChange={(e) => onUpdateExtra('teleport_subject', e.target.value)}
-                disabled={!draft.extras.anchor_item_id}
-              >
-                <option value="caster">{t('caster → anchor')}</option>
-                <option value="anchor_holder">{t('anchor holder → caster')}</option>
-              </select>
-            </Field>
-          </div>
-        </div>
-      ) : null}
-
-      {draft.consumable || draft.category === 'spell' ? (
-        <div className="ga-section">
-          <div className="ga-form-section-label">
-            {draft.category === 'spell' ? t('Effect on cast') : t('Effect on consume')}
-          </div>
-          <Field
-            label={t('Effects')}
-            help="effects_syntax"
-            hint={t('Format: "stat_change: +/-value" per line. Click a stat or mood to insert it.')}
-          >
-            <EffectsEditor value={draft.effects} onChange={(v) => onUpdate('effects', v)} />
-          </Field>
-          <div className="ga-form-row">
-            <Field label={t('Apply condition')} hint={t('Optional. Activates a state tag in the character profile.')}>
-              <select
-                className="ga-input"
-                value={draft.apply_condition}
-                onChange={(e) => onUpdate('apply_condition', e.target.value)}
-              >
-                <option value="">{t('-- none --')}</option>
-                {conditionOptions.map((c) => {
-                  const icon = c.icon ? `${c.icon} ` : ''
-                  const label = c.label ? ` — ${c.label}` : ''
-                  return (
-                    <option key={c.name} value={c.name}>
-                      {icon}
-                      {c.name}
-                      {label}
-                    </option>
-                  )
-                })}
-                {draft.apply_condition &&
-                !conditionOptions.some((c) => c.name === draft.apply_condition) ? (
-                  <option value={draft.apply_condition}>
-                    {draft.apply_condition} {t('(not in conditions)')}
-                  </option>
-                ) : null}
-              </select>
-            </Field>
-            <Field label={t('Duration in hours')}>
-              <input
-                type="number"
-                className="ga-input"
-                style={{ width: 90 }}
-                min={1}
-                value={draft.condition_duration}
-                onChange={(e) => onUpdate('condition_duration', parseInt(e.target.value, 10) || 0)}
-              />
-            </Field>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-interface TagPickerProps {
-  options: string[]
-  values: string[]
-  onToggle: (value: string) => void
-  allowFreeform?: boolean
-}
-
-function TagPicker({ options, values, onToggle, allowFreeform }: TagPickerProps) {
-  const { t } = useI18n()
-  const [draft, setDraft] = useState('')
-  const remaining = options.filter((o) => !values.includes(o))
-  return (
-    <div className="ga-tags-row">
-      {values.map((v) => (
-        <button key={v} type="button" className="ga-tag-pill" onClick={() => onToggle(v)} title={t('Remove')}>
-          {v} ×
-        </button>
-      ))}
-      <select
-        className="ga-input"
-        style={{ width: 'auto', fontSize: 11, padding: '2px 6px' }}
-        value=""
-        onChange={(e) => {
-          if (e.target.value) onToggle(e.target.value)
-        }}
-      >
-        <option value="">+ {t('add')}</option>
-        {remaining.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-      {allowFreeform ? (
-        <input
-          className="ga-input"
-          style={{ width: 130, fontSize: 11, padding: '2px 6px' }}
-          value={draft}
-          placeholder={t('+ new')}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && draft.trim()) {
-              onToggle(draft.trim().toLowerCase())
-              setDraft('')
-            }
-          }}
-        />
-      ) : null}
     </div>
   )
 }
