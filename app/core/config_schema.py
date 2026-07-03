@@ -111,7 +111,7 @@ SECTIONS = {
                     "types": {
                         "type": "str",
                         "label": "Nutzung",
-                        "description": "Comma-separated: ollama, openai. ComfyUI/A1111 runs are routed through the per-backend channel under Image Generation → Backends.",
+                        "description": "Comma-separated: ollama, openai. Image-generation runs are routed through the per-backend channel under Image Generation → Backends.",
                         "default": "openai",
                     },
                     "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Max gleichzeitige Aufgaben auf dieser GPU"},
@@ -255,21 +255,11 @@ SECTIONS = {
             "postprocess_enabled": {"type": "bool", "label": "Post-Processing aktiviert", "default": False, "description": "Nach dem Erzeugen eines geeigneten Bildes einen externen Post-Processing-Dienst benachrichtigen. Der Dienst liest das Bild selbst (Galerie-API / Dateisystem) und schreibt das Ergebnis ueber den API-Endpoint zurueck. Dieses Programm bearbeitet keine Bilder selbst und sendet keine Bild-Bytes."},
             "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Basis-URL, die nach der Erzeugung benachrichtigt wird. Das Programm haengt Parameter an (welt-relativer Bildpfad). Es werden KEINE Bild-Bytes gesendet. Beispiel: http://127.0.0.1:8005/trigger"},
 
-            # --- UNET Loader ---
-            "unet_weight_dtype": {
-                "type": "select",
-                "label": "UNET weight_dtype",
-                "choices": ["", "default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],
-                "default": "",
-                "description": "weight_dtype fuer den Safetensors/UNET-Loader (Node mit weight_dtype-Input) in ComfyUI-Workflows. Leer = Workflow-Wert unveraendert lassen. Fuer fp8-quantisierte Flux-Modelle 'fp8_e4m3fn' setzen — sonst 'Only Tensors of floating point and complex dtype can require gradients' beim Laden. Gilt nicht fuer GGUF-Loader.",
-            },
-
-            # --- Default-Backends ---
-            "comfy_default_workflow": {"type": "workflow_select", "label": "Default ComfyUI Workflow (Match)", "description": "Standard-Workflow als Match-Glob (z.B. 'Qwen*') — wird nach Verfuegbarkeit aufgeloest, keine feste Auswahl."},
-            "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Vorschau Default (Match)", "description": "Match-Glob 'workflow:Qwen*' oder 'backend:ComfyUI*' — nach Verfuegbarkeit aufgeloest (kein festes Backend)."},
-            "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Match-Glob 'workflow:Qwen*' oder 'backend:ComfyUI*' fuer Mood/Activity-Varianten — nach Verfuegbarkeit aufgeloest."},
-            "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Match-Glob 'workflow:Glob' oder 'backend:Glob' — nach Verfuegbarkeit aufgeloest."},
-            "mapfit_imagegen_default": {"type": "imagegen_select", "label": "Map Fit/Match-edges target", "default": "workflow:Flux Inpaint*", "description": "Imagegen-Target (Match-Spec, z.B. 'workflow:Flux Inpaint*') fuer 'Fit to neighbors' und 'Match edges'. Loest sich ueber das normale ComfyUI-Workflow-Matching auf — der gewaehlte Workflow muss die Inpaint-Nodes haben (input_reference_image = 3x3-Canvas, input_mask, input_crop, output_final = gecroppte Mitte)."},
+            # --- Default backends ---
+            "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Preview Default (Match)", "description": "Match glob 'backend:<glob>' (e.g. 'backend:Flux*') or a bare glob — resolved by availability + cost, no fixed backend."},
+            "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Match glob 'backend:<glob>' for mood/activity variants — resolved by availability + cost."},
+            "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Match glob 'backend:<glob>' or a bare glob — resolved by availability + cost."},
+            "mapfit_imagegen_default": {"type": "imagegen_select", "label": "Map Fit/Match-edges target", "default": "", "description": "Imagegen target (match spec, e.g. 'backend:<glob>') for 'Fit to neighbors' and 'Match edges'. Must resolve to a category=inpaint backend, which generates via POST /v1/images/edits (canvas + mask as two images)."},
             "map_tile_vision_analysis": {"type": "bool", "label": "Analyze neighbor tiles for map prompts", "default": False, "description": "For Fit/Match-edges: run a short vision-LLM analysis of each neighbour's ACTUAL 2D tile to build the north/south/east/west prompt (instead of the stored description, which drifts after regeneration). Cached per tile — re-analysed only when a tile changes. Costs one vision call per new tile."},
 
             # --- Prompt-Prefixes ---
@@ -360,7 +350,7 @@ SECTIONS = {
                     "Do NOT add new visual elements, do NOT remove any. "
                     "Respond with ONLY the rewritten prompt, no preamble, no commentary."
                 ),
-                "description": "System-Prompt fuer den Image-Prompt-Enhancer LLM. Platzhalter: {target_model} (z_image/qwen/flux), {prompt_instruction} (aus Workflow-Config).",
+                "description": "System prompt for the image-prompt-enhancer LLM. Placeholders: {target_model} (z_image/qwen/flux), {prompt_instruction} (from the use-case config).",
             },
         },
         "sub_arrays": {
@@ -388,7 +378,7 @@ SECTIONS = {
                     "api_type": {
                         "type": "select",
                         "label": "API Typ",
-                        "choices": ["a1111", "comfyui", "openai_chat", "openai_diffusion", "localai", "civitai", "together"],
+                        "choices": ["a1111", "openai_chat", "openai_diffusion", "localai", "civitai", "together"],
                         "triggers_rerender": True,
                     },
                     "api_url": {"type": "str", "label": "API URL"},
@@ -426,8 +416,8 @@ SECTIONS = {
                     },
                     "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "How the model wants its prompts: keywords = comma tags (Z-Image/SD), natural = flowing prose (Flux/Qwen). Selects the prompt adapter and which use-case style family applies. Empty = fallback via backend model name."},
                     "ref_slot_count": {"type": "number", "label": "Reference Slots", "description": "How many reference images this backend consumes per generation (slot priority: agent > room > others > items). 0 = no reference images. Empty = type default (localai/openai_diffusion: 4, others: 0).", "applicable_for": ["localai", "openai_diffusion"]},
-                    "guidance_scale": {"type": "float", "label": "Guidance Scale", "min": 0, "max": 50, "step": 0.5, "applicable_for": ["a1111", "comfyui"]},
-                    "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200, "applicable_for": ["a1111", "comfyui", "together", "openai_diffusion", "localai"]},
+                    "guidance_scale": {"type": "float", "label": "Guidance Scale", "min": 0, "max": 50, "step": 0.5, "applicable_for": ["a1111"]},
+                    "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200, "applicable_for": ["a1111", "together", "openai_diffusion", "localai"]},
                     "response_format": {"type": "select", "label": "Response Format", "choices": ["b64_json", "url"], "default": "b64_json", "description": "Wie das Gateway das Bild liefert. 'b64_json' (empfohlen): inline im JSON, ein Request. 'url': Result-URL, die mit demselben Bearer-Header abgeholt wird.", "applicable_for": ["openai_diffusion"]},
                     "extra_params": {"type": "text", "label": "Extra-Params (JSON)", "description": "Optionales JSON-Objekt mit zusaetzlichen Request-Parametern (z.B. {\"cfg\": 4.5, \"sampler\": \"euler\"}). Wird 1:1 in den Gateway-Request gemergt; ueberschreibt gleichnamige Defaults. Welche Keys gueltig sind, definiert der Alias-Workflow gateway-seitig. LoRAs NICHT hier eintragen — die kommen automatisch aus der LoRA-Library (lora_NN/strength_NN).", "applicable_for": ["openai_diffusion"]},
                     "category": {"type": "select", "label": "Category", "choices": ["", "inpaint"], "description": "Zweck-Kategorie. 'inpaint' generiert ueber POST /v1/images/edits (Canvas + Maske als zwei Bilder) statt /v1/images/generations und bietet das Backend als Inpaint-Ziel im Map-Fit/Edge-Dialog an. Der Alias-Workflow muss gateway-seitig Bild- + Masken-Slot haben.", "applicable_for": ["openai_diffusion"]},
@@ -436,82 +426,23 @@ SECTIONS = {
                     "terrain_hint": {"type": "bool", "label": "Terrain hint", "default": False, "description": "Nur bei Category=inpaint. AN = dynamische Terrain-Beschreibung der Nachbarn wird an den Prompt angehaengt (Fill-Modelle). AUS = nicht anhaengen (Edit-Modelle sehen den grauen Canvas selbst).", "applicable_for": ["openai_diffusion"]},
                     "mask_grow": {"type": "float", "label": "Mask grow", "default": 1.05, "min": 1.0, "max": 1.5, "step": 0.01, "description": "Nur bei Category=inpaint. Maskenrand-Faktor: wie weit die Maske ueber die Zelle/Naht hinausreicht (1.05 = +5%, 1.02 = +2%).", "applicable_for": ["openai_diffusion"]},
                     "inner_crop": {"type": "float", "label": "Inner crop", "default": 0.7, "min": 0.05, "max": 1.0, "step": 0.05, "description": "Nur bei Category=inpaint mit Full mask (Fit). Anteil der Mitte, der ausgeschnitten wird (0.7 = innere 70%, 1.0 = ganze Mitte). Greift nicht bei Match Edges.", "applicable_for": ["openai_diffusion"]},
-                    "mask_format": {"type": "select", "label": "Mask format", "choices": ["grayscale", "openai"], "default": "grayscale", "description": "Category=inpaint only. How the inpaint mask reaches the gateway. 'grayscale' (recommended): the L-PNG is sent 1:1 as generated, white = edit region — for gateways that hand the mask straight to ComfyUI's inputs.mask (byte-identical to mapblend_debug/last_mask.png). 'openai': RGBA with transparent = edit, for true OpenAI/DALL-E edits endpoints.", "applicable_for": ["openai_diffusion"]},
+                    "mask_format": {"type": "select", "label": "Mask format", "choices": ["grayscale", "openai"], "default": "grayscale", "description": "Category=inpaint only. How the inpaint mask reaches the gateway. 'grayscale' (recommended): the L-PNG is sent 1:1 as generated, white = edit region (byte-identical to mapblend_debug/last_mask.png). 'openai': RGBA with transparent = edit, for true OpenAI/DALL-E edits endpoints.", "applicable_for": ["openai_diffusion"]},
                     "disable_safety": {"type": "bool", "label": "Safety deaktivieren", "default": False, "description": "Schickt disable_safety_checker=true mit (Together.ai-spezifisch).", "applicable_for": ["together"]},
-                    "poll_interval": {"type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wartezeit zwischen Status-Polls. Bei ComfyUI: wie oft das Backend nach dem Job-Status gefragt wird. Bei async Cloud-Backends (CivitAI, Together): niedriger = schnelleres Erkennen, aber mehr API-Calls.", "applicable_for": ["comfyui", "civitai", "together"]},
-                    "max_wait": {"type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximale Wartezeit bis die Generation als fehlgeschlagen gilt.", "applicable_for": ["comfyui", "civitai", "together"]},
+                    "poll_interval": {"type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together): lower = faster detection, but more API calls.", "applicable_for": ["civitai", "together"]},
+                    "max_wait": {"type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed.", "applicable_for": ["civitai", "together"]},
                     "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request-Timeout fuer die Bild-Generierung (HTTP). Bei langsamen Modellen/grossen Bildern hochsetzen — fuer das synchrone Gateway grosszuegig (z.B. 300). Gilt fuer together/openai_diffusion/localai/openai_chat.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat"]},
                     "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallele Jobs auf dieser Backend-Queue. Mehr gleichzeitige Anfragen warten, bis ein Slot frei wird. Gilt fuer alle Backend-Typen (auch Cloud/OpenAI)."},
-                    "beszel_system_id": {"type": "str", "label": "Beszel System-ID", "description": "Optional: Beszel-System fuer VRAM-Anzeige im Queue-Panel.", "applicable_for": ["comfyui", "a1111"]},
+                    "beszel_system_id": {"type": "str", "label": "Beszel System-ID", "description": "Optional: Beszel system for the VRAM display in the queue panel.", "applicable_for": ["a1111"]},
                     "gpus": {
                         "type": "array",
                         "label": "GPUs (optional)",
-                        "applicable_for": ["comfyui", "a1111", "openai_diffusion", "localai", "openai_chat", "together", "civitai"],
+                        "applicable_for": ["a1111", "openai_diffusion", "localai", "openai_chat", "together", "civitai"],
                         "item_fields": {
                             "label": {"type": "str", "label": "Label", "description": "Anzeigename, z.B. 'RTX 3090'. WICHTIG: gleiches Label auf einem LLM-Provider UND einem Image-Backend = dieselbe physische GPU → die Calls (Chat + Bild) serialisieren (nur einer gleichzeitig). Leer = keine Serialisierung."},
                             "vram_gb": {"type": "int", "label": "VRAM (GB)", "min": 0, "max": 512},
                             "device": {"type": "str", "label": "Device", "default": "0", "description": "Beszel GPU-Key (Fallback wenn match_name nicht greift)"},
                             "match_name": {"type": "str", "label": "Match Name", "description": "Substring im Beszel-GPU-Namen — stabil ueber Reboots"},
                         },
-                    },
-                },
-            },
-            "comfyui_workflows": {
-                "label": "ComfyUI Workflows",
-                "is_dict": True,
-                "item_label_field": "name",
-                "sort_alphabetically": True,
-                "master_detail": True,
-                "list_columns": [
-                    {"field": "name", "label": "Name"},
-                    {"field": "image_family", "label": "Family"},
-                    {"field": "skill", "label": "Backend"},
-                ],
-                "fields": {
-                    "name": {"type": "str", "label": "Anzeigename", "required": True},
-                    "filter": {"type": "str", "label": "Filter Pattern", "description": "Glob-Pattern zum Filtern von Modellen/LoRAs (* als Wildcard, case-insensitive)"},
-                    "skill": {"type": "comfyui_backend_select", "label": "Backend(s)", "multi": True, "description": "ComfyUI Backend(s) die diesen Workflow ausfuehren koennen — mehrere moeglich. LEER = deaktiviert (der Workflow wird nirgends angeboten/genutzt)."},
-                    "workflow_file": {"type": "str", "label": "Workflow Datei", "required": True},
-                    "model": {"type": "comfyui_model_select", "label": "Model"},
-                    "clip": {"type": "comfyui_clip_select", "label": "CLIP Model"},
-                    "clip2": {"type": "comfyui_clip_select", "label": "CLIP Model 2", "description": "Nur fuer DualCLIPLoader-Workflows (z.B. Flux Inpaint): clip_name2."},
-                    "vae": {"type": "comfyui_vae_select", "label": "VAE Model", "description": "VAE fuer Workflows mit eigenem input_vae (VAELoader) — z.B. Flux. Leer = der im Workflow gewaehlte VAE bleibt."},
-                    "clip_type": {"type": "select", "label": "CLIP Type", "choices": ["", "flux", "flux2", "qwen_image", "sd3", "sdxl", "stable_diffusion"], "description": "type-Parameter des CLIP-Loaders (input_clip, z.B. ClipLoaderGGUF/DualCLIPLoader). MUSS zum Modell passen: flux2 fuer Flux.2, qwen_image fuer Qwen-Image. Leer = der im Workflow gebackene Wert bleibt."},
-                    "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "Wie das Modell Prompts will: keywords = Komma-Tags (Z-Image/SD), natural = Fliesstext (Flux/Qwen). Bestimmt Prompt-Adapter + welche Use-Case-Style-Familie greift. Leer = Fallback ueber Workflow-Dateiname."},
-                    "category": {"type": "select", "label": "Category", "choices": ["", "inpaint"], "description": "Workflow purpose, used to offer the right workflows in special dialogs. Empty = normal generation. 'inpaint' = map fit / edge-match workflows (need input_reference_image, input_mask, input_crop). Extensible for future workflow types."},
-                    "prompt": {"type": "str", "label": "Default prompt", "description": "Per-workflow default prompt, pre-filled in the Fit/Edge dialog (and used verbatim for map-blend). Differs per model — e.g. an edit instruction for Qwen Inpaint vs. a fill description for Flux Inpaint. Empty = fall back to the 'mapfit' use-case prompt."},
-                    "width": {
-                        "type": "int",
-                        "label": "Breite",
-                        "default": 800,
-                        "min": 64,
-                        "max": 4096,
-                        "description": (
-                            "Quadratisches Default-Format (~1:1) fuer den Workflow. "
-                            "Performance-relevante Stufen (Render-Zeit ≈ linear zu MP):\n"
-                            "  - 512x512   (~0.26 MP — ca. 30% Zeit, schnelle Iteration)\n"
-                            "  - 768x768   (~0.59 MP — ca. 70% Zeit)\n"
-                            "  - 1024x1024 (~1.05 MP — SDXL/Flux Sweet-Spot)\n"
-                            "  - 1280x1280 (~1.64 MP — ca. 60% mehr Zeit/VRAM)\n"
-                            "Workflow-Override schlaegt Backend-Default. Default 800x800 liegt "
-                            "zwischen den SDXL-Buckets — fuer beste Resultate auf 768 oder 1024 "
-                            "setzen. Ueber 1MP flacht der Qualitaetsgewinn ab und "
-                            "Repetitionsartefakte werden wahrscheinlicher — Upscale-Pass "
-                            "nachgelagert ist meist effizienter."
-                        ),
-                    },
-                    "height": {
-                        "type": "int",
-                        "label": "Höhe",
-                        "default": 800,
-                        "min": 64,
-                        "max": 4096,
-                        "description": "Siehe Breite fuer empfohlene Bucket-Kombinationen.",
-                    },
-                    "loras": {
-                        "type": "lora_array",
-                        "label": "LoRAs",
-                        "max_items": 4,
                     },
                 },
             },
@@ -711,9 +642,8 @@ SECTIONS = {
             "entry_roll_jitter_seconds": {"type": "int", "label": "Entry Jitter (s)", "default": 3, "min": 0, "max": 30, "description": "Zufaellige Verzoegerung 0–N Sekunden bevor das Event nach Eintritt aufploppt. 0 = sofort, sonst fuehlt es sich an als wuerde was 'passieren' nach Ankunft."},
             "resolution_proactive": {"type": "bool", "label": "Proaktive Event-Aufloesung", "default": True, "description": "Characters an betroffener Location versuchen offene disruption/danger Events automatisch zu loesen (alle 5 Min)."},
             "resolution_cooldown_minutes": {"type": "int", "label": "Resolution Cooldown (min)", "default": 15, "min": 1, "max": 240, "description": "Mindestabstand zwischen zwei Loesungsversuchen am gleichen Event."},
-            "event_imagegen_default": {"type": "imagegen_select", "label": "Event Illustration Default Backend", "description": "Backend or workflow used to render disruption/danger event illustrations that swap the location background while the event is active. The workflow needs input_prompt, input_reference_image (= location background, optionally with input_reference_image_use Crystools switch), input_denoise_strength (PrimitiveFloat), and input_model. Output resolution follows the input reference image."},
+            "event_imagegen_default": {"type": "imagegen_select", "label": "Event Illustration Default Backend", "description": "Backend match (e.g. 'backend:<glob>') used to render disruption/danger event illustrations that swap the location background while the event is active."},
             "resolved_image_linger_minutes": {"type": "int", "label": "Resolved-Image Linger (min)", "default": 30, "min": 0, "max": 240, "description": "How long the 'after' illustration of a resolved disruption/danger event keeps overriding the normal location background before reverting."},
-            "event_image_denoise_strength": {"type": "float", "label": "Event Image Denoise Strength", "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05, "description": "Denoise strength used by the event_illustration workflow when remixing the location background. Higher = more change vs. the original location image."},
         },
     },
     "story_engine": {
@@ -743,7 +673,7 @@ SECTIONS = {
                 "type": "bool",
                 "label": "Downscale enabled",
                 "default": True,
-                "description": "Re-encode generated item and map-icon images at a lower resolution after ComfyUI returns them. Location backgrounds (day/night/scene) keep their full resolution. ComfyUI always generates at full workflow size (lower sizes crash it); only the on-disk copy shrinks.",
+                "description": "Re-encode generated item and map-icon images at a lower resolution after the backend returns them. Location backgrounds (day/night/scene) keep their full resolution; only the on-disk copy shrinks.",
             },
             "downscale_item_max_dim": {
                 "type": "int",
@@ -884,8 +814,8 @@ SECTIONS = {
             },
             "target": {
                 "type": "imagegen_target_select",
-                "label": "Workflow / Backend",
-                "description": "Welche Image-Pipeline soll das Frame rendern? ComfyUI-Workflows nutzen ihre konfigurierten Models/LoRAs/Switches automatisch. Cloud-Backends (Together, CivitAI) verwenden ihren konfigurierten Modellnamen. Offline-Optionen sind ausgegraut.",
+                "label": "Backend",
+                "description": "Which image backend renders the frame. Each backend uses its configured model name. Offline options are greyed out.",
             },
             "_grp_actions": {"type": "group_header", "label": "Aktion"},
             "_action_generate": {

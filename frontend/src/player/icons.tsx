@@ -13,7 +13,7 @@ export type IconName =
   | 'inventory' | 'journal' | 'gallery' | 'instagram' | 'phone' | 'tasks' | 'layouts' | 'news'
   | 'reset' | 'close' | 'sendBack' | 'autosize' | 'maximize' | 'lock' | 'unlock'
   | 'zoomIn' | 'zoomOut' | 'settings' | 'trash'
-  | 'brain' | 'cpu' | 'cloud' | 'sliders'
+  | 'brain' | 'cloud' | 'sliders'
   | 'background' | 'tag' | 'backpack' | 'avatar'
 
 // Jeder Eintrag = der innere Inhalt eines <svg> (Pfade/Formen).
@@ -184,14 +184,6 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
       <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
-    </>
-  ),
-  // Lokales ComfyUI-Backend — Chip (lucide "cpu")
-  cpu: (
-    <>
-      <rect width="16" height="16" x="4" y="4" rx="2" />
-      <rect width="6" height="6" x="9" y="9" rx="1" />
-      <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
     </>
   ),
   // Cloud-Image-Backends (CivitAI/Together/OpenAI-kompatibel) — Wolke (lucide "cloud")

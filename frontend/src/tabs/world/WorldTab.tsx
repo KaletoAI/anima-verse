@@ -1087,9 +1087,7 @@ function LocationGallery({
         prompt: payload.prompt,
       }
       if (roomFilter && dialogType !== 'map_2d') body.room_id = roomFilter
-      if (payload.workflow) body.workflow = payload.workflow
       if (payload.backend) body.backend = payload.backend
-      if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras) body.loras = payload.loras
       // Dialog hat den Karten-Icon-Suffix schon im Prompt → Server nicht doppeln.
       if (payload.prompt_settings_applied) body.settings_applied = true
@@ -1119,9 +1117,7 @@ function LocationGallery({
         prompt: payload.prompt,
         reference_image: target.filename,
       }
-      if (payload.workflow) body.workflow = payload.workflow
       if (payload.backend) body.backend = payload.backend
-      if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras) body.loras = payload.loras
       if (payload.prompt_settings_applied) body.settings_applied = true
       // Regenerate mit dem bestehenden Bild als Selbst-Referenz.
@@ -1368,7 +1364,7 @@ function LocationGallery({
                     className="ga-btn ga-btn-sm"
                     disabled={isBusy}
                     onClick={() => setRegenTarget({ filename, type })}
-                    title={t('Adjust this image via a reference workflow + prompt (saved as a new image)')}
+                    title={t('Adjust this image via a reference-capable backend + prompt (saved as a new image)')}
                   >
                     ♻
                   </button>

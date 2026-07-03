@@ -29,7 +29,6 @@ interface ImageMeta {
   model?: string
   backend?: string
   backend_type?: string
-  workflow?: string
   postprocessed?: boolean
   duration_s?: number
   image_analysis?: string
@@ -72,7 +71,6 @@ function metaTitle(m?: ImageMeta): string {
   if (m.model) parts.push(`Model: ${m.model}`)
   if (m.backend) parts.push(`Skill: ${m.backend}`)
   if (m.backend_type) parts.push(`Type: ${m.backend_type}`)
-  if (m.workflow) parts.push(`Workflow: ${m.workflow}`)
   if (m.postprocessed) parts.push('Post-processing: external')
   if (m.duration_s) parts.push(`Duration: ${m.duration_s}s`)
   if (m.image_analysis) parts.push(`Analysis: ${m.image_analysis}`)
@@ -239,9 +237,7 @@ export function InstagramPanel() {
       if (!p) return
       const body: Record<string, unknown> = {}
       if (payload.prompt) body.custom_prompt = payload.prompt
-      if (payload.workflow) body.workflow = payload.workflow
       if (payload.backend) body.backend = payload.backend
-      if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras) body.loras = payload.loras
       if (payload.character_names) body.character_names = payload.character_names
       if (payload.improvement_request) body.improvement_request = payload.improvement_request

@@ -106,18 +106,9 @@ class ImageGenerationSkill(BaseSkill):
         import threading as _th
         self._meta_tls = _th.local()
 
-        # Cache fuer ComfyUI-Modelle und LoRAs pro Service (wird beim Start geladen)
-        # Format: {service_name: [model1, model2, ...]}
-        self._cached_checkpoints_by_service: Dict[str, List[str]] = {}
-        self._cached_unet_models_by_service: Dict[str, List[str]] = {}
-        self._cached_loras_by_service: Dict[str, List[str]] = {}
-        self._cached_clip_models_by_service: Dict[str, List[str]] = {}
-        self._cached_vae_models_by_service: Dict[str, List[str]] = {}
-        self._model_cache_loaded: bool = False
-
-        # Round-Robin Counter pro Workflow-Name. Verteilt Tasks ueber
-        # gleich-cost Backends (z.B. zwei lokale ComfyUI mit cost=0).
-        # Ersetzt das alte LOAD_COST_PENALTY-Verfahren.
+        # Round-robin counter per rotation key. Spreads tasks across
+        # equal-cost backends (e.g. two local backends with cost=0).
+        # Replaces the old LOAD_COST_PENALTY approach.
         self._round_robin_counter: Dict[str, int] = {}
         self._round_robin_lock = __import__("threading").Lock()
 
@@ -201,63 +192,6 @@ class ImageGenerationSkill(BaseSkill):
                 logger.error("Fehler beim Laden von Instanz %d (%s): %s", n, name, e)
 
         return instances
-
-    def get_cached_checkpoints(self, model_type: str = "") -> List[str]:
-        """Gibt alle gecachten Modelle zurueck (ueber alle Services kombiniert), gefiltert nach model_type."""
-        all_checkpoints = set()
-        all_unets = set()
-        for models in self._cached_checkpoints_by_service.values():
-            all_checkpoints.update(models)
-        for models in self._cached_unet_models_by_service.values():
-            all_unets.update(models)
-        if model_type == "unet":
-            return sorted(all_unets)
-        elif model_type == "checkpoint":
-            return sorted(all_checkpoints)
-        else:
-            return sorted(all_checkpoints | all_unets)
-
-    def get_cached_checkpoints_by_service(self, model_type: str = "") -> Dict[str, List[str]]:
-        """Gibt gecachte Modelle gruppiert nach Service zurueck."""
-        result: Dict[str, List[str]] = {}
-        for svc_name in set(list(self._cached_checkpoints_by_service.keys()) +
-                            list(self._cached_unet_models_by_service.keys())):
-            cp = self._cached_checkpoints_by_service.get(svc_name, [])
-            unet = self._cached_unet_models_by_service.get(svc_name, [])
-            if model_type == "unet":
-                models = unet
-            elif model_type == "checkpoint":
-                models = cp
-            else:
-                models = sorted(set(cp + unet))
-            if models:
-                result[svc_name] = models
-        return result
-
-    def get_cached_loras(self) -> List[str]:
-        """Gibt gecachte LoRA-Liste zurueck (ueber alle Services kombiniert)."""
-        all_loras = set()
-        for loras in self._cached_loras_by_service.values():
-            all_loras.update(loras)
-        return sorted(all_loras)
-
-    def get_cached_loras_by_service(self) -> Dict[str, List[str]]:
-        """Gibt gecachte LoRAs gruppiert nach Service zurueck."""
-        return dict(self._cached_loras_by_service)
-
-    def get_cached_clip_models(self) -> List[str]:
-        """Gibt gecachte CLIP/Text-Encoder-Liste zurueck (ueber alle Services kombiniert)."""
-        all_clips = set()
-        for clips in self._cached_clip_models_by_service.values():
-            all_clips.update(clips)
-        return sorted(all_clips)
-
-    def get_cached_vae_models(self) -> List[str]:
-        """Gibt gecachte VAE-Liste zurueck (ueber alle Services kombiniert)."""
-        all_vae = set()
-        for vaes in self._cached_vae_models_by_service.values():
-            all_vae.update(vaes)
-        return sorted(all_vae)
 
     def pick_lowest_cost(
         self,

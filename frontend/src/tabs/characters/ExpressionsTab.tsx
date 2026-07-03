@@ -24,7 +24,6 @@ interface Expression {
   seed: number | null
   provider: string
   service: string
-  workflow: string
   prompt: string
   created_at: string
   use_count: number
@@ -128,7 +127,7 @@ export function ExpressionsTab({ character }: { character: string }) {
               const pieces = piecesText(e.equipped_pieces)
               const tip = [
                 `mood: ${e.mood || '—'}`, `activity: ${e.activity || '—'}`,
-                pieces && `outfit: ${pieces}`, e.workflow && `workflow: ${e.workflow}`,
+                pieces && `outfit: ${pieces}`,
                 e.service && `backend: ${e.service}`, e.model && `model: ${e.model}`,
                 e.seed != null && `seed: ${e.seed}`, e.created_at && `created: ${fmtDate(e.created_at)}`,
                 e.use_count != null && `used: ${e.use_count}×`,
@@ -175,9 +174,9 @@ export function ExpressionsTab({ character }: { character: string }) {
                       {e.activity ? `🚶 ${e.activity}` : <span style={{ opacity: 0.5 }}>🚶 —</span>}
                     </div>
                     {pieces && <div style={{ fontSize: '0.72em', opacity: 0.6 }} title={pieces}>👕 {pieces}</div>}
-                    {(e.workflow || e.service) && (
-                      <div style={{ fontSize: '0.7em', opacity: 0.55 }} title={`${e.workflow} · ${e.service}`}>
-                        ⚙ {[e.workflow, e.service].filter(Boolean).join(' · ')}
+                    {e.service && (
+                      <div style={{ fontSize: '0.7em', opacity: 0.55 }} title={e.service}>
+                        ⚙ {e.service}
                       </div>
                     )}
                     {(e.model || e.seed != null) && (

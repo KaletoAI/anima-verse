@@ -68,28 +68,28 @@ interface ProviderChannel {
   pending?: LLMTaskInfo[]
 }
 
-/** Verfügbarkeit eines Backends (Channel) für die Status-Anzeige.
- *  kind unterscheidet LLM-Provider von Image-Generation-Backends (ComfyUI). */
+/** Availability of a backend (channel) for the status display.
+ *  kind distinguishes LLM providers from image-generation backends. */
 export interface ChannelStatus {
   key: string
   name: string
   healthy: boolean
   busy: boolean
   kind: 'llm' | 'image'
-  /** Roher Backend-/Provider-Typ (comfyui/civitai/together/openai_chat/
-   *  openai_diffusion/a1111/…) fuer typ-spezifische Symbole im Panel. */
+  /** Raw backend/provider type (civitai/together/openai_chat/
+   *  openai_diffusion/a1111/…) for type-specific symbols in the panel. */
   type: string
-  /** GPU-Label(s) des Channels (leer = keine gelabelte GPU). */
+  /** GPU label(s) of the channel (empty = no labelled GPU). */
   gpu: string
   running: number
   waiting: number
 }
 
-// Alle Image-Backend-Typen (kind='image'). Alles andere = LLM-Provider.
-const IMAGE_BACKEND_TYPES = new Set(['comfyui', 'civitai', 'together', 'openai_chat', 'openai_diffusion', 'a1111'])
+// All image-backend types (kind='image'). Everything else = LLM provider.
+const IMAGE_BACKEND_TYPES = new Set(['civitai', 'together', 'openai_chat', 'openai_diffusion', 'a1111'])
 
-// Nicht-LLM-Tasks, die ebenfalls über Provider-Channels laufen (ComfyUI/TTS) —
-// sie gehören ins getrackte active_tasks-Panel, NICHT zu den Chat-LLM-Calls.
+// Non-LLM tasks that also run over provider channels (image/TTS) —
+// they belong in the tracked active_tasks panel, NOT with the chat LLM calls.
 const NON_LLM_TYPES = new Set([
   'image_generation', 'tts', 'video_generation', 'animate', 'variant_generation',
 ])
@@ -132,11 +132,9 @@ function collectLLM(providers: Record<string, ProviderChannel> | undefined): LLM
   const out: LLMTaskInfo[] = []
   const seen = new Set<string>()
   for (const ch of Object.values(providers || {})) {
-    // ComfyUI/Bild-Backends überspringen — deren Tasks sind keine Chat-LLM-Calls
-    // (sie erscheinen separat im getrackten active_tasks-Block).
-    if ((ch?.type || '') === 'comfyui') continue
-    // chat_active (Streaming/registrierte Chats) + current_tasks (submit-Calls,
-    // u.a. der Loop-Respond via run_chat_turn) — beide sind laufende LLM-Calls.
+    // chat_active (streaming/registered chats) + current_tasks (submit calls,
+    // e.g. the loop respond via run_chat_turn) — both are running LLM calls.
+    // Image/TTS tasks are filtered per-task via NON_LLM_TYPES below.
     const ca = ch?.chat_active
     const fromChat = Array.isArray(ca) ? ca : ca ? [ca] : []
     const fromCurrent = ch?.current_tasks || []
@@ -157,7 +155,6 @@ function collectPendingLLM(providers: Record<string, ProviderChannel> | undefine
   const out: LLMTaskInfo[] = []
   const seen = new Set<string>()
   for (const ch of Object.values(providers || {})) {
-    if ((ch?.type || '') === 'comfyui') continue
     for (const tk of ch?.pending || []) {
       if (NON_LLM_TYPES.has(tk.task_type || '')) continue
       const key = tk.task_id || `${tk.agent_name}:${tk.label}`
@@ -190,9 +187,9 @@ function collectRecent(d: QueueStatus): RecentTaskInfo[] {
   return out.slice(0, 25)
 }
 
-/** Alle Backends (Channels) aus dem providers-Payload: LLM-Provider UND
- * Image-Generation-Backends (ComfyUI), per `kind` unterscheidbar. healthy/busy
- * kommen vom Server (get_combined_status; ComfyUI inkl. Backend-Ping). */
+/** All backends (channels) from the providers payload: LLM providers AND
+ * image-generation backends, distinguishable via `kind`. healthy/busy
+ * come from the server (get_combined_status). */
 function collectChannels(providers: Record<string, ProviderChannel> | undefined,
                          tracked: TrackedTaskInfo[] = []): ChannelStatus[] {
   // task_ids, die bereits als Channel-Task (chat_active/current_tasks) zaehlen —

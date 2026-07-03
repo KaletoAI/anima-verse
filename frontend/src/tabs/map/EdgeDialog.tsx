@@ -4,15 +4,15 @@ import { apiGet } from '../../lib/api'
 import { useHelp } from '../../help/HelpContext'
 
 /**
- * „Kanten angleichen" — gesperrter Dialog (gleicher mapfit-Workflow/Backend wie
- * Fit). Man klickt die anzugleichenden Seiten DIREKT auf dem Tile an: nur Seiten
- * mit Nachbar sind aktiv, vorausgewählt. Maske (Rahmen) + Prompt entstehen aus
- * der Auswahl; der Prompt wird serverseitig dynamisch ermittelt und ist editierbar.
+ * "Match edges" — locked-down dialog (same mapfit inpaint backend as Fit).
+ * The sides to blend are clicked DIRECTLY on the tile: only sides with a
+ * neighbor are active, preselected. Mask (frame) + prompt derive from the
+ * selection; the prompt is determined server-side and stays editable.
  */
 type Side = 'north' | 'south' | 'east' | 'west'
 const SIDES: Side[] = ['north', 'south', 'east', 'west']
 
-export function EdgeDialog({ locId, locName, available, info = '', rotation, workflows = [], defaultWorkflow = '', mapfitPrompts = {}, onSubmit, onClose }: {
+export function EdgeDialog({ locId, locName, available, info = '', rotation, backends = [], defaultBackend = '', mapfitPrompts = {}, onSubmit, onClose }: {
   locId: string
   locName: string
   /** side -> neighbor name (only sides that have a neighbor with a tile). */
@@ -20,33 +20,32 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
   info?: string
   /** Cell display rotation (map_rotation_2d) — preview shown as on the map. */
   rotation?: number
-  /** Inpaint-Workflows (category=="inpaint") zur Auswahl; leer = Server-Default. */
-  workflows?: { name: string; spec: string; family?: string; prompt?: string; terrainHint?: boolean }[]
-  defaultWorkflow?: string
-  /** mapfit-Default-Prompt pro Familie (natural/keywords) — Fallback ohne Workflow-Prompt. */
+  /** Inpaint backends (category=="inpaint") to pick from; empty = server default. */
+  backends?: { name: string; family?: string; prompt?: string; terrainHint?: boolean }[]
+  defaultBackend?: string
+  /** mapfit default prompt per family (natural/keywords) — fallback without a backend prompt. */
   mapfitPrompts?: Record<string, string>
-  onSubmit: (sides: Side[], prompt: string, workflow: string) => void
+  onSubmit: (sides: Side[], prompt: string, backend: string) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
   const { setTopic } = useHelp()
   const availSides = useMemo(() => SIDES.filter((s) => available[s]), [available])
-  // Alle Inpaint-Ziele (category=="inpaint") — keine Gray-Filter-Sonderbehandlung.
-  const wfs = workflows
-  // Genau EINE Kante zwischen zwei Karten-Elementen.
+  // Exactly ONE edge between two map elements.
   const [sel, setSel] = useState<Side | ''>(() => availSides[0] || '')
-  const [wf, setWf] = useState(() => {
-    const def = wfs.find((w) => w.spec === defaultWorkflow)
-    return def?.spec || wfs[0]?.spec || ''
+  // Default may carry a legacy "backend:" prefix — match against the bare name.
+  const [be, setBe] = useState(() => {
+    const defName = defaultBackend.replace(/^backend:/i, '').trim()
+    return (backends.find((b) => b.name === defName) || backends[0])?.name || ''
   })
-  const [edgeHint, setEdgeHint] = useState('')  // dynamischer Terrain-Hint (/edge-prompt)
+  const [edgeHint, setEdgeHint] = useState('')  // dynamic terrain hint (/edge-prompt)
   const [prompt, setPrompt] = useState('')
 
-  // Per-Workflow-Instruktion (Fallback: mapfit pro Familie).
-  const instrFor = (spec: string): string => {
-    const w = wfs.find((x) => x.spec === spec)
-    const fam = w?.family || 'natural'
-    return (w?.prompt || '').trim() || mapfitPrompts[fam] || mapfitPrompts.natural || ''
+  // Per-backend instruction (fallback: mapfit prompt per family).
+  const instrFor = (name: string): string => {
+    const b = backends.find((x) => x.name === name)
+    const fam = b?.family || 'natural'
+    return (b?.prompt || '').trim() || mapfitPrompts[fam] || mapfitPrompts.natural || ''
   }
 
   const pick = useCallback((s: Side) => {
@@ -63,13 +62,13 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
       .then((d) => setEdgeHint(d.prompt || ''))
       .catch(() => { /* ignore */ })
   }, [locId, selKey])
-  // Prompt = Instruktion (+ dynamischer Terrain-Hint NUR wenn das Ziel ihn will,
-  // terrain_hint). Edit-Modelle ohne Hint sehen die Umgebung im grauen Canvas selbst.
+  // Prompt = instruction (+ dynamic terrain hint ONLY if the target wants it,
+  // terrain_hint). Edit models without the hint see the surroundings in the gray canvas.
   useEffect(() => {
-    const wantsHint = !!wfs.find((w) => w.spec === wf)?.terrainHint
-    setPrompt(wantsHint ? [instrFor(wf), edgeHint].filter(Boolean).join(', ') : instrFor(wf))
+    const wantsHint = !!backends.find((b) => b.name === be)?.terrainHint
+    setPrompt(wantsHint ? [instrFor(be), edgeHint].filter(Boolean).join(', ') : instrFor(be))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wf, edgeHint])
+  }, [be, edgeHint])
 
   // Kanten-Leiste: aktiv (Nachbar) + gewählt = Akzent; aktiv-ungewählt = dezent;
   // ohne Nachbar = sehr blass, nicht klickbar.
@@ -101,12 +100,12 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
             {t('Click ONE edge to blend with that neighbor (only sides with a neighbor are active).')}
           </div>
 
-          {wfs.length > 0 ? (
+          {backends.length > 0 ? (
             <div>
-              <div style={{ fontSize: '0.8em', fontWeight: 600, marginBottom: 4 }}>{t('Inpaint workflow')}</div>
-              <select className="ga-input" value={wf} onChange={(e) => setWf(e.target.value)} style={{ width: '100%' }}>
-                {wfs.map((w) => (
-                  <option key={w.spec} value={w.spec}>{w.name}</option>
+              <div style={{ fontSize: '0.8em', fontWeight: 600, marginBottom: 4 }}>{t('Inpaint backend')}</div>
+              <select className="ga-input" value={be} onChange={(e) => setBe(e.target.value)} style={{ width: '100%' }}>
+                {backends.map((b) => (
+                  <option key={b.name} value={b.name}>{b.name}</option>
                 ))}
               </select>
             </div>
@@ -146,7 +145,7 @@ export function EdgeDialog({ locId, locName, available, info = '', rotation, wor
           <button
             className="ga-btn ga-btn-primary"
             disabled={!sel}
-            onClick={() => { if (sel) onSubmit([sel], prompt, wf); onClose() }}
+            onClick={() => { if (sel) onSubmit([sel], prompt, be); onClose() }}
           >
             {t('Match edge')}
           </button>

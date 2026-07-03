@@ -188,11 +188,9 @@ export function TaskPanel() {
             // Icon = Typ, Farbe = Status (wie die Panel-Leisten-Icons).
             const color = !ch.healthy ? '#e05656' : ch.busy ? 'var(--accent, #6aa9ff)' : '#3fa45a'
             const icon: IconName = ch.kind === 'llm' ? 'brain'
-              : ch.type === 'comfyui' ? 'cpu'
               : ch.type === 'a1111' ? 'sliders'
-              : 'cloud'  // civitai / together / openai_chat / openai_diffusion (Cloud/OpenAI-APIs)
+              : 'cloud'  // civitai / together / openai_chat / openai_diffusion (cloud/OpenAI APIs)
             const typeName = ch.kind === 'llm' ? t('LLM provider')
-              : ch.type === 'comfyui' ? 'ComfyUI'
               : ch.type === 'civitai' ? 'CivitAI'
               : ch.type === 'together' ? 'Together.ai'
               : ch.type === 'openai_chat' ? 'OpenAI Chat'

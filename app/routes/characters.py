@@ -1001,16 +1001,12 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
     """Returns the LoRA list for the outfit-piece editor.
 
     Response:
-        workflow: "" (legacy key, workflows are gone — dropped with the UI cleanup)
-        filter: "" (legacy key)
         loras: LoRA list (without 'None')
     """
     sm = get_skill_manager()
     imagegen = sm.get_skill("image_generation")
     if not imagegen:
-        return {"workflow": "", "filter": "", "loras": []}
-
-    all_loras = list(imagegen.get_cached_loras() or [])
+        return {"loras": []}
 
     # LoRA-library entries for the backend resolved for this character at
     # generation time (endpoint-filtered) — never the LoRAs of a foreign backend.
@@ -1020,13 +1016,8 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
         lib_names = get_lora_library_names(eff.name if eff else None)
     except Exception:
         lib_names = []
-    merged = list(dict.fromkeys(all_loras + lib_names))
 
-    return {
-        "workflow": "",
-        "filter": "",
-        "loras": merged,
-    }
+    return {"loras": list(dict.fromkeys(lib_names))}
 
 
 @router.get("/outfit-rules")
@@ -3677,114 +3668,9 @@ def get_imagegen_workflows(character_name: str) -> Dict[str, Any]:
 
     return {
         "character": character_name,
-        # Legacy keys — workflows are gone; kept empty until the frontend
-        # drops them (step 1f).
-        "workflows": [],
-        "active_workflow": "",
         "options": options,
         "defaults": defaults,
     }
-
-
-@router.get("/{character_name}/skills/image_generation/available-loras")
-def get_available_loras(character_name: str) -> Dict[str, Any]:
-    """Gibt alle verfuegbaren LoRAs zurueck (aus Startup-Cache)."""
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        return {"loras": []}
-
-    loras = imagegen.get_cached_loras()
-    return {"loras": ["None"] + loras}
-
-
-@router.get("/{character_name}/skills/image_generation/available-checkpoints")
-def get_available_checkpoints(character_name: str, model_type: str = "") -> Dict[str, Any]:
-    """Gibt alle verfuegbaren Checkpoints/UNets zurueck, gruppiert nach Service.
-
-    model_type: 'unet' | 'checkpoint' — filtert die gecachte Liste.
-    Leer = beide Listen kombiniert.
-
-    Returns:
-        models: Flat-Liste aller Modelle (Backward-Compat)
-        models_by_service: {service_name: [model1, model2, ...]}
-    """
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        return {"models": [], "models_by_service": {}}
-
-    models = imagegen.get_cached_checkpoints(model_type)
-    models_by_service = imagegen.get_cached_checkpoints_by_service(model_type)
-    return {"models": models, "models_by_service": models_by_service}
-
-
-@router.post("/{character_name}/skills/image_generation/workflow-model")
-async def set_workflow_model(character_name: str, request: Request) -> Dict[str, Any]:
-    """Setzt das per-Character Modell fuer einen Workflow (ueberschreibt .env Default)."""
-    data = await request.json()
-    user_id = data.get("user_id", "").strip()
-    workflow_name = data.get("workflow_name", "").strip()
-    model_name = data.get("model_name", "").strip()
-
-    agent_config = get_character_skill_config(character_name, "image_generation") or {}
-    workflow_models = agent_config.get("workflow_models", {})
-    if model_name:
-        workflow_models[workflow_name] = model_name
-    else:
-        workflow_models.pop(workflow_name, None)
-    agent_config["workflow_models"] = workflow_models
-    save_character_skill_config(character_name, "image_generation", agent_config)
-
-    return {"status": "success", "workflow_name": workflow_name, "model_name": model_name}
-
-
-@router.post("/{character_name}/skills/image_generation/workflow-loras")
-async def set_workflow_loras(character_name: str, request: Request) -> Dict[str, Any]:
-    """Setzt per-Character LoRA-Overrides fuer einen Workflow (ueberschreibt .env Defaults).
-
-    Body: {user_id, workflow_name, loras: [{name, strength}, ...] oder null zum Zuruecksetzen}
-    """
-    data = await request.json()
-    user_id = data.get("user_id", "").strip()
-    workflow_name = data.get("workflow_name", "").strip()
-    loras = data.get("loras")  # Liste oder null
-    if not workflow_name:
-        raise HTTPException(status_code=400, detail="workflow_name fehlt")
-
-    agent_config = get_character_skill_config(character_name, "image_generation") or {}
-    workflow_loras = agent_config.get("workflow_loras", {})
-    if loras is not None:
-        # Normalisieren: strength als float sicherstellen
-        normalized = []
-        for l in loras:
-            name = (l.get("name") or "").strip() or "None"
-            try:
-                strength = float(l.get("strength", 1.0))
-            except (TypeError, ValueError):
-                strength = 1.0
-            normalized.append({"name": name, "strength": strength})
-        workflow_loras[workflow_name] = normalized
-    else:
-        workflow_loras.pop(workflow_name, None)
-    agent_config["workflow_loras"] = workflow_loras
-    save_character_skill_config(character_name, "image_generation", agent_config)
-
-    return {"status": "success", "workflow_name": workflow_name, "loras": loras}
-
-
-@router.post("/{character_name}/skills/image_generation/comfy-seed")
-async def set_comfy_seed(character_name: str, request: Request) -> Dict[str, Any]:
-    """Setzt den ComfyUI-Seed fuer einen Character (0 = auto-generieren beim naechsten Aufruf)."""
-    data = await request.json()
-    user_id = data.get("user_id", "").strip()
-    seed_value = int(data.get("seed", 0))
-
-    agent_config = get_character_skill_config(character_name, "image_generation") or {}
-    agent_config["comfy_seed"] = seed_value
-    save_character_skill_config(character_name, "image_generation", agent_config)
-
-    return {"status": "success", "comfy_seed": seed_value}
 
 
 # --- VideoGeneration Skill Config ---
@@ -3798,11 +3684,6 @@ def get_videogen_options(character_name: str) -> Dict[str, Any]:
     # --- ImageGen options (backends) ---
     imagegen = sm.get_skill("image_generation")
     imagegen_options = []
-    imagegen_loras = ["None"]
-    models_checkpoint = []
-    models_unet = []
-    models_checkpoint_by_service = {}
-    models_unet_by_service = {}
     if imagegen:
         for b in imagegen.backends:
             if not b.available:
@@ -3817,27 +3698,16 @@ def get_videogen_options(character_name: str) -> Dict[str, Any]:
                 opt["models"] = backend_models
                 opt["default_model"] = getattr(b, 'model', backend_models[0])
             imagegen_options.append(opt)
-        # Models split by type + LoRAs (cached lists; empty without a scanner)
-        models_checkpoint = imagegen.get_cached_checkpoints("checkpoint")
-        models_unet = imagegen.get_cached_checkpoints("unet")
-        models_checkpoint_by_service = imagegen.get_cached_checkpoints_by_service("checkpoint")
-        models_unet_by_service = imagegen.get_cached_checkpoints_by_service("unet")
-        imagegen_loras = ["None"] + imagegen.get_cached_loras()
 
-    # --- Animation Optionen ---
+    # --- Animation options ---
     from app.skills.animate import get_animate_services
     animate_services = get_animate_services()
 
-    # --- Aktuelle per-Character Config ---
+    # --- Current per-character config ---
     current_config = get_character_skill_config(character_name, "video_generation") or {}
 
     return {
         "imagegen_options": imagegen_options,
-        "models_checkpoint": models_checkpoint,
-        "models_unet": models_unet,
-        "models_checkpoint_by_service": models_checkpoint_by_service,
-        "models_unet_by_service": models_unet_by_service,
-        "imagegen_loras": imagegen_loras,
         "animate_services": animate_services,
         "current_config": {
             "imagegen_backend": current_config.get("imagegen_backend", ""),

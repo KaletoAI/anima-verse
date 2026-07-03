@@ -4,52 +4,54 @@ import { apiGet } from '../../lib/api'
 import { useHelp } from '../../help/HelpContext'
 
 /**
- * Minimaler, gesperrter Dialog für „Fit to neighbors". Fit ist eine
- * festverdrahtete Funktion: Workflow + Backend kommen aus der Server-Config und
- * sind hier nur Anzeige (read-only) — KEINE Service-/Model-/Clip-/LoRA-Auswahl.
- * Zeigt den 3×3-Nachbar-Canvas als Referenz-Vorschau und den editierbaren
- * Richtungs-Prompt (north/south/east/west).
+ * Minimal, locked-down dialog for "Fit to neighbors". Fit is a hardwired
+ * function: the inpaint backend comes from the server config — NO
+ * model/LoRA selection here. Shows the 3×3 neighbor canvas as a reference
+ * preview and the editable directional prompt (north/south/east/west).
  */
-export function FitDialog({ title, info = '', locId, canvasUrl, workflows = [], defaultWorkflow = '', mapfitPrompts = {}, onSubmit, onClose }: {
+export function FitDialog({ title, info = '', locId, canvasUrl, backends = [], defaultBackend = '', mapfitPrompts = {}, onSubmit, onClose }: {
   title: string
   info?: string
   locId: string
   canvasUrl: string
-  /** Inpaint-Workflows (category=="inpaint") zur Auswahl; leer = Server-Default. */
-  workflows?: { name: string; spec: string; family?: string; prompt?: string; terrainHint?: boolean }[]
-  defaultWorkflow?: string
-  /** mapfit-Default-Prompt pro Familie (natural/keywords) — Fallback ohne Workflow-Prompt. */
+  /** Inpaint backends (category=="inpaint") to pick from; empty = server default. */
+  backends?: { name: string; family?: string; prompt?: string; terrainHint?: boolean }[]
+  defaultBackend?: string
+  /** mapfit default prompt per family (natural/keywords) — fallback without a backend prompt. */
   mapfitPrompts?: Record<string, string>
-  onSubmit: (prompt: string, workflow: string) => void
+  onSubmit: (prompt: string, backend: string) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
   const { setTopic } = useHelp()
-  const [wf, setWf] = useState(defaultWorkflow || workflows[0]?.spec || '')
-  const [fitHint, setFitHint] = useState('')  // dynamischer Terrain-Hint (/fit-prompt)
+  // Default may carry a legacy "backend:" prefix — match against the bare name.
+  const defName = defaultBackend.replace(/^backend:/i, '').trim()
+  const [be, setBe] = useState(() =>
+    (backends.find((b) => b.name === defName) || backends[0])?.name || '')
+  const [fitHint, setFitHint] = useState('')  // dynamic terrain hint (/fit-prompt)
   const [prompt, setPrompt] = useState('')
   const [canvasFail, setCanvasFail] = useState(false)
 
-  // Per-Workflow-Instruktion (Fallback: mapfit pro Familie).
-  const instrFor = (spec: string): string => {
-    const w = workflows.find((x) => x.spec === spec)
-    const fam = w?.family || 'natural'
-    return (w?.prompt || '').trim() || mapfitPrompts[fam] || mapfitPrompts.natural || ''
+  // Per-backend instruction (fallback: mapfit prompt per family).
+  const instrFor = (name: string): string => {
+    const b = backends.find((x) => x.name === name)
+    const fam = b?.family || 'natural'
+    return (b?.prompt || '').trim() || mapfitPrompts[fam] || mapfitPrompts.natural || ''
   }
 
-  // Terrain-Hint (langsam, vision-basiert) NACH dem Oeffnen asynchron holen.
+  // Fetch the terrain hint (slow, vision-based) asynchronously AFTER opening.
   useEffect(() => {
     apiGet<{ prompt?: string }>(`/world/locations/${encodeURIComponent(locId)}/fit-prompt`)
       .then((d) => setFitHint(d.prompt || ''))
       .catch(() => { /* ignore */ })
   }, [locId])
-  // Prompt = Instruktion (+ dynamischer Terrain-Hint NUR wenn das Ziel ihn will,
-  // terrain_hint). Edit-Modelle ohne Hint sehen die Umgebung im grauen Canvas selbst.
+  // Prompt = instruction (+ dynamic terrain hint ONLY if the target wants it,
+  // terrain_hint). Edit models without the hint see the surroundings in the gray canvas.
   useEffect(() => {
-    const wantsHint = !!workflows.find((w) => w.spec === wf)?.terrainHint
-    setPrompt(wantsHint ? [instrFor(wf), fitHint].filter(Boolean).join(', ') : instrFor(wf))
+    const wantsHint = !!backends.find((b) => b.name === be)?.terrainHint
+    setPrompt(wantsHint ? [instrFor(be), fitHint].filter(Boolean).join(', ') : instrFor(be))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wf, fitHint])
+  }, [be, fitHint])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -61,12 +63,12 @@ export function FitDialog({ title, info = '', locId, canvasUrl, workflows = [], 
         <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ fontSize: '0.8em', opacity: 0.75 }}>{info}</div>
 
-          {workflows.length > 0 ? (
+          {backends.length > 0 ? (
             <div>
-              <div style={{ fontSize: '0.8em', fontWeight: 600, marginBottom: 4 }}>{t('Inpaint workflow')}</div>
-              <select className="ga-input" value={wf} onChange={(e) => setWf(e.target.value)} style={{ width: '100%' }}>
-                {workflows.map((w) => (
-                  <option key={w.spec} value={w.spec}>{w.name}</option>
+              <div style={{ fontSize: '0.8em', fontWeight: 600, marginBottom: 4 }}>{t('Inpaint backend')}</div>
+              <select className="ga-input" value={be} onChange={(e) => setBe(e.target.value)} style={{ width: '100%' }}>
+                {backends.map((b) => (
+                  <option key={b.name} value={b.name}>{b.name}</option>
                 ))}
               </select>
             </div>
@@ -104,7 +106,7 @@ export function FitDialog({ title, info = '', locId, canvasUrl, workflows = [], 
         </div>
         <div className="ga-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button className="ga-btn" onClick={onClose}>{t('Cancel')}</button>
-          <button className="ga-btn ga-btn-primary" onClick={() => { onSubmit(prompt, wf); onClose() }}>
+          <button className="ga-btn ga-btn-primary" onClick={() => { onSubmit(prompt, be); onClose() }}>
             {t('Generate')}
           </button>
         </div>

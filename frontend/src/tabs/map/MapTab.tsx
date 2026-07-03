@@ -76,34 +76,35 @@ export function MapTab() {
   // Welche Galerie-Datei steht gerade zum Loeschen an (Inline-Bestaetigung, kein confirm()).
   const [delConfirm, setDelConfirm] = useState<string | null>(null)
 
-  // Bild-Generierung aus dem Cell-image-Dialog: ✨ = normaler ImageGenDialog,
-  // ⊞ = festverdrahteter FitDialog (Workflow/Backend aus der Config).
+  // Image generation from the cell-image dialog: ✨ = normal ImageGenDialog,
+  // ⊞ = hardwired FitDialog (backend comes from the config).
   const [gen, setGen] = useState<{ loc: Location; type: 'map_2d' } | null>(null)
   const [fit, setFit] = useState<{ loc: Location } | null>(null)
   const [edge, setEdge] = useState<{ loc: Location; available: Record<string, string> } | null>(null)
-  // Inpaint-Workflows (category=="inpaint") fuer die Auswahl in Fit/Edge + die
-  // mapfit-Default-Prompts pro Familie (belegen das Prompt-Feld vor).
-  const [inpaintWfs, setInpaintWfs] = useState<{ name: string; spec: string; family: string; prompt: string; terrainHint: boolean }[]>([])
+  // Inpaint backends (category=="inpaint") for the Fit/Edge selection + the
+  // mapfit default prompts per family (prefill the prompt field).
+  const [inpaintBackends, setInpaintBackends] = useState<{ name: string; family: string; prompt: string; terrainHint: boolean }[]>([])
   const [mapfitPrompts, setMapfitPrompts] = useState<Record<string, string>>({})
+  const [mapfitDefault, setMapfitDefault] = useState('')
   useEffect(() => {
     apiGet<{
       mapfit_prompts?: Record<string, string>
-      options?: Array<{ type?: string; name?: string; category?: string; image_family?: string; prompt?: string; terrain_hint?: boolean; inpaint_gray?: boolean }>
+      mapfit_imagegen_default?: string
+      options?: Array<{ name?: string; category?: string; image_family?: string; prompt?: string; terrain_hint?: boolean }>
     }>('/world/imagegen-options')
       .then((d) => {
         setMapfitPrompts(d.mapfit_prompts || {})
-        // Inpaint-Ziele: ComfyUI-Workflows UND Gateway-Backends (openai_diffusion)
-        // mit category=="inpaint". Spec-Prefix entsprechend workflow: bzw. backend:.
-        // terrain_hint: Backend-Feld; ComfyUI-Fallback auf das alte inpaint_gray-Flag
-        // (gray-Modelle = KEIN Hint), bis ComfyUI entfernt ist.
+        setMapfitDefault(d.mapfit_imagegen_default || '')
+        // Inpaint targets: backends with category=="inpaint". terrain_hint decides
+        // whether the dialog appends the dynamic terrain hint to the prompt.
         const inp = (d.options || [])
-          .filter((o) => (o.type === 'workflow' || o.type === 'backend') && o.category === 'inpaint' && o.name)
+          .filter((o) => o.category === 'inpaint' && o.name)
           .map((o) => ({
-            name: o.name as string, spec: `${o.type}:${o.name}`,
+            name: o.name as string,
             family: o.image_family || '', prompt: o.prompt || '',
-            terrainHint: o.type === 'backend' ? !!o.terrain_hint : !o.inpaint_gray,
+            terrainHint: !!o.terrain_hint,
           }))
-        setInpaintWfs(inp)
+        setInpaintBackends(inp)
       })
       .catch(() => { /* ignore */ })
   }, [])
@@ -232,9 +233,7 @@ export function MapTab() {
   const submitGen = useCallback(
     async (payload: ImageGenSubmit, target: { loc: Location; type: 'map_2d' }) => {
       const body: Record<string, unknown> = { prompt_type: target.type, prompt: payload.prompt }
-      if (payload.workflow) body.workflow = payload.workflow
       if (payload.backend) body.backend = payload.backend
-      if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras) body.loras = payload.loras
       if (payload.prompt_settings_applied) body.settings_applied = true
       try {
@@ -247,14 +246,13 @@ export function MapTab() {
     [t, toast, watchAndRefresh],
   )
 
-  // ⊞ Fit to neighbors — festverdrahtet: Workflow + Backend kommen serverseitig
-  // aus der Config; hier nur prompt_type/fit + der editierte Richtungs-Prompt.
-  // settings_applied=true: Server hängt weder Stil-Suffix noch Hinweis erneut an.
+  // ⊞ Fit to neighbors — prompt_type/fit + the edited directional prompt.
+  // settings_applied=true: the server appends neither style suffix nor hint again.
   const submitFit = useCallback(
-    async (prompt: string, workflow: string, loc: Location) => {
+    async (prompt: string, backend: string, loc: Location) => {
       const body: Record<string, unknown> = { prompt_type: 'map_2d', prompt, fit_neighbors: true, settings_applied: true }
-      // Gewaehlter Inpaint-Workflow (category=="inpaint"); leer = Server-Default.
-      if (workflow) body.workflow = workflow
+      // Chosen inpaint backend (category=="inpaint"); empty = server default.
+      if (backend) body.backend = backend
       try {
         const r = await apiPost<{ track_id?: string }>(
           `/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
@@ -265,14 +263,14 @@ export function MapTab() {
     [t, toast, watchAndRefresh],
   )
 
-  // ⧉ Kanten angleichen — gleicher mapfit-Workflow, aber Rahmen-Maske + Übergangs-
-  // Prompt nur für die gewählten Seiten. Mitte = bestehendes Tile.
+  // ⧉ Match edges — same mapfit inpaint backend, but frame mask + transition
+  // prompt only for the selected sides. Center = existing tile.
   const submitEdge = useCallback(
-    async (sides: string[], prompt: string, workflow: string, loc: Location) => {
+    async (sides: string[], prompt: string, backend: string, loc: Location) => {
       const body: Record<string, unknown> = {
         prompt_type: 'map_2d', prompt, edge_match: true, edge_sides: sides, settings_applied: true,
       }
-      if (workflow) body.workflow = workflow
+      if (backend) body.backend = backend
       try {
         const r = await apiPost<{ track_id?: string }>(
           `/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
@@ -741,9 +739,10 @@ export function MapTab() {
           title={t('Fit to neighbors — {name}').replace('{name}', fit.loc.name)}
           locId={fit.loc.id}
           canvasUrl={`/world/locations/${encodeURIComponent(fit.loc.id)}/fit-canvas`}
-          workflows={inpaintWfs}
+          backends={inpaintBackends}
+          defaultBackend={mapfitDefault}
           mapfitPrompts={mapfitPrompts}
-          onSubmit={(prompt, workflow) => submitFit(prompt, workflow, fit.loc)}
+          onSubmit={(prompt, backend) => submitFit(prompt, backend, fit.loc)}
           onClose={() => setFit(null)}
         />
       ) : null}
@@ -754,9 +753,10 @@ export function MapTab() {
           locName={edge.loc.name}
           available={edge.available}
           rotation={edge.loc.map_rotation_2d || 0}
-          workflows={inpaintWfs}
+          backends={inpaintBackends}
+          defaultBackend={mapfitDefault}
           mapfitPrompts={mapfitPrompts}
-          onSubmit={(sides, prompt, workflow) => submitEdge(sides, prompt, workflow, edge.loc)}
+          onSubmit={(sides, prompt, backend) => submitEdge(sides, prompt, backend, edge.loc)}
           onClose={() => setEdge(null)}
         />
       ) : null}

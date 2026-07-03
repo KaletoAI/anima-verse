@@ -1682,10 +1682,8 @@ def get_imagegen_options() -> Dict[str, Any]:
                 from app.core.config import get_lora_library_names
                 opt["lora_options"] = get_lora_library_names(b.name)
         options.append(opt)
-    # ComfyUI is gone — key kept until the frontend drops it (step 1f).
-    comfy_backends: list = []
-    # mapfit-Default-Prompts pro Familie — der Fit/Edge-Dialog belegt damit das
-    # Prompt-Feld vor (statt des frueheren Terrain-/Edge-Hints).
+    # mapfit default prompts per family — the Fit/Edge dialog prefills the
+    # prompt field with these (instead of the former terrain/edge hint).
     from app.core import config as _cfg
     mapfit_prompts = {}
     for _fam in ("natural", "keywords"):
@@ -1694,10 +1692,9 @@ def get_imagegen_options() -> Dict[str, Any]:
             mapfit_prompts[_fam] = _r.get("prompt_style", "")
         except Exception:
             mapfit_prompts[_fam] = ""
-    # Default-Vorauswahl fuer Location aus .env
+    # Default preselection for locations
     loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
-    result = {"options": options, "comfy_backends": comfy_backends,
-              "mapfit_prompts": mapfit_prompts}
+    result = {"options": options, "mapfit_prompts": mapfit_prompts}
     # Fit/match-edges: imagegen target (backend match spec, read-only in the Fit dialog).
     result["mapfit_imagegen_default"] = (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "").strip()
     # Globaler Outfit-Default (Match-Spec, z.B. "backend:LocalAI-Flux") — die
@@ -1728,35 +1725,6 @@ async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
     from app.skills.image_regenerate import enhance_prompt
     enhanced = await asyncio.to_thread(enhance_prompt, prompt, improvement_request, None)
     return {"prompt": enhanced}
-
-
-@router.get("/imagegen-models")
-def get_imagegen_models(model_type: str = Query("", description="unet|checkpoint")) -> Dict[str, Any]:
-    """Gibt verfuegbare Modelle zurueck (aus Startup-Cache, ohne Character-Bindung)."""
-    from app.core.dependencies import get_skill_manager
-
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        return {"models": []}
-
-    models = imagegen.get_cached_checkpoints(model_type)
-    models_by_service = imagegen.get_cached_checkpoints_by_service(model_type)
-    return {"models": models, "models_by_service": models_by_service}
-
-
-@router.get("/imagegen-loras")
-def get_imagegen_loras() -> Dict[str, Any]:
-    """Gibt verfuegbare LoRAs zurueck (aus Startup-Cache, ohne Character-Bindung)."""
-    from app.core.dependencies import get_skill_manager
-
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        return {"loras": []}
-
-    loras = imagegen.get_cached_loras()
-    return {"loras": ["None"] + loras}
 
 
 @router.post("/locations/{location_name}/gallery/batch")
@@ -1969,11 +1937,11 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         # Backend selection: map-blend (inpaint) > match spec > explicit > auto (cheapest)
         backend = None
         if _map_blend:
-            # Fit AND edge blending need an inpaint-capable backend. The spec
-            # picked in the dialog (data["workflow"]) has priority; without a
+            # Fit AND edge blending need an inpaint-capable backend. The backend
+            # picked in the dialog (data["backend"]) has priority; without a
             # pick fall back to MAPFIT_IMAGEGEN_DEFAULT (a backend match spec).
             # Legacy "workflow:*" specs resolve to None and drop through.
-            _fit_spec = ((data.get("workflow") or "").strip()
+            _fit_spec = ((data.get("backend") or "").strip()
                          or (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "").strip())
             if _fit_spec:
                 backend = img_skill.resolve_imagegen_target(_fit_spec)

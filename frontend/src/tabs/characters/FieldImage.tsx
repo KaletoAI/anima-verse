@@ -104,17 +104,15 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     }
   }, [busy, enc, t, toast, startPoll])
 
-  // Profilbild: kommt aus dem ImageGenDialog (Backend/Workflow/Modell/LoRAs
-  // waehlbar) -> /generate-profile-image mit den Dialog-Params. Leerer Prompt =
-  // Server nimmt die Appearance.
+  // Profile image: comes from the ImageGenDialog (backend/LoRAs selectable)
+  // -> /generate-profile-image with the dialog params. Empty prompt =
+  // server uses the appearance.
   const submitGenerate = useCallback(async (payload: ImageGenSubmit) => {
     setGenOpen(false)
     setBusy(true)
     try {
       const body: Record<string, unknown> = { prompt: payload.prompt }
-      if (payload.workflow) body.workflow = payload.workflow
       if (payload.backend) body.backend = payload.backend
-      if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras && payload.loras.length) {
         body.loras = payload.loras.map((l) => ({ file: l.name, strength: l.strength }))
       }

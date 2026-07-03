@@ -8,13 +8,12 @@ import { collectTokens, type TmplSectionRaw } from './TemplateTab'
 
 /**
  * Per-character image-generation overrides (Characters → Image):
- *  - Render match: a render-target glob — a workflow ("Qwen*") OR a backend
- *    ("backend:LocalAI-Flux"). The server resolves it to a concrete workflow or
- *    backend at render time, picking among matches by availability — independent
- *    of the global fallback. A model picker is intentionally absent (the model
- *    comes from the workflow/backend).
+ *  - Backend match: a glob over image-backend names (e.g. "Flux*"). The server
+ *    resolves it to a concrete backend at render time, picking among matches by
+ *    availability — independent of the global fallback. A model picker is
+ *    intentionally absent (the model comes from the backend).
  *  - LoRA override: LoRAs always applied for this character.
- * Backed by /characters/{name}/outfit-imagegen (GET/PUT) plus the workflow
+ * Backed by /characters/{name}/outfit-imagegen (GET/PUT) plus the backend
  * list (/world/imagegen-options) and available LoRAs (/outfit-lora-options).
  */
 
@@ -58,12 +57,10 @@ function globToRegex(glob: string): RegExp {
   return new RegExp('^' + escaped + '$', 'i')
 }
 
-// Match-Spec lesbar machen: "backend:LocalAI-Flux" -> "LocalAI-Flux",
-// "workflow:Qwen*" -> "Qwen*".
+// Make a match spec readable: "backend:LocalAI-Flux" -> "LocalAI-Flux".
 function formatMatchSpec(spec: string): string {
   const s = (spec || '').trim()
   if (s.startsWith('backend:')) return s.slice(8)
-  if (s.startsWith('workflow:')) return s.slice(9)
   return s
 }
 
@@ -77,9 +74,8 @@ export function ImageOverrides({ character }: { character: string }) {
   const slotElRef = useRef<{ slot: string; el: HTMLInputElement } | null>(null)
   const [pattern, setPattern] = useState('')
   const [loras, setLoras] = useState<Lora[]>([])
-  const [workflows, setWorkflows] = useState<string[]>([])
-  const [backends, setBackends] = useState<string[]>([])  // Image-Backend-Namen (Render-Target via backend:<name>)
-  const [outfitDefault, setOutfitDefault] = useState('')  // globaler Outfit-Default (Match-Spec)
+  const [backends, setBackends] = useState<string[]>([])  // image-backend names (match target)
+  const [outfitDefault, setOutfitDefault] = useState('')  // global outfit default (match spec)
   const [availableLoras, setAvailableLoras] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -88,7 +84,8 @@ export function ImageOverrides({ character }: { character: string }) {
   const [slots, setSlots] = useState<Record<string, SlotEntry>>({})
   const [slotsSaving, setSlotsSaving] = useState(false)
 
-  // Persist the full override ({workflow pattern, loras}); model is dropped.
+  // Persist the full override ({backend match pattern, loras}); model is dropped.
+  // The server field for the match pattern is still named "workflow".
   const persist = useCallback(
     async (next: { pattern: string; loras: Lora[] }) => {
       setSaving(true)
@@ -116,7 +113,7 @@ export function ImageOverrides({ character }: { character: string }) {
           apiGet<{ workflow?: string; loras?: Lora[] }>(
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
-          apiGet<{ options?: Array<{ type?: string; name?: string; category?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
+          apiGet<{ options?: Array<{ name?: string; category?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
           apiGet<{ loras?: string[] }>(
             `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
           ),
@@ -127,16 +124,11 @@ export function ImageOverrides({ character }: { character: string }) {
         if (cancelled) return
         setPattern(ovr.workflow || '')
         setLoras(Array.isArray(ovr.loras) ? ovr.loras : [])
-        // Inpaint-Ziele (category=inpaint) sind nur für Map-Fit/Match-Edges, nicht
-        // für das normale Render-Matching eines Characters.
-        setWorkflows(
-          (opts.options || [])
-            .filter((o) => o.type === 'workflow' && o.name && o.category !== 'inpaint')
-            .map((o) => o.name as string),
-        )
+        // Inpaint targets (category=inpaint) are only for Map-Fit/Match-Edges,
+        // not for a character's normal render matching.
         setBackends(
           (opts.options || [])
-            .filter((o) => o.type === 'backend' && o.name && o.category !== 'inpaint')
+            .filter((o) => o.name && o.category !== 'inpaint')
             .map((o) => o.name as string),
         )
         setOutfitDefault(opts.outfit_imagegen_default || '')
@@ -180,16 +172,11 @@ export function ImageOverrides({ character }: { character: string }) {
   const matching = useMemo(() => {
     const p = pattern.trim()
     if (!p) return []
-    // "backend:<glob>" → gegen Backend-Namen matchen; sonst Workflow-Glob
-    // (auch "workflow:<glob>"). resolve_imagegen_target auf dem Server identisch.
-    const bm = /^backend:(.*)$/i.exec(p)
-    if (bm) {
-      const re = globToRegex(bm[1].trim())
-      return backends.filter((b) => re.test(b)).map((b) => `backend:${b}`)
-    }
-    const re = globToRegex(p.replace(/^workflow:/i, '').trim())
-    return workflows.filter((w) => re.test(w))
-  }, [pattern, workflows, backends])
+    // Glob over image-backend names (an optional "backend:" prefix is allowed) —
+    // same resolution as resolve_imagegen_target on the server.
+    const re = globToRegex(p.replace(/^backend:/i, '').trim())
+    return backends.filter((b) => re.test(b))
+  }, [pattern, backends])
 
   const setLorasAndSave = useCallback(
     (next: Lora[]) => {
@@ -263,20 +250,20 @@ export function ImageOverrides({ character }: { character: string }) {
         <div className="ga-fieldset-title">{t('Render match')}</div>
         <div className="ga-form-row">
           <Field
-            label={t('Render target (glob)')}
+            label={t('Backend match (glob)')}
             help="imagegen_target"
-            hint={t('e.g. "Qwen*" (workflow) or "backend:LocalAI-Flux" (backend). Matched against workflow/backend names; the server picks an available match at render time. Empty = global default.')}
+            hint={t('e.g. "Flux*" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Empty = global default.')}
           >
             <input
               className="ga-input"
               value={pattern}
-              placeholder="Qwen*"
+              placeholder="Flux*"
               disabled={saving}
               onChange={(e) => setPattern(e.target.value)}
               onBlur={() => persist({ pattern, loras })}
             />
           </Field>
-          <Field label={t('Currently matches')} hint={t('Workflows/backends matching the pattern right now.')}>
+          <Field label={t('Currently matches')} hint={t('Backends matching the pattern right now.')}>
             <div className="ga-img-matches">
               {pattern.trim() === '' ? (
                 <span className="ga-sched-muted">
@@ -297,9 +284,9 @@ export function ImageOverrides({ character }: { character: string }) {
             </div>
           </Field>
         </div>
-        {workflows.length > 0 || backends.length > 0 ? (
+        {backends.length > 0 ? (
           <p className="ga-sched-muted" style={{ margin: '2px 0 0' }}>
-            {t('Available targets:')} {[...workflows, ...backends.map((b) => `backend:${b}`)].join(', ')}
+            {t('Available targets:')} {backends.join(', ')}
           </p>
         ) : null}
       </div>
@@ -375,7 +362,7 @@ export function ImageOverrides({ character }: { character: string }) {
       <div className="ga-fieldset">
         <div className="ga-fieldset-title">{t('Image Appearance (slot overrides)')}</div>
         <p className="ga-sched-muted" style={{ margin: '0 0 8px' }}>
-          {t('Per slot: the prompt is added to the image prompt when that slot is empty and uncovered; the LoRA is merged into a free workflow slot.')}
+          {t('Per slot: the prompt is added to the image prompt when that slot is empty and uncovered; the LoRA is merged into a free LoRA slot.')}
         </p>
         <div className="ga-img-slotgrid">
           {[SLOT_ORDER.slice(0, 4), SLOT_ORDER.slice(4)].map((col, ci) => (

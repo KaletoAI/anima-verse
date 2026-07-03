@@ -552,9 +552,7 @@ export function ItemsTab() {
     async (payload: ImageGenSubmit) => {
       if (!draft || draft.isNew) return
       const body: Record<string, unknown> = { prompt: payload.prompt }
-      if (payload.workflow) body.workflow = payload.workflow
       if (payload.backend) body.backend = payload.backend
-      if (payload.model_override) body.model_override = payload.model_override
       if (payload.loras && payload.loras.length) {
         body.loras = payload.loras.map((l) => ({ file: l.name, strength: l.strength }))
       }

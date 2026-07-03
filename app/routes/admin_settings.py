@@ -316,11 +316,10 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
     },
     "imagegen_target": {
         "title": "Render target (match)",
-        "intro": "A match glob resolving to a ComfyUI workflow or an image backend (by availability + cost):",
+        "intro": "A match glob resolving to an image backend (by availability + cost):",
         "items": [
-            {"code": "Qwen*", "text": "ComfyUI workflow whose name matches the glob"},
             {"code": "backend:LocalAI-Flux", "text": "A specific image backend (exact name or glob after 'backend:')"},
-            {"code": "*", "text": "Any available target"},
+            {"code": "*", "text": "Any available backend"},
         ],
     },
     "image_prompt": {
@@ -660,7 +659,7 @@ def _apply_section_reloads(changed_keys: list) -> list:
         from app.core.tts_service import reload_tts_service
         _run("tts", reload_tts_service)
 
-    # Animation-Backends (comfy + together).
+    # Animation backends (together).
     if "animation" in changed_keys:
         from app.skills.animate import reload_animate_services
         _run("animation", reload_animate_services)
@@ -676,8 +675,8 @@ async def settings_save(request: Request, user=Depends(require_admin)):
     # Merge: keep current values for masked sensitive fields
     current = config.get_all()
     merged = _merge_sensitive(new_data, current)
-    # Schutz fuer Felder in sub_array/is_dict-Items (z.B. comfyui_workflows),
-    # die der Frontend bei undefined-CONFIG-Werten beim Save weglaesst.
+    # Protect fields in sub_array/is_dict items (e.g. image backends) that the
+    # frontend omits on save when the CONFIG value is undefined.
     _preserve_unsent_subarray_fields(merged, current)
 
     # Structural validation (e.g. llm_routing order uniqueness)
@@ -1118,34 +1117,6 @@ document.getElementById('editor').addEventListener('input', () => { _state.dirty
 """
 
 
-@router.get("/settings/comfyui-models")
-async def comfyui_models_all(user=Depends(require_admin)):
-    """Aggregierte Liste aller gecachten ComfyUI-Modelle (alle Backends gemerged).
-
-    Wird vom Admin-Settings-Frontend (loadComfyModels) als globaler Cache fuer
-    Workflow- / LoRA- / CLIP-Selects genutzt.
-
-    ``checkpoints`` enthaelt absichtlich Checkpoints + UNet/Diffusion-Modelle
-    zusammen — der ``model``-Selector im Workflow akzeptiert beides (z.B.
-    Z-Image als UNet/GGUF, klassische SDXL als Checkpoint).
-    """
-    out = {"checkpoints": [], "loras": [], "clip_models": [], "vae_models": []}
-    try:
-        from app.core.dependencies import get_skill_manager
-        sm = get_skill_manager()
-        img = sm.get_skill("image_generation")
-        if img and getattr(img, "_model_cache_loaded", False):
-            # leerer model_type => Checkpoints + UNets gemerged
-            out["checkpoints"] = img.get_cached_checkpoints()
-            out["loras"] = img.get_cached_loras()
-            out["clip_models"] = img.get_cached_clip_models()
-            out["vae_models"] = img.get_cached_vae_models()
-    except Exception as e:
-        logger.warning("ComfyUI-Model-Cache nicht lesbar: %s", e)
-        return {**out, "error": str(e)}
-    return out
-
-
 @router.get("/settings/imagegen-backends/{backend_name}/models")
 async def imagegen_backend_models(backend_name: str,
                                   api_type: str = "", api_url: str = "", api_key: str = "",
@@ -1162,20 +1133,18 @@ async def imagegen_backend_models(backend_name: str,
     img_gen = config.get("image_generation", {}) or {}
     backends = img_gen.get("backends", []) or []
     b = next((x for x in backends if x.get("name") == backend_name), None) or {}
-    # Live-Formularwerte haben Vorrang, Fallback = gespeicherte Config.
+    # Live form values take precedence, fallback = saved config.
     api_type = (api_type or b.get("api_type") or "").lower()
     api_key = api_key if api_key else b.get("api_key", "")
     api_url = (api_url or b.get("api_url") or "").rstrip("/")
     cur_model = b.get("model", "")
     if not api_url:
-        return {"backend": backend_name, "models": [], "clip": [], "vae": [], "error": "Keine API URL"}
+        return {"backend": backend_name, "models": [], "error": "Keine API URL"}
     models: list = []
-    clip: list = []
-    vae: list = []
     try:
         if api_type in ("together", "openai_diffusion", "localai", "openai_chat"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
-            # api_key optional fuer localai (LocalAI ohne Auth); Gateway/Together brauchen ihn
+            # api_key optional for localai (LocalAI without auth); gateway/Together need it
             _hdrs = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(f"{base}/models", headers=_hdrs)
@@ -1197,11 +1166,11 @@ async def imagegen_backend_models(backend_name: str,
             if cur_model:
                 models = [cur_model]
     except Exception as e:
-        return {"backend": backend_name, "models": [], "clip": [], "vae": [], "error": str(e)}
-    # cur_model immer dabei haben (auch wenn es nicht in der Liste ist)
+        return {"backend": backend_name, "models": [], "error": str(e)}
+    # Always include cur_model (even if it is not in the list)
     if cur_model and cur_model not in models:
         models.insert(0, cur_model)
-    return {"backend": backend_name, "models": models, "clip": clip, "vae": vae, "current": cur_model}
+    return {"backend": backend_name, "models": models, "current": cur_model}
 
 
 @router.get("/settings/providers/{provider_name}/models")
@@ -1761,9 +1730,8 @@ def _preserve_unsent_subarray_fields(merged: dict, current: dict) -> None:
     bleibt CONFIG undefined → JSON.stringify laesst den Key weg →
     `_merge_sensitive` wertet den fehlenden Key als 'absichtlich geloescht'.
 
-    Wir wandern hier durch alle Schema-`sub_arrays` (z.B.
-    image_generation.comfyui_workflows, image_generation.backends) und
-    uebernehmen fehlende Felder aus der current Config.
+    We walk all schema `sub_arrays` (e.g. image_generation.backends) and
+    carry missing fields over from the current config.
     """
     schema = get_schema()
     for sec_key, sec_def in schema.items():
@@ -1953,7 +1921,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .array-item-header .chevron { transition: transform 0.2s; color: #8b949e; }
 .array-item.open .array-item-header .chevron { transform: rotate(90deg); }
 
-/* ── Master-Detail (Backends, ComfyUI Workflows) ── */
+/* ── Master-detail (backends) ── */
 .md-grid { display: grid; grid-template-columns: minmax(280px, 38%) 1fr; gap: 16px; align-items: start; }
 .md-list { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 8px; }
 .md-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -2148,8 +2116,8 @@ function buildNav() {
         a.dataset.section = key;
         a.onclick = (e) => { e.preventDefault(); activateSection(key); };
         nav.appendChild(a);
-        // Sub-Arrays (z.B. Backends, ComfyUI Workflows) als eingerueckte
-        // Unterpunkte — jedes bekommt eine eigene Seite (Key "<sec>::<arr>").
+        // Sub-arrays (e.g. backends) as indented sub-items — each gets its
+        // own page (key "<sec>::<arr>").
         if (sec.sub_arrays) {
             for (const [arrKey, arrDef] of Object.entries(sec.sub_arrays)) {
                 const subKey = key + '::' + arrKey;
@@ -2214,7 +2182,7 @@ function renderUseCasesMasterDetail(path) {
     SELECTED_ITEM[path] = sel;
     let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
           + 'Style / Negative / Instruction pro Use-Case × Familie. Leeres Feld = eingebauter Default (grau). '
-          + 'Welche Familie greift, bestimmt die <b>Image Family</b> des Workflows/Backends.</p>';
+          + 'Which family applies is determined by the <b>Image Family</b> of the backend.</p>';
     html += '<div class="md-grid"><div class="md-list"><table class="md-table"><thead><tr><th>Use-Case</th></tr></thead><tbody>';
     for (const uc of ucs) {
         const active = (uc === sel) ? ' active' : '';
@@ -2278,13 +2246,11 @@ function renderLoraTriggersEditor(path) {
              + 'LoRA nutzt, wird das Wort automatisch dem Prompt vorangestellt (Map, Character, …). '
              + 'Alle LoRA-Dropdowns in der UI ziehen ihre Vorschlaege aus dieser Liste.</p>';
     html += '<p class="hint" style="opacity:.7;margin-bottom:12px">'
-             + '<b>„Load LoRAs"</b> liest die LoRAs nur von <b>ComfyUI</b>-Backends aus dem Modell-Verzeichnis. '
-             + 'Andere Endpoint-Typen (OpenAI-kompatibel wie LocalAI, Together, CivitAI) bieten <b>keine</b> '
-             + 'LoRA-Abfrage — solche LoRAs hier <b>manuell</b> eintragen. Angewandt werden sie ueber die '
-             + 'Prompt-Syntax <code>&lt;lora:Name:Gewicht&gt;</code> bzw. das Aktivierungs-Wort.</p>';
+             + 'Backends with a <b>LoRA Query URL</b> fetch their LoRA list live from that endpoint; '
+             + 'for all other backends enter the LoRA names here <b>manually</b>. They are applied via the '
+             + 'prompt syntax <code>&lt;lora:Name:Weight&gt;</code> or the activation word.</p>';
     html += '<div style="margin-bottom:12px">'
-          + '<button class="btn btn-sm" onclick="addLoraTrigger(\\'' + path + '\\')">+ Add</button>'
-          + ' <button class="btn btn-sm" onclick="loadLoraTriggerOptions(\\'' + path + '\\')">Load LoRAs</button></div>';
+          + '<button class="btn btn-sm" onclick="addLoraTrigger(\\'' + path + '\\')">+ Add</button></div>';
     if (!items.length) {
         html += '<div class="md-empty">Noch keine Eintraege. „+ Add", dann LoRA-Namen tippen/suchen.</div>';
     }
@@ -2320,8 +2286,6 @@ function renderLoraTriggersEditor(path) {
         html += '<button class="btn btn-sm btn-danger" title="Loeschen" onclick="removeItem(\\'' + ip + '\\')">✕</button>';
         html += '</div>';
     }
-    // LoRA-Liste im Hintergrund laden, damit die Suche sofort Vorschlaege hat.
-    setTimeout(function () { ltEnsureLoaded(); }, 0);
     return html;
 }
 
@@ -2340,36 +2304,30 @@ function copyLoraTrigger(path, i) {
     renderSection(ACTIVE_SECTION);
 }
 
-// Cache der verfuegbaren LoRA-Namen (vom ComfyUI-Server). Wird einmal geladen
-// und client-seitig fuer die Suche gefiltert.
-window.LORA_OPTS = window.LORA_OPTS || [];
-
-async function ltEnsureLoaded(force) {
-    if (!force && window.LORA_OPTS && window.LORA_OPTS.length) return;
-    try {
-        const cache = await loadComfyModels();
-        window.LORA_OPTS = (cache && cache.loras) || [];
-    } catch (e) { window.LORA_OPTS = []; }
+// Suggestion list for the LoRA search combobox. There is no server-side LoRA
+// scan anymore — suggestions are the LoRA names already entered in the list
+// (useful when reusing the same LoRA for another endpoint).
+function ltSuggestions() {
+    const items = (CONFIG.image_generation && CONFIG.image_generation.lora_triggers) || [];
+    const seen = {};
+    const out = [];
+    for (const it of items) {
+        const n = (it && it.lora) ? String(it.lora) : '';
+        if (n && !seen[n]) { seen[n] = true; out.push(n); }
+    }
+    return out;
 }
 
-// Manuell (Button): neu laden + Rueckmeldung.
-async function loadLoraTriggerOptions(path) {
-    await ltEnsureLoaded(true);
-    const n = (window.LORA_OPTS || []).length;
-    if (!n) { toast('No LoRAs found. Server running?', 'error'); return; }
-    toast(n + ' LoRAs loaded', 'success');
-}
-
-// Dropdown unter dem Input fuellen, gefiltert nach dem getippten Text.
+// Fill the dropdown below the input, filtered by the typed text.
 function ltFilter(inp, ip) {
-    setVal(ip + '.lora', inp.value);  // Freitext sofort uebernehmen
+    setVal(ip + '.lora', inp.value);  // apply free text immediately
     const dd = inp.nextElementSibling;
     if (!dd) return;
     const q = (inp.value || '').toLowerCase();
-    const all = window.LORA_OPTS || [];
+    const all = ltSuggestions();
     const opts = q ? all.filter(function (m) { return m.toLowerCase().indexOf(q) !== -1; }) : all;
     if (!all.length) {
-        dd.innerHTML = '<div class="lt-dd-empty">LoRAs laden… (Button „Load LoRAs") — frei tippen geht trotzdem</div>';
+        dd.innerHTML = '<div class="lt-dd-empty">No suggestions — type the LoRA name manually</div>';
         dd.style.display = 'block';
         return;
     }
@@ -2452,8 +2410,8 @@ function renderSection(key) {
         }
     }
 
-    // Sub-arrays (backends, comfyui_workflows, catalogs) werden NICHT hier
-    // gerendert — jedes hat einen eigenen Nav-Unterpunkt (siehe buildNav /
+    // Sub-arrays (backends, catalogs) are NOT rendered here — each has its
+    // own nav sub-item (see buildNav /
     // renderSubArrayPage), damit die Hauptseite nicht ueberladen ist.
 
     // Array sections (providers)
@@ -2984,10 +2942,6 @@ function renderFields(fields, data, path) {
             html += renderGpuField(data[fKey] || [], path + '.' + fKey);
             continue;
         }
-        if (f.type === 'lora_array') {
-            html += renderLoraField(data[fKey] || [], path + '.' + fKey, f.max_items || 4);
-            continue;
-        }
         if (f.type === 'task_order_list') {
             html += renderTaskOrderList(data[fKey] || [], path + '.' + fKey, f);
             continue;
@@ -3042,14 +2996,8 @@ function renderInput(f, val, path) {
             return renderGpuSelect(val, path);
         case 'model_select':
             return renderModelSelect(val, path);
-        case 'workflow_select':
-            return renderWorkflowSelect(val, path);
         case 'imagegen_select':
             return renderImagegenSelect(val, path);
-        case 'comfyui_model_select':
-            return renderComfyModelSelect(val, path);
-        case 'comfyui_backend_select':
-            return renderComfyBackendSelect(val, path, f.multi);
         case 'imagegen_backend_select':
             return renderImagegenBackendSelect(val, path);
         case 'imagegen_model_select':
@@ -3058,10 +3006,6 @@ function renderInput(f, val, path) {
             return renderImagegenModelCombo(val, path);
         case 'imagegen_target_select':
             return renderImagegenTargetSelect(val, path);
-        case 'comfyui_clip_select':
-            return renderComfyClipSelect(val, path);
-        case 'comfyui_vae_select':
-            return renderComfyVaeSelect(val, path);
         default: // str
             return '<input type="text" id="' + id + '" value="' + esc(val) + '" '
                 + (f.placeholder ? 'placeholder="' + esc(f.placeholder) + '" ' : '')
@@ -3085,8 +3029,6 @@ function renderGpuSelect(val, path) {
         const gpus = p.gpus || [];
         for (let i = 0; i < gpus.length; i++) {
             const g = gpus[i];
-            const types = Array.isArray(g.types) ? g.types : (g.types || '').split(',');
-            if (!types.some(t => t.trim() === 'comfyui')) continue;
             const key = p.name + ':' + i;
             const label = g.label || ('GPU ' + i);
             const vram = g.vram_gb ? ' — ' + g.vram_gb + ' GB' : '';
@@ -3107,85 +3049,23 @@ function renderModelSelect(val, path) {
     return select;
 }
 
-// Aktiviert? Ein ComfyUI-Workflow gilt als DEAKTIVIERT, wenn kein aktives
-// (enabled) ComfyUI-Backend ihn ausfuehren kann. wf.skill = zugewiesene
-// Backend(s) (skill); LEER = deaktiviert. Rein aus CONFIG, client-seitig.
-function comfyEnabledBackendNames() {
-    return new Set((CONFIG.image_generation?.backends || [])
-        .filter(b => b.api_type === 'comfyui' && b.enabled !== false)
-        .map(b => b.name));
-}
-function workflowHasActiveBackend(wf) {
-    const enabled = comfyEnabledBackendNames();
-    if (!enabled.size) return false;
-    const skill = (wf.skill || '').trim();
-    if (!skill) return false;  // LEER = deaktiviert (kein Backend zugeordnet)
-    return skill.split(',').map(s => s.trim()).filter(Boolean).some(n => enabled.has(n));
-}
-
-function renderWorkflowSelect(val, path) {
-    // Default-MATCH statt fester Auswahl: Combobox mit Glob-Vorschlaegen
-    // (Workflow-filter, z.B. "Qwen*") + Freitext.
-    const workflows = CONFIG.image_generation?.comfyui_workflows || {};
-    const globs = new Set();
-    for (const [wid, wf] of Object.entries(workflows)) {
-        if (!workflowHasActiveBackend(wf)) continue;  // ohne aktives Backend = deaktiviert
-        const g = ((wf.filter || '').trim()) || (wf.name || wid);
-        if (g) globs.add(g);
-    }
-    let opts = '';
-    for (const g of globs) opts += '<option value="' + esc(g) + '">';
-    return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="z.B. Qwen* (Match-Glob)" onchange="setVal(\\'' + path + '\\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
-}
-
 function renderImagegenSelect(val, path) {
-    // Default-MATCH: Combobox mit Glob-Vorschlaegen "workflow:<filter>" und
-    // "backend:<name>" + Freitext (z.B. "backend:ComfyUI*"). Aufloesung ueber
-    // resolve_imagegen_target -> match_backend (nach Verfuegbarkeit).
-    const workflows = CONFIG.image_generation?.comfyui_workflows || {};
+    // Default MATCH: combobox with glob suggestions "backend:<name>" + free
+    // text (values are "backend:<glob>" or bare globs). Resolved via
+    // resolve_imagegen_target -> match_backend (by availability).
     const backends = CONFIG.image_generation?.backends || [];
     const sugg = new Set();
-    for (const [wid, wf] of Object.entries(workflows)) {
-        if (!workflowHasActiveBackend(wf)) continue;  // ohne aktives Backend = deaktiviert
-        const g = ((wf.filter || '').trim()) || (wf.name || wid);
-        if (g) sugg.add('workflow:' + g);
-    }
     for (const be of backends) {
-        if (be.enabled === false) continue;  // deaktivierte Backends nicht vorschlagen
+        if (be.enabled === false) continue;  // do not suggest disabled backends
         sugg.add('backend:' + be.name);
     }
     let opts = '';
     for (const s of sugg) opts += '<option value="' + esc(s) + '">';
-    return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="z.B. workflow:Qwen* oder backend:ComfyUI*" onchange="setVal(\\'' + path + '\\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
-}
-
-function renderComfyBackendSelect(val, path, multi) {
-    // ComfyUI backends are image_generation.backends where api_type === 'comfyui'
-    const backends = (CONFIG.image_generation?.backends || []).filter(b => b.api_type === 'comfyui');
-    if (multi) {
-        // Multi-select: value is comma-separated string
-        const selected = (val || '').split(',').map(s => s.trim()).filter(Boolean);
-        let html = '<div id="f-' + path + '-wrap">';
-        for (const be of backends) {
-            const checked = selected.includes(be.name) ? 'checked' : '';
-            html += '<label style="display:inline-flex; align-items:center; gap:4px; margin-right:12px; font-size:13px; color:#c9d1d9; cursor:pointer;">';
-            html += '<input type="checkbox" value="' + esc(be.name) + '" ' + checked + ' onchange="updateMultiBackend(\\'' + path + '\\')">';
-            html += esc(be.name) + '</label>';
-        }
-        if (!backends.length) html += '<span style="color:#6e7681; font-size:12px;">No ComfyUI backends configured</span>';
-        html += '</div>';
-        return html;
-    }
-    // Single select
-    let opts = '<option value="">— Auto —</option>';
-    for (const be of backends) {
-        opts += '<option value="' + esc(be.name) + '"' + (be.name === val ? ' selected' : '') + '>' + esc(be.name) + '</option>';
-    }
-    return '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">' + opts + '</select>';
+    return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="e.g. backend:LocalAI-Flux" onchange="setVal(\\'' + path + '\\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
 }
 
 function renderImagegenBackendSelect(val, path) {
-    // ALLE Image-Backends (ComfyUI, Together, CivitAI, Mammouth, ...)
+    // ALL image backends (Together, CivitAI, LocalAI, ...)
     const backends = CONFIG.image_generation?.backends || [];
     let opts = '<option value="">— None —</option>';
     for (const be of backends) {
@@ -3241,8 +3121,8 @@ async function loadImagegenBackendModels(path, backendName) {
     sel.innerHTML = opts;
 }
 
-// Kombinierte Auswahl: ComfyUI-Workflows + Cloud-Backends.
-// Wert-Format: "workflow:<name>" oder "backend:<name>" (wie /workflows-Endpoint)
+// Backend selection for imagegen_target_select fields.
+// Value format: "backend:<name>" (as served by /settings/imagegen-targets)
 let IMAGEGEN_TARGETS_CACHE = null;
 
 async function loadImagegenTargets() {
@@ -3334,152 +3214,6 @@ async function loadImagegenModelCombo(path, base) {
     }
 }
 
-function updateMultiBackend(path) {
-    const wrap = document.getElementById('f-' + path + '-wrap');
-    if (!wrap) return;
-    const checked = [...wrap.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.value);
-    setVal(path, checked.join(','));
-}
-
-// ── ComfyUI Model / LoRA selects ──
-let COMFY_CACHE = null; // {checkpoints: [], loras: []}
-
-async function loadComfyModels() {
-    if (COMFY_CACHE) return COMFY_CACHE;
-    try {
-        const resp = await fetch('/admin/settings/comfyui-models', { credentials: 'same-origin' });
-        COMFY_CACHE = await resp.json();
-    } catch (e) {
-        COMFY_CACHE = { checkpoints: [], loras: [] };
-    }
-    return COMFY_CACHE;
-}
-
-// ── Workflow "Filter Pattern" auf Model-/LoRA-Listen anwenden ──
-// Das `filter`-Feld eines Workflows (Glob mit * als Wildcard, case-insensitive,
-// wie fnmatch im Backend) filtert direkt die Auswahl-Dropdowns. Liegt am
-// Geschwister-Feld: <...>.model / <...>.loras -> <...>.filter.
-function comfyFilterForPath(path) {
-    const parts = path.split('.');
-    parts[parts.length - 1] = 'filter';
-    return getVal(parts.join('.'));
-}
-function _comfyGlobMatch(name, glob) {
-    const n = String(name).toLowerCase();
-    const g = String(glob).toLowerCase().trim();
-    if (!g) return true;
-    if (g.indexOf('*') === -1) return n === g; // fnmatch: ohne Wildcard exakt
-    const parts = g.split('*');
-    if (parts[0] && n.slice(0, parts[0].length) !== parts[0]) return false;
-    let pos = parts[0].length;
-    for (let i = 1; i < parts.length - 1; i++) {
-        const p = parts[i];
-        if (!p) continue;
-        const idx = n.indexOf(p, pos);
-        if (idx === -1) return false;
-        pos = idx + p.length;
-    }
-    const last = parts[parts.length - 1];
-    if (last) {
-        if (n.length - last.length < pos) return false;
-        if (n.slice(n.length - last.length) !== last) return false;
-    }
-    return true;
-}
-// Mehrere Globs per Komma (ODER-Verknuepfung). Leeres Pattern -> alle Items.
-function comfyApplyFilter(items, pattern) {
-    const pat = String(pattern || '').trim();
-    if (!pat) return items;
-    const globs = pat.split(',').map(s => s.trim()).filter(Boolean);
-    if (!globs.length) return items;
-    return (items || []).filter(m => globs.some(g => _comfyGlobMatch(m, g)));
-}
-
-function renderComfyModelSelect(val, path) {
-    let html = '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">';
-    html += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
-    html += '</select>';
-    html += ' <button class="btn btn-sm" onclick="populateComfySelect(\\'' + path + '\\', \\'checkpoints\\')">Load Models</button>';
-    return html;
-}
-
-// Backend(s) am Geschwister-Feld lesen (Workflows: 'skill' multi, Animation:
-// 'backend'). Zur KLICK-Zeit gelesen, damit ein Backend-Wechsel sofort greift.
-function comfyBackendsForPath(path) {
-    const parts = path.split('.');
-    for (const sib of ['skill', 'backend']) {
-        const p = parts.slice(0, -1).concat(sib).join('.');
-        const v = getVal(p);
-        if (v) return String(v).split(',').map(s => s.trim()).filter(Boolean);
-    }
-    return [];
-}
-
-async function populateComfySelect(path, type) {
-    const sel = document.getElementById('f-' + path);
-    if (!sel) return;
-    const backends = comfyBackendsForPath(path);
-    let items = [];
-    if (backends.length) {
-        // Nur die Modelle der im Workflow gewaehlten Backend(s) — vereinigt.
-        const seen = new Set();
-        sel.innerHTML = '<option>Loading...</option>';
-        for (const b of backends) {
-            try {
-                const resp = await fetch('/admin/settings/imagegen-backends/' + encodeURIComponent(b) + '/models',
-                    { credentials: 'same-origin' });
-                const d = await resp.json();
-                if (d.error) toast('Backend ' + b + ': ' + d.error, 'error');
-                const list = (type === 'clip_models') ? (d.clip || []) : (type === 'vae_models') ? (d.vae || []) : (d.models || []);
-                for (const m of list) { if (!seen.has(m)) { seen.add(m); items.push(m); } }
-            } catch (e) { toast('Load models failed (' + b + '): ' + e.message, 'error'); }
-        }
-        items.sort();
-    } else {
-        // Kein Backend gewaehlt → globale, gemergte Liste (Fallback).
-        const cache = await loadComfyModels();
-        items = cache[type] || [];
-    }
-    // Workflow "Filter Pattern" auf Modell-/UNet-Listen anwenden (nicht CLIP —
-    // CLIP-Namen passen nicht zum Checkpoint-Glob). NICHT-destruktiv: trifft das
-    // Pattern keinen Eintrag, lieber ALLE zeigen (statt leer) — sonst sieht es
-    // aus wie "Server not running", obwohl nur der Filter nichts trifft.
-    if (type === 'checkpoints' && items.length) {
-        const pat = String(comfyFilterForPath(path) || '').trim();
-        if (pat) {
-            const filtered = comfyApplyFilter(items, pat);
-            if (filtered.length) items = filtered;
-            else toast('Filter Pattern "' + pat + '" matches no model — showing all', 'error');
-        }
-    }
-    const current = sel.value;
-    let opts = '<option value="">— none —</option>';
-    for (const m of items) {
-        opts += '<option value="' + esc(m) + '"' + (m === current ? ' selected' : '') + '>' + esc(m) + '</option>';
-    }
-    sel.innerHTML = opts;
-    if (current && !items.includes(current)) {
-        sel.insertAdjacentHTML('afterbegin', '<option value="' + esc(current) + '" selected>' + esc(current) + ' (not on server)</option>');
-    }
-    if (!items.length) toast('No models found. Server running?', 'error');
-}
-
-function renderComfyClipSelect(val, path) {
-    let html = '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">';
-    html += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
-    html += '</select>';
-    html += ' <button class="btn btn-sm" onclick="populateComfySelect(\\'' + path + '\\', \\'clip_models\\')">Load CLIP Models</button>';
-    return html;
-}
-
-function renderComfyVaeSelect(val, path) {
-    let html = '<select id="f-' + path + '" onchange="setVal(\\'' + path + '\\', this.value)">';
-    html += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
-    html += '</select>';
-    html += ' <button class="btn btn-sm" onclick="populateComfySelect(\\'' + path + '\\', \\'vae_models\\')">Load VAE Models</button>';
-    return html;
-}
-
 // ── Array/Dict Items ──
 // _itemLabel: gleiche Logik wie in renderArrayItem — fuer Sortierung.
 // labelField darf ein String ODER ein Array sein. Bei Array gewinnt der erste
@@ -3540,11 +3274,10 @@ function renderArrayItem(def, item, path, index, labelField) {
     return html;
 }
 
-// ── Master-Detail (links Tabelle, rechts Editor) ──
-// Liefert die geordnete Eintragsliste fuer Array- ODER Dict-Sub-Arrays.
-// Jeder Eintrag traegt seinen vollen Pfad (image_generation.backends[0]
-// bzw. image_generation.comfyui_workflows.Qwen) — identisch zu den Pfaden
-// die renderArrayItem/setVal nutzen.
+// ── Master-detail (table left, editor right) ──
+// Returns the ordered entry list for array OR dict sub-arrays. Each entry
+// carries its full path (image_generation.backends[0] or dict-keyed paths) —
+// identical to the paths renderArrayItem/setVal use.
 function _mdOrder(def, items, path) {
     let order;
     if (def.is_dict) {
@@ -3871,53 +3604,6 @@ function renderGpuField(gpus, path) {
     return html;
 }
 
-// ── LoRA Field ──
-function renderLoraField(loras, path, maxItems) {
-    let html = '<div class="field"><label>LoRAs</label><div class="input-wrap">';
-    for (let i = 0; i < maxItems; i++) {
-        const l = loras[i] || { file: '', strength: 1 };
-        const selId = 'lora-' + path + '-' + i;
-        html += '<div class="lora-row">';
-        html += '<select id="' + selId + '" style="flex:3;" onchange="setLoraVal(\\'' + path + '\\', ' + i + ', \\'file\\', this.value)">';
-        html += '<option value="">— none —</option>';
-        if (l.file) html += '<option value="' + esc(l.file) + '" selected>' + esc(l.file) + '</option>';
-        html += '</select>';
-        html += '<input type="number" value="' + (l.strength || 1) + '" step="0.1" min="0" max="2" style="flex:1; max-width:80px;" onchange="setLoraVal(\\'' + path + '\\', ' + i + ', \\'strength\\', parseFloat(this.value))">';
-        html += '</div>';
-    }
-    html += '<button class="btn btn-sm" style="margin-top:4px;" onclick="populateLoraSelects(\\'' + path + '\\', ' + maxItems + ')">Load LoRAs</button>';
-    html += '</div></div>';
-    return html;
-}
-
-async function populateLoraSelects(path, maxItems) {
-    const cache = await loadComfyModels();
-    const all = cache.loras || [];
-    // Nicht-destruktiv: Filter anwenden, aber bei 0 Treffern ALLE zeigen.
-    let items = all;
-    const pat = String(comfyFilterForPath(path) || '').trim();
-    if (pat && all.length) {
-        const filtered = comfyApplyFilter(all, pat);
-        if (filtered.length) items = filtered;
-        else toast('Filter Pattern "' + pat + '" matches no LoRA — showing all', 'error');
-    }
-    if (!items.length) { toast('No LoRAs found. Server running?', 'error'); return; }
-    for (let i = 0; i < maxItems; i++) {
-        const sel = document.getElementById('lora-' + path + '-' + i);
-        if (!sel) continue;
-        const current = sel.value;
-        let opts = '<option value="">— none —</option>';
-        for (const m of items) {
-            opts += '<option value="' + esc(m) + '"' + (m === current ? ' selected' : '') + '>' + esc(m) + '</option>';
-        }
-        sel.innerHTML = opts;
-        if (current && !items.includes(current)) {
-            sel.insertAdjacentHTML('afterbegin', '<option value="' + esc(current) + '" selected>' + esc(current) + '</option>');
-        }
-    }
-    toast(items.length + ' LoRAs loaded', 'success');
-}
-
 // ── Data Access ──
 function setVal(path, value) {
     const parts = parsePath(path);
@@ -3987,34 +3673,19 @@ function _ensureContainer(path, leafType) {
 }
 
 // ── Actions ──
-function _detectImageModelFromId(id) {
-    // Image Family aus der Workflow-ID raten: keywords = Komma-Tags (Z-Image/SD),
-    // natural = Fliesstext (Flux/Qwen).
-    const u = String(id || '').toUpperCase();
-    if (u.includes('Z-IMAGE') || u.includes('Z_IMAGE') || u.includes('ZIMAGE') || u.includes('SD')) return 'keywords';
-    if (u.includes('QWEN') || u.includes('FLUX')) return 'natural';
-    return '';
-}
-
 function addArrayItem(path, type) {
     const obj = _ensureContainer(path, type);
     if (type === 'dict') {
-        const id = prompt('Workflow ID (e.g. FLUX, QWEN, Z-IMAGE):');
+        const id = prompt('New entry key:');
         if (!id) return;
-        // Key punktfrei halten: der Editor adressiert Felder per Dot-Notation
-        // (..comfyui_workflows.<KEY>.<feld>) und split('.') zerbricht an einem
-        // Punkt IM Key. Der Anzeige-Name behaelt die Original-Eingabe.
+        // Keep the key dot-free: the editor addresses fields via dot notation
+        // and split('.') breaks on a dot INSIDE the key. The display name
+        // keeps the original input.
         const key = id.replace(/[.\\[\\]]/g, ' ').replace(/\\s+/g, ' ').trim();
-        if (!key) { toast('Ungueltige Workflow ID', 'error'); return; }
-        if (obj[key] !== undefined) { toast('Workflow existiert bereits: ' + key, 'error'); return; }
-        // Target Prompt Stil (image_model) aus der ID raten.
-        const detectedModel = _detectImageModelFromId(id);
-        obj[key] = {
-            name: id,
-            loras: [{file:'',strength:1},{file:'',strength:1},{file:'',strength:1},{file:'',strength:1}],
-            ...(detectedModel ? { image_family: detectedModel } : {}),
-        };
-        // Neuen Eintrag im Master-Detail direkt selektieren (no-op fuer Accordion).
+        if (!key) { toast('Invalid key', 'error'); return; }
+        if (obj[key] !== undefined) { toast('Entry already exists: ' + key, 'error'); return; }
+        obj[key] = { name: id };
+        // Select the new entry in the master-detail view (no-op for accordion).
         SELECTED_ITEM[path] = path + '.' + key;
     } else {
         if (path === 'llm_routing') {
@@ -4051,10 +3722,9 @@ function removeItem(path) {
     renderSection(ACTIVE_SECTION);
 }
 
-// Dupliziert einen Array- oder Dict-Eintrag (LLM-Routing, Backends,
-// ComfyUI-Workflows etc.). Bei Dicts wird ein neuer Key abgefragt; bei
-// Arrays wird der Klon ans Ende angehaengt. `name`-Felder bekommen ein
-// "(Kopie)"-Suffix, damit der duplizierte Eintrag direkt unterscheidbar ist.
+// Duplicates an array or dict entry (LLM routing, backends, ...). For dicts
+// a new key is prompted; for arrays the clone is appended after the original.
+// `name` fields get a "(Kopie)" suffix so the duplicate is distinguishable.
 function duplicateItem(path) {
     const parts = parsePath(path);
     let parent = CONFIG;
@@ -4281,10 +3951,10 @@ async function saveConfig() {
         });
         const result = await resp.json();
         if (resp.ok) {
-            // URL/Key-Aenderungen sollen sofort greifen, ohne Page-Reload.
-            // Provider-Model-Cache + ComfyUI-Model-Cache invalidieren.
+            // URL/key changes should apply immediately, without a page reload:
+            // invalidate the provider and imagegen backend model caches.
             for (const k of Object.keys(PROVIDERS_CACHE)) delete PROVIDERS_CACHE[k];
-            COMFY_CACHE = null;
+            for (const k of Object.keys(IMAGEGEN_MODELS_CACHE)) delete IMAGEGEN_MODELS_CACHE[k];
             toast(result.message || 'Saved!', 'success');
             // Nach Save pruefen, ob restart-pflichtige Felder veraendert wurden.
             loadRestartPending();

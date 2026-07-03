@@ -14,7 +14,7 @@ import { Field } from '../../components/Field'
  *   POST /characters/{c}/skills/{skill}            (merge config fields)
  *
  * The image_generation / video_generation skills have their own dedicated
- * config (workflows, LoRAs, …) via separate routes — those land in their own
+ * config (backends, LoRAs, …) via separate routes — those land in their own
  * editor; here they appear with just the enable toggle.
  */
 

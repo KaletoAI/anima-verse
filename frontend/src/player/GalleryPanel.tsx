@@ -80,9 +80,7 @@ export function GalleryPanel() {
     if (!img || !selected) return
     const body: Record<string, unknown> = {}
     if (payload.prompt) body.custom_prompt = payload.prompt
-    if (payload.workflow) body.workflow = payload.workflow
     if (payload.backend) body.backend = payload.backend
-    if (payload.model_override) body.model_override = payload.model_override
     if (payload.loras) body.loras = payload.loras
     if (payload.character_names) body.character_names = payload.character_names
     if (payload.improvement_request) body.improvement_request = payload.improvement_request

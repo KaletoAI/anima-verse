@@ -5,9 +5,8 @@ import { apiGet, apiPost } from '../lib/api'
 import { useHelp } from '../help/HelpContext'
 
 /**
- * Modal dialog for image-generation overrides — provider/workflow,
- * model, LoRAs, prompt. Pre-fills from `/world/imagegen-options`,
- * `/world/imagegen-models`, `/world/imagegen-loras`. Submit fires the
+ * Modal dialog for image-generation overrides — backend, LoRAs, prompt.
+ * Pre-fills from `/world/imagegen-options`. Submit fires the
  * caller-supplied `onSubmit(payload)` and closes; the caller is
  * responsible for posting the request and refreshing the UI. The
  * server enqueues the job, so submit is fire-and-forget.
@@ -19,53 +18,23 @@ interface LoraDefault {
 }
 
 interface ImagegenOption {
-  type: 'workflow' | 'backend'
   name: string
   label: string
+  available?: boolean
   has_loras?: boolean
-  default_loras?: LoraDefault[]
-  model_type?: string
-  default_model?: string
-  filter?: string
-  models?: string[] // for non-comfy backends with their own model list
-  lora_options?: string[] // LoRA names for backend options (from the LoRA Library, endpoint-filtered)
+  lora_options?: string[] // LoRA names for the backend (from the LoRA Library, endpoint-filtered)
   ref_slot_count?: number // number of reference-image slots (0 = none)
-  compatible_backends?: string[] // ComfyUI instances this workflow runs on (empty = all)
-  category?: string // 'inpaint' = nur für Map-Fit/Match-Edges, nicht für normale Renders
-}
-
-interface ComfyBackend {
-  name: string
-  available: boolean
+  category?: string // 'inpaint' = only for Map-Fit/Match-Edges, not for normal renders
 }
 
 interface ImagegenOptionsResponse {
   options: ImagegenOption[]
-  comfy_backends?: ComfyBackend[]
   default_location?: string
-}
-
-// Ein Eintrag im „Service (match)"-Dropdown. Entweder ein reiner Match
-// (Workflow auto / Cloud-Backend) oder ein Workflow mit gepinntem ComfyUI-
-// Endpoint (backendOverride). `option` traegt die Metadaten (ref_slot_count,
-// LoRAs, Model) — der Override aendert nur, welche Instanz angesprochen wird.
-interface SelectEntry {
-  id: string
-  group: string
-  label: string
-  option: ImagegenOption
-  // Was als payload.workflow gesendet wird: bei „auto" der Filter-Glob (Match),
-  // bei „fixed endpoint" der EXAKTE Workflow-Name (sonst kann der Server zwei
-  // Workflows mit gleichem Glob — z.B. „Qwen*" — nicht unterscheiden).
-  workflowSpec?: string
-  backendOverride?: string
 }
 
 export interface ImageGenSubmit {
   prompt: string
-  workflow?: string
   backend?: string
-  model_override?: string
   loras?: LoraDefault[] | null
   // Optional faithful-regenerate extras (Instagram/Gallery). Only emitted when
   // the corresponding prop enables the field.
@@ -76,7 +45,7 @@ export interface ImageGenSubmit {
   // True when the prompt already includes the independent config parts
   // (prefix/suffix) from the dialog → the backend must NOT re-append them.
   prompt_settings_applied?: boolean
-  // Reference-slot toggles (managed against the workflow's ref_slot_count budget).
+  // Reference-slot toggles (managed against the backend's ref_slot_count budget).
   use_room?: boolean
   use_source_as_reference?: boolean
 }
@@ -101,11 +70,11 @@ interface Props {
   defaultUseSource?: boolean
   /**
    * Require the source image to actually be used as a reference: the chosen
-   * workflow must expose a reference slot (ref_slot_count > 0) and the
+   * backend must expose a reference slot (ref_slot_count > 0) and the
    * "current image as reference" toggle must be on. Otherwise the Generate
-   * button is blocked with a hint to pick a reference-capable workflow
-   * (e.g. Flux2/Qwen). Use for "adjust this image"-style regenerate, where a
-   * non-reference workflow would silently produce a fresh image instead.
+   * button is blocked with a hint to pick a reference-capable backend
+   * (e.g. Flux/Qwen). Use for "adjust this image"-style regenerate, where a
+   * non-reference backend would silently produce a fresh image instead.
    */
   requireSourceReference?: boolean
   /**
@@ -125,7 +94,7 @@ interface Props {
   onSubmit: (payload: ImageGenSubmit) => void | Promise<void>
   onClose: () => void
   /**
-   * Field visibility is opt-OUT: generic fields (workflow, prompt, LoRAs, negative
+   * Field visibility is opt-OUT: generic fields (backend, prompt, LoRAs, negative
    * prompt) show by default so new generic features land in every caller. Only
    * context-specific fields are gated:
    *  - `mode='regenerate'` adds the "improvement request" field + the "add as new
@@ -146,47 +115,7 @@ interface Props {
 type CharOpt = string | { name: string; type?: string }
 const charName = (c: CharOpt): string => (typeof c === 'string' ? c : c?.name || '')
 
-// Match-Wert einer Option wie das Admin-Feld „…/Vorschau Default (Match)":
-//   workflow:<glob>  (Glob aus dem Workflow-filter, sonst Name)
-//   backend:<name>   (Provider, exakter Name matcht sich selbst)
-// Wird nach Verfügbarkeit serverseitig aufgelöst (resolve_imagegen_target).
-const optMatch = (o: ImagegenOption): string =>
-  o.type === 'workflow' ? `workflow:${o.filter || o.name}` : `backend:${o.name}`
-
 const LORA_SLOTS = 4
-
-function globToRegex(glob: string): RegExp {
-  const esc = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
-  return new RegExp('^' + esc + '$', 'i')
-}
-
-function filterByWorkflowName(items: string[], workflowName: string, filter: string): string[] {
-  if (filter) {
-    const re = globToRegex(filter)
-    const matched = items.filter((l) => {
-      if (l === 'None') return true
-      const base = l.includes('/') ? l.split('/').pop()! : l
-      return re.test(base)
-    })
-    if (matched.length > 1) return matched
-  } else if (workflowName) {
-    const prefix = workflowName.toLowerCase()
-    let matched = items.filter((l) => {
-      if (l === 'None') return true
-      const base = l.includes('/') ? l.split('/').pop()! : l
-      return base.toLowerCase().startsWith(prefix)
-    })
-    if (matched.length <= 1) {
-      matched = items.filter((l) => {
-        if (l === 'None') return true
-        const base = l.includes('/') ? l.split('/').pop()! : l
-        return base.toLowerCase().includes(prefix)
-      })
-    }
-    if (matched.length > 1) return matched
-  }
-  return items
-}
 
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
@@ -203,17 +132,15 @@ export function ImageGenDialog({
   const [prefixText, setPrefixText] = useState(settingsPrefix?.text || '')
   const [suffixText, setSuffixText] = useState(settingsSuffix?.text || '')
   const [createNew, setCreateNew] = useState(!!defaultCreateNew)
-  // Referenz-Slot-Toggles (gegen das ref_slot_count-Budget des Workflows gemanagt).
+  // Reference-slot toggles (managed against the backend's ref_slot_count budget).
   const [useRoom, setUseRoom] = useState(true)
   const [useSource, setUseSource] = useState(!!defaultUseSource)
   const [improvement, setImprovement] = useState('')
   const [negative, setNegative] = useState('')
   const [selectedChars, setSelectedChars] = useState<string[]>([])
   const [options, setOptions] = useState<ImagegenOption[] | null>(null)
-  const [comfyBackends, setComfyBackends] = useState<ComfyBackend[]>([])
   const [defaultLocationOpt, setDefaultLocationOpt] = useState<string>('')
-  const [optionKey, setOptionKey] = useState<string>('') // SelectEntry.id
-  const [allLoras, setAllLoras] = useState<string[]>([])
+  const [optionKey, setOptionKey] = useState<string>('') // selected backend name
   const [loraSlots, setLoraSlots] = useState<LoraDefault[]>(
     () => Array.from({ length: LORA_SLOTS }, () => ({ name: 'None', strength: 1.0 })),
   )
@@ -271,102 +198,44 @@ export function ImageGenDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, detectedKey])
 
-  // Load options + loras once when dialog first opens.
+  // Load options once when dialog first opens.
   useEffect(() => {
     if (!open || options !== null) return
     apiGet<ImagegenOptionsResponse>('/world/imagegen-options')
       .then((d) => {
-        // KEIN globaler Dedup mehr: die Fixed-Endpoint-Eintraege brauchen jeden
-        // einzelnen Workflow (auch zwei mit gleichem Glob, z.B. „Flux2 NVFP4"
-        // und „Flux2 Q5"). Der Dedup passiert nur noch in der „auto"-Gruppe.
         setOptions(d.options || [])
-        setComfyBackends(d.comfy_backends || [])
         setDefaultLocationOpt(d.default_location || '')
       })
       .catch(() => setOptions([]))
-    apiGet<{ loras: string[] }>('/world/imagegen-loras')
-      .then((d) => setAllLoras(d.loras || []))
-      .catch(() => setAllLoras([]))
   }, [open, options])
 
-  // Gruppierte Auswahl-Eintraege bauen: pro Workflow ein „auto"-Match plus je
-  // einen Eintrag pro kompatibler ComfyUI-Instanz (gepinnter Endpoint). Nicht-
-  // Comfy-Backends (Cloud) als eigene Gruppe.
-  const entries = useMemo<SelectEntry[]>(() => {
+  // Selectable backends: inpaint targets belong only in the Map-Fit/Match-Edges
+  // dialogs, never in the normal render selection. Available backends first,
+  // offline ones keep their "(offline?)" label from the server.
+  const entries = useMemo<ImagegenOption[]>(() => {
     if (!options) return []
-    const auto: SelectEntry[] = []
-    const fixed: SelectEntry[] = []
-    const cloud: SelectEntry[] = []
-    const seenGlob = new Set<string>()
-    for (const o of options) {
-      // Inpaint-Ziele gehören nur in die Map-Fit/Match-Edges-Dialoge, nie in die
-      // normale Render-Auswahl.
-      if (o.category === 'inpaint') continue
-      if (o.type === 'workflow') {
-        // „auto": ein Eintrag pro Filter-Glob (Match waehlt Workflow + Endpoint).
-        const fspec = o.filter || o.name
-        const key = `workflow:${fspec}`
-        if (!seenGlob.has(key)) {
-          seenGlob.add(key)
-          auto.push({ id: `auto:${key}`, group: t('Workflows (auto)'), label: optMatch(o), option: o, workflowSpec: fspec })
-        }
-        // „fixed endpoint": exakter Workflow-Name × jede kompatible ComfyUI-Instanz.
-        const compat = o.compatible_backends || []
-        const eps = comfyBackends.filter((b) => compat.length === 0 || compat.includes(b.name))
-        for (const ep of eps) {
-          fixed.push({
-            id: `fix:${o.name}@${ep.name}`,
-            group: t('Fixed endpoints'),
-            label: `${o.name} @ ${ep.name}${ep.available ? '' : ' (offline?)'}`,
-            option: o,
-            workflowSpec: o.name,
-            backendOverride: ep.name,
-          })
-        }
-      } else {
-        cloud.push({ id: `be:${o.name}`, group: t('Cloud backends'), label: optMatch(o), option: o })
-      }
-    }
-    return [...auto, ...fixed, ...cloud]
-  }, [options, comfyBackends, t])
+    const list = options.filter((o) => o.category !== 'inpaint')
+    return [...list.filter((o) => o.available !== false),
+            ...list.filter((o) => o.available === false)]
+  }, [options])
 
-  // Gruppen in Render-Reihenfolge (erste Vorkommnisse), fuer die <optgroup>s.
-  const entryGroups = useMemo<string[]>(() => {
-    const seen = new Set<string>()
-    const order: string[] = []
-    for (const e of entries) if (!seen.has(e.group)) { seen.add(e.group); order.push(e.group) }
-    return order
-  }, [entries])
-
-  // Pick initial entry once the list arrives.
+  // Pick initial entry once the list arrives (default spec may carry a
+  // legacy "backend:" prefix — compare against the bare backend name).
   useEffect(() => {
     if (!entries.length || optionKey) return
-    const match = defaultLocationOpt
-      ? entries.find(
-          (e) => e.backendOverride === undefined && (
-            `${e.option.type}:${e.option.name}` === defaultLocationOpt ||
-            e.option.name === defaultLocationOpt),
-        )
-      : null
-    setOptionKey((match || entries[0]).id)
+    const def = defaultLocationOpt.replace(/^backend:/i, '').trim()
+    const match = def ? entries.find((e) => e.name === def) : null
+    setOptionKey((match || entries[0]).name)
   }, [entries, defaultLocationOpt, optionKey])
 
-  const currentEntry = useMemo<SelectEntry | null>(
-    () => entries.find((e) => e.id === optionKey) || null, [entries, optionKey])
+  const currentOption = useMemo<ImagegenOption | null>(
+    () => entries.find((e) => e.name === optionKey) || null, [entries, optionKey])
 
-  const currentOption = useMemo<ImagegenOption | null>(() => {
-    return currentEntry?.option || null
-  }, [currentEntry])
-
-  // Reset LoRA slots when workflow changes; pull defaults from the option.
+  // Reset LoRA slots when the backend changes.
   useEffect(() => {
     if (!currentOption) return
-    const defaults = currentOption.default_loras || []
     setLoraSlots(
-      Array.from({ length: LORA_SLOTS }, (_, i) => ({
-        name: defaults[i]?.name || 'None',
-        strength: defaults[i]?.strength ?? 1.0,
-      })),
+      Array.from({ length: LORA_SLOTS }, () => ({ name: 'None', strength: 1.0 })),
     )
   }, [currentOption])
 
@@ -385,33 +254,23 @@ export function ImageGenDialog({
     }
   }, [open, submitting, onClose])
 
+  // LoRA names come straight from the backend option (LoRA Library,
+  // endpoint-filtered, delivered by the server).
   const filteredLoras = useMemo(() => {
     if (!currentOption || !currentOption.has_loras) return []
-    // Backend-Optionen (z.B. openai_diffusion): LoRA-Namen direkt aus der
-    // LoRA-Library (endpoint-gefiltert, vom Server geliefert). Workflows:
-    // ComfyUI-Scan nach Workflow-Name/Filter.
-    if (currentOption.type === 'backend') return currentOption.lora_options || []
-    return filterByWorkflowName(allLoras, currentOption.name, currentOption.filter || '')
-  }, [allLoras, currentOption])
+    return currentOption.lora_options || []
+  }, [currentOption])
 
   const handleSubmit = useCallback(async () => {
     if (!currentOption) return
-    // Vollen Prompt zusammensetzen: Prefix + Basis + Suffix (alle editierbar). Der
-    // Server haengt die unabhaengigen Config-Teile dann nicht erneut an.
+    // Assemble the full prompt: prefix + base + suffix (all editable). The
+    // server then does not re-append the independent config parts.
     const fullPrompt = [prefixText.trim(), prompt.trim(), suffixText.trim()]
       .filter(Boolean).join(', ')
     const payload: ImageGenSubmit = { prompt: fullPrompt }
     if (settingsPrefix || settingsSuffix) payload.prompt_settings_applied = true
-    // Match-Glob senden (workflow:<filter> / backend:<name>) — der Server löst ihn
-    // nach Verfügbarkeit auf (match_workflow / match_backend), wie im Admin-Default.
-    if (currentOption.type === 'workflow') {
-      // „auto" sendet den Filter-Glob, „fixed endpoint" den exakten Namen.
-      payload.workflow = currentEntry?.workflowSpec || currentOption.filter || currentOption.name
-      // Gepinnter Endpoint: Workflow bleibt, diese ComfyUI-Instanz wird erzwungen.
-      if (currentEntry?.backendOverride) payload.backend = currentEntry.backendOverride
-    } else {
-      payload.backend = currentOption.name
-    }
+    // Exact backend name — backends match their own name on the server.
+    payload.backend = currentOption.name
     if (currentOption.has_loras) {
       const active = loraSlots.filter((l) => l.name && l.name !== 'None')
       payload.loras = active.length ? active : null
@@ -429,12 +288,12 @@ export function ImageGenDialog({
     } finally {
       setSubmitting(false)
     }
-  }, [currentOption, currentEntry, prompt, prefixText, suffixText, settingsPrefix,
+  }, [currentOption, prompt, prefixText, suffixText, settingsPrefix,
       settingsSuffix, loraSlots, onSubmit, onClose, isRegen, showCreateNew, createNew,
       improvement, hideNegative, negative, characterOptions, selectedChars,
       showRoomReference, useRoom, sourceImageUrl, useSource])
 
-  // Reference-slot budget: how many ref images may be used (workflow ref_slot_count).
+  // Reference-slot budget: how many ref images may be used (backend ref_slot_count).
   // Persons + room + current-image each consume one slot.
   const slotBudget = currentOption?.ref_slot_count || 0
   const usedSlots = selectedChars.length
@@ -442,7 +301,7 @@ export function ImageGenDialog({
     + (sourceImageUrl && useSource ? 1 : 0)
   const atBudget = slotBudget > 0 && usedSlots >= slotBudget
   // Regenerate-as-edit: the source image MUST land in a reference slot. Block
-  // submit (and explain) when the chosen workflow has no slot or the toggle is off.
+  // submit (and explain) when the chosen backend has no slot or the toggle is off.
   const sourceRefBlocked = !!requireSourceReference
     && (!currentOption || slotBudget === 0 || !useSource)
 
@@ -482,19 +341,15 @@ export function ImageGenDialog({
             // Dialog via flex-wrap auf eine Spalte um.
             <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label className="ga-imagegen-label">{t('Service (match)')}</label>
+              <label className="ga-imagegen-label">{t('Backend')}</label>
               <select
                 className="ga-input"
                 value={optionKey}
                 disabled={submitting}
                 onChange={(e) => setOptionKey(e.target.value)}
               >
-                {entryGroups.map((g) => (
-                  <optgroup key={g} label={g}>
-                    {entries.filter((e) => e.group === g).map((e) => (
-                      <option key={e.id} value={e.id}>{e.label}</option>
-                    ))}
-                  </optgroup>
+                {entries.map((e) => (
+                  <option key={e.name} value={e.name}>{e.label || e.name}</option>
                 ))}
               </select>
 
@@ -646,7 +501,7 @@ export function ImageGenDialog({
 
               {requireSourceReference && currentOption && slotBudget === 0 ? (
                 <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
-                  {t('This workflow has no reference-image slot — pick a reference-capable workflow (e.g. Flux2/Qwen) so the current image can be adjusted instead of recreated.')}
+                  {t('This backend has no reference-image slot — pick a reference-capable backend (e.g. Flux/Qwen) so the current image can be adjusted instead of recreated.')}
                 </div>
               ) : null}
               {requireSourceReference && currentOption && slotBudget > 0 && !useSource ? (
