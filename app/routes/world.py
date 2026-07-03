@@ -1523,13 +1523,6 @@ async def generate_location_background(location_name: str, request: Request) -> 
         except RuntimeError as _err:
             raise HTTPException(status_code=500, detail=str(_err))
 
-        # Cache hit: backend returns the string sentinel instead of images.
-        if images == "NO_NEW_IMAGE":
-            raise HTTPException(
-                status_code=409,
-                detail="Das Backend hat das Bild bereits mit diesem Seed/Model erzeugt "
-                       "(Cache-Hit). Erneut versuchen oder Backend neu starten.")
-
         if not images:
             raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
 
@@ -2063,9 +2056,7 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
         if loras_override is not None:
             params["lora_inputs"] = loras_override
 
-        # Fresh seed per call — otherwise a backend may return the
-        # NO_NEW_IMAGE sentinel on an identical prompt+seed cache hit
-        # (memory: feedback_no_new_image_sentinel).
+        # Fresh seed per call so a regenerate produces a new image.
         import random as _rnd
         params["seed"] = _rnd.randint(1, 2**31 - 1)
 
@@ -2200,16 +2191,6 @@ async def _generate_gallery_image_inner(location_name: str, data: Dict[str, Any]
             except RuntimeError as _err:
                 _tq.track_finish(_track_id, error=str(_err)[:200])
                 raise HTTPException(status_code=500, detail=str(_err))
-
-            # Cache hit: backend returns the string sentinel. Without this
-            # check, write_bytes(images[0]) would write a single char and
-            # raise a memoryview TypeError.
-            if images == "NO_NEW_IMAGE":
-                _tq.track_finish(_track_id, error="Duplikat")
-                raise HTTPException(
-                    status_code=409,
-                    detail="Das Backend hat das Bild bereits mit diesem Seed/Model erzeugt "
-                           "(Cache-Hit). Erneut versuchen oder Backend neu starten.")
 
             if not images:
                 _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")
@@ -2710,16 +2691,6 @@ async def generate_time_variant(
             except RuntimeError as _err:
                 _tq.track_finish(_track_id, error=str(_err)[:200])
                 raise HTTPException(status_code=500, detail=str(_err))
-
-            # Cache hit: backend returns the string sentinel. Without this
-            # check, write_bytes(images[0]) would write a single char and
-            # raise a memoryview TypeError.
-            if images == "NO_NEW_IMAGE":
-                _tq.track_finish(_track_id, error="Duplikat")
-                raise HTTPException(
-                    status_code=409,
-                    detail="Das Backend hat das Bild bereits mit diesem Seed/Model erzeugt "
-                           "(Cache-Hit). Erneut versuchen oder Backend neu starten.")
 
             if not images:
                 _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")

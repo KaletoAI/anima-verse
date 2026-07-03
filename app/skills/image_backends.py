@@ -243,7 +243,7 @@ class ImageBackend(ABC):
             with self._jobs_lock:
                 self._active_jobs = max(0, self._active_jobs - 1)
 
-        # Sentinel-String "NO_NEW_IMAGE" oder Fehler-Listen unveraendert weitergeben.
+        # Only downscale a real result list; empty/error results pass through.
         use_case = (params or {}).get("image_use_case") or ""
         if use_case and isinstance(result, list) and result:
             try:
@@ -255,7 +255,7 @@ class ImageBackend(ABC):
             except Exception as _exc:
                 logger.warning("Downscale-Postprocess fehlgeschlagen: %s", _exc)
 
-        # Zentrales Logging nur bei echtem Erfolg (Bilder erzeugt, kein Cache-Hit).
+        # Central logging only on real success (images produced).
         if log_meta is not None and isinstance(result, list) and result:
             self._log_generation(final_prompt, negative_prompt, params,
                                  _time.time() - _t0, log_meta)

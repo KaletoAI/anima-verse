@@ -299,16 +299,12 @@ class DescribeRoomSkill(BaseSkill):
                 except (TypeError, ValueError):
                     _bg_h = 720
                 params = {"width": _bg_w, "height": _bg_h}
-                # Fresh seed against backend cache hits (NO_NEW_IMAGE)
-                # — memory feedback_no_new_image_sentinel.
+                # Random seed for a fresh render each time.
                 import random as _rnd
                 params["seed"] = _rnd.randint(1, 2**31 - 1)
 
                 logger.info("Raum-Bild Generierung gestartet fuer %s/%s", location_id, room_id)
                 images = backend.generate(full_prompt, negative, params)
-                if images == "NO_NEW_IMAGE":
-                    logger.warning("Raum-Bild Cache-Hit (NO_NEW_IMAGE) fuer %s/%s — uebersprungen", location_id, room_id)
-                    return
                 if not images:
                     logger.warning("Raum-Bild Generierung fehlgeschlagen fuer %s/%s", location_id, room_id)
                     return

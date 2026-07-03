@@ -376,10 +376,6 @@ def regenerate_image(character_name: str,
             msg = str(_fb_err)
             logger.error("Regen Fallback-Engine: %s", msg)
             raise
-        if images == "NO_NEW_IMAGE":
-            msg = "Keine neuen Bilder — Seed oder Model unveraendert (Duplikat/Cache)"
-            logger.warning(msg)
-            raise RuntimeError(msg)
         if not images:
             msg = "Backend gab keine Bilder zurueck"
             logger.error(msg)

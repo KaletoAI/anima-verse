@@ -294,9 +294,6 @@ def _do_generate(event_id: str,
         logger.error("Event-Bild [%s] Backend-Fehler: %s", event_id, e)
         return None
 
-    if images == "NO_NEW_IMAGE":
-        logger.warning("Event-Bild [%s]: Cache-Hit (NO_NEW_IMAGE) — skip", event_id)
-        return None
     if not images:
         logger.warning("Event-Bild [%s]: leeres Backend-Ergebnis", event_id)
         return None

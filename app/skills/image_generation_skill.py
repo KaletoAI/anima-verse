@@ -410,24 +410,23 @@ class ImageGenerationSkill(BaseSkill):
         character_name: str = "",
         max_attempts: int = 3,
     ) -> Tuple[Any, ImageBackend]:
-        """Fuehrt op(backend) aus, faellt bei Fehler auf naechstes Backend zurueck.
+        """Runs op(backend), falling back to the next backend on failure.
 
-        Strategie:
-        - Versuche primary_backend
-        - Bei Exception ODER leerer Liste: setze backend.available=False,
-          waehle dynamisch das naechste verfuegbare (kompatible) Backend
-          (_pick_fallback_backend) — die Verfuegbarkeits-Logik IST der Fallback
-        - Wiederhole bis success, max_attempts erreicht oder Kette aus
-        - "NO_NEW_IMAGE" Sentinel-String wird durchgereicht (kein Fail)
+        Strategy:
+        - Try primary_backend
+        - On exception OR empty list: set backend.available=False, dynamically
+          pick the next available (compatible) backend (_pick_fallback_backend)
+          — the availability logic IS the fallback
+        - Repeat until success, max_attempts reached, or the chain is exhausted
 
-        op(backend) -> List[bytes] | "NO_NEW_IMAGE" | [] | None
-        Caller ist dafuer zustaendig, params/Workflow pro Backend anzupassen.
+        op(backend) -> List[bytes] | [] | None
+        The caller is responsible for adapting params per backend.
 
-        Returns (result, used_backend) bei Erfolg.
-        Raises RuntimeError nach Erschoepfung.
+        Returns (result, used_backend) on success.
+        Raises RuntimeError once exhausted.
         """
         if not primary_backend:
-            raise RuntimeError("run_with_fallback: kein primary_backend uebergeben")
+            raise RuntimeError("run_with_fallback: no primary_backend provided")
 
         tried: Set[str] = set()
         last_error: Optional[Exception] = None
@@ -469,11 +468,7 @@ class ImageGenerationSkill(BaseSkill):
                     current, character_name, tried)
                 continue
 
-            # Cache-Hit-Sentinel: erfolgreich, kein Fail
-            if result == "NO_NEW_IMAGE":
-                return result, current
-
-            # Liste mit Bytes -> erfolgreich
+            # List of bytes -> success
             if result:
                 return result, current
 
@@ -1494,12 +1489,6 @@ class ImageGenerationSkill(BaseSkill):
             except RuntimeError as _err:
                 logger.error("Bildgenerierung fehlgeschlagen (alle Backends): %s", _err)
                 images = []
-
-            # ComfyUI: Erfolgreich ausgefuehrt aber kein neues Bild (Duplikat/Cache)
-            if images == "NO_NEW_IMAGE":
-                _tq.track_finish(_track_id, error="Duplikat")
-                return ("Das Bild wurde bereits mit diesem Seed und Model generiert. "
-                        "Aendere den Seed oder den Prompt, um ein neues Bild zu erzeugen.")
 
             if not images:
                 _tq.track_finish(_track_id, error="Keine Bilder generiert")

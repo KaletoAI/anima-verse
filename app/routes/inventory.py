@@ -433,9 +433,6 @@ def generate_item_image_sync(
         logger.error("Item-Bild [%s] fehlgeschlagen: %s", item_id, e)
         return False
 
-    if images == "NO_NEW_IMAGE":
-        logger.warning("Item-Bild [%s]: Backend Cache-Hit — uebersprungen", item_id)
-        return False
     if not images:
         return False
 
