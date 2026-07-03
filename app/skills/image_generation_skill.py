@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import requests
 
 from .base import BaseSkill, ToolSpec
-from .image_backends import ImageBackend, BACKEND_REGISTRY
+from app.imagegen import ImageBackend, BACKEND_REGISTRY
 
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
