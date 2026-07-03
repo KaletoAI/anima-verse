@@ -4,9 +4,12 @@ Logic moved 1:1 out of the route handlers (code-review section 5b); the
 routes remain thin HTTP adapters (auth, request parsing, response types).
 HTTPExceptions that were embedded mid-logic moved along unchanged.
 """
+import asyncio
 import os
 from fastapi import HTTPException
-from typing import Any, Dict
+from fastapi.responses import FileResponse
+from pathlib import Path
+from typing import Any, Dict, Optional
 from app.core.log import get_logger
 
 logger = get_logger("world")
@@ -15,13 +18,15 @@ from app.models.world import (
     list_locations, add_location,
     rename_location, resolve_location, get_location_by_id,
     get_entry_room_id,
+    get_background_path, get_background_file_path,
     get_background_images, remove_background_image,
     get_gallery_dir, list_gallery_images,
     get_all_gallery_prompts,
     set_gallery_image_room, get_gallery_image_rooms, remove_gallery_image_room,
     set_gallery_image_type, get_gallery_image_types, remove_gallery_image_type,
     get_gallery_image_metas,
-    toggle_background_image)
+    toggle_background_image,
+    clear_room_prompt_changed, clear_location_prompt_changed)
 
 
 # === Avatar movement (direction pad) ===
@@ -690,3 +695,797 @@ def assign_gallery_image_type(location_name: str, image_name: str,
 
     set_gallery_image_type(loc_id, image_name, image_type)
     return {"status": "success", "image": image_name, "type": image_type}
+
+
+# === Background images ===
+
+def _location_image_width() -> int:
+    try:
+        return int(os.environ.get("LOCATION_IMAGE_WIDTH", "1280"))
+    except (TypeError, ValueError):
+        return 1280
+
+
+def _location_image_height() -> int:
+    try:
+        return int(os.environ.get("LOCATION_IMAGE_HEIGHT", "720"))
+    except (TypeError, ValueError):
+        return 720
+
+
+def resolve_background_path(location_name: str, room: str = "", hour: int = -1,
+                            file: str = "") -> Optional[Path]:
+    """Resolve the background image of a location (by id or name).
+
+    With an active disruption/danger event that has a rendered image_path,
+    the event image is served. Within the resolve-linger window the
+    resolved_image_path. Otherwise the normal location background.
+    Multi-room: the swap applies to all rooms of the location (consistent
+    with the location-wide block rule).
+
+    ``file`` pins a concrete background image (used by the /play frontend so
+    that figure positions stick to the exact displayed image). An active
+    event image takes precedence and ignores ``file``.
+    """
+    # location_name can be an id or a name — the event swap needs the id.
+    bg_path: Optional[Path] = None
+    try:
+        from app.core.event_images import get_effective_background_event
+        from app.models.world import resolve_location
+        _loc = resolve_location(location_name)
+        _loc_id = _loc.get("id", "") if _loc else ""
+        if _loc_id:
+            bg_path = get_effective_background_event(_loc_id)
+    except Exception as _e:
+        logger.debug("event-bg lookup failed: %s", _e)
+
+    if (not bg_path or not bg_path.exists()) and file:
+        bg_path = get_background_file_path(location_name, file)
+    if not bg_path or not bg_path.exists():
+        bg_path = get_background_path(location_name, room=room, hour=hour)
+    return bg_path
+
+
+def save_uploaded_background(location_name: str, filename: str, content: bytes,
+                             room_id: str) -> Dict[str, Any]:
+    """Store an uploaded background image for a location (optional room).
+
+    Saves into the location's gallery, registers it as a background and maps
+    it to the room if given — the same save/register path as generation.
+    """
+    from app.models.world import (get_gallery_dir, toggle_background_image,
+                                   set_gallery_image_room)
+    from app.core.timeutils import utc_now
+    from pathlib import Path as _Path
+
+    location = resolve_location(location_name)
+    if not location:
+        raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+    loc_id = location.get("id") or location_name
+
+    fname = (filename or "").lower()
+    ext = _Path(fname).suffix or ".png"
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        raise HTTPException(status_code=400, detail="Format nicht unterstützt")
+
+    gallery_dir = get_gallery_dir(loc_id)
+    gallery_dir.mkdir(parents=True, exist_ok=True)
+    image_name = f"{loc_id}_{utc_now().strftime('%Y%m%d%H%M%S')}{ext}"
+    (gallery_dir / image_name).write_bytes(content)
+
+    toggle_background_image(loc_id, image_name)
+    if room_id:
+        try:
+            set_gallery_image_room(location_name, image_name, room_id)
+        except Exception as e:
+            logger.debug("set_gallery_image_room beim Upload fehlgeschlagen: %s", e)
+    return {"status": "success", "image": image_name, "room_id": room_id}
+
+
+async def generate_location_background(location_name: str,
+                                       custom_prompt: str) -> Dict[str, Any]:
+    """Generate a background image for a location via an image backend (by id or name)."""
+    # Resolve the location by id or name
+    location = resolve_location(location_name)
+    if not location:
+        raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+
+    description = location.get("description", location_name)
+
+    # Build the prompt
+    if custom_prompt:
+        prompt = custom_prompt
+    else:
+        prompt = (
+            f"{description}, wide angle establishing shot, no people, "
+            f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
+        )
+
+    # Get the image backend (cheapest available one)
+    from app.core.dependencies import get_skill_manager
+
+    skill_manager = get_skill_manager()
+    img_skill = None
+    for skill in skill_manager.skills:
+        if getattr(skill, 'SKILL_ID', '') == "image_generation":
+            img_skill = skill
+            break
+
+    if not img_skill:
+        raise HTTPException(status_code=503, detail="ImageGeneration Skill nicht verfuegbar")
+
+    backend = img_skill._select_backend()
+    if not backend:
+        raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
+
+    # Generate image (blocking, in a thread) — style/negative from the use case.
+    from app.core import config as _cfg
+    _ucp = _cfg.resolve_use_case_style(
+        "location", getattr(backend, "image_family", "") or "",
+        backend_model=getattr(backend, "model", "") or "")
+    full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
+    negative = _ucp.get("prompt_negative", "")
+    # Location background: full resolution — used as a background scene
+    # image, no downscale.
+    params = {"width": _location_image_width(), "height": _location_image_height()}
+
+    # Fresh seed per call — avoids backend-side cache hits
+    # (memory: feedback_no_new_image_sentinel).
+    import random as _rnd
+    params["seed"] = _rnd.randint(1, 2**31 - 1)
+
+    # Backend fallback engine: tries primary, falls back to the next
+    # available backend on failure. Local GPU backends go through the
+    # GPU provider queue → never two in parallel per backend.
+    def _op(b):
+        if getattr(b, "api_type", "") == "a1111":
+            from app.core.llm_queue import get_llm_queue, Priority as _P
+            return get_llm_queue().submit_gpu_task(
+                provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
+                callable_fn=lambda: b.generate(full_prompt, negative, params),
+                agent_name=location.get("name", location_name), gpu_type=b.api_type)
+        return b.generate(full_prompt, negative, params)
+    try:
+        images, backend = await asyncio.to_thread(
+            lambda: img_skill.run_with_fallback(
+                primary_backend=backend,
+                op=_op,
+                character_name=""))
+    except RuntimeError as _err:
+        raise HTTPException(status_code=500, detail=str(_err))
+
+    if not images:
+        raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
+
+    # Save into the gallery + reference as background
+    import time
+    loc_id = location.get("id", location_name)
+    gallery_dir = get_gallery_dir(loc_id)
+    gallery_dir.mkdir(parents=True, exist_ok=True)
+    image_name = f"{int(time.time())}.png"
+    image_path = gallery_dir / image_name
+    image_path.write_bytes(images[0])
+
+    # Automatically mark as background
+    toggle_background_image(loc_id, image_name)
+
+    logger.info("Bild generiert + als Hintergrund markiert: %s (%s) -> gallery/%s/%s", location['name'], loc_id, loc_id, image_name)
+    return {"status": "success", "location": location["name"], "location_id": loc_id}
+
+
+def clear_location_backgrounds(location_name: str) -> Dict[str, Any]:
+    """Delete the background-image references of a location (by id or name)."""
+    loc = resolve_location(location_name)
+    loc_id = loc["id"] if loc and loc.get("id") else location_name
+    # Remove all background markers
+    for img in get_background_images(loc_id):
+        toggle_background_image(loc_id, img)
+    return {"status": "success", "location": location_name}
+
+
+# === Map / tiles / map-fit helpers ===
+
+_MAP_MEDIA_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
+
+
+def _serve_map_icon(location_name: str, image_type: str, override_field: str):
+    """Serves the map icon of a location for the given gallery type.
+
+    Per-cell choice: if ``override_field`` is set on the (cloned) location and
+    the file exists in the owner gallery, EXACTLY this image is served — so
+    with several images every map cell can show its own one. Otherwise fall
+    back to the first image tagged as ``image_type``.
+    """
+    loc = resolve_location(location_name)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    loc_id = loc.get("id", "")
+    if not loc_id:
+        raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
+
+    # Clones share the gallery of their template (owner_id = template id).
+    from app.models.world import _gallery_owner_id
+    owner_id = _gallery_owner_id(location_name) or loc_id
+    gallery_dir = get_gallery_dir(owner_id)
+
+    # 1) Image explicitly chosen per location/clone (if set + file exists).
+    chosen = (loc.get(override_field) or "").strip()
+    if chosen:
+        p = gallery_dir / chosen
+        if p.exists():
+            return FileResponse(str(p),
+                                media_type=_MAP_MEDIA_TYPES.get(p.suffix.lower(), 'image/png'),
+                                headers={"Cache-Control": "no-cache"})
+
+    # 2) Fallback: first image tagged as image_type.
+    image_types = get_gallery_image_types(owner_id)
+    map_images = [img for img, t in image_types.items() if t == image_type]
+    if not map_images:
+        raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
+    for img_name in map_images:
+        img_path = gallery_dir / img_name
+        if img_path.exists():
+            return FileResponse(str(img_path),
+                                media_type=_MAP_MEDIA_TYPES.get(img_path.suffix.lower(), 'image/png'),
+                                headers={"Cache-Control": "max-age=300"})
+    raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
+
+
+# Map fit (neighbor inpaint): generation canvas size (16-GB-friendly) + target
+# tile size the cut-out center is upscaled to.
+# Default output size: the fit/edge result (center cell) is ALWAYS scaled to
+# this edge length (1024). The 3x3 canvas, however, is composed in the
+# ORIGINAL resolution of the source tiles (see _place_neighbors) — the input
+# is NOT reduced anymore; only the cropped center is normalized to
+# MAP_FIT_OUT_TILE at the end. (Previously the whole canvas was capped at
+# 1024, i.e. every tile shrunk to ~341px.)
+MAP_FIT_OUT_TILE = 1024
+# Safety cap per tile (prevents an absurdly large canvas/OOM with unusually
+# high-resolution source tiles). 0 = no limit.
+MAP_FIT_MAX_TILE = 1536
+# Fit: fraction of the neighbor tile placed as context border around the
+# center. Smaller = closer to native and sharper, but less blend context.
+# Flexible. 0.1875 → with a native 1024 tile the center stays full 1024 and
+# the canvas ~1408.
+MAP_FIT_NEIGHBOR_FRAC = 0.1875
+# Fit: Flux-friendly upper bound for the WHOLE canvas (generation
+# resolution). Flux is optimal around ~1 MP (1024px); noticeably above that
+# the image gets soft. The tile is chosen so that tile + 2*border <= this
+# value (center as large as possible, at most native). Rounded to a multiple
+# of 16 (Flux/VAE requirement). 1408 = ~2 MP, matches frac 0.1875 with a full
+# 1024 center. Fit only — edge keeps using full tiles.
+MAP_FIT_CANVAS_MAX = 1408
+# Fit (edit models like Qwen only): cut out only the inner fraction of the
+# center. Edit models invent "more surroundings" at the border of the
+# regenerated area — the inner core is clean. 1.0 = whole center (like fill
+# models), 0.7 = inner 70 %.
+MAP_FIT_INNER_CROP = 0.7
+# The inpaint workflows no longer receive a crop mask — the workflow returns
+# the full (inpainted) canvas and the BACKEND cuts out the center and scales
+# it to MAP_FIT_OUT_TILE.
+# Mask margin beyond the gray area (so the model blends in the edges) —
+# tested: gray-fill/edit models (Qwen/Flux2) +5%, Flux-Dev-Fill (fill model)
+# +2% (slightly better).
+MAP_BLEND_MASK_GROW_GRAY = 1.05
+MAP_BLEND_MASK_GROW_FILL = 1.02
+
+
+def _resolve_map_icon_path(loc: Dict[str, Any], field: str = "map_image_2d",
+                           image_type: str = "map_2d"):
+    """Path of the per-cell chosen 2D map tile (otherwise first tagged one).
+    Reused logic from :func:`_serve_map_icon`, without FileResponse."""
+    from app.models.world import _gallery_owner_id, get_gallery_image_types
+    loc_id = loc.get("id", "")
+    if not loc_id:
+        return None
+    owner_id = _gallery_owner_id(loc_id) or loc_id
+    gallery_dir = get_gallery_dir(owner_id)
+    chosen = (loc.get(field) or "").strip()
+    if chosen and (gallery_dir / chosen).exists():
+        return gallery_dir / chosen
+    for fn, tp in (get_gallery_image_types(owner_id) or {}).items():
+        if tp == image_type and (gallery_dir / fn).exists():
+            return gallery_dir / fn
+    return None
+
+
+def _save_canvas_with_alpha(canvas, mask, path: str) -> None:
+    """Saves the canvas as RGBA with the mask in the ALPHA channel: inpaint
+    region (mask white) -> transparent (alpha 0), rest opaque. Matches
+    ComfyUI-LoadImage (``MASK = 1 - alpha``). The RGB part stays unchanged
+    (non-breaking)."""
+    from PIL import ImageOps
+    rgba = canvas.convert("RGBA")
+    rgba.putalpha(ImageOps.invert(mask.convert("L")))
+    rgba.save(path)
+
+
+def _save_rgba_mask(mask, path: str) -> None:
+    """RGBA mask image (same dimension as the canvas): white area, the marked
+    region (``mask`` white) sits in the ALPHA channel as transparent — like
+    the canvas. ComfyUI ``MASK = 1 - alpha`` yields exactly this region (e.g.
+    the center cell for the crop, independent of the inpaint mask)."""
+    from PIL import Image, ImageOps
+    rgba = Image.new("RGBA", mask.size, (255, 255, 255, 255))
+    rgba.putalpha(ImageOps.invert(mask.convert("L")))
+    rgba.save(path)
+
+
+def _place_neighbors(location: Dict[str, Any], border_frac: float = 1.0,
+                     canvas_max: Optional[int] = None):
+    """Builds the canvas (gray, center = own tile) with the neighbor tiles around it.
+
+    ``border_frac`` = fraction of the neighbor tile used as context border
+    (1.0 = whole tile → classic 3*tile canvas; 0.25 = narrow border).
+    Per neighbor ONLY the strip facing the center (orthogonal) or the corner
+    (diagonal) is inserted — this keeps the generation closer to the native
+    resolution and therefore sharper.
+
+    ``canvas_max`` (optional): upper bound for the WHOLE canvas (tile + 2*border).
+    If set, the tile is chosen so the canvas stays below it (center as large
+    as possible, at most native) and tile/border are rounded to multiples of
+    16 (Flux/VAE-compatible). None = old behavior (edge).
+
+    Returns ``(canvas, tile, border, present)`` or ``None``. ``border`` =
+    border in px, ``present`` = set of the present neighbor directions (dx, dy)."""
+    from PIL import Image
+    from app.models.world import list_locations
+    gx, gy = location.get("grid_x"), location.get("grid_y")
+    if gx is None or gy is None:
+        return None
+    by_pos = {}
+    for loc in list_locations():
+        lx, ly = loc.get("grid_x"), loc.get("grid_y")
+        if lx is not None and ly is not None:
+            by_pos[(lx, ly)] = loc
+    # Load tiles in ORIGINAL resolution (no downscale). Uniform cell size
+    # = largest native edge length (own tile + neighbors); smaller ones are
+    # upscaled.
+    loaded = {}   # (dx, dy) -> (img, rot)
+    native_max = 0
+    own_p = _resolve_map_icon_path(location)
+    if own_p:
+        try:
+            with Image.open(own_p) as _o:
+                native_max = max(native_max, _o.width, _o.height)
+        except Exception:
+            pass
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if dx == 0 and dy == 0:
+                continue
+            nb = by_pos.get((gx + dx, gy + dy))
+            p = _resolve_map_icon_path(nb) if nb else None
+            if not p:
+                continue
+            try:
+                img = Image.open(p).convert("RGB")
+                native_max = max(native_max, img.width, img.height)
+                loaded[(dx, dy)] = (img, int(nb.get("map_rotation_2d") or 0))
+            except Exception as _e:
+                logger.warning("Nachbar-Tile %s nicht ladbar: %s", p, _e)
+    if not loaded:
+        return None
+    tile = native_max or MAP_FIT_OUT_TILE
+    if MAP_FIT_MAX_TILE and tile > MAP_FIT_MAX_TILE:
+        logger.info("Map-Fit: Tile-Aufloesung %dpx auf MAP_FIT_MAX_TILE=%dpx begrenzt",
+                    tile, MAP_FIT_MAX_TILE)
+        tile = MAP_FIT_MAX_TILE
+    frac = max(0.05, min(1.0, border_frac))
+    if canvas_max:
+        # Cap the tile so the whole canvas (tile + 2*border) stays <= canvas_max
+        # → Flux-compatible generation resolution. Center as large as
+        # possible (at most native). Multiples of 16 (Flux/VAE).
+        tile = min(tile, int(canvas_max / (1 + 2 * frac)))
+        tile = max(256, (tile // 16) * 16)
+        border = max(16, (int(round(tile * frac)) // 16) * 16)
+    else:
+        border = max(1, int(round(tile * frac)))
+    csize = tile + 2 * border
+    canvas = Image.new("RGB", (csize, csize), (128, 128, 128))
+    present = set()
+    for (dx, dy), (img, rot) in loaded.items():
+        im = img if img.size == (tile, tile) else img.resize((tile, tile))
+        if rot:
+            im = im.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
+        # Source crop: only the neighbor's strip/corner facing the center.
+        sx0 = (tile - border) if dx < 0 else 0
+        sx1 = tile if dx < 0 else (border if dx > 0 else tile)
+        sy0 = (tile - border) if dy < 0 else 0
+        sy1 = tile if dy < 0 else (border if dy > 0 else tile)
+        strip = im.crop((sx0, sy0, sx1, sy1))
+        # Target position in the canvas (left/top = 0, center = border, right/bottom = border+tile).
+        px = 0 if dx < 0 else (border + tile if dx > 0 else border)
+        py = 0 if dy < 0 else (border + tile if dy > 0 else border)
+        canvas.paste(strip, (px, py))
+        present.add((dx, dy))
+    logger.info("Map-Fit: Canvas komponiert — Tile %dpx, Border %dpx (frac %.2f), Canvas %dpx",
+                tile, border, frac, csize)
+    return canvas, tile, border, present
+
+
+def _finalize_blend(canvas, inpaint_mask, tile, border, present, crop_empty: bool,
+                    inner_crop: float = 1.0):
+    """Common finish for fit/edge. With ``crop_empty`` cuts off COMPLETELY
+    empty outer borders (also for edge at the map border) and saves:
+      - canvas (pure RGB)          -> cpath  (input_reference_image)
+      - inpaint mask as L          -> mpath  (input_mask)
+    NO crop mask anymore — the center is NOT cut out in the workflow anymore
+    but by the backend from the returned image. Instead we deliver the center
+    cell as FRACTIONS (x0,y0,x1,y1) of the (possibly trimmed) canvas, robust
+    against the workflow's output resolution.
+
+    ``inner_crop`` < 1.0 cuts out only the inner fraction of the center
+    (around the midpoint) — against the "invented outside" ring of edit models.
+
+    Geometry: center (own tile) sits at ``border``, canvas = tile + 2*border.
+    Returns ``(cpath, mpath, tile, crop_frac)``."""
+    import tempfile
+    csize = tile + 2 * border
+    left, top, right, bottom = 0, 0, csize, csize
+    if crop_empty:
+        # Only cut off the outer border if NO neighbor lies on that side
+        # (orthogonal or diagonal) — otherwise corners would remain.
+        left = 0 if any(d[0] < 0 for d in present) else border
+        right = csize if any(d[0] > 0 for d in present) else csize - border
+        top = 0 if any(d[1] < 0 for d in present) else border
+        bottom = csize if any(d[1] > 0 for d in present) else csize - border
+        if (left, top, right, bottom) != (0, 0, csize, csize):
+            canvas = canvas.crop((left, top, right, bottom))
+            inpaint_mask = inpaint_mask.crop((left, top, right, bottom))
+            logger.info("Map-Blend: leere Raender abgeschnitten -> Canvas %dx%d",
+                        right - left, bottom - top)
+    # Center cell (middle) as fractions of the trimmed canvas — optionally
+    # only the inner fraction (inner_crop) around the midpoint.
+    cw, ch = canvas.size  # = (right-left, bottom-top)
+    cx0, cy0 = border - left, border - top
+    _icf = max(0.05, min(1.0, inner_crop))
+    _cxc, _cyc = cx0 + tile / 2.0, cy0 + tile / 2.0
+    _half = (tile / 2.0) * _icf
+    crop_frac = ((_cxc - _half) / cw, (_cyc - _half) / ch,
+                 (_cxc + _half) / cw, (_cyc + _half) / ch)
+    cpath = tempfile.NamedTemporaryFile(suffix="_mapblend_canvas.png", delete=False).name
+    mpath = tempfile.NamedTemporaryFile(suffix="_mapblend_mask.png", delete=False).name
+    canvas.convert("RGB").save(cpath)
+    inpaint_mask.save(mpath)
+    return cpath, mpath, tile, crop_frac
+
+
+def _compose_neighbor_canvas(location: Dict[str, Any], crop_empty: bool = False,
+                             mask_grow: float = MAP_BLEND_MASK_GROW_GRAY,
+                             border_frac: float = MAP_FIT_NEIGHBOR_FRAC,
+                             full_mask: bool = False,
+                             inner_crop: float = MAP_FIT_INNER_CROP):
+    """Fit: canvas (neighbor borders, gray center) + inpaint mask = center * mask_grow.
+    ``border_frac`` controls the border width (smaller = closer to native,
+    sharper). With ``crop_empty`` cuts off empty outer borders. Returns
+    ``(cpath, mpath, tile, crop_frac)`` or ``None``.
+
+    ``mask_grow``: how far the mask extends beyond the center cell
+    (1.05 = +5% for gray-fill/edit models, 1.02 = +2% for Flux-Dev-Fill).
+    ``full_mask``: mask the WHOLE area instead of only the center — needed for
+    edit models (Qwen-Edit), which with a partial mask copy the narrow
+    neighbor strip into the center ("neighbor border pulled into the image")."""
+    from PIL import Image, ImageDraw
+    placed = _place_neighbors(location, border_frac=border_frac,
+                             canvas_max=MAP_FIT_CANVAS_MAX)
+    if not placed:
+        return None
+    canvas, tile, border, present = placed
+    if full_mask:
+        # Edit model (Qwen): whole area editable → coherent regeneration
+        # instead of strip copy. The center crop (crop_frac) stays unchanged.
+        mask = Image.new("L", canvas.size, 255)
+    else:
+        mask = Image.new("L", canvas.size, 0)
+        # The mask slightly overlaps into the neighbors so the model blends
+        # the tile edges. Still only the EXACT center is cut out.
+        _m = int(round(tile * (mask_grow - 1) / 2))
+        ImageDraw.Draw(mask).rectangle(
+            [border - _m, border - _m, border + tile - 1 + _m, border + tile - 1 + _m], fill=255)
+    # inner_crop: cut out only the inner core of the center (freely
+    # configurable per backend). With a partial mask (full_mask=False) the
+    # ring is real anyway → 1.0.
+    _inner = inner_crop if full_mask else 1.0
+    return _finalize_blend(canvas, mask, tile, border, present, crop_empty, inner_crop=_inner)
+
+
+def build_fit_canvas_png(loc: Dict[str, Any]) -> bytes:
+    """Preview PNG of the 3x3 neighbor canvas that goes into the workflow as
+    input_reference_image for "fit to neighbors" (gray center = gets
+    inpainted). 404 if no neighbors with a tile / no grid position."""
+    comp = _compose_neighbor_canvas(loc)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Keine Nachbarn mit Tile")
+    cpath = comp[0]
+    try:
+        data = Path(cpath).read_bytes()
+    finally:
+        for _p in comp[:2]:  # cpath, mpath (paths; comp[3] is the crop fraction)
+            try:
+                os.remove(_p)
+            except Exception:
+                pass
+    return data
+
+
+# Edge match (align edges): frame mask width + solid core at the edge.
+# BLEND_FRAC = how far the inpaint band reaches inward from each chosen edge
+# (fraction of the tile width). Keep it low — with SEVERAL edges the bands
+# overlap; a band that is too wide (0.45) eats ~70% of the tile with 2
+# neighbors (everything gray). 0.22 -> narrow edge frame, center is kept.
+MAP_EDGE_BLEND_FRAC = 0.22
+MAP_EDGE_CORE_FRAC = 0.30
+_EDGE_DIRS = (("north", 0, -1), ("south", 0, 1), ("east", 1, 0), ("west", -1, 0))
+
+
+def _analyze_tile_terrain(loc: Dict[str, Any]):
+    """Vision terrain phrase of the CURRENT 2D tile, cached per tile filename
+    in the gallery meta. ``None`` if vision is off / no tile / error. This way
+    north/south/east/west describe the real image, not the possibly outdated
+    text description. Re-analysis only for a new tile (different filename)."""
+    if str(os.environ.get("MAP_TILE_VISION_ANALYSIS", "")).strip().lower() not in ("1", "true", "yes", "on"):
+        return None
+    tp = _resolve_map_icon_path(loc)
+    if not tp:
+        return None
+    from app.models.world import (_gallery_owner_id, get_gallery_image_metas,
+                                  set_gallery_image_meta)
+    owner_id = _gallery_owner_id(loc.get("id", "")) or loc.get("id", "")
+    fname = tp.name
+    metas = get_gallery_image_metas(owner_id) or {}
+    cached = (metas.get(fname) or {}).get("terrain")
+    if cached:
+        return cached
+    from app.core.dependencies import get_skill_manager
+    skill = get_skill_manager().get_skill("image_generation")
+    if not skill:
+        return None
+    term = skill.describe_map_tile(str(tp))
+    if term:
+        _m = dict(metas.get(fname) or {})
+        _m["terrain"] = term
+        set_gallery_image_meta(owner_id, fname, _m)
+        logger.info("Map-Tile-Vision: %s -> %s", fname, term)
+    return term
+
+
+def _terrain_term(loc: Dict[str, Any]) -> str:
+    """Short terrain term of a tile: vision analysis of the CURRENT tile (if
+    enabled), otherwise its own 2D map prompt, otherwise description,
+    otherwise name — first statement, ~80 chars at a word boundary, without
+    dangling function words."""
+    term = " ".join((_analyze_tile_terrain(loc) or loc.get("image_prompt_map_2d")
+                     or loc.get("description") or loc.get("name") or "").split())
+    for _sep in (".", ";"):
+        if _sep in term:
+            term = term.split(_sep)[0]
+    if len(term) > 80:
+        _head = term[:80]
+        term = _head.rsplit(",", 1)[0] if "," in _head else _head.rsplit(" ", 1)[0]
+    term = term.rstrip(",.; ")
+    _fw = {"with", "on", "in", "a", "an", "the", "of", "and", "to", "at",
+           "for", "from", "by", "as", "or"}
+    _words = term.split()
+    while _words and _words[-1].lower() in _fw:
+        _words.pop()
+    return " ".join(_words)
+
+
+def _neighbor_sides(location: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """{side: neighbor-loc} for the 4 orthogonal sides with a neighbor that
+    has a 2D tile (no entry otherwise)."""
+    from app.models.world import list_locations
+    gx, gy = location.get("grid_x"), location.get("grid_y")
+    if gx is None or gy is None:
+        return {}
+    by_pos = {(l.get("grid_x"), l.get("grid_y")): l for l in list_locations()
+              if l.get("grid_x") is not None and l.get("grid_y") is not None}
+    out: Dict[str, Dict[str, Any]] = {}
+    for side, dx, dy in _EDGE_DIRS:
+        nb = by_pos.get((gx + dx, gy + dy))
+        if nb and _resolve_map_icon_path(nb):
+            out[side] = nb
+    return out
+
+
+def _neighbor_terrain_hint(location: Dict[str, Any]) -> str:
+    """Auto prompt for map fit (regenerate the gray center): one tile that
+    merges all neighbor terrains — same quality language as the edge prompt
+    (color/tone/style alignment), just for the whole tile instead of only the
+    edges."""
+    parts = [f"{_terrain_term(nb)} to the {side}" for side, nb in _neighbor_sides(location).items()
+             if _terrain_term(nb)]
+    if not parts:
+        return ""
+    return ("top-down orthographic map tile blending together the surrounding "
+            "terrain — " + ", ".join(parts) + "; colors, tones and art style merge "
+            "smoothly across the whole tile, cohesive unified palette and lighting, "
+            "no hard seams")
+
+
+def _edge_transition_prompt(location: Dict[str, Any], sides=None) -> str:
+    """Prompt for "align edges": the existing center tile whose borders
+    transition into the chosen neighbor terrains (color/tone/style merge)."""
+    avail = _neighbor_sides(location)
+    use = [s for s in (sides or list(avail)) if s in avail]
+    if not use:
+        return ""
+    parts = [f"{_terrain_term(avail[s])} to the {s}" for s in use if _terrain_term(avail[s])]
+    return ("top-down orthographic map tile; its edges blend into the adjacent "
+            "terrain — " + ", ".join(parts) + "; colors, tones and art style merge "
+            "smoothly across the edges, cohesive unified palette and lighting, no hard seams")
+
+
+def _compose_edge_canvas(location: Dict[str, Any], sides=None, gray_fill: bool = False):
+    """Like :func:`_compose_neighbor_canvas` (3x3, real neighbors around), BUT
+    the center is the REAL tile and the mask is a FRAME (distance transform)
+    only for the chosen sides with a neighbor: solid at the edge, evenly down
+    to 0 towards the center. Returns (canvas_path, mask_path, tile) or None."""
+    import numpy as np
+    from PIL import Image
+    avail = _neighbor_sides(location)
+    use = [s for s in (sides or list(avail)) if s in avail]
+    # Edge uses full neighbor tiles (border_frac=1.0 → border == tile, classic
+    # 3*tile canvas) — the frame mask needs the full neighbor context.
+    placed = _place_neighbors(location, border_frac=1.0)
+    if not placed or not use:
+        return None
+    canvas, tile, border, present = placed
+    # Fill the center with the real tile (instead of gray).
+    tp = _resolve_map_icon_path(location)
+    if tp:
+        t_img = Image.open(tp).convert("RGB").resize((tile, tile))
+        rot = int(location.get("map_rotation_2d") or 0)
+        if rot:
+            t_img = t_img.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
+        canvas.paste(t_img, (border, border))
+    # Frame mask via distance transform.
+    W, H = canvas.size
+    cx0, cy0, cx1, cy1 = border, border, border + tile, border + tile
+    blend = max(1, int(tile * MAP_EDGE_BLEND_FRAC))
+    core = max(0, int(blend * MAP_EDGE_CORE_FRAC))
+    ys, xs = np.mgrid[0:H, 0:W]
+    dist = np.full((H, W), float(blend + 1))
+    if "west" in use:
+        dist = np.minimum(dist, xs - cx0)
+    if "east" in use:
+        dist = np.minimum(dist, (cx1 - 1) - xs)
+    if "north" in use:
+        dist = np.minimum(dist, ys - cy0)
+    if "south" in use:
+        dist = np.minimum(dist, (cy1 - 1) - ys)
+    inside = (xs >= cx0) & (xs < cx1) & (ys >= cy0) & (ys < cy1)
+    dist = np.where(inside, dist, float(blend + 1))
+    f = np.clip((dist - core) / max(1, blend - core), 0.0, 1.0)
+    sm = f * f * (3 - 2 * f)
+    val = np.where(dist < core, 255.0, 255.0 * (1.0 - sm))
+    val = np.where((dist >= blend) | (~inside), 0.0, val)
+    mask = Image.fromarray(val.astype("uint8"), "L")
+    # ONLY for edit-model inpaint (gray_fill, e.g. Qwen-Edit): color the
+    # masked edge SOLID gray (same (128,128,128) as the empty fit center),
+    # because Qwen "completes the gray areas" and reads them straight from the
+    # reference image. Solid gray with a HARD edge (binary mask >0, NOT the
+    # fading inpaint mask — no gradient). Fill models (Flux DevFill) get NO
+    # gray: they use the separate input_mask and keep the real tile content.
+    if gray_fill:
+        _gray = Image.new("RGB", canvas.size, (128, 128, 128))
+        _solid = mask.point(lambda v: 255 if v > 0 else 0)
+        canvas = Image.composite(_gray, canvas.convert("RGB"), _solid)
+    # Edge also cuts off empty borders (e.g. at the map border).
+    return _finalize_blend(canvas, mask, tile, border, present, crop_empty=True)
+
+
+# Edge match (new model): EXACTLY two adjacent tiles side by side, the seam
+# filled hard gray; mask = gray strip + 5%. The workflow returns ONE image
+# (same size), the backend cuts it in the middle and stores both halves in
+# their respective locations. NO fill model anymore.
+def _compose_edge_pair(location: Dict[str, Any], side: str,
+                       mask_grow: float = MAP_BLEND_MASK_GROW_GRAY):
+    """Builds the 2-tile canvas (location + neighbor in ``side``) in display
+    orientation, fills the seam hard gray and creates the inpaint mask
+    (gray strip + 5%). Returns ``(cpath, mpath, info)`` or None.
+
+    ``info`` = dict(axis='x'|'y', a_first(bool), a_loc, b_loc, a_rot, b_rot, tile):
+      - axis: seam axis (x = vertical seam, tiles left/right; y = horizontal).
+      - a_first: is ``location`` the first half (left resp. top)?
+    """
+    import tempfile
+    from PIL import Image
+    import numpy as np
+    avail = _neighbor_sides(location)
+    nb = avail.get(side)
+    if not nb:
+        return None
+    pa = _resolve_map_icon_path(location)
+    pb = _resolve_map_icon_path(nb)
+    if not pa or not pb:
+        return None
+    ia = Image.open(pa).convert("RGB")
+    ib = Image.open(pb).convert("RGB")
+    tile = max(ia.width, ia.height, ib.width, ib.height)
+    if MAP_FIT_MAX_TILE and tile > MAP_FIT_MAX_TILE:
+        tile = MAP_FIT_MAX_TILE
+    a_rot = int(location.get("map_rotation_2d") or 0)
+    b_rot = int(nb.get("map_rotation_2d") or 0)
+
+    def _disp(img, rot):
+        im = img if img.size == (tile, tile) else img.resize((tile, tile))
+        return im.rotate(-rot, expand=False, fillcolor=(128, 128, 128)) if rot else im
+    a_img = _disp(ia, a_rot)
+    b_img = _disp(ib, b_rot)
+
+    horizontal = side in ("east", "west")  # tiles left/right -> vertical seam
+    if horizontal:
+        canvas = Image.new("RGB", (tile * 2, tile), (128, 128, 128))
+        a_first = (side == "east")           # east: neighbor right -> A left
+        canvas.paste(a_img, (0, 0) if a_first else (tile, 0))
+        canvas.paste(b_img, (tile, 0) if a_first else (0, 0))
+        axis, W_, H_, seam = "x", tile * 2, tile, tile
+    else:
+        canvas = Image.new("RGB", (tile, tile * 2), (128, 128, 128))
+        a_first = (side == "south")          # south: neighbor below -> A on top
+        canvas.paste(a_img, (0, 0) if a_first else (0, tile))
+        canvas.paste(b_img, (0, tile) if a_first else (0, 0))
+        axis, W_, H_, seam = "y", tile, tile * 2, tile
+
+    blend = max(1, int(tile * MAP_EDGE_BLEND_FRAC))
+    coord = np.mgrid[0:H_, 0:W_][1 if axis == "x" else 0]
+    dist = np.abs(coord - seam)
+    # Fill the seam hard gray (gray strip ±blend).
+    gray_band = dist < blend
+    arr = np.array(canvas)
+    arr[gray_band] = (128, 128, 128)
+    canvas = Image.fromarray(arr, "RGB")
+    # Mask = strip * mask_grow (hard).
+    mask_w = blend * mask_grow
+    mask = Image.fromarray(np.where(dist < mask_w, 255, 0).astype("uint8"), "L")
+
+    cpath = tempfile.NamedTemporaryFile(suffix="_edgepair_canvas.png", delete=False).name
+    mpath = tempfile.NamedTemporaryFile(suffix="_edgepair_mask.png", delete=False).name
+    canvas.save(cpath)
+    mask.save(mpath)
+    info = {"axis": axis, "a_first": a_first, "a_loc": location, "b_loc": nb,
+            "a_rot": a_rot, "b_rot": b_rot, "tile": tile}
+    logger.info("Edge-Pair: %s <-%s-> %s | Canvas %dx%d, Naht %s",
+                location.get("name"), side, nb.get("name"), W_, H_, axis)
+    return cpath, mpath, info
+
+
+# === prompt-changed flag ===
+
+def set_location_prompt_changed(location_id: str, room_id: str,
+                                value: Any) -> Dict[str, Any]:
+    """Sets or removes the prompt_changed flag for a location or a room.
+
+    Without ``room_id`` the flag is set/removed at location level.
+    """
+    from app.models.world import _load_world_data, _save_world_data
+
+    if not value:
+        # Remove the flag
+        if room_id:
+            ok = clear_room_prompt_changed(location_id, room_id)
+        else:
+            ok = clear_location_prompt_changed(location_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Location/Raum nicht gefunden")
+        return {"status": "success", "prompt_changed": False}
+    else:
+        # Set the flag
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") == location_id:
+                if room_id:
+                    for room in loc.get("rooms", []):
+                        if room.get("id") == room_id:
+                            room["prompt_changed"] = True
+                            _save_world_data(data)
+                            return {"status": "success", "prompt_changed": True}
+                    raise HTTPException(status_code=404, detail="Raum nicht gefunden")
+                else:
+                    loc["prompt_changed"] = True
+                    _save_world_data(data)
+                    return {"status": "success", "prompt_changed": True}
+        raise HTTPException(status_code=404, detail="Location nicht gefunden")
