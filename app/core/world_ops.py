@@ -21,10 +21,11 @@ from app.models.world import (
     get_background_path, get_background_file_path,
     get_background_images, remove_background_image,
     get_gallery_dir, list_gallery_images,
-    get_all_gallery_prompts,
+    save_gallery_prompt, get_all_gallery_prompts,
     set_gallery_image_room, get_gallery_image_rooms, remove_gallery_image_room,
     set_gallery_image_type, get_gallery_image_types, remove_gallery_image_type,
-    get_gallery_image_metas,
+    set_gallery_image_meta, get_gallery_image_metas,
+    get_room_by_id,
     toggle_background_image,
     clear_room_prompt_changed, clear_location_prompt_changed)
 
@@ -1489,3 +1490,759 @@ def set_location_prompt_changed(location_id: str, room_id: str,
                     _save_world_data(data)
                     return {"status": "success", "prompt_changed": True}
         raise HTTPException(status_code=404, detail="Location nicht gefunden")
+
+
+# === Gallery image generation ===
+
+async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Actual generation logic — fired by the single mode as a background
+    task and awaited directly by the batch mode (dispatchers in
+    app/routes/world.py).
+    """
+    import time
+
+    try:
+        custom_prompt = data.get("prompt", "").strip()
+        room_id = data.get("room_id", "").strip()
+        prompt_type = data.get("prompt_type", "").strip()  # day/night/map/description
+        workflow_name = data.get("workflow", "").strip()
+        backend_name = data.get("backend", "").strip()
+        loras_override = data.get("loras")
+        model_override = data.get("model_override", "").strip()
+        batch_track_id = data.get("_batch_track_id", "")
+        fit_neighbors = bool(data.get("fit_neighbors"))
+        # Edge matching: same mapfit workflow as Fit, only the mask (frame)
+        # + prompt (transition) differ. edge_sides = the selected sides.
+        edge_match = bool(data.get("edge_match"))
+        edge_sides = data.get("edge_sides") or None
+        _map_blend = fit_neighbors or edge_match
+
+        location = resolve_location(location_name)
+        if not location:
+            raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+
+        # Prompt source: custom_prompt > room+type > room > prompt type > location description
+        if custom_prompt:
+            prompt = custom_prompt
+        else:
+            description = ""
+            if room_id:
+                room = get_room_by_id(location, room_id)
+                if room:
+                    # Room with prompt type: prefer the room's day/night prompt
+                    if prompt_type == "day":
+                        description = (room.get("image_prompt_day", "") or "").strip()
+                    elif prompt_type == "night":
+                        description = (room.get("image_prompt_night", "") or "").strip()
+                    if not description:
+                        description = room.get("image_prompt_day", "") or room.get("description", "")
+            if not description and prompt_type == "day":
+                description = location.get("image_prompt_day", "").strip()
+            elif not description and prompt_type == "night":
+                description = location.get("image_prompt_night", "").strip()
+            elif not description and prompt_type == "map_2d":
+                description = location.get("image_prompt_map_2d", "").strip()
+            if not description:
+                description = location.get("description", location.get("name", location_name))
+
+            # Subject only — framing/style come from the use case (map/location).
+            prompt = description
+
+        # The map/location style now comes from the use case (applied below
+        # via resolve_use_case_style) — no separate suffix anymore.
+        from app.core.dependencies import get_skill_manager
+
+        skill_manager = get_skill_manager()
+        img_skill = None
+        for skill in skill_manager.skills:
+            if getattr(skill, 'SKILL_ID', '') == "image_generation":
+                img_skill = skill
+                break
+
+        if not img_skill:
+            raise HTTPException(status_code=503, detail="ImageGeneration Skill nicht verfuegbar")
+
+        # Freshly check the availability of all backends — network calls go into
+        # a thread, otherwise they block the event loop (the watchdog trips).
+        await asyncio.to_thread(
+            lambda: [b.check_availability()
+                     for b in img_skill.backends if b.instance_enabled])
+
+        # Backend selection: map-blend (inpaint) > match spec > explicit > auto (cheapest)
+        backend = None
+        if _map_blend:
+            # Fit AND edge blending need an inpaint-capable backend. The backend
+            # picked in the dialog (data["backend"]) has priority; without a
+            # pick fall back to MAPFIT_IMAGEGEN_DEFAULT (a backend match spec).
+            # Legacy "workflow:*" specs resolve to None and drop through.
+            _fit_spec = ((data.get("backend") or "").strip()
+                         or (os.environ.get("MAPFIT_IMAGEGEN_DEFAULT") or "").strip())
+            if _fit_spec:
+                backend = img_skill.resolve_imagegen_target(_fit_spec)
+            if not backend:
+                # No (usable) spec — cheapest available inpaint-category backend.
+                _inpaint = [b for b in img_skill.backends
+                            if b.available and b.instance_enabled
+                            and (getattr(b, "category", "") or "") == "inpaint"]
+                backend = img_skill.pick_lowest_cost(_inpaint, rotation_key="mapfit")
+            if not backend:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Kein Inpaint-faehiges Backend fuer Map-Fit/Edge verfuegbar")
+            logger.info("Map-Blend (%s): spec=%s -> Backend=%s",
+                        "edge" if edge_match else "fit", _fit_spec, backend.name)
+        elif workflow_name:
+            # Match concept: glob + availability instead of an exact name.
+            # An additionally pinned endpoint (backend_name) forces that instance.
+            backend = img_skill.resolve_imagegen_target(
+                workflow_name, preferred_backend=backend_name)
+            if not backend and backend_name:
+                # Explicitly pinned endpoint not available -> CLEAR error
+                # instead of a silent fallback to another instance.
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Gewaehltes Backend '{backend_name}' ist nicht verfuegbar")
+            if not backend:
+                logger.warning(
+                    "Imagegen-Spec '%s' ergab kein verfuegbares Backend", workflow_name)
+            else:
+                logger.info("Imagegen-Spec (match): %s -> Backend: %s",
+                            workflow_name, backend.name)
+        elif backend_name:
+            # Backend glob via the match concept. _wait_for_explicit_backend probes
+            # the matching backends FRESH (instead of trusting stale b.available) —
+            # needed for freshly configured cloud backends (CivitAI/Together).
+            backend = (img_skill._wait_for_explicit_backend(backend_name)
+                       or img_skill.match_backend(backend_name))
+            logger.debug("Explizites Backend: %s -> %s", backend_name, backend.name if backend else 'nicht verfuegbar')
+            # Explicit choice + not available -> CLEAR error instead of a silent
+            # ComfyUI fallback (otherwise the user thinks CivitAI was used).
+            if not backend:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Gewaehltes Backend '{backend_name}' ist nicht verfuegbar "
+                           f"(z.B. ungueltiger API-Key / offline). Kein automatischer Fallback.")
+
+        if not backend:
+            backend = img_skill._select_backend()
+        if not backend:
+            raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
+
+        # Map blend: auto-prompt only as a fallback when NO prompt came along (the
+        # dialog already delivers it editable via .../fit-prompt or .../edge-prompt).
+        # Terrain hint only when the backend wants it (terrain_hint) — otherwise the
+        # prompt only describes the target style, the gray canvas supplies the context itself.
+        if _map_blend and not custom_prompt and getattr(backend, "terrain_hint", False):
+            # The terrain analysis makes blocking LLM submits (describe_map_tile,
+            # up to one per neighbor side) → into a thread so the event loop
+            # stays free. This was the cause of the watchdog block.
+            if edge_match:
+                _ep = await asyncio.to_thread(_edge_transition_prompt, location, edge_sides)
+                if _ep:
+                    prompt = _ep
+                    logger.info("Edge-Match Auto-Prompt: %s", _ep)
+            else:
+                _hint = await asyncio.to_thread(_neighbor_terrain_hint, location)
+                if _hint:
+                    prompt = _hint
+                    logger.info("Map-Fit Auto-Prompt: %s", _hint)
+
+        # Regenerate (self-reference): the prompt is a literal adjustment
+        # instruction for the reference workflow (e.g. "road turns right") — NO
+        # use-case prefix, NO use-case negative, no other manipulation.
+        _is_regen = bool(data.get("use_source_as_reference"))
+        # Optional "what do you want to change" request: the same LLM function
+        # as in the character/Instagram regenerate builds the final prompt from
+        # it. Left empty -> the prompt stays literal.
+        _improve = (data.get("improvement_request") or "").strip()
+        if _is_regen and _improve:
+            from app.skills.image_regenerate import enhance_prompt
+            prompt = await asyncio.to_thread(enhance_prompt, prompt, _improve, None)
+            logger.info("Regenerate-Prompt via enhance_prompt umgeschrieben: %s", prompt[:120])
+        # Use-case style/negative: map blend (inpaint) -> "mapfit" (fill gray
+        # areas seamlessly, no "new tile" style), normal tile -> "map",
+        # otherwise location background.
+        from app.core import config as _cfg
+        _uc_name = "mapfit" if _map_blend else ("map" if prompt_type == "map_2d" else "location")
+        _ucp = _cfg.resolve_use_case_style(
+            _uc_name, getattr(backend, "image_family", "") or "",
+            backend_model=getattr(backend, "model", "") or "")
+        if _is_regen:
+            full_prompt = prompt
+            negative = ""
+        elif _map_blend and custom_prompt:
+            # The Fit/Edge dialog delivers the (mapfit) prompt already fully edited
+            # — take it literally, do NOT double the style prefix. The negative
+            # still comes from the mapfit use case. Without a dialog prompt (batch)
+            # it falls back to style+auto-hint below.
+            full_prompt = prompt
+            negative = _ucp.get("prompt_negative", "")
+        else:
+            full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
+            negative = _ucp.get("prompt_negative", "")
+        # Map icons are small thumbnails for the world overview and get
+        # downscaled. Day/night/description stay at full resolution
+        # as background images.
+        params: Dict[str, Any] = {"width": _location_image_width(), "height": _location_image_height()}
+        if prompt_type == "map_2d":
+            params["image_use_case"] = "map"
+            # Generate 2D map tiles square (1:1, Flux-native 1024) instead of
+            # the 16:9 location format — fills the tile. Otherwise landscape.
+            params["width"] = 1024
+            params["height"] = 1024
+        # Model override from the dialog — backends read params["model"].
+        if model_override:
+            params["model"] = model_override
+        # LoRA selection from the dialog.
+        if loras_override is not None:
+            params["lora_inputs"] = loras_override
+
+        # Fresh seed per call so a regenerate produces a new image.
+        import random as _rnd
+        params["seed"] = _rnd.randint(1, 2**31 - 1)
+
+        # Self-reference: the existing (map) image as reference in slot 1 —
+        # for "regenerate with current image" (e.g. so 2D tiles fit together
+        # better). Only if the backend has reference slots.
+        if (data.get("use_source_as_reference") and data.get("reference_image")
+                and int(getattr(backend, "ref_slot_count", 0) or 0) >= 1):
+            _ref_name = (data.get("reference_image") or "").strip()
+            if _ref_name and "/" not in _ref_name and ".." not in _ref_name:
+                # get_gallery_dir is imported module-wide (top). NO local import
+                # here — it would turn get_gallery_dir into a function-wide local
+                # variable and blow up the save path (below) with an
+                # UnboundLocalError as soon as this block does not run.
+                _ref_path = get_gallery_dir(location_name) / _ref_name
+                if _ref_path.exists():
+                    params["reference_images"] = {"input_reference_image_1": str(_ref_path)}
+                    logger.info("Map-Selbst-Referenz in Slot 1: %s", _ref_name)
+
+        # Neighbor-context inpainting: build the 3x3 canvas + mask and inject
+        # them as input_reference_image/input_mask. Fit = gray center (whole
+        # tile new); Edge = real tile + frame mask of the selected sides.
+        _fit_comp = None
+        _edge_pair = None
+        _cpath = _mpath = None
+        # Inpaint mask parameters come purely from the backend fields (no flag,
+        # no per-model special casing). Only applies when the backend is an
+        # inpaint backend (category=="inpaint").
+        if getattr(backend, "category", "") == "inpaint":
+            _grow = float(getattr(backend, "mask_grow", MAP_BLEND_MASK_GROW_GRAY))
+            _full = bool(getattr(backend, "full_mask", True))
+            _inner = float(getattr(backend, "inner_crop", MAP_FIT_INNER_CROP))
+        else:
+            _grow = MAP_BLEND_MASK_GROW_FILL
+            _full = False
+            _inner = MAP_FIT_INNER_CROP
+        if edge_match:
+            # EXACTLY two adjacent tiles, ONE edge. Seam hard gray, mask =
+            # strip * mask_grow. The backend returns ONE image — this module
+            # cuts it down the middle and puts both halves into the neighbor locations.
+            _side = (edge_sides[0] if isinstance(edge_sides, (list, tuple)) and edge_sides
+                     else (edge_sides if isinstance(edge_sides, str) else ""))
+            _ep = _compose_edge_pair(location, _side, mask_grow=_grow)
+            if _ep:
+                _cpath, _mpath, _edge_pair = _ep
+                params["image_use_case"] = "mapfit"  # bypass the 400 cap: full output for cutting
+        elif fit_neighbors:
+            _fit_comp = _compose_neighbor_canvas(location, crop_empty=True, mask_grow=_grow,
+                                                 full_mask=_full, inner_crop=_inner)
+            if _fit_comp:
+                _cpath, _mpath, _ctile, _cfrac = _fit_comp
+                # Bypass the 400 cap: the backend shall return the FULL canvas so
+                # that the center is cropped out at full resolution. Without this
+                # the output is shrunk to 400px (map cap) beforehand → the
+                # center crop yields only ~290px upscaled (blurry).
+                params["image_use_case"] = "mapfit"
+        if _cpath and _mpath:
+            # Canvas (pure RGB) -> input_reference_image, inpaint mask -> input_mask.
+            # Both at original resolution; give the workflow the real canvas dimensions.
+            params["reference_images"] = {
+                "input_reference_image": _cpath, "input_mask": _mpath}
+            from PIL import Image as _ImgSz
+            with _ImgSz.open(_cpath) as _cv:
+                _cw, _ch = _cv.size
+            params["width"] = _cw
+            params["height"] = _ch
+            logger.info("Map-Blend: Canvas + Inpaint-Maske injiziert (%dx%d)", _cw, _ch)
+            try:
+                import shutil as _sh
+                from app.core.paths import get_storage_dir as _gsd
+                _dbg = _gsd() / "mapblend_debug"
+                _dbg.mkdir(parents=True, exist_ok=True)
+                _sh.copy(_cpath, _dbg / "last_canvas.png")
+                _sh.copy(_mpath, _dbg / "last_mask.png")
+                (_dbg / "last_prompt.txt").write_text(
+                    f"mode: {'edge' if edge_match else 'fit'}\n"
+                    f"location: {location.get('name', '')} ({location.get('id', '')})\n"
+                    f"edge_sides: {edge_sides}\n\n"
+                    f"PROMPT:\n{full_prompt}\n\nNEGATIVE:\n{negative}\n",
+                    encoding="utf-8")
+                # Log the md5 too → 1:1 comparison with the backend's "Ref-Inject"
+                # log line: this proves that the mapblend_debug files are exactly
+                # the ones that go to ComfyUI.
+                import hashlib as _hl
+                _cmd5 = _hl.md5(Path(_cpath).read_bytes()).hexdigest()[:12]
+                _mmd5 = _hl.md5(Path(_mpath).read_bytes()).hexdigest()[:12]
+                logger.info("Map-Blend Debug (%s): %s | canvas md5=%s mask md5=%s",
+                            "edge" if edge_match else "fit", _dbg, _cmd5, _mmd5)
+            except Exception as _de:
+                logger.debug("Map-Blend Debug-Copy fehlgeschlagen: %s", _de)
+        elif _map_blend:
+            logger.info("Map-Fit/Edge: kein Nachbar/Grid-Position — normaler Lauf")
+
+        from app.core.task_queue import get_task_queue
+        _tq = get_task_queue()
+        if batch_track_id:
+            _track_id = batch_track_id
+        else:
+            _track_id = _tq.track_start(
+                "image_gen", "Ort-Bild", agent_name=location.get("name", location_name),
+                provider=backend.name, start_running=False)
+
+        _gen_start = time.time()
+        try:
+            # Generate via the GPU provider queue — serialized per backend
+            # (never two in parallel); activates the track only once the channel
+            # picks up the work; waiting world gens thus stay correctly "pending".
+            # Context for the CENTRAL logging in backend.generate() (final_prompt,
+            # backend, model, LoRAs, refs, duration are set by generate() itself).
+            _log_meta = {"agent_name": location.get("name", location_name),
+                         "original_prompt": prompt, "auto_enhance": False}
+            def _op(b):
+                def _gen():
+                    try:
+                        from app.core.task_router import match_queue_name
+                        _tq.track_activate(_track_id, queue_name=match_queue_name(b.name) or "", provider=b.name)
+                    except Exception:
+                        pass
+                    return b.generate(full_prompt, negative, params, log_meta=_log_meta)
+                if getattr(b, "api_type", "") == "a1111":
+                    from app.core.llm_queue import get_llm_queue, Priority as _P
+                    return get_llm_queue().submit_gpu_task(
+                        provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
+                        callable_fn=_gen, agent_name=location.get("name", location_name),
+                        gpu_type=b.api_type)
+                return _gen()
+            try:
+                images, backend = await asyncio.to_thread(
+                    lambda: img_skill.run_with_fallback(
+                        primary_backend=backend, op=_op,
+                        character_name=""))
+            except RuntimeError as _err:
+                _tq.track_finish(_track_id, error=str(_err)[:200])
+                raise HTTPException(status_code=500, detail=str(_err))
+
+            if not images:
+                _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")
+                raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
+
+            # Edge pair (new model): cut the returned ONE image down the middle,
+            # rotate each half back to north by its own rotation, bring it to the
+            # map thumbnail (400) and store it in the respective location as a
+            # new map_2d tile. Then done immediately.
+            if _edge_pair:
+                import io as _io2
+                from PIL import Image as _ImgE
+                from app.core.image_postprocess import downscale_bytes
+                from app.models.world import set_location_map_image
+                _full = _ImgE.open(_io2.BytesIO(images[0])).convert("RGB")
+                _W, _H = _full.size
+                if _edge_pair["axis"] == "x":
+                    _mid = _W // 2
+                    _first = _full.crop((0, 0, _mid, _H))
+                    _second = _full.crop((_mid, 0, _W, _H))
+                else:
+                    _mid = _H // 2
+                    _first = _full.crop((0, 0, _W, _mid))
+                    _second = _full.crop((0, _mid, _W, _H))
+                _a_half = _first if _edge_pair["a_first"] else _second
+                _b_half = _second if _edge_pair["a_first"] else _first
+                _saved = []
+                for _hl, _loc2, _rot2 in ((_a_half, _edge_pair["a_loc"], _edge_pair["a_rot"]),
+                                          (_b_half, _edge_pair["b_loc"], _edge_pair["b_rot"])):
+                    if _rot2:
+                        _hl = _hl.rotate(_rot2, expand=False)  # back to north
+                    _bb = _io2.BytesIO(); _hl.save(_bb, format="PNG")
+                    _png = downscale_bytes(_bb.getvalue(), "map")  # map thumbnail (400)
+                    _lid2 = _loc2.get("id", "")
+                    _gd2 = get_gallery_dir(_lid2); _gd2.mkdir(parents=True, exist_ok=True)
+                    _nm2 = f"{int(time.time())}_{_lid2[:6]}.png"
+                    (_gd2 / _nm2).write_bytes(_png)
+                    save_gallery_prompt(_lid2, _nm2, full_prompt)
+                    set_gallery_image_type(_lid2, _nm2, "map_2d")
+                    set_gallery_image_meta(_lid2, _nm2, {
+                        "backend": backend.name, "backend_type": backend.api_type,
+                        "model": (getattr(backend, 'model', '') or ''), "loras": []})
+                    set_location_map_image(_lid2, "map_image_2d", _nm2)  # show the new tile
+                    toggle_background_image(_lid2, _nm2)
+                    _saved.append({"location_id": _lid2, "image": _nm2})
+                for _tmp in (_cpath, _mpath):
+                    try:
+                        os.remove(_tmp)
+                    except Exception:
+                        pass
+                _tq.track_finish(_track_id)
+                logger.info("Edge-Pair gespeichert: %s", _saved)
+                return {"status": "success", "edge": True, "saved": _saved}
+
+            # Map-Fit/Edge: the backend crops the center (the new tile) out of the
+            # returned full canvas (via a fraction box, robust against the output
+            # resolution) and scales it to MAP_FIT_OUT_TILE. The workflow no
+            # longer gets a crop mask.
+            if _fit_comp:
+                try:
+                    import io as _io
+                    from PIL import Image as _Img
+                    _full = _Img.open(_io.BytesIO(images[0])).convert("RGB")
+                    _w, _h = _full.size
+                    _fx0, _fy0, _fx1, _fy1 = _cfrac
+                    _box = (round(_fx0 * _w), round(_fy0 * _h),
+                            round(_fx1 * _w), round(_fy1 * _h))
+                    _crop = _full.crop(_box)
+                    if _crop.size != (MAP_FIT_OUT_TILE, MAP_FIT_OUT_TILE):
+                        _crop = _crop.resize((MAP_FIT_OUT_TILE, MAP_FIT_OUT_TILE), _Img.LANCZOS)
+                    _buf = _io.BytesIO()
+                    _crop.save(_buf, format="PNG")
+                    images = [_buf.getvalue()]
+                    logger.info("Map-Fit: Mitte %s aus %dx%d -> %dpx", _box, _w, _h, MAP_FIT_OUT_TILE)
+                except Exception as _ce:
+                    logger.warning("Map-Fit Crop fehlgeschlagen: %s", _ce)
+                finally:
+                    for _tmp in (_fit_comp[0], _fit_comp[1]):
+                        try:
+                            os.remove(_tmp)
+                        except Exception:
+                            pass
+
+            # Map blend: the canvas is built in DISPLAY orientation (center + neighbors
+            # each rotated by their map_rotation_2d). The result tile therefore must be
+            # rotated BACK to north by exactly this rotation BEFORE saving, otherwise
+            # the display (map_rotation_2d) rotates it a second time -> doubly twisted.
+            _rot = int(location.get("map_rotation_2d") or 0) if _map_blend else 0
+            if _rot:
+                try:
+                    import io as _io3
+                    from PIL import Image as _Img3
+                    _im = _Img3.open(_io3.BytesIO(images[0])).rotate(_rot, expand=False)
+                    _b = _io3.BytesIO()
+                    _im.save(_b, format="PNG")
+                    images = [_b.getvalue()]
+                    logger.info("Map-Blend: Ergebnis um %d° nach Norden zurueckgedreht", _rot)
+                except Exception as _re:
+                    logger.warning("Map-Blend Rueckdrehung fehlgeschlagen: %s", _re)
+
+            loc_id = location.get("id", location_name)
+            gallery_dir = get_gallery_dir(loc_id)
+            gallery_dir.mkdir(parents=True, exist_ok=True)
+            # Replace ("new image" checkbox off): overwrite the source image
+            # in place — keeps the file name and thus the room/type/map assignment
+            # and the background flag. Otherwise a new image with a timestamp.
+            _replace_src = (data.get("reference_image") or "").strip() if data.get("replace_source") else ""
+            _is_replace = bool(
+                _replace_src and "/" not in _replace_src and ".." not in _replace_src
+                and (gallery_dir / _replace_src).exists())
+            image_name = _replace_src if _is_replace else f"{int(time.time())}.png"
+            image_path = gallery_dir / image_name
+            image_path.write_bytes(images[0])
+
+            # Save the prompt for a later upgrade
+            save_gallery_prompt(loc_id, image_name, full_prompt)
+
+            # Mark the new image as background by default — do NOT toggle on an
+            # in-place replace (otherwise an already-set flag flips over).
+            if not _is_replace:
+                toggle_background_image(loc_id, image_name)
+
+            # Set the room assignment when room_id is given
+            if room_id:
+                set_gallery_image_room(loc_id, image_name, room_id)
+                # Remove the prompt_changed flag — the image was created from the prompt
+                from app.models.world import clear_room_prompt_changed
+                clear_room_prompt_changed(loc_id, room_id)
+            elif not custom_prompt:
+                # Location-level prompt was used — remove the flag there
+                from app.models.world import clear_location_prompt_changed
+                clear_location_prompt_changed(loc_id)
+
+            # Save generation metadata (service + model + LoRAs)
+            _model_used = (getattr(backend, 'last_used_checkpoint', '')
+                           or getattr(backend, 'model', '')
+                           or getattr(backend, 'checkpoint', '') or '')
+            _loras_used = [str(l.get("name")).strip()
+                           for l in (params.get("lora_inputs") or params.get("loras") or [])
+                           if isinstance(l, dict) and (l.get("name") or "").strip()
+                           and l.get("name") != "None"]
+            set_gallery_image_meta(loc_id, image_name, {
+                "backend": backend.name,
+                "backend_type": backend.api_type,
+                "model": _model_used,
+                "loras": _loras_used,
+            })
+
+            # Set the image type when prompt_type is given (day/night/map_2d)
+            if prompt_type in ("day", "night", "map_2d"):
+                set_gallery_image_type(loc_id, image_name, prompt_type)
+            # Set the newly created map tile as the displayed map item right away
+            # (fit/neighbor + normal map_2d gen) — otherwise the old tile would stay active.
+            if prompt_type == "map_2d":
+                from app.models.world import set_location_map_image
+                set_location_map_image(loc_id, "map_image_2d", image_name)
+
+            _tq.track_finish(_track_id)
+            _gen_duration = time.time() - _gen_start
+            logger.info("Bild generiert: %s (%s)/%s%s", location['name'], loc_id, image_name,
+                        f" room={room_id}" if room_id else "")
+
+            # Image-prompt logging now happens CENTRALLY in backend.generate()
+            # (with the final, trigger-injected prompt) — via log_meta below.
+            return {"status": "success", "location": location["name"], "location_id": loc_id, "image": image_name}
+        except HTTPException:
+            raise
+        except Exception as e:
+            _tq.track_finish(_track_id, error=str(e))
+            raise
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Gallery Fehler: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def generate_time_variant_core(location_name: str, image_name: str,
+                                     target_type: str, workflow_name: str,
+                                     backend_name: str,
+                                     custom_prompt: str) -> Dict[str, Any]:
+    """Logic core of the day/night time variant (img2img with the source
+    image as the reference). The route keeps parsing/traversal/HTTP mapping;
+    the 404 guards for location/source image sit mid-logic here.
+    """
+    import time
+
+    location = resolve_location(location_name)
+    if not location:
+        raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+
+    loc_id = location.get("id", location_name)
+    gallery_dir = get_gallery_dir(loc_id)
+    source_path = gallery_dir / image_name
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Quellbild nicht gefunden")
+
+    # Prompt: custom or automatically from the day/night prompt / description
+    prompt_field = f"image_prompt_{target_type}"
+    if custom_prompt:
+        prompt = custom_prompt
+    else:
+        # Check the room assignment of the source image
+        image_rooms = get_gallery_image_rooms(loc_id)
+        source_room_id = image_rooms.get(image_name, "")
+        description = ""
+        is_room = False
+        if source_room_id:
+            room = get_room_by_id(location, source_room_id)
+            if room:
+                is_room = True
+                description = (room.get(prompt_field, "") or
+                               room.get("description", ""))
+        if not description:
+            description = (location.get(prompt_field, "") or
+                           location.get("description", location.get("name", location_name)))
+
+        if is_room:
+            # Interior: no sky/stars, adjust the lighting instead
+            if target_type == "night":
+                prompt = (
+                    f"{description}, nighttime interior, dim warm lighting, "
+                    f"lamp light, evening atmosphere, cozy shadows, "
+                    f"window showing dark sky outside, "
+                    f"wide angle interior shot, no people, "
+                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
+                )
+            else:
+                prompt = (
+                    f"{description}, daytime interior, bright natural light, "
+                    f"sunlight through windows, warm daylight atmosphere, "
+                    f"wide angle interior shot, no people, "
+                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
+                )
+        else:
+            # Outdoor area / location
+            if target_type == "night":
+                prompt = (
+                    f"{description}, nighttime, dark sky, moonlight, "
+                    f"night atmosphere, dim lighting, stars, evening mood, "
+                    f"wide angle establishing shot, no people, "
+                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
+                )
+            else:
+                prompt = (
+                    f"{description}, daytime, bright sunlight, clear sky, "
+                    f"warm daylight atmosphere, natural lighting, "
+                    f"wide angle establishing shot, no people, "
+                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
+                )
+
+    from app.core.dependencies import get_skill_manager
+
+    skill_manager = get_skill_manager()
+    img_skill = None
+    for skill in skill_manager.skills:
+        if getattr(skill, 'SKILL_ID', '') == "image_generation":
+            img_skill = skill
+            break
+
+    if not img_skill:
+        raise HTTPException(status_code=503, detail="ImageGeneration Skill nicht verfuegbar")
+
+    # Check availability — network calls go into a thread, otherwise
+    # they block the event loop (the watchdog trips).
+    await asyncio.to_thread(
+        lambda: [b.check_availability()
+                 for b in img_skill.backends if b.instance_enabled])
+
+    # Backend selection: explicit spec > explicit backend > reference-capable auto
+    backend = None
+    if workflow_name:
+        # Match concept: glob + availability instead of an exact name.
+        # Legacy "workflow:*" specs resolve to None and drop through.
+        backend = img_skill.resolve_imagegen_target(workflow_name)
+    elif backend_name:
+        backend = img_skill.match_backend(backend_name)  # backend glob via match concept
+
+    if not backend:
+        # Prefer an edit-capable backend with at least one reference-image
+        # slot. NO inpaint backends: they expect a mask, which the
+        # day/night convert does not provide.
+        candidates = [b for b in img_skill.list_available_backends()
+                      if int(getattr(b, "ref_slot_count", 0) or 0) >= 1
+                      and (getattr(b, "category", "") or "") != "inpaint"]
+        backend = img_skill.pick_lowest_cost(candidates, rotation_key="time_variant")
+
+    # No fallback to backends without reference-image support — the
+    # time-variant convert strictly needs img2img with a local reference image.
+    if not backend:
+        raise HTTPException(
+            status_code=503,
+            detail="Kein Image-Backend mit Referenzbild-Support verfuegbar. "
+                   "Bitte ein Backend mit Referenz-Slots konfigurieren/starten.")
+
+    # The time variant needs an edit backend with a reference-image slot.
+    # An inpaint backend does NOT fit — it expects mask inputs.
+    if ((getattr(backend, "category", "") or "") == "inpaint"
+            or int(getattr(backend, "ref_slot_count", 0) or 0) < 1):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Backend '{backend.name}' ist fuer Tag/Nacht-Varianten "
+                    "ungeeignet (Inpaint bzw. ohne Referenzbild-Slot)."))
+
+    from app.core import config as _cfg
+    _ucp = _cfg.resolve_use_case_style(
+        "location", getattr(backend, "image_family", "") or "",
+        backend_model=getattr(backend, "model", "") or "")
+    full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
+    negative = _ucp.get("prompt_negative", "")
+    # Day/night variants are background images — full size, no downscale.
+    params = {"width": _location_image_width(), "height": _location_image_height()}
+
+    # Fresh seed per call — the time variant should always produce a new
+    # image instead of hitting a backend-side prompt+seed cache.
+    import random as _rnd
+    params["seed"] = _rnd.randint(1, 2**31 - 1)
+
+    # The source image is the image being edited (primary edit reference)
+    # in reference slot 1.
+    params["reference_images"] = {
+        "input_reference_image_1": str(source_path),
+    }
+
+    from app.core.task_queue import get_task_queue
+    _tq = get_task_queue()
+    _variant_label = "Nachtansicht" if target_type == "night" else "Tagansicht"
+    _track_id = _tq.track_start(
+        "image_gen", _variant_label, agent_name=location.get("name", location_name),
+        provider=backend.name, start_running=False)
+
+    _gen_start = time.time()
+    try:
+        # GPU provider queue: serialized per backend + track only active
+        # once the channel picks up the work (waiting ones stay "pending").
+        _log_meta = {"agent_name": location.get("name", location_name),
+                     "original_prompt": prompt, "auto_enhance": False}
+        def _op(b):
+            def _gen():
+                try:
+                    from app.core.task_router import match_queue_name
+                    _tq.track_activate(_track_id, queue_name=match_queue_name(b.name) or "", provider=b.name)
+                except Exception:
+                    pass
+                return b.generate(full_prompt, negative, params, log_meta=_log_meta)
+            if getattr(b, "api_type", "") == "a1111":
+                from app.core.llm_queue import get_llm_queue, Priority as _P
+                return get_llm_queue().submit_gpu_task(
+                    provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
+                    callable_fn=_gen, agent_name=location.get("name", location_name),
+                    gpu_type=b.api_type)
+            return _gen()
+        try:
+            images, backend = await asyncio.to_thread(
+                lambda: img_skill.run_with_fallback(
+                    primary_backend=backend, op=_op,
+                    character_name=""))
+        except RuntimeError as _err:
+            _tq.track_finish(_track_id, error=str(_err)[:200])
+            raise HTTPException(status_code=500, detail=str(_err))
+
+        if not images:
+            _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")
+            raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
+
+        gallery_dir.mkdir(parents=True, exist_ok=True)
+        new_image_name = f"{int(time.time())}.png"
+        new_image_path = gallery_dir / new_image_name
+        new_image_path.write_bytes(images[0])
+
+        # Save the prompt
+        save_gallery_prompt(loc_id, new_image_name, full_prompt)
+
+        # Mark as background
+        toggle_background_image(loc_id, new_image_name)
+
+        # Set the type (day/night)
+        set_gallery_image_type(loc_id, new_image_name, target_type)
+
+        # Take over the room assignment from the source image
+        image_rooms = get_gallery_image_rooms(loc_id)
+        source_room = image_rooms.get(image_name, "")
+        if source_room:
+            set_gallery_image_room(loc_id, new_image_name, source_room)
+
+        # Save the meta
+        _model_used = (getattr(backend, 'last_used_checkpoint', '')
+                       or getattr(backend, 'model', '')
+                       or getattr(backend, 'checkpoint', '') or '')
+        _loras_used = [str(l.get("name")).strip()
+                       for l in (params.get("lora_inputs") or params.get("loras") or [])
+                       if isinstance(l, dict) and (l.get("name") or "").strip()
+                       and l.get("name") != "None"]
+        set_gallery_image_meta(loc_id, new_image_name, {
+            "backend": backend.name,
+            "backend_type": backend.api_type,
+            "model": _model_used,
+            "loras": _loras_used,
+            "source": image_name,
+        })
+
+        _tq.track_finish(_track_id)
+        _gen_duration = time.time() - _gen_start
+        logger.info("%s generiert: %s (%s)/%s -> %s", _variant_label, location['name'], loc_id, image_name, new_image_name)
+
+        # Image-prompt logging now happens CENTRALLY in backend.generate()
+        # (final, trigger-injected) — via log_meta on the generate call.
+        return {"status": "success", "location_id": loc_id, "image": new_image_name, "source": image_name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _tq.track_finish(_track_id, error=str(e))
+        raise
