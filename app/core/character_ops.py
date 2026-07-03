@@ -12,6 +12,26 @@ logger = get_logger("characters")
 
 from app.core.timeutils import utc_now
 
+# File-default whitelist (single source of truth for the soul editor UI)
+from app.core.soul_sections import (
+    EDITABLE_SECTIONS as _SOUL_EDITABLE,
+    LOCKED_SECTIONS as _SOUL_LOCKED,
+    SECTION_FILE_MAP as _SOUL_FILE_MAP,
+    EDITABLE_MARKER as _SOUL_EDITABLE_MARKER)
+
+DEFAULT_NEW_CHARACTER_SKILLS = (
+    # Skill IDs from app/skills/skill_manager.py:SKILL_REGISTRY.
+    # Defaults for newly created characters -- the list matches the ticks in
+    # the Skills tab for a "freshly born" character (everything essential on,
+    # special/niche skills like OutfitCreation, VideoGenerator, Retrospect,
+    # MarkdownWriter, KnowledgeExtract stay off because they cost tokens/setup
+    # and not every NPC needs them).
+    "imagegen", "setlocation", "talk_to", "send_message", "notify_user",
+    "instagram_comment", "instagram_reply",
+    "consume_item", "outfit_change", "setactivity",
+    "invite_to_party", "join_party", "leave_party",
+)
+
 
 # === Pure helpers ===
 
@@ -835,3 +855,1038 @@ def build_memory_history(character_name: str,
         return {"character": character_name, "kind": kind, "items": items}
 
     raise HTTPException(status_code=400, detail=f"unknown kind: {kind}")
+
+
+# ===========================================================================
+# 5a Runde B — simple-domain + soul/status/template/create logic cores
+# Moved 1:1 out of app/routes/characters.py; routes remain thin adapters.
+# ===========================================================================
+
+def build_available_models() -> Dict[str, Any]:
+    """List available models from all configured providers.
+
+    Returns model lists grouped by provider, plus current task defaults.
+    Used by the frontend for per-character model selection dropdowns.
+    """
+    from app.core.provider_manager import get_provider_manager
+    from app.core.model_capabilities import (get_model_capabilities,
+                                             get_all_suitability)
+
+    pm = get_provider_manager()
+    providers = pm.list_all_models()
+    suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
+
+    # Attach capabilities to each model. Pre-fill the vision column: if nothing
+    # is stored (None) and the name identifies a vision model, pre-fill with
+    # True. (The name heuristic can only confirm vision, not rule it out
+    # -> for non-vision names it stays unknown.) COPY the caps, otherwise the
+    # cached _default/substring entry would be mutated.
+    # The suitability test (HW-dependent) is merged EXACTLY per full
+    # provider::model -> the same model on different hardware gets its own values.
+    for provider_name, provider_data in providers.items():
+        for model in provider_data.get("models", []):
+            caps = dict(get_model_capabilities(model.get("name", "")))
+            if caps.get("vision") is None and model.get("vision"):
+                caps["vision"] = True
+            sd = suit_all.get(f"{provider_name}::{model.get('name', '')}".lower())
+            if sd:
+                caps.update(sd)
+            model["capabilities"] = caps
+
+    return {
+        "providers": providers,
+        "task_defaults": {},
+    }
+
+
+def build_characters_at_location(location: str, room: str = "") -> Dict[str, Any]:
+    """Returns all characters located at the given place.
+
+    - `location`: ID or name of the location.
+    - `room` (optional): when set, characters get a `same_room` flag (true
+      when they are in exactly this room). No filtering happens -- the
+      frontend can grey out who is in a different room of the same location.
+    """
+    from app.models.world import resolve_location, get_room_by_id
+    from app.models.character import get_character_current_room
+    from app.models.character import (list_available_characters,
+                                      get_character_current_location,
+                                      get_character_profile_image)
+    loc = resolve_location(location)
+    loc_id = loc.get("id", "") if loc else ""
+    loc_name = loc.get("name", location) if loc else location
+
+    # Resolve the avatar room to {id, name} -- char_room can historically be
+    # either an ID or a name, so we match against both.
+    room_norm = (room or "").strip()
+    avatar_room_id = ""
+    avatar_room_name = ""
+    if room_norm and loc:
+        _r = get_room_by_id(loc, room_norm)
+        if _r:
+            avatar_room_id = _r.get("id", "") or room_norm
+            avatar_room_name = _r.get("name", "")
+        else:
+            for _r in (loc.get("rooms") or []):
+                if _r.get("name") == room_norm:
+                    avatar_room_id = _r.get("id", "")
+                    avatar_room_name = room_norm
+                    break
+            else:
+                avatar_room_name = room_norm
+                avatar_room_id = room_norm
+
+    all_chars = list_available_characters()
+    result = []
+    for name in all_chars:
+        char_loc = get_character_current_location(name)
+        if not (char_loc and (char_loc == loc_id or char_loc == location)):
+            continue
+        char_room = (get_character_current_room(name) or "").strip()
+        # Default same_room=True; only when the avatar is in a room AND the
+        # character is explicitly in ANOTHER room does it count as "elsewhere".
+        # A character without a room is present everywhere in the location.
+        if room_norm and char_room:
+            same_room = char_room in (avatar_room_id, avatar_room_name)
+        else:
+            same_room = True
+        profile_img = get_character_profile_image(name)
+        result.append({
+            "name": name,
+            "profile_image": profile_img or "",
+            "avatar_url": f"/characters/{name}/images/{profile_img}" if profile_img else "",
+            "same_room": same_room,
+            "room": char_room,
+        })
+    return {"characters": result, "location": loc_name, "location_id": loc_id, "room": room_norm}
+
+
+def build_chatbots_list() -> Dict[str, Any]:
+    """Lists all chatbots (characters without a location system).
+
+    A chatbot is a character whose template has `locations_enabled: false` --
+    it has no world position and is always addressable.
+    """
+    from app.models.character_template import is_feature_enabled
+    from app.models.character import (list_available_characters,
+                                      get_character_profile_image)
+    all_chars = list_available_characters()
+    result = []
+    for name in all_chars:
+        # No location system = chatbot
+        if is_feature_enabled(name, "locations_enabled"):
+            continue
+        profile_img = get_character_profile_image(name)
+        result.append({
+            "name": name,
+            "profile_image": profile_img or "",
+            "avatar_url": f"/characters/{name}/images/{profile_img}" if profile_img else "",
+        })
+    return {"characters": result}
+
+
+def build_character_notice(character_name: str) -> Dict[str, Any]:
+    """Returns the persistent notices for the avatar header banner.
+
+    - ``force_warning``: active force rule (rule_name + message + go_to +
+      set_activity) OR ``None``. For the avatar the rule is NOT executed
+      automatically.
+    - ``critical_events``: unresolved events of the ``disruption``/``danger``
+      categories at the current avatar location, newest first.
+    """
+    out: Dict[str, Any] = {"force_warning": None, "critical_events": []}
+    try:
+        from app.models.rules import check_force_rules, resolve_force_destination
+        force = check_force_rules(character_name)
+        if force:
+            go_loc, go_room = resolve_force_destination(character_name,
+                                                        force.get("go_to", "stay"))
+            out["force_warning"] = {
+                "rule_id": force.get("rule_id", ""),
+                "rule_name": force.get("rule_name", ""),
+                "message": force.get("message", ""),
+                "go_to": force.get("go_to", "stay"),
+                "go_to_location_id": go_loc,
+                "go_to_room_id": go_room,
+                "set_activity": force.get("set_activity", ""),
+            }
+    except Exception as e:
+        logger.debug("notice: force_rules failed for %s: %s", character_name, e)
+
+    try:
+        from app.models.character import get_character_current_location
+        from app.models.events import list_events
+        loc_id = (get_character_current_location(character_name) or "").strip()
+        if loc_id:
+            for ev in list_events(location_id=loc_id) or []:
+                cat = (ev.get("category") or "").lower()
+                if cat not in ("disruption", "danger"):
+                    continue
+                if ev.get("resolved"):
+                    continue
+                out["critical_events"].append({
+                    "id": ev.get("id", ""),
+                    "category": cat,
+                    "text": ev.get("text", ""),
+                    "created_at": ev.get("created_at", ""),
+                })
+            out["critical_events"].sort(key=lambda e: e.get("created_at", ""), reverse=True)
+    except Exception as e:
+        logger.debug("notice: critical_events failed for %s: %s", character_name, e)
+
+    return out
+
+
+def build_profile_payload(character_name: str) -> Dict[str, Any]:
+    """Returns the complete character profile."""
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name)
+
+    # Attach token-resolved variants of the appearance fields so the frontend
+    # (e.g. profile-image generation) gets the finished text without parsing
+    # tokens itself.
+    try:
+        from app.models.character_template import (
+            get_template, resolve_profile_tokens)
+        _tmpl_id = profile.get("template", "") or ""
+        _tmpl = get_template(_tmpl_id) if _tmpl_id else None
+        for _key in ("character_appearance", "face_appearance"):
+            _raw = (profile.get(_key) or "").strip()
+            if not _raw or "{" not in _raw:
+                continue
+            _resolved = resolve_profile_tokens(
+                _raw, profile, template=_tmpl, target_key="character_appearance")
+            if _resolved and _resolved != _raw:
+                if not isinstance(profile, dict):
+                    profile = dict(profile)
+                profile[f"{_key}_resolved"] = _resolved
+    except Exception:
+        pass
+
+    # Resolve the location name so the editor shows the name instead of the ID
+    loc_id = profile.get("current_location", "")
+    if loc_id:
+        try:
+            from app.models.world import get_location_name as _get_loc_name
+            resolved = _get_loc_name(loc_id)
+            if resolved:
+                profile = dict(profile)
+                profile["current_location"] = resolved
+        except Exception:
+            pass
+    # Resolve the room name (room ID -> name)
+    room_id = profile.get("current_room", "")
+    if room_id and loc_id:
+        try:
+            from app.models.world import get_location, get_room_by_id
+            loc_data = get_location(loc_id)
+            if loc_data:
+                room = get_room_by_id(loc_data, room_id)
+                if room and room.get("name"):
+                    if not isinstance(profile, dict):
+                        profile = dict(profile)
+                    profile["current_room"] = room["name"]
+        except Exception:
+            pass
+    return {"character": character_name, "profile": profile}
+
+
+def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Updates character profile fields (bulk update)."""
+    from app.models.character import get_character_profile, save_character_profile
+    user_id = data.get("user_id", "")
+    fields = data.get("fields", {})
+    if not fields:
+        raise HTTPException(status_code=400, detail="fields fehlt")
+
+    profile = get_character_profile(character_name)
+
+    # current_location: resolve the name back to an ID so the world map keeps
+    # finding the character (GET returns the resolved name, POST gets it back).
+    if "current_location" in fields:
+        loc_val = fields["current_location"]
+        if loc_val:
+            from app.models.world import resolve_location, get_location_id
+            loc_id = get_location_id(loc_val)
+            if loc_id:
+                fields["current_location"] = loc_id
+            else:
+                loc_obj = resolve_location(loc_val)
+                if loc_obj and loc_obj.get("id"):
+                    fields["current_location"] = loc_obj["id"]
+
+    # Filter out __custom__ sentinel values (UI placeholder for custom input)
+    for k, v in list(fields.items()):
+        if v == "__custom__":
+            fields[k] = ""
+
+    # Fields with source_file belong in MD files, NOT in the JSON profile.
+    # If someone sends them here, ignore them -- the soul editor is
+    # responsible (see /characters/{char}/soul/*).
+    _sf_keys = _soul_field_keys(profile.get("template", ""))
+    for k in list(fields.keys()):
+        if k in _sf_keys:
+            fields.pop(k, None)
+
+    profile.update(fields)
+    save_character_profile(character_name, profile)
+    return {"status": "success", "character": character_name,
+            "updated_fields": list(fields.keys())}
+
+
+def build_active_conditions(character_name: str) -> Dict[str, Any]:
+    """Returns active conditions with icon/label/remaining duration.
+
+    Expired conditions are filtered out. Icons/labels come from the prompt
+    filters (Game Admin -> Conditions).
+    """
+    from datetime import datetime as _dt
+    from app.core.prompt_filters import load_filters
+    from app.models.character import get_character_profile
+
+    profile = get_character_profile(character_name)
+    active = profile.get("active_conditions", []) or []
+
+    # Index: condition_name (lowercased) -> {icon, label, image_modifier}.
+    # The filter `id` is the canonical condition name (new model): when the
+    # tag shows up in active_conditions, the filter triggers implicitly. We
+    # build the lookup primarily via id; legacy filters with a
+    # `condition:<name>` expression are additionally indexed as an alias so
+    # old data still gets an icon.
+    meta_by_name: Dict[str, Dict[str, str]] = {}
+    for f in load_filters():
+        meta = {
+            "icon": f.get("icon", "") or "",
+            "label": f.get("label", "") or "",
+            "image_modifier": f.get("image_modifier", "") or "",
+        }
+        fid = (f.get("id") or "").strip().lower()
+        if fid:
+            meta_by_name.setdefault(fid, dict(meta, label=meta["label"] or fid))
+        cond_str = (f.get("condition") or "").strip()
+        if cond_str.lower().startswith("condition:"):
+            name = cond_str[10:].strip().lower()
+            if name:
+                meta_by_name.setdefault(name, dict(meta, label=meta["label"] or name))
+
+    now = _dt.now()
+    result = []
+    for cond in active:
+        name = (cond.get("name") or "").strip()
+        if not name:
+            continue
+        # Expired?
+        duration_h = cond.get("duration_hours", 0) or 0
+        remaining_h = None
+        if duration_h:
+            try:
+                started = _dt.fromisoformat(cond["started_at"])
+                elapsed_s = (now - started).total_seconds()
+                total_s = duration_h * 3600
+                if elapsed_s > total_s:
+                    continue
+                remaining_h = round((total_s - elapsed_s) / 3600, 1)
+            except (ValueError, KeyError):
+                pass
+        meta = meta_by_name.get(name.lower(), {})
+        result.append({
+            "name": name,
+            "label": meta.get("label") or name,
+            "icon": meta.get("icon", ""),
+            "remaining_hours": remaining_h,
+            "source": cond.get("source", ""),
+        })
+    return {"character": character_name, "conditions": result}
+
+
+def apply_config_update(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Updates character config fields (bulk update)."""
+    from app.models.character import get_character_config, save_character_config
+    user_id = data.get("user_id", "")
+    fields = data.get("fields", {})
+    if not fields:
+        raise HTTPException(status_code=400, detail="fields fehlt")
+
+    config = get_character_config(character_name)
+    config.update(fields)
+    save_character_config(character_name, config)
+
+    # Immediate effect of the avatar_only_presence flag: on + uncontrolled ->
+    # disappear; off -> reappear (idempotent).
+    if "avatar_only_presence" in fields:
+        try:
+            from app.models.account import is_player_controlled
+            from app.models.character import enter_offmap_sleep, appear_in_world
+            on = str(fields.get("avatar_only_presence")).strip().lower() == "true"
+            if on:
+                if not is_player_controlled(character_name):
+                    enter_offmap_sleep(character_name)
+            else:
+                appear_in_world(character_name)
+        except Exception:
+            pass
+
+    return {"status": "success", "character": character_name, "updated_fields": list(fields.keys())}
+
+
+def build_available_skills(character_name: str) -> Dict[str, Any]:
+    """Returns all globally loaded skills with per-character enabled state and config fields."""
+    from app.core.dependencies import get_skill_manager
+    from app.models.character import get_character_skill_config
+    skill_manager = get_skill_manager()
+    skills = []
+    for skill in skill_manager.skills:
+        skill_id = skill.SKILL_ID
+        if not skill_id:
+            continue
+        config = get_character_skill_config(character_name, skill_id)
+        # Default: ALWAYS_LOAD skills start disabled, others enabled
+        default_enabled = not getattr(skill, 'ALWAYS_LOAD', False)
+        enabled = default_enabled
+        if config and "enabled" in config:
+            enabled = bool(config["enabled"])
+
+        # Config fields with defaults, types, and current values
+        config_fields = skill.get_config_fields()
+        if config_fields:
+            for field_name, field_info in config_fields.items():
+                if config and field_name in config:
+                    field_info["value"] = config[field_name]
+                else:
+                    field_info["value"] = field_info["default"]
+
+        skills.append({
+            "skill_id": skill_id,
+            "name": skill.name,
+            "description": skill.description,
+            "enabled": enabled,
+            "config_fields": config_fields if config_fields else None,
+        })
+
+    # Location list for skill config fields of type "locations"
+    from app.models.world import list_locations
+    all_locations = [{"id": loc.get("id", ""), "name": loc.get("name", "")}
+                     for loc in list_locations() if loc.get("id")]
+
+    return {"skills": skills, "locations": all_locations}
+
+
+def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Saves workflow/model/LoRA override for the outfit image service.
+    All fields empty deletes the override completely."""
+    from app.models.character import get_character_profile, save_character_profile
+    workflow = (body.get("workflow") or "").strip()
+    model = (body.get("model") or "").strip()
+    loras = body.get("loras") or []
+    if not isinstance(loras, list):
+        loras = []
+    clean_loras = []
+    for l in loras:
+        if not isinstance(l, dict):
+            continue
+        nm = (l.get("name") or "").strip()
+        if not nm or nm == "None":
+            continue
+        try:
+            st = float(l.get("strength", 1.0))
+        except Exception:
+            st = 1.0
+        clean_loras.append({"name": nm, "strength": st})
+    prof = get_character_profile(character_name) or {}
+    # Always write (even empty) -- otherwise a clear does not persist:
+    # outfit_imagegen lives in config_json and is only transferred on save when
+    # the key is PRESENT in the profile. A del leaves the old config value in
+    # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
+    # (it comes from the workflow).
+    if workflow or clean_loras:
+        prof["outfit_imagegen"] = {"workflow": workflow, "loras": clean_loras}
+    else:
+        prof["outfit_imagegen"] = {}
+    save_character_profile(character_name, prof)
+    return {"status": "ok", "workflow": workflow, "loras": clean_loras}
+
+
+def build_slot_overrides(character_name: str) -> Dict[str, Any]:
+    """Returns per-slot prompt+LoRA overrides (9 slots).
+
+    Structure: {slot: {prompt: str, lora: {name, strength}}}.
+    They only take effect when the slot is empty and not covered.
+    """
+    from app.models.character import get_character_profile
+    from app.models.inventory import VALID_PIECE_SLOTS
+    prof = get_character_profile(character_name) or {}
+    raw = prof.get("slot_overrides") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    out: Dict[str, Any] = {}
+    for slot in VALID_PIECE_SLOTS:
+        entry = raw.get(slot) or {}
+        if not isinstance(entry, dict):
+            entry = {}
+        lora = entry.get("lora") or {}
+        if not isinstance(lora, dict):
+            lora = {}
+        out[slot] = {
+            "prompt": (entry.get("prompt") or "").strip(),
+            "lora": {
+                "name": (lora.get("name") or "").strip(),
+                "strength": float(lora.get("strength", 1.0) or 1.0),
+            },
+        }
+    return {"slots": out, "order": list(VALID_PIECE_SLOTS)}
+
+
+def apply_slot_overrides(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Saves per-slot prompt+LoRA overrides.
+
+    Body: {slots: {slot: {prompt: str, lora: {name, strength}}}}.
+    Empty entries (no prompt + no LoRA) are removed.
+    """
+    from app.models.character import get_character_profile, save_character_profile
+    from app.models.inventory import VALID_PIECE_SLOTS
+    slots_in = body.get("slots") or {}
+    if not isinstance(slots_in, dict):
+        slots_in = {}
+    cleaned: Dict[str, Any] = {}
+    for slot in VALID_PIECE_SLOTS:
+        entry = slots_in.get(slot) or {}
+        if not isinstance(entry, dict):
+            continue
+        prompt = (entry.get("prompt") or "").strip()
+        lora_raw = entry.get("lora") or {}
+        lora_name = ""
+        lora_strength = 1.0
+        if isinstance(lora_raw, dict):
+            lora_name = (lora_raw.get("name") or "").strip()
+            if lora_name.lower() == "none":
+                lora_name = ""
+            try:
+                lora_strength = float(lora_raw.get("strength", 1.0))
+            except Exception:
+                lora_strength = 1.0
+        if not prompt and not lora_name:
+            continue
+        out: Dict[str, Any] = {}
+        if prompt:
+            out["prompt"] = prompt
+        if lora_name:
+            out["lora"] = {"name": lora_name, "strength": lora_strength}
+        cleaned[slot] = out
+    prof = get_character_profile(character_name) or {}
+    if cleaned:
+        prof["slot_overrides"] = cleaned
+    elif "slot_overrides" in prof:
+        del prof["slot_overrides"]
+    save_character_profile(character_name, prof)
+    return {"status": "ok", "slots": cleaned}
+
+
+def apply_videogen_config(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Saves the VideoGen config (ImageGen + animation settings)."""
+    from app.models.character import get_character_skill_config, save_character_skill_config
+    user_id = data.get("user_id", "").strip()
+
+    config = get_character_skill_config(character_name, "video_generation") or {}
+
+    # ImageGen fields
+    for key in ("imagegen_backend", "imagegen_workflow", "imagegen_model", "animate_service"):
+        if key in data:
+            config[key] = str(data[key]).strip()
+
+    # Normalize LoRA lists
+    def _normalize_loras(loras):
+        if not loras:
+            return []
+        out = []
+        for l in loras:
+            name = (l.get("name") or "").strip() or "None"
+            try:
+                strength = float(l.get("strength", 1.0))
+            except (TypeError, ValueError):
+                strength = 1.0
+            out.append({"name": name, "strength": strength})
+        return out
+
+    for key in ("imagegen_loras",):
+        if key in data:
+            config[key] = _normalize_loras(data[key])
+
+    save_character_skill_config(character_name, "video_generation", config)
+    return {"status": "success"}
+
+
+def build_status_effects(character_name: str) -> Dict[str, Any]:
+    """Returns the current status values of a character.
+
+    On the first call: initializes status_effects from trait defaults and
+    persists them in the profile. Afterwards the stored values are always
+    returned.
+    """
+    from app.models.character_template import is_feature_enabled
+    if not is_feature_enabled(character_name, "status_effects_enabled"):
+        return {"status_effects": {}, "traits": {}, "bar_meta": {}}
+    from app.models.character import get_character_profile, get_character_config, save_character_profile
+    profile = get_character_profile(character_name)
+    config = get_character_config(character_name)
+    status = profile.get("status_effects", {})
+
+    # Load the template -- source for stat defaults and bar metadata
+    bar_meta = {}
+    stat_defaults = {}  # stat_key -> default_value from the template
+    stat_order: List[str] = []  # template order of the stats
+    try:
+        from app.models.character_template import get_template
+        template_name = profile.get("template", "human-default")
+        template = get_template(template_name)
+        if template:
+            for section in template.get("sections", []):
+                for field in section.get("fields", []):
+                    if field.get("store") != "status_effects":
+                        continue
+                    stat_key = field.get("key", "")
+                    if not stat_key:
+                        continue
+                    if stat_key not in stat_order:
+                        stat_order.append(stat_key)
+                    # Default from the template
+                    if field.get("default") is not None:
+                        try:
+                            stat_defaults[stat_key] = int(field["default"])
+                        except (ValueError, TypeError):
+                            pass
+                    # Bar metadata
+                    meta = {}
+                    if field.get("bar_color"):
+                        meta["color"] = field["bar_color"]
+                    if field.get("bar_label"):
+                        meta["label"] = field["bar_label"]
+                    if field.get("label"):
+                        meta["name"] = field["label"]
+                    if field.get("label_de"):
+                        meta["name_de"] = field["label_de"]
+                    if meta:
+                        bar_meta[stat_key] = meta
+    except Exception:
+        pass
+
+    # Initialize and persist missing status_effects from template defaults
+    status_changed = False
+    for stat_key, stat_default in stat_defaults.items():
+        if stat_key not in status:
+            status[stat_key] = stat_default
+            status_changed = True
+
+    if status_changed:
+        profile["status_effects"] = status
+        save_character_profile(character_name, profile)
+
+    # Return in template order -- otherwise Self/Others panels show the same
+    # stats in different (stored) orders.
+    ordered_status = {k: status[k] for k in stat_order if k in status}
+    for k, v in status.items():  # append keys not defined in the template
+        if k not in ordered_status:
+            ordered_status[k] = v
+
+    return {"status_effects": ordered_status, "bar_meta": bar_meta}
+
+
+def apply_template_switch(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Template switch with diff: shows new/dropped fields and runs migration.
+
+    mode="diff": returns only the diff (no change)
+    mode="apply": performs the switch (set new defaults, delete old fields)
+    """
+    user_id = data.get("user_id", "").strip()
+    new_template_name = data.get("new_template", "").strip()
+    mode = data.get("mode", "diff")
+
+    if not new_template_name:
+        raise HTTPException(status_code=400, detail="user_id und new_template erforderlich")
+
+    from app.models.character import get_character_profile, get_character_config, save_character_profile, save_character_config
+    from app.models.character_template import get_template
+
+    profile = get_character_profile(character_name)
+    config = get_character_config(character_name)
+    old_template_name = profile.get("template", "")
+    old_template = get_template(old_template_name) if old_template_name else None
+    new_template = get_template(new_template_name)
+
+    if not new_template:
+        raise HTTPException(status_code=404, detail=f"Template '{new_template_name}' nicht gefunden")
+
+    # Collect ALL fields from old and new template (not just traits)
+    def _collect_all_fields(tmpl):
+        fields = {}
+        if not tmpl:
+            return fields
+        for section in tmpl.get("sections", []):
+            for field in section.get("fields", []):
+                fkey = field.get("key", "")
+                if fkey:
+                    fields[fkey] = field
+        return fields
+
+    old_fields = _collect_all_fields(old_template)
+    new_fields = _collect_all_fields(new_template)
+
+    # Compute the diff
+    added = []
+    for key, field in new_fields.items():
+        if key not in old_fields:
+            added.append({
+                "key": key,
+                "label": field.get("label", key),
+                "label_de": field.get("label_de", ""),
+                "default": field.get("default"),
+                "store": field.get("store", ""),
+                "is_stat": field.get("store") == "status_effects",
+            })
+
+    removed = []
+    for key, field in old_fields.items():
+        if key not in new_fields:
+            store = field.get("store", "")
+            # Read the current value from the correct store
+            if store == "status_effects":
+                current_val = profile.get("status_effects", {}).get(key, "")
+            elif store == "config":
+                current_val = config.get(key, "")
+            else:
+                current_val = profile.get(key, "")
+            removed.append({
+                "key": key,
+                "label": field.get("label", key),
+                "label_de": field.get("label_de", ""),
+                "current_value": current_val,
+                "store": store,
+                "is_stat": store == "status_effects",
+            })
+
+    if mode == "diff":
+        return {
+            "old_template": old_template_name,
+            "new_template": new_template_name,
+            "added": added,
+            "removed": removed,
+        }
+
+    # mode == "apply": run the migration
+
+    # 1. Fill new fields with defaults
+    status = profile.get("status_effects", {})
+    for item in added:
+        default_val = item.get("default")
+        key = item["key"]
+        store = item.get("store", "")
+        if store == "status_effects":
+            if default_val is not None and key not in status:
+                status[key] = default_val
+        elif store == "config":
+            config[key] = default_val if default_val is not None else ""
+        else:
+            profile[key] = default_val if default_val is not None else ""
+
+    # 2. Remove old fields
+    for item in removed:
+        key = item["key"]
+        store = item.get("store", "")
+        if store == "status_effects":
+            status.pop(key, None)
+            config.pop(key + "_hourly", None)
+        elif store == "config":
+            config.pop(key, None)
+        else:
+            profile.pop(key, None)
+
+    profile["status_effects"] = status
+
+    # 4. Set the template in the profile
+    profile["template"] = new_template_name
+
+    # 5. Save
+    save_character_profile(character_name, profile)
+    save_character_config(character_name, config)
+
+    return {
+        "ok": True,
+        "old_template": old_template_name,
+        "new_template": new_template_name,
+        "added": added,
+        "removed": removed,
+    }
+
+
+async def create_character_core(request) -> Dict[str, Any]:
+    """Creates a new character with an empty profile and an assigned template."""
+    from app.models.account import set_current_character
+    from app.models.character import (list_available_characters,
+                                      save_character_profile, get_character_config,
+                                      save_character_config, save_character_skill_config)
+    data = await request.json()
+    character_name = data.get("character_name", "").strip()
+    template_name = data.get("template", "human-default")
+    if not character_name:
+        raise HTTPException(status_code=400, detail="character_name fehlt")
+    # Catch reserved / problematic names -- e.g. "undefined" or "null" appear
+    # when some JS code fails to initialize a value and then string-converts
+    # it. That must not create a character folder.
+    if character_name.lower() in ("undefined", "null", "none", "nan"):
+        raise HTTPException(status_code=400,
+            detail=f"'{character_name}' ist als Character-Name nicht erlaubt")
+
+    # Check if character already exists
+    existing = list_available_characters()
+    if character_name in existing:
+        raise HTTPException(status_code=409, detail=f"Character '{character_name}' existiert bereits")
+
+    # Create character with initial profile + template reference
+    initial_profile = {
+        "character_name": character_name,
+        "template": template_name,
+    }
+    # Explicit creation -- save_character_profile otherwise blocks unknown
+    # names (protection against ghost characters from LLM output).
+    save_character_profile(character_name, initial_profile, create_new=True)
+
+    # Initialize known_locations explicitly as an empty list. Without this
+    # field the legacy bypass in the SetLocation skill kicks in and the char
+    # may teleport to arbitrary places (path validation is skipped). Fresh
+    # chars should not be able to go anywhere until they are actively placed
+    # or led -- auto-discovery in save_character_current_location fills the
+    # list afterwards automatically.
+    try:
+        cfg = get_character_config(character_name) or {}
+        if "known_locations" not in cfg:
+            cfg["known_locations"] = []
+            save_character_config(character_name, cfg)
+    except Exception as _e:
+        logger.warning("create_character: known_locations init fehlgeschlagen: %s", _e)
+
+    # Write skill defaults -- without these files the ALWAYS_LOAD filter logic
+    # (skill_manager._get_agent_skills) kicks in and turns all skills off by
+    # default. With the default list the fresh char has the usual repertoire
+    # right away (chat, set_location, consume magic, outfit change, ...).
+    for _sid in DEFAULT_NEW_CHARACTER_SKILLS:
+        try:
+            save_character_skill_config(character_name, _sid, {"enabled": True})
+        except Exception as _e:
+            logger.warning("create_character: skill-default '%s' nicht gesetzt: %s",
+                           _sid, _e)
+
+    # Auto-assign the new character to the creator's allowed_characters list
+    # so they can immediately see and use it without a separate admin step.
+    from app.core.auth_dependency import get_current_user_optional
+    from app.core.users import update_user
+    creator = get_current_user_optional(request)
+    if creator and creator.get("id"):
+        allowed = list(creator.get("allowed_characters") or [])
+        if character_name not in allowed:
+            allowed.append(character_name)
+            try:
+                update_user(creator["id"], allowed_characters=allowed)
+            except Exception as e:
+                logger.warning(
+                    "create_character: konnte allowed_characters fuer "
+                    "user=%s nicht aktualisieren: %s",
+                    creator.get("username"), e,
+                )
+
+    # Set as current character
+    set_current_character(character_name)
+
+    return {
+        "status": "success",
+        "character": character_name,
+        "template": template_name,
+        "message": f"Character '{character_name}' erstellt"
+    }
+
+
+# ---------------------------------------------------------------------------
+# Soul Editor -- MD files under characters/{Char}/soul/
+# ---------------------------------------------------------------------------
+
+def _parse_soul_sections(text: str) -> List[Dict[str, Any]]:
+    """Splits MD text into {heading, body, has_editable_marker} sections.
+
+    A top-level `# Heading` is marked as a 'top' section. Body is raw content
+    WITHOUT the EDITABLE marker (the UI renders the status indicator separately).
+    """
+    sections = []
+    cur_h = None
+    cur_lvl = 0
+    cur_body: List[str] = []
+
+    def _flush():
+        if cur_h is None and not cur_body:
+            return
+        body_lines = list(cur_body)
+        # Detect the EDITABLE marker + remove it from the body
+        has_marker = any(_SOUL_EDITABLE_MARKER in ln for ln in body_lines)
+        clean_body = [ln for ln in body_lines if _SOUL_EDITABLE_MARKER not in ln]
+        body_text = "\n".join(clean_body).strip()
+        sections.append({
+            "level": cur_lvl,
+            "heading": cur_h or "",
+            "body": body_text,
+            "editable_marker": has_marker,
+        })
+
+    for line in text.splitlines():
+        if line.startswith("# ") and not line.startswith("## "):
+            _flush()
+            cur_h = line[2:].strip()
+            cur_lvl = 1
+            cur_body = []
+        elif line.startswith("## "):
+            _flush()
+            cur_h = line[3:].strip()
+            cur_lvl = 2
+            cur_body = []
+        else:
+            cur_body.append(line)
+    _flush()
+    return sections
+
+
+def _soul_file_meta(section_id: str) -> Dict[str, Any]:
+    """Returns meta for a soul file: file-default lock status + path."""
+    if section_id in _SOUL_EDITABLE:
+        default = "editable"
+    elif section_id in _SOUL_LOCKED:
+        default = "locked"
+    else:
+        default = "unknown"
+    return {
+        "section": section_id,
+        "file_default": default,
+        "path": _SOUL_FILE_MAP.get(section_id, ""),
+    }
+
+
+def _is_soul_section_enabled(character_name: str, section_id: str) -> bool:
+    """Checks whether the soul section is enabled via a template feature.
+
+    'personality' / 'tasks' / 'presence' are ungated -> always on. Others via
+    a template feature. beliefs/lessons/goals are additionally coupled to the
+    Retrospect master switch -- when the char has disabled Retrospect via the
+    UI, those three sections drop out of the soul tab regardless of what the
+    template says for beliefs/lessons/goals.
+    """
+    if section_id in ("personality", "tasks", "presence"):
+        return True
+    feature_map = {
+        "roleplay_rules": "roleplay_rules_enabled",
+        "beliefs":        "beliefs_enabled",
+        "lessons":        "lessons_enabled",
+        "goals":          "goals_enabled",
+        "soul":           "soul_enabled",
+    }
+    feature = feature_map.get(section_id)
+    if not feature:
+        return False
+    try:
+        from app.models.character_template import is_feature_enabled
+        # Retrospect master switch: disables the three output sections
+        # together.
+        if section_id in ("beliefs", "lessons", "goals"):
+            if not is_feature_enabled(character_name, "retrospect_enabled"):
+                return False
+        return is_feature_enabled(character_name, feature)
+    except Exception:
+        return True
+
+
+def build_soul_files(character_name: str) -> Dict[str, Any]:
+    """Lists the soul MD files available for this character.
+
+    Honors template feature gates. Returns per file: section id, file-default
+    lock status, and whether the file exists.
+    """
+    from app.models.character import get_character_dir, get_character_profile
+    char_dir = get_character_dir(character_name)
+
+    # Friendly labels from the template: source_file basename (= section id) ->
+    # field label/label_de. So the soul tab shows "Roleplay Rules" instead of
+    # "Roleplay_rules".
+    import os as _os
+    label_map: Dict[str, Dict[str, str]] = {}
+    try:
+        from app.models.character_template import get_template
+        _prof = get_character_profile(character_name) or {}
+        _tmpl = get_template(_prof.get("template", "")) if _prof.get("template") else None
+        for _sec in (_tmpl or {}).get("sections", []):
+            for _f in _sec.get("fields", []):
+                _sf = _f.get("source_file") or ""
+                if not _sf:
+                    continue
+                _sid = _os.path.basename(_sf)
+                if _sid.endswith(".md"):
+                    _sid = _sid[:-3]
+                label_map[_sid] = {
+                    "label": _f.get("label") or "",
+                    "label_de": _f.get("label_de") or "",
+                }
+    except Exception:
+        pass
+
+    files = []
+    for section_id in ("personality", "tasks", "presence", "roleplay_rules",
+                        "beliefs", "lessons", "goals", "soul"):
+        if not _is_soul_section_enabled(character_name, section_id):
+            continue
+        meta = _soul_file_meta(section_id)
+        meta["exists"] = (char_dir / meta["path"]).exists()
+        _lbl = label_map.get(section_id, {})
+        meta["label"] = _lbl.get("label", "")
+        meta["label_de"] = _lbl.get("label_de", "")
+        files.append(meta)
+    return {"character": character_name, "files": files}
+
+
+def read_soul_file(character_name: str, section_id: str) -> Dict[str, Any]:
+    """Returns content + parsed sections of a soul MD file."""
+    if section_id not in _SOUL_FILE_MAP:
+        raise HTTPException(status_code=404, detail=f"Unknown section: {section_id}")
+    if not _is_soul_section_enabled(character_name, section_id):
+        raise HTTPException(status_code=403, detail=f"Section '{section_id}' nicht im Template aktiv")
+
+    from app.models.character import get_character_dir
+    char_dir = get_character_dir(character_name)
+    md_path = char_dir / _SOUL_FILE_MAP[section_id]
+
+    raw = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+    sections = _parse_soul_sections(raw)
+    meta = _soul_file_meta(section_id)
+    return {
+        "character": character_name,
+        "section": section_id,
+        "path": meta["path"],
+        "file_default": meta["file_default"],
+        "raw": raw,
+        "sections": sections,
+        "editable_marker_token": _SOUL_EDITABLE_MARKER,
+    }
+
+
+async def write_soul_file(character_name: str, section_id: str, request) -> Dict[str, Any]:
+    """Writes a complete soul MD file.
+
+    Body: {"user_id": "...", "content": "...full MD text..."}
+    """
+    if section_id not in _SOUL_FILE_MAP:
+        raise HTTPException(status_code=404, detail=f"Unknown section: {section_id}")
+    data = await request.json()
+    user_id = data.get("user_id", "")
+    content = data.get("content", "")
+    if not _is_soul_section_enabled(character_name, section_id):
+        raise HTTPException(status_code=403, detail=f"Section '{section_id}' nicht im Template aktiv")
+
+    from app.models.character import get_character_dir
+    char_dir = get_character_dir(character_name)
+    md_path = char_dir / _SOUL_FILE_MAP[section_id]
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    # Guarantee a trailing newline without collecting superfluous ones
+    md_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+    return {"status": "success", "section": section_id, "size": len(content)}
