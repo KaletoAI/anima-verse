@@ -3,17 +3,7 @@
     {
       "name": "LocalAI",
       "enabled": true,
-      "gpus": [
-        {
-          "vram_gb": 0,
-          "types": [
-            "openai"
-          ],
-          "match_name": "",
-          "device": "",
-          "label": "4070"
-        }
-      ],
+      "serialize_group": "4070",
       "api_key": "",
       "api_base": "http://192.168.8.197:8080/v1",
       "timeout": 300,
@@ -164,14 +154,7 @@
       {
         "name": "LocalAI-Flux",
         "enabled": true,
-        "gpus": [
-          {
-            "vram_gb": 0,
-            "label": "4070",
-            "match_name": "",
-            "device": ""
-          }
-        ],
+        "serialize_group": "4070",
         "api_type": "localai",
         "api_url": "http://192.168.8.197:8080",
         "api_key": "",
@@ -185,14 +168,7 @@
       {
         "name": "LocalAI-ZImage",
         "enabled": true,
-        "gpus": [
-          {
-            "vram_gb": 0,
-            "label": "4070",
-            "match_name": "",
-            "device": ""
-          }
-        ],
+        "serialize_group": "4070",
         "api_type": "localai",
         "api_url": "http://192.168.8.197:8080",
         "api_key": "",
@@ -470,7 +446,6 @@
     "log_retention_days": 5,
     "world_admin_tick_interval_seconds": 60
   },
-  "beszel": {},
   "llm_retry": {
     "busy_max_attempts": 3,
     "busy_base_delay_seconds": 10
