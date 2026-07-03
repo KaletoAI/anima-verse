@@ -37,7 +37,7 @@ and resetting.
 
 ## External services (optional, configured in the admin UI)
 
-LLM (LocalAI/Ollama/vLLM), image generation (ComfyUI / SD / Together), TTS
+LLM (LocalAI/Ollama/vLLM), image generation (LocalAI / SD / Together), TTS
 (F5/XTTS), SearX, n8n. None of these run inside the container — point the app at
 them under `/admin/settings`. Embeddings for pose matching run **inside** the
 container on CPU and need no external endpoint.

@@ -110,7 +110,7 @@ stops acting autonomously).
   keeping the task queue and LLM tools live.
 
 ### Image generation & animation
-- Backends: **ComfyUI**, **Stable Diffusion WebUI (A1111/Forge)**, **CivitAI**, **Together.ai**,
+- Backends: **Stable Diffusion WebUI (A1111/Forge)**, **CivitAI**, **Together.ai**,
   plus two generic OpenAI-compatible types:
   - **`openai_chat`** — image-returning *chat-completions* endpoints (the model replies with an
     image), e.g. **Mammouth AI**. Text-only; no reference images.
@@ -123,15 +123,15 @@ stops acting autonomously).
   selects the prompt adapter and style family.
 - Context-aware prompts (appearance, outfit, mood, activity, location), reference-image slots for
   face consistency, pose/expression variants, outfit decency/compliance system.
-- ComfyUI workflow management, automatic background removal (rembg/u2net) and image downscaling.
+- Automatic background removal (rembg/u2net) and image downscaling.
 - Optional external **post-processing hand-off** (a separate service pulls finished images and
   writes results back via the API — this project does no pixel editing itself).
-- **Animation:** turn a gallery image into a short video via a ComfyUI img2video workflow,
+- **Animation:** turn a gallery image into a short video via **Together.ai** (Kling/Wan),
   asynchronously.
 
 ### Text-to-speech
-- Backends: **XTTS v2** (voice cloning), **F5-TTS** (high-quality cloning), **Magpie** (NVIDIA
-  Riva, multilingual) and **ComfyUI (Qwen3-TTS)**.
+- Backends: **XTTS v2** (voice cloning), **F5-TTS** (high-quality cloning) and **Magpie** (NVIDIA
+  Riva, multilingual).
 - Auto-TTS for every reply or on-demand per message; per-character voice config; text cleaning
   (strips markdown / emojis / mood markers before synthesis).
 
@@ -174,10 +174,10 @@ corresponding feature.
 | Purpose            | Options                                                                       |
 |--------------------|------------------------------------------------------------------------------|
 | **LLM (required)** | Ollama · any OpenAI-compatible API (vLLM, llama-swap, …) · Anthropic          |
-| Image generation   | ComfyUI · Stable Diffusion WebUI (A1111/Forge, run with `--listen --api`) · CivitAI · Together.ai · `openai_chat` (e.g. Mammouth) · `openai_diffusion` (e.g. LocalAI) |
-| Text-to-speech     | XTTS v2 · F5-TTS · Magpie (Riva) · ComfyUI (Qwen3-TTS)                        |
+| Image generation   | Stable Diffusion WebUI (A1111/Forge, run with `--listen --api`) · CivitAI · Together.ai · `openai_chat` (e.g. Mammouth) · `openai_diffusion` (e.g. LocalAI) |
+| Text-to-speech     | XTTS v2 · F5-TTS · Magpie (Riva)                                              |
 | Web search         | SearX / SearXNG                                                               |
-| Animation          | ComfyUI (img2video workflow, e.g. Wan2.2)                                     |
+| Animation          | Together.ai (Kling / Wan)                                                     |
 | GPU monitoring     | Beszel                                                                        |
 
 System packages:
@@ -334,7 +334,7 @@ endpoint, so it slots straight into Anima Verse as a normal `openai` provider. W
   `/v1/images/generations`). `API URL = http://<host>:8080` (no `/v1`), API key empty, `Model` e.g.
   `Z-Image-Turbo` or `flux.2-klein-4b`; set `image_family` to `natural` (Flux) or `keywords`
   (Z-Image/SD). LoRAs go into the prompt as `<lora:name:weight>` and are managed per-endpoint in the
-  **LoRA Library** ("Load LoRAs" only scans ComfyUI; for LocalAI enter them by hand).
+  **LoRA Library** (enter them by hand, or set a *LoRA Query URL* on the backend to fetch the list).
 - **Mind the model's resolution ceiling.** Small distilled diffusion models are picky —
   `flux.2-klein-4b` only rendered small square sizes here (512² / 768²; 1024² and portrait sizes
   returned HTTP 500). Set the use-case / backend dimensions to a size the model actually serves.
@@ -371,7 +371,7 @@ different fine-tunes:
 - **Image generation** is separate — Infermatic only covers the LLM side. Without a local GPU, two
   cheap hosted options are **[Together.ai](https://www.together.ai)** (backend type `together`,
   Flux/SD models) and **[Civitai](https://civitai.com)** (backend type `civitai`, huge model + LoRA
-  catalogue, pay-per-image). Add either under **Image Backends** instead of running ComfyUI/LocalAI
+  catalogue, pay-per-image). Add either under **Image Backends** instead of running LocalAI
   yourself.
 
 ---

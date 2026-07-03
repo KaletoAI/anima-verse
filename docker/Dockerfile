@@ -40,12 +40,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 #   static/   — gebaute Frontend-Assets (game_admin/play SPA, committed)
 #   shared/   — LLM-Prompt-Templates, Character-Templates, Sprachen, Schemas (PFLICHT)
 #   worlds/   — Welten inkl. gebackener Demo-Welt (worlds/demo/world.db)
-#   workflows/— ComfyUI-Workflows (optional, nur bei ComfyUI-Bildbackend genutzt)
 COPY app/ ./app/
 COPY static/ ./static/
 COPY shared/ ./shared/
 COPY worlds/ ./worlds/
-COPY workflows/ ./workflows/
 COPY start.sh fetch_models.sh ./
 COPY docker/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./start.sh ./fetch_models.sh ./docker-entrypoint.sh

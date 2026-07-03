@@ -17,7 +17,7 @@ The container runs **only the FastAPI app** (chat orchestration, world simulatio
 admin UI, the built React SPA). It does **not** run an LLM — every chat/tool/vision
 call is routed over HTTP to the external LocalAI server. Text **embeddings** for
 pose matching run **inside** the container on CPU (`fastembed`/ONNX), so no
-embedding endpoint is required. Image generation, TTS, ComfyUI etc. are optional
+embedding endpoint is required. Image generation, TTS etc. are optional
 external services configured later through the admin UI. There is **no `.env`
 file**: all configuration lives per-world in `config.json` / `world.db` and is
 edited at `/admin/settings`.
@@ -191,7 +191,7 @@ With one chat-capable model routed, the following work against LocalAI:
 - **Pose matching** — handled locally via the embedding model.
 
 Optional, **not** covered by LocalAI text models and configured separately under
-`/admin/settings` if you want them: image generation (image backends / ComfyUI),
+`/admin/settings` if you want them: image generation (image backends),
 TTS, web search (SearX), n8n.
 
 ---

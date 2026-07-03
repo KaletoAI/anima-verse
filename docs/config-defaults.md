@@ -41,13 +41,6 @@ Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `c
 | `TTS_MAGPIE_URL` | `http://localhost:9000` | app/core/tts_service.py |
 | `TTS_MAGPIE_VOICE` | `` | app/core/tts_service.py |
 | `TTS_MAGPIE_LANGUAGE` | `de-DE` | app/core/tts_service.py |
-| `TTS_COMFYUI_SKILL` | `` | app/core/tts_service.py |
-| `TTS_COMFYUI_MODE` | `voiceclone` | app/core/tts_service.py |
-| `TTS_COMFYUI_WORKFLOW_VOICECLONE` | `./workflows/tts_voiceclone_workflow_api.json` | app/core/tts_service.py |
-| `TTS_COMFYUI_WORKFLOW_VOICEDESC` | `./workflows/tts_voicedesc_workflow_api.json` | app/core/tts_service.py |
-| `TTS_COMFYUI_WORKFLOW_VOICENAME` | `./workflows/tts_voicename_workflow_api.json` | app/core/tts_service.py |
-| `TTS_COMFYUI_MAX_WAIT` | `300` | app/core/tts_service.py |
-| `TTS_COMFYUI_POLL_INTERVAL` | `1.0` | app/core/tts_service.py |
 | `TTS_F5_URL` | `http://localhost:7860` | app/core/tts_service.py |
 | `TTS_F5_SPEED` | `1.0` | app/core/tts_service.py |
 | `TTS_F5_NFE_STEPS` | `32` | app/core/tts_service.py |
