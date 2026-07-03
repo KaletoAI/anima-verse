@@ -815,8 +815,11 @@ class TaskQueue:
 
 
 # ---------------------------------------------------------------------------
-# VRAM Auto-Free (moved from task_tracker.py)
+# Module-level singleton
 # ---------------------------------------------------------------------------
+_task_queue: Optional[TaskQueue] = None
+_init_lock = threading.Lock()
+
 
 def get_task_queue() -> TaskQueue:
     """Returns the global TaskQueue singleton."""
