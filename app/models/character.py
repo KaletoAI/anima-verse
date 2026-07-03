@@ -239,6 +239,46 @@ _CONFIG_KEYS_IN_PROFILE = ("outfit_exceptions", "outfit_imagegen", "slot_overrid
                            "no_outfit_prompt")
 
 
+# ---------------------------------------------------------------------------
+# Shared row helpers — one place per duplicated SQL statement. Callers keep
+# their own connection/transaction context and result interpretation.
+# ---------------------------------------------------------------------------
+
+def _character_row_exists(conn, character_name: str) -> bool:
+    """True when a row for this character exists in the characters table."""
+    row = conn.execute(
+        "SELECT 1 FROM characters WHERE name=? LIMIT 1",
+        (character_name,)).fetchone()
+    return bool(row)
+
+
+def _read_config_json_row(conn, character_name: str):
+    """Raw config_json row for a character (or None)."""
+    return conn.execute(
+        "SELECT config_json FROM characters WHERE name=?",
+        (character_name,)).fetchone()
+
+
+def _read_state_meta_row(conn, character_name: str):
+    """Raw meta row from character_state (or None)."""
+    return conn.execute(
+        "SELECT meta FROM character_state WHERE character_name=?",
+        (character_name,)).fetchone()
+
+
+def _room_name_row(conn, room_id: str):
+    """Raw name row for a room id (or None)."""
+    return conn.execute(
+        "SELECT name FROM rooms WHERE id=?", (room_id,)).fetchone()
+
+
+def _read_scheduler_job_ids(conn, character_name: str) -> List[str]:
+    """All scheduler job ids for a character."""
+    return [r[0] for r in conn.execute(
+        "SELECT id FROM scheduler_jobs WHERE character_name=?",
+        (character_name,)).fetchall()]
+
+
 def _load_character_state(character_name: str) -> Dict[str, Any]:
     """Laedt character_state: Spalten (current_*, *_changed_at, pose_*,
     is_*) + meta-Keys."""
@@ -466,11 +506,7 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     if not create_new:
         _exists = False
         try:
-            conn = get_connection()
-            _row = conn.execute(
-                "SELECT 1 FROM characters WHERE name=? LIMIT 1",
-                (character_name,)).fetchone()
-            _exists = bool(_row)
+            _exists = _character_row_exists(get_connection(), character_name)
         except Exception:
             pass
         if not _exists:
@@ -523,12 +559,9 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     now = utc_now_iso()
     try:
         with transaction() as conn:
-            # Vorhandenes config_json lesen um Config-Patch zu mergen
+            # Read existing config_json so the config patch can be merged
             existing_config: Dict[str, Any] = {}
-            _crow = conn.execute(
-                "SELECT config_json FROM characters WHERE name=?",
-                (character_name,),
-            ).fetchone()
+            _crow = _read_config_json_row(conn, character_name)
             if _crow:
                 try:
                     existing_config = json.loads(_crow[0] or "{}")
@@ -791,10 +824,7 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
 
     # Versuche aus DB zu lesen
     try:
-        conn = get_connection()
-        row = conn.execute(
-            "SELECT config_json FROM characters WHERE name=?", (character_name,)
-        ).fetchone()
+        row = _read_config_json_row(get_connection(), character_name)
         if row and row[0] and row[0] != "{}":
             config = json.loads(row[0])
     except Exception as e:
@@ -818,12 +848,7 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
         config = _get_character_defaults()
         _exists = False
         try:
-            conn = get_connection()
-            _row = conn.execute(
-                "SELECT 1 FROM characters WHERE name=? LIMIT 1",
-                (character_name,)
-            ).fetchone()
-            _exists = bool(_row)
+            _exists = _character_row_exists(get_connection(), character_name)
         except Exception:
             pass
         if not _exists:
@@ -876,13 +901,9 @@ def save_character_config(character_name: str, config: Dict[str, Any]):
                        character_name)
         return
 
-    # Existenz-Check: Row in characters-Tabelle ODER Verzeichnis vorhanden
+    # Existence check: row in the characters table OR directory present
     try:
-        conn = get_connection()
-        _row = conn.execute(
-            "SELECT 1 FROM characters WHERE name=? LIMIT 1",
-            (character_name,)).fetchone()
-        _exists = bool(_row)
+        _exists = _character_row_exists(get_connection(), character_name)
     except Exception:
         _exists = False
     if not _exists:
@@ -1082,17 +1103,49 @@ def clear_movement_target(character_name: str) -> None:
 
 
 def _room_name_for(room_id: str) -> str:
-    """Anzeigename eines Raums (oder die ID als Fallback)."""
+    """Display name of a room (or the id as fallback)."""
     if not room_id:
         return ""
     try:
-        row = get_connection().execute(
-            "SELECT name FROM rooms WHERE id=?", (room_id,)).fetchone()
+        row = _room_name_row(get_connection(), room_id)
         if row and row[0]:
             return row[0]
     except Exception:
         pass
     return room_id
+
+
+def _drag_party_followers_to_location(character_name: str, location: str) -> None:
+    """Party drag: when the moved character leads a party, every follower is
+    pulled to the same location. ``_party_drag=True`` on the recursive call
+    keeps a dragged follower from triggering another drag. Followers are never
+    leaders themselves (party_followers then returns []), the kwarg is the
+    extra safety brake."""
+    try:
+        from app.core.party_engine import party_followers
+        for _follower in party_followers(character_name):
+            if _follower and _follower != character_name:
+                save_character_current_location(_follower, location,
+                                                _party_drag=True)
+    except Exception as _pe:
+        from app.core.log import get_logger
+        get_logger("character_model").debug(
+            "Party-Drag (location) fehlgeschlagen: %s", _pe)
+
+
+def _drag_party_followers_to_room(character_name: str, room_id: str) -> None:
+    """Party drag (room): when the leader changes rooms, every follower is
+    pulled into the same room. ``_party_drag`` prevents recursion."""
+    try:
+        from app.core.party_engine import party_followers
+        for _follower in party_followers(character_name):
+            if _follower and _follower != character_name:
+                save_character_current_room(_follower, room_id,
+                                            _party_drag=True)
+    except Exception as _pe:
+        from app.core.log import get_logger
+        get_logger("character_model").debug(
+            "Party-Drag (room) fehlgeschlagen: %s", _pe)
 
 
 def _movement_trace(character_name: str, location_id: str, room_id: str,
@@ -1259,16 +1312,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # ohnehin keine Leader (party_followers liefert dann []), das kwarg ist die
     # zusaetzliche sichere Bremse. Nur bei echtem Location-Wechsel.
     if location_changed and not _party_drag:
-        try:
-            from app.core.party_engine import party_followers
-            for _follower in party_followers(character_name):
-                if _follower and _follower != character_name:
-                    save_character_current_location(_follower, location,
-                                                    _party_drag=True)
-        except Exception as _pe:
-            from app.core.log import get_logger
-            get_logger("character_model").debug(
-                "Party-Drag (location) fehlgeschlagen: %s", _pe)
+        _drag_party_followers_to_location(character_name, location)
 
 
 def get_location_changed_at(character_name: str = "") -> str:
@@ -1374,8 +1418,7 @@ def save_character_current_room(character_name: str, room_id: str,
     if room_id and room_id != old_room:
         room_name = room_id
         try:
-            row = get_connection().execute(
-                "SELECT name FROM rooms WHERE id=?", (room_id,)).fetchone()
+            row = _room_name_row(get_connection(), room_id)
             if row and row[0]:
                 room_name = row[0]
         except Exception:
@@ -1399,16 +1442,7 @@ def save_character_current_room(character_name: str, room_id: str,
         # Party-Mitziehen (Raum): wechselt der Leader den Raum, ziehen alle
         # Follower in denselben Raum mit. _party_drag verhindert Rekursion.
         if not _party_drag:
-            try:
-                from app.core.party_engine import party_followers
-                for _follower in party_followers(character_name):
-                    if _follower and _follower != character_name:
-                        save_character_current_room(_follower, room_id,
-                                                    _party_drag=True)
-            except Exception as _pe:
-                from app.core.log import get_logger
-                get_logger("character_model").debug(
-                    "Party-Drag (room) fehlgeschlagen: %s", _pe)
+            _drag_party_followers_to_room(character_name, room_id)
 
     # Decency-Compliance nur bei echtem Raumwechsel + Avatar ausnehmen
     if not room_id or room_id == old_room:
@@ -1499,10 +1533,7 @@ def _read_state_meta(character_name: str) -> Dict[str, Any]:
     if not character_name:
         return {}
     try:
-        conn = get_connection()
-        row = conn.execute(
-            "SELECT meta FROM character_state WHERE character_name=?",
-            (character_name,)).fetchone()
+        row = _read_state_meta_row(get_connection(), character_name)
         if row and row[0]:
             return json.loads(row[0])
     except Exception:
@@ -1595,9 +1626,7 @@ def set_scene_position(character_name: str, room_id: str,
     bg_key = bg_id or ""
     try:
         with transaction() as conn:
-            row = conn.execute(
-                "SELECT meta FROM character_state WHERE character_name=?",
-                (character_name,)).fetchone()
+            row = _read_state_meta_row(conn, character_name)
             meta: Dict[str, Any] = {}
             if row and row[0]:
                 try:
@@ -2758,11 +2787,7 @@ def save_character_skill_config(character_name: str, skill_name: str, config: Di
         return
     _exists = False
     try:
-        conn = get_connection()
-        _row = conn.execute(
-            "SELECT 1 FROM characters WHERE name=? LIMIT 1",
-            (character_name,)).fetchone()
-        _exists = bool(_row)
+        _exists = _character_row_exists(get_connection(), character_name)
     except Exception:
         pass
     if not _exists:
@@ -2791,8 +2816,7 @@ def get_character_scheduler_dir(character_name: str) -> Path:
 def get_character_scheduler_jobs(character_name: str) -> List[Dict[str, Any]]:
     """Laedt Scheduler-Jobs fuer einen Character aus der DB."""
     try:
-        from app.core.db import get_connection as _get_conn
-        conn = _get_conn()
+        conn = get_connection()
         rows = conn.execute(
             "SELECT id, action, trigger, source, meta, created_at FROM scheduler_jobs "
             "WHERE character_name=? ORDER BY created_at ASC",
@@ -2842,12 +2866,8 @@ def save_character_scheduler_jobs(character_name: str, jobs: List[Dict[str, Any]
     """Speichert Scheduler-Jobs fuer einen Character in die DB (Upsert)."""
     now = utc_now_iso()
     try:
-        from app.core.db import transaction as _transaction
-        with _transaction() as conn:
-            existing_ids = {r[0] for r in conn.execute(
-                "SELECT id FROM scheduler_jobs WHERE character_name=?",
-                (character_name,),
-            ).fetchall()}
+        with transaction() as conn:
+            existing_ids = set(_read_scheduler_job_ids(conn, character_name))
             new_ids = {j.get("id") for j in jobs if j.get("id")}
 
             for jid in existing_ids - new_ids:
@@ -2885,13 +2905,9 @@ def save_character_scheduler_jobs(character_name: str, jobs: List[Dict[str, Any]
 def get_character_scheduler_logs(character_name: str) -> List[Dict[str, Any]]:
     """Laedt Scheduler-Logs fuer einen Character aus der DB."""
     try:
-        from app.core.db import get_connection as _get_conn
-        conn = _get_conn()
-        # Alle Job-IDs des Characters
-        job_ids = [r[0] for r in conn.execute(
-            "SELECT id FROM scheduler_jobs WHERE character_name=?",
-            (character_name,),
-        ).fetchall()]
+        conn = get_connection()
+        # All job ids of this character
+        job_ids = _read_scheduler_job_ids(conn, character_name)
         if not job_ids:
             return []
         placeholders = ",".join("?" * len(job_ids))
@@ -2917,8 +2933,7 @@ def get_character_scheduler_logs(character_name: str) -> List[Dict[str, Any]]:
 def save_character_scheduler_logs(character_name: str, logs: List[Dict[str, Any]]):
     """Speichert Scheduler-Logs fuer einen Character in die DB."""
     try:
-        from app.core.db import transaction as _transaction
-        with _transaction() as conn:
+        with transaction() as conn:
             for log_entry in logs:
                 job_id = log_entry.get("job_id", "")
                 if not job_id:
@@ -2990,8 +3005,7 @@ def get_character_daily_schedule(character_name: str) -> Dict[str, Any]:
     """Laedt den Tagesablauf fuer einen Character aus der DB."""
     schedule: Dict[str, Any] = {"enabled": False, "slots": []}
     try:
-        from app.core.db import get_connection as _get_conn
-        conn = _get_conn()
+        conn = get_connection()
         row = conn.execute(
             "SELECT enabled, slots, meta FROM daily_schedules WHERE character_name=?",
             (character_name,),
@@ -3027,8 +3041,7 @@ def save_character_daily_schedule(character_name: str, schedule: Dict[str, Any])
     now = utc_now_iso()
     schedule["last_updated"] = now
     try:
-        from app.core.db import transaction as _transaction
-        with _transaction() as conn:
+        with transaction() as conn:
             conn.execute("""
                 INSERT INTO daily_schedules (character_name, enabled, slots, meta)
                 VALUES (?, ?, ?, ?)
