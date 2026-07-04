@@ -11,7 +11,6 @@ from app.core.log import get_logger
 
 logger = get_logger("characters")
 
-from app.models.account import set_current_character
 from app.models.character import (
     list_available_characters,
     generate_random_appearance,
@@ -1292,42 +1291,6 @@ def cleanup_images_endpoint(character_name: str) -> Dict[str, Any]:
     """Loescht verwaiste Bilddateien die nicht im Profil registriert sind."""
     try:
         return cleanup_orphaned_images(character_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# --- Reset Endpoints ---
-
-@router.post("/reset/user/{user_id}")
-def reset_user_profile() -> Dict[str, str]:
-    """Setzt das komplette User-Profil zurueck"""
-    try:
-        import json
-        from app.core.paths import get_storage_dir
-        profile_path = get_storage_dir()
-
-        for file in profile_path.glob("*.json"):
-            if "_chat_" in file.name:
-                continue
-            try:
-                data = json.loads(file.read_text())
-                if isinstance(data, dict) and "_user_id" in data:
-                    file.unlink()
-                    break
-            except:
-                pass
-
-        return {"status": "success", "message": "User profile reset"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/reset/character/{user_id}")
-def reset_character_selection() -> Dict[str, str]:
-    """Setzt die Character-Auswahl zurueck"""
-    try:
-        set_current_character("")
-        return {"status": "success", "message": "Character selection reset"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
