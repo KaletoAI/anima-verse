@@ -495,72 +495,7 @@ async def delete_character_outfit_route(character_name: str, request: Request) -
 @router.post("/{character_name}/generate-profile-image")
 async def generate_profile_image_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Generiert ein neues Profilbild via ImageGenerationSkill."""
-    import os
-    import json as _json
-    data = await request.json()
-    user_id = data.get("user_id", "")
-
-    # Character-Profil laden. Profilbild-Prompt = FACE PROMPT (face_appearance),
-    # NICHT die Body-Appearance. Fallback auf Body-Appearance, falls leer.
-    from app.models.character import get_character_profile, get_character_appearance, set_character_profile_image
-    from app.models.character_template import resolve_profile_tokens, get_template
-    profile = get_character_profile(character_name)
-    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    appearance = character_ops._resolve_face_prompt(profile, character_name, tmpl)
-
-    # Prompt aus Dialog oder Face Prompt (Style kommt aus dem "profile"-Use-Case).
-    prompt_text = data.get("prompt", "").strip() or (appearance or "").strip()
-
-    # ImageGenerationSkill holen
-    try:
-        skill_manager = get_skill_manager()
-        image_skill = skill_manager.get_skill("image_generation")
-    except Exception:
-        image_skill = None
-    if not image_skill:
-        raise HTTPException(status_code=500, detail="ImageGenerationSkill nicht verfuegbar")
-
-    # Workflow/Backend/Modell aus Request
-    workflow_name = data.get("workflow", "").strip()
-    backend_name = data.get("backend", "").strip()
-    loras_override = data.get("loras")
-    model_override = data.get("model_override", "").strip()
-
-    payload = {
-        "prompt": prompt_text,
-        "agent_name": character_name,
-        "user_id": "",
-        "auto_enhance": False,
-        "set_profile": True,
-        "image_use_case": "profile",
-        "workflow": workflow_name,
-        "backend": backend_name,
-    }
-    if loras_override is not None:
-        payload["loras"] = loras_override
-    if model_override:
-        payload["model_override"] = model_override
-    input_data = _json.dumps(payload)
-
-    try:
-        import asyncio
-        result = await asyncio.to_thread(image_skill.execute, input_data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Bildgenerierung fehlgeschlagen: {str(e)}")
-
-    # Dateiname aus dem Ergebnis extrahieren
-    import re
-    image_match = re.search(r'/characters/[^/]+/images/([^?)\n]+)', result)
-    if not image_match:
-        raise HTTPException(status_code=500, detail=f"Kein Bild im Ergebnis: {result[:200]}")
-
-    image_filename = image_match.group(1)
-
-    # Als Profilbild setzen
-    set_character_profile_image(character_name, image_filename)
-
-    image_url = f"/characters/{character_name}/images/{image_filename}"
-    return {"status": "success", "image": image_filename, "image_url": image_url}
+    return await character_ops.generate_profile_image_core(character_name, request)
 
 
 @router.get("/{character_name}/outfits/{outfit_id}/image-prompt")
@@ -585,167 +520,7 @@ async def get_outfit_image_prompt(character_name: str, outfit_id: str) -> Dict[s
 @router.post("/{character_name}/outfits/{outfit_id}/generate-image")
 async def generate_outfit_image_route(character_name: str, outfit_id: str, request: Request) -> Dict[str, Any]:
     """Generiert ein Bild fuer ein Outfit via ImageGenerationSkill."""
-    import os
-    import json as _json
-    data = await request.json()
-    user_id = data.get("user_id", "")
-
-    # Outfit suchen
-    outfits = get_character_outfits(character_name)
-    outfit_obj = next((o for o in outfits if o.get("id") == outfit_id), None)
-    if not outfit_obj:
-        raise HTTPException(status_code=404, detail="Outfit nicht gefunden")
-
-    outfit_description = outfit_obj.get("outfit", "")
-    if not outfit_description:
-        raise HTTPException(status_code=400, detail="Outfit hat keine Beschreibung")
-
-    # Character-Profil laden: Appearance + Geschlecht (Tokens auflösen)
-    from app.models.character import get_character_profile, get_character_appearance
-    from app.models.character_template import resolve_profile_tokens, get_template
-    profile = get_character_profile(character_name)
-    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    appearance = get_character_appearance(character_name)
-    if appearance and "{" in appearance:
-        appearance = resolve_profile_tokens(appearance, profile, template=tmpl, target_key="character_appearance")
-    if outfit_description and "{" in outfit_description:
-        outfit_description = resolve_profile_tokens(outfit_description, profile, template=tmpl, target_key="outfit")
-
-    # Prompt: aus Dialog (wenn vorhanden) oder via Hilfsfunktion aufbauen
-    prompt_text = data.get("prompt", "").strip()
-    if not prompt_text:
-        prompt_text = character_ops._build_outfit_image_prompt(character_name, outfit_description)
-
-    # ImageGenerationSkill holen
-    try:
-        skill_manager = get_skill_manager()
-        image_skill = skill_manager.get_skill("image_generation")
-    except Exception:
-        image_skill = None
-
-    if not image_skill:
-        raise HTTPException(status_code=500, detail="ImageGenerationSkill nicht verfuegbar")
-
-    # Workflow/Backend/LoRA/Modell-Auswahl:
-    #   1) explizit aus Request
-    #   2) per-Character-Override (profile.outfit_imagegen) — MUSS vor dem
-    #      Skill-Default greifen, sonst generiert ein Character mit konfiguriertem
-    #      Flux faelschlich mit dem ersten geladenen Workflow (z.B. Z-Image).
-    #   3) ENV OUTFIT_IMAGEGEN_DEFAULT
-    workflow_name = data.get("workflow", "").strip()
-    backend_name = data.get("backend", "").strip()
-    loras_override = data.get("loras")
-    model_override = data.get("model_override", "").strip()
-    if not workflow_name and not backend_name:
-        try:
-            from app.models.character import get_character_profile as _gcp
-            _ovr = (_gcp(character_name) or {}).get("outfit_imagegen") or {}
-            if isinstance(_ovr, dict):
-                workflow_name = (_ovr.get("workflow") or "").strip()
-                if not model_override:
-                    model_override = (_ovr.get("model") or "").strip()
-                if loras_override is None and isinstance(_ovr.get("loras"), list):
-                    loras_override = _ovr.get("loras")
-        except Exception as _e:
-            logger.debug("outfit-image per-char override read failed: %s", _e)
-    if not workflow_name and not backend_name:
-        _outfit_default = os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip()
-        if _outfit_default.startswith("workflow:"):
-            workflow_name = _outfit_default[len("workflow:"):].strip()
-        elif _outfit_default.startswith("backend:"):
-            backend_name = _outfit_default[len("backend:"):].strip()
-    # The spec (glob) is resolved by the skill itself at generation time
-    # (resolve_imagegen_target) — no pre-resolution here.
-
-    # Resolution from .env (portrait format for full-body outfits)
-    outfit_w = int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None
-    outfit_h = int(os.environ.get("OUTFIT_IMAGE_HEIGHT", 0) or 0) or None
-
-    # Appearance mitgeben damit Reference-Bilder aufgeloest werden (Flux2 braucht sie)
-    payload = {
-        "prompt": prompt_text,
-        "agent_name": character_name,
-        "user_id": "",
-        "auto_enhance": False,
-        "skip_gallery": True,
-        "image_use_case": "outfit",
-        "workflow": workflow_name,
-        "backend": backend_name,
-        "appearances": [{"name": character_name, "appearance": appearance or ""}],
-        "profile_only": True,
-    }
-    if outfit_w:
-        payload["override_width"] = outfit_w
-    if outfit_h:
-        payload["override_height"] = outfit_h
-    if loras_override is not None:
-        payload["loras"] = loras_override
-    if model_override:
-        payload["model_override"] = model_override
-    input_data = _json.dumps(payload)
-
-    try:
-        import asyncio
-        result = await asyncio.to_thread(image_skill.execute, input_data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Bildgenerierung fehlgeschlagen: {str(e)}")
-
-    # Dateiname aus dem Ergebnis extrahieren (Skill gibt Markdown-Links zurueck)
-    import re
-    image_match = re.search(r'/characters/[^/]+/images/([^?)\n]+)', result)
-    if not image_match:
-        raise HTTPException(status_code=500, detail=f"Kein Bild im Ergebnis: {result[:200]}")
-
-    image_filename = image_match.group(1)
-
-    # Generiertes Bild von images/ nach outfits/ verschieben
-    from app.models.character import get_character_outfits_dir, postprocess_outfit_image
-    import shutil
-    images_dir = get_character_images_dir(character_name)
-    outfits_dir = get_character_outfits_dir(character_name)
-    src_path = images_dir / image_filename
-    dst_path = outfits_dir / image_filename
-    if src_path.exists():
-        shutil.move(str(src_path), str(dst_path))
-
-    # Hintergrund entfernen + transparente Raender abschneiden
-    # rembg/ONNX-Inferenz ist CPU-bound → Threadpool damit der Event-Loop nicht blockiert.
-    import asyncio as _asyncio
-    final_path = await _asyncio.to_thread(postprocess_outfit_image, dst_path)
-    final_filename = final_path.name
-
-    # Altes Outfit-Bild loeschen
-    old_image = outfit_obj.get("image", "")
-    if old_image and old_image != final_filename:
-        old_path = outfits_dir / old_image
-        if old_path.exists():
-            old_path.unlink()
-
-    # Outfit-Image-Feld + Metadaten aktualisieren
-    # Vollstaendige Metadaten aus der Generierung uebernehmen (Spec 1.2)
-    _gen_meta = getattr(image_skill, 'last_image_meta', {}) or {}
-    _image_meta = {
-        "provider": _gen_meta.get("backend_type", ""),
-        "service": _gen_meta.get("backend", ""),
-        "model": _gen_meta.get("model", ""),
-        "loras": _gen_meta.get("loras", loras_override or []),
-        "prompt": prompt_text,
-        "negative_prompt": _gen_meta.get("negative_prompt", ""),
-        "seed": _gen_meta.get("seed", 0),
-        "width": outfit_w or _gen_meta.get("width", 0),
-        "height": outfit_h or _gen_meta.get("height", 0),
-        "created_at": _gen_meta.get("created_at", ""),
-        "duration_s": _gen_meta.get("duration_s", 0),
-        "reference_images": _gen_meta.get("reference_images", {}),
-        "workflow": _gen_meta.get("workflow", workflow_name),
-        "model_override": model_override,
-    }
-    # Bild verknuepfen (loescht automatisch alte Variants).
-    # update_outfit_image schreibt die Sidecar-JSON neben dem PNG (Spec 1.2).
-    update_outfit_image(character_name, outfit_id, final_filename, image_meta=_image_meta)
-
-    image_url = f"/characters/{character_name}/outfits/{final_filename}"
-    return {"status": "success", "image": final_filename, "image_url": image_url}
+    return await character_ops.generate_outfit_image_core(character_name, outfit_id, request)
 
 
 @router.post("/{character_name}/outfits/generate-all-images")
@@ -755,8 +530,6 @@ async def generate_all_outfit_images_route(character_name: str, request: Request
     Verwendet die gleiche Pipeline wie generate_outfit_image_route,
     aber fuer jedes Outfit einzeln. Laeuft im Hintergrund ueber die Task-Queue.
     """
-    import os
-    import json as _json
     import threading
     data = await request.json()
     user_id = data.get("user_id", "")
@@ -778,120 +551,10 @@ async def generate_all_outfit_images_route(character_name: str, request: Request
 
     logger.info("Bulk Outfit-Bild Generierung: %s, %d Outfits", character_name, len(eligible))
 
-    def _generate_all():
-        from app.core.task_queue import get_task_queue
-        from app.models.character_template import resolve_profile_tokens, get_template
-        from app.models.character import (
-            get_character_outfits_dir, postprocess_outfit_image, update_outfit_image)
-        import shutil
-        import re
-
-        _tq = get_task_queue()
-        _track_id = _tq.track_start(
-            "bulk_outfit_images", f"Outfit-Bilder ({len(eligible)})",
-            agent_name=character_name)
-
-        profile = get_character_profile(character_name)
-        tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-
-        skill_manager = get_skill_manager()
-        image_skill = skill_manager.get_skill("image_generation")
-        if not image_skill:
-            _tq.track_finish(_track_id, error="ImageGenerationSkill nicht verfuegbar")
-            return
-
-        success_count = 0
-        for idx, outfit_obj in enumerate(eligible, 1):
-            outfit_id = outfit_obj.get("id", "")
-            outfit_name = outfit_obj.get("name", outfit_id[:8])
-            outfit_description = outfit_obj.get("outfit", "")
-
-            _tq.track_update_label(_track_id, f"Outfit {idx}/{len(eligible)}: {outfit_name}")
-            logger.info("Bulk Outfit %d/%d: %s (%s)", idx, len(eligible), outfit_name, outfit_id[:8])
-
-            # Tokens aufloesen
-            if outfit_description and "{" in outfit_description:
-                outfit_description = resolve_profile_tokens(
-                    outfit_description, profile, template=tmpl, target_key="outfit")
-
-            # Prompt via Hilfsfunktion
-            prompt_text = character_ops._build_outfit_image_prompt(character_name, outfit_description)
-
-            # Appearance fuer Reference-Bilder
-            appearance = get_character_appearance(character_name)
-            if appearance and "{" in appearance:
-                appearance = resolve_profile_tokens(
-                    appearance, profile, template=tmpl, target_key="character_appearance")
-
-            payload = {
-                "prompt": prompt_text,
-                "agent_name": character_name,
-                "user_id": "",
-                "auto_enhance": False,
-                "skip_gallery": True,
-                "appearances": [{"name": character_name, "appearance": appearance or ""}],
-                "profile_only": True,
-            }
-            if workflow_name:
-                payload["workflow"] = workflow_name
-            if backend_name:
-                payload["backend"] = backend_name
-            if loras_override is not None:
-                payload["loras"] = loras_override
-            if model_override:
-                payload["model_override"] = model_override
-
-            try:
-                result = image_skill.execute(_json.dumps(payload))
-                match = re.search(r'/characters/[^/]+/images/([^?)\n]+)', result)
-                if not match:
-                    logger.warning("Bulk Outfit %s: Kein Bild im Ergebnis", outfit_name)
-                    continue
-
-                image_filename = match.group(1)
-                images_dir = get_character_images_dir(character_name)
-                outfits_dir = get_character_outfits_dir(character_name)
-                src_path = images_dir / image_filename
-                dst_path = outfits_dir / image_filename
-                if src_path.exists():
-                    shutil.move(str(src_path), str(dst_path))
-
-                final_path = postprocess_outfit_image(dst_path)
-                final_filename = final_path.name
-
-                # Altes Bild loeschen
-                old_image = outfit_obj.get("image", "")
-                if old_image and old_image != final_filename:
-                    old_path = outfits_dir / old_image
-                    if old_path.exists():
-                        old_path.unlink()
-
-                # Metadaten
-                _gen_meta = getattr(image_skill, 'last_image_meta', {}) or {}
-                _image_meta = {
-                    "provider": _gen_meta.get("backend_type", ""),
-                    "service": _gen_meta.get("backend", ""),
-                    "model": _gen_meta.get("model", ""),
-                    "loras": _gen_meta.get("loras", []),
-                    "prompt": prompt_text,
-                    "negative_prompt": _gen_meta.get("negative_prompt", ""),
-                    "seed": _gen_meta.get("seed", 0),
-                    "workflow": _gen_meta.get("workflow", workflow_name),
-                    "model_override": model_override,
-                }
-                # update_outfit_image schreibt PNG-Verknuepfung + Sidecar-JSON
-                update_outfit_image(character_name, outfit_id, final_filename, image_meta=_image_meta)
-
-                success_count += 1
-                logger.info("Bulk Outfit %s: Bild generiert -> %s", outfit_name, final_filename)
-
-            except Exception as e:
-                logger.error("Bulk Outfit %s fehlgeschlagen: %s", outfit_name, e)
-
-        _tq.track_finish(_track_id)
-        logger.info("Bulk Outfit-Bilder fertig: %d/%d erfolgreich", success_count, len(eligible))
-
-    threading.Thread(target=_generate_all, daemon=True, name=f"bulk-outfit-{character_name}").start()
+    threading.Thread(
+        target=character_ops.generate_all_outfit_images_worker,
+        args=(character_name, eligible, workflow_name, backend_name, loras_override, model_override),
+        daemon=True, name=f"bulk-outfit-{character_name}").start()
     return {"status": "started", "count": len(eligible)}
 
 
@@ -1618,28 +1281,11 @@ def delete_image_animation(character_name: str, image_filename: str) -> Dict[str
     if ".." in image_filename or "/" in image_filename:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
 
-    images_dir = get_character_images_dir(character_name)
-    stem = Path(image_filename).stem
-    video_path = images_dir / f"{stem}.mp4"
-
-    if not video_path.exists():
+    from app.models.character import remove_image_animation
+    deleted = remove_image_animation(character_name, image_filename)
+    if deleted is None:
         raise HTTPException(status_code=404, detail="Keine Animation vorhanden")
-
-    video_path.unlink()
-    logger.info("Animation geloescht: %s", video_path.name)
-
-    # animate_prompt und animate_created_at aus Metadaten entfernen
-    from app.models.character import _load_single_image_meta, _save_single_image_meta
-    meta = _load_single_image_meta(character_name, image_filename)
-    changed = False
-    for key in ("animate_prompt", "animate_created_at"):
-        if key in meta:
-            del meta[key]
-            changed = True
-    if changed:
-        _save_single_image_meta(character_name, image_filename, meta)
-
-    return {"status": "success", "deleted_video": f"{stem}.mp4"}
+    return {"status": "success", "deleted_video": deleted}
 
 
 @router.post("/{character_name}/cleanup-images")
@@ -1829,9 +1475,6 @@ async def regenerate_character_image(character_name: str, image_name: str, reque
     Nutzt den gespeicherten Prompt, optional verbessert durch User-Feedback,
     und generiert ein neues Bild das das alte ersetzt.
     """
-    from app.skills.image_regenerate import regenerate_image
-    from app.models.character import add_character_image_prompt
-
     body = await request.json()
     user_id = body.get("user_id", "")
     if ".." in image_name or "/" in image_name:
@@ -1879,31 +1522,14 @@ async def regenerate_character_image(character_name: str, image_name: str, reque
         queue_name=_queue,
         start_running=False)
 
-    def _run_regen():
-        try:
-            _success, final_prompt, actual_path = regenerate_image(character_name, str(image_path),
-                prompt, improvement_request, workflow_name, backend_name, agent_config,
-                loras=loras,
-                model_override=model_override,
-                character_names=character_names,
-                room_id=room_id,
-                location_id=original_location_id,
-                negative_prompt_override=negative_prompt_override,
-                track_id=_track_id,
-                create_new=bool(create_new),
-                use_room=bool(use_room),
-                use_source_as_reference=use_source_as_reference,
-                source_image_path=str(image_path))
-            _actual_filename = Path(actual_path).name
-            if final_prompt != prompt:
-                add_character_image_prompt(character_name, _actual_filename, final_prompt)
-            _tq.track_finish(_track_id)
-        except Exception as e:
-            logger.error("Bild-Regenerierung fehlgeschlagen: %s", e)
-            _tq.track_finish(_track_id, error=str(e))
-
     import threading
-    threading.Thread(target=_run_regen, daemon=True).start()
+    threading.Thread(
+        target=character_ops.regenerate_image_worker,
+        args=(character_name, image_path, prompt, improvement_request, workflow_name,
+              backend_name, agent_config, loras, model_override, character_names, room_id,
+              original_location_id, negative_prompt_override, _track_id, create_new,
+              use_room, use_source_as_reference, _tq),
+        daemon=True).start()
     return {"status": "started", "image": image_name, "track_id": _track_id}
 
 
@@ -1965,46 +1591,11 @@ async def animate_character_image(character_name: str, image_name: str, request:
         "image_animate", "Bild animieren", agent_name=character_name,
         start_running=False)
 
-    def _run_animate():
-        _tq.track_activate(_track_id)
-        try:
-            from app.skills.animate import animate_image
-            from datetime import datetime
-            from app.core.llm_queue import get_llm_queue, Priority as _P
-
-            stem = Path(image_name).stem
-            video_name = f"{stem}.mp4"
-            output_path = str(images_dir / video_name)
-
-            # Run via provider queue (serialization + queue-panel visibility).
-            # gpu_type = the animation service id ("together"), which matches
-            # a channel of the same type if one exists.
-            success = get_llm_queue().submit_gpu_task(
-                provider_name=service,
-                task_type="image_animate",
-                priority=_P.IMAGE_GEN,
-                callable_fn=lambda: animate_image(
-                    str(image_path), prompt, output_path, service=service),
-                agent_name=character_name,
-                label="Animation",
-                gpu_type=service)
-
-            if not success:
-                _tq.track_finish(_track_id, error="Animation fehlgeschlagen")
-                return
-
-            # Video-Info in bestehende Bild-Metadaten schreiben
-            add_character_image_metadata(character_name, image_name, {
-                "animate_prompt": prompt,
-                "animate_created_at": utc_now_iso(),
-            })
-            _tq.track_finish(_track_id)
-        except Exception as e:
-            logger.error("Animation fehlgeschlagen: %s", e)
-            _tq.track_finish(_track_id, error=str(e))
-
     import threading
-    threading.Thread(target=_run_animate, daemon=True).start()
+    threading.Thread(
+        target=character_ops.animate_image_worker,
+        args=(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id),
+        daemon=True).start()
     return {"status": "started", "image": image_name, "track_id": _track_id}
 
 

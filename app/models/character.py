@@ -2636,6 +2636,34 @@ def _save_single_image_meta(character_name: str, image_filename: str, meta: Dict
     )
 
 
+def remove_image_animation(character_name: str, image_filename: str) -> Optional[str]:
+    """Loescht die Animation (Video) eines Bildes + scrubbt animate-Metadaten.
+
+    Gibt den Namen der geloeschten mp4-Datei zurueck, oder None wenn keine
+    Animation vorhanden war (Route mappt None auf 404)."""
+    images_dir = get_character_images_dir(character_name)
+    stem = Path(image_filename).stem
+    video_path = images_dir / f"{stem}.mp4"
+
+    if not video_path.exists():
+        return None
+
+    video_path.unlink()
+    logger.info("Animation geloescht: %s", video_path.name)
+
+    # animate_prompt und animate_created_at aus Metadaten entfernen
+    meta = _load_single_image_meta(character_name, image_filename)
+    changed = False
+    for key in ("animate_prompt", "animate_created_at"):
+        if key in meta:
+            del meta[key]
+            changed = True
+    if changed:
+        _save_single_image_meta(character_name, image_filename, meta)
+
+    return f"{stem}.mp4"
+
+
 def _load_all_image_meta(character_name: str) -> Dict[str, Dict[str, Any]]:
     """Laedt alle Bild-Metadaten als Dict {filename: meta}."""
     images_dir = get_character_images_dir(character_name)
