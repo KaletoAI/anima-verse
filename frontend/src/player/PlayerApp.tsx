@@ -40,90 +40,11 @@ import { NoticeBanner } from './NoticeBanner'
 import { useQueue } from './useQueue'
 import { Icon, type IconName } from './icons'
 import { LightboxProvider, useLightbox } from './Lightbox'
-
-// Quadratische, browser-unabhängige Zellen: feste Zellgröße in px. Die
-// Spaltenzahl wird aus der gemessenen Breite berechnet, sodass die Spaltenbreite
-// == rowHeight ist (CELL). Breiterer Browser = MEHR Spalten, nicht breitere.
-const CELL = 14
-const MARGIN = 4
-
-// Standard-Layout fuer neue Welten + Demo — uebernommen aus dem lokal
-// gespeicherten Stand. Das Grid rendert mit compactType={null} + allowOverlap,
-// d.h. die Positionen bleiben exakt wie hier gesetzt.
-const DEFAULT_LAYOUT: Layout[] = [
-  { i: 'scene', x: 13, y: 18, w: 49, h: 26, minW: 8, minH: 8 },
-  { i: 'env', x: 13, y: 3, w: 49, h: 33, minW: 6, minH: 5 },
-  { i: 'map', x: 75, y: 3, w: 16, h: 12, minW: 6, minH: 5 },
-  { i: 'worldmap', x: 62, y: 3, w: 13, h: 12, minW: 6, minH: 5 },
-  { i: 'self', x: 0, y: 3, w: 13, h: 20, minW: 6, minH: 8 },
-  { i: 'others', x: 41, y: 20, w: 13, h: 18, minW: 8, minH: 8 },
-  { i: 'belongings', x: 62, y: 19, w: 29, h: 25, minW: 10, minH: 8 },
-  { i: 'journal', x: 20, y: 9, w: 50, h: 30, minW: 8, minH: 6 },
-  { i: 'gallery', x: 0, y: 54, w: 20, h: 14, minW: 8, minH: 6 },
-  { i: 'instagram', x: 20, y: 54, w: 21, h: 18, minW: 10, minH: 8 },
-  { i: 'phone', x: 18, y: 7, w: 18, h: 30, minW: 10, minH: 12 },
-  { i: 'tasks', x: 24, y: 27, w: 17, h: 10, minW: 6, minH: 4 },
-  { i: 'news', x: 18, y: 6, w: 34, h: 33, minW: 8, minH: 8 },
-  { i: 'layouts', x: 24, y: 37, w: 17, h: 14, minW: 6, minH: 6 },
-  { i: 'settings', x: 11, y: 5, w: 59, h: 38, minW: 12, minH: 12 },
-]
-
-// Default-Box je Panel-id — Quelle der Wahrheit fuer Mindest-/Anfangsgroesse.
-const DEFAULT_BY_ID: Record<string, Layout> = Object.fromEntries(
-  DEFAULT_LAYOUT.map((d) => [d.i, d]))
-
-// Launcher-Labels + Art. kind:'dialog' → zentriertes Overlay (kommt/geht)
-// statt Grid-Kachel; generell für „Werkzeug"-Fenster nutzbar.
-const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | 'dialog' }[] = [
-  { id: 'scene', label: 'Chat', icon: 'chat' },
-  { id: 'env', label: 'Surroundings', icon: 'surroundings' },
-  { id: 'map', label: 'Move', icon: 'move' },
-  { id: 'worldmap', label: 'Map', icon: 'worldmap' },
-  { id: 'self', label: 'Self', icon: 'self' },
-  { id: 'others', label: 'Others', icon: 'others' },
-  { id: 'belongings', label: 'Inventory', icon: 'backpack' },
-  { id: 'journal', label: 'Mind', icon: 'brain' },
-  { id: 'gallery', label: 'Gallery', icon: 'gallery' },
-  { id: 'instagram', label: 'Instagram', icon: 'instagram' },
-  { id: 'phone', label: 'Phone', icon: 'phone' },
-  { id: 'tasks', label: 'Tasks', icon: 'tasks' },
-  { id: 'news', label: 'News', icon: 'news' },
-  { id: 'settings', label: 'Avatar', icon: 'avatar' },
-  { id: 'layouts', label: 'Layouts', icon: 'layouts', kind: 'dialog' },
-]
-const ALL_PANELS = PANEL_META.map((p) => p.id)
-const GRID_PANELS = PANEL_META.filter((p) => p.kind !== 'dialog').map((p) => p.id)
-const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((p) => p.id)
-// Grid-Panel, aber NICHT default-offen (occasional, per Button geöffnet).
-// Geschlossen-by-default = alle Grid-Panels, die NICHT im gespeicherten Default
-// offen waren (offen: scene/env/map/worldmap/self/others/belongings/gallery/
-// instagram/tasks). 'layouts' ist ein Dialog und wird ohnehin nicht getiled.
-const CLOSED_BY_DEFAULT = new Set(['journal', 'news', 'phone', 'settings'])
-const INITIAL_OPEN = GRID_PANELS.filter((id) => !CLOSED_BY_DEFAULT.has(id))
-const ICON_BY_ID: Record<string, IconName> = Object.fromEntries(
-  PANEL_META.map((p) => [p.id, p.icon]))
-const LABEL_BY_ID: Record<string, string> = Object.fromEntries(
-  PANEL_META.map((p) => [p.id, p.label]))
-// Pro Panel ein Akzent-Farbton (dezent gesättigt, dark-theme-tauglich) — macht
-// die Leiste auf einen Blick lesbar: die Farbe färbt das Icon (aktiv = voll +
-// getönter Hintergrund, inaktiv = gedimmt). Utility-Buttons bleiben neutral.
-const PANEL_COLOR: Record<string, string> = {
-  scene: '#6aa9ff',      // Chat — blau
-  env: '#4ec9a8',        // Surroundings — teal
-  map: '#56c4dd',        // Move — cyan
-  worldmap: '#e0a356',   // Map — amber
-  self: '#b48ead',       // Self — violett
-  others: '#e8995e',     // Others — orange
-  belongings: '#d3a84a', // Inventory — gold
-  journal: '#c98bdb',    // Mind — magenta
-  gallery: '#5fb0e8',    // Gallery — himmelblau
-  instagram: '#e1567c',  // Instagram — pink
-  phone: '#6cc24a',      // Phone — grün
-  news: '#e0675e',       // News — rot
-  settings: '#9aa4b2',   // Avatar — grau
-}
-// Panels die sich vergrößert (view-only Overlay) anzeigen lassen. Erweiterbar.
-const EXPANDABLE = new Set<string>(['worldmap'])
+import {
+  CELL, MARGIN, DEFAULT_LAYOUT, DEFAULT_BY_ID, PANEL_META, ALL_PANELS,
+  GRID_PANELS, DIALOG_PANELS, INITIAL_OPEN, ICON_BY_ID, LABEL_BY_ID,
+  PANEL_COLOR, EXPANDABLE,
+} from './panelRegistry'
 
 type IconMode = 'icon' | 'iconText'
 type ToolbarAlign = 'left' | 'right'
