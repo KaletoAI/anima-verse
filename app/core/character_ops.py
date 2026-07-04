@@ -1890,3 +1890,784 @@ async def write_soul_file(character_name: str, section_id: str, request) -> Dict
     # Guarantee a trailing newline without collecting superfluous ones
     md_path.write_text(content.rstrip() + "\n", encoding="utf-8")
     return {"status": "success", "section": section_id, "size": len(content)}
+
+
+# === Round C: movement + imagegen AI-ops (moved 1:1 from routes) ===
+
+
+def build_current_location_payload(character_name: str) -> Dict[str, Any]:
+    """Gibt den aktuellen virtuellen Aufenthaltsort zurueck"""
+    from app.models.character import get_character_current_location
+    from app.models.world import get_location_name as _get_loc_name, get_room_by_id, _load_world_data
+    from app.models.character_template import is_feature_enabled
+    locations_on = is_feature_enabled(character_name, "locations_enabled")
+    activities_on = is_feature_enabled(character_name, "activities_enabled")
+    location_id = get_character_current_location(character_name) if locations_on else ""
+    location_name = _get_loc_name(location_id) if location_id else ""
+    from app.models.character import get_effective_activity
+    activity = get_effective_activity(character_name) if activities_on else ""
+    from app.models.character import get_character_current_room
+    current_room = get_character_current_room(character_name) if locations_on else ""
+    # Resolve room: could be an ID or a name — normalize to ID + name
+    current_room_id = ""
+    current_room_name = ""
+    if current_room and location_id:
+        world_data = _load_world_data()
+        for loc in world_data.get("locations", []):
+            if loc.get("id") == location_id:
+                # Try by ID first
+                room = get_room_by_id(loc, current_room)
+                if room:
+                    current_room_id = room.get("id", current_room)
+                    current_room_name = room.get("name", "")
+                else:
+                    # Fallback: match by name
+                    for r in loc.get("rooms", []):
+                        if r.get("name", "").lower() == current_room.lower():
+                            current_room_id = r.get("id", "")
+                            current_room_name = r.get("name", "")
+                            break
+                break
+    # Detail-Beschreibung der Aktivitaet
+    from app.models.character import get_character_profile, get_movement_target
+    profile = get_character_profile(character_name)
+    activity_detail = ""  # current_activity_detail entfernt (Pose-Modell)
+    movement_target_id = get_movement_target(character_name) if locations_on else ""
+    movement_target_name = _get_loc_name(movement_target_id) if movement_target_id else ""
+    return {
+        "character": character_name,
+        "current_location": location_name or location_id or "",
+        "current_location_id": location_id or "",
+        "current_activity": activity or "",
+        "current_activity_detail": activity_detail,
+        "current_room": current_room_id or current_room or "",
+        "current_room_name": current_room_name or current_room or "",
+        "movement_target_id": movement_target_id,
+        "movement_target_name": movement_target_name,
+    }
+
+
+async def apply_current_location(character_name: str, request) -> Dict[str, Any]:
+    """Aktualisiert den aktuellen virtuellen Aufenthaltsort"""
+    from app.models.character import save_character_current_location
+    data = await request.json()
+    user_id = data.get("user_id", "")
+    location = data.get("current_location", "")
+    room = data.get("current_room", "")
+
+    # Name → ID aufloesen falls noetig
+    from app.models.world import resolve_location as _resolve_loc, get_entry_room_id
+    from app.models.character import get_character_current_location, get_character_current_room, save_character_current_room, clear_pose_intent
+    loc_obj = _resolve_loc(location)
+    location_to_save = loc_obj["id"] if loc_obj and loc_obj.get("id") else location
+    location_name_resp = loc_obj.get("name", location) if loc_obj else location
+    old_loc = get_character_current_location(character_name)
+    old_room = get_character_current_room(character_name) or ""
+    # Default-Raum fuer Cross-Location-Move: Entry-Room des Ziels.
+    if not room and loc_obj and location_to_save != old_loc:
+        room = get_entry_room_id(loc_obj) or ""
+    # Avatar: Outfit NICHT automatisch umstellen (manuelle User-Wahl bleibt).
+    from app.models.account import get_active_character
+    _is_avatar = (get_active_character() == character_name)
+
+    # Block-Regeln: Avatar darf nicht in geblockte Locations/Raeume.
+    # Gleiche Gates wie der SetLocation-Skill der NPCs durchlaeuft.
+    if _is_avatar and (location_to_save != old_loc or (room and room != old_room)):
+        from app.models.rules import check_leave, check_access
+        if old_loc and location_to_save != old_loc:
+            ok_leave, leave_msg = check_leave(character_name)
+            if not ok_leave:
+                raise HTTPException(status_code=403,
+                    detail={"reason": "block_leave", "message": leave_msg})
+        ok_enter, enter_msg = check_access(character_name, location_to_save,
+                                           room_id=room or "")
+        if not ok_enter:
+            raise HTTPException(status_code=403,
+                detail={"reason": "block_enter", "message": enter_msg})
+    save_character_current_location(character_name, location_to_save,
+        _skip_compliance=_is_avatar)
+    # Raum und Aktivitaet: bei Ortswechsel loeschen, es sei denn Raum wurde mitgegeben
+    if location_to_save != old_loc:
+        save_character_current_room(character_name, room or '')
+        if not room:
+            clear_pose_intent(character_name)
+    elif room:
+        save_character_current_room(character_name, room)
+
+    # Avatar-Eintritts-Hook: andere Characters im neuen Raum bemerken den
+    # Eintritt und reagieren ggf. (forced_thought + TalkTo). Nur wenn:
+    # - es der Avatar ist (sonst ist's der Auto-Move eines NPCs)
+    # - tatsaechlich Raum oder Location gewechselt hat (nicht nur Re-Save)
+    new_room = room or ''
+    room_changed = (location_to_save != old_loc) or (new_room and new_room != old_room)
+    from app.core.log import get_logger as _gl_route
+    _gl_route("characters_route").info(
+        "current-location POST: char=%s is_avatar=%s old_loc=%s -> new_loc=%s old_room=%s -> new_room=%s room_changed=%s",
+        character_name, _is_avatar, old_loc, location_to_save, old_room, new_room, room_changed)
+    room_entry_result = {"reactor": "", "silent_noticers": []}
+    # Roll-on-Entry: bei echtem Cross-Location-Move sofort wuerfeln, ob ein
+    # Event fuer den Avatar entsteht. Nur fuer Avatar (nicht fuer NPC-Moves).
+    if _is_avatar and location_to_save != old_loc and loc_obj:
+        try:
+            from app.core.random_events import try_roll_on_entry
+            try_roll_on_entry(character_name, location_to_save, loc_obj)
+        except Exception as _re:
+            logger.debug("try_roll_on_entry fehlgeschlagen: %s", _re)
+    if _is_avatar and room_changed:
+        try:
+            from app.core.room_entry import on_avatar_room_entry
+            # Room-Label aufloesen
+            _room_label = ""
+            if new_room and loc_obj:
+                from app.models.world import get_room_by_id
+                _r = get_room_by_id(loc_obj, new_room)
+                if _r and _r.get("name"):
+                    _room_label = _r["name"]
+            import asyncio as _asyncio
+            room_entry_result = await _asyncio.to_thread(
+                on_avatar_room_entry,
+                avatar_name=character_name,
+                location_id=location_to_save,
+                room_id=new_room,
+                location_label=location_name_resp,
+                room_label=_room_label,
+            ) or room_entry_result
+        except Exception as _re:
+            from app.core.log import get_logger as _gl
+            _gl("characters_route").debug("avatar_room_entry hook failed: %s", _re)
+
+    return {
+        "status": "success",
+        "character": character_name,
+        "current_location": location_name_resp,
+        "reactor": room_entry_result.get("reactor", ""),
+        "silent_noticers": room_entry_result.get("silent_noticers", []),
+    }
+
+
+async def apply_place_on_map(character_name: str, request) -> Dict[str, Any]:
+    """Drag&Drop-Platzierung: setzt current_location UND fuegt die Location
+    in die known_locations-Liste des Characters ein. Damit aktiviert der erste
+    Drop strict-mode (Listen-basierte Sichtbarkeit) — bis dahin ist der
+    Character auf Legacy-Verhalten (knowledge_item-Gating only).
+    """
+    from app.models.character import get_character_current_location, save_character_current_location
+    data = await request.json()
+    location = (data.get("location_id") or data.get("current_location") or "").strip()
+    room = (data.get("current_room") or "").strip()
+    if not location:
+        raise HTTPException(status_code=400, detail="location_id fehlt")
+
+    from app.models.world import resolve_location as _resolve_loc, get_entry_room_id
+    from app.models.character import (
+        add_known_location, get_character_current_room,
+        save_character_current_room, clear_pose_intent)
+
+    loc_obj = _resolve_loc(location)
+    location_to_save = loc_obj["id"] if loc_obj and loc_obj.get("id") else location
+    location_name_resp = loc_obj.get("name", location) if loc_obj else location
+
+    # Kein Raum mitgegeben → Entry-Room der Ziel-Location nehmen.
+    if not room and loc_obj:
+        room = get_entry_room_id(loc_obj) or ""
+
+    old_loc = get_character_current_location(character_name)
+    old_room = get_character_current_room(character_name) or ""
+    from app.models.account import get_active_character
+    _is_avatar = (get_active_character() == character_name)
+
+    # Block-Regeln: Avatar darf nicht in geblockte Locations/Raeume.
+    if _is_avatar and (location_to_save != old_loc or (room and room != old_room)):
+        from app.models.rules import check_leave, check_access
+        if old_loc and location_to_save != old_loc:
+            ok_leave, leave_msg = check_leave(character_name)
+            if not ok_leave:
+                raise HTTPException(status_code=403,
+                    detail={"reason": "block_leave", "message": leave_msg})
+        ok_enter, enter_msg = check_access(character_name, location_to_save,
+                                           room_id=room or "")
+        if not ok_enter:
+            raise HTTPException(status_code=403,
+                detail={"reason": "block_enter", "message": enter_msg})
+
+    add_known_location(character_name, location_to_save)
+    save_character_current_location(character_name, location_to_save,
+        _skip_compliance=_is_avatar)
+    if location_to_save != old_loc:
+        save_character_current_room(character_name, room or '')
+        if not room:
+            clear_pose_intent(character_name)
+    elif room:
+        save_character_current_room(character_name, room)
+
+    new_room = room or ''
+    room_changed = (location_to_save != old_loc) or (new_room and new_room != old_room)
+    room_entry_result = {"reactor": "", "silent_noticers": []}
+    # Roll-on-Entry: Cross-Location-Drop-on-Map löst sofort Würfel aus.
+    if _is_avatar and location_to_save != old_loc and loc_obj:
+        try:
+            from app.core.random_events import try_roll_on_entry
+            try_roll_on_entry(character_name, location_to_save, loc_obj)
+        except Exception as _re:
+            logger.debug("try_roll_on_entry fehlgeschlagen: %s", _re)
+    if _is_avatar and room_changed:
+        try:
+            from app.core.room_entry import on_avatar_room_entry
+            _room_label = ""
+            if new_room and loc_obj:
+                from app.models.world import get_room_by_id
+                _r = get_room_by_id(loc_obj, new_room)
+                if _r and _r.get("name"):
+                    _room_label = _r["name"]
+            import asyncio as _asyncio
+            room_entry_result = await _asyncio.to_thread(
+                on_avatar_room_entry,
+                avatar_name=character_name,
+                location_id=location_to_save,
+                room_id=new_room,
+                location_label=location_name_resp,
+                room_label=_room_label,
+            ) or room_entry_result
+        except Exception as _re:
+            logger.debug("avatar_room_entry hook failed: %s", _re)
+
+    return {
+        "status": "success",
+        "character": character_name,
+        "current_location": location_name_resp,
+        "current_location_id": location_to_save,
+        "reactor": room_entry_result.get("reactor", ""),
+        "silent_noticers": room_entry_result.get("silent_noticers", []),
+    }
+
+
+async def detect_characters_core(character_name: str, image_name: str, request) -> Dict[str, Any]:
+    """Erkennt im Bild verwendete Characters aus reference_images Metadaten."""
+    from app.models.character import (list_available_characters, get_character_images_dir,
+        get_character_outfits_dir, get_character_image_prompts, get_character_current_location)
+    from app.models.account import get_user_profile, get_active_character
+    from app.models.character import get_single_image_meta
+
+    body = await request.json()
+    user_id = body.get("user_id", "")
+
+    all_chars = list_available_characters()
+    user_profile = get_user_profile()
+    # user_name = Login-Name (z.B. "admin") — ist KEINE Person die in einem
+    # Bild auftauchen kann. Avatar ist der vom User gespielte Character.
+    avatar_name = (get_active_character() or "").strip()
+    user_name = avatar_name  # Fuer Detection (Filename-Match etc.) den Avatar nutzen
+
+    # 1. Primaer: explizit gespeicherte character_names aus vorheriger Auswahl
+    meta = get_single_image_meta(character_name, image_name)
+    saved_names = (meta or {}).get("character_names")
+    detected_names = []
+    if saved_names and isinstance(saved_names, list):
+        detected_names = saved_names
+    else:
+        # 2. Fallback: canonical.persons aus dem Generate-Zeitpunkt — das ist
+        #    die zuverlaessigste Quelle, weil sie genau die Personen enthaelt
+        #    die der Prompt-Builder ins Bild gepackt hat. Nur Nicht-Agent
+        #    persons (= im Bild sichtbar, nicht der Photographer-Avatar).
+        canonical = (meta or {}).get("canonical") or {}
+        canon_persons = canonical.get("persons") or []
+        if isinstance(canon_persons, list):
+            for p in canon_persons:
+                if not isinstance(p, dict):
+                    continue
+                _n = (p.get("name") or "").strip()
+                if _n and _n not in detected_names:
+                    detected_names.append(_n)
+
+        # 3. Fallback: aus reference_images ableiten — aber NUR Person-Slots,
+        #    keine Background-/Location-Refs (sonst wird der Avatar faelschlich
+        #    detected weil das BG-Bild zufaellig im User-Image-Dir liegt).
+        if not detected_names:
+            ref_images = meta.get("reference_images", {}) if meta else {}
+            _BG_SLOT_HINTS = ("background", "location", "scene", "_4", "room")
+            for _slot, ref_filename in ref_images.items():
+                _slot_lower = (_slot or "").lower()
+                if any(h in _slot_lower for h in _BG_SLOT_HINTS):
+                    continue  # Background/Location-Slot, keine Person
+                matched = False
+                # a) Dateiname beginnt mit Character-Name
+                for c in all_chars:
+                    if ref_filename.startswith(c + "_"):
+                        if c not in detected_names:
+                            detected_names.append(c)
+                        matched = True
+                        break
+                if matched:
+                    continue
+                # b) Datei in Character-Verzeichnissen suchen (Images, Outfits, Variants)
+                for c in all_chars:
+                    _imgs_dir = get_character_images_dir(c)
+                    _outfits_dir = get_character_outfits_dir(c)
+                    _variants_dir = _outfits_dir / "variants"
+                    if ((_imgs_dir / ref_filename).exists()
+                            or (_outfits_dir / ref_filename).exists()
+                            or (_variants_dir / ref_filename).exists()):
+                        if c not in detected_names:
+                            detected_names.append(c)
+                        matched = True
+                        break
+                # c) User-Profilbild — nur wenn Slotname NICHT als BG identifiziert wurde
+                #    (oben schon abgefangen)
+                if not matched and user_name and user_name not in detected_names:
+                    from app.models.account import get_user_images_dir
+                    _user_imgs = get_user_images_dir()
+                    if (_user_imgs / ref_filename).exists():
+                        detected_names.append(user_name)
+
+        # 4. Letzter Fallback: Prompt-basierte Erkennung
+        if not detected_names:
+            prompts = get_character_image_prompts(character_name)
+            prompt = prompts.get(image_name, "")
+            if prompt:
+                from app.core.prompt_builder import PromptBuilder
+                _pb = PromptBuilder(character_name)
+                _persons = _pb.detect_persons(prompt)
+                appearances = [{"name": p.name, "appearance": p.appearance} for p in _persons]
+                detected_names = [p["name"] for p in appearances]
+
+    # Underscore-Prefix-Filter (Sicherheitsnetz fuer System-Characters wie
+    # _messaging_frame, falls list_available_characters cached o.ae.)
+    all_chars = [c for c in all_chars if not c.startswith("_")]
+
+    # "Agent" = der Charakter der das Bild ERSTELLT hat. Bei Bildern die ein
+    # NPC dem Avatar geschickt hat (gallery_character != ersteller), steht
+    # der Ersteller in meta.from_character. Sonst ist es der gallery_owner.
+    agent_name = (meta or {}).get("from_character") or character_name
+    available = []
+    if agent_name and agent_name in all_chars:
+        available.append({"name": agent_name, "type": "agent"})
+    if user_name and user_name != agent_name:
+        available.append({"name": user_name, "type": "user"})
+    for c in all_chars:
+        if c != agent_name and c != user_name:
+            available.append({"name": c, "type": "character"})
+
+    # Rooms der aktuellen Location (fuer Room-Auswahl im Dialog)
+    rooms = []
+    current_room_id = ""
+    location_id = (meta or {}).get("location", "")
+    if not location_id:
+        location_id = get_character_current_location(character_name) or ""
+    if location_id:
+        from app.models.world import get_location
+        loc_data = get_location(location_id)
+        if loc_data:
+            for room in loc_data.get("rooms", []):
+                rooms.append({"id": room.get("id", ""), "name": room.get("name", "")})
+        current_room_id = (meta or {}).get("room_id", "")
+        # Room aus Slot-4 Hintergrundbild ableiten wenn nicht explizit gespeichert
+        if not current_room_id:
+            ref_images = meta.get("reference_images", {}) if meta else {}
+            slot4_filename = ref_images.get("input_reference_image_4", "")
+            if slot4_filename and loc_data:
+                from app.models.world import get_gallery_image_rooms
+                _img_rooms = get_gallery_image_rooms(location_id)
+                _matched_room = _img_rooms.get(slot4_filename, "")
+                if _matched_room:
+                    current_room_id = _matched_room
+        # Kein Fallback auf aktuellen Raum — wenn nicht bekannt, leer lassen
+
+    return {
+        "detected": detected_names,
+        "available": available,
+        "rooms": rooms,
+        "current_room_id": current_room_id,
+        "location_id": location_id,
+    }
+
+
+async def enhance_image_prompt_core(character_name: str, request) -> Dict[str, Any]:
+    """Verbessert einen Image-Prompt via LLM direkt im Dialog.
+
+    Body: { user_id, prompt, improvement_request, llm_override? }
+    Returns: { prompt: "verbesserter prompt" }
+    """
+    from app.models.character import get_character_config
+    body = await request.json()
+    user_id = body.get("user_id", "")
+
+    prompt = body.get("prompt", "").strip()
+    improvement_request = body.get("improvement_request", "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt fehlt")
+    if not improvement_request:
+        raise HTTPException(status_code=400, detail="improvement_request fehlt")
+
+    agent_config = get_character_config(character_name)
+    from app.skills.image_regenerate import enhance_prompt
+    # enhance_prompt macht einen blocking LLM-Call → Threadpool, sonst
+    # blockiert der Event-Loop bis das Tool-LLM antwortet (~1s+).
+    import asyncio as _asyncio
+    enhanced = await _asyncio.to_thread(
+        enhance_prompt, prompt, improvement_request, agent_config)
+    return {"prompt": enhanced}
+
+
+async def rebuild_image_prompt_core(character_name: str, request) -> Dict[str, Any]:
+    """Rebuilds the image prompt based on the adapter of the target backend.
+
+    Source of the values (mood, outfit, expression, location, ...):
+      1. PRIMARY: saved `canonical` dict from the image.json (from creation time)
+      2. FALLBACK: current character state (only for old images without canonical)
+
+    Body: { user_id, workflow? (backend match spec), canonical?, scene_text? }
+    Returns: { prompt, target_model, source: "saved"|"current" }
+    """
+    import asyncio
+
+    body = await request.json()
+    user_id = body.get("user_id", "")
+    workflow_name = body.get("workflow", "").strip()
+    saved_canonical = body.get("canonical") or None
+    scene_text = body.get("scene_text", "").strip()
+    location_id = body.get("location_id", "").strip()
+    room_id = body.get("room_id", "").strip()
+    reference_images = body.get("reference_images") or {}
+
+    def _build():
+        # Closure: location_id/room_id sind im outer scope nonlocal
+        nonlocal location_id, room_id
+
+        # Fallback: location_id/room_id aus reference_image_4 (Slot 4 = Raum-Hintergrund) ableiten
+        if not (location_id or room_id) and reference_images:
+            ref_room_img = reference_images.get("input_reference_image_4", "")
+            if ref_room_img:
+                try:
+                    from app.models.world import find_room_by_gallery_image
+                    _loc_from_ref, _room_from_ref = find_room_by_gallery_image(ref_room_img)
+                    if _loc_from_ref:
+                        location_id = location_id or _loc_from_ref
+                        room_id = room_id or _room_from_ref
+                        logger.info("rebuild: location/room aus Reference-Image '%s' aufgeloest (loc=%s room=%s)",
+                                    ref_room_img, location_id, room_id)
+                except Exception as _e:
+                    logger.debug("Reference-Image-Aufloesung fehlgeschlagen: %s", _e)
+
+        from app.core.dependencies import get_skill_manager
+        sm = get_skill_manager()
+        img_skill = None
+        for skill in sm.skills:
+            if skill.__class__.__name__ == "ImageGenerationSkill":
+                img_skill = skill
+                break
+        if not img_skill:
+            raise HTTPException(status_code=503, detail="ImageGenerationSkill nicht verfuegbar")
+
+        from app.core.prompt_adapters import (
+            get_target_model, render as adapter_render,
+            maybe_enhance_via_llm, dict_to_canonical)
+
+        # Target model from the backend that would render for this character
+        # (explicit spec from the request wins, otherwise the agent's backend).
+        _be = img_skill.resolve_imagegen_target(workflow_name) if workflow_name else None
+        if not _be:
+            _be = img_skill._select_backend_for_agent(character_name)
+        target_model = get_target_model(
+            getattr(_be, "image_family", "") if _be else "",
+            getattr(_be, "model", "") if _be else "")
+
+        # 1) PRIMAERE Quelle: gespeichertes canonical
+        if saved_canonical and isinstance(saved_canonical, dict):
+            pv = dict_to_canonical(saved_canonical)
+            # Style/Negative bleiben wie gespeichert; der finale Style kommt beim
+            # echten Generieren aus dem Use-Case (image_generation_skill).
+
+            # sanitize_scene_prompt auch beim Rebuild ausfuehren — damit der
+            # neue Outfit-Extraction-Filter (wearing/posing/dressed) auch fuer
+            # Re-Creations greift. Sanitize ist idempotent: bei bereits
+            # bereinigten scenes findet es nichts und bleibt no-op.
+            if pv.scene_prompt:
+                from app.core.prompt_builder import PromptBuilder as _PB
+                _rebuild_builder = _PB(character_name)
+                pv.scene_prompt = _rebuild_builder.sanitize_scene_prompt(pv.scene_prompt, pv)
+
+            # Outfit-Enrichment: Wenn canonical.outfits leer aber reference_image_1
+            # vorhanden, das Outfit ueber die Bild-Datei aufloesen
+            if not pv.prompt_outfits and reference_images:
+                ref1 = reference_images.get("input_reference_image_1", "")
+                if ref1:
+                    try:
+                        from app.models.character import find_outfit_by_image
+                        _outfit = find_outfit_by_image(character_name, ref1)
+                        if _outfit:
+                            _outfit_text = (_outfit.get("outfit") or "").strip()
+                            if _outfit_text:
+                                _label = pv.persons[0].actor_label if pv.persons else character_name
+                                pv.prompt_outfits[1] = f"{_label} is wearing {_outfit_text}"
+                                logger.info("rebuild: Outfit '%s' aus Reference-Image '%s' aufgeloest",
+                                            _outfit.get("name", "?"), ref1)
+                    except Exception as _e:
+                        logger.debug("Outfit-Enrichment fehlgeschlagen: %s", _e)
+            # Location-Enrichment: wenn canonical.location zu kurz (nur Name, keine Description),
+            # aus world.json den Raum-Description nachladen
+            if pv.prompt_location and len(pv.prompt_location) < 30 and (location_id or room_id):
+                try:
+                    from app.models.world import get_location, get_room_by_id
+                    from datetime import datetime as _dt
+                    _loc_data = get_location(location_id) if location_id else None
+                    if _loc_data:
+                        _hour = _dt.now().hour
+                        _is_day = 6 <= _hour < 18
+                        _desc = ""
+                        # Raum bevorzugt
+                        if room_id:
+                            _room = get_room_by_id(_loc_data, room_id)
+                            if _room:
+                                _desc = (_room.get("image_prompt_day", "") if _is_day else _room.get("image_prompt_night", "")) \
+                                        or _room.get("description", "")
+                        if not _desc:
+                            _desc = (_loc_data.get("image_prompt_day", "") if _is_day else _loc_data.get("image_prompt_night", "")) \
+                                    or _loc_data.get("description", "")
+                        if _desc:
+                            pv.prompt_location = f"{pv.prompt_location}, {_desc}"
+                            logger.info("rebuild: Location enriched fuer kurze canonical.location (room=%s loc=%s)",
+                                        room_id, location_id)
+                except Exception as _e:
+                    logger.debug("Location-Enrichment fehlgeschlagen: %s", _e)
+            source = "saved"
+        else:
+            # 2) FALLBACK: aktueller State (nur fuer alte Bilder ohne canonical)
+            from app.core.prompt_builder import PromptBuilder, EntryPointConfig
+            builder = PromptBuilder(character_name)
+            persons = builder.detect_persons(scene_text or "")
+            pv = builder.collect_context(
+                persons, EntryPointConfig.chat(),
+                prompt_text=scene_text or "",
+                photographer_mode=False,
+                set_profile=False)
+            if scene_text:
+                pv.scene_prompt = builder.sanitize_scene_prompt(scene_text, pv)
+            # The final style/negative comes from the use-case at real
+            # generation time (image_generation_skill) — plain default here.
+            pv.prompt_style = "photorealistic"
+            pv.negative_prompt = ""
+            source = "current"
+
+            # Outfit-Enrichment auch im current-state Pfad: bei Bildern ohne canonical
+            # versuchen das ORIGINAL-Outfit ueber reference_image_1 wiederherzustellen
+            # (statt das aktuelle Char-Outfit zu nutzen).
+            if reference_images:
+                ref1 = reference_images.get("input_reference_image_1", "")
+                if ref1:
+                    try:
+                        from app.models.character import find_outfit_by_image
+                        _outfit = find_outfit_by_image(character_name, ref1)
+                        if _outfit:
+                            _outfit_text = (_outfit.get("outfit") or "").strip()
+                            if _outfit_text and persons:
+                                _label = persons[0].actor_label or character_name
+                                pv.prompt_outfits[1] = f"{_label} is wearing {_outfit_text}"
+                                logger.info("rebuild (current): Outfit '%s' aus Reference-Image '%s' aufgeloest",
+                                            _outfit.get("name", "?"), ref1)
+                                source = "current+ref_outfit"
+                    except Exception as _e:
+                        logger.debug("Outfit-Enrichment fehlgeschlagen: %s", _e)
+
+        assembled = adapter_render(pv, target_model)
+        template_prompt = assembled["input_prompt_positiv"]
+
+        # No LLM enhancement for the rebuild preview — the instruction lives
+        # in the use-case config and is applied at real generation time.
+        final_prompt, _method = maybe_enhance_via_llm(
+            template_prompt, pv,
+            target_model=target_model,
+            prompt_instruction="")
+        return {"prompt": final_prompt, "target_model": target_model, "source": source}
+
+    return await asyncio.to_thread(_build)
+
+
+async def suggest_animate_prompt_core(character_name: str, image_name: str, request) -> Dict[str, str]:
+    """Generiert einen Animation-Prompt basierend auf der Bildanalyse via Tools-LLM."""
+    from app.models.character import get_character_images_dir, add_character_image_metadata
+    import asyncio
+
+    body = await request.json()
+    user_id = body.get("user_id", "")
+    custom_system_prompt = body.get("system_prompt", "")
+    llm_override = body.get("llm_override", "").strip()
+
+    images_dir = get_character_images_dir(character_name)
+    image_path = images_dir / image_name
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
+
+    def _generate_prompt() -> str:
+        from app.models.character import _load_single_image_meta
+        meta = _load_single_image_meta(character_name, image_name)
+
+        # Bildanalyse aus Metadaten lesen oder neu generieren
+        image_analysis = meta.get("image_analysis", "")
+        if not image_analysis:
+            logger.info("[suggest-animate] Keine Bildanalyse vorhanden, generiere neu...")
+            try:
+                from app.skills.image_generation_skill import ImageGenerationSkill
+                skill = ImageGenerationSkill({})
+                image_analysis = skill._generate_image_analysis(str(image_path), character_name)
+                if image_analysis:
+                    logger.info("[suggest-animate] Bildanalyse generiert (%d Zeichen)", len(image_analysis))
+                    add_character_image_metadata(character_name, image_name, {
+                        "image_analysis": image_analysis,
+                    })
+            except Exception as e:
+                logger.warning("[suggest-animate] Bildanalyse fehlgeschlagen: %s", e)
+
+        if not image_analysis:
+            raise ValueError("Bildanalyse nicht verfuegbar")
+
+        logger.info("[suggest-animate] Bildanalyse vorhanden (%d Zeichen), rufe LLM auf... (llm_override=%s)", len(image_analysis), llm_override or "")
+
+        from app.core.llm_router import llm_call
+        from app.core.prompt_templates import render_task
+        default_system, user_prompt = render_task(
+            "animation_prompt", image_analysis=image_analysis)
+        system_content = custom_system_prompt or default_system
+        response = llm_call(
+            task="instagram_caption",
+            system_prompt=system_content,
+            user_prompt=user_prompt,
+            agent_name=character_name)
+        result = (response.content or "").strip().strip('"').strip("'")
+        logger.info("[suggest-animate] Prompt generiert: %s", result[:100])
+        return result
+
+    try:
+        prompt = await asyncio.get_event_loop().run_in_executor(None, _generate_prompt)
+        return {"prompt": prompt}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error("[suggest-animate] Fehlgeschlagen: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def build_imagegen_workflows(character_name: str) -> Dict[str, Any]:
+    """Returns all available generation options (image backends)."""
+    import os
+    from app.core.dependencies import get_skill_manager
+    from app.models.character import get_character_skill_config
+    sm = get_skill_manager()
+    imagegen = sm.get_skill("image_generation")
+    if not imagegen:
+        raise HTTPException(status_code=404, detail="ImageGeneration skill not found")
+
+    # Re-probe currently unavailable backends — otherwise the dialog keeps
+    # showing a backend as "not available" even though the service came back
+    # online in the meantime. The recovery hook in check_availability also
+    # triggers channel_health.force_poll(), so downstream GPU routing
+    # decisions see the fresh status too.
+    for _b in imagegen.backends:
+        if _b.instance_enabled and not _b.available:
+            try:
+                _b.check_availability()
+            except Exception:
+                pass
+
+    agent_config = get_character_skill_config(character_name, "image_generation") or {}
+
+    # Collect all available generation options (backends only).
+    options = []
+    agent_instances = agent_config.get("instances", {})
+    for b in imagegen.backends:
+        if not b.available:
+            continue
+        # Per-agent enabled check
+        agent_inst = agent_instances.get(b.name, {})
+        is_enabled = bool(agent_inst["enabled"]) if "enabled" in agent_inst else b.instance_enabled
+        if not is_enabled:
+            continue
+        # Derive target style from image family / backend model name (e.g.
+        # Qwen-Image -> qwen, FLUX -> flux, Z-Image URN -> z_image).
+        try:
+            from app.core.prompt_adapters import get_target_model as _gtm
+            _target_style = _gtm(
+                getattr(b, "image_family", "") or "", getattr(b, 'model', "") or "")
+        except Exception:
+            _target_style = "z_image"
+        opt = {
+            "type": "backend",
+            "name": b.name,
+            "label": b.name,
+            "negative_prompt": getattr(b, 'negative_prompt', ""),
+            "cost": b.cost,
+            "available": True,
+            "target_model": _target_style,
+            "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
+        }
+        # Backend with a model list (e.g. Together.ai) — offer as a selection.
+        backend_models = getattr(b, 'available_models', [])
+        if backend_models:
+            opt["models"] = backend_models
+            opt["default_model"] = getattr(b, 'model', backend_models[0])
+        options.append(opt)
+
+    # Sort by cost — the UI can show "cheapest first".
+    options.sort(key=lambda o: (o.get("cost") if o.get("cost") is not None else 999999, o.get("label", "")))
+
+    # Default preselection per area from .env
+    defaults = {}
+    for env_key, area in [
+        ("OUTFIT_IMAGEGEN_DEFAULT", "outfit"),
+        ("EXPRESSION_IMAGEGEN_DEFAULT", "expression"),
+        ("LOCATION_IMAGEGEN_DEFAULT", "location"),
+        ("SKILL_INSTAGRAM_IMAGEGEN_DEFAULT", "instagram"),
+    ]:
+        val = os.environ.get(env_key, "").strip()
+        if val:
+            defaults[area] = val  # e.g. "backend:CivitAI"
+
+    return {
+        "character": character_name,
+        "options": options,
+        "defaults": defaults,
+    }
+
+
+def build_videogen_options(character_name: str) -> Dict[str, Any]:
+    """Returns all selection options for the VideoGen config:
+    ImageGen backends/models/LoRAs + animation services/LoRAs."""
+    from app.core.dependencies import get_skill_manager
+    from app.models.character import get_character_skill_config
+    sm = get_skill_manager()
+
+    # --- ImageGen options (backends) ---
+    imagegen = sm.get_skill("image_generation")
+    imagegen_options = []
+    if imagegen:
+        for b in imagegen.backends:
+            if not b.available:
+                continue
+            opt: Dict[str, Any] = {
+                "type": "backend",
+                "name": b.name,
+                "label": b.name,
+            }
+            backend_models = getattr(b, 'available_models', [])
+            if backend_models:
+                opt["models"] = backend_models
+                opt["default_model"] = getattr(b, 'model', backend_models[0])
+            imagegen_options.append(opt)
+
+    # --- Animation options ---
+    from app.skills.animate import get_animate_services
+    animate_services = get_animate_services()
+
+    # --- Current per-character config ---
+    current_config = get_character_skill_config(character_name, "video_generation") or {}
+
+    return {
+        "imagegen_options": imagegen_options,
+        "animate_services": animate_services,
+        "current_config": {
+            "imagegen_backend": current_config.get("imagegen_backend", ""),
+            "imagegen_workflow": current_config.get("imagegen_workflow", ""),
+            "imagegen_model": current_config.get("imagegen_model", ""),
+            "imagegen_loras": current_config.get("imagegen_loras", []),
+            "animate_service": current_config.get("animate_service", ""),
+        },
+    }
