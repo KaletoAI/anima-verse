@@ -5,25 +5,17 @@ import os
 import re
 import time
 import uuid
-
-# Erkennt 4xx-Status-Codes in Exception-Strings (z.B. "400 Client Error",
-# "HTTP 422", "Bad Request"). 4xx = Service erreichbar, Payload kaputt —
-# Backend NICHT als unavailable markieren.
-_re_4xx = re.compile(r"\b(?:HTTP\s*)?4(?:00|01|03|04|05|22)\b|Bad Request|Unprocessable", re.IGNORECASE)
-# Cooldown nach einem nicht-Payload-Fehler (5xx / Connection / leeres Ergebnis).
-# Spiegelt den LLM-Provider-Cooldown: ein gescheitertes Backend wird fuer diese
-# Zeit aus der Match-Auswahl genommen und danach automatisch wieder probiert.
-_BACKEND_COOLDOWN_SECONDS = 300.0
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional
 
 
 import requests
 
 from .base import BaseSkill, ToolSpec
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
+from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
 
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
@@ -106,14 +98,11 @@ class ImageGenerationSkill(BaseSkill):
         import threading as _th
         self._meta_tls = _th.local()
 
-        # Round-robin counter per rotation key. Spreads tasks across
-        # equal-cost backends (e.g. two local backends with cost=0).
-        # Replaces the old LOAD_COST_PENALTY approach.
-        self._round_robin_counter: Dict[str, int] = {}
-        self._round_robin_lock = __import__("threading").Lock()
-
-        # Lade alle konfigurierten Instanzen
-        self.backends: List[ImageBackend] = self._load_instances()
+        # Load all configured instances and build the backend pool.
+        # Round-robin state + all selection logic live in BackendPool now.
+        backends = self._load_instances()
+        self._pool = BackendPool(
+            backends, agent_instances_provider=self._agent_instances)
 
         if not self.backends:
             logger.warning("Keine Image-Generation Instanzen konfiguriert")
@@ -139,6 +128,17 @@ class ImageGenerationSkill(BaseSkill):
         # get_config_fields() — die Konfiguration geschieht ueber die instanzbasierte
         # Config in storage/users/{user}/characters/{char}/skills/imagegen.json
         self._defaults = {}
+
+    @property
+    def backends(self) -> List[ImageBackend]:
+        """Backends live in the pool now; exposed as a property for the many
+        external readers (``img.backends``) and internal skill helpers."""
+        return self._pool.backends
+
+    def _agent_instances(self, name: str) -> Dict[str, Any]:
+        """Provider injected into ``BackendPool``: returns the per-agent
+        instances dict, auto-creating the per-agent config on first access."""
+        return self._ensure_agent_config(name).get("instances", {})
 
     def get_config_fields(self) -> Dict[str, Dict[str, Any]]:
         """Top-level Config-Felder fuer den Character-Editor.
@@ -193,44 +193,16 @@ class ImageGenerationSkill(BaseSkill):
 
         return instances
 
-    def pick_lowest_cost(
-        self,
-        candidates: List[ImageBackend],
-        rotation_key: str = "default",
-    ) -> Optional[ImageBackend]:
-        """Pickt aus den Kandidaten das billigste verfuegbare Backend.
+    # ------------------------------------------------------------------
+    # BackendPool facade — thin delegators to self._pool (public API)
+    # ------------------------------------------------------------------
 
-        Bei mehreren gleich-cost Backends (z.B. zwei lokale ComfyUI mit
-        cost=0) wird per Round-Robin verteilt — verhindert dass alle
-        Tasks immer auf das gleiche Backend gehen ohne LOAD_COST_PENALTY.
-        Counter ist pro `rotation_key` (typisch: workflow_name).
-        """
-        if not candidates:
-            return None
-        # Sortiere nach cost und gruppiere gleich-cost zusammen
-        sorted_c = sorted(candidates, key=lambda b: b.effective_cost)
-        cheapest_cost = sorted_c[0].effective_cost
-        tier = [b for b in sorted_c if b.effective_cost == cheapest_cost]
-        if len(tier) == 1:
-            return tier[0]
-        # Mehrere gleich-cost -> Round-Robin pro rotation_key
-        with self._round_robin_lock:
-            idx = self._round_robin_counter.get(rotation_key, 0)
-            self._round_robin_counter[rotation_key] = idx + 1
-        return tier[idx % len(tier)]
-
-    @staticmethod
-    def _is_inpaint_backend(b: ImageBackend) -> bool:
-        """Inpaint-Backends (category=="inpaint") sind NUR fuer die Inpaint-Dialoge
-        (Map-Fit/Match-Edges, explizit per exaktem backend:<name>) — niemals fuer
-        normales Render-Matching, Auto-Select oder Fallback."""
-        return getattr(b, "category", "") == "inpaint"
+    def pick_lowest_cost(self, candidates: List[ImageBackend],
+                         rotation_key: str = "default") -> Optional[ImageBackend]:
+        return self._pool.pick_lowest_cost(candidates, rotation_key)
 
     def _select_backend(self) -> Optional[ImageBackend]:
-        """Waehlt das guenstigste verfuegbare und global-enabled Backend."""
-        available = [b for b in self.backends if b.available and b.instance_enabled
-                     and not self._is_inpaint_backend(b)]
-        return self.pick_lowest_cost(available, rotation_key="_select_backend")
+        return self._pool._select_backend()
 
     def _ensure_agent_config(self, character_name: str) -> Dict[str, Any]:
         """Erstellt automatisch eine per-Agent Skill-Config mit .env-Defaults, falls noch keine existiert."""
@@ -264,288 +236,29 @@ class ImageGenerationSkill(BaseSkill):
         return agent_config
 
     def _select_backend_for_agent(self, character_name: str) -> Optional[ImageBackend]:
-        """Waehlt die guenstigste Instanz unter Beruecksichtigung der per-Agent enabled Flags."""
-        agent_config = self._ensure_agent_config(character_name)
-        agent_instances = agent_config.get("instances", {})
-
-        available = []
-        for b in self.backends:
-            if not b.available:
-                continue
-            # Per-Agent Override hat Vorrang, sonst .env Default
-            agent_inst = agent_instances.get(b.name, {})
-            if "enabled" in agent_inst:
-                is_enabled = bool(agent_inst["enabled"])
-            else:
-                is_enabled = b.instance_enabled
-            if is_enabled:
-                # Inpaint-Backends nie ins normale Agent-Render-Matching
-                if self._is_inpaint_backend(b):
-                    continue
-                available.append(b)
-
-        return self.pick_lowest_cost(
-            available, rotation_key=f"agent:{character_name}")
+        return self._pool._select_backend_for_agent(character_name)
 
     def resolve_imagegen_target(self, spec: str,
                                 preferred_backend: str = ""
                                 ) -> Optional[ImageBackend]:
-        """Resolves a config/explicit backend spec via the match concept.
-
-        A spec is one of:
-          - ``"<glob>"`` (bare)  → ``match_backend`` (glob over backend names,
-            cheapest available; an exact name matches itself). This is the
-            canonical form since ComfyUI was removed.
-          - ``"backend:<glob>"`` → legacy prefix, tolerated and stripped
-            (behaves like the bare glob).
-          - ``"workflow:<glob>"`` → legacy ComfyUI spec; logs a warning and
-            resolves to None so callers fall back to their defaults.
-
-        ``preferred_backend``: exact instance name that overrides the match —
-        must be available and enabled, otherwise ``None`` (no silent fallback
-        to another instance).
-        """
-        s = (spec or "").strip()
-        if not s:
-            return None
-        if s.startswith("workflow:"):
-            logger.warning(
-                "Legacy workflow spec '%s' ignoriert (ComfyUI entfernt) — "
-                "bitte einen Backend-Glob verwenden", s)
-            return None
-        pat = s[len("backend:"):].strip() if s.startswith("backend:") else s
-        pref = (preferred_backend or "").strip()
-        if pref:
-            forced = next(
-                (b for b in self.backends
-                 if b.name == pref and b.available and b.instance_enabled),
-                None)
-            if not forced:
-                logger.warning(
-                    "Explizites Backend '%s' nicht verfuegbar/aktiviert", pref)
-            return forced
-        return self.match_backend(pat)
+        return self._pool.resolve_imagegen_target(spec, preferred_backend)
 
     def match_backend(self, pattern: str) -> Optional[ImageBackend]:
-        """Loest ein Backend-Glob (z.B. ``"ComfyUI*"``, ``"Together*"``, ``"*"``)
-        zu einem konkreten, verfuegbaren Backend auf — Auswahl unter mehreren
-        Treffern nach Kosten. Ein
-        exakter Name matcht sich selbst. ``None`` wenn leer / kein verfuegbarer
-        Treffer. So ist auch der Backend-Default ein Match statt fester Instanz.
-        """
-        import fnmatch
-        pat = (pattern or "").strip()
-        if not pat:
-            return None
-        pl = pat.lower()
-        # Inpaint-Backends nur bei EXAKTEM Namen (Fit/Edge: backend:<inpaint-name>),
-        # nie ueber ein Glob/"*" — sonst landet ein normaler Render dort.
-        has_wildcard = any(ch in pat for ch in "*?[")
-        matches = [b for b in self.backends
-                   if fnmatch.fnmatch(b.name.lower(), pl)
-                   and b.available and b.instance_enabled
-                   and not (has_wildcard and self._is_inpaint_backend(b))]
-        if not matches:
-            return None
-        return self.pick_lowest_cost(matches, rotation_key=f"backend_match:{pat}")
+        return self._pool.match_backend(pattern)
 
-    def list_available_backends(
-        self,
-        character_name: str = "",
-    ) -> List[ImageBackend]:
-        """List of all available backends for helper API + engine.
+    def list_available_backends(self, character_name: str = "") -> List[ImageBackend]:
+        return self._pool.list_available_backends(character_name)
 
-        Filters:
-        - b.available (live status; channel_health may set this False)
-        - b.instance_enabled (.env flag)
-        - per-agent override (agent_config.instances[name].enabled)
+    def run_with_fallback(self, primary_backend, op, character_name="",
+                          max_attempts=3):
+        return self._pool.run_with_fallback(
+            primary_backend, op, character_name, max_attempts)
 
-        Sorted ascending by effective_cost. NO round-robin here — the
-        selector (or UI) takes care of distribution. This list is meant
-        for display and engine use.
-        """
-        agent_instances: Dict[str, Any] = {}
-        if character_name:
-            agent_config = self._ensure_agent_config(character_name)
-            agent_instances = agent_config.get("instances", {}) or {}
+    def _wait_for_backend(self, character_name):
+        return self._pool._wait_for_backend(character_name)
 
-        out: List[ImageBackend] = []
-        for b in self.backends:
-            if not b.available:
-                continue
-            agent_inst = agent_instances.get(b.name, {})
-            if "enabled" in agent_inst:
-                if not bool(agent_inst["enabled"]):
-                    continue
-            elif not b.instance_enabled:
-                continue
-            out.append(b)
-
-        out.sort(key=lambda x: x.effective_cost)
-        return out
-
-    # ------------------------------------------------------------------
-    # Backend-Fallback-Engine
-    # ------------------------------------------------------------------
-
-    def _pick_fallback_backend(
-        self,
-        failed: ImageBackend,
-        character_name: str,
-        exclude: Set[str],
-    ) -> Optional[ImageBackend]:
-        """Next available backend — the match/availability logic IS the
-        fallback (no static fallback_mode/fallback_specific anymore).
-        """
-        candidates = self.list_available_backends(character_name=character_name)
-        candidates = [b for b in candidates if b.name not in exclude]
-        # Inpaint backends are no fallback for normal renders. Only if the
-        # failed backend itself was inpaint, the chain stays on inpaint.
-        if not self._is_inpaint_backend(failed):
-            candidates = [b for b in candidates if not self._is_inpaint_backend(b)]
-        return candidates[0] if candidates else None
-
-    def run_with_fallback(
-        self,
-        primary_backend: ImageBackend,
-        op: Callable[[ImageBackend], Any],
-        character_name: str = "",
-        max_attempts: int = 3,
-    ) -> Tuple[Any, ImageBackend]:
-        """Runs op(backend), falling back to the next backend on failure.
-
-        Strategy:
-        - Try primary_backend
-        - On exception OR empty list: set backend.available=False, dynamically
-          pick the next available (compatible) backend (_pick_fallback_backend)
-          — the availability logic IS the fallback
-        - Repeat until success, max_attempts reached, or the chain is exhausted
-
-        op(backend) -> List[bytes] | [] | None
-        The caller is responsible for adapting params per backend.
-
-        Returns (result, used_backend) on success.
-        Raises RuntimeError once exhausted.
-        """
-        if not primary_backend:
-            raise RuntimeError("run_with_fallback: no primary_backend provided")
-
-        tried: Set[str] = set()
-        last_error: Optional[Exception] = None
-        current = primary_backend
-
-        for attempt in range(max_attempts):
-            if not current or current.name in tried:
-                break
-            tried.add(current.name)
-
-            logger.info("Fallback-Engine Versuch %d/%d: backend=%s (cost=%s)",
-                        attempt + 1, max_attempts, current.name, current.cost)
-
-            try:
-                result = op(current)
-            except Exception as e:
-                last_error = e
-                # Unterscheidung: Connection/Server-Probleme vs. Payload-Fehler.
-                # 4xx-Fehler (HTTP 400/422 wie Workflow-Validation) bedeuten der
-                # Service ist erreichbar — nur das gesendete JSON ist kaputt.
-                # In dem Fall NICHT als unavailable markieren, sonst wird das
-                # Backend vom Pool entfernt und nachgelagerte Steps finden
-                # faelschlich kein ComfyUI mehr.
-                _err_str = str(e)
-                _is_payload_err = bool(_re_4xx.search(_err_str))
-                if _is_payload_err:
-                    logger.warning(
-                        "Fallback-Engine: %s warf Payload-Fehler (%s: %s) — Backend bleibt verfuegbar, "
-                        "versuche anderen Backend (Workflow/Prompt vermutlich inkompatibel)",
-                        current.name, type(e).__name__, _err_str[:200])
-                else:
-                    logger.warning(
-                        "Fallback-Engine: %s warf Exception (%s: %s) — Backend in Cooldown, versuche Fallback",
-                        current.name, type(e).__name__, _err_str[:200])
-                    current.mark_unhealthy(
-                        f"generate failed: {type(e).__name__}: {_err_str[:120]}",
-                        _BACKEND_COOLDOWN_SECONDS)
-                current = self._pick_fallback_backend(
-                    current, character_name, tried)
-                continue
-
-            # List of bytes -> success
-            if result:
-                return result, current
-
-            # Leeres Resultat = Fail, naechstes probieren
-            logger.warning("Fallback-Engine: %s lieferte leeres Ergebnis — Cooldown, versuche Fallback",
-                           current.name)
-            current.mark_unhealthy("generate returned empty result",
-                                   _BACKEND_COOLDOWN_SECONDS)
-            current = self._pick_fallback_backend(
-                current, character_name, tried)
-
-        _err_suffix = f" (letzter Fehler: {type(last_error).__name__}: {last_error})" if last_error else ""
-        raise RuntimeError(
-            f"Fallback-Engine: alle {len(tried)} probierten Backends fehlgeschlagen "
-            f"({', '.join(sorted(tried))}){_err_suffix}")
-
-    def _wait_for_backend(self, character_name: str):
-        """Picks an available backend for this agent.
-
-        Fail-fast: if NO backend is instance_enabled at all (i.e. structurally
-        not configured rather than "currently unavailable"), abort immediately —
-        otherwise background threads (e.g. expression_regen) would each stall
-        at a permanently impossible condition.
-        """
-        agent_instances: Dict[str, Any] = {}
-        if character_name:
-            try:
-                _agent_cfg = get_character_skill_config(character_name, "image_generation") or {}
-                agent_instances = _agent_cfg.get("instances", {}) or {}
-            except Exception:
-                agent_instances = {}
-        plausible = []
-        for b in self.backends:
-            if not b.instance_enabled:
-                continue
-            agent_inst = agent_instances.get(b.name, {})
-            if "enabled" in agent_inst and not agent_inst["enabled"]:
-                continue
-            plausible.append(b)
-        if not plausible:
-            logger.warning(
-                "_wait_for_backend: kein konfiguriertes Backend kann diesen "
-                "Agent jemals erfuellen (agent=%s) — fail-fast",
-                character_name or "n/a")
-            return None
-
-        # One single check round — no 120s polling. The background poller
-        # (channel_health) detects recovery every 30s; the next generate
-        # call sees the fresh status.
-        for b in plausible:
-            b.check_availability()
-        backend = self._select_backend_for_agent(character_name)
-        if backend:
-            return backend
-        logger.warning(
-            "_wait_for_backend: kein Backend verfuegbar — fail-fast "
-            "(channel_health pollt im Hintergrund weiter)")
-        return None
-
-    def _wait_for_explicit_backend(self, backend_name: str):
-        """Loest ein Backend-Glob (z.B. "ComfyUI*", "Together*") ueber das
-        Match-Konzept zu einem konkreten, verfuegbaren Backend auf. Ein exakter
-        Name matcht sich selbst. Fail-fast: kein Polling — Recovery erkennt der
-        Background-Poller (channel_health) alle 30s.
-        """
-        import fnmatch
-        pl = (backend_name or "").strip().lower()
-        # Frische Verfuegbarkeit der passenden Kandidaten pruefen, dann matchen.
-        for b in self.backends:
-            if b.instance_enabled and fnmatch.fnmatch(b.name.lower(), pl):
-                b.check_availability()
-        target = self.match_backend(backend_name)
-        if not target:
-            logger.warning("Backend '%s' nicht verfuegbar/kein Treffer — fail-fast", backend_name)
-        return target
+    def _wait_for_explicit_backend(self, backend_name):
+        return self._pool._wait_for_explicit_backend(backend_name)
 
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:
         """Holt die Instanz-spezifischen Defaults (nur agent-level Overrides).
