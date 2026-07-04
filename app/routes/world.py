@@ -594,8 +594,6 @@ async def generate_gallery_image(location_name: str, request: Request) -> Dict[s
     Batch-Mode (mit vorhandenem ``_batch_track_id``) bleibt synchron,
     damit der Batch-Handler die Jobs sequentialisieren kann.
     """
-    import time
-
     try:
         data = await request.json()
         batch_track_id = data.get("_batch_track_id", "")

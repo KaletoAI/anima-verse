@@ -3,7 +3,6 @@ import io
 import os
 import time
 import mimetypes
-import zipfile
 from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -905,7 +904,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
 
 
 @router.delete("/{character_name}/outfit-expression/cache")
-async def clear_expression_cache_route(character_name: str, request: Request) -> Dict[str, Any]:
+async def clear_outfit_expression_cache_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Clears the expression image cache for a character."""
     from app.core.expression_regen import clear_expression_cache
     data = await request.json()
