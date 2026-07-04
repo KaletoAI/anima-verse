@@ -1,0 +1,94 @@
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0d1117; color: #c9d1d9; }
+
+.toolbar {
+    position: sticky; top: 0; z-index: 100;
+    background: #161b22; border-bottom: 1px solid #30363d;
+    padding: 10px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+}
+.toolbar select, .toolbar input {
+    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 6px 10px; border-radius: 6px; font-size: 13px;
+}
+.toolbar select { min-width: 140px; }
+.toolbar input[type="text"] { min-width: 220px; }
+.toolbar .count { color: #8b949e; font-size: 13px; margin-left: auto; }
+.toolbar button {
+    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.toolbar button:hover { background: #30363d; }
+
+.entries { padding: 8px; }
+
+.entry {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    margin-bottom: 8px; overflow: hidden;
+}
+.entry.entry-error { border-left: 3px solid #b62324; }
+.entry-header {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    cursor: pointer; flex-wrap: wrap;
+}
+.entry-header:hover { background: #1c2128; }
+
+.badge {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.badge-number { background: #8b949e22; color: #8b949e; font-family: "JetBrains Mono", "Fira Code", monospace; min-width: 40px; text-align: center; }
+.badge-task { background: #1f6feb33; color: #58a6ff; }
+.badge-model { background: #3fb95033; color: #3fb950; }
+.badge-character { background: #bc8cff33; color: #bc8cff; }
+.badge-provider { background: #f0883e33; color: #f0883e; }
+.badge-tokens { background: #d2992233; color: #d29922; }
+.badge-time { background: #8b949e33; color: #8b949e; }
+.badge-duration { background: #f8514933; color: #f85149; }
+.badge-role { background: #da363333; color: #ff7b72; }
+.badge-role-tool { background: #f0883e33; color: #f0883e; }
+.badge-role-chat { background: #3fb95033; color: #3fb950; }
+
+.entry-body { display: none; border-top: 1px solid #30363d; }
+.entry-body.open { display: block; }
+
+.section {
+    border-bottom: 1px solid #21262d;
+}
+.section:last-child { border-bottom: none; }
+.section-header {
+    padding: 8px 14px; background: #0d1117; cursor: pointer;
+    font-size: 12px; font-weight: 600; color: #8b949e; text-transform: uppercase;
+    letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;
+}
+.section-header:hover { color: #c9d1d9; }
+.section-header .arrow { transition: transform 0.15s; font-size: 10px; }
+.section-header .arrow.open { transform: rotate(90deg); }
+.section-content {
+    display: none; padding: 12px 14px; overflow-x: auto;
+}
+.section-content.open { display: block; }
+.section-content pre {
+    white-space: pre-wrap; word-wrap: break-word; font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 13px; line-height: 1.5; color: #e6edf3;
+}
+
+.msg-turn { margin-bottom: 10px; border-left: 2px solid #30363d; padding-left: 10px; }
+.msg-turn:last-child { margin-bottom: 0; }
+.msg-turn.role-user { border-left-color: #1f6feb; }
+.msg-turn.role-assistant { border-left-color: #2ea043; }
+.msg-turn.role-system { border-left-color: #d29922; }
+.msg-role { font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; color: #8b949e; margin-bottom: 4px; }
+.msg-turn.role-user .msg-role { color: #58a6ff; }
+.msg-turn.role-assistant .msg-role { color: #56d364; }
+.msg-turn.role-system .msg-role { color: #e3b341; }
+.msg-meta { color: #6e7681; font-size: 11px; margin-bottom: 8px; }
+
+.pager {
+    display: flex; justify-content: center; gap: 8px; padding: 16px;
+}
+.pager button { min-width: 80px; }
+.pager button:disabled { opacity: 0.4; cursor: default; }
+
+.highlight { background: #6e40c966; border-radius: 2px; }

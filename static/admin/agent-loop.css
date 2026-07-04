@@ -1,0 +1,22 @@
+
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#0d1117; color:#c9d1d9; margin:0; padding:20px; }
+h1 { font-size:18px; margin-top:0; }
+.bar { display:flex; gap:8px; align-items:center; margin-bottom:16px; padding:10px; background:#161b22; border:1px solid #30363d; border-radius:6px; }
+.bar button { background:#238636; color:#fff; border:0; padding:6px 12px; border-radius:4px; cursor:pointer; font-size:13px; }
+.bar button.paused { background:#da3633; }
+.bar .label { color:#8b949e; font-size:12px; }
+.section { margin-bottom:14px; padding:10px; background:#161b22; border:1px solid #30363d; border-radius:6px; }
+.section h2 { font-size:13px; margin:0 0 6px; color:#58a6ff; }
+.section .data { font-family: ui-monospace, SFMono-Regular, monospace; font-size:12px; color:#c9d1d9; white-space:pre-wrap; }
+.recent table { width:100%; font-size:12px; border-collapse:collapse; }
+.recent th, .recent td { text-align:left; padding:4px 6px; border-bottom:1px solid #21262d; vertical-align:top; }
+.recent th { color:#8b949e; font-weight:500; }
+.outcome-ok { color:#3fb950; }
+.outcome-timeout { color:#d29922; }
+.outcome-skip    { color:#6e7681; }
+.outcome-err { color:#f85149; }
+.tag { display:inline-block; padding:1px 6px; margin:1px 3px 1px 0; border-radius:3px; font-size:11px; background:#21262d; color:#8b949e; }
+.tag.tool { background:#1f3a5f; color:#79c0ff; }
+.tag.intent { background:#3a2f5f; color:#d2a8ff; }
+.preview { color:#8b949e; font-style:italic; max-width:380px; word-break:break-word; }
+.muted { color:#484f58; }
