@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../lib/api'
+import { usePoll } from './usePolling'
 import { useLightbox } from './Lightbox'
 import { ImageGenDialog, type ImageGenSubmit } from '../components/ImageGenDialog'
 import { Icon } from './icons'
@@ -136,34 +137,27 @@ export function GalleryPanel() {
   }, [data, t, lang])
 
   // Load the set of galleries the avatar may browse (own + shared). Slow poll.
+  const { data: galleriesData } = usePoll<{ avatar: string; galleries: GalleryRef[] }>(
+    'play-galleries', () => apiGet('/play/galleries'), { intervalMs: 30000 })
   useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      try {
-        const d = await apiGet<{ avatar: string; galleries: GalleryRef[] }>('/play/galleries')
-        if (!alive) return
-        setSelf(d.avatar || '')
-        setGalleries(d.galleries || [])
-        setSelected((cur) => cur || d.avatar || '')
-      } catch { /* auth handled */ }
-    }
-    tick()
-    const id = setInterval(tick, 30000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
+    if (!galleriesData) return
+    setSelf(galleriesData.avatar || '')
+    setGalleries(galleriesData.galleries || [])
+    setSelected((cur) => cur || galleriesData.avatar || '')
+  }, [galleriesData])
 
   // Load + poll the currently selected gallery's images.
+  const galleryUrl = selected
+    ? (selected === self ? '/play/gallery' : `/play/gallery/${encodeURIComponent(selected)}`)
+    : ''
+  const { data: galleryData, error: galleryError } = usePoll<Gallery>(
+    `play-gallery:${selected}`, () => apiGet<Gallery>(galleryUrl),
+    { intervalMs: 8000, enabled: !!selected })
   useEffect(() => {
-    if (!selected) { setData(null); return }
-    let alive = true
-    const url = selected === self ? '/play/gallery' : `/play/gallery/${encodeURIComponent(selected)}`
-    const tick = async () => {
-      try { const d = await apiGet<Gallery>(url); if (alive) setData(d) } catch { if (alive) setData(null) }
-    }
-    tick()
-    const id = setInterval(tick, 8000)
-    return () => { alive = false; clearInterval(id) }
-  }, [selected, self])
+    if (!selected) setData(null)
+    else if (galleryError) setData(null)
+    else if (galleryData) setData(galleryData)
+  }, [selected, galleryData, galleryError])
 
   if (!self) {
     return <EmptyState icon="self" title={t('No active avatar')} />

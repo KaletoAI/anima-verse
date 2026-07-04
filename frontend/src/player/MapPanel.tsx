@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
+import { usePoll } from './usePolling'
 
 const CELL = 72
 const GAP = 0 // Zellen stoßen aneinander → zusammenhängende Karte (keine Lücken)
@@ -146,7 +147,8 @@ function Cell({ loc, isActive, chars, events, travellingTo, showLabel }: {
 export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all' }:
   { currentLocationId: string; autoFit?: boolean; labelMode?: LabelMode }) {
   const { t } = useI18n()
-  const [data, setData] = useState<WorldMap | null>(null)
+  const { data } = usePoll<WorldMap>(
+    'play-worldmap', () => apiGet<WorldMap>('/play/worldmap'), { intervalMs: 10000 })
   // autoFit (vergrößertes Overlay): gespeicherte Ansicht ignorieren, stattdessen
   // die Karte in den Container einpassen — und NICHT zurückschreiben.
   const savedRef = useRef<View | null>(autoFit ? null : loadView())
@@ -172,16 +174,6 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       localStorage.setItem(VIEW_KEY, JSON.stringify({ zoom: zoomRef.current, sx: c.scrollLeft, sy: c.scrollTop }))
     } catch { /* ignore */ }
   }, [autoFit])
-
-  useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      try { const d = await apiGet<WorldMap>('/play/worldmap'); if (alive) setData(d) } catch { /* ignore */ }
-    }
-    tick()
-    const id = setInterval(tick, 10000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
 
   useEffect(() => { zoomRef.current = zoom; persist() }, [zoom, persist])
 

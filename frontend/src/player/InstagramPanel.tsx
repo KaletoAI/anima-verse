@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../lib/api'
+import { usePoll } from './usePolling'
 import { useToast } from '../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../components/ImageGenDialog'
 import { AnimateDialog, type AnimateSubmit } from '../components/AnimateDialog'
@@ -111,15 +112,13 @@ export function InstagramPanel() {
     }
   }, [])
 
+  // Unmount guard for the imperative reload() used by actions/pollTrack.
   useEffect(() => {
     alive.current = true
-    reload()
-    const id = setInterval(reload, 12000)
-    return () => {
-      alive.current = false
-      clearInterval(id)
-    }
-  }, [reload])
+    return () => { alive.current = false }
+  }, [])
+  // Steady feed poll via the shared hub (visibility pause + error backoff).
+  usePoll('instagram-feed', reload, { intervalMs: 12000 })
 
   const like = useCallback(
     async (p: Post) => {

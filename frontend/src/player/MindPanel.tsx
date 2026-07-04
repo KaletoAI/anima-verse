@@ -13,6 +13,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 
 // ---------------------------------------------------------------------------
@@ -266,21 +267,20 @@ function TodayView({ character, onOpenMemories }: { character: string; onOpenMem
   const [diary, setDiary] = useState<DiaryResponse | null>(null)
   const enc = encodeURIComponent(character)
 
+  // Steady 10s poll (today status + diary) via the shared hub.
+  const { data: td } = usePoll<{ today: TodayResponse; diary: DiaryResponse }>(
+    `mind-today:${enc}`,
+    async () => {
+      const [today, diary] = await Promise.all([
+        apiGet<TodayResponse>(`/characters/${enc}/memory/today`),
+        apiGet<DiaryResponse>(`/diary/me/${enc}?limit=200`),
+      ])
+      return { today, diary }
+    },
+    { intervalMs: 10000 })
   useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      try {
-        const [td, dy] = await Promise.all([
-          apiGet<TodayResponse>(`/characters/${enc}/memory/today`),
-          apiGet<DiaryResponse>(`/diary/me/${enc}?limit=200`),
-        ])
-        if (alive) { setToday(td); setDiary(dy) }
-      } catch { /* auth/offline — naechster Tick */ }
-    }
-    tick()
-    const id = setInterval(tick, 10000)
-    return () => { alive = false; clearInterval(id) }
-  }, [enc])
+    if (td) { setToday(td.today); setDiary(td.diary) }
+  }, [td])
 
   if (!today) return <EmptyState small icon="journal" title={t('Loading…')} />
   const s = today.status || ({} as TodayStatus)
