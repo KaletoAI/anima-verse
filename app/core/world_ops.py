@@ -991,28 +991,6 @@ def _resolve_map_icon_path(loc: Dict[str, Any], field: str = "map_image_2d",
     return None
 
 
-def _save_canvas_with_alpha(canvas, mask, path: str) -> None:
-    """Saves the canvas as RGBA with the mask in the ALPHA channel: inpaint
-    region (mask white) -> transparent (alpha 0), rest opaque. Matches
-    ComfyUI-LoadImage (``MASK = 1 - alpha``). The RGB part stays unchanged
-    (non-breaking)."""
-    from PIL import ImageOps
-    rgba = canvas.convert("RGBA")
-    rgba.putalpha(ImageOps.invert(mask.convert("L")))
-    rgba.save(path)
-
-
-def _save_rgba_mask(mask, path: str) -> None:
-    """RGBA mask image (same dimension as the canvas): white area, the marked
-    region (``mask`` white) sits in the ALPHA channel as transparent — like
-    the canvas. ComfyUI ``MASK = 1 - alpha`` yields exactly this region (e.g.
-    the center cell for the crop, independent of the inpaint mask)."""
-    from PIL import Image, ImageOps
-    rgba = Image.new("RGBA", mask.size, (255, 255, 255, 255))
-    rgba.putalpha(ImageOps.invert(mask.convert("L")))
-    rgba.save(path)
-
-
 def _place_neighbors(location: Dict[str, Any], border_frac: float = 1.0,
                      canvas_max: Optional[int] = None):
     """Builds the canvas (gray, center = own tile) with the neighbor tiles around it.
@@ -1317,65 +1295,6 @@ def _edge_transition_prompt(location: Dict[str, Any], sides=None) -> str:
     return ("top-down orthographic map tile; its edges blend into the adjacent "
             "terrain — " + ", ".join(parts) + "; colors, tones and art style merge "
             "smoothly across the edges, cohesive unified palette and lighting, no hard seams")
-
-
-def _compose_edge_canvas(location: Dict[str, Any], sides=None, gray_fill: bool = False):
-    """Like :func:`_compose_neighbor_canvas` (3x3, real neighbors around), BUT
-    the center is the REAL tile and the mask is a FRAME (distance transform)
-    only for the chosen sides with a neighbor: solid at the edge, evenly down
-    to 0 towards the center. Returns (canvas_path, mask_path, tile) or None."""
-    import numpy as np
-    from PIL import Image
-    avail = _neighbor_sides(location)
-    use = [s for s in (sides or list(avail)) if s in avail]
-    # Edge uses full neighbor tiles (border_frac=1.0 → border == tile, classic
-    # 3*tile canvas) — the frame mask needs the full neighbor context.
-    placed = _place_neighbors(location, border_frac=1.0)
-    if not placed or not use:
-        return None
-    canvas, tile, border, present = placed
-    # Fill the center with the real tile (instead of gray).
-    tp = _resolve_map_icon_path(location)
-    if tp:
-        t_img = Image.open(tp).convert("RGB").resize((tile, tile))
-        rot = int(location.get("map_rotation_2d") or 0)
-        if rot:
-            t_img = t_img.rotate(-rot, expand=False, fillcolor=(128, 128, 128))
-        canvas.paste(t_img, (border, border))
-    # Frame mask via distance transform.
-    W, H = canvas.size
-    cx0, cy0, cx1, cy1 = border, border, border + tile, border + tile
-    blend = max(1, int(tile * MAP_EDGE_BLEND_FRAC))
-    core = max(0, int(blend * MAP_EDGE_CORE_FRAC))
-    ys, xs = np.mgrid[0:H, 0:W]
-    dist = np.full((H, W), float(blend + 1))
-    if "west" in use:
-        dist = np.minimum(dist, xs - cx0)
-    if "east" in use:
-        dist = np.minimum(dist, (cx1 - 1) - xs)
-    if "north" in use:
-        dist = np.minimum(dist, ys - cy0)
-    if "south" in use:
-        dist = np.minimum(dist, (cy1 - 1) - ys)
-    inside = (xs >= cx0) & (xs < cx1) & (ys >= cy0) & (ys < cy1)
-    dist = np.where(inside, dist, float(blend + 1))
-    f = np.clip((dist - core) / max(1, blend - core), 0.0, 1.0)
-    sm = f * f * (3 - 2 * f)
-    val = np.where(dist < core, 255.0, 255.0 * (1.0 - sm))
-    val = np.where((dist >= blend) | (~inside), 0.0, val)
-    mask = Image.fromarray(val.astype("uint8"), "L")
-    # ONLY for edit-model inpaint (gray_fill, e.g. Qwen-Edit): color the
-    # masked edge SOLID gray (same (128,128,128) as the empty fit center),
-    # because Qwen "completes the gray areas" and reads them straight from the
-    # reference image. Solid gray with a HARD edge (binary mask >0, NOT the
-    # fading inpaint mask — no gradient). Fill models (Flux DevFill) get NO
-    # gray: they use the separate input_mask and keep the real tile content.
-    if gray_fill:
-        _gray = Image.new("RGB", canvas.size, (128, 128, 128))
-        _solid = mask.point(lambda v: 255 if v > 0 else 0)
-        canvas = Image.composite(_gray, canvas.convert("RGB"), _solid)
-    # Edge also cuts off empty borders (e.g. at the map border).
-    return _finalize_blend(canvas, mask, tile, border, present, crop_empty=True)
 
 
 # Edge match (new model): EXACTLY two adjacent tiles side by side, the seam
