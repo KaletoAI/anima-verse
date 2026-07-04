@@ -2538,16 +2538,27 @@ def get_character_address_form(character_name: str) -> str:
 # --- Character Images ---
 
 def get_character_images_dir(character_name: str) -> Path:
-    """Gibt das Images-Verzeichnis fuer einen Character zurueck"""
-    images_dir = get_character_dir(character_name) / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
+    """Returns the images directory for a character.
+
+    Only materializes the subdir when the character's base dir already exists
+    (= real character). A bare call on a read path must NOT create ghost dirs
+    (see get_character_dir's create=False rationale); real writes always follow
+    a create=True base-dir creation.
+    """
+    base = get_character_dir(character_name)
+    images_dir = base / "images"
+    if base.exists():
+        images_dir.mkdir(parents=True, exist_ok=True)
     return images_dir
 
 
 def get_character_outfits_dir(character_name: str) -> Path:
-    """Gibt das Outfits-Bildverzeichnis fuer einen Character zurueck."""
-    outfits_dir = get_character_dir(character_name) / "outfits"
-    outfits_dir.mkdir(parents=True, exist_ok=True)
+    """Returns the outfit-image directory for a character (see
+    get_character_images_dir for the base-dir existence gate)."""
+    base = get_character_dir(character_name)
+    outfits_dir = base / "outfits"
+    if base.exists():
+        outfits_dir.mkdir(parents=True, exist_ok=True)
     return outfits_dir
 
 
@@ -2782,9 +2793,12 @@ def get_single_image_meta(character_name: str, image_filename: str) -> Dict[str,
 # --- Character Skill Config ---
 
 def get_character_skills_dir(character_name: str) -> Path:
-    """Gibt das Skills-Verzeichnis fuer einen Character zurueck"""
-    skills_dir = get_character_dir(character_name) / "skills"
-    skills_dir.mkdir(parents=True, exist_ok=True)
+    """Returns the skills directory for a character (see
+    get_character_images_dir for the base-dir existence gate)."""
+    base = get_character_dir(character_name)
+    skills_dir = base / "skills"
+    if base.exists():
+        skills_dir.mkdir(parents=True, exist_ok=True)
     return skills_dir
 
 
@@ -2835,9 +2849,12 @@ def save_character_skill_config(character_name: str, skill_name: str, config: Di
 # --- Per-Character Scheduler Storage ---
 
 def get_character_scheduler_dir(character_name: str) -> Path:
-    """Gibt das Scheduler-Verzeichnis fuer einen Character zurueck"""
-    scheduler_dir = get_character_dir(character_name) / "scheduler"
-    scheduler_dir.mkdir(parents=True, exist_ok=True)
+    """Returns the scheduler directory for a character (see
+    get_character_images_dir for the base-dir existence gate)."""
+    base = get_character_dir(character_name)
+    scheduler_dir = base / "scheduler"
+    if base.exists():
+        scheduler_dir.mkdir(parents=True, exist_ok=True)
     return scheduler_dir
 
 

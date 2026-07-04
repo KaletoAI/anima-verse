@@ -201,6 +201,12 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
     # Seed, model_resolve, Cloud-Cross-Type-Fallback).
     try:
         import json as _json
+        # Materialize the _messaging_frame pseudo-character base dir so the
+        # skill's image save (get_character_images_dir) has a real base — the
+        # dir getters no longer create ghost dirs on read/write for missing
+        # characters, and this pseudo-character has no profile-creation flow.
+        from app.models.character import get_character_dir
+        get_character_dir("_messaging_frame", create=True)
         payload = {
             "prompt": prompt.strip(),
             "input": prompt.strip(),
