@@ -232,10 +232,10 @@ SECTIONS = {
             "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Basis-URL, die nach der Erzeugung benachrichtigt wird. Das Programm haengt Parameter an (welt-relativer Bildpfad). Es werden KEINE Bild-Bytes gesendet. Beispiel: http://127.0.0.1:8005/trigger"},
 
             # --- Default backends ---
-            "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Preview Default (Match)", "description": "Match glob 'backend:<glob>' (e.g. 'backend:Flux*') or a bare glob — resolved by availability + cost, no fixed backend."},
-            "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Match glob 'backend:<glob>' for mood/activity variants — resolved by availability + cost."},
-            "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Match glob 'backend:<glob>' or a bare glob — resolved by availability + cost."},
-            "mapfit_imagegen_default": {"type": "imagegen_select", "label": "Map Fit/Match-edges target", "default": "", "description": "Imagegen target (match spec, e.g. 'backend:<glob>') for 'Fit to neighbors' and 'Match edges'. Must resolve to a category=inpaint backend, which generates via POST /v1/images/edits (canvas + mask as two images)."},
+            "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Preview Default (Match)", "description": "Backend-name glob (e.g. 'Flux*' or an exact name) — resolved by availability + cost, no fixed backend."},
+            "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Backend-name glob for mood/activity variants — resolved by availability + cost."},
+            "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Backend-name glob (e.g. 'Flux*') — resolved by availability + cost."},
+            "mapfit_imagegen_default": {"type": "imagegen_select", "label": "Map Fit/Match-edges target", "default": "", "description": "Imagegen target (backend-name glob) for 'Fit to neighbors' and 'Match edges'. Must resolve to a category=inpaint backend, which generates via POST /v1/images/edits (canvas + mask as two images)."},
             "map_tile_vision_analysis": {"type": "bool", "label": "Analyze neighbor tiles for map prompts", "default": False, "description": "For Fit/Match-edges: run a short vision-LLM analysis of each neighbour's ACTUAL 2D tile to build the north/south/east/west prompt (instead of the stored description, which drifts after regeneration). Cached per tile — re-analysed only when a tile changes. Costs one vision call per new tile."},
 
             # --- Prompt-Prefixes ---
@@ -607,7 +607,7 @@ SECTIONS = {
             "entry_roll_jitter_seconds": {"type": "int", "label": "Entry Jitter (s)", "default": 3, "min": 0, "max": 30, "description": "Zufaellige Verzoegerung 0–N Sekunden bevor das Event nach Eintritt aufploppt. 0 = sofort, sonst fuehlt es sich an als wuerde was 'passieren' nach Ankunft."},
             "resolution_proactive": {"type": "bool", "label": "Proaktive Event-Aufloesung", "default": True, "description": "Characters an betroffener Location versuchen offene disruption/danger Events automatisch zu loesen (alle 5 Min)."},
             "resolution_cooldown_minutes": {"type": "int", "label": "Resolution Cooldown (min)", "default": 15, "min": 1, "max": 240, "description": "Mindestabstand zwischen zwei Loesungsversuchen am gleichen Event."},
-            "event_imagegen_default": {"type": "imagegen_select", "label": "Event Illustration Default Backend", "description": "Backend match (e.g. 'backend:<glob>') used to render disruption/danger event illustrations that swap the location background while the event is active."},
+            "event_imagegen_default": {"type": "imagegen_select", "label": "Event Illustration Default Backend", "description": "Backend-name glob used to render disruption/danger event illustrations that swap the location background while the event is active."},
             "resolved_image_linger_minutes": {"type": "int", "label": "Resolved-Image Linger (min)", "default": 30, "min": 0, "max": 240, "description": "How long the 'after' illustration of a resolved disruption/danger event keeps overriding the normal location background before reverting."},
         },
     },

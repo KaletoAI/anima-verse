@@ -318,7 +318,7 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
         "title": "Render target (match)",
         "intro": "A match glob resolving to an image backend (by availability + cost):",
         "items": [
-            {"code": "backend:LocalAI-Flux", "text": "A specific image backend (exact name or glob after 'backend:')"},
+            {"code": "LocalAI-Flux", "text": "A specific image backend (exact name or glob)"},
             {"code": "*", "text": "Any available backend"},
         ],
     },
@@ -794,7 +794,7 @@ def _autofill_imagegen_defaults(cfg: Dict[str, Any]) -> None:
     )
     if not chosen:
         return
-    target = f"backend:{chosen}"
+    target = chosen
     for field in ("outfit_imagegen_default",
                   "expression_imagegen_default",
                   "location_imagegen_default"):
@@ -858,7 +858,7 @@ async def settings_use_case_defaults(user=Depends(require_admin)):
 async def imagegen_targets(user=Depends(require_admin)):
     """Returns the list of image-gen targets for admin selects (backends only).
 
-    Format: [{"value": "backend:CivitAI", "label": "...", "type": "backend", "available": True}, ...]
+    Format: [{"value": "CivitAI", "label": "...", "type": "backend", "available": True}, ...]
     """
     try:
         from app.core.dependencies import get_skill_manager
@@ -874,7 +874,7 @@ async def imagegen_targets(user=Depends(require_admin)):
         if not b.instance_enabled:
             continue
         out.append({
-            "value": f"backend:{b.name}",
+            "value": b.name,
             "label": f"{b.name} ({b.api_type})",
             "type": "backend",
             "available": bool(b.available),
@@ -3028,18 +3028,18 @@ function renderModelSelect(val, path) {
 }
 
 function renderImagegenSelect(val, path) {
-    // Default MATCH: combobox with glob suggestions "backend:<name>" + free
-    // text (values are "backend:<glob>" or bare globs). Resolved via
-    // resolve_imagegen_target -> match_backend (by availability).
+    // Default MATCH: combobox with backend-name glob suggestions + free text
+    // (values are bare backend globs). Resolved via resolve_imagegen_target ->
+    // match_backend (by availability). A legacy "backend:" prefix is tolerated.
     const backends = CONFIG.image_generation?.backends || [];
     const sugg = new Set();
     for (const be of backends) {
         if (be.enabled === false) continue;  // do not suggest disabled backends
-        sugg.add('backend:' + be.name);
+        sugg.add(be.name);
     }
     let opts = '';
     for (const s of sugg) opts += '<option value="' + esc(s) + '">';
-    return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="e.g. backend:LocalAI-Flux" onchange="setVal(\\'' + path + '\\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
+    return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="e.g. LocalAI-Flux" onchange="setVal(\\'' + path + '\\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
 }
 
 function renderImagegenBackendSelect(val, path) {

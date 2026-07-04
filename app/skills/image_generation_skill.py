@@ -293,9 +293,11 @@ class ImageGenerationSkill(BaseSkill):
         """Resolves a config/explicit backend spec via the match concept.
 
         A spec is one of:
-          - ``"backend:<glob>"`` → ``match_backend`` (glob over backend names,
-            cheapest available; an exact name matches itself).
-          - ``"<glob>"`` (bare)  → treated as a backend glob.
+          - ``"<glob>"`` (bare)  → ``match_backend`` (glob over backend names,
+            cheapest available; an exact name matches itself). This is the
+            canonical form since ComfyUI was removed.
+          - ``"backend:<glob>"`` → legacy prefix, tolerated and stripped
+            (behaves like the bare glob).
           - ``"workflow:<glob>"`` → legacy ComfyUI spec; logs a warning and
             resolves to None so callers fall back to their defaults.
 
@@ -309,7 +311,7 @@ class ImageGenerationSkill(BaseSkill):
         if s.startswith("workflow:"):
             logger.warning(
                 "Legacy workflow spec '%s' ignoriert (ComfyUI entfernt) — "
-                "bitte auf 'backend:<glob>' umstellen", s)
+                "bitte einen Backend-Glob verwenden", s)
             return None
         pat = s[len("backend:"):].strip() if s.startswith("backend:") else s
         pref = (preferred_backend or "").strip()
@@ -1054,9 +1056,9 @@ class ImageGenerationSkill(BaseSkill):
         backend = None
 
         # Normalize the render-target spec: the "workflow" field (legacy name)
-        # can be a match spec ("backend:<glob>" / bare glob), e.g. from the
-        # per-character render match. "workflow:<glob>" specs come from old
-        # configs (ComfyUI removed) and are ignored.
+        # is a backend glob, e.g. from the per-character render match. A leading
+        # "backend:" is a tolerated legacy prefix; "workflow:<glob>" specs come
+        # from old configs (ComfyUI removed) and are ignored.
         _target_spec = input_data.get("workflow", "").strip() if isinstance(input_data, dict) else ""
         _soft_backend = ""
         if _target_spec.lower().startswith("backend:"):
@@ -1065,7 +1067,7 @@ class ImageGenerationSkill(BaseSkill):
         elif _target_spec.lower().startswith("workflow:"):
             logger.warning(
                 "Legacy workflow spec '%s' ignoriert (ComfyUI entfernt) — "
-                "bitte auf 'backend:<glob>' umstellen", _target_spec)
+                "bitte einen Backend-Glob verwenden", _target_spec)
         elif _target_spec:
             # Bare glob: try as a backend glob, fall back to default selection.
             _soft_backend = _target_spec

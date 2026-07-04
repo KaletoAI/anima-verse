@@ -180,9 +180,9 @@
         "image_family": "keywords"
       }
     ],
-    "outfit_imagegen_default": "backend:LocalAI-Flux",
-    "expression_imagegen_default": "backend:LocalAI-Flux",
-    "location_imagegen_default": "backend:LocalAI-Flux",
+    "outfit_imagegen_default": "LocalAI-Flux",
+    "expression_imagegen_default": "LocalAI-Flux",
+    "location_imagegen_default": "LocalAI-Flux",
     "use_cases": {
       "map": {
         "styles": {
