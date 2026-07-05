@@ -18,8 +18,6 @@ Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `c
 
 | Variable | Default | Datei |
 |---|---|---|
-| `FACE_SERVICE_URL` | `http://localhost:8005` | app/server.py, app/core/dependencies.py, app/skills/face_client.py |
-| `FACE_SERVICE_PORT` | `8005` | face_service/server.py |
 | `SKILL_SEARX_URL` | `http://localhost:8888` | app/skills/searx_skill.py |
 | `TELEGRAM_API_URL` | `https://api.telegram.org/bot` | app/models/telegram_channel.py |
 | `PORT` | `8000` | app/scheduler/scheduler_manager.py, app/core/intent_engine.py |
@@ -83,37 +81,10 @@ Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `c
 
 ---
 
-## Face Enhancement / Swap
-
-| Variable | Default | Datei |
-|---|---|---|
-| `FACE_SERVICE_ENABLED` / `FACESWAP_ENABLED` | `false` | app/skills/image_generation_skill.py |
-| `FACE_ENHANCE_ENABLED` | `true` | app/skills/image_generation_skill.py |
-| `FACE_SERVICE_OMP_NUM_THREADS` / `FACESWAP_OMP_NUM_THREADS` | `4` | app/skills/face_enhance.py, app/skills/face_swap.py |
-| `FACE_SERVICE_DET_SIZE` / `FACESWAP_DET_SIZE` | `640` | app/skills/face_swap.py |
-| `FACE_SERVICE_MODEL_PATH` / `FACESWAP_MODEL_PATH` | `` | app/skills/face_swap.py |
-| `FACE_ENHANCE_COLOR_CORRECTION` | `true` | app/skills/face_enhance.py |
-| `FACE_ENHANCE_SHARPEN` | `true` | app/skills/face_enhance.py |
-| `FACE_ENHANCE_SHARPEN_STRENGTH` | `0.5` | app/skills/face_enhance.py |
-| `FACE_ENHANCE_BLEND` | `1.0` | app/skills/face_enhance.py |
-| `FACE_ENHANCE_CODEFORMER_WEIGHT` | `0.7` | app/skills/face_enhance.py |
-| `FACE_SERVICE_REQUEST_TIMEOUT` | `300` | app/skills/face_client.py |
-| `COMFY_FACESWAP_WORKFLOW_FILE` | `` | app/skills/image_generation_skill.py |
-| `COMFY_FACESWAP_BACKEND` | `` | app/skills/image_generation_skill.py |
-| `COMFY_FACESWAP_VRAM_REQUIRED` | `0` | app/skills/image_generation_skill.py |
-| `COMFY_MULTISWAP_WORKFLOW_FILE` | `` | app/skills/image_generation_skill.py |
-| `COMFY_MULTISWAP_BACKEND` | `` | app/skills/image_generation_skill.py |
-| `COMFY_MULTISWAP_UNET` | `` | app/skills/image_generation_skill.py |
-| `COMFY_MULTISWAP_CLIP` | `` | app/skills/image_generation_skill.py |
-| `DEFAULT_SWAP_MODE` | `comfyui` | app/skills/image_regenerate.py |
-
----
-
 ## Image Generation
 
 | Variable | Default | Datei |
 |---|---|---|
-| `COMFY_IMAGEGEN_DEFAULT` | `` | app/skills/image_generation_skill.py |
 | `OUTFIT_IMAGE_PROMPT_PREFIX` | `full body portrait` | app/routes/characters.py, app/core/expression_regen.py |
 | `PROFILE_IMAGE_PROMPT_PREFIX` | `photorealistic, portrait, only head,` | app/routes/characters.py |
 | `OUTFIT_IMAGEGEN_DEFAULT` | `` | app/routes/characters.py, app/core/expression_regen.py |
@@ -121,7 +92,6 @@ Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `c
 | `EXPRESSION_IMAGEGEN_DEFAULT` | `` | app/core/expression_regen.py |
 | `IMAGE_ANALYSIS_PROMPT` | `` | app/skills/image_generation_skill.py |
 | `IMAGE_ANALYSIS_LANGUAGE` | `de` | app/skills/image_generation_skill.py |
-| `COMFY_FREE_MEMORY_BEFORE_RUN` | `true` | app/skills/image_backends.py |
 
 ---
 

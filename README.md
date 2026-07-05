@@ -158,7 +158,7 @@ stops acting autonomously).
 - **Auth & multi-user:** JWT auth, bcrypt hashes, admin/user roles, per-user isolated access to
   characters.
 - **Logging & monitoring:** LLM call log (`/logs/llm`), image-prompt log, LLM stats, dashboard,
-  health endpoint (`GET /health`), optional Beszel GPU/VRAM monitoring.
+  health endpoint (`GET /health`).
 
 ---
 
@@ -178,7 +178,6 @@ corresponding feature.
 | Text-to-speech     | XTTS v2 · F5-TTS · Magpie (Riva)                                              |
 | Web search         | SearX / SearXNG                                                               |
 | Animation          | Together.ai (Kling / Wan)                                                     |
-| GPU monitoring     | Beszel                                                                        |
 
 System packages:
 ```bash
@@ -340,8 +339,8 @@ endpoint, so it slots straight into Anima Verse as a normal `openai` provider. W
   returned HTTP 500). Set the use-case / backend dimensions to a size the model actually serves.
 - **Single GPU?** Chat and image share the card. Enable LocalAI's **watchdog** (Idle 2m, Busy Check
   2m, Memory Reclaimer) so it reclaims VRAM between requests instead of OOM-ing. To also stop Anima
-  Verse from dispatching a chat and an image gen at the same time, give the LLM provider's GPU and
-  the image backend's GPU the **same Label** — same label = same physical GPU = one call at a time.
+  Verse from dispatching a chat and an image gen at the same time, give the LLM provider and the
+  image backend the **same `serialize_group`** — same group = one call at a time on that GPU.
 
 See **[docker/DEPLOYMENT.md](docker/DEPLOYMENT.md)** for a full reproducible LocalAI-backed
 deployment (incl. the watchdog and a Proxmox-LXC note).
