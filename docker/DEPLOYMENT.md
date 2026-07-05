@@ -208,7 +208,15 @@ docker compose down             # stop (keeps data volumes)
 docker compose exec app bash    # shell inside the container
 
 # Update to the latest code:
-cd /opt/anima-verse && git pull && cd docker && docker compose up -d --build
+# Use reset --hard, not plain "git pull": the baked demo world.db is modified at
+# runtime, so the checkout is dirty and a pull would fail with a merge conflict.
+# (World data lives in named volumes and survives the rebuild — see below.)
+cd /opt/anima-verse && git fetch origin && git reset --hard origin/main \
+  && cd docker && docker compose up -d --build
+
+# Verify it came back healthy:
+docker inspect -f '{{.State.Health.Status}}' anima-verse   # -> healthy
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8100/play   # -> 200
 
 # Full reset to a fresh demo world (DELETES all world data + downloaded models):
 docker compose down -v && docker compose up -d --build
