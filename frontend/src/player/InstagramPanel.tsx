@@ -1,13 +1,13 @@
 /**
- * InstagramPanel — der Instagram-Feed im Player-UI (/play), portiert aus der
- * alten UI. Phase 1: Feed-Anzeige (Avatar, Bild/Carousel/Video, Caption +
- * Hashtags, Likes/liked_by, Kommentare mit Reaktionen/@Mentions/Creator-Reply)
- * plus die direkten Aktionen Like, Comment, Delete und Carousel-Navigation
- * (inkl. einzelnes Bild entfernen). Regenerate + Animate (große geteilte
- * Dialoge) folgen als eigene Schritte.
- * Quelle: /instagram/feed (+ /post/{id}/like|comment, DELETE /post/{id}).
+ * InstagramPanel — the Instagram feed in the player UI (/play), ported from
+ * the legacy UI. Phase 1: feed display (avatar, image/carousel/video, caption +
+ * hashtags, likes/liked_by, comments with reactions/@mentions/creator reply)
+ * plus the direct actions like, comment, delete and carousel navigation
+ * (including removing a single image). Regenerate + animate (large shared
+ * dialogs) were added as separate steps.
+ * Source: /instagram/feed (+ /post/{id}/like|comment, DELETE /post/{id}).
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../lib/api'
 import { usePoll } from './usePolling'
@@ -88,8 +88,8 @@ export function InstagramPanel() {
   const [avatarFail, setAvatarFail] = useState<Record<string, boolean>>({})
   const [liked, setLiked] = useState<Record<string, boolean>>({})
   const lightbox = useLightbox()
-  // Bild/Video aus dem Feed in der gemeinsamen Lightbox öffnen (Video an der
-  // Endung erkennen → Lightbox zeigt Video mit Steuerung statt Zoom).
+  // Open an image/video from the feed in the shared lightbox (video detected
+  // by file extension → the lightbox shows video controls instead of zoom).
   const openMedia = useCallback((url: string) => {
     lightbox.open(/\.(mp4|webm)$/i.test(url) ? { video: url } : { src: url })
   }, [lightbox])
@@ -101,24 +101,20 @@ export function InstagramPanel() {
   // Animate: the post whose animate dialog is open, and posts currently animating.
   const [animatePost, setAnimatePost] = useState<Post | null>(null)
   const [animating, setAnimating] = useState<Record<string, boolean>>({})
-  const alive = useRef(true)
 
-  const reload = useCallback(async () => {
-    try {
-      const d = await apiGet<{ posts?: Post[] }>('/instagram/feed?limit=50')
-      if (alive.current) setPosts(d.posts || [])
-    } catch {
-      /* auth handled globally */
-    }
-  }, [])
-
-  // Unmount guard for the imperative reload() used by actions/pollTrack.
-  useEffect(() => {
-    alive.current = true
-    return () => { alive.current = false }
-  }, [])
   // Steady feed poll via the shared hub (visibility pause + error backoff).
-  usePoll('instagram-feed', reload, { intervalMs: 12000 })
+  // The fetcher RETURNS the payload (instead of setting state itself) so the
+  // hub can replay the last result into a freshly remounted panel — the grid
+  // remounts all panels whenever the open-panel set changes.
+  const { data: feed, refresh: reload } = usePoll<{ posts?: Post[] }>(
+    'instagram-feed',
+    () => apiGet<{ posts?: Post[] }>('/instagram/feed?limit=50'),
+    { intervalMs: 12000 },
+  )
+  // Local copy so actions (e.g. like) can update optimistically between polls.
+  useEffect(() => {
+    if (feed) setPosts(feed.posts || [])
+  }, [feed])
 
   const like = useCallback(
     async (p: Post) => {

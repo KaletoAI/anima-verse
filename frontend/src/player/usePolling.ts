@@ -17,14 +17,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type Fetcher<T> = () => Promise<T>;
 
+interface Subscriber {
+  cb: (data: unknown, error: unknown) => void;
+  /** Live binding to the owning component's current fetcher. */
+  fetcher: Fetcher<unknown>;
+}
+
 interface Entry {
   key: string;
-  fetcher: Fetcher<unknown>;
   intervalMs: number;
   errorFactor: number; // 1, 2, 4, ... capped so interval*factor <= MAX_BACKOFF_MS
   lastRun: number; // epoch ms of last fetch start (0 = never)
   inFlight: boolean;
-  subscribers: Set<(data: unknown, error: unknown) => void>;
+  subscribers: Set<Subscriber>;
   lastData: unknown;
   lastError: unknown;
 }
@@ -42,10 +47,16 @@ function effectiveInterval(e: Entry): number {
 
 async function runEntry(e: Entry): Promise<void> {
   if (e.inFlight) return;
+  // The fetcher lives on the subscribers, not the entry: an entry outlives its
+  // components (survives remounts), and a fetcher captured at entry creation
+  // would keep calling into an unmounted instance whose state updates are dead
+  // (symptom: panel polls 200s forever but stays on "Loading…").
+  const sub: Subscriber | undefined = e.subscribers.values().next().value;
+  if (!sub) return;
   e.inFlight = true;
   e.lastRun = Date.now();
   try {
-    const data = await e.fetcher();
+    const data = await sub.fetcher();
     e.lastData = data;
     e.lastError = null;
     e.errorFactor = 1;
@@ -56,7 +67,7 @@ async function runEntry(e: Entry): Promise<void> {
   } finally {
     e.inFlight = false;
   }
-  for (const cb of e.subscribers) cb(e.lastData, e.lastError);
+  for (const s of e.subscribers) s.cb(e.lastData, e.lastError);
 }
 
 function tick(): void {
@@ -119,7 +130,6 @@ export function usePoll<T>(
     if (!e) {
       e = {
         key,
-        fetcher: () => fetcherRef.current(),
         intervalMs,
         errorFactor: 1,
         lastRun: 0,
@@ -132,17 +142,20 @@ export function usePoll<T>(
     } else if (intervalMs < e.intervalMs) {
       e.intervalMs = intervalMs; // fastest subscriber wins
     }
-    const cb = (d: unknown, err: unknown) => {
-      setData(d as T | null);
-      setError(err);
+    const sub: Subscriber = {
+      cb: (d: unknown, err: unknown) => {
+        setData(d as T | null);
+        setError(err);
+      },
+      fetcher: () => fetcherRef.current(),
     };
-    e.subscribers.add(cb);
+    e.subscribers.add(sub);
     // Replay the shared result so late subscribers render immediately.
-    if (e.lastData !== null || e.lastError !== null) cb(e.lastData, e.lastError);
+    if (e.lastData !== null || e.lastError !== null) sub.cb(e.lastData, e.lastError);
     // First subscriber: fetch right away instead of waiting a full interval.
     if (e.lastRun === 0) void runEntry(e);
     return () => {
-      e.subscribers.delete(cb);
+      e.subscribers.delete(sub);
       // Entries stay registered (cheap) so the shared result survives
       // remounts; ticking skips subscriber-less entries.
     };
