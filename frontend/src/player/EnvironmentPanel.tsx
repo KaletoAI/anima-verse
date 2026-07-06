@@ -127,6 +127,28 @@ export function EnvironmentPanel({
     localStorage.setItem('play-scene-mode', m)
     if (m === 'rendered') void requestRender(false)
   }, [measureLayout, requestRender])
+  // Init from the last persisted measurement — a reload straight into
+  // rendered mode has no live figures left to measure.
+  useEffect(() => {
+    if (renderLayoutRef.current) return
+    try {
+      const s = localStorage.getItem('play-scene-layout')
+      if (s) renderLayoutRef.current = JSON.parse(s)
+    } catch { /* ignore */ }
+  }, [])
+  // Keep the measurement fresh after every commit while the live view is
+  // visible (cheap rect reads, debounced) and persist it for reloads.
+  useEffect(() => {
+    if (mode !== 'live') return
+    const id = window.setTimeout(() => {
+      const l = measureLayout()
+      if (l) {
+        renderLayoutRef.current = l
+        try { localStorage.setItem('play-scene-layout', JSON.stringify(l)) } catch { /* ignore */ }
+      }
+    }, 150)
+    return () => window.clearTimeout(id)
+  })
   // Panel mounted directly in rendered mode (persisted choice) → render once.
   useEffect(() => {
     if (mode === 'rendered' && !renderSig && !rendering) void requestRender(false)

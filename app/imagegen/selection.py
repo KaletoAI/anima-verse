@@ -158,13 +158,19 @@ class BackendPool:
         if not pat:
             return None
         pl = pat.lower()
-        # Inpaint backends only on an EXACT name (Fit/Edge: backend:<inpaint-name>),
-        # never via a glob/"*" — otherwise a normal render lands there.
-        has_wildcard = any(ch in pat for ch in "*?[")
         matches = [b for b in self.backends
                    if fnmatch.fnmatch(b.name.lower(), pl)
-                   and b.available and b.instance_enabled
-                   and not (has_wildcard and self._is_inpaint_backend(b))]
+                   and b.available and b.instance_enabled]
+        # Globs skip inpaint backends so "*"/"Flux*" never lands a normal
+        # render there — UNLESS the pattern matches ONLY inpaint backends
+        # (e.g. "Qwen Inpaint*"): then the caller explicitly aimed at them
+        # and excluding everything would silently fall back elsewhere.
+        has_wildcard = any(ch in pat for ch in "*?[")
+        if has_wildcard:
+            non_inpaint = [b for b in matches
+                           if not self._is_inpaint_backend(b)]
+            if non_inpaint:
+                matches = non_inpaint
         if not matches:
             return None
         return self.pick_lowest_cost(matches, rotation_key=f"backend_match:{pat}")

@@ -433,7 +433,14 @@ def render_scene(avatar: str, force: bool = False,
             label=state["label"], count=count_word)
     else:
         # multi_ref mode: background + persons as separate references.
-        if slots < 2 and state["chars"]:
+        if getattr(backend, "category", "") == "inpaint":
+            # The edits path does img2img on ONE input — extra references
+            # are not composed (observed: result = the untouched room).
+            warning = (f"Backend '{backend.name}' is an edits/inpaint alias — "
+                       f"it cannot compose multiple references. Use collage "
+                       f"mode with it, or a generate alias for multi_ref.")
+            logger.warning("scene render: %s", warning)
+        elif slots < 2 and state["chars"]:
             # Composing needs bg + persons — a 0/1-slot backend is bg-only.
             warning = (f"Backend '{backend.name}' has only {slots} reference "
                        f"slot(s) — persons are not composed. Set 'Scene Render "
