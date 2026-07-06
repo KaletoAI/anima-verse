@@ -42,17 +42,17 @@ logger = get_logger("scene_render")
 # {people} = person list. KEEP IN SYNC with the schema defaults in
 # config_schema.py.
 PROMPT_MULTI_REF_DEFAULT = (
-    "{label}: the exact room from the first reference image, keeping the "
-    "room layout, lighting and perspective. Compose {count} into the scene "
+    "The exact room from the first reference image, keeping the room "
+    "layout, lighting and perspective. Compose {count} into the scene "
     "and NO ONE else — each person appears exactly once, no additional "
     "people, no duplicates. The person reference images provide IDENTITY "
     "ONLY (face, hair, body, outfit) — IGNORE the pose and background they "
     "show; each person's pose follows the text. People: {people}")
 PROMPT_ONLY_BG_DEFAULT = (
-    "{label}: the exact room from the reference image, keeping the room "
-    "layout, lighting and perspective. Compose {count} into the scene and "
-    "NO ONE else — each person appears exactly once, no additional people, "
-    "no duplicates. People: {people}")
+    "The exact room from the reference image, keeping the room layout, "
+    "lighting and perspective. Compose {count} into the scene and NO ONE "
+    "else — each person appears exactly once, no additional people, no "
+    "duplicates. People: {people}")
 
 
 def get_scene_dir() -> Path:
@@ -317,8 +317,8 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
             _prompt_template(tpl_key, tpl_default),
             label=state["label"], count=count_word, people="; ".join(lines))
     else:
-        prompt = (f"{state['label']}: the exact room from the reference "
-                  f"image, keeping the room layout, lighting and perspective")
+        prompt = ("The exact room from the reference image, keeping the "
+                  "room layout, lighting and perspective")
     _ucp = config.resolve_use_case_style(
         "scene",
         backend_model=getattr(backend, "model", "") or "",
