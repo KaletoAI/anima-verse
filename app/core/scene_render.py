@@ -89,6 +89,38 @@ def _expr_image_path(name: str) -> Optional[Path]:
     return None
 
 
+def _pose_hint(name: str) -> str:
+    """Compact pose/activity hint for the scene prompt.
+
+    The raw pose_intent is often a whole RP paragraph (the tool LLM copies
+    prose into SetPose) — useless as an image hint. Preference: a short
+    effective activity as-is (covers "Sleeping" etc.), else the stored pose
+    variant's canonical form (normalize_pose result, short + English, no
+    extra LLM call), else the first sentence hard-trimmed with quoted
+    speech removed.
+    """
+    import re
+    from app.models.character import get_character_profile, get_effective_activity
+    act = (get_effective_activity(name) or "").strip()
+    if act and len(act) <= 60 and "\n" not in act:
+        return act
+    try:
+        variant_id = (get_character_profile(name) or {}).get("pose_variant_id")
+        if variant_id:
+            from app.core.pose_variants import get_variant
+            canonical = ((get_variant(int(variant_id)) or {})
+                         .get("canonical_pose") or "").strip()
+            if canonical:
+                return canonical
+    except Exception as e:
+        logger.debug("scene: pose variant lookup failed for %s: %s", name, e)
+    if not act:
+        return ""
+    act = re.sub(r'["„“»].*?["“”«]', "", act).strip()
+    act = re.split(r"(?<=[.!?])\s", act, 1)[0].strip()
+    return act[:80]
+
+
 def _position_bucket(x: Optional[float]) -> str:
     if x is None:
         return "center"
@@ -109,7 +141,6 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     from app.core.world_ops import resolve_background_path
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
-                                      get_effective_activity,
                                       get_last_scene_position)
     from app.models.world import get_location_by_id, get_room_by_id
 
@@ -139,7 +170,7 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
             "name": n,
             "image": img,
             "bucket": _position_bucket(pos.get("x")),
-            "activity": (get_effective_activity(n) or "").strip(),
+            "activity": _pose_hint(n),
         })
 
     sig_src = json.dumps([
