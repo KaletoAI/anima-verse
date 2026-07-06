@@ -106,32 +106,48 @@ def _resolve_backend():
 
 
 def _expr_image_path(name: str) -> Optional[Path]:
-    """Identity reference image of a character.
+    """Figure image of a character for the scene (collage figure / identity
+    reference). The POSE of this image matters — the edit model reproduces
+    it — so the lookup prefers pose fidelity:
 
-    Preference: the variant matching the CURRENT state (mood + effective
-    activity + real equipped state — same lookup as /outfit-expression);
-    else the newest cached variant of any state (matches the current outfit
-    era better than the often-old profile portrait); else the profile image.
-    The reference is used for identity only — pose comes from the prompt.
+    1. Variant for the exact current state (mood + effective activity +
+       equipped — same key as /outfit-expression). On a miss the missing
+       variant is triggered in the background (coalesced/cooldowned), so
+       the next render has the exact figure.
+    2. Variant with the SAME activity/pose but any mood (sidecar match) —
+       the exact key misses on every mood shift although a pose-matching
+       figure exists; this is what previously fell through to defaults.
+    3. Newest cached variant of any state (outfit-era match).
+    4. Profile image.
     """
+    mood = activity = ""
     try:
-        from app.core.expression_regen import get_cached_expression
         from app.models.character import (get_character_current_feeling,
                                           get_effective_activity)
-        from app.models.inventory import get_equipped_items, get_equipped_pieces
         mood = get_character_current_feeling(name) or ""
         activity = get_effective_activity(name) or ""
+    except Exception as e:
+        logger.debug("scene: state lookup failed for %s: %s", name, e)
+    try:
+        from app.core.expression_regen import (get_cached_expression,
+                                               trigger_expression_generation)
+        from app.models.inventory import get_equipped_items, get_equipped_pieces
         cached = get_cached_expression(
             name, mood, activity,
             equipped_pieces=get_equipped_pieces(name),
             equipped_items=get_equipped_items(name))
         if cached and Path(cached).exists():
             return Path(cached)
+        # Exact variant missing — generate it for the NEXT render (fire and
+        # forget; coalesce + cooldown keep this from spamming the queue).
+        trigger_expression_generation(name, mood, activity)
     except Exception as e:
         logger.debug("scene: expression lookup failed for %s: %s", name, e)
     try:
         from app.core.expression_regen import _get_expressions_dir
         expr_dir = _get_expressions_dir(name)
+        want = activity.strip().lower()
+        pose_match = None
         newest = None
         if expr_dir.exists():
             for p in expr_dir.iterdir():
@@ -141,6 +157,19 @@ def _expr_image_path(name: str) -> Optional[Path]:
                     continue
                 if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
                     newest = p
+                if want:
+                    sidecar = p.with_suffix(".json")
+                    try:
+                        meta = json.loads(sidecar.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    if str(meta.get("activity") or "").strip().lower() != want:
+                        continue
+                    if (pose_match is None
+                            or p.stat().st_mtime > pose_match.stat().st_mtime):
+                        pose_match = p
+        if pose_match:
+            return pose_match
         if newest:
             return newest
     except Exception as e:
