@@ -1947,6 +1947,20 @@ def build_current_location_payload(character_name: str) -> Dict[str, Any]:
     }
 
 
+def _wake_avatar_on_manual_move(character_name: str, moved: bool) -> None:
+    """Player/admin-driven movement is a wake signal: without this a sleeping
+    avatar keeps its Sleeping state (flag + sleep expression) after being
+    moved to another location/room. Deliberately avatar-only — NPC sleep is
+    managed by the agent loop/rules (sleep-walk moves sleeping characters on
+    purpose). Counterpart of the same wake in /play/enter-room."""
+    if not moved:
+        return
+    from app.models.character import is_character_sleeping, set_is_sleeping
+    if is_character_sleeping(character_name):
+        set_is_sleeping(character_name, False)
+        logger.info("manual move: %s woke up (location/room change)", character_name)
+
+
 async def apply_current_location(character_name: str, request) -> Dict[str, Any]:
     """Aktualisiert den aktuellen virtuellen Aufenthaltsort"""
     from app.models.character import save_character_current_location
@@ -1993,6 +2007,10 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
             clear_pose_intent(character_name)
     elif room:
         save_character_current_room(character_name, room)
+    if _is_avatar:
+        _wake_avatar_on_manual_move(
+            character_name,
+            location_to_save != old_loc or bool(room and room != old_room))
 
     # Avatar-Eintritts-Hook: andere Characters im neuen Raum bemerken den
     # Eintritt und reagieren ggf. (forced_thought + TalkTo). Nur wenn:
@@ -2099,6 +2117,10 @@ async def apply_place_on_map(character_name: str, request) -> Dict[str, Any]:
             clear_pose_intent(character_name)
     elif room:
         save_character_current_room(character_name, room)
+    if _is_avatar:
+        _wake_avatar_on_manual_move(
+            character_name,
+            location_to_save != old_loc or bool(room and room != old_room))
 
     new_room = room or ''
     room_changed = (location_to_save != old_loc) or (new_room and new_room != old_room)
