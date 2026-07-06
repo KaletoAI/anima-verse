@@ -33,6 +33,39 @@ logger = get_logger("scene_render")
 # panel's FIG_BASE_H so the collage matches what the live view shows.
 FIG_BASE_H = 70
 
+# Built-in prompt templates per render mode. Overridable via config
+# (image_generation.scene_prompt_collage / scene_prompt_multi_ref) so each
+# workflow (e.g. Krea edit vs. Qwen edit) can get its own tuned wording
+# without code changes. Placeholders: {label} = room/location name,
+# {count} = "exactly two people" etc., {people} = person list (multi_ref
+# only). KEEP IN SYNC with the schema defaults in config_schema.py.
+PROMPT_COLLAGE_DEFAULT = (
+    "{label}: the people were pasted onto this room photo — seamlessly "
+    "integrate them into the scene. Keep the room and keep every person "
+    "exactly where and as they are: same position, same size, same pose, "
+    "{count} and NO ONE else — no additional people, no duplicates. Blend "
+    "lighting, shadows, color grading, reflections and edges so it looks "
+    "like one natural photograph")
+PROMPT_MULTI_REF_DEFAULT = (
+    "{label}: the exact room from the first reference image, keeping the "
+    "room layout, lighting and perspective. Compose {count} into the scene "
+    "and NO ONE else — each person appears exactly once, no additional "
+    "people, no duplicates. The person reference images provide IDENTITY "
+    "ONLY (face, hair, body, outfit) — IGNORE the pose and background they "
+    "show; each person's pose follows the text. People: {people}")
+
+
+def _prompt_template(config_key: str, default: str) -> str:
+    txt = str(config.get(f"image_generation.{config_key}", "") or "").strip()
+    return txt or default
+
+
+def _fill_template(tpl: str, **vars_: str) -> str:
+    # Plain token replace — str.format would choke on braces in user text.
+    for k, v in vars_.items():
+        tpl = tpl.replace("{" + k + "}", v)
+    return tpl
+
 
 def get_scene_dir() -> Path:
     d = get_storage_dir() / "scene_render"
@@ -308,13 +341,9 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
             logger.warning("scene render: %s", warning)
         else:
             refs["input_reference_image_1"] = str(draft)
-        prompt = (f"{state['label']}: the people were pasted onto this room "
-                  f"photo — seamlessly integrate them into the scene. Keep "
-                  f"the room and keep every person exactly where and as they "
-                  f"are: same position, same size, same pose, {count_word} "
-                  f"and NO ONE else — no additional people, no duplicates. "
-                  f"Blend lighting, shadows, color grading, reflections and "
-                  f"edges so it looks like one natural photograph")
+        prompt = _fill_template(
+            _prompt_template("scene_prompt_collage", PROMPT_COLLAGE_DEFAULT),
+            label=state["label"], count=count_word)
     else:
         # multi_ref mode: background + persons as separate references.
         if slots < 2 and state["chars"]:
@@ -353,15 +382,15 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
                                      flags=re.IGNORECASE)
                 part += f": {act}"
             lines.append(part)
-        prompt = (f"{state['label']}: the exact room from the first reference "
-                  f"image, keeping the room layout, lighting and perspective")
         if lines:
-            prompt += (f". Compose {count_word} into the scene and NO ONE else — "
-                       f"each person appears exactly once, no additional people, "
-                       f"no duplicates. The person reference images provide "
-                       f"IDENTITY ONLY (face, hair, body, outfit) — IGNORE the "
-                       f"pose and background they show; each person's pose "
-                       f"follows the text. People: " + "; ".join(lines))
+            prompt = _fill_template(
+                _prompt_template("scene_prompt_multi_ref", PROMPT_MULTI_REF_DEFAULT),
+                label=state["label"], count=count_word,
+                people="; ".join(lines))
+        else:
+            prompt = (f"{state['label']}: the exact room from the first "
+                      f"reference image, keeping the room layout, lighting "
+                      f"and perspective")
     _ucp = config.resolve_use_case_style(
         "scene",
         backend_model=getattr(backend, "model", "") or "",

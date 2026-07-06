@@ -998,9 +998,12 @@ function renderFields(fields, data, path) {
         html += renderInput(f, val, fullPath);
         // Show the schema default next to the description so the effective
         // fallback is always visible — even when the stored value is empty.
+        // Long text defaults (e.g. prompt templates) are skipped: they are
+        // prefilled into the input anyway and would bloat the description.
         let desc = f.description || '';
         if (f.default !== undefined && f.default !== ''
-            && (typeof f.default === 'string' || typeof f.default === 'number' || typeof f.default === 'boolean')) {
+            && (typeof f.default === 'string' || typeof f.default === 'number' || typeof f.default === 'boolean')
+            && String(f.default).length <= 80) {
             const dv = typeof f.default === 'boolean' ? (f.default ? 'on' : 'off') : String(f.default);
             desc += (desc ? ' ' : '') + '<span class="desc-default">Default: ' + esc(dv) + '</span>';
         }
