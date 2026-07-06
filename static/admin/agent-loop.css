@@ -19,4 +19,11 @@ h1 { font-size:18px; margin-top:0; }
 .tag.tool { background:#1f3a5f; color:#79c0ff; }
 .tag.intent { background:#3a2f5f; color:#d2a8ff; }
 .preview { color:#8b949e; font-style:italic; max-width:380px; word-break:break-word; }
+/* Multi-line preview: one labeled block per call (RP answer / Tool-LLM answer). */
+.pv-block { display:flex; gap:6px; align-items:flex-start; margin:2px 0 6px; }
+.pv-block:last-of-type { margin-bottom:2px; }
+.pv-label { flex:0 0 auto; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:600; background:#21262d; color:#8b949e; }
+.pv-label.rp { background:#1f3a5f; color:#79c0ff; }
+.pv-label.tool { background:#3a2f5f; color:#d2a8ff; }
+.pv-text { white-space:pre-wrap; word-break:break-word; color:#8b949e; max-width:560px; }
 .muted { color:#484f58; }

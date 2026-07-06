@@ -194,11 +194,14 @@ class ThoughtRunner:
         # Relationship-Updates leakt.
         user_name = (get_active_character() or "").strip()
 
-        # Turn-Summary fuer den Agent-Loop / Admin-Panel.
+        # Turn summary for the agent loop / admin panel.
         # tools = list of tool-name strings actually invoked (stream + narrative).
         # intents = list of intent-type strings dispatched after the stream.
         # preview = first ~140 chars of the cleaned narrative output.
-        _turn_info: Dict[str, Any] = {"tools": [], "intents": [], "preview": ""}
+        # rp_response / tool_response = untruncated raw answers of the RP call
+        # and the Tool-LLM call, shown multi-line in "Recent turns".
+        _turn_info: Dict[str, Any] = {"tools": [], "intents": [], "preview": "",
+                                      "rp_response": "", "tool_response": ""}
 
         # Character-Daten sammeln
         task = (profile.get("character_task", "") or "").strip()
@@ -527,8 +530,14 @@ class ThoughtRunner:
                 _llm_queue.register_chat_done(_thought_state["task_id"])
                 _thought_state["task_id"] = None
 
-        # Ergebnis verarbeiten
+        # Process the result
         full_response = full_response.strip()
+
+        # Untruncated raw answers for the admin panel BEFORE any cleaning:
+        # the RP call's narrative text and the Tool-LLM's decision text.
+        _turn_info["rp_response"] = full_response
+        _turn_info["tool_response"] = (
+            getattr(agent, "last_tool_response", "") or "").strip()
 
         # Narrativ beschriebene Tool-Calls erkennen und ausfuehren BEVOR
         # die Halluzinations-Bereinigung den Text entfernt.

@@ -35,8 +35,8 @@ async function load() {
   }
 }
 
-// Verifiziere dass der Script ueberhaupt laeuft — wenn 'loading…' nach 1s
-// nicht ersetzt wurde, gab es einen Pre-Init-Error.
+// Verify the script runs at all — if 'loading…' has not been replaced
+// after 1s, there was a pre-init error.
 setTimeout(() => {
   const lbl = document.getElementById('status-label');
   if (lbl && lbl.textContent === 'loading…') {
@@ -81,34 +81,46 @@ function render() {
     const tools = (r.tools || []).map(t => `<span class="tag tool">${escapeHtml(t)}</span>`).join('');
     const intents = (r.intents || []).map(i => `<span class="tag intent">${escapeHtml(i)}</span>`).join('');
     const tagsCell = (tools + intents) || '<span class="muted">—</span>';
-    // Link zum LLM Log: nur fuer Outcomes wo tatsaechlich ein LLM-Call lief.
-    // Auto-Sleep / in_chat_skip / no_llm haben keinen Eintrag im LLM-Log.
+    // Link to the LLM log: only for outcomes where an LLM call actually ran.
+    // Auto-sleep / in_chat_skip / no_llm have no entry in the LLM log.
     const _llmRanOutcomes = !(
       (r.outcome || '').startsWith('auto_sleep') ||
       r.outcome === 'in_chat_skip' || r.outcome === 'no_llm'
     );
     let logLink = '';
     if (_llmRanOutcomes && r.agent && r.started_at) {
-      // Search-Filter: ISO-Format mit "T" + Minute des Turn-Starts (matcht
-      // das Roh-Format in llm_calls.jsonl 'starttime'). Beispiel:
-      // "2026-05-05T13:35". Der LLM-Log-Viewer liest die URL-Params, wendet
-      // Filter an und auto-expanded den ersten Treffer.
+      // Search filter: ISO format with "T" + minute of the turn start (matches
+      // the raw format in llm_calls.jsonl 'starttime'). Example:
+      // "2026-05-05T13:35". The LLM log viewer reads the URL params, applies
+      // the filters and auto-expands the first match.
       const tsMin = (r.started_at || '').slice(0, 16);
       const url = '/logs/llm?character=' + encodeURIComponent(r.agent)
                 + '&search=' + encodeURIComponent(tsMin);
-      // Wir versuchen die Admin-Sidebar-Navigation (parent.activateIframe) zu
-      // nutzen — dann wird im Admin-Layout NUR der iframe-Inhalt getauscht
-      // und Sidebar-Links bleiben erhalten. Fallback: direkte Navigation
-      // (z.B. wenn Agent-Loop standalone geoeffnet wurde).
+      // Try the admin sidebar navigation (parent.activateIframe) first — then
+      // only the iframe content is swapped inside the admin layout and the
+      // sidebar links stay intact. Fallback: direct navigation (e.g. when the
+      // agent-loop page was opened standalone).
       const onclick = "event.preventDefault();"
         + " try { if (window.parent && window.parent.activateIframe) {"
         + " window.parent.activateIframe('_llm_log', '" + url + "', 'LLM Log'); return; } } catch(e) {}"
         + " window.location = '" + url + "';";
       logLink = ` <a href="${url}" onclick="${onclick}" title="Im LLM-Log oeffnen" style="margin-left:6px;text-decoration:none;color:#58a6ff;">🔍</a>`;
     }
-    const preview = r.preview
-      ? `<span class="preview">${escapeHtml(r.preview)}</span>${logLink}`
-      : (logLink ? `<span class="muted">—</span>${logLink}` : '<span class="muted">—</span>');
+    // Multi-line preview: untruncated RP answer + Tool-LLM answer when the
+    // turn captured them; otherwise fall back to the short preview string.
+    const rp = (r.rp_response || '').trim();
+    const tool = (r.tool_response || '').trim();
+    let preview;
+    if (rp || tool) {
+      const blocks = [];
+      if (rp) blocks.push(`<div class="pv-block"><span class="pv-label rp">RP</span><div class="pv-text">${escapeHtml(rp)}</div></div>`);
+      if (tool) blocks.push(`<div class="pv-block"><span class="pv-label tool">Tool</span><div class="pv-text">${escapeHtml(tool)}</div></div>`);
+      preview = blocks.join('') + logLink;
+    } else {
+      preview = r.preview
+        ? `<span class="preview">${escapeHtml(r.preview)}</span>${logLink}`
+        : (logLink ? `<span class="muted">—</span>${logLink}` : '<span class="muted">—</span>');
+    }
     let startedShort = '';
     if (r.started_at) {
       const _d = new Date(r.started_at);

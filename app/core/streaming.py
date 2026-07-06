@@ -338,11 +338,15 @@ class StreamingAgent:
         self.deferred_tools = deferred_tools or set()
         self.content_tools = content_tools or set()
         self.mode = mode
-        # A (plan-follow-room-conversation-bug): True → Move/SetLocation aus
-        # diesem (in-person-)Gesprächs-Turn unterdrücken. Wer antwortet, geht
-        # nicht im selben Turn weg. Nur für in-person-Chat gesetzt, NICHT für
-        # autonome Thought-Turns (legitime Bewegung).
+        # A (plan-follow-room-conversation-bug): True → suppress Move/SetLocation
+        # coming out of this (in-person) conversation turn. Whoever answers does
+        # not walk away in the same turn. Set only for in-person chat, NOT for
+        # autonomous thought turns (legitimate movement).
         self.suppress_move_in_conversation = suppress_move_in_conversation
+        # Raw text of the Tool-LLM decision from the last rp_first run. The
+        # Tool-LLM phase suppresses ContentEvents, so callers (e.g. the agent
+        # loop's "Recent turns" panel) can only see it through this attribute.
+        self.last_tool_response = ""
 
     # Mapping: Tool-Name → Action-Trigger-Beschreibung (fuer constrained Mode).
     _TOOL_ACTION_HINTS = {
@@ -660,6 +664,8 @@ class StreamingAgent:
             llm_label="Tool-LLM", detect_tools=True, is_tool_decision=True,
             iteration=2):
             yield event
+        # Expose the raw decision text (ContentEvents are suppressed above).
+        self.last_tool_response = state_tool.response.strip()
 
         # Extrahierte Marker (Intent, Assignment, Fallback-Mood/Activity/Location)
         _extracted = _extract_markers(state_tool.response, rp_response)

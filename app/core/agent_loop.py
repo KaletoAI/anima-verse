@@ -774,7 +774,10 @@ class AgentLoop:
             logger.warning("respond-turn %s: PFLICHT-Antwort auf %s kam LEER "
                            "zurück — keine Utterance aufgezeichnet",
                            character_name, speaker or "?")
-        return {"preview": (reply or "(no reply)")[:80], "tools": [], "intents": []}
+        return {"preview": (reply or "(no reply)")[:80], "tools": [], "intents": [],
+                # Full reply for the multi-line preview; the tool phase runs
+                # inside run_chat_turn and is not surfaced here.
+                "rp_response": reply or ""}
 
     def _maybe_active_conversation_chime(self, character_name: str) -> Optional[Dict[str, Any]]:
         """Phase 3b: Steht der Character in einer AKTIVEN Raumkonversation, liefert
@@ -1209,6 +1212,9 @@ class AgentLoop:
             "tools": list(info.get("tools") or []),
             "intents": list(info.get("intents") or []),
             "preview": str(info.get("preview") or ""),
+            # Untruncated RP / Tool-LLM answers for the multi-line preview.
+            "rp_response": str(info.get("rp_response") or ""),
+            "tool_response": str(info.get("tool_response") or ""),
         })
         if len(self._recent) > _RECENT_HISTORY:
             self._recent = self._recent[-_RECENT_HISTORY:]
