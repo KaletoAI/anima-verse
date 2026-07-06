@@ -234,7 +234,9 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        clear_pose_intent,
-                                       save_character_current_room)
+                                       is_character_sleeping,
+                                       save_character_current_room,
+                                       set_is_sleeping)
     from app.models.world import get_location_by_id
 
     body = await request.json()
@@ -257,9 +259,18 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     if room_id not in valid:
         raise HTTPException(status_code=400, detail="room not in current location")
     save_character_current_room(avatar, room_id)
-    # Bewegung unterbricht die laufende Pose — sonst „kocht" der Avatar
-    # weiter, obwohl er gerade den Raum gewechselt hat.
+    # Movement interrupts the running pose — otherwise the avatar keeps
+    # "cooking" although they just changed rooms.
     clear_pose_intent(avatar)
+    # Player-driven movement is the clearest wake signal there is: without
+    # this, a sleeping avatar keeps "Sleeping" (flag + sleep expression) after
+    # walking to another room. set_is_sleeping(False) also drops the sleep
+    # pose/variant. Deliberately ONLY here (player-initiated move) — model-
+    # level auto-wake would break offmap-sleep transfers and rule-driven
+    # moves of sleeping characters.
+    if is_character_sleeping(avatar):
+        set_is_sleeping(avatar, False)
+        logger.info("enter-room: %s woke up by moving to %s", avatar, room_id)
     return {"ok": True, "room_id": room_id}
 
 
