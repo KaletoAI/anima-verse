@@ -274,6 +274,43 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     return {"ok": True, "room_id": room_id}
 
 
+@router.post("/play/scene-render")
+async def play_scene_render(request: Request, user=Depends(get_current_user)):
+    """Renders the current scene (room background + present characters) as
+    one composed image — the environment panel's "Rendered" view. Manual
+    trigger only; force=true bypasses the signature cache (fresh seed)."""
+    import asyncio
+    from app.models.account import get_active_character
+    from app.core.scene_render import render_scene
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=404, detail="no active avatar")
+    force = False
+    try:
+        body = await request.json()
+        force = bool((body or {}).get("force"))
+    except Exception:
+        pass
+    result = await asyncio.to_thread(render_scene, avatar, force)
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("error") or "render failed")
+    return result
+
+
+@router.get("/play/scene-render/image")
+async def play_scene_render_image(sig: str, user=Depends(get_current_user)):
+    """Serves a rendered scene image by its cache signature."""
+    import re as _re
+    from app.core.scene_render import get_scene_image_path
+    if not _re.fullmatch(r"[0-9a-f]{8,64}", (sig or "").strip()):
+        raise HTTPException(status_code=400, detail="invalid sig")
+    p = get_scene_image_path(sig.strip())
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="not rendered")
+    return FileResponse(p, media_type="image/png",
+                        headers={"Cache-Control": "no-cache"})
+
+
 def _party_block(avatar: str):
     """Party-Status des Avatars fuer die UI (None = in keiner Party)."""
     try:

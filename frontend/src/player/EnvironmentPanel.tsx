@@ -19,7 +19,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
-import { apiGet, apiPut } from '../lib/api'
+import { apiGet, apiPost, apiPut } from '../lib/api'
 
 interface PresentChar { name: string; avatar_url: string; expr_version?: string }
 interface Pos { x: number; y: number; scale: number }
@@ -64,6 +64,39 @@ export function EnvironmentPanel({
   useEffect(() => { setBgOk(true) }, [bgUrl])
   // Show the usage hint only until the first interaction (drag/resize).
   const [interacted, setInteracted] = useState(false)
+
+  // "Rendered" view: one server-composed image (room + present characters)
+  // instead of background + draggable figures. Manual trigger only — the
+  // server caches per scene signature, ⟳ forces a fresh render.
+  const [mode, setMode] = useState<'live' | 'rendered'>(() =>
+    localStorage.getItem('play-scene-mode') === 'rendered' ? 'rendered' : 'live')
+  const [renderSig, setRenderSig] = useState('')
+  const [renderNonce, setRenderNonce] = useState(0)  // cache-buster after force
+  const [rendering, setRendering] = useState(false)
+  const [renderErr, setRenderErr] = useState('')
+  const requestRender = useCallback(async (force: boolean) => {
+    setRendering(true)
+    setRenderErr('')
+    try {
+      const d = await apiPost<{ sig?: string }>('/play/scene-render', { force })
+      setRenderSig(d.sig || '')
+      setRenderNonce((n) => n + 1)
+    } catch (e) {
+      setRenderErr((e as Error).message)
+    } finally {
+      setRendering(false)
+    }
+  }, [])
+  const switchMode = useCallback((m: 'live' | 'rendered') => {
+    setMode(m)
+    localStorage.setItem('play-scene-mode', m)
+    if (m === 'rendered') void requestRender(false)
+  }, [requestRender])
+  // Panel mounted directly in rendered mode (persisted choice) → render once.
+  useEffect(() => {
+    if (mode === 'rendered' && !renderSig && !rendering) void requestRender(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState<Record<string, Pos>>({})
@@ -196,7 +229,47 @@ export function EnvironmentPanel({
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
       )}
 
-      {others.length === 0 && (
+      {/* Rendered mode: the composed scene image covers the whole stage. */}
+      {mode === 'rendered' && renderSig && (
+        <img src={`/play/scene-render/image?sig=${encodeURIComponent(renderSig)}&n=${renderNonce}`}
+          alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+      )}
+      {mode === 'rendered' && (rendering || renderErr || !renderSig) && (
+        <span style={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          fontSize: '0.85em', background: 'rgba(0,0,0,0.6)', color: renderErr ? '#f88' : '#fff',
+          padding: '4px 10px', borderRadius: 6, maxWidth: '85%', textAlign: 'center',
+        }}>
+          {rendering ? t('Rendering scene…') : (renderErr || t('No rendered scene yet.'))}
+        </span>
+      )}
+
+      {/* View toggle: Live (draggable figures) vs. Rendered (composed image). */}
+      <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 5, display: 'flex', gap: 4 }}>
+        {(['live', 'rendered'] as const).map((m) => (
+          <button key={m} onClick={() => switchMode(m)}
+            style={{
+              fontSize: '0.72em', padding: '2px 8px', borderRadius: 6, cursor: 'pointer',
+              border: '1px solid rgba(255,255,255,0.25)',
+              background: mode === m ? 'var(--accent, #6aa9ff)' : 'rgba(0,0,0,0.45)',
+              color: '#fff',
+            }}>
+            {m === 'live' ? t('Live') : t('Rendered')}
+          </button>
+        ))}
+        {mode === 'rendered' && (
+          <button onClick={() => requestRender(true)} disabled={rendering}
+            title={t('Re-render scene')} aria-label={t('Re-render scene')}
+            style={{
+              fontSize: '0.72em', padding: '2px 8px', borderRadius: 6,
+              cursor: rendering ? 'wait' : 'pointer',
+              border: '1px solid rgba(255,255,255,0.25)',
+              background: 'rgba(0,0,0,0.45)', color: '#fff',
+            }}>⟳</button>
+        )}
+      </div>
+
+      {mode === 'live' && others.length === 0 && (
         <span style={{
           position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)',
           opacity: 0.6, fontSize: '0.8em', background: 'rgba(0,0,0,0.45)', color: '#fff',
@@ -204,13 +277,13 @@ export function EnvironmentPanel({
         }}>{t('Nobody else here.')}</span>
       )}
 
-      {!interacted && figures.length > 0 && (
+      {mode === 'live' && !interacted && figures.length > 0 && (
         <span className="player-hint-pill" style={{ top: 8, left: 8 }}>
           {t('Drag to move · scroll to resize')}
         </span>
       )}
 
-      {figures.map((c, i) => {
+      {mode === 'live' && figures.map((c, i) => {
         const p = pos[c.name] || defaultPos(i, figures.length)
         const isAvatar = c.name === avatarName
         return (
