@@ -219,6 +219,20 @@ def _pose_hint(name: str) -> str:
     return act[:80]
 
 
+def _appearance_text(name: str) -> str:
+    """Compact appearance description for persons WITHOUT a reference slot
+    (multi_ref on low-slot backends): identity travels as text instead of
+    an image. Outfit placeholders are resolved by the model helper."""
+    try:
+        from app.models.character import get_character_appearance
+        desc = (get_character_appearance(name) or "").strip()
+        desc = " ".join(desc.split())
+        return desc[:300]
+    except Exception as e:
+        logger.debug("scene: appearance lookup failed for %s: %s", name, e)
+        return ""
+
+
 def build_scene_state(avatar: str,
                       layout: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Collects everything the render needs + the cache signature.
@@ -462,18 +476,15 @@ def render_scene(avatar: str, force: bool = False,
             label=state["label"], count=count_word)
     else:
         # multi_ref mode: background + persons as separate references.
+        # Fewer slots than persons is a legitimate setup: unslotted persons
+        # are described in TEXT (appearance from the profile) — e.g. Flux
+        # with 1 slot renders room reference + text-only persons.
         if getattr(backend, "category", "") == "inpaint":
             # The edits path does img2img on ONE input — extra references
             # are not composed (observed: result = the untouched room).
             warning = (f"Backend '{backend.name}' is an edits/inpaint alias — "
                        f"it cannot compose multiple references. Use collage "
                        f"mode with it, or a generate alias for multi_ref.")
-            logger.warning("scene render: %s", warning)
-        elif slots < 2 and state["chars"]:
-            # Composing needs bg + persons — a 0/1-slot backend is bg-only.
-            warning = (f"Backend '{backend.name}' has only {slots} reference "
-                       f"slot(s) — persons are not composed. Set 'Scene Render "
-                       f"Default' to a multi-reference backend (e.g. Krea2).")
             logger.warning("scene render: %s", warning)
         ref_slot_of: Dict[str, int] = {}
         if slots >= 1:
@@ -494,6 +505,10 @@ def render_scene(avatar: str, force: bool = False,
             part = c["name"]
             if c["name"] in ref_slot_of:
                 part += f" (identity from reference image {ref_slot_of[c['name']]})"
+            else:
+                desc = _appearance_text(c["name"])
+                if desc:
+                    part += f" ({desc})"
             act = c["activity"]
             if act:
                 # Another present character's name inside a pose hint ("lying
