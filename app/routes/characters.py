@@ -366,11 +366,14 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
         return {"loras": []}
 
     # LoRA-library entries for the backend resolved for this character at
-    # generation time (endpoint-filtered) — never the LoRAs of a foreign backend.
+    # generation time (endpoint-filtered + backend lora_filter glob) — never
+    # the LoRAs of a foreign backend/model family.
     try:
         from app.core.config import get_lora_library_names
         eff = imagegen._select_backend_for_agent(character_name) if character_name else None
-        lib_names = get_lora_library_names(eff.name if eff else None)
+        lib_names = get_lora_library_names(
+            eff.name if eff else None,
+            lora_filter=(getattr(eff, "lora_filter", "") or "") if eff else "")
     except Exception:
         lib_names = []
 

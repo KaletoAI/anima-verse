@@ -350,7 +350,8 @@ SECTIONS = {
                     {"field": "enabled", "label": "Status", "kind": "status"},
                 ],
                 "fields": {
-                    "name": {"type": "str", "label": "Name", "required": True},
+                    "name": {"half": True, "type": "str", "label": "Name", "required": True},
+                    "lora_filter": {"half": True, "type": "str", "label": "LoRA Filter", "description": "Glob for this backend's LoRAs (e.g. 'Qwen*'). Applied by the discovery sync AND every LoRA dropdown — only matching LoRAs are stored/offered for this backend. Empty = all.", "applicable_for": ["localai", "openai_diffusion"]},
                     "category": {"type": "select", "label": "Category", "choices": ["generate", "inpaint"], "default": "generate", "triggers_rerender": True, "description": "Purpose category. 'generate' = standard generation via POST /v1/images/generations. 'inpaint' = generation via POST /v1/images/edits (canvas + mask as two images); the backend is offered as inpaint target in the map fit/edge dialog, and the alias workflow needs image + mask slots on the gateway side.", "applicable_for": ["openai_diffusion"]},
                     "enabled": {"type": "bool", "label": "Enabled", "default": True},
                     "api_type": {

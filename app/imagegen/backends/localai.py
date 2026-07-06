@@ -47,6 +47,11 @@ class LocalAIBackend(TogetherBackend):
         # (analogous to ComfyUI). Empty = no query. ``{alias}`` is replaced by the
         # model name; without a placeholder ``/v1/generations/{model}/loras`` is appended.
         self.lora_url = os.environ.get(f"{env_prefix}LORA_URL", "").strip()
+        # Glob narrowing the endpoint's LoRA list to this backend's model
+        # (e.g. "Qwen*") — gateways list the LoRAs of ALL models on one
+        # endpoint. Applied in fetch_loras, so discovery and every dropdown
+        # only see matching LoRAs. Empty = no filtering.
+        self.lora_filter = os.environ.get(f"{env_prefix}LORA_FILTER", "").strip()
         self.available_loras: List[str] = []
 
     def _lora_query_url(self) -> str:
@@ -58,7 +63,11 @@ class LocalAIBackend(TogetherBackend):
 
     def fetch_loras(self) -> List[str]:
         """Fetches the available LoRAs from the lora_url endpoint (GET -> {"loras": [...]}).
-        Sets + returns self.available_loras. Empty/erroneous response -> []."""
+
+        The result is narrowed by ``lora_filter`` (case-insensitive glob) —
+        gateway endpoints list the LoRAs of ALL models, the filter keeps only
+        the ones matching this backend's model. Sets + returns
+        self.available_loras. Empty/erroneous response -> []."""
         if not self.lora_url or not self.model:
             return self.available_loras
         try:
@@ -67,8 +76,15 @@ class LocalAIBackend(TogetherBackend):
                 body = resp.json()
                 loras = body.get("loras") if isinstance(body, dict) else body
                 if isinstance(loras, list):
-                    self.available_loras = [str(l).strip() for l in loras if l and str(l).strip()]
-                    logger.info(f"{self.name}: {len(self.available_loras)} LoRA(s) vom Endpoint geladen")
+                    names = [str(l).strip() for l in loras if l and str(l).strip()]
+                    if self.lora_filter:
+                        import fnmatch
+                        pat = self.lora_filter.lower()
+                        names = [n for n in names if fnmatch.fnmatch(n.lower(), pat)]
+                    self.available_loras = names
+                    logger.info(
+                        f"{self.name}: {len(self.available_loras)} LoRA(s) vom Endpoint geladen"
+                        + (f" (Filter '{self.lora_filter}')" if self.lora_filter else ""))
             else:
                 logger.warning(f"{self.name}: LoRA-Abfrage HTTP {resp.status_code}")
         except Exception as e:

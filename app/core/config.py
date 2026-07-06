@@ -266,21 +266,25 @@ def get_lora_trigger_words(lora_names) -> list:
     return out
 
 
-def get_lora_library_names(backend_name=None) -> list:
-    """LoRA-Namen aus der per-Welt-LoRA-Library (``image_generation.lora_triggers``
-    = [{lora, word, endpoint}, …]), gefiltert nach Endpoint:
+def get_lora_library_names(backend_name=None, lora_filter: str = "") -> list:
+    """LoRA names from the per-world LoRA library
+    (``image_generation.lora_triggers`` = [{lora, word, endpoint, …}, …]),
+    filtered by endpoint and optionally by the backend's LoRA glob:
 
-    - Eintraege mit ``endpoint == backend_name`` ODER leerem ``endpoint`` (= gilt
-      fuer alle Backends) werden aufgenommen.
-    - ``backend_name=None`` -> alle Namen (kein Filter).
+    - Entries with ``endpoint == backend_name`` OR an empty ``endpoint``
+      (= applies to all backends) are included.
+    - ``backend_name=None`` -> all names (no endpoint filter).
+    - ``lora_filter`` (e.g. "Qwen*"): case-insensitive glob applied to the
+      LoRA name — mirrors the backend's ``lora_filter`` so global/"all"
+      entries of foreign model families don't leak into the dropdowns.
 
-    Reihenfolge wie im Repo, Duplikate entfernt. Damit ziehen LoRA-Dropdowns die
-    manuell gepflegten LoRAs (z.B. fuer Cloud-/OpenAI-Backends ohne LoRA-API) und
-    bekommen nicht die LoRAs eines fremden Backends/Modells angeboten.
+    Order as in the repo, duplicates removed.
     """
+    import fnmatch
     triggers = get("image_generation.lora_triggers", []) or []
     if not isinstance(triggers, list):
         return []
+    _pat = (lora_filter or "").strip().lower()
     out, seen = [], set()
     for e in triggers:
         if not isinstance(e, dict):
@@ -294,6 +298,8 @@ def get_lora_library_names(backend_name=None) -> list:
             continue
         ep = (e.get("endpoint") or "").strip()
         if backend_name is not None and ep and ep != backend_name:
+            continue
+        if _pat and not fnmatch.fnmatch(lora.lower(), _pat):
             continue
         seen.add(lora)
         out.append(lora)
@@ -751,7 +757,7 @@ def _flatten_to_env(config: dict) -> None:
                      "response_format", "extra_params", "category", "prompt",
                      "ref_slot_count",
                      "full_mask", "terrain_hint", "mask_grow", "inner_crop",
-                     "mask_format", "lora_url"]:
+                     "mask_format", "lora_url", "lora_filter"]:
             val = be.get(key, "")
             # extra_params can be a dict (JSON editor) — bridge as JSON string.
             if key == "extra_params" and isinstance(val, (dict, list)):

@@ -592,12 +592,14 @@ def build_imagegen_options() -> Dict[str, Any]:
             opt["default_model"] = getattr(b, 'model', backend_models[0])
         # LoRA selection in the image-gen dialog. Single source: the per-world
         # LoRA library (filled by the discovery sync job + manual entries,
-        # endpoint-filtered, missing entries excluded). Transfer: localai as
-        # <lora:> prompt tag, openai_diffusion as lora_NN/strength_NN params.
+        # endpoint-filtered, missing entries excluded, narrowed by the
+        # backend's lora_filter glob). Transfer: localai as <lora:> prompt
+        # tag, openai_diffusion as lora_NN/strength_NN params.
         if b.api_type in ("localai", "openai_diffusion"):
             opt["has_loras"] = True
             from app.core.config import get_lora_library_names
-            opt["lora_options"] = get_lora_library_names(b.name)
+            opt["lora_options"] = get_lora_library_names(
+                b.name, lora_filter=getattr(b, "lora_filter", "") or "")
         options.append(opt)
     # mapfit default prompts per family — the Fit/Edge dialog prefills the
     # prompt field with these (instead of the former terrain/edge hint).
