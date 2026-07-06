@@ -2,7 +2,6 @@
 
 Each check returns a list of issues: {"level": "error"|"warning", "section": str, "message": str}
 """
-from pathlib import Path
 from typing import Any, Dict, List
 
 from app.core.log import get_logger
@@ -37,7 +36,7 @@ def _check_providers(config: dict) -> list:
     issues = []
     providers = config.get("providers", [])
     if not providers:
-        issues.append(_err("providers", "Keine Provider konfiguriert"))
+        issues.append(_err("providers", "No providers configured"))
         return issues
 
     names = set()
@@ -48,21 +47,21 @@ def _check_providers(config: dict) -> list:
         api_key = p.get("api_key", "")
 
         if not name:
-            issues.append(_err("providers", f"Provider #{i+1}: Name fehlt"))
+            issues.append(_err("providers", f"Provider #{i+1}: name missing"))
         elif name in names:
-            issues.append(_err("providers", f"Provider '{name}': Doppelter Name"))
+            issues.append(_err("providers", f"Provider '{name}': duplicate name"))
         names.add(name)
 
         if not api_base:
-            issues.append(_err("providers", f"Provider '{name}': API Base URL fehlt"))
+            issues.append(_err("providers", f"Provider '{name}': API base URL missing"))
 
-        # API Key check for cloud providers
+        # API key check for cloud providers
         if ptype == "anthropic" and (not api_key or api_key in ("not-needed", "YOUR_ANTHROPIC_API_KEY")):
-            issues.append(_err("providers", f"Provider '{name}': Anthropic benoetigt einen gueltigen API Key"))
+            issues.append(_err("providers", f"Provider '{name}': Anthropic requires a valid API key"))
         if api_base and "together.xyz" in api_base and (not api_key or api_key == "not-needed"):
-            issues.append(_err("providers", f"Provider '{name}': Together.ai benoetigt einen API Key"))
+            issues.append(_err("providers", f"Provider '{name}': Together.ai requires an API key"))
         if api_base and "api.anthropic.com" in api_base and (not api_key or api_key in ("not-needed", "YOUR_ANTHROPIC_API_KEY")):
-            issues.append(_err("providers", f"Provider '{name}': API Key fehlt oder ist Platzhalter"))
+            issues.append(_err("providers", f"Provider '{name}': API key missing or placeholder"))
 
     return issues
 
@@ -74,7 +73,7 @@ def _check_llm_routing(config: dict) -> list:
     issues = []
     routing = config.get("llm_routing", [])
     if not isinstance(routing, list):
-        issues.append(_err("llm_routing", "llm_routing muss eine Liste sein"))
+        issues.append(_err("llm_routing", "llm_routing must be a list"))
         return issues
 
     providers = config.get("providers", [])
@@ -87,22 +86,22 @@ def _check_llm_routing(config: dict) -> list:
 
     for idx, entry in enumerate(routing):
         if not isinstance(entry, dict):
-            issues.append(_err("llm_routing", f"Eintrag #{idx+1}: kein Objekt"))
+            issues.append(_err("llm_routing", f"Entry #{idx+1}: not an object"))
             continue
-        # Disabled-Eintraege werden zur Laufzeit ignoriert -> keine
-        # Coverage/Order-/Provider-Validierung (sonst meldet die UI Fehler
-        # fuer bewusst stillgelegte Modelle).
+        # Disabled entries are ignored at runtime -> no coverage/order/
+        # provider validation (otherwise the UI reports errors for models
+        # that were deliberately shut off).
         if entry.get("enabled") is False:
             continue
         provider = (entry.get("provider") or "").strip()
         model = (entry.get("model") or "").strip()
         label = model or f"#{idx+1}"
         if not provider:
-            issues.append(_err("llm_routing", f"{label}: Provider fehlt"))
+            issues.append(_err("llm_routing", f"{label}: provider missing"))
         elif provider not in provider_names:
-            issues.append(_err("llm_routing", f"{label}: Provider '{provider}' existiert nicht"))
+            issues.append(_err("llm_routing", f"{label}: provider '{provider}' does not exist"))
         if not model:
-            issues.append(_err("llm_routing", f"Eintrag #{idx+1}: Model fehlt"))
+            issues.append(_err("llm_routing", f"Entry #{idx+1}: model missing"))
 
         tasks = entry.get("tasks") or []
         if not isinstance(tasks, list):
@@ -118,31 +117,31 @@ def _check_llm_routing(config: dict) -> list:
             if order is not None:
                 order_keys.setdefault((tid, int(order)), []).append(idx)
 
-    # Order-Uniqueness
+    # Order uniqueness
     for (tid, order), idxs in order_keys.items():
         if len(idxs) > 1:
             issues.append(_err(
                 "llm_routing",
-                f"Task '{tid}' Order {order} mehrfach vergeben (Eintraege {', '.join('#'+str(i+1) for i in idxs)})"
+                f"Task '{tid}' order {order} assigned multiple times (entries {', '.join('#'+str(i+1) for i in idxs)})"
             ))
 
-    # Coverage: jeder Task im Katalog braucht mindestens einen Eintrag — ausser Gate off
+    # Coverage: every task in the catalog needs at least one entry — unless gated off
     for tid in TASK_TYPES.keys():
         if coverage.get(tid):
             continue
         if is_task_gated_off(tid, config):
             continue
-        # pose_embedding laeuft ueber config.embedding (eingebautes fastembed/ONNX
-        # oder externer /v1/embeddings-Provider), NICHT ueber llm_routing. Nur bei
-        # backend="external" wird ein gerouteter Provider erwartet.
+        # pose_embedding runs via config.embedding (built-in fastembed/ONNX or
+        # an external /v1/embeddings provider), NOT via llm_routing. A routed
+        # provider is only expected for backend="external".
         if tid == "pose_embedding" and (config.get("embedding", {}) or {}).get("backend", "auto") != "external":
             continue
-        issues.append(_warn("llm_routing", f"Task '{tid}' hat keinen LLM-Eintrag"))
+        issues.append(_warn("llm_routing", f"Task '{tid}' has no LLM entry"))
 
-    # Unbekannte Tasks
+    # Unknown tasks
     for tid in coverage.keys():
         if tid not in TASK_TYPES:
-            issues.append(_warn("llm_routing", f"Unbekannter Task '{tid}' — nicht im Katalog"))
+            issues.append(_warn("llm_routing", f"Unknown task '{tid}' — not in the catalog"))
 
     return issues
 
@@ -165,12 +164,12 @@ def _check_image_backends(config: dict) -> list:
         api_key = be.get("api_key", "")
 
         if not api_url:
-            issues.append(_err("image_generation", f"Backend '{name}': API URL fehlt"))
+            issues.append(_err("image_generation", f"Backend '{name}': API URL missing"))
 
-        # Echte Cloud-Backends brauchen einen API Key. openai_chat/localai/openai_diffusion
-        # sind generisch (koennen auf LocalAI/vLLM/Gateway ohne Key zeigen) -> kein Zwang.
+        # Real cloud backends need an API key. openai_chat/localai/openai_diffusion
+        # are generic (may point at LocalAI/vLLM/gateway without a key) -> no requirement.
         if api_type in ("civitai", "together") and not api_key:
-            issues.append(_err("image_generation", f"Backend '{name}': API Key fehlt (Cloud-Backend '{api_type}')"))
+            issues.append(_err("image_generation", f"Backend '{name}': API key missing (cloud backend '{api_type}')"))
 
     # Use-case default render targets (backend globs)
     for field_name, label in [
@@ -200,7 +199,7 @@ def _check_imagegen_ref(val: str, backends: list, section: str, label: str, issu
         if ref_type == "workflow":
             issues.append(_warn(
                 section,
-                f"{label} Default '{val}': ComfyUI entfernt — auf 'backend:<glob>' umstellen"))
+                f"{label} default '{val}': ComfyUI was removed — switch to 'backend:<glob>'"))
             return
         if ref_type != "backend":
             return
@@ -212,7 +211,7 @@ def _check_imagegen_ref(val: str, backends: list, section: str, label: str, issu
     pl = pat.lower()
     be_names = {b.get("name", "") for b in backends}
     if not any(fnmatch.fnmatch(str(n).lower(), pl) for n in be_names):
-        issues.append(_warn(section, f"{label} Default: kein Backend passt auf '{pat}'"))
+        issues.append(_warn(section, f"{label} default: no backend matches '{pat}'"))
 
 
 # ── Animation Checks ──
@@ -221,19 +220,18 @@ def _check_animation(config: dict) -> list:
     issues = []
     anim = config.get("animation", {})
 
-    comfy = anim.get("comfy", {})
-    if comfy.get("enabled"):
-        if not comfy.get("workflow_file"):
-            issues.append(_err("animation", "ComfyUI Animation: Workflow Datei fehlt"))
-        elif not Path(comfy["workflow_file"]).exists():
-            issues.append(_err("animation", f"ComfyUI Animation: Datei '{comfy['workflow_file']}' nicht gefunden"))
-        if not comfy.get("unet_high") and not comfy.get("unet_low"):
-            issues.append(_warn("animation", "ComfyUI Animation: Kein UNet Model konfiguriert"))
+    # ComfyUI was removed entirely (2026-07 review). A leftover legacy block
+    # is dead config — point at it instead of validating a gone subsystem.
+    if anim.get("comfy"):
+        issues.append(_warn(
+            "animation",
+            "Legacy ComfyUI animation block found — ComfyUI was removed; "
+            "delete 'animation.comfy' from the config"))
 
     together = anim.get("together", {})
     if together.get("enabled"):
         if not together.get("model"):
-            issues.append(_warn("animation", "Together Animation: Kein Model konfiguriert"))
+            issues.append(_warn("animation", "Together animation: no model configured"))
 
     return issues
 
@@ -251,19 +249,19 @@ def _check_tts(config: dict) -> list:
     if backend == "xtts":
         xtts = tts.get("xtts", {})
         if not xtts.get("url"):
-            issues.append(_err("tts", "XTTS: URL fehlt"))
+            issues.append(_err("tts", "XTTS: URL missing"))
 
     elif backend == "f5":
         f5 = tts.get("f5", {})
         if not f5.get("url"):
-            issues.append(_err("tts", "F5-TTS: URL fehlt"))
+            issues.append(_err("tts", "F5-TTS: URL missing"))
 
     elif backend == "magpie":
         magpie = tts.get("magpie", {})
         if not magpie.get("url"):
-            issues.append(_err("tts", "Magpie: URL fehlt"))
+            issues.append(_err("tts", "Magpie: URL missing"))
         if not magpie.get("voice"):
-            issues.append(_warn("tts", "Magpie: Keine Stimme konfiguriert"))
+            issues.append(_warn("tts", "Magpie: no voice configured"))
 
     return issues
 
@@ -276,7 +274,7 @@ def _check_skills(config: dict) -> list:
 
     searx = skills.get("searx", {})
     if searx.get("enabled") and not searx.get("url"):
-        issues.append(_err("skills", "SearX: Aktiviert aber keine URL konfiguriert"))
+        issues.append(_err("skills", "SearX: enabled but no URL configured"))
 
     return issues
 
@@ -289,7 +287,7 @@ def _check_server(config: dict) -> list:
 
     jwt = server.get("jwt_secret", "")
     if not jwt or jwt == "your-secret-key-change-in-production":
-        issues.append(_warn("server", "JWT Secret ist der Default-Wert — bitte fuer Production aendern"))
+        issues.append(_warn("server", "JWT secret is the default value — change it for production"))
 
     # Story engine references
     se = config.get("story_engine", {})
