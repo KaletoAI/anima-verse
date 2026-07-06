@@ -351,45 +351,49 @@ SECTIONS = {
                 "fields": {
                     "name": {"type": "str", "label": "Name", "required": True},
                     "category": {"type": "select", "label": "Category", "choices": ["generate", "inpaint"], "default": "generate", "triggers_rerender": True, "description": "Purpose category. 'generate' = standard generation via POST /v1/images/generations. 'inpaint' = generation via POST /v1/images/edits (canvas + mask as two images); the backend is offered as inpaint target in the map fit/edge dialog, and the alias workflow needs image + mask slots on the gateway side.", "applicable_for": ["openai_diffusion"]},
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
+                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
                     "api_type": {
                         "type": "select",
-                        "label": "API Typ",
+                        "label": "API Type",
                         "choices": ["a1111", "openai_chat", "openai_diffusion", "localai", "civitai", "together"],
                         "triggers_rerender": True,
                     },
                     "api_url": {"type": "str", "label": "API URL"},
-                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Erforderlich fuer Cloud-Backends (civitai, together) und das LLM-Gateway (openai_diffusion, Bearer immer); optional fuer openai_chat/localai (z.B. LocalAI/vLLM ohne Auth)", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together"]},
-                    "model": {"type": "imagegen_model", "label": "Model", "description": "Modell-ID, Gateway-Generierungs-Alias (openai_diffusion) oder URN (civitai: urn:air:sdxl:checkpoint:...). Freitext + 'Load Models' holt die Liste vom Backend (/v1/models) als Vorschlaege.", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together"]},
-                    "lora_url": {"type": "str", "label": "LoRA Query URL", "description": "Optional: Endpoint, der die fuer das Modell verfuegbaren LoRAs liefert (GET -> {\"loras\": [...]}). Gefuellt = LoRA-Auswahl im Image-Gen-Dialog kommt von hier statt aus der LoRA-Library. '{alias}' wird durch den Modellnamen ersetzt; ohne Platzhalter wird '/v1/generations/<model>/loras' angehaengt. Beispiel: http://192.168.8.10:4000", "applicable_for": ["openai_diffusion", "localai"]},
-                    "cost": {"type": "int", "label": "Kosten", "default": 0, "min": 0, "description": "Relative Kosten (0 = lokal/kostenlos, hoeher = teurer)"},
+                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Required for cloud backends (civitai, together) and the LLM gateway (openai_diffusion, always Bearer); optional for openai_chat/localai (e.g. LocalAI/vLLM without auth)", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together"]},
+                    "model": {"type": "imagegen_model", "label": "Model", "description": "Model ID, gateway generation alias (openai_diffusion) or URN (civitai: urn:air:sdxl:checkpoint:...). Free text + 'Load Models' fetches the list from the backend (/v1/models) as suggestions.", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together"]},
+                    "lora_url": {"type": "str", "label": "LoRA Query URL", "description": "Optional: endpoint that returns the LoRAs available for the model (GET -> {\"loras\": [...]}). When set, the LoRA selection in the image-gen dialog comes from here instead of the LoRA library. '{alias}' is replaced with the model name; without the placeholder '/v1/generations/<model>/loras' is appended. Example: http://192.168.8.10:4000", "applicable_for": ["openai_diffusion", "localai"]},
+                    "cost": {"type": "int", "label": "Cost", "default": 0, "min": 0, "description": "Relative cost (0 = local/free, higher = more expensive)"},
                     "width": {
                         "type": "int",
-                        "label": "Breite",
+                        "label": "Width",
                         "default": 800,
                         "min": 64,
                         "max": 4096,
-                        "description": (
-                            "Quadratisches Default-Format (~1:1). Render-Zeit skaliert grob "
-                            "linear mit der Pixelanzahl, deshalb sind nur Sprünge mit "
-                            "deutlichem Performance-Effekt sinnvoll:\n"
-                            "  - 512x512   (~0.26 MP — ca. 30% Zeit, schnelle Iteration)\n"
-                            "  - 768x768   (~0.59 MP — ca. 70% Zeit, brauchbare Details)\n"
-                            "  - 1024x1024 (~1.05 MP — SDXL/Flux Sweet-Spot)\n"
-                            "  - 1280x1280 (~1.64 MP — ca. 60% mehr Zeit/VRAM)\n"
-                            "Default 800x800 liegt zwischen den Buckets — fuer beste "
-                            "Resultate auf einen der oben genannten setzen. Ueber 1MP waechst "
-                            "die Zeit weiter linear, der Qualitaetsgewinn flacht aber ab — "
-                            "fuer scharfe grosse Bilder besser einen Upscale-Pass nachschalten."
-                        ),
+                        "half": True,
                     },
                     "height": {
                         "type": "int",
-                        "label": "Höhe",
+                        "label": "Height",
                         "default": 800,
                         "min": 64,
                         "max": 4096,
-                        "description": "Siehe Breite fuer empfohlene Bucket-Kombinationen.",
+                        "half": True,
+                    },
+                    "_size_note": {
+                        "type": "note",
+                        "text": (
+                            "Square default format (~1:1). Render time scales roughly "
+                            "linearly with the pixel count, so only jumps with a clear "
+                            "performance effect are worthwhile:\n"
+                            "  - 512x512   (~0.26 MP — ~30% time, fast iteration)\n"
+                            "  - 768x768   (~0.59 MP — ~70% time, decent detail)\n"
+                            "  - 1024x1024 (~1.05 MP — SDXL/Flux sweet spot)\n"
+                            "  - 1280x1280 (~1.64 MP — ~60% more time/VRAM)\n"
+                            "The default 800x800 sits between the buckets — pick one of the "
+                            "above for best results. Above 1MP render time keeps growing "
+                            "linearly while the quality gain flattens — for sharp large "
+                            "images prefer an upscale pass afterwards."
+                        ),
                     },
                     "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "How the model wants its prompts: keywords = comma tags (Z-Image/SD), natural = flowing prose (Flux/Qwen). Selects the prompt adapter and which use-case style family applies. Empty = fallback via backend model name."},
                     "ref_slot_count": {"type": "number", "label": "Reference Slots", "description": "How many reference images this backend consumes per generation (slot priority: agent > room > others > items). 0 = no reference images. Empty = type default (localai/openai_diffusion: 4, others: 0).", "applicable_for": ["localai", "openai_diffusion"]},
@@ -397,18 +401,18 @@ SECTIONS = {
                     "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200, "applicable_for": ["a1111", "together", "openai_diffusion", "localai"]},
                     "response_format": {"type": "select", "label": "Response Format", "choices": ["b64_json", "url"], "default": "b64_json", "description": "Wie das Gateway das Bild liefert. 'b64_json' (empfohlen): inline im JSON, ein Request. 'url': Result-URL, die mit demselben Bearer-Header abgeholt wird.", "applicable_for": ["openai_diffusion"]},
                     "extra_params": {"type": "text", "label": "Extra-Params (JSON)", "description": "Optionales JSON-Objekt mit zusaetzlichen Request-Parametern (z.B. {\"cfg\": 4.5, \"sampler\": \"euler\"}). Wird 1:1 in den Gateway-Request gemergt; ueberschreibt gleichnamige Defaults. Welche Keys gueltig sind, definiert der Alias-Workflow gateway-seitig. LoRAs NICHT hier eintragen — die kommen automatisch aus der LoRA-Library (lora_NN/strength_NN).", "applicable_for": ["openai_diffusion"]},
-                    "prompt": {"type": "text", "label": "Default Prompt", "description": "Fallback-Prompt, wenn der Aufrufer keinen liefert (z.B. Inpaint-Fill-Anweisung). Bei Inpaint belegt er auch das Prompt-Feld im Fit/Edge-Dialog vor.", "applicable_for": ["openai_diffusion"]},
-                    "full_mask": {"visible_when": {"category": "inpaint"}, "type": "bool", "label": "Full mask", "default": True, "description": "Nur bei Category=inpaint (Map-Blend). AN = ganze Flaeche maskieren (Edit-/Gray-Fill-Modelle wie Qwen/Flux2). AUS = nur die Mitte/Zelle maskieren (Fill-Modelle wie Flux-Dev-Fill).", "applicable_for": ["openai_diffusion"]},
-                    "terrain_hint": {"visible_when": {"category": "inpaint"}, "type": "bool", "label": "Terrain hint", "default": False, "description": "Nur bei Category=inpaint. AN = dynamische Terrain-Beschreibung der Nachbarn wird an den Prompt angehaengt (Fill-Modelle). AUS = nicht anhaengen (Edit-Modelle sehen den grauen Canvas selbst).", "applicable_for": ["openai_diffusion"]},
-                    "mask_grow": {"visible_when": {"category": "inpaint"}, "type": "float", "label": "Mask grow", "default": 1.05, "min": 1.0, "max": 1.5, "step": 0.01, "description": "Nur bei Category=inpaint. Maskenrand-Faktor: wie weit die Maske ueber die Zelle/Naht hinausreicht (1.05 = +5%, 1.02 = +2%).", "applicable_for": ["openai_diffusion"]},
-                    "inner_crop": {"visible_when": {"category": "inpaint"}, "type": "float", "label": "Inner crop", "default": 0.7, "min": 0.05, "max": 1.0, "step": 0.05, "description": "Nur bei Category=inpaint mit Full mask (Fit). Anteil der Mitte, der ausgeschnitten wird (0.7 = innere 70%, 1.0 = ganze Mitte). Greift nicht bei Match Edges.", "applicable_for": ["openai_diffusion"]},
-                    "mask_format": {"visible_when": {"category": "inpaint"}, "type": "select", "label": "Mask format", "choices": ["grayscale", "openai"], "default": "grayscale", "description": "Category=inpaint only. How the inpaint mask reaches the gateway. 'grayscale' (recommended): the L-PNG is sent 1:1 as generated, white = edit region (byte-identical to mapblend_debug/last_mask.png). 'openai': RGBA with transparent = edit, for true OpenAI/DALL-E edits endpoints.", "applicable_for": ["openai_diffusion"]},
-                    "disable_safety": {"type": "bool", "label": "Safety deaktivieren", "default": False, "description": "Schickt disable_safety_checker=true mit (Together.ai-spezifisch).", "applicable_for": ["together"]},
-                    "poll_interval": {"type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together): lower = faster detection, but more API calls.", "applicable_for": ["civitai", "together"]},
-                    "max_wait": {"type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed.", "applicable_for": ["civitai", "together"]},
-                    "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request-Timeout fuer die Bild-Generierung (HTTP). Bei langsamen Modellen/grossen Bildern hochsetzen — fuer das synchrone Gateway grosszuegig (z.B. 300). Gilt fuer together/openai_diffusion/localai/openai_chat.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat"]},
-                    "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallele Jobs auf dieser Backend-Queue. Mehr gleichzeitige Anfragen warten, bis ein Slot frei wird. Gilt fuer alle Backend-Typen (auch Cloud/OpenAI)."},
-                    "serialize_group": {"type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
+                    "prompt": {"type": "text", "label": "Default Prompt", "description": "Fallback prompt when the caller provides none (e.g. an inpaint fill instruction). For inpaint it also prefills the prompt field in the fit/edge dialog.", "applicable_for": ["openai_diffusion"]},
+                    "full_mask": {"visible_when": {"category": "inpaint"}, "half": True, "type": "bool", "label": "Full mask", "default": True, "description": "Map blend: ON = mask the whole area (edit/gray-fill models like Qwen/Flux2). OFF = mask only the center/cell (fill models like Flux-Dev-Fill).", "applicable_for": ["openai_diffusion"]},
+                    "terrain_hint": {"visible_when": {"category": "inpaint"}, "half": True, "type": "bool", "label": "Terrain hint", "default": False, "description": "ON = a dynamic terrain description of the neighbors is appended to the prompt (fill models). OFF = don't append (edit models see the gray canvas themselves).", "applicable_for": ["openai_diffusion"]},
+                    "mask_grow": {"visible_when": {"category": "inpaint"}, "half": True, "type": "float", "label": "Mask grow", "default": 1.05, "min": 1.0, "max": 1.5, "step": 0.01, "description": "Mask border factor: how far the mask extends beyond the cell/seam (1.05 = +5%, 1.02 = +2%).", "applicable_for": ["openai_diffusion"]},
+                    "inner_crop": {"visible_when": {"category": "inpaint"}, "half": True, "type": "float", "label": "Inner crop", "default": 0.7, "min": 0.05, "max": 1.0, "step": 0.05, "description": "With Full mask (Fit) only: share of the center that gets cut out (0.7 = inner 70%, 1.0 = whole center). Not applied for Match Edges.", "applicable_for": ["openai_diffusion"]},
+                    "mask_format": {"visible_when": {"category": "inpaint"}, "type": "select", "label": "Mask format", "choices": ["grayscale", "openai"], "default": "grayscale", "description": "How the inpaint mask reaches the gateway. 'grayscale' (recommended): the L-PNG is sent 1:1 as generated, white = edit region (byte-identical to mapblend_debug/last_mask.png). 'openai': RGBA with transparent = edit, for true OpenAI/DALL-E edits endpoints.", "applicable_for": ["openai_diffusion"]},
+                    "disable_safety": {"type": "bool", "label": "Disable safety", "default": False, "description": "Sends disable_safety_checker=true (Together.ai-specific).", "applicable_for": ["together"]},
+                    "poll_interval": {"half": True, "type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together): lower = faster detection, but more API calls.", "applicable_for": ["civitai", "together"]},
+                    "max_wait": {"half": True, "type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed.", "applicable_for": ["civitai", "together"]},
+                    "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout for the image generation (HTTP). Raise it for slow models/large images — be generous with the synchronous gateway (e.g. 300). Applies to together/openai_diffusion/localai/openai_chat.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat"]},
+                    "max_concurrent": {"half": True, "type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallel jobs on this backend queue. Additional concurrent requests wait until a slot frees up. Applies to all backend types (including cloud/OpenAI)."},
+                    "serialize_group": {"half": True, "type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
                 },
             },
         },

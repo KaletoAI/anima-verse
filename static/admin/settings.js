@@ -856,8 +856,15 @@ function renderFields(fields, data, path) {
             if (!visible) continue;
         }
         if (f.type === 'group_header') {
-            // Visueller Trenner ohne Daten-Binding (gruppiert nachfolgende Felder)
+            // Visual separator without data binding (groups the fields below)
             html += '<div class="subsection-title" style="margin-top:18px;">' + f.label + '</div>';
+            continue;
+        }
+        if (f.type === 'note') {
+            // Layout-only full-width note without data binding — e.g. the
+            // size guide rendered below the Width/Height half-column pair.
+            html += '<div class="field field-note"><label></label>'
+                + '<div class="input-wrap"><div class="desc">' + (f.text || '') + '</div></div></div>';
             continue;
         }
         if (f.type === 'button') {
@@ -914,17 +921,21 @@ function renderFields(fields, data, path) {
         const pill = f.requires_restart
             ? ' <span class="restart-pill" title="Changing this value requires a server restart">restart</span>'
             : '';
-        // Felder, die bei Embedding-Eintraegen (Tasks der Gruppe "embedding")
-        // irrelevant sind (temperature/max_tokens) — per Post-Pass ein-/ausgeblendet.
+        // Fields irrelevant for embedding entries (tasks of the "embedding"
+        // group), e.g. temperature/max_tokens — toggled by a post-pass.
         const embedAttr = f.hide_for_embedding ? ' data-embedhide-entry="' + path + '"' : '';
-        html += '<div class="field"' + embedAttr + '>';
+        // `half: true` fields occupy one grid column instead of both, so two
+        // adjacent half fields (e.g. Width | Height) share one row.
+        html += '<div class="field' + (f.half ? ' field-half' : '') + '"' + embedAttr + '>';
         html += '<label for="f-' + fullPath + '">' + f.label + pill + '</label>';
         html += '<div class="input-wrap">';
         html += renderInput(f, val, fullPath);
         if (f.description) html += '<div class="desc">' + f.description + '</div>';
         html += '</div></div>';
     }
-    return html;
+    // Two-column grid: regular fields span both columns (unchanged look),
+    // `half` fields take one column each so pairs share a row.
+    return '<div class="fields-grid">' + html + '</div>';
 }
 
 function renderInput(f, val, path) {
