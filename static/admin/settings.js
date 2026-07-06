@@ -831,16 +831,29 @@ async function applyTaskPreset(preset) {
 function renderFields(fields, data, path) {
     let html = '';
     for (const [fKey, f] of Object.entries(fields)) {
-        // Schema-level Sichtbarkeit: ein Feld mit `applicable_for` wird nur
-        // angezeigt, wenn `data.api_type` (oder ein anderes Geschwister-Feld,
-        // falls spaeter erweitert) in der Liste enthalten ist. Solange kein
-        // api_type gesetzt ist, blenden wir spezifische Felder aus — der
-        // Nutzer waehlt erst den Typ, dann tauchen die passenden Felder auf.
+        // Schema-level visibility: a field with `applicable_for` is only shown
+        // when `data.api_type` is in the list. While no api_type is set, the
+        // type-specific fields stay hidden — the user picks the type first,
+        // then the matching fields appear.
         if (Array.isArray(f.applicable_for) && f.applicable_for.length) {
             const cur = (data && data.api_type) || '';
             if (!cur || !f.applicable_for.includes(cur)) {
                 continue;
             }
+        }
+        // Sibling-value visibility: `visible_when: {field: value}` shows the
+        // field only while every referenced sibling field holds the required
+        // value (e.g. the inpaint-only mask fields behind Category=inpaint).
+        // The gating select needs `triggers_rerender` so toggling it re-runs
+        // this filter immediately.
+        if (f.visible_when && typeof f.visible_when === 'object') {
+            let visible = true;
+            for (const [depKey, depVal] of Object.entries(f.visible_when)) {
+                const cur = (data && data[depKey] !== undefined && data[depKey] !== null)
+                    ? data[depKey] : '';
+                if (cur !== depVal) { visible = false; break; }
+            }
+            if (!visible) continue;
         }
         if (f.type === 'group_header') {
             // Visueller Trenner ohne Daten-Binding (gruppiert nachfolgende Felder)
