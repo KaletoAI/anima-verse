@@ -190,9 +190,12 @@ def _pose_hint(name: str) -> str:
     return act[:80]
 
 
-def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
+def build_scene_state(avatar: str,
+                      layout: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Collects everything the render needs + the cache signature.
 
+    ``layout`` is the panel's measured on-screen geometry (stage aspect +
+    per-figure anchor/height fractions) — it feeds the collage signature.
     Returns None when the avatar has no location or the room has no
     background image (nothing to compose onto).
     """
@@ -235,9 +238,19 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     mode = get_scene_render_mode()
     # Positions only matter for the collage draft — in multi_ref mode they
     # must not invalidate the cache (they don't influence the render there).
-    pos_sig = ([(round(float(c["x"] or 0.0), 2), round(float(c["y"] or 0.0), 2),
-                 round(float(c["scale"] or 1.0), 2)) for c in chars]
-               if mode == "collage" else None)
+    pos_sig = None
+    if mode == "collage":
+        lay = layout if isinstance(layout, dict) else {}
+        figs = lay.get("figures") if isinstance(lay.get("figures"), dict) else {}
+        entries = []
+        for c in chars:
+            f = figs.get(c["name"]) if isinstance(figs.get(c["name"]), dict) else {}
+            entries.append((
+                round(float(f.get("x", c["x"] or 0.0) or 0.0), 2),
+                round(float(f.get("y", c["y"] or 0.0) or 0.0), 2),
+                round(float(f.get("h", 0.0) or 0.0), 2),
+                round(float(c["scale"] or 1.0), 2)))
+        pos_sig = [round(float(lay.get("aspect") or 0.0), 2), entries]
     sig_src = json.dumps([
         mode, loc, room, bg_path.name,
         [(c["name"], str(c["image"]), int(c["image"].stat().st_mtime))
@@ -267,14 +280,18 @@ def _full_mask_for(draft: Path, sig: str) -> Optional[Path]:
         return None
 
 
-def _build_collage(state: Dict[str, Any], sig: str) -> Optional[Path]:
-    """Pastes the present figures onto the room background at their live
-    panel positions — the draft the edit model then only harmonizes.
+def _build_collage(state: Dict[str, Any], sig: str,
+                   layout: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    """Pastes the present figures onto the room background — the draft the
+    edit model then only harmonizes.
 
-    Layout math mirrors the environment panel: anchor = figure bottom
-    center (x/y as stage fractions), figure height = FIG_BASE_H% of the
-    stage height × scale. Figures without a stored position get the
-    panel's default spread along the bottom edge.
+    Preferred geometry source is the panel's MEASURED layout (stage aspect
+    + per-figure anchor/height fractions): the background is center-cropped
+    to the panel aspect (the panel shows it object-fit:cover) and every
+    figure is pasted at exactly its measured on-screen size — WYSIWYG.
+    Without a layout, the panel CSS is approximated (anchor bottom center,
+    height FIG_BASE_H% × scale — NOTE: this misses the panel's 200px width
+    cap and tends to render figures larger than the live view).
     """
     try:
         from PIL import Image
@@ -286,6 +303,28 @@ def _build_collage(state: Dict[str, Any], sig: str) -> Optional[Path]:
     except Exception as e:
         logger.error("scene collage: background unreadable: %s", e)
         return None
+
+    lay = layout if isinstance(layout, dict) else {}
+    figs = lay.get("figures") if isinstance(lay.get("figures"), dict) else {}
+    aspect = 0.0
+    try:
+        aspect = float(lay.get("aspect") or 0.0)
+    except (TypeError, ValueError):
+        aspect = 0.0
+    if aspect > 0:
+        # Reproduce the panel's object-fit:cover center crop so the layout
+        # fractions land on the same background pixels the player sees.
+        W, H = canvas.size
+        cur = W / H
+        if cur > aspect * 1.01:
+            new_w = int(H * aspect)
+            x0 = (W - new_w) // 2
+            canvas = canvas.crop((x0, 0, x0 + new_w, H))
+        elif cur < aspect * 0.99:
+            new_h = int(W / aspect)
+            y0 = (H - new_h) // 2
+            canvas = canvas.crop((0, y0, W, y0 + new_h))
+
     W, H = canvas.size
     n = len(state["chars"])
     for i, c in enumerate(state["chars"]):
@@ -294,17 +333,23 @@ def _build_collage(state: Dict[str, Any], sig: str) -> Optional[Path]:
         except Exception as e:
             logger.warning("scene collage: figure %s unreadable: %s", c["name"], e)
             continue
-        x = c.get("x")
-        y = c.get("y")
-        if x is None:
-            x = 0.5 if n <= 1 else 0.12 + (0.76 * i) / (n - 1)
-        if y is None:
-            y = 0.92
-        scale = float(c.get("scale") or 1.0)
-        fh = max(1, int(H * FIG_BASE_H / 100.0 * scale))
+        f = figs.get(c["name"]) if isinstance(figs.get(c["name"]), dict) else None
+        if f and f.get("h"):
+            x = float(f.get("x") or 0.5)
+            y = float(f.get("y") or 0.92)
+            fh = max(1, int(H * float(f["h"])))
+        else:
+            x = c.get("x")
+            y = c.get("y")
+            if x is None:
+                x = 0.5 if n <= 1 else 0.12 + (0.76 * i) / (n - 1)
+            if y is None:
+                y = 0.92
+            x, y = float(x), float(y)
+            fh = max(1, int(H * FIG_BASE_H / 100.0 * float(c.get("scale") or 1.0)))
         fw = max(1, int(fig.width * fh / fig.height))
         fig = fig.resize((fw, fh), Image.LANCZOS)
-        canvas.paste(fig, (int(float(x) * W - fw / 2), int(float(y) * H - fh)), fig)
+        canvas.paste(fig, (int(x * W - fw / 2), int(y * H - fh)), fig)
     out = get_scene_dir() / f"{sig}_draft.png"
     try:
         canvas.save(out)
@@ -314,11 +359,13 @@ def _build_collage(state: Dict[str, Any], sig: str) -> Optional[Path]:
     return out
 
 
-def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
+def render_scene(avatar: str, force: bool = False,
+                 layout: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Renders (or serves from cache) the composed scene for the avatar's
-    current room. Returns {"ok", "sig", "cached"} or {"ok": False, "error"}.
+    current room. ``layout`` = the panel's measured geometry (collage mode).
+    Returns {"ok", "sig", "cached"} or {"ok": False, "error"}.
     """
-    state = build_scene_state(avatar)
+    state = build_scene_state(avatar, layout)
     if not state:
         return {"ok": False, "error": "No location or no room background."}
 
@@ -351,9 +398,14 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
         # panel positions) — the input already contains each person exactly
         # once, the model only harmonizes. Pose text deliberately omitted —
         # the pasted figure IS the pose.
-        draft = _build_collage(state, sig)
+        draft = _build_collage(state, sig, layout)
         if not draft:
             return {"ok": False, "error": "Collage draft failed."}
+        # Generation size follows the draft — the layout crop may have
+        # changed the aspect vs. the raw background.
+        draft_dims = _read_image_dimensions(draft)
+        if draft_dims:
+            w, h = _safe_dims(*draft_dims)
         if getattr(backend, "category", "") == "inpaint":
             # Edits/inpaint alias: draft as init image + all-white mask via
             # POST /v1/images/edits — true img2img, the composition is

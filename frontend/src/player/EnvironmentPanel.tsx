@@ -75,12 +75,40 @@ export function EnvironmentPanel({
   const [rendering, setRendering] = useState(false)
   const [renderErr, setRenderErr] = useState('')
   const [renderWarn, setRenderWarn] = useState('')
+  // Last measured on-screen layout (stage aspect + per-figure anchor/height
+  // fractions). The server pastes the collage from THESE numbers — WYSIWYG
+  // instead of re-deriving panel CSS (70% height, 200px width cap, cover
+  // crop) on the backend. Measured while the live view is in the DOM.
+  const renderLayoutRef = useRef<{ aspect: number
+    figures: Record<string, { x: number; y: number; h: number }> } | null>(null)
+  const measureLayout = useCallback(() => {
+    const stage = stageRef.current
+    if (!stage) return null
+    const sr = stage.getBoundingClientRect()
+    if (sr.width < 10 || sr.height < 10) return null
+    const figures: Record<string, { x: number; y: number; h: number }> = {}
+    stage.querySelectorAll<HTMLElement>('[data-fig]').forEach((el) => {
+      const name = el.dataset.fig
+      const img = el.querySelector('img')
+      if (!name || !img) return
+      const r = img.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) return
+      figures[name] = {
+        x: (r.left + r.width / 2 - sr.left) / sr.width,   // anchor: bottom center
+        y: (r.bottom - sr.top) / sr.height,
+        h: r.height / sr.height,
+      }
+    })
+    if (!Object.keys(figures).length) return null
+    return { aspect: sr.width / sr.height, figures }
+  }, [])
   const requestRender = useCallback(async (force: boolean) => {
     setRendering(true)
     setRenderErr('')
     setRenderWarn('')
     try {
-      const d = await apiPost<{ sig?: string; warning?: string }>('/play/scene-render', { force })
+      const d = await apiPost<{ sig?: string; warning?: string }>(
+        '/play/scene-render', { force, layout: renderLayoutRef.current })
       setRenderSig(d.sig || '')
       setRenderWarn(d.warning || '')
       setRenderNonce((n) => n + 1)
@@ -91,10 +119,14 @@ export function EnvironmentPanel({
     }
   }, [])
   const switchMode = useCallback((m: 'live' | 'rendered') => {
+    // Measure BEFORE the mode switch unmounts the live figures; the ⟳
+    // button in rendered mode reuses the last measured layout.
+    const l = measureLayout()
+    if (l) renderLayoutRef.current = l
     setMode(m)
     localStorage.setItem('play-scene-mode', m)
     if (m === 'rendered') void requestRender(false)
-  }, [requestRender])
+  }, [measureLayout, requestRender])
   // Panel mounted directly in rendered mode (persisted choice) → render once.
   useEffect(() => {
     if (mode === 'rendered' && !renderSig && !rendering) void requestRender(false)
