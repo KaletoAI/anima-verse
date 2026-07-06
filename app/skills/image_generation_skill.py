@@ -1356,9 +1356,14 @@ class ImageGenerationSkill(BaseSkill):
                 "template_prompt": locals().get("template_prompt", ""),
                 "prompt_method": locals().get("_prompt_method", "template"),
                 "items_used": list(locals().get("_item_ids") or []),
+                # Owner + files of this generation — lets same-turn consumers
+                # (e.g. SendMessage attach_image) reference the image without
+                # rescanning the gallery.
+                "gallery_character": gallery_character,
+                "filenames": list(saved_files),
             }
-            # Thread-lokal speichern (fuer parallele Aufrufer)
-            # + auf Instanz spiegeln (Backward-Compat fuer non-threaded Caller)
+            # Store thread-local (for parallel callers)
+            # + mirror on the instance (backward compat for non-threaded callers)
             self._meta_tls.last_image_meta = _meta
             self.last_image_meta = _meta
 

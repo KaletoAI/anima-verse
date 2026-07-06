@@ -1,22 +1,24 @@
 /**
- * PhonePanel — 1:1 Messaging (Säule B, medium="messaging").
+ * PhonePanel — 1:1 messaging (pillar B, medium="messaging").
  *
- * Async-Modell: Senden legt eine chat_messages-Zeile (= Inbox des Charakters)
- * an und bumpt ihn. Der Charakter antwortet in EIGENER Zeit über den Agent-Loop
- * und DARF ignorieren. Dieses Panel pollt Verlauf + Status (kein Fake-"tippt").
+ * Async model: sending creates a chat_messages row (= the character's inbox)
+ * and bumps them. The character replies in their OWN time via the agent loop
+ * and MAY ignore. This panel polls history + status (no fake "typing…").
  *
- * Master-Detail: Kontaktliste → Thread (mit Zurück) — phone-artig, funktioniert
- * auch in schmalen Panels.
+ * Master-detail: contact list → thread (with back button) — phone-like, works
+ * in narrow panels too. Messages may carry an image attachment
+ * (metadata.image from SendMessage attach_image) shown as a tappable thumbnail.
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { useLightbox } from './Lightbox'
 
 interface Conversation {
   partner: string; avatar_url: string; last: string; last_ts: string
   mine_last: boolean; unread: number; status: string; location: string
 }
-interface ThreadMsg { mine: boolean; content: string; ts: string }
+interface ThreadMsg { mine: boolean; content: string; ts: string; image?: string }
 interface MessagesResp { avatar?: string; conversations?: Conversation[]; available?: string[] }
 
 function fmtTime(ts: string): string {
@@ -28,6 +30,7 @@ function fmtTime(ts: string): string {
 
 export function PhonePanel() {
   const { t } = useI18n()
+  const lightbox = useLightbox()
   const [convs, setConvs] = useState<Conversation[]>([])
   const [available, setAvailable] = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -125,7 +128,16 @@ export function PhonePanel() {
           {thread.length === 0 && <div style={EMPTY}>{t('No messages yet')}</div>}
           {thread.map((m, i) => (
             <div key={i} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '78%' }}>
-              <div style={{ ...BUBBLE, ...(m.mine ? BUBBLE_MINE : BUBBLE_THEIRS) }}>{m.content}</div>
+              <div style={{ ...BUBBLE, ...(m.mine ? BUBBLE_MINE : BUBBLE_THEIRS) }}>
+                {m.image ? (
+                  <img src={m.image} alt="" draggable={false}
+                    onClick={() => lightbox.open({ src: m.image! })}
+                    style={{ display: 'block', maxWidth: '100%', maxHeight: 220,
+                             borderRadius: 8, cursor: 'zoom-in',
+                             marginBottom: m.content ? 6 : 0 }} />
+                ) : null}
+                {m.content}
+              </div>
               <div style={{ fontSize: 10, opacity: 0.45, textAlign: m.mine ? 'right' : 'left', marginTop: 1 }}>{fmtTime(m.ts)}</div>
             </div>
           ))}

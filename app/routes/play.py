@@ -1459,10 +1459,12 @@ async def play_messages_thread(partner: str, user=Depends(get_current_user)):
     if not partner:
         raise HTTPException(status_code=400, detail="partner erforderlich")
     hist = [m for m in (get_chat_history(avatar, partner_name=partner) or [])
-            if (m.get("content") or "").strip()]
+            if (m.get("content") or "").strip()
+            or (m.get("metadata") or {}).get("image")]
     msgs = [{"mine": m.get("role") == "assistant",
              "content": m.get("content") or "",
-             "ts": m.get("timestamp") or ""} for m in hist]
+             "ts": m.get("timestamp") or "",
+             "image": (m.get("metadata") or {}).get("image") or ""} for m in hist]
     if hist:
         _phone_set_read(avatar, partner, hist[-1].get("timestamp") or "")
     return {"avatar": avatar, "partner": partner, "messages": msgs}

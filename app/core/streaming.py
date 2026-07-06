@@ -134,13 +134,32 @@ def _inject_rp_context(tool_input: str, rp_response: str, user_input: str = "") 
         except Exception:
             pass
 
-    # Fallback: JSON-Wrapper um den Text-Input
+    # Fallback: JSON wrapper around the text input
     wrapper: Dict[str, Any] = {"prompt": tool_input}
     if rp_response:
         wrapper["rp_context"] = rp_response
     if user_input:
         wrapper["user_input"] = user_input
     return _json.dumps(wrapper, ensure_ascii=False)
+
+
+def _sendmessage_wants_attachment(tool_input: str) -> bool:
+    """True when a SendMessage tool input requests an image attachment.
+
+    Such calls must run AFTER the deferred image tools of the same turn —
+    the attachment source (this turn's generated image) only exists then.
+    """
+    if not tool_input or "attach_image" not in tool_input:
+        return False
+    stripped = tool_input.strip()
+    if stripped.startswith("{"):
+        import json as _json
+        try:
+            data, _ = _json.JSONDecoder().raw_decode(stripped)
+            return bool(isinstance(data, dict) and data.get("attach_image"))
+        except ValueError:
+            return True  # mentions attach_image but unparseable — defer to be safe
+    return True
 
 
 # Sentinel fuer Stream-Ende (safe_anext)
@@ -351,7 +370,7 @@ class StreamingAgent:
     # Mapping: Tool-Name → Action-Trigger-Beschreibung (fuer constrained Mode).
     _TOOL_ACTION_HINTS = {
         "TalkTo":           "Character speaks to someone present in the room",
-        "SendMessage":      "Character writes a remote text message to another character NOT in the same room (use this to proactively reach out)",
+        "SendMessage":      "Character writes a remote text message to another character NOT in the same room (use this to proactively reach out). Text only — to send along a photo from this turn use JSON {\"to\": ..., \"message\": ..., \"attach_image\": true}; never write '[image attached]' as text",
         "ChangeOutfit":     "Character changes/puts on/takes off clothes (e.g. gets dressed because not alone anymore)",
         "OutfitCreation":   "Character creates a brand new outfit (when nothing fitting exists)",
         "SetPose":          "Character changes what they're physically doing right now (free-text pose)",
@@ -607,6 +626,10 @@ class StreamingAgent:
                 f"     - Character changes what they're physically doing (pose) → SetPose\n"
                 f"     - Character looks something up / searches / checks facts → KnowledgeSearch or WebSearch\n"
                 f"     - Character relays info to a third party not in chat → TalkTo\n"
+                f"     - Character sends a remote/text message to someone NOT present → SendMessage. "
+                f"SendMessage carries TEXT ONLY — NEVER write placeholder text like '[image attached]'. "
+                f"Only when the character sends along a photo they take/took THIS turn, use JSON input: "
+                f'{{"to": "Name", "message": "...", "attach_image": true}}\n'
                 f"   For a REAL action listed above, narrative description IS the signal — do not skip the "
                 f"tool just because it was only described. Call every tool that genuinely applies; "
                 f"multiple tools are fine.\n"
@@ -678,13 +701,18 @@ class StreamingAgent:
                         time.monotonic() - _start)
             return
 
-        # Klassifizieren: Post-RP / Content / Seiteneffekt
+        # Classify: post-RP / content / side effect
         post_rp_matches = []
         content_matches = []
         side_fx_matches = []
         for tm in state_tool.tool_matches:
             t_name = tm[0] if isinstance(tm, (list, tuple)) else tm.get("name", "")
-            if t_name in self.deferred_tools:
+            t_input = tm[1] if isinstance(tm, (list, tuple)) else tm.get("input", "")
+            # SendMessage with attach_image is deferred too — the attachment
+            # (this turn's generated image) only exists after the image tools.
+            if t_name in self.deferred_tools or (
+                    t_name == "SendMessage"
+                    and _sendmessage_wants_attachment(str(t_input))):
                 post_rp_matches.append(tm)
             elif t_name in self.content_tools:
                 content_matches.append(tm)
@@ -1056,10 +1084,14 @@ class StreamingAgent:
 
             tool_input_text = tool_input_text.strip()
 
-            # Deferred Tools: merken statt ausfuehren → Chat-LLM antwortet erst
-            if tool_name in self.deferred_tools:
+            # Deferred tools: remember instead of executing → chat LLM answers first.
+            # SendMessage with attach_image rides along: its attachment (this
+            # turn's generated image) only exists after the image tools ran.
+            if tool_name in self.deferred_tools or (
+                    tool_name == "SendMessage"
+                    and _sendmessage_wants_attachment(tool_input_text)):
                 pending_deferred.append((tool_name, tool_input_text))
-                logger.info("Tool DEFERRED: %s (wird nach Chat-Antwort ausgefuehrt)", tool_name)
+                logger.info("Tool DEFERRED: %s (runs after the chat reply)", tool_name)
                 continue
 
             # A: Wer in einem in-person-Gespräch gerade geantwortet hat, geht
@@ -1110,6 +1142,13 @@ class StreamingAgent:
         """
         if not pending_deferred:
             return
+        # Attachment sends run last: their image is produced by the other
+        # deferred tools (ImageGenerator) of this same batch. Stable sort
+        # keeps the remaining order untouched.
+        pending_deferred = sorted(
+            pending_deferred,
+            key=lambda m: 1 if (m[0] == "SendMessage"
+                                and _sendmessage_wants_attachment(m[1])) else 0)
         rp_text = rp_response.strip() if rp_response else ""
         user_text = user_input.strip() if user_input else ""
         logger.info("DEFERRED TOOLS: %d Tool(s) nach Chat-Antwort (rp_context=%d, user_input=%d chars)",

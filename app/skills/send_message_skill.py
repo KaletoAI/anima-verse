@@ -1,11 +1,13 @@
-"""SendMessage Skill — Remote-Nachricht an einen anderen Character.
+"""SendMessage skill — remote message to another character.
 
-Fuer Fernkommunikation (Character nicht am gleichen Ort). Standard-Medium
-ist "messaging" (internes Nachrichtenfenster). Telegram-Zusatz kommt
-spaeter als separates Tool oder Parameter.
+For remote communication (character not at the same place). Default medium
+is "messaging" (internal message window / phone panel).
 
-Input-Format: "CharacterName, Nachricht"
-Beispiel: "Luna, bist du heute Abend frei?"
+Input formats:
+  - Legacy text: "CharacterName, message" — e.g. "Luna, are you free tonight?"
+  - JSON: {"to": "Luna", "message": "look!", "attach_image": true} — with
+    attach_image the image generated in the SAME turn is attached to the DM
+    (the streaming layer defers such calls until after the image tools ran).
 """
 from typing import Any, Dict
 
@@ -20,10 +22,10 @@ from app.core.timeutils import utc_now_iso
 
 
 class SendMessageSkill(BaseSkill):
-    """Schickt eine Remote-Nachricht an einen anderen Character.
+    """Sends a remote message to another character.
 
-    Unabhaengig vom Ort. Das Ziel-LLM antwortet via zentrale Chat-Engine
-    mit medium="messaging". Ergebnis wird als Skill-Output zurueckgegeben.
+    Independent of location. The target LLM replies via the central chat
+    engine with medium="messaging". The result is returned as skill output.
     """
 
     SKILL_ID = "send_message"
@@ -48,14 +50,20 @@ class SendMessageSkill(BaseSkill):
 
         if not sender_name:
             return "Error: sender context missing."
-        if not input_text:
-            return "Error: empty input. Format: 'CharacterName, message'"
 
-        parts = input_text.split(",", 1)
-        if len(parts) < 2 or not parts[1].strip():
-            parts = input_text.split(" ", 1)
-        target_raw = parts[0].strip()
-        message = parts[1].strip() if len(parts) > 1 else ""
+        # JSON form ({"to", "message", "attach_image"} merged into ctx by
+        # _parse_base_input) takes precedence; legacy form: "Name, message".
+        target_raw = str(ctx.get("to") or "").strip()
+        message = str(ctx.get("message") or "").strip()
+        attach_image = bool(ctx.get("attach_image"))
+        if not (target_raw and message):
+            if not input_text:
+                return "Error: empty input. Format: 'CharacterName, message'"
+            parts = input_text.split(",", 1)
+            if len(parts) < 2 or not parts[1].strip():
+                parts = input_text.split(" ", 1)
+            target_raw = target_raw or parts[0].strip()
+            message = message or (parts[1].strip() if len(parts) > 1 else "")
         if not message:
             return f"Error: no message for {target_raw}."
 
@@ -66,16 +74,16 @@ class SendMessageSkill(BaseSkill):
         if target_name == sender_name:
             return "You cannot message yourself."
 
-        # Sleep-Check (busy-Check entfaellt — Messages kann man immer schicken,
-        # der Empfaenger liest sie wenn er Zeit hat)
+        # Sleep check (no busy check — messages can always be sent, the
+        # recipient reads them when they have time)
         from app.models.character import is_character_sleeping
         if is_character_sleeping(target_name):
             return f"{target_name} is sleeping — message queued, but no response for now."
 
-        # Avatar-Target erkennen: wenn der Empfaenger der vom User gesteuerte
-        # Character ist, gilt SendMessage als "proaktive Chat-Nachricht an den
-        # Spieler". Keine Notification (verschmutzt den System-Event-Feed),
-        # kein forced_thought (Avatar denkt nicht autonom).
+        # Detect avatar target: when the recipient is the player-controlled
+        # character, SendMessage counts as a "proactive chat message to the
+        # player". No notification (pollutes the system event feed), no
+        # forced_thought (the avatar does not think autonomously).
         from app.models.account import is_player_controlled as _is_pc
         target_is_avatar = _is_pc(target_name)
 
@@ -94,31 +102,50 @@ class SendMessageSkill(BaseSkill):
             except Exception as e:
                 logger.debug("pending_report add failed: %s", e)
 
-        # Asynchron: Nachricht speichern + Notification + forced_thought fuer
-        # den Empfaenger einplanen. Der Sender WARTET NICHT auf die Antwort —
-        # das ist DM-Semantik (Messaging, nicht Call). Synchron-Warten wuerde
-        # bei nested LLM-Queue-Calls den outer Thought-Timeout sprengen.
+        # Optional image attachment: the image generated in this turn. The
+        # streaming layer defers attach-sends until after the image tools, so
+        # the file exists by now. Without a resolvable image the DM goes out
+        # as text-only (never a placeholder).
+        attached_image = ""
+        if attach_image:
+            attached_image = _resolve_turn_image(sender_name)
+            if attached_image:
+                logger.info("SendMessage %s: attaching image %s",
+                            sender_name, attached_image)
+            else:
+                logger.info("SendMessage %s: attach_image requested but no "
+                            "recent image found — sending text only", sender_name)
+        _msg_meta = {"image": attached_image} if attached_image else {}
+
+        # Asynchronous: store the message + notification + schedule a
+        # forced_thought for the recipient. The sender does NOT wait for the
+        # reply — that is DM semantics (messaging, not a call). Waiting
+        # synchronously would blow the outer thought timeout on nested
+        # LLM-queue calls.
         from datetime import datetime
         ts = utc_now_iso()
 
         try:
             from app.models.chat import save_message
-            # In Empfaenger-History: Sender als Absender (role=user)
+            # Recipient history: sender as originator (role=user)
             save_message({
                 "role": "user", "content": message, "timestamp": ts,
                 "speaker": sender_name, "medium": "messaging",
+                "metadata": _msg_meta,
             }, character_name=target_name, partner_name=sender_name)
-            # In Sender-History: Sender als Autor (role=assistant)
+            # Sender history: sender as author (role=assistant)
             save_message({
                 "role": "assistant", "content": message, "timestamp": ts,
                 "speaker": sender_name, "medium": "messaging",
+                "metadata": _msg_meta,
             }, character_name=sender_name, partner_name=target_name)
         except Exception as e:
-            logger.error("SendMessage: Chat-History speichern fehlgeschlagen: %s", e)
+            logger.error("SendMessage: saving chat history failed: %s", e)
 
-        # Push-Bridge (Telegram Option B): ist das Ziel ein Telegram-gebundener
-        # Avatar dieses Senders (NPC), die Nachricht an den Telegram-Chat zustellen.
-        # Sync-Enqueue; der Poller des NPC stellt sie async zu.
+        # Push bridge (Telegram option B): if the target is a Telegram-bound
+        # avatar of this sender (NPC), deliver the message to the Telegram
+        # chat. Sync enqueue; the NPC's poller delivers it asynchronously.
+        # (Image attachments are not bridged yet — text only, phase 2.)
         try:
             from app.models.telegram_channel import (
                 get_telegram_channel, enqueue_telegram_outbound)
@@ -128,9 +155,9 @@ class SendMessageSkill(BaseSkill):
         except Exception as _be:
             logger.debug("telegram outbound enqueue failed: %s", _be)
 
-        # Notification nur fuer Character→Character (System-Event-Feed bleibt
-        # sauber von "X hat Y geschrieben"-Spam). Bei Avatar-Target reicht der
-        # Chat-History-Eintrag — der Chat-Unread-Indikator pingt automatisch.
+        # Notification only for character→character (keeps the system event
+        # feed clean of "X wrote Y" spam). For an avatar target the chat
+        # history entry suffices — the unread indicator pings automatically.
         if not target_is_avatar:
             try:
                 from app.models.notifications import create_notification
@@ -152,8 +179,8 @@ class SendMessageSkill(BaseSkill):
             except Exception as e:
                 logger.debug("SendMessage: AgentLoop bump failed: %s", e)
 
-        # Resolve: falls dieser Send einen offenen pending_report aufloest,
-        # markieren. Heuristik: Target == initiator eines offenen Reports.
+        # Resolve: if this send resolves an open pending_report, mark it.
+        # Heuristic: target == initiator of an open report.
         try:
             from app.core.pending_reports import list_open, mark_resolved
             from app.models.account import get_active_character
@@ -166,6 +193,9 @@ class SendMessageSkill(BaseSkill):
         except Exception as e:
             logger.debug("pending_report resolve failed: %s", e)
 
+        if attached_image:
+            return (f"Message with photo sent to {target_name}. "
+                    f"They will reply when they get to it.")
         return f"Message sent to {target_name}. They will reply when they get to it."
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
@@ -180,9 +210,61 @@ class SendMessageSkill(BaseSkill):
                 f"{self.description} "
                 f"Input: target character name, comma, message. "
                 f"Example: 'Luna, dinner at 8?'. "
-                f"For face-to-face use TalkTo instead."
+                f'To send along a photo taken THIS turn use JSON: '
+                f'{{"to": "Luna", "message": "look!", "attach_image": true}}. '
+                f"No other attachments exist — NEVER write placeholder text "
+                f"like '[image attached]'. For face-to-face use TalkTo instead."
             ),
             func=self.execute)
+
+
+def _resolve_turn_image(sender_name: str) -> str:
+    """URL path of the image the sender generated in this turn, or "".
+
+    Primary source: the ImageGenerationSkill's last-generation meta —
+    thread-local slot first, instance mirror as fallback (the deferred
+    SendMessage may run on a different worker thread than the image tool).
+    The meta must belong to the sender. Fallback: the sender's newest
+    gallery file, if it is fresh (≤ 15 min).
+    """
+    from urllib.parse import quote
+    try:
+        from app.core.dependencies import get_skill_manager
+        from app.skills.image_generation_skill import ImageGenerationSkill
+        for sk in get_skill_manager().skills:
+            if not isinstance(sk, ImageGenerationSkill):
+                continue
+            metas = []
+            tls = getattr(sk, "_meta_tls", None)
+            if tls is not None:
+                metas.append(getattr(tls, "last_image_meta", None))
+            metas.append(getattr(sk, "last_image_meta", None))
+            for meta in metas:
+                if not isinstance(meta, dict):
+                    continue
+                files = meta.get("filenames") or []
+                owner = str(meta.get("gallery_character") or "")
+                if files and owner == sender_name:
+                    return (f"/characters/{quote(owner)}"
+                            f"/images/{quote(str(files[-1]))}")
+            break
+    except Exception as e:
+        logger.debug("attach_image: skill meta lookup failed: %s", e)
+    try:
+        import time
+        from app.models.character import get_character_images_dir
+        newest = None
+        for p in get_character_images_dir(sender_name).iterdir():
+            if p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                continue
+            if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
+                newest = p
+        if newest and time.time() - newest.stat().st_mtime <= 900:
+            return (f"/characters/{quote(sender_name)}"
+                    f"/images/{quote(newest.name)}")
+    except Exception as e:
+        logger.debug("attach_image: gallery fallback failed: %s", e)
+    return ""
 
 
 def _resolve_name(raw: str, available: list) -> str:
