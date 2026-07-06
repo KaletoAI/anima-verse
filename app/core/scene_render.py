@@ -42,17 +42,28 @@ logger = get_logger("scene_render")
 # {people} = person list. KEEP IN SYNC with the schema defaults in
 # config_schema.py.
 PROMPT_MULTI_REF_DEFAULT = (
-    "The exact room from the first reference image, keeping the room "
+    "The exact {setting} from the first reference image, keeping its "
     "layout, lighting and perspective. Compose {count} into the scene "
     "and NO ONE else — each person appears exactly once, no additional "
     "people, no duplicates. The person reference images provide IDENTITY "
     "ONLY (face, hair, body, outfit) — IGNORE the pose and background they "
     "show; each person's pose follows the text. People: {people}")
 PROMPT_ONLY_BG_DEFAULT = (
-    "The exact room from the reference image, keeping the room layout, "
+    "The exact {setting} from the reference image, keeping its layout, "
     "lighting and perspective. Compose {count} into the scene and NO ONE "
     "else — each person appears exactly once, no additional people, no "
     "duplicates. People: {people}")
+
+
+def _setting_word(loc_obj: Dict[str, Any]) -> str:
+    """'room'/'outdoor location'/'place' from the location's indoor flag —
+    'room' on an outdoor location makes the model build an interior."""
+    flag = str((loc_obj or {}).get("indoor") or "").strip().lower()
+    if flag == "indoor":
+        return "room"
+    if flag == "outdoor":
+        return "outdoor location"
+    return "place"
 
 
 def get_scene_dir() -> Path:
@@ -206,6 +217,7 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     loc_obj = get_location_by_id(loc) or {}
     room_obj = get_room_by_id(loc_obj, room) if (loc_obj and room) else None
     label = (room_obj or {}).get("name") or loc_obj.get("name") or loc
+    setting = _setting_word(loc_obj)
 
     names = [avatar] + [n for n in (_list_characters_in_room(loc, room) or [])
                         if n != avatar]
@@ -231,7 +243,7 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     sig = hashlib.sha1(sig_src.encode("utf-8")).hexdigest()[:16]
 
     return {"location": loc, "room": room, "label": label, "mode": mode,
-            "bg_path": bg_path, "chars": chars, "sig": sig}
+            "setting": setting, "bg_path": bg_path, "chars": chars, "sig": sig}
 
 
 def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
@@ -315,10 +327,11 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
     if lines:
         prompt = _fill_template(
             _prompt_template(tpl_key, tpl_default),
-            label=state["label"], count=count_word, people="; ".join(lines))
+            label=state["label"], count=count_word,
+            setting=state["setting"], people="; ".join(lines))
     else:
-        prompt = ("The exact room from the reference image, keeping the "
-                  "room layout, lighting and perspective")
+        prompt = (f"The exact {state['setting']} from the reference image, "
+                  f"keeping its layout, lighting and perspective")
     _ucp = config.resolve_use_case_style(
         "scene",
         backend_model=getattr(backend, "model", "") or "",
