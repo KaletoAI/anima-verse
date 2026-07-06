@@ -396,7 +396,7 @@ SECTIONS = {
                         ),
                     },
                     "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "How the model wants its prompts: keywords = comma tags (Z-Image/SD), natural = flowing prose (Flux/Qwen). Selects the prompt adapter and which use-case style family applies. Empty = fallback via backend model name."},
-                    "ref_slot_count": {"type": "number", "label": "Reference Slots", "description": "How many reference images this backend consumes per generation (slot priority: agent > room > others > items). 0 = no reference images. Empty = type default (localai/openai_diffusion: 4, others: 0).", "applicable_for": ["localai", "openai_diffusion"]},
+                    "ref_slot_count": {"type": "number", "label": "Reference Slots", "default": 4, "description": "How many reference images this backend consumes per generation (slot priority: agent > room > others > items). 0 = no reference images.", "applicable_for": ["localai", "openai_diffusion"]},
                     "guidance_scale": {"type": "float", "label": "Guidance Scale", "min": 0, "max": 50, "step": 0.5, "applicable_for": ["a1111"]},
                     "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200, "applicable_for": ["a1111", "together", "openai_diffusion", "localai"]},
                     "response_format": {"type": "select", "label": "Response Format", "choices": ["b64_json", "url"], "default": "b64_json", "description": "Wie das Gateway das Bild liefert. 'b64_json' (empfohlen): inline im JSON, ein Request. 'url': Result-URL, die mit demselben Bearer-Header abgeholt wird.", "applicable_for": ["openai_diffusion"]},
