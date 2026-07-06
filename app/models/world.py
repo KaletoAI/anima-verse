@@ -1667,7 +1667,12 @@ def get_background_path(location_identifier: str, room: str = "",
     image_types = get_gallery_image_types(owner_id)
 
     def _not_map(img: str) -> bool:
-        return image_types.get(img, "") != "map"
+        # Map tiles are never room backgrounds. "map" is the legacy type,
+        # "map_2d" the current tile type since the 2.5D→2D consolidation —
+        # the missing map_2d filter let tiles end up as chat-image room
+        # references (they were also background-flagged by the fit/edge
+        # save paths; both fixed, this filter heals existing worlds).
+        return image_types.get(img, "") not in ("map", "map_2d")
 
     # Kandidaten-Auswahl nach Regel:
     # 1) Raum gesetzt → Raum-Bilder versuchen

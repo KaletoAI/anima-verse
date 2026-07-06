@@ -1792,7 +1792,6 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                         "backend": backend.name, "backend_type": backend.api_type,
                         "model": (getattr(backend, 'model', '') or ''), "loras": []})
                     set_location_map_image(_lid2, "map_image_2d", _nm2)  # show the new tile
-                    toggle_background_image(_lid2, _nm2)
                     _saved.append({"location_id": _lid2, "image": _nm2})
                 for _tmp in (_cpath, _mpath):
                     try:
@@ -1867,8 +1866,11 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             save_gallery_prompt(loc_id, image_name, full_prompt)
 
             # Mark the new image as background by default — do NOT toggle on an
-            # in-place replace (otherwise an already-set flag flips over).
-            if not _is_replace:
+            # in-place replace (otherwise an already-set flag flips over), and
+            # NOT for map tiles (map_2d): a tile is map art, never a room
+            # background — flagged tiles used to leak into the room-reference
+            # slot of chat images.
+            if not _is_replace and prompt_type != "map_2d":
                 toggle_background_image(loc_id, image_name)
 
             # Set the room assignment when room_id is given
