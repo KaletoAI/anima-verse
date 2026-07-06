@@ -17,6 +17,7 @@ cache with a fresh seed and overwrites the signature file.
 import hashlib
 import json
 import random
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -58,9 +59,14 @@ def _resolve_backend():
 
 
 def _expr_image_path(name: str) -> Optional[Path]:
-    """Current expression/variant image of a character — same lookup as the
-    /outfit-expression route (mood + effective activity + real equipped
-    state); falls back to the profile image."""
+    """Identity reference image of a character.
+
+    Preference: the variant matching the CURRENT state (mood + effective
+    activity + real equipped state — same lookup as /outfit-expression);
+    else the newest cached variant of any state (matches the current outfit
+    era better than the often-old profile portrait); else the profile image.
+    The reference is used for identity only — pose comes from the prompt.
+    """
     try:
         from app.core.expression_regen import get_cached_expression
         from app.models.character import (get_character_current_feeling,
@@ -76,6 +82,22 @@ def _expr_image_path(name: str) -> Optional[Path]:
             return Path(cached)
     except Exception as e:
         logger.debug("scene: expression lookup failed for %s: %s", name, e)
+    try:
+        from app.core.expression_regen import _get_expressions_dir
+        expr_dir = _get_expressions_dir(name)
+        newest = None
+        if expr_dir.exists():
+            for p in expr_dir.iterdir():
+                if p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                    continue
+                if p.name.startswith(".tmp_"):
+                    continue
+                if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
+                    newest = p
+        if newest:
+            return newest
+    except Exception as e:
+        logger.debug("scene: variant fallback failed for %s: %s", name, e)
     try:
         from app.models.character import (get_character_images_dir,
                                           get_character_profile_image)
@@ -121,16 +143,6 @@ def _pose_hint(name: str) -> str:
     return act[:80]
 
 
-def _position_bucket(x: Optional[float]) -> str:
-    if x is None:
-        return "center"
-    if x < 0.35:
-        return "left"
-    if x > 0.65:
-        return "right"
-    return "center"
-
-
 def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     """Collects everything the render needs + the cache signature.
 
@@ -140,8 +152,7 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     from app.core.room_entry import _list_characters_in_room
     from app.core.world_ops import resolve_background_path
     from app.models.character import (get_character_current_location,
-                                      get_character_current_room,
-                                      get_last_scene_position)
+                                      get_character_current_room)
     from app.models.world import get_location_by_id, get_room_by_id
 
     loc = (get_character_current_location(avatar) or "").strip()
@@ -165,18 +176,16 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
         img = _expr_image_path(n)
         if not img:
             continue  # no visual — the figure also has no panel presence
-        pos = get_last_scene_position(n, room, bg_path.name) or {}
         chars.append({
             "name": n,
             "image": img,
-            "bucket": _position_bucket(pos.get("x")),
             "activity": _pose_hint(n),
         })
 
     sig_src = json.dumps([
         loc, room, bg_path.name,
-        [(c["name"], str(c["image"]), int(c["image"].stat().st_mtime),
-          c["bucket"]) for c in chars],
+        [(c["name"], str(c["image"]), int(c["image"].stat().st_mtime))
+         for c in chars],
     ], ensure_ascii=False, sort_keys=True)
     sig = hashlib.sha1(sig_src.encode("utf-8")).hexdigest()[:16]
 
@@ -225,27 +234,38 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
 
     # Prompt: room label + a CLOSED person set. Models like to invent extra
     # people or duplicate a referenced person — so state the exact count,
-    # forbid everyone else, and bind each person to their reference image.
-    # The appearance itself travels via the reference images.
+    # forbid everyone else, and declare the person references as IDENTITY
+    # sources only (per ref-slot semantics: appearance from the image, pose
+    # from the text — a standing reference must not spawn a standing copy).
     n = len(state["chars"])
     count_word = {1: "exactly one person", 2: "exactly two people"}.get(
         n, f"exactly {n} people")
+    all_names = [c["name"] for c in state["chars"]]
     lines = []
     for c in state["chars"]:
         part = c["name"]
         if c["name"] in ref_slot_of:
-            part += f" (the person from reference image {ref_slot_of[c['name']]}, {c['bucket']})"
-        else:
-            part += f" ({c['bucket']})"
-        if c["activity"]:
-            part += f": {c['activity']}"
+            part += f" (identity from reference image {ref_slot_of[c['name']]})"
+        act = c["activity"]
+        if act:
+            # Another present character's name inside a pose hint ("lying
+            # beside Kai") makes the model instantiate that person AGAIN —
+            # neutralize names of co-present characters.
+            for other in all_names:
+                if other != c["name"]:
+                    act = re.sub(rf"\b{re.escape(other)}\b", "them", act,
+                                 flags=re.IGNORECASE)
+            part += f": {act}"
         lines.append(part)
     prompt = (f"{state['label']}: the exact room from the first reference "
               f"image, keeping the room layout, lighting and perspective")
     if lines:
         prompt += (f". Compose {count_word} into the scene and NO ONE else — "
                    f"each person appears exactly once, no additional people, "
-                   f"no duplicates. People: " + "; ".join(lines))
+                   f"no duplicates. The person reference images provide "
+                   f"IDENTITY ONLY (face, hair, body, outfit) — IGNORE the "
+                   f"pose and background they show; each person's pose "
+                   f"follows the text. People: " + "; ".join(lines))
     _ucp = config.resolve_use_case_style(
         "scene",
         backend_model=getattr(backend, "model", "") or "",
