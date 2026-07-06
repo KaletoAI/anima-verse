@@ -63,8 +63,9 @@ def _event_image_path(event_id: str, resolved: bool) -> Path:
 def _resolve_backend():
     """Resolves the image backend from the ``EVENT_IMAGEGEN_DEFAULT`` spec.
 
-    Falls back to the location default (backgrounds) when nothing is set,
-    and finally to the cheapest available backend. Returns None when no
+    Fallback chain (user decision 2026-07-06: the scene-render backend
+    choice also governs events): event default → scene render default →
+    location default → cheapest available backend. Returns None when no
     backend is available.
     """
     try:
@@ -77,7 +78,9 @@ def _resolve_backend():
     if not img_skill:
         return None
 
+    from app.core import config as _cfg
     default = (os.environ.get("EVENT_IMAGEGEN_DEFAULT", "").strip()
+               or str(_cfg.get("image_generation.scene_imagegen_default", "") or "").strip()
                or os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip())
     # Match concept: glob + availability instead of an exact backend name.
     backend = img_skill.resolve_imagegen_target(default)

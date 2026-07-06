@@ -1,18 +1,26 @@
-"""Rendered-scene pipeline — composes the environment view (room background
-+ present characters) into ONE generated image, shown by the player UI's
-"Rendered" toggle in the environment panel (plan-scene-live-rendering.md).
+"""Rendered-scene pipeline — renders the environment view (room + present
+characters) as ONE generated image, shown by the player UI's "Rendered"
+toggle in the environment panel (plan-scene-live-rendering.md).
 
-Follows the event_images pattern: the backend comes from the config glob
+Two independent render modes (config ``image_generation.scene_render_mode``),
+so any generate backend (Qwen, Flux, Krea2, …) can be used flexibly:
+
+- ``multi_ref``: room background as reference slot 1 + the present
+  characters' PROFILE images (canonical identity source, same semantics as
+  the main pipeline's reference slots) on the remaining slots. Persons
+  beyond the slot budget are described in text instead.
+- ``only_background``: only the room background as reference — every
+  person is described in text (appearance from the profile + pose).
+
+Backend selection follows the event-image pattern: config glob
 ``image_generation.scene_imagegen_default`` (fallback: location default,
-then cheapest available), the prompt is styled via use case ``scene``, the
-current room background goes into reference slot 1 and the present
-characters' expression images fill the remaining slots (capped by the
-backend's ref_slot_count). Results are cached per scene signature —
-(location, room, background file, present characters + expression images,
-coarse position buckets) — under ``worlds/<w>/scene_render/``.
+then cheapest available). The prompt per mode is a config template
+(``scene_prompt_multi_ref`` / ``scene_prompt_only_background``).
 
-Rendering is manual-only (player button); ``force=True`` bypasses the
-cache with a fresh seed and overwrites the signature file.
+Results are cached per scene signature — (mode, backend, location, room,
+background file, present characters + reference images) — under
+``worlds/<w>/scene_render/``. Rendering is manual-only (player button);
+``force=True`` bypasses the cache with a fresh seed.
 """
 import hashlib
 import json
@@ -28,28 +36,11 @@ from app.core.timeutils import utc_now
 
 logger = get_logger("scene_render")
 
-
-# Figure height in % of the stage at scale = 1 — mirrors the environment
-# panel's FIG_BASE_H so the collage matches what the live view shows.
-FIG_BASE_H = 70
-
-# Built-in prompt templates per render mode. Overridable via config
-# (image_generation.scene_prompt_collage / scene_prompt_multi_ref) so each
-# workflow (e.g. Krea edit vs. Qwen edit) can get its own tuned wording
-# without code changes. Placeholders: {label} = room/location name,
-# {count} = "exactly two people" etc., {people} = person list (multi_ref
-# only). KEEP IN SYNC with the schema defaults in config_schema.py.
-# Action-first for edit models: they reproduce the input by default, so the
-# prompt must COMMAND the changes and state preservation only as constraint —
-# a keep-everything wording returns the draft unchanged.
-PROMPT_COLLAGE_DEFAULT = (
-    "{label}: this is a rough photo composite — cut-out people were pasted "
-    "onto a room photo. Rework it into ONE photorealistic photograph: "
-    "relight every person to match the room's light sources and color "
-    "temperature, add natural contact shadows and reflections, fix scale "
-    "and perspective mismatches, and smooth all cut-out edges. Keep the "
-    "room and keep each person's position, size, pose and identity "
-    "unchanged — {count} in total, no additional people, no duplicates")
+# Built-in prompt templates per render mode. Overridable via config so each
+# workflow can get its own tuned wording without code changes. Placeholders:
+# {label} = room/location name, {count} = "exactly two people" etc.,
+# {people} = person list. KEEP IN SYNC with the schema defaults in
+# config_schema.py.
 PROMPT_MULTI_REF_DEFAULT = (
     "{label}: the exact room from the first reference image, keeping the "
     "room layout, lighting and perspective. Compose {count} into the scene "
@@ -57,6 +48,28 @@ PROMPT_MULTI_REF_DEFAULT = (
     "people, no duplicates. The person reference images provide IDENTITY "
     "ONLY (face, hair, body, outfit) — IGNORE the pose and background they "
     "show; each person's pose follows the text. People: {people}")
+PROMPT_ONLY_BG_DEFAULT = (
+    "{label}: the exact room from the reference image, keeping the room "
+    "layout, lighting and perspective. Compose {count} into the scene and "
+    "NO ONE else — each person appears exactly once, no additional people, "
+    "no duplicates. People: {people}")
+
+
+def get_scene_dir() -> Path:
+    d = get_storage_dir() / "scene_render"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def get_scene_image_path(sig: str) -> Path:
+    return get_scene_dir() / f"{sig}.png"
+
+
+def get_scene_render_mode() -> str:
+    """'multi_ref' (default): background + profile images as references.
+    'only_background': background reference only, persons as text."""
+    m = str(config.get("image_generation.scene_render_mode", "") or "").strip().lower()
+    return m if m in ("multi_ref", "only_background") else "multi_ref"
 
 
 def _prompt_template(config_key: str, default: str) -> str:
@@ -69,25 +82,6 @@ def _fill_template(tpl: str, **vars_: str) -> str:
     for k, v in vars_.items():
         tpl = tpl.replace("{" + k + "}", v)
     return tpl
-
-
-def get_scene_dir() -> Path:
-    d = get_storage_dir() / "scene_render"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def get_scene_render_mode() -> str:
-    """'collage' (default): paste the figures onto the background at their
-    live panel positions and send ONE image — the edit model only
-    harmonizes. 'multi_ref': background + persons as separate reference
-    images, pose from text (for backends with true identity conditioning)."""
-    m = str(config.get("image_generation.scene_render_mode", "") or "").strip().lower()
-    return m if m in ("collage", "multi_ref") else "collage"
-
-
-def get_scene_image_path(sig: str) -> Path:
-    return get_scene_dir() / f"{sig}.png"
 
 
 def _resolve_backend():
@@ -107,120 +101,6 @@ def _resolve_backend():
     if not backend:
         backend = img_skill._select_backend()
     return backend
-
-
-def _expr_image_path(name: str) -> Optional[Path]:
-    """Figure image of a character for the scene (collage figure / identity
-    reference). The POSE of this image matters — the edit model reproduces
-    it — so the lookup prefers pose fidelity:
-
-    1. Variant for the exact current state (mood + effective activity +
-       equipped — same key as /outfit-expression). On a miss the missing
-       variant is triggered in the background (coalesced/cooldowned), so
-       the next render has the exact figure.
-    2. Variant with the SAME activity/pose but any mood (sidecar match) —
-       the exact key misses on every mood shift although a pose-matching
-       figure exists; this is what previously fell through to defaults.
-    3. Newest cached variant of any state (outfit-era match).
-    4. Profile image.
-    """
-    mood = activity = ""
-    try:
-        from app.models.character import (get_character_current_feeling,
-                                          get_effective_activity)
-        mood = get_character_current_feeling(name) or ""
-        activity = get_effective_activity(name) or ""
-    except Exception as e:
-        logger.debug("scene: state lookup failed for %s: %s", name, e)
-    try:
-        from app.core.expression_regen import (get_cached_expression,
-                                               trigger_expression_generation)
-        from app.models.inventory import get_equipped_items, get_equipped_pieces
-        cached = get_cached_expression(
-            name, mood, activity,
-            equipped_pieces=get_equipped_pieces(name),
-            equipped_items=get_equipped_items(name))
-        if cached and Path(cached).exists():
-            return Path(cached)
-        # Exact variant missing — generate it for the NEXT render (fire and
-        # forget; coalesce + cooldown keep this from spamming the queue).
-        trigger_expression_generation(name, mood, activity)
-    except Exception as e:
-        logger.debug("scene: expression lookup failed for %s: %s", name, e)
-    try:
-        from app.core.expression_regen import _get_expressions_dir
-        expr_dir = _get_expressions_dir(name)
-        want = activity.strip().lower()
-        pose_match = None
-        newest = None
-        if expr_dir.exists():
-            for p in expr_dir.iterdir():
-                if p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
-                    continue
-                if p.name.startswith(".tmp_"):
-                    continue
-                if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
-                    newest = p
-                if want:
-                    sidecar = p.with_suffix(".json")
-                    try:
-                        meta = json.loads(sidecar.read_text(encoding="utf-8"))
-                    except Exception:
-                        continue
-                    if str(meta.get("activity") or "").strip().lower() != want:
-                        continue
-                    if (pose_match is None
-                            or p.stat().st_mtime > pose_match.stat().st_mtime):
-                        pose_match = p
-        if pose_match:
-            return pose_match
-        if newest:
-            return newest
-    except Exception as e:
-        logger.debug("scene: variant fallback failed for %s: %s", name, e)
-    try:
-        from app.models.character import (get_character_images_dir,
-                                          get_character_profile_image)
-        profile = get_character_profile_image(name)
-        if profile:
-            p = get_character_images_dir(name) / profile
-            if p.exists():
-                return p
-    except Exception as e:
-        logger.debug("scene: profile image lookup failed for %s: %s", name, e)
-    return None
-
-
-def _pose_hint(name: str) -> str:
-    """Compact pose/activity hint for the scene prompt.
-
-    The raw pose_intent is often a whole RP paragraph (the tool LLM copies
-    prose into SetPose) — useless as an image hint. Preference: a short
-    effective activity as-is (covers "Sleeping" etc.), else the stored pose
-    variant's canonical form (normalize_pose result, short + English, no
-    extra LLM call), else the first sentence hard-trimmed with quoted
-    speech removed.
-    """
-    import re
-    from app.models.character import get_character_profile, get_effective_activity
-    act = (get_effective_activity(name) or "").strip()
-    if act and len(act) <= 60 and "\n" not in act:
-        return act
-    try:
-        variant_id = (get_character_profile(name) or {}).get("pose_variant_id")
-        if variant_id:
-            from app.core.pose_variants import get_variant
-            canonical = ((get_variant(int(variant_id)) or {})
-                         .get("canonical_pose") or "").strip()
-            if canonical:
-                return canonical
-    except Exception as e:
-        logger.debug("scene: pose variant lookup failed for %s: %s", name, e)
-    if not act:
-        return ""
-    act = re.sub(r'["„“»].*?["“”«]', "", act).strip()
-    act = re.split(r"(?<=[.!?])\s", act, 1)[0].strip()
-    return act[:80]
 
 
 def _identity_image_path(name: str) -> Optional[Path]:
@@ -256,10 +136,41 @@ def _identity_image_path(name: str) -> Optional[Path]:
     return None
 
 
+def _pose_hint(name: str) -> str:
+    """Compact pose/activity hint for the scene prompt.
+
+    The raw pose_intent is often a whole RP paragraph (the tool LLM copies
+    prose into SetPose) — useless as an image hint. Preference: a short
+    effective activity as-is (covers "Sleeping" etc.), else the stored pose
+    variant's canonical form (normalize_pose result, short + English, no
+    extra LLM call), else the first sentence hard-trimmed with quoted
+    speech removed.
+    """
+    from app.models.character import get_character_profile, get_effective_activity
+    act = (get_effective_activity(name) or "").strip()
+    if act and len(act) <= 60 and "\n" not in act:
+        return act
+    try:
+        variant_id = (get_character_profile(name) or {}).get("pose_variant_id")
+        if variant_id:
+            from app.core.pose_variants import get_variant
+            canonical = ((get_variant(int(variant_id)) or {})
+                         .get("canonical_pose") or "").strip()
+            if canonical:
+                return canonical
+    except Exception as e:
+        logger.debug("scene: pose variant lookup failed for %s: %s", name, e)
+    if not act:
+        return ""
+    act = re.sub(r'["„“»].*?["“”«]', "", act).strip()
+    act = re.split(r"(?<=[.!?])\s", act, 1)[0].strip()
+    return act[:80]
+
+
 def _appearance_text(name: str) -> str:
-    """Compact appearance description for persons WITHOUT a reference slot
-    (multi_ref on low-slot backends): identity travels as text instead of
-    an image. Outfit placeholders are resolved by the model helper."""
+    """Compact appearance description for persons WITHOUT a reference slot:
+    identity travels as text instead of an image. Outfit placeholders are
+    resolved by the model helper."""
     try:
         from app.models.character import get_character_appearance
         desc = (get_character_appearance(name) or "").strip()
@@ -270,12 +181,9 @@ def _appearance_text(name: str) -> str:
         return ""
 
 
-def build_scene_state(avatar: str,
-                      layout: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     """Collects everything the render needs + the cache signature.
 
-    ``layout`` is the panel's measured on-screen geometry (stage aspect +
-    per-figure anchor/height fractions) — it feeds the collage signature.
     Returns None when the avatar has no location or the room has no
     background image (nothing to compose onto).
     """
@@ -302,42 +210,23 @@ def build_scene_state(avatar: str,
     names = [avatar] + [n for n in (_list_characters_in_room(loc, room) or [])
                         if n != avatar]
     mode = get_scene_render_mode()
-    from app.models.character import get_last_scene_position
     chars: List[Dict[str, Any]] = []
     for n in names:
-        # Collage needs the FIGURE (pose-matched variant — the pasted image
-        # is the pose); multi_ref needs the IDENTITY (profile image — pose
-        # comes from the text, like the main pipeline's reference slots).
-        img = _expr_image_path(n) if mode == "collage" else _identity_image_path(n)
-        if not img:
-            continue  # no visual — the figure also has no panel presence
-        pos = get_last_scene_position(n, room, bg_path.name) or {}
+        # Identity image (profile) — only referenced in multi_ref mode, but
+        # part of the signature either way (identity changes = new scene).
+        img = _identity_image_path(n)
         chars.append({
             "name": n,
             "image": img,
             "activity": _pose_hint(n),
-            "x": pos.get("x"), "y": pos.get("y"), "scale": pos.get("scale"),
         })
-    # Positions only matter for the collage draft — in multi_ref mode they
-    # must not invalidate the cache (they don't influence the render there).
-    pos_sig = None
-    if mode == "collage":
-        lay = layout if isinstance(layout, dict) else {}
-        figs = lay.get("figures") if isinstance(lay.get("figures"), dict) else {}
-        entries = []
-        for c in chars:
-            f = figs.get(c["name"]) if isinstance(figs.get(c["name"]), dict) else {}
-            entries.append((
-                round(float(f.get("x", c["x"] or 0.0) or 0.0), 2),
-                round(float(f.get("y", c["y"] or 0.0) or 0.0), 2),
-                round(float(f.get("h", 0.0) or 0.0), 2),
-                round(float(c["scale"] or 1.0), 2)))
-        pos_sig = [round(float(lay.get("aspect") or 0.0), 2), entries]
+
     sig_src = json.dumps([
         mode, loc, room, bg_path.name,
-        [(c["name"], str(c["image"]), int(c["image"].stat().st_mtime))
+        [(c["name"],
+          str(c["image"]) if c["image"] else "",
+          int(c["image"].stat().st_mtime) if c["image"] else 0)
          for c in chars],
-        pos_sig,
     ], ensure_ascii=False, sort_keys=True)
     sig = hashlib.sha1(sig_src.encode("utf-8")).hexdigest()[:16]
 
@@ -345,109 +234,11 @@ def build_scene_state(avatar: str,
             "bg_path": bg_path, "chars": chars, "sig": sig}
 
 
-def _full_mask_for(draft: Path, sig: str) -> Optional[Path]:
-    """All-white L mask in the draft's size — 'edit everywhere' for the
-    edits endpoint. The init image still anchors the composition (img2img);
-    how much may change is the workflow's denoise (tunable via the
-    backend's extra params)."""
-    try:
-        from PIL import Image
-        with Image.open(draft) as im:
-            mask = Image.new("L", im.size, 255)
-        out = get_scene_dir() / f"{sig}_mask.png"
-        mask.save(out)
-        return out
-    except Exception as e:
-        logger.error("scene mask: %s", e)
-        return None
-
-
-def _build_collage(state: Dict[str, Any], sig: str,
-                   layout: Optional[Dict[str, Any]] = None) -> Optional[Path]:
-    """Pastes the present figures onto the room background — the draft the
-    edit model then only harmonizes.
-
-    Preferred geometry source is the panel's MEASURED layout (stage aspect
-    + per-figure anchor/height fractions): the background is center-cropped
-    to the panel aspect (the panel shows it object-fit:cover) and every
-    figure is pasted at exactly its measured on-screen size — WYSIWYG.
-    Without a layout, the panel CSS is approximated (anchor bottom center,
-    height FIG_BASE_H% × scale — NOTE: this misses the panel's 200px width
-    cap and tends to render figures larger than the live view).
-    """
-    try:
-        from PIL import Image
-    except Exception as e:
-        logger.error("scene collage: PIL unavailable: %s", e)
-        return None
-    try:
-        canvas = Image.open(state["bg_path"]).convert("RGB")
-    except Exception as e:
-        logger.error("scene collage: background unreadable: %s", e)
-        return None
-
-    lay = layout if isinstance(layout, dict) else {}
-    figs = lay.get("figures") if isinstance(lay.get("figures"), dict) else {}
-    aspect = 0.0
-    try:
-        aspect = float(lay.get("aspect") or 0.0)
-    except (TypeError, ValueError):
-        aspect = 0.0
-    if aspect > 0:
-        # Reproduce the panel's object-fit:cover center crop so the layout
-        # fractions land on the same background pixels the player sees.
-        W, H = canvas.size
-        cur = W / H
-        if cur > aspect * 1.01:
-            new_w = int(H * aspect)
-            x0 = (W - new_w) // 2
-            canvas = canvas.crop((x0, 0, x0 + new_w, H))
-        elif cur < aspect * 0.99:
-            new_h = int(W / aspect)
-            y0 = (H - new_h) // 2
-            canvas = canvas.crop((0, y0, W, y0 + new_h))
-
-    W, H = canvas.size
-    n = len(state["chars"])
-    for i, c in enumerate(state["chars"]):
-        try:
-            fig = Image.open(c["image"]).convert("RGBA")
-        except Exception as e:
-            logger.warning("scene collage: figure %s unreadable: %s", c["name"], e)
-            continue
-        f = figs.get(c["name"]) if isinstance(figs.get(c["name"]), dict) else None
-        if f and f.get("h"):
-            x = float(f.get("x") or 0.5)
-            y = float(f.get("y") or 0.92)
-            fh = max(1, int(H * float(f["h"])))
-        else:
-            x = c.get("x")
-            y = c.get("y")
-            if x is None:
-                x = 0.5 if n <= 1 else 0.12 + (0.76 * i) / (n - 1)
-            if y is None:
-                y = 0.92
-            x, y = float(x), float(y)
-            fh = max(1, int(H * FIG_BASE_H / 100.0 * float(c.get("scale") or 1.0)))
-        fw = max(1, int(fig.width * fh / fig.height))
-        fig = fig.resize((fw, fh), Image.LANCZOS)
-        canvas.paste(fig, (int(x * W - fw / 2), int(y * H - fh)), fig)
-    out = get_scene_dir() / f"{sig}_draft.png"
-    try:
-        canvas.save(out)
-    except Exception as e:
-        logger.error("scene collage: save failed: %s", e)
-        return None
-    return out
-
-
-def render_scene(avatar: str, force: bool = False,
-                 layout: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
     """Renders (or serves from cache) the composed scene for the avatar's
-    current room. ``layout`` = the panel's measured geometry (collage mode).
-    Returns {"ok", "sig", "cached"} or {"ok": False, "error"}.
+    current room. Returns {"ok", "sig", "cached"} or {"ok": False, "error"}.
     """
-    state = build_scene_state(avatar, layout)
+    state = build_scene_state(avatar)
     if not state:
         return {"ok": False, "error": "No location or no room background."}
 
@@ -468,106 +259,66 @@ def render_scene(avatar: str, force: bool = False,
         return {"ok": False, "error": "Background dimensions unknown."}
     w, h = _safe_dims(*dims)
 
+    mode = state["mode"]
     slots = int(getattr(backend, "ref_slot_count", 0) or 0)
     n = len(state["chars"])
     count_word = {1: "exactly one person", 2: "exactly two people"}.get(
         n, f"exactly {n} people")
     warning = ""
-    refs: Dict[str, str] = {}
+    if getattr(backend, "category", "") == "inpaint":
+        # The edits path does img2img on ONE input — it neither composes
+        # references nor renders text persons reliably.
+        warning = (f"Backend '{backend.name}' is an edits/inpaint alias — "
+                   f"scene rendering needs a generate alias.")
+        logger.warning("scene render: %s", warning)
 
-    if state["mode"] == "collage":
-        # Collage mode: ONE pre-composed image (bg + figures at their live
-        # panel positions) — the input already contains each person exactly
-        # once, the model only harmonizes. Pose text deliberately omitted —
-        # the pasted figure IS the pose.
-        draft = _build_collage(state, sig, layout)
-        if not draft:
-            return {"ok": False, "error": "Collage draft failed."}
-        # Generation size follows the draft — the layout crop may have
-        # changed the aspect vs. the raw background.
-        draft_dims = _read_image_dimensions(draft)
-        if draft_dims:
-            w, h = _safe_dims(*draft_dims)
-        if getattr(backend, "category", "") == "inpaint":
-            # Edits/inpaint alias: draft as init image + all-white mask via
-            # POST /v1/images/edits — true img2img, the composition is
-            # anchored by the init latent instead of loose conditioning
-            # (a generate alias treats references only as inspiration and
-            # freely recomposes — observed with Krea rebalance).
-            mask = _full_mask_for(draft, sig)
-            if not mask:
-                return {"ok": False, "error": "Mask creation failed."}
-            refs["input_canvas"] = str(draft)
-            refs["input_mask"] = str(mask)
-        elif slots < 1:
-            warning = (f"Backend '{backend.name}' has no reference slot — "
-                       f"the collage draft cannot be sent.")
-            logger.warning("scene render: %s", warning)
-        else:
-            refs["input_reference_image_1"] = str(draft)
-            warning = (f"Backend '{backend.name}' is a generate alias — the "
-                       f"draft is only loose inspiration there. For faithful "
-                       f"integration point 'Scene Render Default' at an "
-                       f"edits/inpaint alias (category=inpaint).")
-            logger.info("scene render: %s", warning)
-        prompt = _fill_template(
-            _prompt_template("scene_prompt_collage", PROMPT_COLLAGE_DEFAULT),
-            label=state["label"], count=count_word)
-    else:
-        # multi_ref mode: background + persons as separate references.
-        # Fewer slots than persons is a legitimate setup: unslotted persons
-        # are described in TEXT (appearance from the profile) — e.g. Flux
-        # with 1 slot renders room reference + text-only persons.
-        if getattr(backend, "category", "") == "inpaint":
-            # The edits path does img2img on ONE input — extra references
-            # are not composed (observed: result = the untouched room).
-            warning = (f"Backend '{backend.name}' is an edits/inpaint alias — "
-                       f"it cannot compose multiple references. Use collage "
-                       f"mode with it, or a generate alias for multi_ref.")
-            logger.warning("scene render: %s", warning)
-        ref_slot_of: Dict[str, int] = {}
-        if slots >= 1:
-            refs["input_reference_image_1"] = str(state["bg_path"])
-            for i, c in enumerate(state["chars"][:max(0, slots - 1)], start=2):
+    # References: background always in slot 1; profile images of the
+    # present characters only in multi_ref mode (slot budget applies).
+    refs: Dict[str, str] = {}
+    ref_slot_of: Dict[str, int] = {}
+    if slots >= 1:
+        refs["input_reference_image_1"] = str(state["bg_path"])
+        if mode == "multi_ref":
+            with_img = [c for c in state["chars"] if c["image"]]
+            for i, c in enumerate(with_img[:max(0, slots - 1)], start=2):
                 refs[f"input_reference_image_{i}"] = str(c["image"])
                 ref_slot_of[c["name"]] = i
 
-        # Prompt: room label + a CLOSED person set. Models like to invent
-        # extra people or duplicate a referenced person — so state the exact
-        # count, forbid everyone else, and declare the person references as
-        # IDENTITY sources only (ref-slot semantics: appearance from the
-        # image, pose from the text — a standing reference must not spawn a
-        # standing copy).
-        all_names = [c["name"] for c in state["chars"]]
-        lines = []
-        for c in state["chars"]:
-            part = c["name"]
-            if c["name"] in ref_slot_of:
-                part += f" (identity from reference image {ref_slot_of[c['name']]})"
-            else:
-                desc = _appearance_text(c["name"])
-                if desc:
-                    part += f" ({desc})"
-            act = c["activity"]
-            if act:
-                # Another present character's name inside a pose hint ("lying
-                # beside Kai") makes the model instantiate that person AGAIN —
-                # neutralize names of co-present characters.
-                for other in all_names:
-                    if other != c["name"]:
-                        act = re.sub(rf"\b{re.escape(other)}\b", "them", act,
-                                     flags=re.IGNORECASE)
-                part += f": {act}"
-            lines.append(part)
-        if lines:
-            prompt = _fill_template(
-                _prompt_template("scene_prompt_multi_ref", PROMPT_MULTI_REF_DEFAULT),
-                label=state["label"], count=count_word,
-                people="; ".join(lines))
+    # People lines: slotted persons point at their reference image, all
+    # others carry their appearance as text.
+    all_names = [c["name"] for c in state["chars"]]
+    lines = []
+    for c in state["chars"]:
+        part = c["name"]
+        if c["name"] in ref_slot_of:
+            part += f" (identity from reference image {ref_slot_of[c['name']]})"
         else:
-            prompt = (f"{state['label']}: the exact room from the first "
-                      f"reference image, keeping the room layout, lighting "
-                      f"and perspective")
+            desc = _appearance_text(c["name"])
+            if desc:
+                part += f" ({desc})"
+        act = c["activity"]
+        if act:
+            # Another present character's name inside a pose hint ("lying
+            # beside Kai") makes the model instantiate that person AGAIN —
+            # neutralize names of co-present characters.
+            for other in all_names:
+                if other != c["name"]:
+                    act = re.sub(rf"\b{re.escape(other)}\b", "them", act,
+                                 flags=re.IGNORECASE)
+            part += f": {act}"
+        lines.append(part)
+
+    tpl_key, tpl_default = (
+        ("scene_prompt_multi_ref", PROMPT_MULTI_REF_DEFAULT)
+        if mode == "multi_ref"
+        else ("scene_prompt_only_background", PROMPT_ONLY_BG_DEFAULT))
+    if lines:
+        prompt = _fill_template(
+            _prompt_template(tpl_key, tpl_default),
+            label=state["label"], count=count_word, people="; ".join(lines))
+    else:
+        prompt = (f"{state['label']}: the exact room from the reference "
+                  f"image, keeping the room layout, lighting and perspective")
     _ucp = config.resolve_use_case_style(
         "scene",
         backend_model=getattr(backend, "model", "") or "",
@@ -578,6 +329,7 @@ def render_scene(avatar: str, force: bool = False,
     _neg_base = ("additional people, extra person, crowd, duplicated person, "
                  "clone, twins, second copy of the same person")
     negative = ", ".join(p for p in (_ucp.get("prompt_negative", ""), _neg_base) if p)
+
     params: Dict[str, Any] = {
         "width": w, "height": h,
         "seed": random.randint(1, 2**31 - 1),
@@ -617,8 +369,9 @@ def render_scene(avatar: str, force: bool = False,
         _tq.track_finish(_track_id, error=str(e))
         return {"ok": False, "error": str(e)}
     _tq.track_finish(_track_id)
-    logger.info("scene rendered: %s (%s, %d chars, %d refs, %dx%d)",
-                out_path.name, state["label"], len(state["chars"]), len(refs), w, h)
+    logger.info("scene rendered: %s (%s, mode=%s, %d chars, %d refs, %dx%d)",
+                out_path.name, state["label"], mode, len(state["chars"]),
+                len(refs), w, h)
     result = {"ok": True, "sig": sig, "cached": False}
     if warning:
         result["warning"] = warning

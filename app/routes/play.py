@@ -286,16 +286,12 @@ async def play_scene_render(request: Request, user=Depends(get_current_user)):
     if not avatar:
         raise HTTPException(status_code=404, detail="no active avatar")
     force = False
-    layout = None
     try:
         body = await request.json()
         force = bool((body or {}).get("force"))
-        # Measured on-screen layout from the panel (stage aspect + per-figure
-        # anchor/height fractions) — the collage is built from these numbers.
-        layout = (body or {}).get("layout")
     except Exception:
         pass
-    result = await asyncio.to_thread(render_scene, avatar, force, layout)
+    result = await asyncio.to_thread(render_scene, avatar, force)
     if not result.get("ok"):
         raise HTTPException(status_code=503, detail=result.get("error") or "render failed")
     return result
