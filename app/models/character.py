@@ -1606,19 +1606,24 @@ def get_last_scene_position(character_name: str, room_id: str,
 def set_scene_position(character_name: str, room_id: str,
                        expr_version: str, bg_id: str,
                        x: float, y: float, scale: float = 1.0) -> None:
-    """Persistiert Standpunkt + Groesse der Figur fuer (Raum, Hintergrundbild,
-    Expression-Bild). Location bewusst NICHT im Schluessel — die Platzierung
-    haengt am Bild (geteilt ueber Locations mit denselben BG-Dateien).
+    """Persists the figure's anchor + size for (room, background image,
+    expression image). Location deliberately NOT part of the key — the
+    placement sticks to the image (shared across locations with the same
+    background files).
 
-    Schreibt direkt auf character_state.meta — leichtgewichtig, kein voller
-    Profil-Save. Pro Hintergrund bleiben max. _SCENE_POS_MAX_PER_BG expr-Hashes
-    und pro Raum max. _SCENE_POS_MAX_BG Hintergruende (aelteste verfallen, da
-    Bilder sich aendern)."""
+    Writes directly to character_state.meta — lightweight, no full profile
+    save. Per background at most _SCENE_POS_MAX_PER_BG expr hashes are kept
+    and per room at most _SCENE_POS_MAX_BG backgrounds (oldest expire, since
+    images change)."""
     if not (character_name and expr_version):
         return
     try:
         x = max(0.0, min(1.0, float(x)))
-        y = max(0.0, min(1.0, float(y)))
+        # The stage edge may cut into the figure (frontend FIG_OVERHANG
+        # boundary; the rendered figure size only exists client-side), so the
+        # bottom-center anchor may sit below the stage bottom. 2.0 generously
+        # covers the max case (base height 0.7 · scale 2.0 · overhang 0.5).
+        y = max(0.0, min(2.0, float(y)))
         scale = max(_SCENE_SCALE_MIN, min(_SCENE_SCALE_MAX, float(scale)))
     except (TypeError, ValueError):
         return

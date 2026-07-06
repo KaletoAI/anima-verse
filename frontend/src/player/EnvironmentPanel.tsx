@@ -1,21 +1,21 @@
 /**
- * EnvironmentPanel — Raum-Hintergrund + anwesende Charaktere als
- * **frei verschieb- und skalierbare Expression-Figuren** (aktuelle Pose/Ausdruck).
- * plan-room-conversation Phase 2.
+ * EnvironmentPanel — room background + present characters as
+ * **freely movable and scalable expression figures** (current pose/expression).
+ * plan-room-conversation phase 2.
  *
- * Hintergrund:  GET /world/locations/{id}/background?room=&hour=&file=<bg_id>
- *               (file pinnt das konkrete Bild → Positionen haften an genau ihm).
- * Expression:   GET /characters/{name}/outfit-expression?fallback=default
- * Positionen:   GET/PUT /play/figures  (pro Character {x,y,scale}; x/y als
- *               Bruchteile 0..1 = Standpunkt = Bild-Unterkante/Mitte, scale =
- *               Größenfaktor). Serverseitig gekoppelt an Raum + Hintergrundbild
- *               (bg_id) + Expression-Bild-Hash und in den Character-Daten
- *               gespeichert → gilt für alle Spieler. Wechselt Raum, Hintergrund
- *               oder Bild, werden die Positionen neu geladen.
+ * Background:  GET /world/locations/{id}/background?room=&hour=&file=<bg_id>
+ *              (file pins the concrete image → positions stick to exactly it).
+ * Expression:  GET /characters/{name}/outfit-expression?fallback=default
+ * Positions:   GET/PUT /play/figures  (per character {x,y,scale}; x/y as
+ *              fractions 0..1 = anchor = image bottom edge/center, scale =
+ *              size factor). Server-side coupled to room + background image
+ *              (bg_id) + expression image hash and stored in the character
+ *              data → applies to all players. When room, background or image
+ *              changes, positions are reloaded.
  *
- * Figuren werden mit der Maus innerhalb des Panels gezogen (Verschieben) und mit
- * dem Mausrad über der Figur in der Größe verändert; der Panel selbst zieht nur
- * über seine Kopfzeile, also kein Konflikt.
+ * Figures are dragged with the mouse inside the panel (moving) and resized
+ * with the mouse wheel over the figure; the panel itself only drags via its
+ * header, so no conflict.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
@@ -27,10 +27,16 @@ interface Pos { x: number; y: number; scale: number }
 const exprUrl = (name: string, version?: string) =>
   `/characters/${encodeURIComponent(name)}/outfit-expression?fallback=default`
   + (version ? `&v=${encodeURIComponent(version)}` : '')
-const clamp = (v: number) => Math.max(0, Math.min(1, v))
 const SCALE_MIN = 0.3
 const SCALE_MAX = 2.0
-const FIG_BASE_H = 70  // Figurenhöhe in % der Stage bei scale = 1
+const FIG_BASE_H = 70  // figure height in % of the stage at scale = 1
+// How deep the stage edge may cut into a figure before the drag stops:
+// 0.5 = up to half the figure may leave the stage on each side (trial value).
+// The bottom-center anchor means x∈[0,1] already equals exactly this bound
+// horizontally; vertically it grants half-figure slack below the bottom edge
+// and keeps at least half the figure visible at the top (previously a figure
+// could vanish entirely above the top and became ungrabbable).
+const FIG_OVERHANG = 0.5
 const clampScale = (v: number) => Math.max(SCALE_MIN, Math.min(SCALE_MAX, v))
 
 export function EnvironmentPanel({
@@ -56,7 +62,7 @@ export function EnvironmentPanel({
     : ''
   const [bgOk, setBgOk] = useState(true)
   useEffect(() => { setBgOk(true) }, [bgUrl])
-  // Bedien-Hinweis nur bis zur ersten Interaktion (Ziehen/Skalieren) zeigen.
+  // Show the usage hint only until the first interaction (drag/resize).
   const [interacted, setInteracted] = useState(false)
 
   const stageRef = useRef<HTMLDivElement | null>(null)
@@ -65,15 +71,20 @@ export function EnvironmentPanel({
   posRef.current = pos
   const bgIdRef = useRef(bgId || '')
   bgIdRef.current = bgId || ''
-  const dragRef = useRef<{ name: string; rect: DOMRect; dx: number; dy: number } | null>(null)
+  const dragRef = useRef<{
+    name: string; rect: DOMRect; dx: number; dy: number
+    // Figure box size as fractions of the stage — measured at drag start,
+    // needed for the FIG_OVERHANG boundary in onMove.
+    fw: number; fh: number
+  } | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Default-Standpunkte aller aktuell gezeigten Figuren — damit Mausrad/Drag auch
-  // eine noch nie bewegte Figur korrekt materialisieren (x/y vom Default holen).
+  // Default anchors of all currently shown figures — so wheel/drag can also
+  // materialize a never-moved figure correctly (x/y taken from the default).
   const defaultsRef = useRef<Record<string, Pos>>({})
 
-  // Positionen laden — neu, sobald sich Raum, Hintergrund (bg_id) ODER das
-  // Expression-Bild einer Figur ändert: der Server liefert die Standpunkte passend
-  // zu (Raum, bg_id, Bild-Hash); fehlt ein Eintrag, greift unten der Default.
+  // Load positions — anew whenever the room, background (bg_id) OR a figure's
+  // expression image changes: the server returns the anchors matching
+  // (room, bg_id, image hash); if an entry is missing the default applies below.
   const figSig = [
     locationId, roomId, bgId || '', avatarExprVersion || '',
     ...present.filter((c) => c.name !== avatarName).map((c) => `${c.name}:${c.expr_version || ''}`),
@@ -95,9 +106,17 @@ export function EnvironmentPanel({
   const onMove = useCallback((e: PointerEvent) => {
     const d = dragRef.current
     if (!d) return
-    // Greif-Offset (dx/dy) abziehen → Figur bleibt unter dem Cursor, kein Sprung.
-    const x = clamp((e.clientX - d.dx - d.rect.left) / d.rect.width)
-    const y = clamp((e.clientY - d.dy - d.rect.top) / d.rect.height)
+    // Subtract the grab offset (dx/dy) → figure stays under the cursor, no jump.
+    const rawX = (e.clientX - d.dx - d.rect.left) / d.rect.width
+    const rawY = (e.clientY - d.dy - d.rect.top) / d.rect.height
+    // Boundary: the stage edge may cut up to FIG_OVERHANG into the figure.
+    // Anchor is the figure's bottom center, so per axis:
+    //   x: center offset from the edge ≥ width·(0.5 − OVERHANG)  (= [0,1] at 0.5)
+    //   y: anchor from ‑half height above the top edge (keeps half visible)
+    //      down to half height below the bottom edge.
+    const xPad = d.fw * (0.5 - FIG_OVERHANG)
+    const x = Math.max(xPad, Math.min(1 - xPad, rawX))
+    const y = Math.max(d.fh * (1 - FIG_OVERHANG), Math.min(1 + FIG_OVERHANG * d.fh, rawY))
     setPos((p) => {
       const prev = p[d.name] || defaultsRef.current[d.name]
       return { ...p, [d.name]: { x, y, scale: prev?.scale ?? 1 } }
@@ -116,16 +135,21 @@ export function EnvironmentPanel({
     e.stopPropagation()
     const rect = stageRef.current?.getBoundingClientRect()
     if (!rect) return
-    // aktueller Standpunkt der Figur in px + Offset zum Greifpunkt
+    // Current figure anchor in px + offset to the grab point
     const anchorX = rect.left + p.x * rect.width
     const anchorY = rect.top + p.y * rect.height
-    dragRef.current = { name, rect, dx: e.clientX - anchorX, dy: e.clientY - anchorY }
+    // Figure box size relative to the stage for the overhang boundary.
+    const figRect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    dragRef.current = {
+      name, rect, dx: e.clientX - anchorX, dy: e.clientY - anchorY,
+      fw: figRect.width / rect.width, fh: figRect.height / rect.height,
+    }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }, [onMove, onUp])
 
-  // Mausrad über einer Figur → Größe ändern. Non-passiver Listener auf der Stage,
-  // damit preventDefault greift (kein Seiten-Scroll). Treffer per data-fig-Attribut.
+  // Mouse wheel over a figure → resize. Non-passive listener on the stage so
+  // preventDefault works (no page scroll). Hit detection via data-fig attribute.
   useEffect(() => {
     const stage = stageRef.current
     if (!stage) return
@@ -147,18 +171,18 @@ export function EnvironmentPanel({
     return () => stage.removeEventListener('wheel', onWheel)
   }, [persist])
 
-  // Default-Position: gleichmäßig entlang der Unterkante, scale = 1
+  // Default position: evenly spread along the bottom edge, scale = 1
   const defaultPos = (index: number, count: number): Pos => ({
     x: count <= 1 ? 0.5 : 0.12 + (0.76 * index) / (count - 1),
     y: 0.92, scale: 1,
   })
 
-  // Avatar (du selbst) wird mit als Figur gezeigt — wie ein anwesender Character.
+  // The avatar (you) is shown as a figure too — like any present character.
   const others = present.filter((c) => c.name !== avatarName)
   const figures: PresentChar[] = avatarName
     ? [{ name: avatarName, avatar_url: '', expr_version: avatarExprVersion }, ...others]
     : others
-  // Defaults für alle aktuell gezeigten Figuren bereitstellen (für Wheel/Drag).
+  // Provide defaults for all currently shown figures (for wheel/drag).
   defaultsRef.current = Object.fromEntries(
     figures.map((c, i) => [c.name, defaultPos(i, figures.length)]))
 

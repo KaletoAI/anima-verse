@@ -1225,13 +1225,14 @@ async def play_put_layout(request: Request, user=Depends(get_current_user)):
 
 @router.get("/play/figures")
 async def play_get_figures(bg: str = "", user=Depends(get_current_user)):
-    """Figuren-Standpunkte im Umgebungsfenster (Name → {x, y, scale}, x/y als
-    Bruchteile 0..1) fuer den AKTUELLEN Raum + Hintergrundbild (``bg`` = bg_id)
-    + das aktuelle Expression-Bild jeder Figur.
+    """Figure anchors in the environment panel (name → {x, y, scale}; x as a
+    fraction 0..1, y may exceed 1 — the figure may overhang the stage bottom
+    up to the frontend's FIG_OVERHANG boundary) for the CURRENT room +
+    background image (``bg`` = bg_id) + each figure's current expression image.
 
-    Quelle sind die Character-Daten (nicht User-Settings) → die Platzierung gilt
-    fuer alle Spieler. Pos ist an (Raum, bg_id, expr_version) gekoppelt: bei
-    neuem Bild fehlt der Eintrag → Frontend nutzt seine Default-Position."""
+    Source is the character data (not user settings) → the placement applies
+    to all players. A position is keyed to (room, bg_id, expr_version): for a
+    new image the entry is missing → the frontend uses its default position."""
     from app.core.room_entry import _list_characters_in_room
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
@@ -1260,9 +1261,9 @@ async def play_get_figures(bg: str = "", user=Depends(get_current_user)):
 
 @router.put("/play/figures")
 async def play_save_figures(request: Request, user=Depends(get_current_user)):
-    """Persistiert Figuren-Standpunkte + Groesse in den Character-Daten, gekoppelt
-    an Raum + Hintergrundbild (``bg``) + Expression-Bild-Hash. Nur Figuren, die im
-    Raum des Avatars anwesend sind."""
+    """Persists figure anchors + size in the character data, keyed to room +
+    background image (``bg``) + expression image hash. Only figures present in
+    the avatar's room."""
     from app.core.room_entry import _list_characters_in_room
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
