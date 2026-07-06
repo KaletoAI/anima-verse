@@ -977,7 +977,15 @@ function renderFields(fields, data, path) {
         html += '<label for="f-' + fullPath + '">' + f.label + pill + '</label>';
         html += '<div class="input-wrap">';
         html += renderInput(f, val, fullPath);
-        if (f.description) html += '<div class="desc">' + f.description + '</div>';
+        // Show the schema default next to the description so the effective
+        // fallback is always visible — even when the stored value is empty.
+        let desc = f.description || '';
+        if (f.default !== undefined && f.default !== ''
+            && (typeof f.default === 'string' || typeof f.default === 'number' || typeof f.default === 'boolean')) {
+            const dv = typeof f.default === 'boolean' ? (f.default ? 'on' : 'off') : String(f.default);
+            desc += (desc ? ' ' : '') + '<span class="desc-default">Default: ' + esc(dv) + '</span>';
+        }
+        if (desc) html += '<div class="desc">' + desc + '</div>';
         html += '</div></div>';
     }
     // Two-column grid: regular fields span both columns (unchanged look),

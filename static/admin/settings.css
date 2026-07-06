@@ -91,6 +91,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .field input:focus, .field select:focus, .field textarea:focus { border-color: #58a6ff; outline: none; }
 .field textarea { min-height: 60px; resize: vertical; }
 .field .desc { font-size: 11px; color: #6e7681; margin-top: 3px; }
+.field .desc .desc-default { color: #58a6ff; opacity: .75; white-space: nowrap; }
 .field input[type="checkbox"] { margin-top: 8px; }
 
 /* Toggle for password */
