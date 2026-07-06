@@ -51,7 +51,7 @@ class BaseSkill(ABC):
         pass
 
     def _parse_base_input(self, raw_input: str) -> Dict[str, Any]:
-        """Extrahiert den standardisierten Kontext aus dem Tool-Input (JSON mit character_name)."""
+        """Extracts the standardized context from the tool input (JSON with character_name)."""
         data: Dict[str, Any] = {"input": raw_input, "agent_name": "", "user_id": ""}
 
         if isinstance(raw_input, str) and raw_input.strip().startswith("{"):
@@ -60,7 +60,15 @@ class BaseSkill(ABC):
                 if isinstance(parsed, dict):
                     data.update(parsed)
             except Exception:
-                pass
+                # Salvage: LLM tool inputs sometimes carry trailing garbage
+                # after the JSON object (e.g. fallback-marker lines). Parse
+                # the first balanced object instead of dropping all fields.
+                try:
+                    parsed, _ = json.JSONDecoder().raw_decode(raw_input.strip())
+                    if isinstance(parsed, dict):
+                        data.update(parsed)
+                except Exception:
+                    pass
 
         return data
 

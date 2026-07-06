@@ -508,7 +508,7 @@ async def instagram_post_core(request) -> Dict[str, Any]:
         shutil.copy2(str(image_path), str(dst_path))
 
     post = create_post(
-        agent_name=agent_name,
+        character_name=agent_name,
         image_filename=image_filename,
         caption=caption,
         hashtags=hashtags,
