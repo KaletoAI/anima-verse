@@ -583,8 +583,8 @@ async def prompt_filters_import(
 async def settings_data(user=Depends(require_admin)):
     """Return full config with sensitive fields masked.
 
-    Leere Felder werden mit Schema-Defaults vorbelegt, damit der User
-    sofort sieht welcher Fallback-Wert greift.
+    Empty fields are pre-filled with their schema default so the user
+    immediately sees which fallback value applies.
     """
     import copy
     data = copy.deepcopy(config.get_all())
@@ -1361,20 +1361,31 @@ _AGENT_LOOP_HTML = """<!DOCTYPE html>
 
 
 def _apply_schema_defaults(data: dict) -> None:
-    """Fuellt leere Config-Felder mit Schema-Defaults vor.
+    """Prefills empty config fields with their schema defaults.
 
-    Iteriert ueber SECTIONS aus config_schema und traegt fehlende oder leere
-    Werte ein, wenn ein 'default' definiert ist — damit der Admin-User sofort
-    sieht, welcher Fallback aktiv waere.
+    Iterates over SECTIONS from config_schema and fills missing or empty
+    values whenever a 'default' is defined — so the admin user immediately
+    sees which fallback would be active.
     """
     schema = get_schema()
     for section_key, section_def in schema.items():
-        # Virtuelle Sections (z.B. llm_simple) haben kein eigenes Config-Feld —
-        # nicht anlegen, sonst landet ein leeres {} in config.json.
+        # Virtual sections (e.g. llm_simple) have no config field of their
+        # own — don't create one, or an empty {} lands in config.json.
         if section_def.get("virtual"):
             continue
         is_array = section_def.get("is_array", False)
         fields = section_def.get("fields", {})
+        # sub_arrays (e.g. image_generation.backends): fill defaults on each
+        # item, honoring applicable_for/visible_when so type-specific fields
+        # don't get materialized on items they never render for.
+        for sub_key, sub_def in (section_def.get("sub_arrays") or {}).items():
+            sub_fields = (sub_def or {}).get("fields", {})
+            section_data = data.get(section_key)
+            items = section_data.get(sub_key) if isinstance(section_data, dict) else None
+            if sub_fields and isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        _fill_item_defaults(item, sub_fields)
         if is_array:
             items = data.get(section_key)
             if not isinstance(items, list):
@@ -1402,8 +1413,32 @@ def _apply_schema_defaults(data: dict) -> None:
             _fill_defaults(section_data, fields)
 
 
+def _fill_item_defaults(item: dict, fields: dict) -> None:
+    """Like _fill_defaults, but skips fields the item never renders:
+    `applicable_for` mismatching the item's api_type, and `visible_when`
+    conditions on sibling values (evaluated in field order, so a default
+    filled earlier — e.g. category='generate' — gates later fields)."""
+    for key, field_def in fields.items():
+        if not isinstance(field_def, dict):
+            continue
+        applicable = field_def.get("applicable_for")
+        if applicable and (item.get("api_type") or "") not in applicable:
+            continue
+        cond = field_def.get("visible_when")
+        if isinstance(cond, dict) and any(
+                (item.get(k) or "") != v for k, v in cond.items()):
+            continue
+        default = field_def.get("default")
+        if default is None:
+            continue
+        current = item.get(key)
+        if current is None or current == "":
+            item[key] = default
+            logger.debug("Config-Default gesetzt (item): %s = %r", key, default)
+
+
 def _fill_defaults(obj: dict, fields: dict) -> None:
-    """Setzt fehlende/leere Werte in obj auf den field-default."""
+    """Sets missing/empty values in obj to the field default."""
     for key, field_def in fields.items():
         if not isinstance(field_def, dict):
             continue

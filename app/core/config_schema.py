@@ -350,7 +350,7 @@ SECTIONS = {
                 ],
                 "fields": {
                     "name": {"type": "str", "label": "Name", "required": True},
-                    "category": {"type": "select", "label": "Category", "choices": ["", "inpaint"], "triggers_rerender": True, "description": "Zweck-Kategorie. 'inpaint' generiert ueber POST /v1/images/edits (Canvas + Maske als zwei Bilder) statt /v1/images/generations und bietet das Backend als Inpaint-Ziel im Map-Fit/Edge-Dialog an. Der Alias-Workflow muss gateway-seitig Bild- + Masken-Slot haben.", "applicable_for": ["openai_diffusion"]},
+                    "category": {"type": "select", "label": "Category", "choices": ["generate", "inpaint"], "default": "generate", "triggers_rerender": True, "description": "Purpose category. 'generate' = standard generation via POST /v1/images/generations. 'inpaint' = generation via POST /v1/images/edits (canvas + mask as two images); the backend is offered as inpaint target in the map fit/edge dialog, and the alias workflow needs image + mask slots on the gateway side.", "applicable_for": ["openai_diffusion"]},
                     "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
                     "api_type": {
                         "type": "select",
