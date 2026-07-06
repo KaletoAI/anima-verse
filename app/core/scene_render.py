@@ -250,7 +250,24 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
             "bg_path": bg_path, "chars": chars, "sig": sig}
 
 
-def _build_collage(state: Dict[str, Any]) -> Optional[Path]:
+def _full_mask_for(draft: Path, sig: str) -> Optional[Path]:
+    """All-white L mask in the draft's size — 'edit everywhere' for the
+    edits endpoint. The init image still anchors the composition (img2img);
+    how much may change is the workflow's denoise (tunable via the
+    backend's extra params)."""
+    try:
+        from PIL import Image
+        with Image.open(draft) as im:
+            mask = Image.new("L", im.size, 255)
+        out = get_scene_dir() / f"{sig}_mask.png"
+        mask.save(out)
+        return out
+    except Exception as e:
+        logger.error("scene mask: %s", e)
+        return None
+
+
+def _build_collage(state: Dict[str, Any], sig: str) -> Optional[Path]:
     """Pastes the present figures onto the room background at their live
     panel positions — the draft the edit model then only harmonizes.
 
@@ -288,7 +305,7 @@ def _build_collage(state: Dict[str, Any]) -> Optional[Path]:
         fw = max(1, int(fig.width * fh / fig.height))
         fig = fig.resize((fw, fh), Image.LANCZOS)
         canvas.paste(fig, (int(float(x) * W - fw / 2), int(float(y) * H - fh)), fig)
-    out = get_scene_dir() / f"{state['sig']}_draft.png"
+    out = get_scene_dir() / f"{sig}_draft.png"
     try:
         canvas.save(out)
     except Exception as e:
@@ -304,14 +321,17 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
     state = build_scene_state(avatar)
     if not state:
         return {"ok": False, "error": "No location or no room background."}
-    sig = state["sig"]
-    out_path = get_scene_image_path(sig)
-    if out_path.exists() and not force:
-        return {"ok": True, "sig": sig, "cached": True}
 
     backend = _resolve_backend()
     if not backend:
         return {"ok": False, "error": "No image backend available."}
+    # Backend is part of the cache key: switching the scene backend must
+    # produce a fresh render instead of serving the other backend's result.
+    sig = hashlib.sha1(
+        f"{state['sig']}|{backend.name}".encode("utf-8")).hexdigest()[:16]
+    out_path = get_scene_image_path(sig)
+    if out_path.exists() and not force:
+        return {"ok": True, "sig": sig, "cached": True}
 
     from app.core.event_images import _read_image_dimensions, _safe_dims
     dims = _read_image_dimensions(state["bg_path"])
@@ -328,19 +348,34 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
 
     if state["mode"] == "collage":
         # Collage mode: ONE pre-composed image (bg + figures at their live
-        # panel positions) — plays to the strength of edit workflows (Krea):
-        # the input already contains each person exactly once, the model
-        # only harmonizes. Pose text deliberately omitted — the pasted
-        # figure IS the pose; extra text would reintroduce conflicts.
-        draft = _build_collage(state)
+        # panel positions) — the input already contains each person exactly
+        # once, the model only harmonizes. Pose text deliberately omitted —
+        # the pasted figure IS the pose.
+        draft = _build_collage(state, sig)
         if not draft:
             return {"ok": False, "error": "Collage draft failed."}
-        if slots < 1:
+        if getattr(backend, "category", "") == "inpaint":
+            # Edits/inpaint alias: draft as init image + all-white mask via
+            # POST /v1/images/edits — true img2img, the composition is
+            # anchored by the init latent instead of loose conditioning
+            # (a generate alias treats references only as inspiration and
+            # freely recomposes — observed with Krea rebalance).
+            mask = _full_mask_for(draft, sig)
+            if not mask:
+                return {"ok": False, "error": "Mask creation failed."}
+            refs["input_canvas"] = str(draft)
+            refs["input_mask"] = str(mask)
+        elif slots < 1:
             warning = (f"Backend '{backend.name}' has no reference slot — "
                        f"the collage draft cannot be sent.")
             logger.warning("scene render: %s", warning)
         else:
             refs["input_reference_image_1"] = str(draft)
+            warning = (f"Backend '{backend.name}' is a generate alias — the "
+                       f"draft is only loose inspiration there. For faithful "
+                       f"integration point 'Scene Render Default' at an "
+                       f"edits/inpaint alias (category=inpaint).")
+            logger.info("scene render: %s", warning)
         prompt = _fill_template(
             _prompt_template("scene_prompt_collage", PROMPT_COLLAGE_DEFAULT),
             label=state["label"], count=count_word)
