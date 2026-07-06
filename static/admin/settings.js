@@ -1015,6 +1015,16 @@ function renderFields(fields, data, path) {
     return '<div class="fields-grid">' + html + '</div>';
 }
 
+// Default greyed in the empty field (like the use-case styles editor):
+// placeholder attribute from f.placeholder, else from f.default. The server
+// deliberately does NOT materialize defaults for these field types.
+function _phAttr(f) {
+    const ph = f.placeholder !== undefined && f.placeholder !== ''
+        ? f.placeholder
+        : (f.default !== undefined && f.default !== '' ? String(f.default) : '');
+    return ph ? 'placeholder="' + esc(ph) + '" ' : '';
+}
+
 function renderInput(f, val, path) {
     const id = 'f-' + path;
     switch (f.type) {
@@ -1024,11 +1034,13 @@ function renderInput(f, val, path) {
             return '<input type="number" id="' + id + '" value="' + esc(val) + '" '
                 + (f.min !== undefined ? 'min="' + f.min + '" ' : '')
                 + (f.max !== undefined ? 'max="' + f.max + '" ' : '')
+                + _phAttr(f)
                 + 'step="1" onchange="setVal(\'' + path + '\', parseInt(this.value) || 0)">';
         case 'float':
             return '<input type="number" id="' + id + '" value="' + esc(val) + '" '
                 + (f.min !== undefined ? 'min="' + f.min + '" ' : '')
                 + (f.max !== undefined ? 'max="' + f.max + '" ' : '')
+                + _phAttr(f)
                 + 'step="' + (f.step || 0.1) + '" onchange="setVal(\'' + path + '\', parseFloat(this.value) || 0)">';
         case 'select':
             let opts = (f.choices || []).map(c => '<option value="' + esc(c) + '"' + (c == val ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
@@ -1040,7 +1052,8 @@ function renderInput(f, val, path) {
             return '<div class="pw-wrap"><input type="password" id="' + id + '" value="' + esc(val) + '" onchange="setVal(\'' + path + '\', this.value)">'
                 + '<button class="pw-toggle" type="button" onclick="togglePw(this)">👁</button></div>';
         case 'text':
-            return '<textarea id="' + id + '" onchange="setVal(\'' + path + '\', this.value)">' + esc(val) + '</textarea>';
+            return '<textarea id="' + id + '" ' + _phAttr(f)
+                + 'onchange="setVal(\'' + path + '\', this.value)">' + esc(val) + '</textarea>';
         case 'provider_select':
             return renderProviderSelect(val, path);
         case 'model_select':
@@ -1055,9 +1068,9 @@ function renderInput(f, val, path) {
             return renderImagegenModelCombo(val, path);
         case 'imagegen_target_select':
             return renderImagegenTargetSelect(val, path);
-        default: // str
+        default: // str / number
             return '<input type="text" id="' + id + '" value="' + esc(val) + '" '
-                + (f.placeholder ? 'placeholder="' + esc(f.placeholder) + '" ' : '')
+                + _phAttr(f)
                 + 'onchange="setVal(\'' + path + '\', this.value)">';
     }
 }

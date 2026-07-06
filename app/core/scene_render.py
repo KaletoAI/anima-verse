@@ -85,7 +85,14 @@ def get_scene_render_mode() -> str:
 
 def _prompt_template(config_key: str, default: str) -> str:
     txt = str(config.get(f"image_generation.{config_key}", "") or "").strip()
-    return txt or default
+    if not txt:
+        return default
+    # Old shipped defaults persisted by the former settings prefill count as
+    # "not customized" — keep built-in template updates flowing.
+    from app.core.config_schema import SCENE_PROMPT_LEGACY_DEFAULTS
+    if txt in SCENE_PROMPT_LEGACY_DEFAULTS:
+        return default
+    return txt
 
 
 def _fill_template(tpl: str, **vars_: str) -> str:

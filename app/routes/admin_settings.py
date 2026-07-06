@@ -1448,9 +1448,12 @@ def _fill_item_defaults(item: dict, fields: dict) -> None:
     """Like _fill_defaults, but skips fields the item never renders:
     `applicable_for` mismatching the item's api_type, and `visible_when`
     conditions on sibling values (evaluated in field order, so a default
-    filled earlier — e.g. category='generate' — gates later fields)."""
+    filled earlier — e.g. category='generate' — gates later fields).
+    Placeholder-type fields are never materialized (_PLACEHOLDER_TYPES)."""
     for key, field_def in fields.items():
         if not isinstance(field_def, dict):
+            continue
+        if field_def.get("type") in _PLACEHOLDER_TYPES:
             continue
         applicable = field_def.get("applicable_for")
         if applicable and (item.get("api_type") or "") not in applicable:
@@ -1468,15 +1471,33 @@ def _fill_item_defaults(item: dict, fields: dict) -> None:
             logger.debug("Config-Default gesetzt (item): %s = %r", key, default)
 
 
+# Field types whose default is shown GREYED as a placeholder in the empty
+# field instead of being materialized (user directive 2026-07-06, like the
+# use-case styles editor): writing the default in would persist it on save
+# and freeze future built-in updates. Bool/select cannot display a
+# placeholder and keep real default values.
+_PLACEHOLDER_TYPES = {"str", "text", "int", "float", "number"}
+
+
 def _fill_defaults(obj: dict, fields: dict) -> None:
-    """Sets missing/empty values in obj to the field default."""
+    """Sets missing/empty values in obj to the field default (bool/select
+    only — see _PLACEHOLDER_TYPES) and clears legacy-default leftovers."""
     for key, field_def in fields.items():
         if not isinstance(field_def, dict):
+            continue
+        current = obj.get(key)
+        # Legacy cleanup: a stored value that is just an old shipped default
+        # (persisted by the former prefill) counts as "not customized" —
+        # clear it so the placeholder + current built-in apply again.
+        legacy = field_def.get("legacy_defaults")
+        if legacy and isinstance(current, str) and current.strip() in legacy:
+            obj[key] = ""
+            continue
+        if field_def.get("type") in _PLACEHOLDER_TYPES:
             continue
         default = field_def.get("default")
         if default is None:
             continue
-        current = obj.get(key)
         if current is None or current == "":
             obj[key] = default
             logger.debug("Config-Default gesetzt: %s = %r", key, default)
