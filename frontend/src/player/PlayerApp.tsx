@@ -962,19 +962,35 @@ export function PlayerApp() {
       const headH = head ? head.offsetHeight : 0
       const minH = DEFAULT_BY_ID[id]?.minH ?? 4
       const minW = DEFAULT_BY_ID[id]?.minW ?? 4
-      // Inhalt darf seine natürliche Größe selbst melden (z.B. Map via
-      // data-content-w/h), da DOM-Messung bei intern scrollendem Inhalt scheitert.
-      // Dann wird BREITE + Höhe daraus gesetzt; sonst nur Höhe via offsetHeight.
+      // Content may report its natural size itself (e.g. the map via
+      // data-content-w/h) since DOM measurement fails for internally
+      // scrolling content. Then WIDTH + height come from it; otherwise
+      // only the height via offsetHeight.
       const reporter = body.querySelector('[data-content-w]') as HTMLElement | null
       const reportedW = reporter ? parseFloat(reporter.getAttribute('data-content-w') || '') : NaN
       const reportedH = reporter ? parseFloat(reporter.getAttribute('data-content-h') || '') : NaN
       const contentH = (reporter && reportedH > 0 ? reportedH : body.offsetHeight) + headH
-      const rows = Math.max(minH, Math.ceil((contentH + MARGIN) / (CELL + MARGIN)))
       const cur = layoutRef.current.find((l) => l.i === id)
       if (!cur) return
-      const newW = (reporter && reportedW > 0)
+      let rows = Math.max(minH, Math.ceil((contentH + MARGIN) / (CELL + MARGIN)))
+      let newW = (reporter && reportedW > 0)
         ? Math.max(minW, Math.ceil((reportedW + MARGIN) / (CELL + MARGIN)))
         : cur.w
+      // Viewport cap: autosize must never grow a panel past the visible
+      // browser area (that would create page scrollbars at the edges).
+      // Measured in screen px and converted through the panel's actual
+      // on-screen cell size — this also accounts for the frozen-mode CSS
+      // scale transform without needing fitScale in this closure.
+      const rect = panel.getBoundingClientRect()
+      const unit = CELL + MARGIN
+      const scale = (cur.h > 0 && rect.height > 0)
+        ? rect.height / (cur.h * unit - MARGIN) : 1
+      const maxRows = Math.max(minH,
+        Math.floor((window.innerHeight - Math.max(0, rect.top)) / (scale || 1) / unit))
+      const maxCols = Math.max(minW,
+        Math.floor((window.innerWidth - Math.max(0, rect.left)) / (scale || 1) / unit))
+      rows = Math.min(rows, maxRows)
+      newW = Math.min(newW, maxCols)
       if (cur.h === rows && cur.w === newW) return
       const next = layoutRef.current.map((l) => (l.i === id ? { ...l, h: rows, w: newW } : l))
       layoutRef.current = next
