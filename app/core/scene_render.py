@@ -206,27 +206,6 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
         return {"ok": False, "error": "Background dimensions unknown."}
     w, h = _safe_dims(*dims)
 
-    # Prompt: room label + one line per person (position + activity). The
-    # appearance itself travels via the reference images.
-    lines = []
-    for c in state["chars"]:
-        part = f"{c['name']} ({c['bucket']})"
-        if c["activity"]:
-            part += f": {c['activity']}"
-        lines.append(part)
-    prompt = (f"{state['label']}: the exact room from the first reference "
-              f"image, with the following people composed naturally into the "
-              f"scene, keeping the room layout, lighting and perspective")
-    if lines:
-        prompt += ". People: " + "; ".join(lines)
-    _ucp = config.resolve_use_case_style(
-        "scene",
-        backend_model=getattr(backend, "model", "") or "",
-        backend_family=getattr(backend, "image_family", ""))
-    if _ucp.get("prompt_style"):
-        prompt = f"{_ucp['prompt_style']}, {prompt}"
-    negative = _ucp.get("prompt_negative", "")
-
     # References: background first, then the figures (slot budget applies).
     slots = int(getattr(backend, "ref_slot_count", 0) or 0)
     warning = ""
@@ -237,10 +216,46 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
                    f"Default' to a multi-reference backend (e.g. Krea2).")
         logger.warning("scene render: %s", warning)
     refs: Dict[str, str] = {}
+    ref_slot_of: Dict[str, int] = {}
     if slots >= 1:
         refs["input_reference_image_1"] = str(state["bg_path"])
         for i, c in enumerate(state["chars"][:max(0, slots - 1)], start=2):
             refs[f"input_reference_image_{i}"] = str(c["image"])
+            ref_slot_of[c["name"]] = i
+
+    # Prompt: room label + a CLOSED person set. Models like to invent extra
+    # people or duplicate a referenced person — so state the exact count,
+    # forbid everyone else, and bind each person to their reference image.
+    # The appearance itself travels via the reference images.
+    n = len(state["chars"])
+    count_word = {1: "exactly one person", 2: "exactly two people"}.get(
+        n, f"exactly {n} people")
+    lines = []
+    for c in state["chars"]:
+        part = c["name"]
+        if c["name"] in ref_slot_of:
+            part += f" (the person from reference image {ref_slot_of[c['name']]}, {c['bucket']})"
+        else:
+            part += f" ({c['bucket']})"
+        if c["activity"]:
+            part += f": {c['activity']}"
+        lines.append(part)
+    prompt = (f"{state['label']}: the exact room from the first reference "
+              f"image, keeping the room layout, lighting and perspective")
+    if lines:
+        prompt += (f". Compose {count_word} into the scene and NO ONE else — "
+                   f"each person appears exactly once, no additional people, "
+                   f"no duplicates. People: " + "; ".join(lines))
+    _ucp = config.resolve_use_case_style(
+        "scene",
+        backend_model=getattr(backend, "model", "") or "",
+        backend_family=getattr(backend, "image_family", ""))
+    if _ucp.get("prompt_style"):
+        prompt = f"{_ucp['prompt_style']}, {prompt}"
+    # Built-in anti-duplicate negative, merged with the use-case negative.
+    _neg_base = ("additional people, extra person, crowd, duplicated person, "
+                 "clone, twins, second copy of the same person")
+    negative = ", ".join(p for p in (_ucp.get("prompt_negative", ""), _neg_base) if p)
     params: Dict[str, Any] = {
         "width": w, "height": h,
         "seed": random.randint(1, 2**31 - 1),
