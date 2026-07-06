@@ -198,6 +198,13 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
 
     # References: background first, then the figures (slot budget applies).
     slots = int(getattr(backend, "ref_slot_count", 0) or 0)
+    warning = ""
+    if slots < 2 and state["chars"]:
+        # Composing needs bg + persons — a 0/1-slot backend renders bg-only.
+        warning = (f"Backend '{backend.name}' has only {slots} reference "
+                   f"slot(s) — persons are not composed. Set 'Scene Render "
+                   f"Default' to a multi-reference backend (e.g. Krea2).")
+        logger.warning("scene render: %s", warning)
     refs: Dict[str, str] = {}
     if slots >= 1:
         refs["input_reference_image_1"] = str(state["bg_path"])
@@ -242,6 +249,9 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
         _tq.track_finish(_track_id, error=str(e))
         return {"ok": False, "error": str(e)}
     _tq.track_finish(_track_id)
-    logger.info("scene rendered: %s (%s, %d chars, %dx%d)",
-                out_path.name, state["label"], len(state["chars"]), w, h)
-    return {"ok": True, "sig": sig, "cached": False}
+    logger.info("scene rendered: %s (%s, %d chars, %d refs, %dx%d)",
+                out_path.name, state["label"], len(state["chars"]), len(refs), w, h)
+    result = {"ok": True, "sig": sig, "cached": False}
+    if warning:
+        result["warning"] = warning
+    return result

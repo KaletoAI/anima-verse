@@ -74,12 +74,15 @@ export function EnvironmentPanel({
   const [renderNonce, setRenderNonce] = useState(0)  // cache-buster after force
   const [rendering, setRendering] = useState(false)
   const [renderErr, setRenderErr] = useState('')
+  const [renderWarn, setRenderWarn] = useState('')
   const requestRender = useCallback(async (force: boolean) => {
     setRendering(true)
     setRenderErr('')
+    setRenderWarn('')
     try {
-      const d = await apiPost<{ sig?: string }>('/play/scene-render', { force })
+      const d = await apiPost<{ sig?: string; warning?: string }>('/play/scene-render', { force })
       setRenderSig(d.sig || '')
+      setRenderWarn(d.warning || '')
       setRenderNonce((n) => n + 1)
     } catch (e) {
       setRenderErr((e as Error).message)
@@ -242,6 +245,14 @@ export function EnvironmentPanel({
         }}>
           {rendering ? t('Rendering scene…') : (renderErr || t('No rendered scene yet.'))}
         </span>
+      )}
+      {/* Non-blocking hint (e.g. backend has too few reference slots). */}
+      {mode === 'rendered' && !rendering && renderWarn && (
+        <span style={{
+          position: 'absolute', bottom: 28, left: 8, right: 8, fontSize: '0.72em',
+          background: 'rgba(0,0,0,0.6)', color: '#f0c674', padding: '3px 8px',
+          borderRadius: 6, textAlign: 'center',
+        }}>{renderWarn}</span>
       )}
 
       {/* View toggle: Live (draggable figures) vs. Rendered (composed image). */}

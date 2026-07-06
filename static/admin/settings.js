@@ -209,7 +209,8 @@ function renderLoraTriggersEditor(path) {
              + '(CivitAI, Together): add entries manually.</p>';
     html += '<div style="margin-bottom:12px;display:flex;gap:8px">'
           + '<button class="btn btn-sm" onclick="addLoraTrigger(\'' + path + '\')">+ Add</button>'
-          + '<button class="btn btn-sm" onclick="syncLoraLibrary()">⟳ Discover now</button></div>';
+          + '<button class="btn btn-sm" onclick="syncLoraLibrary()">⟳ Discover now</button>'
+          + '<button class="btn btn-sm btn-danger" onclick="clearDiscoveredLoras()">🗑 Delete discovered</button></div>';
     if (!items.length) {
         html += '<div class="md-empty">No entries yet. "Discover now" scans the backends; "+ Add" creates a manual entry.</div>';
     }
@@ -280,6 +281,24 @@ function copyLoraTrigger(path, i) {
 function ltTouch(ip, field, newVal) {
     if ((getVal(ip + '.' + field) || '') === (newVal || '')) return;
     if (getVal(ip + '.source') === 'discovered') setVal(ip + '.source', 'manual');
+}
+
+// Remove all discovered entries server-side (manual ones stay) — reset
+// helper to re-test the per-backend LoRA filter with a clean discovery run.
+async function clearDiscoveredLoras() {
+    try {
+        const resp = await fetch('/admin/settings/lora-library/clear-discovered', {
+            method: 'POST', headers: authHeaders(),
+        });
+        const d = await resp.json();
+        if (!resp.ok) throw new Error((d && d.detail) || ('HTTP ' + resp.status));
+        if (!CONFIG.image_generation) CONFIG.image_generation = {};
+        CONFIG.image_generation.lora_triggers = d.lora_triggers || [];
+        toast('Removed ' + (d.removed || 0) + ' discovered entr' + ((d.removed || 0) === 1 ? 'y' : 'ies'), 'success');
+        renderSection(ACTIVE_SECTION);
+    } catch (e) {
+        toast('Delete discovered failed: ' + e.message, 'error');
+    }
 }
 
 // Run the server-side discovery sync and refresh the editor in place. The

@@ -605,6 +605,24 @@ async def settings_raw(user=Depends(require_admin)):
     return data
 
 
+@router.post("/settings/lora-library/clear-discovered")
+async def lora_library_clear_discovered(user=Depends(require_admin)):
+    """Removes every discovered entry from the LoRA library (manual entries
+    stay). Reset helper — e.g. to re-test the per-backend LoRA filter with a
+    clean discovery run. Persists server-side so a following sync works on
+    the cleared state."""
+    data = config.get_all()
+    ig = data.setdefault("image_generation", {})
+    triggers = ig.get("lora_triggers") or []
+    kept = [e for e in triggers
+            if not (isinstance(e, dict) and (e.get("source") or "") == "discovered")]
+    removed = len(triggers) - len(kept)
+    if removed:
+        ig["lora_triggers"] = kept
+        config.save(data)
+    return {"removed": removed, "lora_triggers": kept}
+
+
 @router.post("/settings/lora-library/sync")
 async def lora_library_sync(user=Depends(require_admin)):
     """Runs LoRA discovery against every backend with a LoRA listing and
