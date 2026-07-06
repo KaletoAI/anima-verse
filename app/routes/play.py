@@ -1045,7 +1045,12 @@ async def play_gallery_delete_image(character: str, filename: str, user=Depends(
         raise HTTPException(status_code=400, detail="character required")
     avatar = (get_active_character() or "").strip()
     if not avatar or character.strip() != avatar:
-        raise HTTPException(status_code=403, detail="Forbidden")
+        # Structured game-block detail: the frontend api layer treats a bare
+        # 403 as an auth failure and kicks the user to the login screen —
+        # this is a game rule, not an auth problem.
+        raise HTTPException(status_code=403, detail={
+            "reason": "block_foreign_gallery",
+            "message": "Only images of your own gallery can be deleted."})
     if not delete_character_image(character, filename):
         raise HTTPException(status_code=404, detail="Image not found")
     return {"ok": True}

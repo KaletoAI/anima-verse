@@ -41,9 +41,9 @@ export function GalleryPanel() {
   const [confirmDel, setConfirmDel] = useState(false)  // Inline-Bestätigung in der Detail-Box
   const [deleting, setDeleting] = useState(false)
 
-  // Löschen aus der AKTUELL gewählten Galerie (vorerst für alle Bilder; eine
-  // Berechtigungsprüfung wird später nachgezogen). Optimistisch aus der Liste
-  // entfernen und die Detail-Box schließen. confirmDel zurücksetzen bei Bildwechsel.
+  // Deleting is offered ONLY for the own gallery (server enforces the same
+  // rule with 403). Optimistically remove from the list and close the detail
+  // box. confirmDel resets on image change.
   const deleteImage = async (img: Img) => {
     if (deleting || !selected) return
     setDeleting(true)
@@ -260,11 +260,13 @@ export function GalleryPanel() {
                   </span>
                 </button>
               ) : null}
-              <button onClick={() => setConfirmDel(true)} title={t('Delete image')} aria-label={t('Delete image')}
-                style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer',
-                  opacity: 0.7, display: 'inline-flex', alignItems: 'center' }}>
-                <Icon name="trash" size={16} />
-              </button>
+              {selected === self ? (
+                <button onClick={() => setConfirmDel(true)} title={t('Delete image')} aria-label={t('Delete image')}
+                  style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer',
+                    opacity: 0.7, display: 'inline-flex', alignItems: 'center' }}>
+                  <Icon name="trash" size={16} />
+                </button>
+              ) : null}
               <button onClick={() => setZoom(null)} title={t('Close')}
                 style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: '1.2em', lineHeight: 1, opacity: 0.7 }}>×</button>
             </div>
