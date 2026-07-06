@@ -29,10 +29,24 @@ from app.core.timeutils import utc_now
 logger = get_logger("scene_render")
 
 
+# Figure height in % of the stage at scale = 1 — mirrors the environment
+# panel's FIG_BASE_H so the collage matches what the live view shows.
+FIG_BASE_H = 70
+
+
 def get_scene_dir() -> Path:
     d = get_storage_dir() / "scene_render"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def get_scene_render_mode() -> str:
+    """'collage' (default): paste the figures onto the background at their
+    live panel positions and send ONE image — the edit model only
+    harmonizes. 'multi_ref': background + persons as separate reference
+    images, pose from text (for backends with true identity conditioning)."""
+    m = str(config.get("image_generation.scene_render_mode", "") or "").strip().lower()
+    return m if m in ("collage", "multi_ref") else "collage"
 
 
 def get_scene_image_path(sig: str) -> Path:
@@ -171,26 +185,83 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
 
     names = [avatar] + [n for n in (_list_characters_in_room(loc, room) or [])
                         if n != avatar]
+    from app.models.character import get_last_scene_position
     chars: List[Dict[str, Any]] = []
     for n in names:
         img = _expr_image_path(n)
         if not img:
             continue  # no visual — the figure also has no panel presence
+        pos = get_last_scene_position(n, room, bg_path.name) or {}
         chars.append({
             "name": n,
             "image": img,
             "activity": _pose_hint(n),
+            "x": pos.get("x"), "y": pos.get("y"), "scale": pos.get("scale"),
         })
 
+    mode = get_scene_render_mode()
+    # Positions only matter for the collage draft — in multi_ref mode they
+    # must not invalidate the cache (they don't influence the render there).
+    pos_sig = ([(round(float(c["x"] or 0.0), 2), round(float(c["y"] or 0.0), 2),
+                 round(float(c["scale"] or 1.0), 2)) for c in chars]
+               if mode == "collage" else None)
     sig_src = json.dumps([
-        loc, room, bg_path.name,
+        mode, loc, room, bg_path.name,
         [(c["name"], str(c["image"]), int(c["image"].stat().st_mtime))
          for c in chars],
+        pos_sig,
     ], ensure_ascii=False, sort_keys=True)
     sig = hashlib.sha1(sig_src.encode("utf-8")).hexdigest()[:16]
 
-    return {"location": loc, "room": room, "label": label,
+    return {"location": loc, "room": room, "label": label, "mode": mode,
             "bg_path": bg_path, "chars": chars, "sig": sig}
+
+
+def _build_collage(state: Dict[str, Any]) -> Optional[Path]:
+    """Pastes the present figures onto the room background at their live
+    panel positions — the draft the edit model then only harmonizes.
+
+    Layout math mirrors the environment panel: anchor = figure bottom
+    center (x/y as stage fractions), figure height = FIG_BASE_H% of the
+    stage height × scale. Figures without a stored position get the
+    panel's default spread along the bottom edge.
+    """
+    try:
+        from PIL import Image
+    except Exception as e:
+        logger.error("scene collage: PIL unavailable: %s", e)
+        return None
+    try:
+        canvas = Image.open(state["bg_path"]).convert("RGB")
+    except Exception as e:
+        logger.error("scene collage: background unreadable: %s", e)
+        return None
+    W, H = canvas.size
+    n = len(state["chars"])
+    for i, c in enumerate(state["chars"]):
+        try:
+            fig = Image.open(c["image"]).convert("RGBA")
+        except Exception as e:
+            logger.warning("scene collage: figure %s unreadable: %s", c["name"], e)
+            continue
+        x = c.get("x")
+        y = c.get("y")
+        if x is None:
+            x = 0.5 if n <= 1 else 0.12 + (0.76 * i) / (n - 1)
+        if y is None:
+            y = 0.92
+        scale = float(c.get("scale") or 1.0)
+        fh = max(1, int(H * FIG_BASE_H / 100.0 * scale))
+        fw = max(1, int(fig.width * fh / fig.height))
+        fig = fig.resize((fw, fh), Image.LANCZOS)
+        canvas.paste(fig, (int(float(x) * W - fw / 2), int(float(y) * H - fh)), fig)
+    out = get_scene_dir() / f"{state['sig']}_draft.png"
+    try:
+        canvas.save(out)
+    except Exception as e:
+        logger.error("scene collage: save failed: %s", e)
+        return None
+    return out
 
 
 def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
@@ -215,57 +286,82 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
         return {"ok": False, "error": "Background dimensions unknown."}
     w, h = _safe_dims(*dims)
 
-    # References: background first, then the figures (slot budget applies).
     slots = int(getattr(backend, "ref_slot_count", 0) or 0)
-    warning = ""
-    if slots < 2 and state["chars"]:
-        # Composing needs bg + persons — a 0/1-slot backend renders bg-only.
-        warning = (f"Backend '{backend.name}' has only {slots} reference "
-                   f"slot(s) — persons are not composed. Set 'Scene Render "
-                   f"Default' to a multi-reference backend (e.g. Krea2).")
-        logger.warning("scene render: %s", warning)
-    refs: Dict[str, str] = {}
-    ref_slot_of: Dict[str, int] = {}
-    if slots >= 1:
-        refs["input_reference_image_1"] = str(state["bg_path"])
-        for i, c in enumerate(state["chars"][:max(0, slots - 1)], start=2):
-            refs[f"input_reference_image_{i}"] = str(c["image"])
-            ref_slot_of[c["name"]] = i
-
-    # Prompt: room label + a CLOSED person set. Models like to invent extra
-    # people or duplicate a referenced person — so state the exact count,
-    # forbid everyone else, and declare the person references as IDENTITY
-    # sources only (per ref-slot semantics: appearance from the image, pose
-    # from the text — a standing reference must not spawn a standing copy).
     n = len(state["chars"])
     count_word = {1: "exactly one person", 2: "exactly two people"}.get(
         n, f"exactly {n} people")
-    all_names = [c["name"] for c in state["chars"]]
-    lines = []
-    for c in state["chars"]:
-        part = c["name"]
-        if c["name"] in ref_slot_of:
-            part += f" (identity from reference image {ref_slot_of[c['name']]})"
-        act = c["activity"]
-        if act:
-            # Another present character's name inside a pose hint ("lying
-            # beside Kai") makes the model instantiate that person AGAIN —
-            # neutralize names of co-present characters.
-            for other in all_names:
-                if other != c["name"]:
-                    act = re.sub(rf"\b{re.escape(other)}\b", "them", act,
-                                 flags=re.IGNORECASE)
-            part += f": {act}"
-        lines.append(part)
-    prompt = (f"{state['label']}: the exact room from the first reference "
-              f"image, keeping the room layout, lighting and perspective")
-    if lines:
-        prompt += (f". Compose {count_word} into the scene and NO ONE else — "
-                   f"each person appears exactly once, no additional people, "
-                   f"no duplicates. The person reference images provide "
-                   f"IDENTITY ONLY (face, hair, body, outfit) — IGNORE the "
-                   f"pose and background they show; each person's pose "
-                   f"follows the text. People: " + "; ".join(lines))
+    warning = ""
+    refs: Dict[str, str] = {}
+
+    if state["mode"] == "collage":
+        # Collage mode: ONE pre-composed image (bg + figures at their live
+        # panel positions) — plays to the strength of edit workflows (Krea):
+        # the input already contains each person exactly once, the model
+        # only harmonizes. Pose text deliberately omitted — the pasted
+        # figure IS the pose; extra text would reintroduce conflicts.
+        draft = _build_collage(state)
+        if not draft:
+            return {"ok": False, "error": "Collage draft failed."}
+        if slots < 1:
+            warning = (f"Backend '{backend.name}' has no reference slot — "
+                       f"the collage draft cannot be sent.")
+            logger.warning("scene render: %s", warning)
+        else:
+            refs["input_reference_image_1"] = str(draft)
+        prompt = (f"{state['label']}: the people were pasted onto this room "
+                  f"photo — seamlessly integrate them into the scene. Keep "
+                  f"the room and keep every person exactly where and as they "
+                  f"are: same position, same size, same pose, {count_word} "
+                  f"and NO ONE else — no additional people, no duplicates. "
+                  f"Blend lighting, shadows, color grading, reflections and "
+                  f"edges so it looks like one natural photograph")
+    else:
+        # multi_ref mode: background + persons as separate references.
+        if slots < 2 and state["chars"]:
+            # Composing needs bg + persons — a 0/1-slot backend is bg-only.
+            warning = (f"Backend '{backend.name}' has only {slots} reference "
+                       f"slot(s) — persons are not composed. Set 'Scene Render "
+                       f"Default' to a multi-reference backend (e.g. Krea2).")
+            logger.warning("scene render: %s", warning)
+        ref_slot_of: Dict[str, int] = {}
+        if slots >= 1:
+            refs["input_reference_image_1"] = str(state["bg_path"])
+            for i, c in enumerate(state["chars"][:max(0, slots - 1)], start=2):
+                refs[f"input_reference_image_{i}"] = str(c["image"])
+                ref_slot_of[c["name"]] = i
+
+        # Prompt: room label + a CLOSED person set. Models like to invent
+        # extra people or duplicate a referenced person — so state the exact
+        # count, forbid everyone else, and declare the person references as
+        # IDENTITY sources only (ref-slot semantics: appearance from the
+        # image, pose from the text — a standing reference must not spawn a
+        # standing copy).
+        all_names = [c["name"] for c in state["chars"]]
+        lines = []
+        for c in state["chars"]:
+            part = c["name"]
+            if c["name"] in ref_slot_of:
+                part += f" (identity from reference image {ref_slot_of[c['name']]})"
+            act = c["activity"]
+            if act:
+                # Another present character's name inside a pose hint ("lying
+                # beside Kai") makes the model instantiate that person AGAIN —
+                # neutralize names of co-present characters.
+                for other in all_names:
+                    if other != c["name"]:
+                        act = re.sub(rf"\b{re.escape(other)}\b", "them", act,
+                                     flags=re.IGNORECASE)
+                part += f": {act}"
+            lines.append(part)
+        prompt = (f"{state['label']}: the exact room from the first reference "
+                  f"image, keeping the room layout, lighting and perspective")
+        if lines:
+            prompt += (f". Compose {count_word} into the scene and NO ONE else — "
+                       f"each person appears exactly once, no additional people, "
+                       f"no duplicates. The person reference images provide "
+                       f"IDENTITY ONLY (face, hair, body, outfit) — IGNORE the "
+                       f"pose and background they show; each person's pose "
+                       f"follows the text. People: " + "; ".join(lines))
     _ucp = config.resolve_use_case_style(
         "scene",
         backend_model=getattr(backend, "model", "") or "",
