@@ -190,54 +190,69 @@ function copyUseCaseDefault(p, uc, fam, fld) {
     renderSection(ACTIVE_SECTION);
 }
 
-// Repository: LoRA -> Aktivierungs-Wort. Liste von {lora, word}; wird vom
-// Image-Creation-Code automatisch in den Prompt aufgenommen, sobald das LoRA
-// genutzt wird. Speicherung in image_generation.lora_triggers (per Welt).
+// Repository: LoRA -> activation word. List of {lora, word, endpoint, source,
+// missing}; the image-creation code automatically prepends the word to the
+// prompt whenever the LoRA is used. Stored in image_generation.lora_triggers
+// (per world). The discovery sync job fills it from every backend with a
+// LoRA Query URL; every LoRA dropdown in the UI feeds from this library.
 function renderLoraTriggersEditor(path) {
     const items = getVal(path) || [];
     let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
-             + 'Zentrale LoRA-Liste der Welt. Pro LoRA ein Aktivierungs-Wort: sobald ein Bild dieses '
-             + 'LoRA nutzt, wird das Wort automatisch dem Prompt vorangestellt (Map, Character, …). '
-             + 'Alle LoRA-Dropdowns in der UI ziehen ihre Vorschlaege aus dieser Liste.</p>';
+             + 'Central LoRA library of the world — <b>every LoRA dropdown</b> (game admin + player UI) '
+             + 'feeds from this list. One activation word per LoRA: whenever an image uses the LoRA, '
+             + 'the word is automatically prepended to the prompt.</p>';
     html += '<p class="hint" style="opacity:.7;margin-bottom:12px">'
-             + 'Backends with a <b>LoRA Query URL</b> fetch their LoRA list live from that endpoint; '
-             + 'for all other backends enter the LoRA names here <b>manually</b>. They are applied via the '
-             + 'prompt syntax <code>&lt;lora:Name:Weight&gt;</code> or the activation word.</p>';
-    html += '<div style="margin-bottom:12px">'
-          + '<button class="btn btn-sm" onclick="addLoraTrigger(\'' + path + '\')">+ Add</button></div>';
+             + 'Backends with a <b>LoRA Query URL</b> are scanned automatically (hourly + on '
+             + '<b>Discover now</b>): found LoRAs are added as <b>discovered</b>; entries whose LoRA '
+             + 'vanished are removed (discovered, untouched) or flagged <b style="color:#f85149">missing</b> '
+             + '(manual / edited) and excluded from the dropdowns. Backends without a listing '
+             + '(CivitAI, Together): add entries manually.</p>';
+    html += '<div style="margin-bottom:12px;display:flex;gap:8px">'
+          + '<button class="btn btn-sm" onclick="addLoraTrigger(\'' + path + '\')">+ Add</button>'
+          + '<button class="btn btn-sm" onclick="syncLoraLibrary()">⟳ Discover now</button></div>';
     if (!items.length) {
-        html += '<div class="md-empty">Noch keine Eintraege. „+ Add", dann LoRA-Namen tippen/suchen.</div>';
+        html += '<div class="md-empty">No entries yet. "Discover now" scans the backends; "+ Add" creates a manual entry.</div>';
     }
     for (let i = 0; i < items.length; i++) {
         const it = items[i] || {};
         const ip = path + '[' + i + ']';
         html += '<div class="lora-row" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">';
-        // 1. Spalte: Endpoint-Zuordnung (Backend-Name) — leer = fuer alle Backends.
-        // Verhindert, dass eine LoRA beim falschen Backend (anderes Modell) erscheint.
-        html += '<select title="Endpoint (Backend) — leer = alle" style="flex:2;min-width:0;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px" onchange="setVal(\'' + ip + '.endpoint\', this.value)">';
-        html += '<option value="">— Alle Endpoints —</option>';
+        // Column 1: endpoint assignment (backend name) — empty = all backends.
+        // Prevents a LoRA from being offered on the wrong backend (other model).
+        html += '<select title="Endpoint (backend) — empty = all" style="flex:2;min-width:0;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px" onchange="ltTouch(\'' + ip + '\', \'endpoint\', this.value); setVal(\'' + ip + '.endpoint\', this.value)">';
+        html += '<option value="">— All endpoints —</option>';
         for (const be of ((CONFIG.image_generation && CONFIG.image_generation.backends) || [])) {
             const bn = be.name || '';
             if (!bn) continue;
             html += '<option value="' + esc(bn) + '"' + (bn === (it.endpoint || '') ? ' selected' : '') + '>' + esc(bn) + '</option>';
         }
         html += '</select>';
-        // 2. Spalte: LoRA-Name. Eigene dunkle Such-Combobox statt nativem <select>
-        // (das rendert die Optionsliste OS-seitig weiss). Freitext erlaubt.
+        // Column 2: LoRA name. Custom dark search combobox instead of a native
+        // <select> (whose option list renders OS-side white). Free text allowed.
         html += '<div class="lt-combo" style="flex:3;min-width:0">';
         html += '<input type="text" class="lt-lora-input" autocomplete="off" value="' + esc(it.lora || '') + '" '
-              + 'placeholder="LoRA-Name — tippen zum Suchen oder frei notieren" style="width:100%" '
+              + 'placeholder="LoRA name — type to search or note freely" style="width:100%" '
               + 'oninput="ltFilter(this, \'' + ip + '\')" '
               + 'onfocus="ltFilter(this, \'' + ip + '\')" '
               + 'onkeydown="ltKey(event, this, \'' + ip + '\')" '
               + 'onblur="ltBlur(this)">';
         html += '<div class="lt-dd"></div>';
         html += '</div>';
-        // 3. Spalte: Aktivierungs-Wort.
-        html += '<input type="text" value="' + esc(it.word || '') + '" placeholder="Aktivierungs-Wort" '
-              + 'style="flex:2;min-width:0" onchange="setVal(\'' + ip + '.word\', this.value)">';
-        html += '<button class="btn btn-sm" title="Kopieren (z.B. fuer anderen Endpoint)" onclick="copyLoraTrigger(\'' + path + '\', ' + i + ')">⧉</button>';
-        html += '<button class="btn btn-sm btn-danger" title="Loeschen" onclick="removeItem(\'' + ip + '\')">✕</button>';
+        // Column 3: activation word.
+        html += '<input type="text" value="' + esc(it.word || '') + '" placeholder="Activation word" '
+              + 'style="flex:2;min-width:0" onchange="ltTouch(\'' + ip + '\', \'word\', this.value); setVal(\'' + ip + '.word\', this.value)">';
+        // Column 4: origin + availability badges.
+        const src = it.source === 'discovered' ? 'discovered' : 'manual';
+        html += '<span style="flex:0 0 auto;display:flex;flex-direction:column;gap:2px;align-items:flex-start;padding-top:4px">';
+        html += '<span class="badge" title="' + (src === 'discovered' ? 'Found by the backend scan' : 'Created/edited by hand') + '" '
+              + 'style="font-size:10px;' + (src === 'discovered' ? 'background:#1f3a5f;color:#79c0ff;' : '') + '">' + src + '</span>';
+        if (it.missing) {
+            html += '<span class="badge" title="No longer exists on its backend — excluded from dropdowns" '
+                  + 'style="font-size:10px;background:#5a1e1e;color:#f85149;">missing</span>';
+        }
+        html += '</span>';
+        html += '<button class="btn btn-sm" title="Copy (e.g. for another endpoint)" onclick="copyLoraTrigger(\'' + path + '\', ' + i + ')">⧉</button>';
+        html += '<button class="btn btn-sm btn-danger" title="Delete" onclick="removeItem(\'' + ip + '\')">✕</button>';
         html += '</div>';
     }
     return html;
@@ -245,17 +260,47 @@ function renderLoraTriggersEditor(path) {
 
 function addLoraTrigger(path) {
     const arr = _ensureContainer(path, 'array');
-    arr.push({ lora: '', word: '', endpoint: '' });
+    arr.push({ lora: '', word: '', endpoint: '', source: 'manual', missing: false });
     renderSection(ACTIVE_SECTION);
 }
 
-// Dupliziert einen LoRA-Eintrag (gleiche LoRA + Wort) direkt darunter — danach
-// nur den Endpoint umstellen, um dieselbe LoRA fuer ein anderes Backend zu nutzen.
+// Duplicates a LoRA entry (same LoRA + word) right below — then just switch
+// the endpoint to use the same LoRA for another backend. The copy is a manual
+// claim (the scan verifies it against the new endpoint).
 function copyLoraTrigger(path, i) {
     const arr = _ensureContainer(path, 'array');
     const src = arr[i] || {};
-    arr.splice(i + 1, 0, { lora: src.lora || '', word: src.word || '', endpoint: src.endpoint || '' });
+    arr.splice(i + 1, 0, { lora: src.lora || '', word: src.word || '', endpoint: src.endpoint || '', source: 'manual', missing: false });
     renderSection(ACTIVE_SECTION);
+}
+
+// Editing a discovered entry turns it into a manual claim: the sync job then
+// flags it as missing instead of silently removing it when it vanishes.
+// Only flips when the value actually changed (focus/no-op edits don't count).
+function ltTouch(ip, field, newVal) {
+    if ((getVal(ip + '.' + field) || '') === (newVal || '')) return;
+    if (getVal(ip + '.source') === 'discovered') setVal(ip + '.source', 'manual');
+}
+
+// Run the server-side discovery sync and refresh the editor in place. The
+// server persists the result itself — CONFIG only mirrors it for rendering.
+async function syncLoraLibrary() {
+    try {
+        const resp = await fetch('/admin/settings/lora-library/sync', {
+            method: 'POST', headers: authHeaders(),
+        });
+        const d = await resp.json();
+        if (!resp.ok) throw new Error((d && d.detail) || ('HTTP ' + resp.status));
+        if (!CONFIG.image_generation) CONFIG.image_generation = {};
+        CONFIG.image_generation.lora_triggers = d.lora_triggers || [];
+        const scanned = (d.scanned || []).length;
+        toast('LoRA sync: ' + scanned + ' backend(s) scanned — '
+            + (d.added || 0) + ' added, ' + (d.removed || 0) + ' removed, '
+            + (d.missing || 0) + ' missing', 'success');
+        renderSection(ACTIVE_SECTION);
+    } catch (e) {
+        toast('LoRA sync failed: ' + e.message, 'error');
+    }
 }
 
 // Suggestion list for the LoRA search combobox. There is no server-side LoRA
@@ -274,6 +319,7 @@ function ltSuggestions() {
 
 // Fill the dropdown below the input, filtered by the typed text.
 function ltFilter(inp, ip) {
+    ltTouch(ip, 'lora', inp.value);   // renaming a discovered entry → manual
     setVal(ip + '.lora', inp.value);  // apply free text immediately
     const dd = inp.nextElementSibling;
     if (!dd) return;
@@ -299,12 +345,13 @@ function ltFilter(inp, ip) {
     dd.style.display = 'block';
 }
 
-// Auswahl per Maus (onmousedown feuert vor onblur, daher kein Race).
+// Mouse selection (onmousedown fires before onblur, so no race).
 function ltPick(el, ip) {
     const v = el.getAttribute('data-v');
     const dd = el.parentElement;
     const inp = dd.previousElementSibling;
     inp.value = v;
+    ltTouch(ip, 'lora', v);
     setVal(ip + '.lora', v);
     dd.style.display = 'none';
 }

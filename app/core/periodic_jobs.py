@@ -290,6 +290,18 @@ def _sub_day_consolidation():
         logger.debug("day_consolidation sub error: %s", e)
 
 
+def _sub_lora_library_sync():
+    """LoRA-library discovery: reconciles image_generation.lora_triggers
+    against every backend with a LoRA listing (lora_url). Adds discovered
+    LoRAs, flags manual ones as missing, drops vanished untouched discoveries.
+    """
+    try:
+        from app.core.lora_library import sync_lora_library
+        sync_lora_library()  # logs its own summary when something changed
+    except Exception as e:
+        logger.debug("lora_library_sync sub error: %s", e)
+
+
 # Sub-Task-Tabelle: (callable, min_interval_seconds, label).
 # min_interval_seconds = wie oft soll dieser Sub-Task LAUFEN. Der Tick
 # selbst feuert haeufiger; jeder Sub-Task wird nur ausgefuehrt wenn seit
@@ -307,6 +319,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_variant_prune,             3600,                  "variant_prune"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),
     (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),
+    (_sub_lora_library_sync,         3600,                  "lora_library_sync"),
 ]
 
 

@@ -288,6 +288,10 @@ def get_lora_library_names(backend_name=None) -> list:
         lora = (e.get("lora") or "").strip()
         if not lora or lora in seen:
             continue
+        # Flagged by the sync job: no longer exists on its backend — keep the
+        # library entry visible in the editor, but never offer it in dropdowns.
+        if e.get("missing"):
+            continue
         ep = (e.get("endpoint") or "").strip()
         if backend_name is not None and ep and ep != backend_name:
             continue

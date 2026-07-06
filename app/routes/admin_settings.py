@@ -605,6 +605,19 @@ async def settings_raw(user=Depends(require_admin)):
     return data
 
 
+@router.post("/settings/lora-library/sync")
+async def lora_library_sync(user=Depends(require_admin)):
+    """Runs LoRA discovery against every backend with a LoRA listing and
+    reconciles the library (add discovered / flag manual missing / drop
+    vanished untouched discoveries). Returns the updated library so the
+    editor can refresh in place."""
+    import asyncio
+    from app.core.lora_library import sync_lora_library
+    result = await asyncio.to_thread(sync_lora_library)
+    result["lora_triggers"] = config.get("image_generation.lora_triggers", []) or []
+    return result
+
+
 def _diff_top_level_sections(current: dict, merged: dict) -> list:
     """Liefert die Top-Level-Schluessel, deren Inhalt sich zwischen
     current und merged geaendert hat. JSON-Vergleich, weil sub-arrays/dicts
