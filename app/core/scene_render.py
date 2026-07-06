@@ -219,6 +219,39 @@ def _pose_hint(name: str) -> str:
     return act[:80]
 
 
+def _identity_image_path(name: str) -> Optional[Path]:
+    """Identity reference for multi_ref mode: the PROFILE image is the
+    canonical identity source (same semantics as the main pipeline's
+    reference slot 1 — appearance only, pose comes from the text). Newest
+    cached variant only as fallback when no profile image exists."""
+    try:
+        from app.models.character import (get_character_images_dir,
+                                          get_character_profile_image)
+        profile = get_character_profile_image(name)
+        if profile:
+            p = get_character_images_dir(name) / profile
+            if p.exists():
+                return p
+    except Exception as e:
+        logger.debug("scene: profile image lookup failed for %s: %s", name, e)
+    try:
+        from app.core.expression_regen import _get_expressions_dir
+        expr_dir = _get_expressions_dir(name)
+        newest = None
+        if expr_dir.exists():
+            for p in expr_dir.iterdir():
+                if p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                    continue
+                if p.name.startswith(".tmp_"):
+                    continue
+                if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
+                    newest = p
+        return newest
+    except Exception as e:
+        logger.debug("scene: variant fallback failed for %s: %s", name, e)
+    return None
+
+
 def _appearance_text(name: str) -> str:
     """Compact appearance description for persons WITHOUT a reference slot
     (multi_ref on low-slot backends): identity travels as text instead of
@@ -264,10 +297,14 @@ def build_scene_state(avatar: str,
 
     names = [avatar] + [n for n in (_list_characters_in_room(loc, room) or [])
                         if n != avatar]
+    mode = get_scene_render_mode()
     from app.models.character import get_last_scene_position
     chars: List[Dict[str, Any]] = []
     for n in names:
-        img = _expr_image_path(n)
+        # Collage needs the FIGURE (pose-matched variant — the pasted image
+        # is the pose); multi_ref needs the IDENTITY (profile image — pose
+        # comes from the text, like the main pipeline's reference slots).
+        img = _expr_image_path(n) if mode == "collage" else _identity_image_path(n)
         if not img:
             continue  # no visual — the figure also has no panel presence
         pos = get_last_scene_position(n, room, bg_path.name) or {}
@@ -277,8 +314,6 @@ def build_scene_state(avatar: str,
             "activity": _pose_hint(n),
             "x": pos.get("x"), "y": pos.get("y"), "scale": pos.get("scale"),
         })
-
-    mode = get_scene_render_mode()
     # Positions only matter for the collage draft — in multi_ref mode they
     # must not invalidate the cache (they don't influence the render there).
     pos_sig = None
