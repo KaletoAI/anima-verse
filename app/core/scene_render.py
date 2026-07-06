@@ -39,13 +39,17 @@ FIG_BASE_H = 70
 # without code changes. Placeholders: {label} = room/location name,
 # {count} = "exactly two people" etc., {people} = person list (multi_ref
 # only). KEEP IN SYNC with the schema defaults in config_schema.py.
+# Action-first for edit models: they reproduce the input by default, so the
+# prompt must COMMAND the changes and state preservation only as constraint —
+# a keep-everything wording returns the draft unchanged.
 PROMPT_COLLAGE_DEFAULT = (
-    "{label}: the people were pasted onto this room photo — seamlessly "
-    "integrate them into the scene. Keep the room and keep every person "
-    "exactly where and as they are: same position, same size, same pose, "
-    "{count} and NO ONE else — no additional people, no duplicates. Blend "
-    "lighting, shadows, color grading, reflections and edges so it looks "
-    "like one natural photograph")
+    "{label}: this is a rough photo composite — cut-out people were pasted "
+    "onto a room photo. Rework it into ONE photorealistic photograph: "
+    "relight every person to match the room's light sources and color "
+    "temperature, add natural contact shadows and reflections, fix scale "
+    "and perspective mismatches, and smooth all cut-out edges. Keep the "
+    "room and keep each person's position, size, pose and identity "
+    "unchanged — {count} in total, no additional people, no duplicates")
 PROMPT_MULTI_REF_DEFAULT = (
     "{label}: the exact room from the first reference image, keeping the "
     "room layout, lighting and perspective. Compose {count} into the scene "
