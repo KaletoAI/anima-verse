@@ -45,9 +45,11 @@ PROMPT_MULTI_REF_DEFAULT = (
     "The exact {setting} from the first reference image, keeping its "
     "layout, lighting and perspective. Compose {count} into the scene "
     "and NO ONE else — each person appears exactly once, no additional "
-    "people, no duplicates. The person reference images provide IDENTITY "
-    "ONLY (face, hair, body, outfit) — IGNORE the pose and background they "
-    "show; each person's pose follows the text. People: {people}")
+    "people, no duplicates. Some people have a reference image: it "
+    "provides their IDENTITY ONLY (face, hair, body, outfit) — IGNORE the "
+    "pose and background it shows. People without a reference image are "
+    "fully described in the text. Every person's pose follows the text. "
+    "People: {people}")
 PROMPT_ONLY_BG_DEFAULT = (
     "The exact {setting} from the reference image, keeping its layout, "
     "lighting and perspective. Compose {count} into the scene and NO ONE "
@@ -121,11 +123,71 @@ def _resolve_backend():
     return backend
 
 
-def _identity_image_path(name: str) -> Optional[Path]:
-    """Identity reference for multi_ref mode: the PROFILE image is the
-    canonical identity source (same semantics as the main pipeline's
-    reference slot 1 — appearance only, pose comes from the text). Newest
-    cached variant only as fallback when no profile image exists."""
+def _person_image_path(name: str) -> Optional[Path]:
+    """Reference image of a person for multi_ref — the CURRENT expression/
+    variant image (renders proved better than the profile portrait; user
+    decision 2026-07-07). Preference:
+
+    1. Variant for the exact current state (mood + effective activity +
+       equipped — same key as /outfit-expression); on a miss the missing
+       variant is triggered in the background (coalesced/cooldowned).
+    2. Variant with the SAME activity/pose but any mood (sidecar match) —
+       the exact key misses on every mood shift.
+    3. Newest cached variant. 4. Profile image.
+    """
+    mood = activity = ""
+    try:
+        from app.models.character import (get_character_current_feeling,
+                                          get_effective_activity)
+        mood = get_character_current_feeling(name) or ""
+        activity = get_effective_activity(name) or ""
+    except Exception as e:
+        logger.debug("scene: state lookup failed for %s: %s", name, e)
+    try:
+        from app.core.expression_regen import (get_cached_expression,
+                                               trigger_expression_generation)
+        from app.models.inventory import get_equipped_items, get_equipped_pieces
+        cached = get_cached_expression(
+            name, mood, activity,
+            equipped_pieces=get_equipped_pieces(name),
+            equipped_items=get_equipped_items(name))
+        if cached and Path(cached).exists():
+            return Path(cached)
+        # Exact variant missing — generate it for the NEXT render (fire and
+        # forget; coalesce + cooldown keep this from spamming the queue).
+        trigger_expression_generation(name, mood, activity)
+    except Exception as e:
+        logger.debug("scene: expression lookup failed for %s: %s", name, e)
+    try:
+        from app.core.expression_regen import _get_expressions_dir
+        expr_dir = _get_expressions_dir(name)
+        want = activity.strip().lower()
+        pose_match = None
+        newest = None
+        if expr_dir.exists():
+            for p in expr_dir.iterdir():
+                if p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                    continue
+                if p.name.startswith(".tmp_"):
+                    continue
+                if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
+                    newest = p
+                if want:
+                    try:
+                        meta = json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    if str(meta.get("activity") or "").strip().lower() != want:
+                        continue
+                    if (pose_match is None
+                            or p.stat().st_mtime > pose_match.stat().st_mtime):
+                        pose_match = p
+        if pose_match:
+            return pose_match
+        if newest:
+            return newest
+    except Exception as e:
+        logger.debug("scene: variant fallback failed for %s: %s", name, e)
     try:
         from app.models.character import (get_character_images_dir,
                                           get_character_profile_image)
@@ -136,21 +198,6 @@ def _identity_image_path(name: str) -> Optional[Path]:
                 return p
     except Exception as e:
         logger.debug("scene: profile image lookup failed for %s: %s", name, e)
-    try:
-        from app.core.expression_regen import _get_expressions_dir
-        expr_dir = _get_expressions_dir(name)
-        newest = None
-        if expr_dir.exists():
-            for p in expr_dir.iterdir():
-                if p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
-                    continue
-                if p.name.startswith(".tmp_"):
-                    continue
-                if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
-                    newest = p
-        return newest
-    except Exception as e:
-        logger.debug("scene: variant fallback failed for %s: %s", name, e)
     return None
 
 
@@ -231,12 +278,13 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     mode = get_scene_render_mode()
     chars: List[Dict[str, Any]] = []
     for n in names:
-        # Identity image (profile) — only referenced in multi_ref mode, but
-        # part of the signature either way (identity changes = new scene).
-        img = _identity_image_path(n)
+        # Reference image (current expression/variant) — only sent in
+        # multi_ref mode, but part of the signature either way (a changed
+        # variant = a changed scene). A person WITHOUT any image stays in
+        # the list: they become a text-described person in the prompt.
         chars.append({
             "name": n,
-            "image": img,
+            "image": _person_image_path(n),
             "activity": _pose_hint(n),
         })
 
