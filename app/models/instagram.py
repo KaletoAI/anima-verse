@@ -413,6 +413,12 @@ def extract_instagram_interactions(text: str) -> Optional[Dict[str, Any]]:
             continue
         # Nur echte User-Handles akzeptieren: @name, oder user_1234 (Underscore + Ziffer).
         # Reine Ziffern (Zeitstempel wie "13:35") werden ignoriert.
+        # Post-IDs ("post_<ts>_<hash>") sehen wie User-Handles aus, sind aber
+        # nie ein Autor: sie stammen aus echoten InstagramComment-Zeilen im
+        # Gedankentext — sonst landet der Kommentar mit der Post-ID als Autor
+        # auf dem NEUESTEN EIGENEN Post statt auf dem gemeinten fremden.
+        if author.lower().startswith("post_"):
+            continue
         is_at_mention = author.startswith('@')
         is_user_handle = '_' in author and re.search(r'\d', author) is not None
         if is_at_mention or is_user_handle:
