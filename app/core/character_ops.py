@@ -699,6 +699,15 @@ def build_memory_relationships(character_name: str,
         for m in mem if (m.get("related_character") or "").strip()
     )
 
+    # Ghost filter: relationships whose partner no longer exists in the
+    # world (character deleted) stay in the DB but must not show in the
+    # Mind panel.
+    try:
+        from app.models.character import list_available_characters
+        existing = set(list_available_characters())
+    except Exception:
+        existing = set()
+
     items = []
     for r in rels:
         # Partner = the other side. _row_to_rel fills character_a/b with
@@ -706,6 +715,8 @@ def build_memory_relationships(character_name: str,
         a = r.get("character_a") or ""
         b = r.get("character_b") or ""
         partner = b if a == character_name else a
+        if existing and partner not in existing:
+            continue
         # Flip the sentiment to the calling character's point of view if
         # needed: a_to_b is the sentiment from a towards b.
         if a == character_name:

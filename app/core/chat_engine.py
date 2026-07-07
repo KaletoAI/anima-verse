@@ -713,12 +713,19 @@ def run_chat_turn(
 
             def _bg_post():
                 try:
+                    # Partner = the SPEAKER of the trigger utterance, not
+                    # ctx["user_display_name"]: that one resolves the active
+                    # avatar via get_active_character(), which returns '' in
+                    # loop/background threads (avatar selection lives in USER
+                    # settings) → sentinel "user" → relationship + memory
+                    # attribution silently skipped on every room reply (no
+                    # 'chat' interaction was recorded since April).
                     post_process_response(
                         owner_id=owner_id, character_name=responder,
                         user_input=incoming_message,
                         full_response=(clean + ("\n" + _markers if _markers else "")),
                         agent_config=ctx["agent_config"], llm=ctx["llm"],
-                        user_display_name=ctx["user_display_name"],
+                        user_display_name=(speaker or ctx["user_display_name"]),
                         full_chat_history=ctx["full_chat_history"],
                         old_history=ctx.get("old_history"),
                         extraction_context={"source": "user_chat"})
