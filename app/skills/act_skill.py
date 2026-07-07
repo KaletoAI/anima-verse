@@ -473,9 +473,13 @@ async def _run_storyteller_agent(
     _stq = _get_llm_queue()
     _st_task_id = ""
     try:
+        # Register with the LLMInstance (st_inst), NOT the raw client: only
+        # the instance carries provider_name — a bare client makes the
+        # provider manager fall back to the FIRST queue, and the task panel
+        # then shows the wrong provider next to the right model.
         _st_task_id = await _stq.register_chat_active_async(
-            actor, llm_instance=st_llm, task_type="storyteller",
-            label=f"Erzähler: {actor}")
+            actor, llm_instance=st_inst, task_type="storyteller",
+            label=f"Erzähler: Aktion von {actor}")
         agent.chat_task_id = _st_task_id
     except Exception as _re:
         logger.debug("storyteller chat-active register failed: %s", _re)
