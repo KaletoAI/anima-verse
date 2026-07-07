@@ -45,10 +45,9 @@ PROMPT_MULTI_REF_DEFAULT = (
     "The exact {setting} from the first reference image, keeping its "
     "layout, lighting and perspective. Compose {count} into the scene "
     "and NO ONE else — each person appears exactly once, no additional "
-    "people, no duplicates. Some people have a reference image: it "
-    "provides their IDENTITY ONLY (face, hair, body, outfit) — IGNORE the "
-    "pose and background it shows. People without a reference image are "
-    "fully described in the text. Every person's pose follows the text. "
+    "people, no duplicates. A person's reference image provides their "
+    "IDENTITY ONLY (face, hair, body, outfit) — IGNORE the pose and "
+    "background it shows; every person's pose follows the text. "
     "People: {people}")
 PROMPT_ONLY_BG_DEFAULT = (
     "The exact {setting} from the reference image, keeping its layout, "
@@ -276,8 +275,19 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     names = [avatar] + [n for n in (_list_characters_in_room(loc, room) or [])
                         if n != avatar]
     mode = get_scene_render_mode()
+    from app.models.character import get_movement_target
     chars: List[Dict[str, Any]] = []
     for n in names:
+        # Characters in transit (active movement target, walking away over
+        # several ticks) still count as present data-wise but are visually
+        # leaving — rendering them produces "returning to X" figures that
+        # don't belong in the scene. The avatar is always included.
+        if n != avatar:
+            try:
+                if (get_movement_target(n) or "").strip():
+                    continue
+            except Exception:
+                pass
         # Reference image (current expression/variant) — only sent in
         # multi_ref mode, but part of the signature either way (a changed
         # variant = a changed scene). A person WITHOUT any image stays in
