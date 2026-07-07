@@ -14,7 +14,7 @@ export type IconName =
   | 'reset' | 'close' | 'sendBack' | 'autosize' | 'maximize' | 'lock' | 'unlock'
   | 'zoomIn' | 'zoomOut' | 'settings' | 'trash'
   | 'brain' | 'cloud' | 'sliders'
-  | 'background' | 'tag' | 'backpack' | 'avatar'
+  | 'background' | 'tag' | 'backpack' | 'avatar' | 'transparency'
 
 // Jeder Eintrag = der innere Inhalt eines <svg> (Pfade/Formen).
 const PATHS: Record<IconName, JSX.Element> = {
@@ -197,6 +197,13 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <rect x="2" y="4" width="20" height="16" rx="2" />
       <rect x="6" y="8" width="8" height="6" rx="1" />
+    </>
+  ),
+  // Half-filled circle — panel transparency cycle button.
+  transparency: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none" />
     </>
   ),
   // Label/Tag — für den Map-Beschriftungs-Umschalter.

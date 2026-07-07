@@ -97,6 +97,7 @@ export function PlayerApp() {
   const [layout, setLayout] = useState<Layout[]>(DEFAULT_LAYOUT)
   const [open, setOpen] = useState<string[]>(INITIAL_OPEN)  // Dialoge starten geschlossen
   const [autosize, setAutosize] = useState<string[]>([])  // Panels mit Höhen-Autosize
+  const [panelAlpha, setPanelAlpha] = useState<Record<string, number>>({})  // Panel-Transparenz (1 = deckend)
   const [iconMode, setIconMode] = useState<IconMode>('iconText')      // Launcher: nur Icon vs Icon+Text (Default aus gespeichertem Layout)
   const [toolbarAlign, setToolbarAlign] = useState<ToolbarAlign>('left')  // Launcher links/rechts (Default aus gespeichertem Layout)
   const [appearanceOpen, setAppearanceOpen] = useState(false)    // Zahnrad-Popover
@@ -118,6 +119,7 @@ export function PlayerApp() {
   const layoutRef = useRef(layout)
   const openRef = useRef(open)
   const autosizeRef = useRef(autosize)
+  const panelAlphaRef = useRef(panelAlpha)
   const iconModeRef = useRef(iconMode)
   const toolbarAlignRef = useRef(toolbarAlign)
   const frozenRef = useRef(frozen)
@@ -128,6 +130,7 @@ export function PlayerApp() {
   layoutRef.current = layout
   openRef.current = open
   autosizeRef.current = autosize
+  panelAlphaRef.current = panelAlpha
   iconModeRef.current = iconMode
   toolbarAlignRef.current = toolbarAlign
   frozenRef.current = frozen
@@ -137,6 +140,7 @@ export function PlayerApp() {
   const persist = useCallback(() => {
     apiPut('/play/layout', { layout: {
       grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current,
+      panelAlpha: panelAlphaRef.current,
       iconMode: iconModeRef.current, toolbarAlign: toolbarAlignRef.current,
       frozen: frozenRef.current, frozenWidth: frozenWidthRef.current,
       bg: bgPanelRef.current,
@@ -155,6 +159,7 @@ export function PlayerApp() {
           if (Array.isArray(v.grid) && v.grid.length) setLayout(v.grid)
           if (Array.isArray(v.open)) setOpen(v.open)
           if (Array.isArray(v.autosize)) setAutosize(v.autosize)
+          if (v.panelAlpha && typeof v.panelAlpha === 'object') setPanelAlpha(v.panelAlpha)
           if (v.iconMode === 'icon' || v.iconMode === 'iconText') setIconMode(v.iconMode)
           if (v.toolbarAlign === 'left' || v.toolbarAlign === 'right') setToolbarAlign(v.toolbarAlign)
           if (typeof v.frozenWidth === 'number' && v.frozenWidth > 0) setFrozenWidth(v.frozenWidth)
@@ -239,6 +244,19 @@ export function PlayerApp() {
     setAutosize(next)
     if (layoutLoaded.current) persist()
   }, [persist])
+  // Panel transparency: header button cycles 100% → 75% → 50% → 25% (same
+  // pattern as the map-label cycle); persisted with the layout.
+  const cycleAlpha = useCallback((id: string) => {
+    const steps = [1, 0.75, 0.5, 0.25]
+    const cur = panelAlphaRef.current[id] ?? 1
+    const next = steps[(steps.indexOf(cur) + 1) % steps.length] ?? 1
+    const map = { ...panelAlphaRef.current }
+    if (next >= 1) delete map[id]
+    else map[id] = next
+    panelAlphaRef.current = map
+    setPanelAlpha(map)
+    if (layoutLoaded.current) persist()
+  }, [persist])
 
   // Surroundings als Vollbild-Hintergrund: Panel verliert Kopf/Kachel, der
   // Inhalt (inkl. Figuren-Drag) läuft als interaktiver Background weiter.
@@ -298,10 +316,10 @@ export function PlayerApp() {
   }, [persist])
 
   // Benannte Layout-Presets
-  const [presets, setPresets] = useState<Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[]; iconMode?: IconMode; toolbarAlign?: ToolbarAlign; frozen?: boolean; frozenWidth?: number; bg?: string }>>({})
+  const [presets, setPresets] = useState<Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[]; panelAlpha?: Record<string, number>; iconMode?: IconMode; toolbarAlign?: ToolbarAlign; frozen?: boolean; frozenWidth?: number; bg?: string }>>({})
   const refreshPresets = useCallback(async () => {
     try {
-      const d = await apiGet<{ presets?: Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[]; iconMode?: IconMode; toolbarAlign?: ToolbarAlign; frozen?: boolean; frozenWidth?: number; bg?: string }> }>('/play/layouts')
+      const d = await apiGet<{ presets?: Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[]; panelAlpha?: Record<string, number>; iconMode?: IconMode; toolbarAlign?: ToolbarAlign; frozen?: boolean; frozenWidth?: number; bg?: string }> }>('/play/layouts')
       setPresets(d?.presets || {})
     } catch { /* ignore */ }
   }, [])
@@ -313,12 +331,15 @@ export function PlayerApp() {
     const grid = Array.isArray(p.grid) && p.grid.length ? p.grid : DEFAULT_LAYOUT
     const op = Array.isArray(p.open) ? p.open : ALL_PANELS
     const az = Array.isArray(p.autosize) ? p.autosize : []
+    const pa = p.panelAlpha && typeof p.panelAlpha === 'object' ? p.panelAlpha : {}
     layoutRef.current = grid
     openRef.current = op
     autosizeRef.current = az
+    panelAlphaRef.current = pa
     setLayout(grid)
     setOpen(op)
     setAutosize(az)
+    setPanelAlpha(pa)
     // Toolbar-Position + Labels mit-wiederherstellen (aeltere Presets ohne diese
     // Felder lassen die aktuelle Einstellung unveraendert).
     if (p.iconMode === 'icon' || p.iconMode === 'iconText') { iconModeRef.current = p.iconMode; setIconMode(p.iconMode) }
@@ -333,6 +354,7 @@ export function PlayerApp() {
     try {
       await apiPut('/play/layouts', { name: n, layout: {
         grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current,
+        panelAlpha: panelAlphaRef.current,
         // Toolbar-Position (links/rechts) + Labels (Icon/Icon+Text) gehoeren zum Preset.
         iconMode: iconModeRef.current, toolbarAlign: toolbarAlignRef.current,
         frozen: frozenRef.current, frozenWidth: frozenWidthRef.current, bg: bgPanelRef.current,
@@ -366,6 +388,14 @@ export function PlayerApp() {
           title={t('Autosize height to content')} aria-label={t('Autosize height to content')}
           aria-pressed={autosize.includes(id)}>
           <Icon name="autosize" size={14} />
+        </button>
+      )}
+      {withBack && (
+        <button className={`player-ctrl-btn${(panelAlpha[id] ?? 1) < 1 ? ' on' : ''}`}
+          onClick={() => cycleAlpha(id)} onMouseDown={(e) => e.stopPropagation()}
+          title={`${t('Panel transparency')}: ${Math.round((panelAlpha[id] ?? 1) * 100)}%`}
+          aria-label={t('Panel transparency')}>
+          <Icon name="transparency" size={14} />
         </button>
       )}
       {withBack && (
@@ -1141,11 +1171,20 @@ export function PlayerApp() {
             compactType={null}
             preventCollision={false}
           >
-            {renderedIds.map((id) => cloneElement(byId[id] as ReactElement, {
-              'data-panel-id': id,
-              'data-autosize': autosize.includes(id) ? '1' : undefined,
-              className: `player-panel${id === frontId ? ' player-panel-front' : ''}`,
-            }))}
+            {renderedIds.map((id) => {
+              const el = byId[id] as ReactElement
+              const alpha = panelAlpha[id] ?? 1
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const baseStyle = (el.props as any).style
+              return cloneElement(el, {
+                'data-panel-id': id,
+                'data-autosize': autosize.includes(id) ? '1' : undefined,
+                className: `player-panel${id === frontId ? ' player-panel-front' : ''}`,
+                // Per-panel transparency (header cycle button). RGL merges its
+                // positional styles over this — opacity survives untouched.
+                style: alpha < 1 ? { ...baseStyle, opacity: alpha } : baseStyle,
+              })
+            })}
           </GridLayout>
         </div>
       </div>
