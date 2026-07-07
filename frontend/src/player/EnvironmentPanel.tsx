@@ -70,7 +70,11 @@ export function EnvironmentPanel({
   // server caches per scene signature, ⟳ forces a fresh render.
   const [mode, setMode] = useState<'live' | 'rendered'>(() =>
     localStorage.getItem('play-scene-mode') === 'rendered' ? 'rendered' : 'live')
-  const [renderSig, setRenderSig] = useState('')
+  // Last known signature survives panel remounts (the grid remounts all
+  // panels on open/close/presence changes) — otherwise every remount would
+  // fire a fresh render request. The server additionally rate-limits.
+  const [renderSig, setRenderSig] = useState(() =>
+    localStorage.getItem('play-scene-sig') || '')
   const [renderNonce, setRenderNonce] = useState(0)  // cache-buster after force
   const [rendering, setRendering] = useState(false)
   const [renderErr, setRenderErr] = useState('')
@@ -83,6 +87,7 @@ export function EnvironmentPanel({
       const d = await apiPost<{ sig?: string; warning?: string }>(
         '/play/scene-render', { force })
       setRenderSig(d.sig || '')
+      try { localStorage.setItem('play-scene-sig', d.sig || '') } catch { /* ignore */ }
       setRenderWarn(d.warning || '')
       setRenderNonce((n) => n + 1)
     } catch (e) {

@@ -26,6 +26,7 @@ import hashlib
 import json
 import random
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -82,6 +83,32 @@ def get_scene_render_mode() -> str:
     'only_background': background reference only, persons as text."""
     m = str(config.get("image_generation.scene_render_mode", "") or "").strip().lower()
     return m if m in ("multi_ref", "only_background") else "multi_ref"
+
+
+# Unix ts of the last fresh generation — basis for the render cooldown.
+_last_gen_ts = 0.0
+
+
+def _scene_cooldown_s() -> int:
+    try:
+        v = config.get("image_generation.scene_render_cooldown_s", "")
+        return int(v) if str(v).strip() != "" else 120
+    except (TypeError, ValueError):
+        return 120
+
+
+def _newest_scene_image() -> Optional[Path]:
+    """Most recent rendered scene image (16-hex signature files only)."""
+    newest = None
+    try:
+        for p in get_scene_dir().iterdir():
+            if p.suffix != ".png" or not re.fullmatch(r"[0-9a-f]{16}", p.stem):
+                continue
+            if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
+                newest = p
+    except Exception as e:
+        logger.debug("scene: newest lookup failed: %s", e)
+    return newest
 
 
 def _prompt_template(config_key: str, default: str) -> str:
@@ -330,6 +357,19 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
     if out_path.exists() and not force:
         return {"ok": True, "sig": sig, "cached": True}
 
+    # Cooldown: a fresh GENERATION at most every N seconds — panel remounts
+    # and signature churn (variant mtimes, presence changes) must not burn
+    # renders back to back. The ⟳ button (force) always bypasses.
+    global _last_gen_ts
+    cooldown = _scene_cooldown_s()
+    if not force and cooldown > 0 and (time.time() - _last_gen_ts) < cooldown:
+        newest = _newest_scene_image()
+        if newest:
+            logger.info("scene render: cooldown active (%ds) — serving %s",
+                        cooldown, newest.name)
+            return {"ok": True, "sig": newest.stem, "cached": True,
+                    "cooldown": True}
+
     from app.core.event_images import _read_image_dimensions, _safe_dims
     dims = _read_image_dimensions(state["bg_path"])
     if not dims:
@@ -447,6 +487,7 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
         _tq.track_finish(_track_id, error=str(e))
         return {"ok": False, "error": str(e)}
     _tq.track_finish(_track_id)
+    _last_gen_ts = time.time()
     logger.info("scene rendered: %s (%s, mode=%s, %d chars, %d refs, %dx%d)",
                 out_path.name, state["label"], mode, len(state["chars"]),
                 len(refs), w, h)
