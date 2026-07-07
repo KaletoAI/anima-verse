@@ -106,7 +106,7 @@ doing right now (free text) — e.g. "leaning against the windowsill" or
 
 === Instagram (recent) ===
 {{ instagram_pending_block }}
-You may use InstagramComment to react if you want.
+You may use InstagramComment to react to other people's posts. Answer new comments under your OWN posts with InstagramReply (input: post_id @commenter: your answer).
 {% endif %}
 {% if travel_block %}
 

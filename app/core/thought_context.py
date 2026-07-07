@@ -269,12 +269,16 @@ def _build_outfit_decision_block(character_name: str) -> str:
 
 
 def _build_instagram_pending_block(character_name: str) -> str:
-    """Recent Instagram posts the agent might want to comment on / reply to.
+    """Recent Instagram activity the agent might want to react to.
 
-    Window length: ``skills.instagram.pending_window_hours`` from admin
-    config (default 4). Excludes the agent's own posts. Limits to the
-    5 newest within the window. If the agent already commented on a
-    post, it's skipped to avoid re-comment spam.
+    Two sections (window: ``skills.instagram.pending_window_hours``,
+    default 4, each capped at the 5 newest):
+
+    - Foreign posts the agent hasn't commented on yet (→ InstagramComment).
+    - NEW comments by others under the agent's OWN posts that the agent
+      hasn't answered yet (→ InstagramReply). "Answered" = the agent
+      commented on that post after the comment; filtered by COMMENT time,
+      so an older own post with fresh comments still surfaces.
     """
     try:
         from app.core import config as _cfg
@@ -290,9 +294,38 @@ def _build_instagram_pending_block(character_name: str) -> str:
     if not feed:
         return ""
 
+    def _comment_dt(c):
+        try:
+            return parse_iso(c.get("timestamp") or "")
+        except Exception:
+            return None
+
+    def _comment_author(c):
+        # Saved comments use "author" (instagram.add_comment); legacy data
+        # may have "by" or "character".
+        return c.get("author") or c.get("by") or c.get("character") or ""
+
     cutoff = utc_now() - timedelta(hours=window_h)
     relevant = []
+    own_replies = []  # (comment_dt, post, comment)
     for post in feed:
+        comments = post.get("comments") or []
+        if post.get("agent_name") == character_name:
+            # Own post: surface others' comments the agent hasn't answered.
+            own_times = [dt for c in comments
+                         if _comment_author(c) == character_name
+                         and (dt := _comment_dt(c))]
+            last_own = max(own_times) if own_times else None
+            for c in comments:
+                if _comment_author(c) == character_name:
+                    continue
+                cdt = _comment_dt(c)
+                if cdt is None or cdt < cutoff:
+                    continue
+                if last_own and cdt <= last_own:
+                    continue  # already answered after this comment
+                own_replies.append((cdt, post, c))
+            continue
         ts = post.get("timestamp", "") or ""
         try:
             post_dt = parse_iso(ts)
@@ -300,47 +333,49 @@ def _build_instagram_pending_block(character_name: str) -> str:
             continue
         if post_dt < cutoff:
             continue
-        if post.get("agent_name") == character_name:
-            continue
         # Skip if this character already commented on the post.
-        # Saved comments use the field "author" (instagram.add_comment); legacy
-        # data may have "by" or "character" — check all three.
-        comments = post.get("comments") or []
-        already = any(
-            c.get("author") == character_name
-            or c.get("by") == character_name
-            or c.get("character") == character_name
-            for c in comments)
+        already = any(_comment_author(c) == character_name for c in comments)
         if already:
             continue
         relevant.append((post_dt, post))
 
-    if not relevant:
-        return ""
-    relevant.sort(key=lambda x: x[0], reverse=True)
-    relevant = relevant[:5]
-
-    lines = []
-    for _, post in relevant:
-        poster = post.get("agent_name", "?")
-        post_id = post.get("post_id") or post.get("id") or ""
-        caption = (post.get("caption") or "").strip()
-        if len(caption) > 140:
-            caption = caption[:140].rstrip() + "…"
-        # Try to surface image_analysis when available — gives the agent
-        # something concrete to react to without us shipping the actual
-        # image (vision-LLM already did that earlier).
-        analysis = ""
-        meta = post.get("image_meta") or {}
-        if isinstance(meta, dict):
-            analysis = (meta.get("image_analysis") or "").strip()
-        line = f"- [{post_id}] {poster}: \"{caption}\""
-        if analysis:
-            if len(analysis) > 140:
-                analysis = analysis[:140].rstrip() + "…"
-            line += f"\n    Image: {analysis}"
-        lines.append(line)
-    return "Recent Instagram posts you haven't reacted to yet:\n" + "\n".join(lines)
+    parts = []
+    if relevant:
+        relevant.sort(key=lambda x: x[0], reverse=True)
+        lines = []
+        for _, post in relevant[:5]:
+            poster = post.get("agent_name", "?")
+            post_id = post.get("post_id") or post.get("id") or ""
+            caption = (post.get("caption") or "").strip()
+            if len(caption) > 140:
+                caption = caption[:140].rstrip() + "…"
+            # Try to surface image_analysis when available — gives the agent
+            # something concrete to react to without us shipping the actual
+            # image (vision-LLM already did that earlier).
+            analysis = ""
+            meta = post.get("image_meta") or {}
+            if isinstance(meta, dict):
+                analysis = (meta.get("image_analysis") or "").strip()
+            line = f"- [{post_id}] {poster}: \"{caption}\""
+            if analysis:
+                if len(analysis) > 140:
+                    analysis = analysis[:140].rstrip() + "…"
+                line += f"\n    Image: {analysis}"
+            lines.append(line)
+        parts.append("Recent Instagram posts you haven't reacted to yet:\n"
+                     + "\n".join(lines))
+    if own_replies:
+        own_replies.sort(key=lambda x: x[0], reverse=True)
+        lines = []
+        for _, post, c in own_replies[:5]:
+            post_id = post.get("post_id") or post.get("id") or ""
+            txt = (c.get("text") or "").strip()
+            if len(txt) > 140:
+                txt = txt[:140].rstrip() + "…"
+            lines.append(f"- [{post_id}] {_comment_author(c) or '?'}: \"{txt}\"")
+        parts.append("New comments under YOUR OWN posts you haven't answered yet:\n"
+                     + "\n".join(lines))
+    return "\n\n".join(parts)
 
 
 def _build_arc_block(character_name: str) -> str:
