@@ -84,6 +84,18 @@ export function ImageOverrides({ character }: { character: string }) {
   const [slots, setSlots] = useState<Record<string, SlotEntry>>({})
   const [slotsSaving, setSlotsSaving] = useState(false)
 
+  // The server resolves the LoRA list from the SAVED match pattern (backend
+  // lora_filter + library, endpoint-filtered) — so the "Add LoRA" choices
+  // must be refetched after every pattern save, not loaded just once.
+  const refreshLoraOptions = useCallback(async () => {
+    try {
+      const loraOpts = await apiGet<{ loras?: string[] }>(
+        `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
+      )
+      setAvailableLoras((loraOpts.loras || []).filter((l) => l && l !== 'None'))
+    } catch { /* keep the previous list */ }
+  }, [character])
+
   // Persist the full override ({backend match pattern, loras}); model is dropped.
   // The server field for the match pattern is still named "workflow".
   const persist = useCallback(
@@ -95,13 +107,16 @@ export function ImageOverrides({ character }: { character: string }) {
           loras: next.loras,
         })
         toast(t('Saved'))
+        // A changed match may resolve to another backend → reload the
+        // available LoRAs for the Add-LoRA select.
+        void refreshLoraOptions()
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       } finally {
         setSaving(false)
       }
     },
-    [character, t, toast],
+    [character, t, toast, refreshLoraOptions],
   )
 
   useEffect(() => {
