@@ -492,6 +492,28 @@ export function PlayerApp() {
     }
   }, [text, volume, addressees, sending, attach, load])
 
+  // 📷 scene photo: prompt distilled from the recent room conversation,
+  // result lands in the avatar's gallery + appears as a narrator line in
+  // the chat (world-visible — present characters can react).
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const takePhoto = useCallback(async () => {
+    if (photoBusy) return
+    setPhotoBusy(true)
+    try {
+      const d = await apiPost<{ ok?: boolean }>('/play/scene-photo', {})
+      if (d?.ok) {
+        toast(t('Photo saved to your gallery.'), 'success')
+        await load()
+      } else {
+        toast(t('Photo failed.'), 'error')
+      }
+    } catch (e) {
+      toast((e as Error).message || t('Photo failed.'), 'error')
+    } finally {
+      setPhotoBusy(false)
+    }
+  }, [photoBusy, toast, t, load])
+
   // Upload a picked/pasted/dropped file → attach by image_id. A local object URL
   // is shown immediately as the preview while the upload resolves.
   const uploadImage = useCallback(async (file: File) => {
@@ -722,6 +744,11 @@ export function PlayerApp() {
                   onClick={() => setPickerOpen(true)} disabled={sending}>🖼</button>
                 <button type="button" className="player-chip" title={t('Give a gift')}
                   onClick={() => setGiftOpen(true)} disabled={sending || present.length === 0}>🎁</button>
+                <button type="button" className="player-chip" style={{ marginLeft: 12 }}
+                  title={t('Take a photo of the current moment (saved to your gallery)')}
+                  onClick={takePhoto} disabled={photoBusy}>
+                  {photoBusy ? '⌛' : '📷'}
+                </button>
                 <span style={{ flex: 1 }} />
                 <button className="player-btn-primary" onClick={send}
                   disabled={sending || attach?.uploading || (!text.trim() && !attach)}>
