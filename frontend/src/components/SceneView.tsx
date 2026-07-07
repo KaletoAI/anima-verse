@@ -111,7 +111,15 @@ function SceneRow({ line, onOpenImage }: { line: SceneLine; onOpenImage?: (url: 
 
   let body: ReactNode
 
-  if (speaker === 'Erzähler') {
+  if (line.meta?.relationship) {
+    // Relationship change (display-only, never in LLM transcripts): subtle
+    // rosé meta line — "💞 Kai ⇄ Bianca Voss: neutral → acquaintance".
+    body = (
+      <em style={{ color: '#c98ba8', opacity: 0.85, fontSize: '0.9em' }}>
+        {line.content}
+      </em>
+    )
+  } else if (speaker === 'Erzähler') {
     // Erzähler-Narration (Act/Storyteller): farblich abgesetzt — gold + kursiv,
     // damit es sich klar vom Charakter-Dialog unterscheidet.
     body = (

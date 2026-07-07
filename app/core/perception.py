@@ -106,6 +106,49 @@ def _resolve_presence(location_id: str, room_id: str) -> Tuple[List[str], List[s
     return room_members, location_others
 
 
+def announce_action(character_name: str, text: str,
+                    source: str = "direct_action",
+                    perception_meta: Optional[Dict[str, Any]] = None,
+                    react: bool = True) -> None:
+    """UNIFIED flow for DIRECT (UI-triggered) actions — outfit change, scene
+    photo, and whatever comes next. Same pattern the spell path uses in
+    /play/say (user directive 2026-07-07: one mechanism, not per-feature
+    rebuilds):
+
+    1. Narrator line into the room stream (world-visible perception).
+    2. Room reactions via the agent loop (present characters get a chime
+       opportunity and may react — or SKIP).
+
+    Location/room come from the acting character ("Erzähler" has no own
+    position). Best-effort — never raises into the calling route."""
+    try:
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room)
+        loc = get_character_current_location(character_name) or ""
+        room = get_character_current_room(character_name) or ""
+        if not loc:
+            return
+        record_utterance(speaker="Erzähler", content=text,
+                         volume=VOLUME_NORMAL, location_id=loc,
+                         room_id=room, source=source,
+                         perception_meta=perception_meta)
+        if not react:
+            return
+        try:
+            from app.core.agent_loop import get_agent_loop
+            from app.models.account import is_player_controlled
+            get_agent_loop().dispatch_room_reactions(
+                speaker=character_name, content=text,
+                volume=VOLUME_NORMAL, location_id=loc, room_id=room,
+                addressees=[],
+                is_avatar=bool(is_player_controlled(character_name)))
+        except Exception as e:
+            logger.debug("announce_action reactions failed for %s: %s",
+                         character_name, e)
+    except Exception as e:
+        logger.debug("announce_action failed for %s: %s", character_name, e)
+
+
 def record_utterance(*, speaker: str, content: str,
                      volume: str = VOLUME_NORMAL,
                      addressees: Optional[Sequence[str]] = None,

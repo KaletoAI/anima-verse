@@ -141,7 +141,8 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     room = get_character_current_room(avatar) or ""
     present = ([c for c in _list_characters_in_room(loc, room) if c != avatar]
                if loc else [])
-    scene = perception_store.get_character_room_stream(avatar, loc, room, limit)
+    scene = perception_store.get_character_room_stream(
+        avatar, loc, room, limit, include_meta_lines=True)
 
     # Porträts der Anwesenden fürs Umgebungs-Fenster
     from app.models.character import get_character_profile_image
@@ -272,6 +273,25 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
         set_is_sleeping(avatar, False)
         logger.info("enter-room: %s woke up by moving to %s", avatar, room_id)
     return {"ok": True, "room_id": room_id}
+
+
+@router.post("/play/scene-photo")
+async def play_scene_photo(user=Depends(get_current_user)):
+    """📷 button: renders a photo of the CURRENT moment (prompt distilled
+    from the recent room conversation, references = room + present
+    characters) into the avatar's gallery. The action is announced as a
+    narrator line so present characters can react."""
+    import asyncio
+    from app.models.account import get_active_character
+    from app.core.scene_photo import take_scene_photo
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=404, detail="no active avatar")
+    result = await asyncio.to_thread(take_scene_photo, avatar)
+    if not result.get("ok"):
+        raise HTTPException(status_code=502,
+                            detail=result.get("error", "photo failed"))
+    return result
 
 
 @router.post("/play/scene-render")
@@ -871,6 +891,14 @@ async def play_equip(request: Request, user=Depends(get_current_user)):
     res = equip_piece(avatar, item_id)
     if res.get("status") != "ok":
         raise HTTPException(status_code=400, detail=res.get("reason", "equip failed"))
+    # Direct action is world-visible: narrator line -> NPCs can react.
+    try:
+        from app.models.inventory import get_item
+        from app.core.perception import announce_action
+        _nm = (get_item(item_id) or {}).get("name") or "etwas"
+        announce_action(avatar, f"{avatar} zieht {_nm} an.", source="wardrobe")
+    except Exception:
+        pass
     return {"ok": True, "item_id": item_id, "slots": res.get("slots", [])}
 
 
@@ -887,6 +915,14 @@ async def play_unequip(request: Request, user=Depends(get_current_user)):
     res = unequip_piece(avatar, slot=slot, item_id=item_id)
     if res.get("status") != "ok":
         raise HTTPException(status_code=400, detail=res.get("reason", "unequip failed"))
+    # Direct action is world-visible: narrator line -> NPCs can react.
+    try:
+        from app.models.inventory import get_item
+        from app.core.perception import announce_action
+        _nm = ((get_item(item_id) or {}).get("name") if item_id else "") or slot
+        announce_action(avatar, f"{avatar} legt {_nm} ab.", source="wardrobe")
+    except Exception:
+        pass
     return {"ok": True, "slot": slot}
 
 
@@ -1252,6 +1288,15 @@ async def play_set_outfit(request: Request, user=Depends(get_current_user)):
     apply_equipped_pieces(avatar, pieces=pieces_by_slot,
                           remove_slots=list(target.get("remove_slots") or []),
                           pieces_meta=pieces_meta, source="play_outfit")
+    # Direct action is world-visible: narrator line -> NPCs can react.
+    try:
+        from app.core.perception import announce_action
+        _onm = target.get("name") or ""
+        announce_action(avatar,
+                        f"{avatar} zieht sich um" + (f" — {_onm}." if _onm else "."),
+                        source="wardrobe")
+    except Exception:
+        pass
     return {"ok": True, "name": target.get("name", "")}
 
 

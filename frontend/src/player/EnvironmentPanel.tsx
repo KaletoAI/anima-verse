@@ -101,6 +101,26 @@ export function EnvironmentPanel({
     localStorage.setItem('play-scene-mode', m)
     if (m === 'rendered') void requestRender(false)
   }, [requestRender])
+  // 📷 scene photo: prompt distilled from the recent room conversation,
+  // result lands in the avatar's gallery; the action is world-visible
+  // (narrator line) so present characters can react.
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const [photoMsg, setPhotoMsg] = useState('')
+  const takePhoto = useCallback(async () => {
+    if (photoBusy) return
+    setPhotoBusy(true)
+    setPhotoMsg('')
+    try {
+      const d = await apiPost<{ ok?: boolean; filename?: string }>(
+        '/play/scene-photo', {})
+      setPhotoMsg(d?.ok ? t('Photo saved to your gallery.') : t('Photo failed.'))
+    } catch (e) {
+      setPhotoMsg((e as Error).message || t('Photo failed.'))
+    } finally {
+      setPhotoBusy(false)
+      window.setTimeout(() => setPhotoMsg(''), 6000)
+    }
+  }, [photoBusy, t])
   // Panel mounted directly in rendered mode (persisted choice) → render once.
   useEffect(() => {
     if (mode === 'rendered' && !renderSig && !rendering) void requestRender(false)
@@ -284,7 +304,23 @@ export function EnvironmentPanel({
               background: 'rgba(0,0,0,0.45)', color: '#fff',
             }}>⟳</button>
         )}
+        <button onClick={takePhoto} disabled={photoBusy}
+          title={t('Take a photo of the current moment (saved to your gallery)')}
+          aria-label={t('Take photo')}
+          style={{
+            fontSize: '0.72em', padding: '2px 8px', borderRadius: 6,
+            cursor: photoBusy ? 'wait' : 'pointer',
+            border: '1px solid rgba(255,255,255,0.25)',
+            background: 'rgba(0,0,0,0.45)', color: '#fff',
+          }}>{photoBusy ? '⌛' : '📷'}</button>
       </div>
+      {photoMsg && (
+        <span style={{
+          position: 'absolute', top: 34, right: 8, zIndex: 5,
+          fontSize: '0.72em', background: 'rgba(0,0,0,0.55)', color: '#fff',
+          padding: '2px 8px', borderRadius: 6,
+        }}>{photoMsg}</span>
+      )}
 
       {mode === 'live' && others.length === 0 && (
         <span style={{

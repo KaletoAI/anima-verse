@@ -102,10 +102,17 @@ def get_room_utterances(location_id: str, room_id: str = "",
 
 
 def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
-                              limit: int = 100) -> List[Dict[str, Any]]:
+                              limit: int = 100,
+                              include_meta_lines: bool = False
+                              ) -> List[Dict[str, Any]]:
     """Wahrnehmungen eines Characters, gefiltert auf einen Raum (fuer die
     Player-Szenen-Ansicht). Join auf ``utterances`` nur fuer die Raum-Metadaten —
-    nie fuer den Inhalt (der bleibt in ``perceptions`` schon gefiltert)."""
+    nie fuer den Inhalt (der bleibt in ``perceptions`` schon gefiltert).
+
+    include_meta_lines: display-only lines (meta.display_only, e.g.
+    relationship-change notes) are for the PLAYER UI only — the default
+    False keeps them out of every LLM-transcript consumer; only the
+    /play/scene route opts in."""
     conn = get_connection()
     # u.volume mitliefern (whisper/normal/shout) — KEIN geheimer Inhalt, nur die
     # Lautstärke; der Inhalt bleibt in p.content schon gefiltert (whisper_meta = leer).
@@ -115,7 +122,10 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
         "WHERE p.perceiver=? AND u.location_id=? AND u.room_id=? "
         "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
         (perceiver, location_id, room_id, limit)).fetchall()
-    return [_row_to_dict(r) for r in reversed(rows)]
+    out = [_row_to_dict(r) for r in reversed(rows)]
+    if not include_meta_lines:
+        out = [r for r in out if not ((r.get("meta") or {}).get("display_only"))]
+    return out
 
 
 def get_followed_conversation_tail(perceiver: str, partner: str,

@@ -957,7 +957,17 @@ def post_process_response(
                 except Exception as rel_err:
                     logger.debug("[%s] Relationship analysis failed (defaults): %s", character_name, rel_err)
 
-                record_interaction(
+                # Old type BEFORE the update — a TYPE change (neutral →
+                # acquaintance → friend/romantic) is surfaced as a
+                # display-only narrator line in the scene view.
+                _old_type = ""
+                try:
+                    from app.models.relationship import get_relationship
+                    _old_type = (get_relationship(_speaker_a, _speaker_b)
+                                 or {}).get("type") or ""
+                except Exception:
+                    pass
+                _rel_after = record_interaction(
                     char_a=_speaker_a,
                     char_b=_speaker_b,
                     interaction_type="chat",
@@ -966,6 +976,31 @@ def post_process_response(
                     sentiment_delta_a=analysis.get("sentiment_a", 0.05),
                     sentiment_delta_b=analysis.get("sentiment_b", 0.05),
                     romantic_delta=analysis.get("romantic_delta", 0.0))
+                _new_type = (_rel_after or {}).get("type") or ""
+                if _new_type and _new_type != _old_type:
+                    # Display-only line (meta.display_only): rendered by the
+                    # player scene view, filtered from all LLM transcripts
+                    # (perception_store default).
+                    try:
+                        from app.core.perception import (record_utterance,
+                                                         VOLUME_NORMAL)
+                        from app.models.character import (
+                            get_character_current_location,
+                            get_character_current_room)
+                        _r_loc = get_character_current_location(character_name) or ""
+                        _r_room = get_character_current_room(character_name) or ""
+                        _txt = (f"💞 {_speaker_a} ⇄ {_speaker_b}: "
+                                + (f"{_old_type} → {_new_type}"
+                                   if _old_type else _new_type))
+                        if _r_loc:
+                            record_utterance(
+                                speaker="Erzähler", content=_txt,
+                                volume=VOLUME_NORMAL, location_id=_r_loc,
+                                room_id=_r_room, source="relationship",
+                                perception_meta={"display_only": True,
+                                                 "relationship": True})
+                    except Exception as _re:
+                        logger.debug("relationship display line failed: %s", _re)
             except Exception as rel_err:
                 logger.error("[%s] Relationship update error: %s", character_name, rel_err)
 

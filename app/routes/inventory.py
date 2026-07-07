@@ -822,6 +822,14 @@ async def equip_route(character_name: str, request: Request) -> Dict[str, Any]:
         result = equip_item(character_name, item_id)
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "equip failed"))
+    # Direct (UI) action is world-visible: narrator line -> others can react.
+    try:
+        from app.core.perception import announce_action
+        announce_action(character_name,
+                        f"{character_name} zieht {item.get('name') or 'etwas'} an.",
+                        source="wardrobe")
+    except Exception:
+        pass
     return result
 
 
@@ -847,6 +855,15 @@ async def unequip_route(character_name: str, request: Request) -> Dict[str, Any]
         result = unequip_item(character_name, item_id)
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "unequip failed"))
+    # Direct (UI) action is world-visible: narrator line -> others can react.
+    try:
+        from app.models.inventory import get_item as _gi
+        from app.core.perception import announce_action
+        _nm = ((_gi(item_id) or {}).get("name") if item_id else "") or slot
+        announce_action(character_name, f"{character_name} legt {_nm} ab.",
+                        source="wardrobe")
+    except Exception:
+        pass
     return result
 
 
