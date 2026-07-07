@@ -28,11 +28,16 @@ logger = get_logger("storyteller")
 # Komplette Liste der Skills, die der Storyteller-Pipeline angeboten
 # werden _können_. Andere Skills sind im Storyteller-Modus generell aus
 # (z.B. retrospect, instagram_*, markdown_writer).
+# Keys MUST be real SKILL_IDs (skill_manager.SKILL_REGISTRY) — the Act
+# toolset filters `sid in enabled_skill_ids`. The former keys
+# "image_generation"/"video_generation"/"setactivity" matched NO skill, so
+# the storyteller silently never got those tools ("mache ein Foto" did
+# nothing); setactivity is abolished entirely.
 _SKILL_KEYS = [
-    "outfit_change", "image_generation", "setactivity", "consume_item",
+    "outfit_change", "imagegen", "consume_item",
     "setlocation", "talk_to", "send_message", "act",
     "instagram", "markdown_writer", "retrospect", "describe_room",
-    "notify_user", "video_generation", "instagram_comment", "instagram_reply",
+    "notify_user", "videogen", "instagram_comment", "instagram_reply",
     "outfit_creation",
 ]
 
@@ -41,8 +46,7 @@ _DEFAULTS: Dict[str, Any] = {
     "llm_task": "storyteller",
     "enabled_skills": {
         "outfit_change": True,
-        "image_generation": True,
-        "setactivity": True,
+        "imagegen": True,
         "consume_item": True,
         "setlocation": False,
         "talk_to": False,
@@ -53,7 +57,7 @@ _DEFAULTS: Dict[str, Any] = {
         "retrospect": False,
         "describe_room": False,
         "notify_user": False,
-        "video_generation": False,
+        "videogen": False,
         "instagram_comment": False,
         "instagram_reply": False,
         "outfit_creation": False,
