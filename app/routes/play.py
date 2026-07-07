@@ -275,19 +275,50 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     return {"ok": True, "room_id": room_id}
 
 
+@router.post("/play/scene-photo/prepare")
+async def play_scene_photo_prepare(user=Depends(get_current_user)):
+    """📷 step 1: distills the photo prompt from the recent room
+    conversation (+ person descriptions) WITHOUT generating — feeds the
+    image-gen dialog (model/LoRA/prompt selection)."""
+    import asyncio
+    from app.models.account import get_active_character
+    from app.core.scene_photo import prepare_scene_photo
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=404, detail="no active avatar")
+    result = await asyncio.to_thread(prepare_scene_photo, avatar)
+    if not result.get("ok"):
+        raise HTTPException(status_code=502,
+                            detail=result.get("error", "prepare failed"))
+    return result
+
+
 @router.post("/play/scene-photo")
-async def play_scene_photo(user=Depends(get_current_user)):
-    """📷 button: renders a photo of the CURRENT moment (prompt distilled
-    from the recent room conversation, references = room + present
-    characters) into the avatar's gallery. The action is announced as a
-    narrator line so present characters can react."""
+async def play_scene_photo(request: Request, user=Depends(get_current_user)):
+    """📷 step 2: renders the photo into the avatar's gallery. Body may
+    carry dialog overrides (prompt, backend, loras, negative_prompt,
+    character_names, use_room) — without them the one-click defaults run.
+    The action is announced as a narrator line so present characters can
+    react."""
     import asyncio
     from app.models.account import get_active_character
     from app.core.scene_photo import take_scene_photo
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=404, detail="no active avatar")
-    result = await asyncio.to_thread(take_scene_photo, avatar)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    result = await asyncio.to_thread(
+        take_scene_photo, avatar,
+        str(body.get("prompt") or ""),
+        str(body.get("backend") or ""),
+        body.get("loras"),
+        str(body.get("negative_prompt") or ""),
+        body.get("character_names"),
+        bool(body.get("use_room", True)))
     if not result.get("ok"):
         raise HTTPException(status_code=502,
                             detail=result.get("error", "photo failed"))

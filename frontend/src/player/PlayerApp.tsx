@@ -21,6 +21,7 @@ import { useToast } from '../lib/Toast'
 import { ChatGalleryPicker } from './ChatGalleryPicker'
 import { GiftPicker, type GiftResult } from './GiftPicker'
 import { SceneView, type SceneLine } from '../components/SceneView'
+import { ImageGenDialog, type ImageGenSubmit } from '../components/ImageGenDialog'
 import { ScenesRecap } from './ScenesRecap'
 import { MovePad } from './MovePad'
 import { EnvironmentPanel } from './EnvironmentPanel'
@@ -492,15 +493,41 @@ export function PlayerApp() {
     }
   }, [text, volume, addressees, sending, attach, load])
 
-  // 📷 scene photo: prompt distilled from the recent room conversation,
-  // result lands in the avatar's gallery + appears as a narrator line in
-  // the chat (world-visible — present characters can react).
+  // 📷 scene photo: step 1 distills the prompt from the recent room
+  // conversation (+ person descriptions) and opens the image-gen dialog
+  // (model/LoRA/prompt editable); step 2 generates into the avatar's
+  // gallery + narrator line in the chat (present characters can react).
   const [photoBusy, setPhotoBusy] = useState(false)
+  const [photoDlg, setPhotoDlg] = useState<{ prompt: string; subjects: string[]; present: string[] } | null>(null)
   const takePhoto = useCallback(async () => {
     if (photoBusy) return
     setPhotoBusy(true)
     try {
-      const d = await apiPost<{ ok?: boolean }>('/play/scene-photo', {})
+      const d = await apiPost<{ ok?: boolean; prompt?: string; subjects?: string[]; present?: string[] }>(
+        '/play/scene-photo/prepare', {})
+      if (d?.ok) {
+        setPhotoDlg({ prompt: d.prompt || '', subjects: d.subjects || [], present: d.present || [] })
+      } else {
+        toast(t('Photo failed.'), 'error')
+      }
+    } catch (e) {
+      toast((e as Error).message || t('Photo failed.'), 'error')
+    } finally {
+      setPhotoBusy(false)
+    }
+  }, [photoBusy, toast, t])
+  const submitPhoto = useCallback(async (payload: ImageGenSubmit) => {
+    setPhotoDlg(null)
+    setPhotoBusy(true)
+    try {
+      const d = await apiPost<{ ok?: boolean }>('/play/scene-photo', {
+        prompt: payload.prompt,
+        backend: payload.backend || '',
+        loras: payload.loras || null,
+        negative_prompt: payload.negative_prompt || '',
+        character_names: payload.character_names || null,
+        use_room: payload.use_room !== false,
+      })
       if (d?.ok) {
         toast(t('Photo saved to your gallery.'), 'success')
         await load()
@@ -512,7 +539,7 @@ export function PlayerApp() {
     } finally {
       setPhotoBusy(false)
     }
-  }, [photoBusy, toast, t, load])
+  }, [toast, t, load])
 
   // Upload a picked/pasted/dropped file → attach by image_id. A local object URL
   // is shown immediately as the preview while the upload resolves.
@@ -766,6 +793,20 @@ export function PlayerApp() {
             <ChatGalleryPicker
               onClose={() => setPickerOpen(false)}
               onPick={(url) => { setAttach({ image_url: url, preview: url }); setPickerOpen(false) }}
+            />
+          )}
+          {photoDlg && (
+            <ImageGenDialog
+              open
+              title={t('Scene photo')}
+              defaultPrompt={photoDlg.prompt}
+              showRoomReference
+              characterOptions={{
+                detected: photoDlg.subjects,
+                available: Array.from(new Set([...photoDlg.present, ...(data?.avatar ? [data.avatar] : [])])),
+              }}
+              onSubmit={submitPhoto}
+              onClose={() => setPhotoDlg(null)}
             />
           )}
           {giftOpen && (

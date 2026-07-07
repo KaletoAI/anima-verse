@@ -32,11 +32,38 @@ def _room_transcript(avatar: str, loc: str, room: str) -> str:
     return "\n".join(lines[-_TRANSCRIPT_LINES:])
 
 
-def take_scene_photo(avatar: str) -> Dict[str, Any]:
-    """Synchronous — the caller (route) runs it in a worker thread."""
+def _person_descriptions(subjects: List[str]) -> str:
+    """Text block with appearance + worn outfit per person in the frame.
+
+    The reference image alone is often not enough (identity only) — the
+    prompt must carry the description too, same semantics as everywhere
+    else: reference = appearance aid, outfit/pose live in the text."""
+    from app.core.scene_render import _appearance_text
+    from app.core.outfit_renderer import render_outfit
+    parts = []
+    for n in subjects:
+        bits = []
+        try:
+            a = _appearance_text(n)
+            if a:
+                bits.append(a)
+        except Exception:
+            pass
+        try:
+            outfit = (render_outfit(character_name=n) or {}).get("full") or ""
+            if outfit:
+                bits.append(outfit)
+        except Exception:
+            pass
+        parts.append(f"{n}" + (f" ({'; '.join(bits)})" if bits else ""))
+    return "People in the frame: " + "; ".join(parts)
+
+
+def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
+    """Builds the photo prompt (chat-context distillation + person
+    descriptions) WITHOUT generating — feeds the image-gen dialog."""
     from app.models.character import (get_character_current_location,
-                                      get_character_current_room,
-                                      get_character_images_dir)
+                                      get_character_current_room)
     from app.core.room_entry import _list_characters_in_room
 
     loc = get_character_current_location(avatar) or ""
@@ -76,10 +103,40 @@ def take_scene_photo(avatar: str) -> Dict[str, Any]:
         prompt = ("Candid photograph of the current moment: "
                   + "; ".join(parts))
 
-    # Backend: same resolution chain as the scene render.
+    desc = _person_descriptions(subjects)
+    if desc:
+        prompt = f"{prompt}\n{desc}"
+
     from app.core.scene_render import _resolve_backend
     backend = _resolve_backend()
+    return {"ok": True, "prompt": prompt, "subjects": subjects,
+            "present": present, "location": loc, "room": room,
+            "default_backend": getattr(backend, "name", "") or ""}
 
+
+def take_scene_photo(avatar: str,
+                     prompt: str = "",
+                     backend_name: str = "",
+                     loras: Any = None,
+                     negative_prompt: str = "",
+                     character_names: Any = None,
+                     use_room: bool = True) -> Dict[str, Any]:
+    """Synchronous — the caller (route) runs it in a worker thread.
+
+    Without overrides it prepares everything itself (one-click path);
+    the image-gen dialog passes prompt/backend/LoRAs/negative explicitly."""
+    prep = prepare_scene_photo(avatar)
+    if not prep.get("ok"):
+        return prep
+    loc, room = prep["location"], prep["room"]
+    present = prep["present"]
+    subjects = list(character_names) if character_names else prep["subjects"]
+    if not prompt:
+        prompt = prep["prompt"]
+
+    backend_name = (backend_name or prep.get("default_backend") or "").strip()
+
+    from app.models.character import get_character_images_dir
     out_dir = get_character_images_dir(avatar)
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = str(out_dir / f"{avatar}_photo.png")
@@ -90,12 +147,14 @@ def take_scene_photo(avatar: str) -> Dict[str, Any]:
             character_name=avatar,
             output_path=output_path,
             original_prompt=prompt,
-            backend_name=(getattr(backend, "name", "") or ""),
+            backend_name=backend_name,
+            loras=(list(loras) if loras else None),
             character_names=subjects,
             room_id=room,
             location_id=loc,
+            negative_prompt_override=(negative_prompt or "").strip(),
             create_new=True,
-            use_room=True)
+            use_room=bool(use_room))
     except Exception as e:
         logger.error("scene photo generation failed: %s", e)
         return {"ok": False, "error": str(e)}
