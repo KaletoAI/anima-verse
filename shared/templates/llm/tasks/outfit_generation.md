@@ -46,19 +46,23 @@ Generate a COHERENT OUTFIT as a list of individual pieces. Rules:
 - name is short, 2-4 words (e.g. "Black Leather Jacket"). {{ language_hint }}
 
 SLOT semantics (MANDATORY — place each garment in the correct slot):
-- head: hats, caps, headbands, hairbands, fascinators.
-- neck: necklaces, chokers, scarves, ties, bowties.
+- head: hats, caps, headbands, hairbands, fascinators, earrings.
+- neck: necklaces, chokers, scarves, ties, bowties. ONLY items worn around
+  the neck — NEVER garments (no shirts, no aprons, no underwear).
 - outer: jackets, coats, blazers, cardigans, hoodies, vests, boleros.
 - top: shirts, blouses, t-shirts, crop tops, tank tops, bras (as outerwear),
-  bodies, bodysuits, dress tops, corsets, bustiers.
+  bodies, bodysuits, dress tops, corsets, bustiers, aprons.
 - bottom: pants, jeans, skirts, shorts, hot-pants, leggings WORN AS PANTS, mini-skirts.
 - underwear_top: bra, sports-bra (under clothing), bralette, nipple-covers.
 - underwear_bottom: panties, thong, briefs, boxers, G-string.
 - legs: stockings, pantyhose, tights, knee-high socks, garters, leg-warmers.
-- feet: shoes, boots, sneakers, heels, sandals, flip-flops, loafers.
+- feet: shoes, boots, sneakers, heels, sandals, flip-flops, loafers,
+  slippers, house shoes — EVERY kind of footwear.
 
 CRITICAL: "Jacket" → slots: ["outer"]. "Leather Jacket" → slots: ["outer"].
 "Dress" → slots: ["top", "bottom"]. NEVER put outerwear in `bottom`.
+"Slippers" → slots: ["feet"] (footwear, NOT underwear). "Panties"/"Thong" →
+slots: ["underwear_bottom"] (NEVER `neck`). An apron → ["top"].
 
 Multi-slot pieces: if one garment physically occupies multiple slots (e.g. a
 dress covers top+bottom, a jumpsuit covers top+bottom+legs, thigh-high

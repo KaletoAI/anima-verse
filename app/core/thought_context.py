@@ -192,26 +192,69 @@ def _build_commitments_block(character_name: str) -> str:
         return ""
 
 
+def _bare_slots_summary(character_name: str) -> str:
+    """Short summary of essential UNCOVERED slot groups ('' = fully dressed).
+
+    Groups: upper body (top/underwear_top/outer), lower body
+    (bottom/underwear_bottom/legs), feet. Multi-slot pieces count via
+    collect_covered_slots. Used by the outfit line (the agent must KNOW it
+    is naked — "Your outfit: boots" reads like a full outfit otherwise)
+    and by the recurring outfit-decision hint.
+    """
+    try:
+        from app.models.inventory import get_equipped_pieces
+        from app.core.outfit_renderer import collect_covered_slots
+        pieces = get_equipped_pieces(character_name) or {}
+        covered = collect_covered_slots(pieces)
+    except Exception as e:
+        logger.debug("bare-slots summary failed for %s: %s", character_name, e)
+        return ""
+
+    def worn(slot: str) -> bool:
+        return bool(pieces.get(slot)) or slot in covered
+
+    upper = worn("top") or worn("underwear_top") or worn("outer")
+    lower = worn("bottom") or worn("underwear_bottom") or worn("legs")
+    feet = worn("feet")
+    if not upper and not lower and not feet:
+        return "completely naked"
+    parts: List[str] = []
+    if not upper:
+        parts.append("topless")
+    elif worn("outer") and not worn("top") and not worn("underwear_top"):
+        parts.append("nothing underneath the outer layer")
+    if not lower:
+        parts.append("naked below the waist")
+    if not feet:
+        parts.append("barefoot")
+    return ", ".join(parts)
+
+
 def _build_outfit_decision_block(character_name: str) -> str:
     """Outfit-decision hint when:
       a) location changed within the last N minutes, OR
       b) the agent just woke up (activity changed away from 'Sleeping'
-         within the last N minutes).
+         within the last N minutes), OR
+      c) recurring: essential slots are bare while the character is up and
+         about (not sleeping/intimate/in water, no decency exemption) —
+         the one-shot hints (a)/(b) are easily ignored and never return,
+         which left characters naked or barefoot for days.
 
-    Both signal "you're in a new context — the outfit you have on may
-    not fit". The agent is free to ignore the hint via SKIP.
+    The agent is free to ignore the hint via SKIP.
     """
     try:
         from app.core.db import get_connection
         conn = get_connection()
         row = conn.execute(
-            "SELECT location_changed_at, activity_changed_at, current_activity "
+            "SELECT location_changed_at, activity_changed_at, current_activity, "
+            "is_sleeping, is_wet, is_intimate, decency_exempt "
             "FROM character_state WHERE character_name=?",
             (character_name,),
         ).fetchone()
         if not row:
             return ""
-        loc_changed_at, activity_changed_at, current_activity = row
+        (loc_changed_at, activity_changed_at, current_activity,
+         is_sleeping, is_wet, is_intimate, decency_exempt) = row
         now = utc_now()
         cur_activity_lc = (current_activity or "").strip().lower()
 
@@ -261,6 +304,17 @@ def _build_outfit_decision_block(character_name: str) -> str:
                             break  # only check the most recent activity
                 except Exception:
                     pass
+
+        # (c) Recurring bare-slot hint. Suppressed while sleeping, intimate,
+        # in water, or under a decency exemption (nudity is fine there).
+        if not (is_sleeping or is_wet or is_intimate or decency_exempt) \
+                and cur_activity_lc != "sleeping":
+            bare = _bare_slots_summary(character_name)
+            if bare:
+                return (
+                    f"You are currently {bare}. If that is not intentional "
+                    "for the situation you are in, get dressed via "
+                    "OutfitChange (your inventory has clothes).")
 
         return ""
     except Exception as e:
@@ -514,15 +568,20 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
 
 
 def _build_outfit_block(character_name: str, label: str) -> str:
-    """Equipped outfit fragment for any character. Returns ``label: ...`` or ''."""
+    """Equipped outfit fragment for any character. Returns ``label: ...`` or ''.
+
+    Includes a bare-slot suffix ("— otherwise topless, barefoot"): without
+    it, "Your outfit: boots" reads like a full outfit and the agent never
+    learns it is naked (root cause of the days-long-naked NPCs)."""
     try:
         from app.core.outfit_renderer import render_outfit
         out = render_outfit(character_name=character_name)
-        # Wir nehmen nur den pieces-Teil (kein Fallback wie "topless") fuer
-        # diesen Block — Fallback gehoert in den Appearance-Pfad.
         raw = (out.get("pieces") or "").strip()
+        bare = _bare_slots_summary(character_name)
         if not raw:
-            return ""
+            return f"{label}: nothing — you are completely naked" if bare else ""
+        if bare:
+            return f"{label}: {raw} — otherwise {bare}"
         return f"{label}: {raw}"
     except Exception as e:
         logger.debug("outfit block failed for %s: %s", character_name, e)
