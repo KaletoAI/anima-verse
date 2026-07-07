@@ -1974,29 +1974,10 @@ def _extract_context_from_last_chat(agent_name: str,
         stat_list = ""
         if not is_avatar:
             try:
-                from app.models.character_template import is_feature_enabled, get_template
-                from app.models.character import get_character_profile as _gcp
-                if is_feature_enabled(target_name, "status_effects_enabled"):
-                    _prof = _gcp(target_name) or {}
-                    _cur = _prof.get("status_effects", {}) or {}
-                    _tmpl = get_template(_prof.get("template", "")) if _prof.get("template") else None
-                    if _tmpl and _cur:
-                        _lines: List[str] = []
-                        for _section in _tmpl.get("sections", []):
-                            for _fld in _section.get("fields", []):
-                                if _fld.get("store") != "status_effects":
-                                    continue
-                                _k = _fld.get("key")
-                                if not _k or _k not in _cur:
-                                    continue
-                                _hint = (_fld.get("hint") or "").strip()
-                                _line = f"- {_k}, currently {_cur.get(_k)}/100"
-                                if _hint:
-                                    _line += f" — {_hint}"
-                                _lines.append(_line)
-                        if _lines:
-                            stat_list = "\n".join(_lines)
-                            stats_enabled = True
+                # Single source for the value list (also used by the
+                # intimacy-end hook and the activity tick).
+                from app.core.stat_effects import build_stat_list
+                stats_enabled, stat_list = build_stat_list(target_name)
             except Exception as _se:
                 logger.debug("Stat-Liste fuer Extraktor [%s] fehlgeschlagen: %s", target_name, _se)
 

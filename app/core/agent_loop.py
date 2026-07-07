@@ -889,6 +889,17 @@ class AgentLoop:
                                  "intents": []}
                     return
 
+                # Activity stat tick: the RUNNING activity influences status
+                # values over time (gym drains stamina, resting restores) —
+                # cheap interval gate here, LLM round in a background thread
+                # (plan-activity-stat-effects.md Baustein 2).
+                try:
+                    from app.core.stat_effects import maybe_activity_tick
+                    maybe_activity_tick(character_name)
+                except Exception as e:
+                    logger.debug("activity stat tick failed for %s: %s",
+                                 character_name, e)
+
                 template_name = "chat/agent_thought.md"
                 if (chat_age_min is not None
                         and _IN_CHAT_HOT_MIN <= chat_age_min < _IN_CHAT_WARM_MIN):

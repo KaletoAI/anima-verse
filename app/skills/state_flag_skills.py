@@ -164,6 +164,14 @@ class IntimateSkill(_BaseFlagSkill):
             if partner:
                 return f"Intimer Moment zwischen {character_name} und {partner}."
             return f"{character_name} ist im intimen Modus."
+        # End of intimacy = the "afterwards" signal: one stat-evaluation
+        # round with climax context (post-climax drop of arousal-like
+        # values etc. — the semantics live in the template hints, not here).
+        try:
+            from app.core.stat_effects import on_intimacy_end
+            on_intimacy_end(character_name, partner or "")
+        except Exception as e:
+            logger.debug("intimacy-end stat hook failed: %s", e)
         return f"{character_name} verlaesst den intimen Modus."
 
 

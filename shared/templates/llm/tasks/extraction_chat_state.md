@@ -33,7 +33,8 @@ Evaluate "stats": how this single scene beat affects {{ target_name }}'s status 
 {{ stat_list }}
 
 Rules for "stats":
-- Return an object mapping value-name → integer delta for the ONE chat beat below (NOT an hour). Use SMALL deltas, roughly -10..+10.
+- Return an object mapping value-name → integer delta for the ONE chat beat below (NOT an hour). Use SMALL deltas for ordinary beats, roughly -10..+10.
+- EXCEPTION — significant turning points may swing BIG (up to about -90..+90) when the beat clearly is one: a climax/orgasm (arousal-like values drop sharply right after), total exhaustion or collapse, deep restorative rest. Let each value's own description above guide direction and size.
 - Only include values that are meaningfully affected by what happened. Omit unaffected values (do not return 0).
 - A demanding/physical action lowers stamina; rest raises it. Arousing context raises lust. Frightening context lowers courage. Judge from the text, not from fixed rules.
 - If nothing meaningfully changes, return an empty object.
