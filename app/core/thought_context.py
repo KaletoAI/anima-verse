@@ -758,8 +758,11 @@ def _build_travel_block(character_name: str, current_location_id: str) -> str:
             steps = len(path) - 1
             return (f"You are travelling to {target_name}. "
                     f"{steps} step(s) remaining — the system moves you one "
-                    f"grid-cell per tick. Re-using SetLocation only to change "
-                    f"the destination.")
+                    f"grid-cell per tick. RECONSIDER on every turn whether "
+                    f"this journey still fits: if something here matters "
+                    f"more now (a conversation, an event), cancel it with "
+                    f"CancelTravel. Use SetLocation only to change the "
+                    f"destination.")
         if path and len(path) == 1:
             # already at target — will be cleared next tick
             return f"You have arrived at {target_name}."

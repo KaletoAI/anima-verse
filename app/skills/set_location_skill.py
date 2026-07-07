@@ -19,6 +19,8 @@ from app.models.character import (
     get_character_current_location,
     get_character_config,
     set_movement_target,
+    get_movement_target,
+    clear_movement_target,
     get_known_locations)
 from app.models.world import (
     list_locations, get_location_rooms, get_room_by_name,
@@ -480,3 +482,51 @@ def _trigger_access_denied_thought(character_name: str, location_label: str, rea
                     character_name, location_label)
     except Exception as e:
         logger.debug("access_denied bump failed: %s", e)
+
+
+class CancelTravelSkill(BaseSkill):
+    """Drops the pending movement target — the character stays put.
+
+    Surfaced so a character can RECONSIDER a running journey on every loop
+    turn (the travel block in the thought prompt points here): plans
+    legitimately change mid-route, e.g. when a conversation starts at the
+    current place. Without this tool a set target either walks to the end
+    or sits forever while walk steps pause in warm chat.
+    """
+
+    SKILL_ID = "cancel_travel"
+    ALWAYS_LOAD = True
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        from app.core.prompt_templates import load_skill_meta
+        meta = load_skill_meta("cancel_travel") or {}
+        self.name = meta.get("name") or "CancelTravel"
+        self.description = meta.get("description") or ""
+        self._defaults = {"enabled": True}
+
+    def execute(self, raw_input: str) -> str:
+        if not self.enabled:
+            return "CancelTravel Skill ist deaktiviert."
+        ctx = self._parse_base_input(raw_input)
+        character_name = (ctx.get("agent_name") or "").strip()
+        if not character_name:
+            return "Fehler: character_name fehlt."
+        target_id = get_movement_target(character_name)
+        if not target_id:
+            return "Du bist auf keiner Reise — nichts abzubrechen."
+        target_name = target_id
+        try:
+            from app.models.world import get_location_name
+            target_name = get_location_name(target_id) or target_id
+        except Exception:
+            pass
+        clear_movement_target(character_name)
+        logger.info("Reise abgebrochen: %s (Ziel war %s)",
+                    character_name, target_name)
+        return (f"Du hast deine Reise nach {target_name} abgebrochen "
+                f"und bleibst hier.")
+
+    def as_tool(self, **kwargs) -> ToolSpec:
+        return ToolSpec(name=self.name, description=self.description,
+                        func=self.execute)
