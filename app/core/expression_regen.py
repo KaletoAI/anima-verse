@@ -1030,8 +1030,17 @@ def generate_expression_image(character_name: str,
 
     if model_override:
         payload["model_override"] = model_override
-    if loras_override is not None:
-        payload["loras"] = loras_override
+    # LoRAs: character override + slot-override LoRAs of ACTIVE (empty,
+    # uncovered) slots from render_outfit — e.g. an anatomy LoRA bound to
+    # the unequipped underwear slot. Character override first, dedup by name.
+    _merged_loras = list(loras_override or [])
+    _have = {str(l.get("name")) for l in _merged_loras if isinstance(l, dict)}
+    for _sl in (_rendered.get("loras") or []):
+        if str(_sl.get("name")) not in _have:
+            _merged_loras.append(_sl)
+            _have.add(str(_sl.get("name")))
+    if _merged_loras:
+        payload["loras"] = _merged_loras
     payload["image_use_case"] = "expression"
 
     try:

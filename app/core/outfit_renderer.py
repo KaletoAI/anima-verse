@@ -207,6 +207,7 @@ def render_outfit(
         return False
 
     fallback_parts: List[str] = []
+    slot_loras: List[Dict[str, Any]] = []
     for slot in VALID_PIECE_SLOTS:
         if pieces.get(slot):
             continue
@@ -215,7 +216,21 @@ def render_outfit(
         if _outer_layer_covers(slot):
             continue
         ov = slot_overrides.get(slot) or {}
-        ov_prompt = (ov.get("prompt") or "").strip() if isinstance(ov, dict) else ""
+        if not isinstance(ov, dict):
+            ov = {}
+        # Slot-override LoRA of an ACTIVE (empty, uncovered) slot — e.g. an
+        # anatomy LoRA bound to the unequipped underwear slot. Collected
+        # independently of the prompt fragment; the generation path merges
+        # it into the LoRA inputs.
+        _lora = ov.get("lora") or {}
+        _lname = (_lora.get("name") or "").strip() if isinstance(_lora, dict) else ""
+        if _lname and _lname != "None":
+            try:
+                _lstrength = float(_lora.get("strength") or 1.0)
+            except (TypeError, ValueError):
+                _lstrength = 1.0
+            slot_loras.append({"name": _lname, "strength": _lstrength})
+        ov_prompt = (ov.get("prompt") or "").strip()
         if ov_prompt:
             fallback_parts.append(_resolve_tokens(ov_prompt, profile))
             continue
@@ -252,6 +267,7 @@ def render_outfit(
         "items": items_text,
         "fallback": fallback_text,
         "full": full,
+        "loras": slot_loras,
     }
 
 
