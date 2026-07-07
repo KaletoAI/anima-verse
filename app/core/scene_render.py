@@ -26,6 +26,7 @@ import hashlib
 import json
 import random
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -85,8 +86,15 @@ def get_scene_render_mode() -> str:
     return m if m in ("multi_ref", "only_background") else "multi_ref"
 
 
-# Unix ts of the last fresh generation — basis for the render cooldown.
+# Unix ts of the last fresh generation START — basis for the render cooldown
+# (stamped at start AND finish: a running 3-minute generation must already
+# count, or parallel requests all pass the check before the first finishes).
 _last_gen_ts = 0.0
+# In-flight guard: never run two scene generations concurrently — parallel
+# requests would only queue up back-to-back on the backend channel and render
+# the same scene repeatedly (2026-07-07 incident: 4× the same signature).
+_inflight_lock = threading.Lock()
+_inflight = False
 
 
 def _scene_cooldown_s() -> int:
@@ -227,7 +235,7 @@ def _person_image_path(name: str) -> Optional[Path]:
     return None
 
 
-def _pose_hint(name: str) -> str:
+def _pose_hint(name: str, skip_activity: bool = False) -> str:
     """Compact pose/activity hint for the scene prompt.
 
     The raw pose_intent is often a whole RP paragraph (the tool LLM copies
@@ -236,9 +244,14 @@ def _pose_hint(name: str) -> str:
     variant's canonical form (normalize_pose result, short + English, no
     extra LLM call), else the first sentence hard-trimmed with quoted
     speech removed.
+
+    ``skip_activity``: ignore the activity text entirely (used for
+    characters with a pending movement target — the travel system writes
+    transit prose like "returning to Edwins Berg" into the activity, which
+    doesn't belong in a static scene; the pose variant still fits).
     """
     from app.models.character import get_character_profile, get_effective_activity
-    act = (get_effective_activity(name) or "").strip()
+    act = "" if skip_activity else (get_effective_activity(name) or "").strip()
     if act and len(act) <= 60 and "\n" not in act:
         return act
     try:
@@ -305,14 +318,17 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     from app.models.character import get_movement_target
     chars: List[Dict[str, Any]] = []
     for n in names:
-        # Characters in transit (active movement target, walking away over
-        # several ticks) still count as present data-wise but are visually
-        # leaving — rendering them produces "returning to X" figures that
-        # don't belong in the scene. The avatar is always included.
+        # LIVE PARITY: render exactly who the live panel lists. A set
+        # movement target does NOT mean "gone" — walk steps only run on the
+        # character's own loop turns and pause during warm chat, so targets
+        # legitimately sit for hours while the character is visibly active
+        # (2026-07-07: Bianca missing from renders). Only the POSE ignores
+        # the activity then: the travel system writes transit prose like
+        # "returning to Edwins Berg" into it.
+        in_transit = False
         if n != avatar:
             try:
-                if (get_movement_target(n) or "").strip():
-                    continue
+                in_transit = bool((get_movement_target(n) or "").strip())
             except Exception:
                 pass
         # Reference image (current expression/variant) — only sent in
@@ -322,7 +338,7 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
         chars.append({
             "name": n,
             "image": _person_image_path(n),
-            "activity": _pose_hint(n),
+            "activity": _pose_hint(n, skip_activity=in_transit),
         })
 
     sig_src = json.dumps([
@@ -339,6 +355,29 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
 
 
 def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
+    """Public entry — never runs two scene generations concurrently.
+
+    A request arriving while a generation is in flight gets the newest
+    existing scene image (``pending: True``) instead of queueing another
+    render behind it on the backend channel.
+    """
+    global _inflight
+    with _inflight_lock:
+        if _inflight:
+            newest = _newest_scene_image()
+            logger.info("scene render: generation already in flight — "
+                        "serving %s", newest.name if newest else "none yet")
+            return {"ok": True, "sig": newest.stem if newest else "",
+                    "cached": True, "pending": True}
+        _inflight = True
+    try:
+        return _render_scene_inner(avatar, force)
+    finally:
+        with _inflight_lock:
+            _inflight = False
+
+
+def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     """Renders (or serves from cache) the composed scene for the avatar's
     current room. Returns {"ok", "sig", "cached"} or {"ok": False, "error"}.
     """
@@ -369,6 +408,9 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
                         cooldown, newest.name)
             return {"ok": True, "sig": newest.stem, "cached": True,
                     "cooldown": True}
+    # Stamp at START: a running multi-minute generation must already count
+    # for the cooldown (and failing backends must not be hammered either).
+    _last_gen_ts = time.time()
 
     from app.core.event_images import _read_image_dimensions, _safe_dims
     dims = _read_image_dimensions(state["bg_path"])
