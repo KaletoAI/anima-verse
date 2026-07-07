@@ -365,12 +365,31 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
     if not imagegen:
         return {"loras": []}
 
-    # LoRA-library entries for the backend resolved for this character at
-    # generation time (endpoint-filtered + backend lora_filter glob) — never
-    # the LoRAs of a foreign backend/model family.
+    # LoRA-library entries for the backend that the VARIANT/OUTFIT generation
+    # would actually resolve for this character — mirror of the chain in
+    # expression_regen: per-character match glob (outfit_imagegen.workflow)
+    # → expression/outfit default spec → cheapest enabled agent backend.
+    # Without this, the Add-LoRA list ignored the page's "Backend match".
     try:
+        import os as _os
         from app.core.config import get_lora_library_names
-        eff = imagegen._select_backend_for_agent(character_name) if character_name else None
+        eff = None
+        if character_name:
+            try:
+                from app.models.character import get_character_profile
+                _ovr = (get_character_profile(character_name) or {}).get("outfit_imagegen") or {}
+                _glob = (_ovr.get("workflow") or "").strip() if isinstance(_ovr, dict) else ""
+                if _glob:
+                    eff = imagegen.match_backend(_glob)
+            except Exception:
+                eff = None
+        if not eff:
+            _default = (_os.environ.get("EXPRESSION_IMAGEGEN_DEFAULT", "").strip()
+                        or _os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip())
+            if _default:
+                eff = imagegen.resolve_imagegen_target(_default)
+        if not eff and character_name:
+            eff = imagegen._select_backend_for_agent(character_name)
         lib_names = get_lora_library_names(
             eff.name if eff else None,
             lora_filter=(getattr(eff, "lora_filter", "") or "") if eff else "")
