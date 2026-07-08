@@ -284,20 +284,21 @@ def are_romantically_compatible(char_a: str, char_b: str) -> bool:
         # Name mentioned directly
         if other_name.lower() in text:
             return True
-        # Gender keywords
+        # Gender keywords — profile gender values are female/male only
+        # (girl/boy removed entirely, user decision 2026-07-08)
         female_words = {"frau", "frauen", "woman", "women", "weiblich",
-                        "female", "maedchen", "girls", "girl"}
+                        "female"}
         male_words = {"mann", "maenner", "man", "men", "maennlich",
-                      "male", "jungs", "boys", "boy"}
+                      "male"}
         both_words = {"alle", "offen", "everyone", "both", "bisexuell",
                       "bi", "pansexuell"}
         text_words = set(text.replace(",", " ").split())
         if text_words & both_words:
             return True
         gender_match = False
-        if other_gender in ("female", "weiblich", "f", "w", "girl"):
+        if other_gender in ("female", "weiblich", "f", "w"):
             gender_match = bool(text_words & female_words)
-        elif other_gender in ("male", "maennlich", "m", "boy"):
+        elif other_gender in ("male", "maennlich", "m"):
             gender_match = bool(text_words & male_words)
         if gender_match:
             return True

@@ -47,19 +47,9 @@
               "label_de": "Frau"
             },
             {
-              "value": "girl",
-              "label": "Girl",
-              "label_de": "Mädchen"
-            },
-            {
               "value": "male",
               "label": "Man",
               "label_de": "Mann"
-            },
-            {
-              "value": "boy",
-              "label": "Boy",
-              "label_de": "Junge"
             }
           ],
           "replacement": {
@@ -77,7 +67,10 @@
           "label_de": "Alter",
           "type": "number",
           "replacement": {
-            "target": ["character_appearance", "face_appearance"]
+            "target": [
+              "character_appearance",
+              "face_appearance"
+            ]
           },
           "in_prompt": false,
           "llm_generable": true
@@ -371,8 +364,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "female",
-                  "girl"
+                  "female"
                 ]
               }
             },
@@ -398,8 +390,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "male",
-                  "boy"
+                  "male"
                 ]
               }
             }
@@ -424,8 +415,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "female",
-                  "girl"
+                  "female"
                 ]
               }
             },
@@ -436,8 +426,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "male",
-                  "boy"
+                  "male"
                 ]
               }
             },
@@ -453,8 +442,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "female",
-                  "girl"
+                  "female"
                 ]
               }
             },
@@ -465,8 +453,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "male",
-                  "boy"
+                  "male"
                 ]
               }
             },
@@ -477,8 +464,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "female",
-                  "girl"
+                  "female"
                 ]
               }
             },
@@ -489,8 +475,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "male",
-                  "boy"
+                  "male"
                 ]
               }
             },
@@ -501,8 +486,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "male",
-                  "boy"
+                  "male"
                 ]
               }
             },
@@ -527,8 +511,7 @@
           "visible_when": {
             "field": "gender",
             "values": [
-              "male",
-              "boy"
+              "male"
             ]
           },
           "options": [
@@ -616,8 +599,7 @@
               "visible_when": {
                 "field": "gender",
                 "values": [
-                  "female",
-                  "girl"
+                  "female"
                 ]
               }
             }
