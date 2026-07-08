@@ -45,6 +45,13 @@ class BaseSkill(ABC):
     SUPPRESS_IN_PERSON = False  # hidden while the conversation partners share a room
     CASCADE_BRAKE = False       # reply_only_to gate for messaging cascades
     SEARCH_INTENT = False       # search-forcing hint targets this tool
+    # Declarative intents (F6): [INTENT: <type>] markers the skill executes.
+    # The intent engine collects these from loaded skills — no intent type
+    # is hardcoded in the core. INTENT_PAYLOAD_KEYS lists the INTENT params
+    # (checked in order) that carry the comparable content for the
+    # redundancy skip (INTENT marker vs tool already executed this turn).
+    INTENT_TYPES: tuple = ()
+    INTENT_PAYLOAD_KEYS: tuple = ()
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -142,6 +149,41 @@ class BaseSkill(ABC):
             return self.config['usage_instructions']
         fmt = format_name or "tag"
         return format_example(fmt, self.name, "[input]")
+
+    def handle_intent(self, intent_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute one of the skill's declared intents (dispatched from the
+        intent engine's TaskQueue handler).
+
+        Default: pass the payload through to execute() as JSON — skills
+        with special payload shaping override this.
+        """
+        raw_input = json.dumps({k: v for k, v in payload.items()
+                                if k != "intent_type"}, ensure_ascii=False)
+        result = self.execute(raw_input)
+        success = bool(result) and "Fehler" not in str(result) \
+            and "Error" not in str(result)
+        return {"success": success, "result": str(result)[:500]}
+
+    def tool_intent_payload(self, raw_input: str) -> str:
+        """Comparable content blob from a tool invocation of this skill —
+        used by the intent engine's redundancy skip. Default: the values of
+        INTENT_PAYLOAD_KEYS (plus 'input') from a JSON input, else the raw
+        text. Empty string disables matching for this call."""
+        if not raw_input:
+            return ""
+        s = raw_input.strip()
+        if s.startswith("{"):
+            try:
+                d = json.loads(s)
+                if isinstance(d, dict):
+                    for key in tuple(self.INTENT_PAYLOAD_KEYS) + ("input",):
+                        val = d.get(key)
+                        if val:
+                            return str(val)
+                    return ""
+            except Exception:
+                pass
+        return s
 
     def memorize_result(self, result: str, character_name: str) -> bool:
         """Speichert das Execute-Ergebnis als Memory (optional).

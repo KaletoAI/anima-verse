@@ -140,6 +140,9 @@ def _parse_skill_entries(meta: Dict[str, Any]) -> List[SkillEntry]:
             suppress_in_person=bool(d.get("suppress_in_person", False)),
             cascade_brake=bool(d.get("cascade_brake", False)),
             search_intent=bool(d.get("search_intent", False)),
+            intents=[str(x).strip() for x in (d.get("intents") or []) if str(x).strip()],
+            intent_payload_keys=[str(x).strip() for x in (d.get("intent_payload_keys") or [])
+                                 if str(x).strip()],
         )
 
     skills_list = meta.get("skills")
@@ -396,6 +399,10 @@ def load_plugin(pkg: Package) -> List[Tuple[str, PluginSkill]]:
                 skill.CASCADE_BRAKE = True
             if entry.search_intent:
                 skill.SEARCH_INTENT = True
+            if entry.intents:
+                skill.INTENT_TYPES = tuple(entry.intents)
+            if entry.intent_payload_keys:
+                skill.INTENT_PAYLOAD_KEYS = tuple(entry.intent_payload_keys)
             _apply_skill_meta(skill, entry)
             logger.info("Package skill loaded: %s/%s (skill_id=%s)",
                         pkg.id, entry.module, entry.skill_id)

@@ -98,6 +98,8 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `skills[].suppress_in_person` | nein | Verb wird unterdrückt, solange die Gesprächspartner im selben Raum sind (Bewegungs-Verben) |
 | `skills[].cascade_brake` | nein | reply_only_to-Gate für Messaging-Kaskaden greift auf dieses Verb |
 | `skills[].search_intent` | nein | Der Search-Forcing-Hint (User fragt nach realen Infos) zielt auf dieses Tool |
+| `skills[].intents` | nein | `[INTENT: <typ>]`-Marker, die dieses Verb ausführt (F6) — die Klasse implementiert `handle_intent()`; Default = Payload-Durchreichung an `execute()` |
+| `skills[].intent_payload_keys` | nein | INTENT-Params mit dem vergleichbaren Inhalt (Redundanz-Skip: Marker vs. bereits ausgeführtes Tool im selben Turn) |
 | `templates.llm` | nein | Ordner relativ zum Paket; gleiche Struktur wie `shared/templates/llm/` |
 | `templates.character` | nein | Liste von Fragment-JSONs (siehe unten) |
 | `config_schema` | nein | Subsections für `/admin/settings → Skills` |

@@ -145,6 +145,17 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 | `add_character_like(post_id, name)` | Auto-Like des Kommentators (Default an) |
 | `create_post(name, image_filename, caption, …)` | Post anlegen — Core-Datenmodell (Feed/Route/`InstagramSkill` bleiben Core bis F6/Welle 5) |
 
+## Intents — `app.core.intent_engine` ✅ (F6, deklarationsbasiert)
+
+Skills deklarieren ihre `[INTENT: <typ>]`-Marker selbst (`INTENT_TYPES` +
+`INTENT_PAYLOAD_KEYS` als Klassenattribute bzw. `intents`/`intent_payload_keys`
+im Manifest) und führen sie über `handle_intent(intent_type, payload)` aus
+(Default: JSON-Durchreichung an `execute()`). `tool_intent_payload(raw_input)`
+liefert den Vergleichs-Inhalt eines Tool-Aufrufs für den Redundanz-Skip.
+Die Engine kennt nur die Core-Typen remind/execute_tool; alles andere kommt
+aus den geladenen Skills — ein nicht geladener Skill macht seinen Intent-Typ
+unbekannt (→ Commitment-Memory statt Fehler-Handler).
+
 ## LLM & Templates ✅
 
 | Funktion | Semantik |

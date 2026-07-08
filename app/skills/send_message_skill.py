@@ -30,6 +30,40 @@ class SendMessageSkill(BaseSkill):
     CASCADE_BRAKE = True
 
     SKILL_ID = "send_message"
+    # [INTENT: send_message | message=...] (F6) — the deferred follow-up
+    # message goes through the chat endpoint, not through execute().
+    INTENT_TYPES = ("send_message",)
+    INTENT_PAYLOAD_KEYS = ("content", "message")
+
+    def handle_intent(self, intent_type, payload):
+        """[INTENT: send_message]: post the follow-up via the chat endpoint
+        (silent) so it lands in the regular history/stream."""
+        import os as _os
+        import requests as _requests
+        message = payload.get("message", "") or payload.get("content", "")
+        if not message:
+            return {"success": False, "error": "missing message"}
+        try:
+            port = _os.environ.get("PORT", "8000")
+            resp = _requests.post(
+                f"http://localhost:{port}/chat/{payload.get('user_id', '')}",
+                json={"agent": payload.get("agent_name", ""),
+                      "message": message, "silent": True},
+                timeout=60)
+            return {"success": resp.ok, "status": resp.status_code}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def tool_intent_payload(self, raw_input: str) -> str:
+        """SendMessage freetext convention: "Recipient, message" — the part
+        after the first comma is the comparable content."""
+        s = (raw_input or "").strip()
+        if not s:
+            return ""
+        if s.startswith("{"):
+            return super().tool_intent_payload(raw_input)
+        parts = s.split(",", 1)
+        return parts[1] if len(parts) > 1 else s
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)

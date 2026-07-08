@@ -43,6 +43,10 @@ class SkillEntry:
     suppress_in_person: bool = False  # hidden while partners share a room
     cascade_brake: bool = False       # reply_only_to gate for messaging cascades
     search_intent: bool = False       # search-forcing hint targets this tool
+    # Declarative intents (F6): [INTENT: <type>] markers this verb executes
+    # (handle_intent on the class) + params carrying comparable content.
+    intents: List[str] = field(default_factory=list)
+    intent_payload_keys: List[str] = field(default_factory=list)
 
 
 @dataclass

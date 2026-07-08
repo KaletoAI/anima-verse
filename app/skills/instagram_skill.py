@@ -53,6 +53,21 @@ class InstagramSkill(BaseSkill):
 
     SKILL_ID = "instagram"
     DEFERRED = True  # Post wird erst nach Chat-Antwort erstellt
+    # [INTENT: instagram_post | caption=...] (F6) — dispatched here.
+    INTENT_TYPES = ("instagram_post",)
+    INTENT_PAYLOAD_KEYS = ("caption",)
+
+    def handle_intent(self, intent_type, payload):
+        """[INTENT: instagram_post]: the caption hint becomes the input."""
+        import json as _json
+        raw_input = _json.dumps({
+            "input": payload.get("caption", "") or "Create an Instagram post",
+            "agent_name": payload.get("agent_name", ""),
+            "user_id": "",
+        })
+        result = self.execute(raw_input)
+        success = bool(result) and "Fehler" not in str(result)
+        return {"success": success, "result": str(result)[:500]}
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)

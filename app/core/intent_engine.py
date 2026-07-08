@@ -1,10 +1,11 @@
 """Intent Engine — extracts character action commitments from chat responses and executes them.
 
 Character emits: [INTENT: type | delay=0 | key=value]
-Supported types: instagram_post, send_message, remind, execute_tool, change_outfit, describe_room
+Supported types (F6, declaration-based): the core types remind/execute_tool
+plus every INTENT_TYPES declaration of the loaded skills — a skill/package
+brings its intents along (class attributes or plugin.yaml ``intents``) and
+executes them via handle_intent(); nothing is registered here by name.
 Delay formats: 0/now/sofort, 30m, 2h, 1d, HH:MM
-
-LLM fallback (async, language-agnostic): triggers for responses > 150 chars without tag.
 """
 import asyncio
 import json
@@ -93,7 +94,10 @@ def _parse_delay(delay_str: str) -> int:
 # Execution routing
 # ---------------------------------------------------------------------------
 
-_KNOWN_TYPES = {"instagram_post", "send_message", "remind", "execute_tool", "change_outfit", "describe_room"}
+# Core-owned intent types — no skill involved (memory / generic stub).
+# Everything else comes from the loaded skills' INTENT_TYPES declarations
+# (F6, plan-skill-plugin-architecture.md): no skill intent is named here.
+_CORE_TYPES = {"remind", "execute_tool"}
 
 # Lowercase identifier, 3-40 chars. Rejects template placeholders the LLM
 # echoes verbatim from the system prompt (e.g. "<type>", "...", "key=value")
@@ -104,17 +108,29 @@ _PLAUSIBLE_INTENT_TYPE_RE = re.compile(r'^[a-z][a-z0-9_]{2,39}$')
 def _is_plausible_intent_type(t: str) -> bool:
     return bool(t) and bool(_PLAUSIBLE_INTENT_TYPE_RE.match(t))
 
-# Mapping: intent type -> tool names that, when executed with matching
-# content in the same turn, make the INTENT marker redundant. RP-finetunes
-# often emit BOTH a real <tool> call AND a [INTENT: ...] marker for the
-# same action — running both duplicates the action.
-_TOOL_FOR_INTENT = {
-    "send_message":   {"SendMessage"},
-    "instagram_post": {"Instagram", "InstagramPost"},
-    "change_outfit":  {"ChangeOutfit", "OutfitChange"},
-    "describe_room":  {"DescribeRoom"},
-    # remind, execute_tool: no direct tool equivalent — always run via INTENT
-}
+
+def _skill_for_intent(intent_type: str):
+    """The loaded skill declaring this intent type (or None)."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        for skill in get_skill_manager().skills:
+            if intent_type in getattr(skill, "INTENT_TYPES", ()):
+                return skill
+    except Exception as e:
+        logger.debug("intent skill lookup failed for %s: %s", intent_type, e)
+    return None
+
+
+def _known_types() -> set:
+    """Core types plus every INTENT_TYPES declaration of the loaded skills."""
+    types = set(_CORE_TYPES)
+    try:
+        from app.core.dependencies import get_skill_manager
+        for skill in get_skill_manager().skills:
+            types.update(getattr(skill, "INTENT_TYPES", ()))
+    except Exception:
+        pass
+    return types
 
 
 def _normalize_text(s: str) -> str:
@@ -125,65 +141,29 @@ def _normalize_text(s: str) -> str:
 
 
 def _intent_payload(intent: "Intent") -> str:
-    """Extract the comparable content blob from an INTENT marker."""
-    p = intent.params or {}
-    if intent.type == "send_message":
-        return _normalize_text(p.get("content") or p.get("message") or "")
-    if intent.type == "instagram_post":
-        return _normalize_text(p.get("caption") or "")
-    if intent.type == "change_outfit":
-        return _normalize_text(p.get("hint") or p.get("style") or "")
-    if intent.type == "describe_room":
-        return _normalize_text(p.get("description") or "")
-    return ""
-
-
-def _tool_payload(tool_name: str, raw_input: str) -> str:
-    """Extract the comparable content blob from a tool invocation's raw input.
-
-    Tool inputs are either freetext ("Recipient, message...") or JSON.
-    """
-    if not raw_input:
+    """Comparable content blob from an INTENT marker — the declaring
+    skill's INTENT_PAYLOAD_KEYS decide which params carry it."""
+    skill = _skill_for_intent(intent.type)
+    if skill is None:
         return ""
-    s = raw_input.strip()
-    if tool_name == "SendMessage":
-        # Convention: "Name, message text" — first comma splits.
-        parts = s.split(",", 1)
-        return _normalize_text(parts[1] if len(parts) > 1 else s)
-    if tool_name in ("Instagram", "InstagramPost"):
-        try:
-            d = json.loads(s)
-            if isinstance(d, dict):
-                return _normalize_text(d.get("caption") or d.get("input") or "")
-        except Exception:
-            pass
-        return _normalize_text(s)
-    if tool_name in ("ChangeOutfit", "OutfitChange"):
-        try:
-            d = json.loads(s)
-            if isinstance(d, dict):
-                return _normalize_text(d.get("hint") or d.get("style") or d.get("input") or "")
-        except Exception:
-            pass
-        return _normalize_text(s)
-    if tool_name == "DescribeRoom":
-        try:
-            d = json.loads(s)
-            if isinstance(d, dict):
-                return _normalize_text(d.get("description") or d.get("input") or "")
-        except Exception:
-            pass
-        return _normalize_text(s)
+    p = intent.params or {}
+    for key in getattr(skill, "INTENT_PAYLOAD_KEYS", ()):
+        if p.get(key):
+            return _normalize_text(p[key])
     return ""
 
 
 def _is_intent_redundant(intent: "Intent",
                           executed_tools: Optional[List]) -> bool:
     """True when an INTENT marker matches a tool already executed in the
-    same turn (same tool family, same/overlapping content blob).
+    same turn (same skill, same/overlapping content blob). RP-finetunes
+    often emit BOTH a real <tool> call AND a [INTENT: ...] marker for the
+    same action — running both duplicates the action.
 
     ``executed_tools``: list of ``(tool_name, raw_input)`` tuples captured
-    by the tool executor during the streaming phase.
+    by the tool executor during the streaming phase. The content extraction
+    on both sides is declared by the skill (INTENT_PAYLOAD_KEYS /
+    tool_intent_payload) — no tool name lives here.
 
     Comparison: normalized text equality, OR one contains the other (≥30
     chars). Different content → both run; identical or near-identical →
@@ -191,16 +171,19 @@ def _is_intent_redundant(intent: "Intent",
     """
     if not executed_tools:
         return False
-    candidate_tools = _TOOL_FOR_INTENT.get(intent.type)
-    if not candidate_tools:
+    skill = _skill_for_intent(intent.type)
+    if skill is None:
         return False
     intent_text = _intent_payload(intent)
     if not intent_text:
         return False
     for (tname, raw) in executed_tools:
-        if tname not in candidate_tools:
+        if (tname or "").lower() != (skill.name or "").lower():
             continue
-        tool_text = _tool_payload(tname, raw)
+        try:
+            tool_text = _normalize_text(skill.tool_intent_payload(raw))
+        except Exception:
+            continue
         if not tool_text:
             continue
         if tool_text == intent_text:
@@ -228,9 +211,13 @@ def execute_intent(intent: Intent, character_name: str,
 def _submit_to_task_queue(intent: Intent, character_name: str) -> None:
     try:
         from app.core.task_queue import get_task_queue
-        payload = {"user_id": "", "agent_name": character_name, **intent.params}
+        payload = {"user_id": "", "agent_name": character_name,
+                   "intent_type": intent.type, **intent.params}
+        # One generic dispatch task type (F6): the handler routes to the
+        # declaring skill at execution time — new packages need no queue
+        # re-registration.
         task_id = get_task_queue().submit(
-            task_type=f"intent_{intent.type}",
+            task_type="intent_dispatch",
             payload=payload,
             queue_name="default",
             agent_name=character_name)
@@ -297,61 +284,39 @@ def _save_commitment(intent: Intent, character_name: str) -> None:
 # ---------------------------------------------------------------------------
 
 def register_intent_handlers() -> None:
-    """Register TaskQueue handlers for all intent types. Call at server startup."""
+    """Register TaskQueue handlers. Call at server startup.
+
+    One generic dispatcher (F6): skill intents route to the declaring
+    skill's handle_intent at execution time; only the core-owned types
+    (remind, execute_tool) have their own handlers here.
+    """
     from app.core.task_queue import get_task_queue
     tq = get_task_queue()
-    tq.register_handler("intent_instagram_post", _handle_instagram_post)
-    tq.register_handler("intent_send_message", _handle_send_message)
+    tq.register_handler("intent_dispatch", _dispatch_intent)
     tq.register_handler("intent_remind", _handle_remind)
     tq.register_handler("intent_execute_tool", _handle_execute_tool)
-    tq.register_handler("intent_change_outfit", _handle_change_outfit)
-    tq.register_handler("intent_describe_room", _handle_describe_room)
-    logger.info("Intent-Handler registriert")
+    logger.info("Intent-Handler registriert (generischer Dispatcher)")
 
 
-def _handle_instagram_post(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Executes Instagram Skill to generate image + caption + post."""
-    import json as _json
-    user_id = payload.get("user_id", "")
-    character_name = payload.get("agent_name", "")
-    caption_hint = payload.get("caption", "")
+def _dispatch_intent(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Generic TaskQueue handler: route to the core handler or the skill
+    that declares the intent type. Knows no intent/skill name."""
+    intent_type = (payload.get("intent_type") or "").strip()
+    if not intent_type:
+        return {"success": False, "error": "missing intent_type"}
+    if intent_type == "remind":
+        return _handle_remind(payload)
+    if intent_type == "execute_tool":
+        return _handle_execute_tool(payload)
+    skill = _skill_for_intent(intent_type)
+    if skill is None:
+        return {"success": False,
+                "error": f"no loaded skill declares intent '{intent_type}'"}
     try:
-        from app.core.dependencies import get_skill_manager
-        sm = get_skill_manager()
-        # get_skill matcht gegen SKILL_ID (klein "instagram"), nicht den Tool-Namen.
-        skill = sm.get_skill("instagram") or sm.get_skill_by_name("Instagram")
-        if not skill:
-            return {"success": False, "error": "Instagram Skill nicht geladen"}
-        # execute() expects JSON string with input, agent_name, user_id
-        raw_input = _json.dumps({
-            "input": caption_hint or "Erstelle einen Instagram-Post",
-            "agent_name": character_name,
-            "user_id": "",
-        })
-        result = skill.execute(raw_input)
-        success = result and "Fehler" not in str(result)
-        return {"success": success, "result": str(result)[:500]}
+        return skill.handle_intent(intent_type, payload)
     except Exception as e:
-        logger.error("Intent instagram_post fehlgeschlagen: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}
-
-
-def _handle_send_message(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Character sends a follow-up message via chat endpoint."""
-    user_id = payload.get("user_id", "")
-    character_name = payload.get("agent_name", "")
-    message = payload.get("message", "")
-    if not message:
-        return {"success": False, "error": "Keine Nachricht"}
-    try:
-        import requests
-        port = os.environ.get("PORT", "8000")
-        resp = requests.post(
-            f"http://localhost:{port}/chat/{user_id}",
-            json={"agent": character_name, "message": message, "silent": True},
-            timeout=60)
-        return {"success": resp.ok, "status": resp.status_code}
-    except Exception as e:
+        logger.error("Intent %s failed in %s: %s", intent_type, skill.name, e,
+                     exc_info=True)
         return {"success": False, "error": str(e)}
 
 
@@ -383,65 +348,6 @@ def _handle_execute_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "tool": tool, "note": "Tool mapping pending"}
 
 
-def _handle_change_outfit(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Executes OutfitChange Skill to generate a new outfit."""
-    import json as _json
-    user_id = payload.get("user_id", "")
-    character_name = payload.get("agent_name", "")
-    hint = payload.get("hint", payload.get("style", ""))
-    try:
-        from app.core.dependencies import get_skill_manager
-        sm = get_skill_manager()
-        skill = sm.get_skill("outfit_change")
-        if not skill:
-            return {"success": False, "error": "OutfitChange Skill nicht geladen"}
-        raw_input = _json.dumps({
-            "input": hint or "Wechsle dein Outfit",
-            "agent_name": character_name,
-            "user_id": "",
-            "skip_daily_limit": True,
-        })
-        result = skill.execute(raw_input)
-        success = result and "Fehler" not in str(result)
-        return {"success": success, "result": str(result)[:500]}
-    except Exception as e:
-        logger.error("Intent change_outfit fehlgeschlagen: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}
-
-
-def _handle_describe_room(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Executes DescribeRoom Skill to describe or create a room."""
-    import json as _json
-    user_id = payload.get("user_id", "")
-    character_name = payload.get("agent_name", "")
-    location_id = payload.get("location_id", "")
-    room = payload.get("room", "")
-    description = payload.get("description", "")
-    image_prompt = payload.get("image_prompt", "")
-    try:
-        from app.core.dependencies import get_skill_manager
-        sm = get_skill_manager()
-        skill = sm.get_skill("describe_room")
-        if not skill:
-            return {"success": False, "error": "DescribeRoom Skill nicht geladen"}
-        skill_payload = {
-            "location_id": location_id,
-            "room": room,
-            "description": description,
-            "agent_name": character_name,
-            "user_id": "",
-        }
-        if image_prompt:
-            skill_payload["image_prompt"] = image_prompt
-        raw_input = _json.dumps(skill_payload)
-        result = skill.execute(raw_input)
-        success = result and "Fehler" not in str(result)
-        return {"success": success, "result": str(result)[:500]}
-    except Exception as e:
-        logger.error("Intent describe_room fehlgeschlagen: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}
-
-
 # ---------------------------------------------------------------------------
 # Main entry point — called from chat.py post-stream
 # ---------------------------------------------------------------------------
@@ -465,7 +371,7 @@ def process_response_intents(
             logger.info("INTENT skipped (redundant with executed tool): %s",
                         intent.type)
             continue
-        if intent.type in _KNOWN_TYPES:
+        if intent.type in _known_types():
             execute_intent(intent, character_name, scheduler_manager)
         elif _is_plausible_intent_type(intent.type):
             _save_commitment(intent, character_name)
@@ -492,7 +398,7 @@ async def process_response_intents_async(
             logger.info("INTENT skipped (redundant with executed tool): %s",
                         intent.type)
             continue
-        if intent.type in _KNOWN_TYPES:
+        if intent.type in _known_types():
             execute_intent(intent, character_name, scheduler_manager)
         elif _is_plausible_intent_type(intent.type):
             _save_commitment(intent, character_name)

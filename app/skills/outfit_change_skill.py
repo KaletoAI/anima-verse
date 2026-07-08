@@ -34,6 +34,24 @@ class OutfitChangeSkill(BaseSkill):
 
     SKILL_ID = "outfit_change"
     ALWAYS_LOAD = True
+    # [INTENT: change_outfit | hint=...] (F6) — dispatched here.
+    INTENT_TYPES = ("change_outfit",)
+    INTENT_PAYLOAD_KEYS = ("hint", "style")
+
+    def handle_intent(self, intent_type, payload):
+        """[INTENT: change_outfit]: hint/style becomes the input; the daily
+        limit does not apply to committed intents."""
+        import json as _json
+        hint = payload.get("hint", "") or payload.get("style", "")
+        raw_input = _json.dumps({
+            "input": hint or "Change your outfit",
+            "agent_name": payload.get("agent_name", ""),
+            "user_id": "",
+            "skip_daily_limit": True,
+        })
+        result = self.execute(raw_input)
+        success = bool(result) and "Fehler" not in str(result)
+        return {"success": success, "result": str(result)[:500]}
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)

@@ -48,6 +48,10 @@ class DescribeRoomSkill(BaseSkill):
     """
 
     SKILL_ID = "describe_room"
+    # [INTENT: describe_room | description=...] (F6) — the default
+    # handle_intent passthrough matches the JSON input of this skill.
+    INTENT_TYPES = ("describe_room",)
+    INTENT_PAYLOAD_KEYS = ("description",)
     ALWAYS_LOAD = True
 
     def __init__(self, config: Dict[str, Any]):
