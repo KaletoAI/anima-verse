@@ -50,6 +50,8 @@ _GLUE_WORDS = {
     "colored", "coloured", "color", "colour", "farbe", "farbene", "farbige",
     "build", "built", "figur", "statur", "körperbau", "koerperbau",
     "tall", "groß", "gross",
+    # animal attribute glue (cat package fields)
+    "fur", "fell", "pelz", "ears", "ohren", "tail", "schwanz", "markings",
 }
 
 

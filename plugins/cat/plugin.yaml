@@ -22,25 +22,42 @@ piece_slots:
   - {id: head, label: Headwear}
 
 body_slots:
+  - id: build
+    attributes:
+      size:
+        type: select
+        allow_custom: true
+        migrate_from: animal_size
+        options: [tiny, small, medium, large]
+    prompt:
+      always: "{size}"
   - id: fur
     face: true   # belongs into portrait/expression prompts
     attributes:
+      type:
+        type: select
+        allow_custom: true
+        migrate_from: fur_type
+        options: [short, long, fluffy, sleek, curly]
       color:
         type: select
         allow_custom: true
+        migrate_from: primary_color
         options: [black, white, gray, orange, brown, cream]
       pattern:
         type: select
         allow_custom: true
+        migrate_from: pattern
         options: [solid, tabby, tuxedo, calico, tortoiseshell, spotted]
     prompt:
-      always: "{color} fur with {pattern} markings"
+      always: "{type} {color} fur with {pattern} markings"
   - id: eyes
     face: true   # belongs into portrait/expression prompts
     attributes:
       color:
         type: select
         allow_custom: true
+        migrate_from: eye_color
         options: [green, yellow, amber, blue, copper, odd-eyed]
     prompt:
       always: "{color} eyes"
