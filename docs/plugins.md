@@ -180,6 +180,13 @@ Werte pro Charakter liegen im Profil (`body_slots: {breast: {size: large}}`).
 Fragmente mit fehlenden Attribut-Werten entfallen komplett (kein halb gerendertes
 `{size}`). Die Fragmente gehen auch mit Referenzbild mit (F3).
 
+**Migration:** Ein Attribut kann `migrate_from: <profilfeld>` (+ optional
+`migrate_skip: [werte]`) deklarieren — das weltweite Migrations-Tool
+(Game-Admin → Setup → „Body-slot migration", `app/core/body_slot_migration.py`)
+kopiert dann auf Nachfrage die alten Template-Select-Werte in die Slot-Werte und
+entfernt die migrierten `{feld}`-Tokens segmentweise aus den Appearance-Texten.
+Bereits gesetzte Slot-Werte werden nie überschrieben (idempotent).
+
 ### State-Flags
 
 Der zentrale Flag-Lifecycle-Executor (`app/core/flag_lifecycle.py`) rendert für

@@ -41,10 +41,12 @@ body_slots:
       color:
         type: select
         allow_custom: true
+        migrate_from: hair_color
         options: [blonde, brunette, black, red, auburn, gray, white, pink]
       length:
         type: select
         allow_custom: true
+        migrate_from: hair_length
         options: [very short, short, medium, long, very long]
     prompt:
       always: "{length} {color} hair"
@@ -53,6 +55,7 @@ body_slots:
       color:
         type: select
         allow_custom: true
+        migrate_from: eye_color
         options: [blue, green, brown, hazel, gray, amber]
     prompt:
       always: "{color} eyes"
@@ -61,6 +64,7 @@ body_slots:
       tone:
         type: select
         allow_custom: true
+        migrate_from: skin_color
         options: [fair, light, medium, olive, tan, brown, dark brown, dark, pale]
     prompt:
       always: "{tone} skin"
@@ -69,10 +73,12 @@ body_slots:
       height:
         type: select
         allow_custom: true
+        migrate_from: size
         options: [petite, short, average height, tall, giant]
       type:
         type: select
         allow_custom: true
+        migrate_from: body_type
         options: [petite, slim, average, athletic, curvy, muscular, stocky, voluptuous]
     prompt:
       always: "{height}, {type} build"
@@ -82,6 +88,8 @@ body_slots:
       style:
         type: select
         allow_custom: true
+        migrate_from: facial_hair
+        migrate_skip: [none]
         options: [clean-shaven, light stubble, short beard, full beard, mustache]
     prompt:
       always: "{style}"

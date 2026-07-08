@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPut } from '../../lib/api'
+import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
@@ -208,7 +208,94 @@ export function SetupTab() {
             />
           </Field>
         </div>
+
+        <BodySlotMigration />
       </div>
+    </div>
+  )
+}
+
+// Body-slot migration payloads (GET/POST /characters/body-slots/migration)
+interface MigrationCharPlan {
+  character: string
+  copies: Array<{ slot: string; attr: string; field: string; value: string }>
+  texts: Record<string, { before: string; after: string; dropped: string[] }>
+}
+interface MigrationPlan { characters: MigrationCharPlan[]; total: number }
+
+/** World-level body-slot migration (on demand, plan-body-slots.md):
+ * dry-run preview first, then apply. Copies template-select values into
+ * species-package slot values and cleans the migrated {tokens} out of the
+ * appearance texts. */
+function BodySlotMigration() {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [plan, setPlan] = useState<MigrationPlan | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState(false)
+
+  const preview = useCallback(async () => {
+    setBusy(true)
+    setDone(false)
+    try {
+      setPlan(await apiGet<MigrationPlan>('/characters/body-slots/migration'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [t, toast])
+
+  const apply = useCallback(async () => {
+    setBusy(true)
+    try {
+      const r = await apiPost<MigrationPlan>('/characters/body-slots/migration/apply', {})
+      setPlan(r)
+      setDone(true)
+      toast(t('Migration applied'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [t, toast])
+
+  return (
+    <div>
+      <h3 style={{ marginTop: 24 }}>{t('Body-slot migration')}</h3>
+      <div className="ga-form-hint" style={{ marginBottom: 8 }}>
+        {t('Copies the legacy appearance select values into the species-package body slots and removes the migrated {tokens} from the appearance texts. Per world, on demand — preview first.')}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <button className="ga-btn ga-btn-sm" disabled={busy} onClick={preview}>
+          {t('Preview migration')}
+        </button>
+        {plan && plan.total > 0 && !done && (
+          <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy} onClick={apply}>
+            {t('Apply migration')} ({plan.total})
+          </button>
+        )}
+      </div>
+      {plan && plan.total === 0 && (
+        <div className="ga-form-hint">{t('Nothing to migrate.')}</div>
+      )}
+      {plan && plan.characters.map((c) => (
+        <div key={c.character} style={{ marginBottom: 8, fontSize: '0.85em',
+          border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '6px 10px' }}>
+          <strong>{c.character}</strong>
+          {c.copies.length > 0 && (
+            <div style={{ opacity: 0.8 }}>
+              {c.copies.map((cp) => `${cp.field} → ${cp.slot}.${cp.attr} = "${cp.value}"`).join(' · ')}
+            </div>
+          )}
+          {Object.entries(c.texts).map(([field, info]) => (
+            <div key={field} style={{ opacity: 0.65 }}>
+              {field}: −{info.dropped.length} {t('segments removed')} → „{info.after.slice(0, 90)}{info.after.length > 90 ? '…' : ''}"
+            </div>
+          ))}
+        </div>
+      ))}
+      {done && <div className="ga-form-hint">{t('Migration applied')}.</div>}
     </div>
   )
 }
