@@ -37,6 +37,7 @@ piece_slots:
 # is a SEPARATE pack (anima-verse-packs, requires: [human]).
 body_slots:
   - id: hair
+    face: true   # belongs into portrait/expression prompts
     attributes:
       color:
         type: select
@@ -51,6 +52,7 @@ body_slots:
     prompt:
       always: "{length} {color} hair"
   - id: eyes
+    face: true   # belongs into portrait/expression prompts
     attributes:
       color:
         type: select
@@ -60,6 +62,7 @@ body_slots:
     prompt:
       always: "{color} eyes"
   - id: skin
+    face: true   # belongs into portrait/expression prompts
     attributes:
       tone:
         type: select
@@ -83,6 +86,7 @@ body_slots:
     prompt:
       always: "{height}, {type} build"
   - id: facial_hair
+    face: true   # belongs into portrait/expression prompts
     applies_to: {gender: [male]}
     attributes:
       style:

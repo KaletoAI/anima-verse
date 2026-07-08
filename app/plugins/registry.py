@@ -86,6 +86,7 @@ class BodySlotSpec:
     applies_to: Dict[str, List[str]] = field(default_factory=dict)  # profile field -> allowed values
     attributes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     prompt: Dict[str, str] = field(default_factory=dict)  # always | covered | exposed
+    face: bool = False  # fragment also belongs into face/portrait prompts
 
 
 @dataclass

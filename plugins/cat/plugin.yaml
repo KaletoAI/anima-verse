@@ -22,6 +22,7 @@ piece_slots:
 
 body_slots:
   - id: fur
+    face: true   # belongs into portrait/expression prompts
     attributes:
       color:
         type: select
@@ -34,6 +35,7 @@ body_slots:
     prompt:
       always: "{color} fur with {pattern} markings"
   - id: eyes
+    face: true   # belongs into portrait/expression prompts
     attributes:
       color:
         type: select
@@ -42,6 +44,7 @@ body_slots:
     prompt:
       always: "{color} eyes"
   - id: ears
+    face: true   # belongs into portrait/expression prompts
     attributes:
       type:
         type: select

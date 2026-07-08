@@ -50,15 +50,27 @@ def default_new_character_skills() -> tuple:
 def _resolve_face_prompt(profile: dict, character_name: str, tmpl) -> str:
     """Profile-image prompt = face prompt (face_appearance), tokens resolved
     (target_key 'character_appearance' — this resolves both appearance fields).
-    Falls back to the body appearance when face_appearance is empty."""
+    Falls back to the body appearance when face_appearance is empty.
+
+    Face-relevant body-slot fragments (``face: true`` in the species
+    manifest — hair/eyes/skin) are appended: after the body-slot migration
+    those attributes live in slots, not in the text anymore."""
     from app.models.character import get_character_appearance
     from app.models.character_template import resolve_profile_tokens
     face = ((profile or {}).get("face_appearance") or "").strip()
-    if face:
-        if "{" in face:
-            face = resolve_profile_tokens(face, profile, template=tmpl, target_key="character_appearance")
-        return face.strip()
-    return (get_character_appearance(character_name) or "").strip()
+    if face and "{" in face:
+        face = resolve_profile_tokens(face, profile, template=tmpl,
+                                      target_key="character_appearance")
+    if not face:
+        face = (get_character_appearance(character_name) or "").strip()
+    try:
+        from app.core.body_slots import appearance_suffix
+        suffix = appearance_suffix(character_name, face_only=True)
+    except Exception:
+        suffix = ""
+    if suffix:
+        face = f"{face}, {suffix}" if face else suffix
+    return face.strip()
 
 
 def _build_outfit_image_prompt(character_name: str, outfit_description: str) -> str:

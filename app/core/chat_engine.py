@@ -130,7 +130,7 @@ def _rp_tool_decision_input(user_input: str, rp_response: str) -> str:
         f"together as a group → InviteToParty (target = that character's name)\n"
         f"  - wants to split off / no longer travel with the group → LeaveParty\n"
         f"  - changes what they're physically doing (pose/activity) → SetPose\n"
-        f"  - looks something up / searches → KnowledgeSearch or WebSearch\n"
+        f"  - looks something up / searches → SearchKnowledge or WebSearch\n"
         f"  - relays info to a third party not in the conversation → TalkTo\n"
         f"Call every tool that applies; multiple are fine. Do NOT skip a tool because "
         f"the action was \"only described\" narratively — that IS the signal.\n"

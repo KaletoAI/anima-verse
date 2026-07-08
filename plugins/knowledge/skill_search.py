@@ -1,4 +1,4 @@
-"""KnowledgeSearch Plugin-Skill — Sucht in extrahierten Memories.
+"""SearchKnowledge plugin skill — searches extracted memories.
 
 Durchsucht die Memory-Datenbank nach relevanten Fakten ohne LLM-Calls.
 Nutzt die Daten, die zuvor per KnowledgeExtract befuellt wurden.
@@ -21,7 +21,7 @@ class KnowledgeSearchPlugin(PluginSkill):
 
     def __init__(self, config: Dict[str, Any], ctx: PluginContext):
         super().__init__(config, ctx)
-        self.name = "KnowledgeSearch"
+        self.name = "SearchKnowledge"
         self.description = (
             "Searches the knowledge database for information about characters, people, events, "
             "and internal data. Use this tool when asked to look up, check, or recall anything "

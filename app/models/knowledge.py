@@ -244,7 +244,7 @@ def build_knowledge_prompt_section(character_name: str,
 
     Filtert: file_extraction-Eintraege ueber andere Characters (granulare
     Aktivitaeten) werden NICHT in den System-Prompt aufgenommen — sie sind
-    per KnowledgeSearch abrufbar. Das haelt den Prompt fokussiert auf:
+    per SearchKnowledge abrufbar. Das haelt den Prompt fokussiert auf:
     - Eigenwissen des Characters
     - User-bezogene Fakten (aus Chat-Extraktion)
     - Beziehungs-Zusammenfassungen (character_relationship)
@@ -258,7 +258,7 @@ def build_knowledge_prompt_section(character_name: str,
 
     max_prompt = _get_max_prompt_entries()
 
-    # Filter: file_extraction ueber andere Characters raus (KnowledgeSearch-Territorium)
+    # Filter: file_extraction ueber andere Characters raus (SearchKnowledge territory)
     char_lower = character_name.lower()
     filtered = []
     for e in entries:
@@ -269,7 +269,7 @@ def build_knowledge_prompt_section(character_name: str,
             and related
             and related.lower() != char_lower
         ):
-            continue  # Andere Character-Aktivitaeten: nur via KnowledgeSearch
+            continue  # Andere Character-Aktivitaeten: nur via SearchKnowledge
         filtered.append(e)
 
     # Sortiere: wichtigste + neueste zuerst

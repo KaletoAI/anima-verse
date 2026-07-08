@@ -176,7 +176,7 @@ _DEFAULT_TOOL_INSTRUCTION = (
     "or anything requiring up-to-date information → you MUST call WebSearch. "
     "Do NOT answer from memory, do NOT make up information.\n"
     "- The user asks for an image or picture → use ImageGenerator\n"
-    "- The user asks for a search or to look something up → use WebSearch or KnowledgeSearch\n"
+    "- The user asks for a search or to look something up → use WebSearch or SearchKnowledge\n"
     "- The user asks to go somewhere or change location → use the location tool\n"
     "HOW: Write your in-character response, then add the tool call at the end. "
     "The system will execute the tool automatically.\n"

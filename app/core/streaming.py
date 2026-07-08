@@ -570,7 +570,7 @@ class StreamingAgent:
 
         Tool-Kategorien:
           DEFERRED (Post-RP): ausfuehren, Ergebnis anhaengen (Image, Video, Instagram)
-          CONTENT_TOOL: ausfuehren, RP verwerfen, Chat-LLM Retry (WebSearch, KnowledgeSearch)
+          CONTENT_TOOL: ausfuehren, RP verwerfen, Chat-LLM Retry (WebSearch, SearchKnowledge)
           Seiteneffekt: ausfuehren, nichts weiter (SetActivity, Outfit, TalkTo, ...)
         """
         _start = time.monotonic()
@@ -639,7 +639,7 @@ class StreamingAgent:
                 f"together as a group → InviteToParty (target = that character's name)\n"
                 f"     - Character wants to split off / no longer travel with the group → LeaveParty\n"
                 f"     - Character changes what they're physically doing (pose) → SetPose\n"
-                f"     - Character looks something up / searches / checks facts → KnowledgeSearch or WebSearch\n"
+                f"     - Character looks something up / searches / checks facts → SearchKnowledge or WebSearch\n"
                 f"     - Character relays info to a third party not in chat → TalkTo\n"
                 f"     - Character sends a remote/text message to someone NOT present → SendMessage. "
                 f"SendMessage carries TEXT ONLY — NEVER write placeholder text like '[image attached]'. "

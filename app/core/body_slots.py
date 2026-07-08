@@ -155,14 +155,19 @@ def _format_if_complete(text: str, values: Dict[str, str]) -> str:
         return ""
 
 
-def prompt_fragments(character_name: str) -> Dict[str, List[str]]:
+def prompt_fragments(character_name: str,
+                     face_only: bool = False) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
     ``always`` plus (while covered) ``covered`` fragments and belongs into
     the person description (F1); exposed renders only while uncovered.
+    ``face_only`` keeps only slots declared ``face: true`` (portrait/
+    expression prompts — hair/eyes/skin, never body or NSFW slots).
     """
     specs = slots_for_character(character_name)
+    if face_only:
+        specs = [s for s in specs if getattr(s, "face", False)]
     if not specs:
         return {"general": [], "exposed": []}
     try:
@@ -192,10 +197,11 @@ def prompt_fragments(character_name: str) -> Dict[str, List[str]]:
     return {"general": general, "exposed": exposed}
 
 
-def appearance_suffix(character_name: str) -> str:
+def appearance_suffix(character_name: str, face_only: bool = False) -> str:
     """Combined fragment text appended to the character's appearance
-    (PromptBuilder). Empty without species packages — safe no-op."""
-    frags = prompt_fragments(character_name)
+    (PromptBuilder; face_only for portrait/expression prompts). Empty
+    without species packages — safe no-op."""
+    frags = prompt_fragments(character_name, face_only=face_only)
     parts = frags["general"] + frags["exposed"]
     return ", ".join(parts)
 

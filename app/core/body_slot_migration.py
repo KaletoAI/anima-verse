@@ -40,20 +40,51 @@ def _mappings_for(character_name: str) -> List[Tuple[Any, str, str, List[str]]]:
     return out
 
 
+# Generic attribute glue words: a segment whose remainder (after removing
+# the migrated tokens) consists only of these carries no information of its
+# own ("{hair_color} hair" -> "hair") and is dropped entirely. Anything else
+# in the remainder is real content and stays ("{size} young {gender} goblin"
+# -> "young {gender} goblin").
+_GLUE_WORDS = {
+    "hair", "haare", "haar", "eyes", "eye", "augen", "auge", "skin", "haut",
+    "colored", "coloured", "color", "colour", "farbe", "farbene", "farbige",
+    "build", "built", "figur", "statur", "körperbau", "koerperbau",
+    "tall", "groß", "gross",
+}
+
+
 def _clean_text(text: str, fields: set) -> Tuple[str, List[str]]:
-    """Drop comma segments containing a migrated {field} token."""
+    """Remove migrated {field} tokens from the appearance text.
+
+    Per comma segment (comma + space — decimal commas like "1,20" stay
+    intact): tokens are stripped out of the segment; the segment itself is
+    only dropped when nothing but attribute glue words remains. This keeps
+    surrounding content that shared a segment with a token.
+    """
     if not text or "{" not in text:
         return text, []
     patterns = [re.compile(r"\{" + re.escape(f) + r"\}") for f in fields]
     keep, dropped = [], []
-    for seg in text.split(","):
-        if any(p.search(seg) for p in patterns):
-            dropped.append(seg.strip())
+    changed = False
+    for seg in re.split(r",\s", text):
+        if not any(p.search(seg) for p in patterns):
+            keep.append(seg.strip())
+            continue
+        changed = True
+        cleaned = seg
+        for p in patterns:
+            cleaned = p.sub("", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -–—")
+        words = [w for w in re.findall(r"[\wäöüÄÖÜß{}]+", cleaned)]
+        substantial = [w for w in words if w.lower() not in _GLUE_WORDS]
+        if cleaned and substantial:
+            keep.append(cleaned)
+            dropped.append(f"{seg.strip()} → {cleaned}")
         else:
-            keep.append(seg)
-    if not dropped:
+            dropped.append(seg.strip())
+    if not changed:
         return text, []
-    new = ", ".join(s.strip() for s in keep if s.strip())
+    new = ", ".join(s for s in keep if s)
     return new, dropped
 
 
