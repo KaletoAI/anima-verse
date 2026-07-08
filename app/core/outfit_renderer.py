@@ -221,15 +221,9 @@ def render_outfit(
             continue
         if _outer_layer_covers(slot):
             continue
-        # Legacy-Felder nur fuer Unterwaesche-Slots
-        if slot == "underwear_top":
-            fb = _resolve_tokens(profile.get("no_outfit_prompt_top") or "", profile)
-            if fb:
-                fallback_parts.append(fb)
-        elif slot == "underwear_bottom":
-            fb = _resolve_tokens(profile.get("no_outfit_prompt_bottom") or "", profile)
-            if fb:
-                fallback_parts.append(fb)
+        # Exposed anatomy comes from the body-slot packages
+        # (appearance_suffix exposed fragments) — the pre-override legacy
+        # fields no_outfit_prompt_top/bottom are retired.
 
     pieces_text = ", ".join(piece_fragments)
     items_text = ", ".join(item_fragments)
@@ -290,13 +284,6 @@ def render_unworn_slots(
             continue
         if slot in covered:
             continue
-        # Legacy-Felder nur fuer Unterwaesche-Slots
-        if slot == "underwear_top":
-            fb = _resolve_tokens(profile.get("no_outfit_prompt_top") or "", profile)
-            if fb:
-                parts.append(fb)
-        elif slot == "underwear_bottom":
-            fb = _resolve_tokens(profile.get("no_outfit_prompt_bottom") or "", profile)
-            if fb:
-                parts.append(fb)
+        # Exposed anatomy comes from the body-slot packages — the legacy
+        # underwear fallback fields are retired.
     return ", ".join(parts)

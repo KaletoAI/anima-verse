@@ -1281,23 +1281,14 @@ def build_prompt_preview(character_name: str) -> Dict[str, str]:
     from app.core.outfit_renderer import render_outfit
     profile = get_character_profile(character_name) or {}
     tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    body = (get_character_appearance(character_name) or "").strip().strip(",")
-    sfx = appearance_suffix(character_name)
-    scene = f"{body}, {sfx}" if (body and sfx) else (body or sfx)
-    outfit = (render_outfit(character_name=character_name).get("full", "") or "").strip()
-    # The scene line mirrors the real scene composition: description +
-    # slot fragments + worn outfit, then the state image modifiers.
-    if outfit:
-        scene = f"{scene}, {outfit}" if scene else outfit
-    try:
-        from app.core.prompt_filters import apply_image_modifiers
-        scene = apply_image_modifiers(character_name, scene)
-    except Exception:
-        pass
+    # SAME production functions as the renderers — no re-implementation
+    # (preview principle): the scene line IS scene_render's text-person
+    # description; face IS the profile-image prompt resolver.
+    from app.core.scene_render import _appearance_text
     return {
-        "scene": scene,
+        "scene": _appearance_text(character_name),
         "face": _resolve_face_prompt(profile, character_name, tmpl),
-        "outfit": outfit,
+        "outfit": (render_outfit(character_name=character_name).get("full", "") or ""),
     }
 
 
