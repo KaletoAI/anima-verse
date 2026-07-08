@@ -1,7 +1,7 @@
-"""Plugin System - Dynamisches Laden von Skills aus dem plugins/ Verzeichnis"""
+"""Plugin system — loads skill packages from the plugins/ directory."""
 
-from .loader import load_all_plugins, discover_plugins
+from .loader import load_all_plugins, discover_packages
 from .context import PluginContext
 from .base import PluginSkill
 
-__all__ = ['load_all_plugins', 'discover_plugins', 'PluginContext', 'PluginSkill']
+__all__ = ['load_all_plugins', 'discover_packages', 'PluginContext', 'PluginSkill']

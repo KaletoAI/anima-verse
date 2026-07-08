@@ -27,21 +27,51 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 # Resolve template dir relative to repo root: <repo>/shared/templates/llm
 _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "shared" / "templates" / "llm"
 
-_env = Environment(
-    loader=FileSystemLoader(str(_TEMPLATE_DIR)),
-    autoescape=False,
-    undefined=StrictUndefined,
-    trim_blocks=True,
-    lstrip_blocks=True,
-    keep_trailing_newline=False,
-)
+# Skill packages may contribute their own template dirs (plugins/<pkg>/templates/llm);
+# registered by the plugin loader. The main tree is searched first.
+_package_template_dirs: List[Path] = []
+
+
+def _build_env() -> Environment:
+    return Environment(
+        loader=FileSystemLoader(
+            [str(_TEMPLATE_DIR)] + [str(p) for p in _package_template_dirs]),
+        autoescape=False,
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        keep_trailing_newline=False,
+    )
+
+
+_env = _build_env()
+
+
+def register_package_template_dirs(dirs: List[Path]) -> None:
+    """Replace the package search path (called by the plugin loader).
+
+    Rebuilds the Jinja environment and clears the skill-meta cache so a
+    plugin reload picks up added/removed package templates.
+    """
+    global _env, _package_template_dirs
+    new_dirs = [Path(d) for d in dirs]
+    if new_dirs == _package_template_dirs:
+        return
+    _package_template_dirs = new_dirs
+    _env = _build_env()
+    _skill_meta_cache.clear()
+
+
+def template_search_dirs() -> List[Path]:
+    """All template roots in search order (main tree first, then packages)."""
+    return [_TEMPLATE_DIR] + list(_package_template_dirs)
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)

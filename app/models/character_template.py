@@ -136,34 +136,81 @@ def _merge_templates(base: Dict[str, Any], extension: Dict[str, Any]) -> Dict[st
     return result
 
 
-# Template-Cache — Templates aendern sich nur durch Admin-Save.
-# Der Cache wird bei save_template() invalidiert. Verhindert Disk-I/O im
-# asyncio-Main-Loop bei Hot-Path-Calls wie ThoughtLoop._get_eligible_characters.
+# Template cache — templates only change through admin save or a plugin
+# reload; both invalidate via clear_template_cache(). Avoids disk I/O in the
+# asyncio main loop on hot-path calls like ThoughtLoop._get_eligible_characters.
 _template_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 _template_cache_lock = __import__("threading").RLock()
 
 
 def clear_template_cache() -> None:
-    """Invalidiert den Template-Cache — aufgerufen nach save_template()."""
+    """Invalidate the template cache — called after save_template() and
+    after plugin (re)discovery."""
     with _template_cache_lock:
         _template_cache.clear()
+
+
+def _fragment_applies(frag: Dict[str, Any], template_name: str,
+                      tmpl: Dict[str, Any]) -> bool:
+    """Check a package fragment's ``apply_to`` selector against a template.
+
+    Selector forms:
+      "*"                          — every template
+      ["human-roleplay-nsfw", …]   — explicit template names
+      {"feature": "<flag>"}        — templates with that feature enabled
+    Missing/empty apply_to = fragment never applies (must be explicit).
+    """
+    sel = frag.get("apply_to")
+    if sel == "*":
+        return True
+    if isinstance(sel, list):
+        return template_name in sel
+    if isinstance(sel, dict) and sel.get("feature"):
+        return bool((tmpl.get("features") or {}).get(sel["feature"], False))
+    return False
+
+
+def _apply_package_fragments(name: str, tmpl: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge character-template fragments contributed by skill packages.
+
+    Fragments use the regular extension-template format plus an ``apply_to``
+    selector and are merged via _merge_templates — a removed package takes
+    its fields (e.g. package-owned status_effects stats) with it.
+    """
+    try:
+        from app.plugins.registry import character_fragments
+        frags = character_fragments()
+    except Exception:
+        return tmpl
+    for frag in frags:
+        if not _fragment_applies(frag, name, tmpl):
+            continue
+        body = {k: v for k, v in frag.items()
+                if k not in ("apply_to", "_package_id")}
+        try:
+            tmpl = _merge_templates(tmpl, body)
+        except Exception as e:
+            logger.error("Package fragment (%s) failed on template '%s': %s",
+                         frag.get("_package_id", "?"), name, e)
+    return tmpl
 
 
 def get_template(name: str = "default") -> Optional[Dict[str, Any]]:
     """Load a character template by name from shared/templates/character/.
 
     If the template declares "base": "<name>", the base template is loaded
-    first and the extension is merged on top via _merge_templates.
+    first and the extension is merged on top via _merge_templates; skill
+    package fragments are merged afterwards.
     Base templates themselves must not declare a base (no recursion).
     Returns None if the template file is not found.
 
-    Ergebnis wird modulweit gecacht — bei Aenderungen muss clear_template_cache
-    aufgerufen werden (save_template macht das automatisch).
+    The result is cached module-wide — changes require clear_template_cache
+    (save_template and the plugin loader do that automatically).
     """
     with _template_cache_lock:
         if name in _template_cache:
             cached = _template_cache[name]
-            # Deep-Copy damit Consumer das Cache-Original nicht mutieren koennen
+            # Deep copy so consumers cannot mutate the cached original
             if cached is None:
                 return None
             return copy.deepcopy(cached)
@@ -190,6 +237,10 @@ def get_template(name: str = "default") -> Optional[Dict[str, Any]]:
                 tmpl = _merge_templates(base, tmpl)
             except Exception as e:
                 logger.error("Error loading base '%s': %s", base_name, e)
+
+    # Skill packages may extend templates (e.g. contribute status_effects
+    # stats they own) — merged after base resolution, before caching.
+    tmpl = _apply_package_fragments(name, tmpl)
 
     with _template_cache_lock:
         _template_cache[name] = tmpl

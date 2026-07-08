@@ -520,63 +520,63 @@ SECTIONS = {
             "searx": {
                 "label": "SearX Web Search",
                 "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": False},
+                    "enabled": {"type": "bool", "label": "Enabled", "default": False},
                     "url": {"type": "str", "label": "SearX URL"},
-                    "engines": {"type": "str", "label": "Engines", "default": "google,duckduckgo,bing", "description": "Kommaseparierte Suchmaschinen"},
-                    "categories": {"type": "str", "label": "Kategorien", "default": "general"},
-                    "num_results": {"type": "int", "label": "Max Ergebnisse", "default": 5, "min": 1, "max": 50},
+                    "engines": {"type": "str", "label": "Engines", "default": "google,duckduckgo,bing", "description": "Comma-separated search engines"},
+                    "categories": {"type": "str", "label": "Categories", "default": "general"},
+                    "num_results": {"type": "int", "label": "Max results", "default": 5, "min": 1, "max": 50},
                 },
             },
             "instagram": {
                 "label": "Instagram",
                 "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": False},
-                    "caption_language": {"type": "select", "label": "Caption Sprache", "choices": ["de", "en", "fr", "es", "it"], "default": "en"},
-                    "default_popularity": {"type": "int", "label": "Default Popularität", "default": 50, "min": 0, "max": 100, "description": "Default-Popularitaet fuer neue Characters (0-100%, per-Character ueberschreibbar)"},
+                    "enabled": {"type": "bool", "label": "Enabled", "default": False},
+                    "caption_language": {"type": "select", "label": "Caption language", "choices": ["de", "en", "fr", "es", "it"], "default": "en"},
+                    "default_popularity": {"type": "int", "label": "Default popularity", "default": 50, "min": 0, "max": 100, "description": "Default popularity for new characters (0-100%, overridable per character)"},
                     "imagegen_default": {"type": "imagegen_select", "label": "Default ImageGen"},
-                    "pending_window_hours": {"type": "int", "label": "Recent-Posts Window (h)", "default": 4, "min": 1, "max": 72, "description": "Wie lange neue Instagram-Posts als 'pending' im Agent-Thought-Prompt sichtbar sind (Stunden). Standardwert 4."},
+                    "pending_window_hours": {"type": "int", "label": "Recent posts window (h)", "default": 4, "min": 1, "max": 72, "description": "How long new Instagram posts stay visible as 'pending' in the agent-thought prompt (hours). Default 4."},
                 },
             },
             "set_location": {
                 "label": "SetLocation",
                 "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
+                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
                 },
             },
             "set_pose": {
                 "label": "SetPose",
                 "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
+                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
                 },
             },
             "talk_to": {
                 "label": "TalkTo (face-to-face)",
                 "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
+                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
                 },
             },
             "send_message": {
                 "label": "SendMessage (remote)",
                 "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
+                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
                 },
             },
             "outfit_change": {
                 "label": "Outfit Change",
                 "fields": {
-                    "generate_image": {"type": "bool", "label": "Bild generieren", "default": True},
-                    "language": {"type": "select", "label": "Sprache", "choices": ["de", "en"], "default": "en"},
-                    "max_outfits": {"type": "int", "label": "Max Outfits", "default": 10, "min": 1, "max": 100, "description": "Maximale Anzahl gespeicherter Outfits pro Character (aelteste werden entfernt)"},
-                    "cooldown_minutes": {"type": "int", "label": "Outfit-Cooldown (Min)", "default": 120, "min": 0, "max": 1440, "description": "Minuten bis ein LLM-gesteuerter Outfit-Wechsel am gleichen Ort moeglich ist. 0 = kein Cooldown. Gilt nicht bei Location-Wechsel oder User-Anfrage."},
+                    "generate_image": {"type": "bool", "label": "Generate image", "default": True},
+                    "language": {"type": "select", "label": "Language", "choices": ["de", "en"], "default": "en"},
+                    "max_outfits": {"type": "int", "label": "Max outfits", "default": 10, "min": 1, "max": 100, "description": "Maximum number of stored outfits per character (oldest are removed)"},
+                    "cooldown_minutes": {"type": "int", "label": "Outfit cooldown (min)", "default": 120, "min": 0, "max": 1440, "description": "Minutes until an LLM-driven outfit change at the same location is possible again. 0 = no cooldown. Does not apply on location change or user request."},
                 },
             },
             "markdown_writer": {
                 "label": "Markdown Writer",
                 "fields": {
-                    "folders": {"type": "str", "label": "Ordner (kommasepariert)", "default": "diary,notes,guides"},
-                    "default_folder": {"type": "str", "label": "Default Ordner", "default": "diary"},
-                    "max_size_kb": {"type": "int", "label": "Max Größe (KB)", "default": 512, "min": 1},
-                    "max_files": {"type": "int", "label": "Max Dateien", "default": 50, "min": 1},
+                    "folders": {"type": "str", "label": "Folders (comma-separated)", "default": "diary,notes,guides"},
+                    "default_folder": {"type": "str", "label": "Default folder", "default": "diary"},
+                    "max_size_kb": {"type": "int", "label": "Max size (KB)", "default": 512, "min": 1},
+                    "max_files": {"type": "int", "label": "Max files", "default": 50, "min": 1},
                 },
             },
         },
@@ -834,8 +834,24 @@ SECTIONS = {
 
 
 def get_schema() -> dict:
-    """Return the full schema for the admin API."""
-    return SECTIONS
+    """Return the full schema for the admin API.
+
+    Skill packages contribute their own subsections under ``skills`` —
+    injected at read time, so a removed package takes its settings
+    section with it (no orphaned config UI).
+    """
+    try:
+        from app.plugins.registry import config_subsections
+        subs = config_subsections()
+    except Exception:
+        subs = {}
+    if not subs:
+        return SECTIONS
+    import copy
+    schema = copy.deepcopy(SECTIONS)
+    schema.setdefault("skills", {}).setdefault("subsections", {}).update(
+        copy.deepcopy(subs))
+    return schema
 
 
 def iter_restart_required_paths() -> list:
@@ -854,7 +870,7 @@ def iter_restart_required_paths() -> list:
             if fdef.get("requires_restart") is True:
                 paths.append(f"{prefix}.{fkey}" if prefix else fkey)
 
-    for skey, sdef in SECTIONS.items():
+    for skey, sdef in get_schema().items():
         if not isinstance(sdef, dict):
             continue
         if sdef.get("is_array") or sdef.get("is_dict"):

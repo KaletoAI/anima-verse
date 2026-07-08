@@ -20,7 +20,10 @@ from app.core.soul_sections import (
     EDITABLE_MARKER as _SOUL_EDITABLE_MARKER)
 
 DEFAULT_NEW_CHARACTER_SKILLS = (
-    # Skill IDs from app/skills/skill_manager.py:SKILL_REGISTRY.
+    # Skill IDs from app/skills/skill_manager.py:SKILL_REGISTRY — the
+    # UNMIGRATED built-ins only. Migrated skill packages declare
+    # `default_enabled: true` in their plugin.yaml instead; the combined
+    # list comes from default_new_character_skills().
     # Defaults for newly created characters -- the list matches the ticks in
     # the Skills tab for a "freshly born" character (everything essential on,
     # special/niche skills like OutfitCreation, VideoGenerator, Retrospect,
@@ -31,6 +34,18 @@ DEFAULT_NEW_CHARACTER_SKILLS = (
     "consume_item", "outfit_change",
     "invite_to_party", "join_party", "leave_party",
 )
+
+
+def default_new_character_skills() -> tuple:
+    """Skill IDs enabled by default for newly created characters:
+    the built-in list plus package-declared defaults (default_enabled)."""
+    try:
+        from app.plugins.registry import default_enabled_skill_ids
+        extra = tuple(sid for sid in default_enabled_skill_ids()
+                      if sid not in DEFAULT_NEW_CHARACTER_SKILLS)
+    except Exception:
+        extra = ()
+    return DEFAULT_NEW_CHARACTER_SKILLS + extra
 
 
 # === Pure helpers ===
@@ -1678,11 +1693,11 @@ async def create_character_core(request) -> Dict[str, Any]:
     # (skill_manager._get_agent_skills) kicks in and turns all skills off by
     # default. With the default list the fresh char has the usual repertoire
     # right away (chat, set_location, consume magic, outfit change, ...).
-    for _sid in DEFAULT_NEW_CHARACTER_SKILLS:
+    for _sid in default_new_character_skills():
         try:
             save_character_skill_config(character_name, _sid, {"enabled": True})
         except Exception as _e:
-            logger.warning("create_character: skill-default '%s' nicht gesetzt: %s",
+            logger.warning("create_character: skill default '%s' not set: %s",
                            _sid, _e)
 
     # Auto-assign the new character to the creator's allowed_characters list

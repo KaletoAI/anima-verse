@@ -1,211 +1,203 @@
-# Plugin System
+# Skill-Pakete (Plugin-System)
 
-Das Plugin-System ermoeglicht es, neue Skills zu entwickeln und zu laden, ohne den Hauptcode zu aendern. Plugins liegen im Verzeichnis `plugins/` im Projektroot und werden beim Start automatisch erkannt.
+Skills werden als **selbst-enthaltene Pakete** unter `plugins/` entwickelt und geladen —
+ohne Änderungen am Hauptcode. Ein Paket bringt alles mit, was sein Skill braucht: die
+Verb-Klassen, LLM-Templates, Admin-Config-Schema, Character-Template-Fragmente und
+State-Flag-Deklarationen. Regeln und Architektur:
+`development_instructions/plan-skill-plugin-architecture.md` (R1–R7).
+
+Der Migrationsstand ist am Dateisystem ablesbar: Was unter `plugins/` liegt, ist
+regelkonform paketiert; was noch in `app/skills/*.py` liegt, ist unmigrierter Altbestand.
 
 ## Architektur
 
 ```
-plugins/                          # Plugin-Verzeichnis (Projektroot)
-  mein_plugin/
-    plugin.yaml                   # Metadaten & Konfiguration
-    skill.py                      # Skill-Klasse (erbt von PluginSkill)
+plugins/                          # Paket-Verzeichnis (Projektroot)
+  mein_paket/
+    plugin.yaml                   # Manifest (Paketformat v1)
+    skill.py                      # Verb-Klasse(n) (erben von PluginSkill)
+    templates/
+      llm/skills/<skill_id>.md    # Tool-Name + Beschreibung (LLM-Meta)
+      llm/sections/...            # optionale Prompt-Sections
+      character/<fragment>.json   # Character-Template-Fragmente
 
-app/plugins/                      # Plugin-Infrastruktur
-  loader.py                       # Erkennung & dynamisches Laden
+app/plugins/                      # Paket-Infrastruktur
+  loader.py                       # Discovery, Manifest-Parsing, Laden
+  registry.py                     # Aggregierte Beiträge aller Pakete
   context.py                      # PluginContext (Service-API)
   base.py                         # PluginSkill (Basisklasse)
 ```
 
 **Ladevorgang:**
 
-1. `SkillManager.load_skills()` ruft `_load_plugins()` auf
-2. Der Loader scannt `plugins/` nach Unterordnern mit `plugin.yaml`
-3. Fuer jedes Plugin wird geprueft ob es per `.env` aktiviert ist
-4. Die Skill-Klasse wird dynamisch importiert und mit einem `PluginContext` instanziiert
-5. Der Skill wird wie ein normaler Built-in Skill in den SkillManager eingehaengt
+1. `SkillManager.load_skills()` ruft `load_all_plugins()` auf.
+2. `discover_packages()` scannt `plugins/` nach Ordnern mit `plugin.yaml`, parst die
+   Manifeste und registriert alle Beiträge in `app/plugins/registry.py`.
+3. Beiträge werden verdrahtet: Template-Suchpfad (`prompt_templates`), Character-
+   Template-Cache, Admin-Config-Schema (`config_schema.get_schema()`), Default-Skills
+   für neue Charaktere, State-Flag-Lebenszyklen.
+4. Pro Verb wird die Skill-Klasse importiert und mit `PluginContext` (+ `params`)
+   instanziiert; Tool-Name/Beschreibung kommen aus `templates/llm/skills/<skill_id>.md`.
+5. Der Skill hängt wie ein Built-in im SkillManager (Per-Character-Config,
+   Tool-Formate, `reload_skills()` funktionieren identisch).
 
-Plugins sind nach dem Laden vollstaendig kompatibel mit dem bestehenden System: Per-Agent Konfiguration, Tool-Formate, Skill-Filtering und `reload_skills()` funktionieren wie bei Built-in Skills.
-
-## Neues Plugin erstellen
-
-### 1. Verzeichnis anlegen
-
-```bash
-mkdir plugins/mein_plugin
-```
-
-### 2. plugin.yaml erstellen
+## plugin.yaml — Manifest-Referenz (Paketformat v1)
 
 ```yaml
-name: mein_plugin
+name: intimacy
 version: "1.0.0"
-description: Kurze Beschreibung was das Plugin tut
-skill_id: mein_plugin
-env_prefix: "SKILL_MEINPLUGIN_"
+description: Kurzbeschreibung des Pakets
+
+# Verben — Kurzform (skill_id/module top-level) oder Listenform:
+skills:
+  - skill_id: start_intimate
+    module: skill.py            # Default: skill.py
+    class: IntimateSkill        # Default: erste PluginSkill-Subklasse im Modul
+    params: {active: true}      # Konstruktor-Kwargs (parametrisierte Verben)
+    always_load: true           # immer laden, Aktivierung per Character
+    pair_with: end_intimate     # UI-Hinweis: gekoppelter Toggle
+    default_enabled: false      # bei neuen Charakteren default-aktiv
+
+templates:
+  llm: templates/llm            # wird in den Prompt-Template-Suchpfad aufgenommen
+  character:                    # Character-Template-Fragmente (siehe unten)
+    - templates/character/lust.json
+
+config_schema:                  # Admin-Settings-Subsections unter "Skills"
+  intimacy:
+    label: Intimacy
+    fields:
+      ttl_minutes: {type: int, label: "Auto-end after (min)", default: 120, min: 0}
+
+state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
+  - flag: is_intimate
+    cleared_by: end_intimate    # skill_id des lösenden Verbs (Auto-Clear ruft es auf)
+    prompt_when_set: "You are in an intimate moment — end it with {clear_tool} when it is over."
+    ttl_minutes: 120            # 0 = kein Zeit-Zerfall
+    reset_on_location_change: true
 ```
 
-### 3. skill.py erstellen
+| Feld | Pflicht | Beschreibung |
+|---|---|---|
+| `name` | ja | Eindeutiger Paketname |
+| `skills` / `skill_id` | ja | Listenform oder Single-Skill-Kurzform |
+| `skills[].class` | nein | Explizite Klasse (nötig bei mehreren Klassen pro Modul) |
+| `skills[].params` | nein | Konstruktor-Kwargs — EINE Klasse kann mehrere Verben bedienen |
+| `skills[].always_load` | nein | Immer laden, Aktivierung per Character (auch top-level erlaubt) |
+| `skills[].pair_with` | nein | Skill-ID des Partner-Verbs (UI rendert einen gekoppelten Schalter) |
+| `skills[].default_enabled` | nein | Neue Charaktere bekommen den Skill aktiviert |
+| `templates.llm` | nein | Ordner relativ zum Paket; gleiche Struktur wie `shared/templates/llm/` |
+| `templates.character` | nein | Liste von Fragment-JSONs (siehe unten) |
+| `config_schema` | nein | Subsections für `/admin/settings → Skills` |
+| `state_flags` | nein | Flag-Deklarationen mit Lebenszyklus |
+| `env_prefix` | nein | Nur Altbestand (Env-Bridge); neue Pakete nutzen `ctx.get_config` |
+
+### LLM-Templates
+
+`templates/llm/` wird dem Template-Suchpfad hinzugefügt (Haupt-Tree
+`shared/templates/llm/` hat Vorrang). `skills/<skill_id>.md` liefert Tool-Name +
+Beschreibung im bekannten Format (Frontmatter `name:`, Body = Description) und wird
+vom Loader automatisch auf die Skill-Instanz angewandt — die Klasse muss
+`name`/`description` nicht selbst setzen.
+
+### Character-Template-Fragmente
+
+Ein Fragment ist ein Extension-Template (gleiche Merge-Semantik wie `base:`-Merges)
+plus `apply_to`-Selektor:
+
+```json
+{
+  "apply_to": ["human-roleplay-nsfw"],
+  "sections": [
+    {"id": "traits", "fields": [
+      {"key": "lust", "label": "Desire", "type": "number",
+       "store": "status_effects", "default": 30, "hint": "0-100 ..."}
+    ]}
+  ]
+}
+```
+
+`apply_to`: `"*"` (alle Templates) · Liste von Template-Namen · `{"feature": "<flag>"}`
+(alle Templates mit diesem Feature). Wird das Paket entfernt, verschwinden seine
+Felder aus den Templates — paketeigene Stats gehören damit dem Paket (R2).
+
+### State-Flags
+
+Der zentrale Flag-Lifecycle-Executor (`app/core/flag_lifecycle.py`) rendert für
+gesetzte Flags die `prompt_when_set`-Zeile in den Situationskontext des Charakters
+(Platzhalter `{name}`, `{clear_tool}`) und beendet Flags automatisch per
+`ttl_minutes` bzw. `reset_on_location_change` — der Auto-Clear ruft das
+`cleared_by`-Verb auf, damit exakt dieselben Seiteneffekte laufen wie beim
+LLM-Tool-Call. Ein `ttl_minutes`-Feld im `config_schema` des Pakets
+(`skills.<paket>.ttl_minutes`) überschreibt den Manifest-Default zur Laufzeit.
+
+## Skill-Klasse
 
 ```python
 from typing import Any, Dict
 from app.plugins.base import PluginSkill
 from app.plugins.context import PluginContext
-from app.skills.base import ToolSpec
 
 
-class MeinPlugin(PluginSkill):
-    SKILL_ID = "mein_plugin"
+class MeinSkill(PluginSkill):
+    SKILL_ID = "mein_paket"
 
     def __init__(self, config: Dict[str, Any], ctx: PluginContext):
         super().__init__(config, ctx)
-        self.name = "MeinTool"
-        self.description = "Beschreibung fuer das LLM"
-
-        # Konfiguration aus Umgebungsvariablen
-        self.api_url = ctx.get_env("SKILL_MEINPLUGIN_URL", "http://localhost:9000")
-
-        # Per-Agent konfigurierbare Defaults
-        self._defaults = {
-            "option_a": ctx.get_env("SKILL_MEINPLUGIN_OPTION_A", "default"),
-            "max_results": ctx.get_env_int("SKILL_MEINPLUGIN_MAX_RESULTS", 5),
-        }
+        # name/description kommen aus templates/llm/skills/mein_paket.md
+        self.api_url = ctx.get_config("skills.mein_paket.url", "http://localhost:9000")
+        self._defaults = {"max_results": 5}   # per-Character konfigurierbar
 
     def execute(self, raw_input: str) -> str:
-        # Standard-Input-Parsing (extrahiert user_id, agent_name, input)
         data = self._parse_base_input(raw_input)
         query = data.get("input", raw_input).strip()
-        user_id = data.get("user_id", "")
-        agent_name = data.get("agent_name", "")
-
-        if not query:
-            return "Fehler: Leere Eingabe."
-
-        # Per-Agent Config laden (merged .env-Defaults mit Agent-Overrides)
-        cfg = self._get_effective_config(user_id, agent_name)
-
+        cfg = self._get_effective_config(data.get("agent_name", ""))
         try:
-            # HTTP-Requests ueber ctx.http (requests-Bibliothek)
-            resp = self.ctx.http.get(
-                f"{self.api_url}/api/search",
-                params={"q": query},
-                timeout=10,
-            )
+            resp = self.ctx.http.get(f"{self.api_url}/api", params={"q": query}, timeout=10)
             resp.raise_for_status()
-            return resp.json().get("result", "Kein Ergebnis")
-
+            return resp.json().get("result", "")
         except Exception as e:
-            self.ctx.logger.error("Fehler: %s", e)
-            return f"Fehler: {e}"
-
-    def as_tool(self, **kwargs) -> ToolSpec:
-        return ToolSpec(
-            name=self.name,
-            description=f"{self.description}. Input: Freitext-Eingabe.",
-            func=self.execute,
-        )
+            self.ctx.logger.error("request failed: %s", e)
+            return f"Error: {e}"
 ```
 
-### 4. In .env aktivieren
-
-```bash
-SKILL_MEINPLUGIN_ENABLED=true
-SKILL_MEINPLUGIN_URL=http://localhost:9000
-```
-
-Das Plugin wird beim naechsten Start oder bei `reload_skills()` automatisch geladen.
-
-## plugin.yaml Referenz
-
-| Feld | Pflicht | Beschreibung |
-|---|---|---|
-| `name` | ja | Eindeutiger Name des Plugins |
-| `skill_id` | ja | Identifier fuer Per-Agent Config (wird zu `skills/{skill_id}.json`) |
-| `version` | nein | Versions-String (Default: `"0.1.0"`) |
-| `description` | nein | Beschreibung des Plugins |
-| `env_prefix` | nein | Prefix fuer Umgebungsvariablen (Default: `SKILL_{SKILL_ID}_`) |
-| `module` | nein | Dateiname des Skill-Moduls (Default: `skill.py`) |
-| `always_load` | nein | `true` = Plugin wird immer geladen, Aktivierung nur per Character (Default: `false`) |
+Parametrisierte Verben: definiert der Manifest-Eintrag `params`, bekommt der
+Konstruktor sie als Kwargs (`def __init__(self, config, ctx, active: bool)`) — eine
+Klasse, mehrere Verben (Muster wie `_Verb` im skill_manager).
 
 ## PluginContext API
 
-Jedes Plugin erhaelt einen `PluginContext` als `self.ctx`. Plugins sollen Services ausschliesslich ueber diesen Context nutzen, nicht ueber direkte Imports aus `app.*`.
-
-### Attribute
-
-| Attribut | Typ | Beschreibung |
-|---|---|---|
-| `ctx.logger` | `logging.Logger` | Logger mit Prefix `plugin.{plugin_id}` |
-| `ctx.http` | `requests` | HTTP-Bibliothek (`requests`) fuer externe API-Aufrufe |
-| `ctx.plugin_id` | `str` | ID des Plugins (Verzeichnisname) |
-
-### Methoden
-
-| Methode | Return | Beschreibung |
-|---|---|---|
-| `ctx.get_env(key, default=None)` | `str \| None` | Umgebungsvariable lesen |
-| `ctx.get_env_int(key, default=0)` | `int` | Umgebungsvariable als Integer |
-| `ctx.get_env_bool(key, default=False)` | `bool` | Umgebungsvariable als Boolean (`true`, `1`, `yes`) |
-
-## Geerbte Methoden von BaseSkill
-
-Durch die Vererbung von `PluginSkill` -> `BaseSkill` stehen folgende Methoden zur Verfuegung:
-
-| Methode | Beschreibung |
+| Attribut/Methode | Beschreibung |
 |---|---|
-| `self._parse_base_input(raw_input)` | Extrahiert `input`, `user_id`, `agent_name` aus dem JSON-Input |
-| `self._get_effective_config(user_id, agent_name)` | Merged `.env`-Defaults (`self._defaults`) mit Per-Agent Overrides |
-| `self.get_config_fields()` | Gibt konfigurierbare Felder mit Typ-Info zurueck (fuer UI) |
+| `ctx.logger` | Logger mit Prefix `plugin.{paket}` |
+| `ctx.http` | `requests` für externe API-Aufrufe |
+| `ctx.plugin_id` | Paket-ID (Ordnername) |
+| `ctx.get_config(path, default)` | **Bevorzugt:** Welt-Config per Dot-Pfad (`skills.<paket>.<feld>`) |
+| `ctx.get_env / get_env_int / get_env_bool` | Nur Altbestand (Env-Bridge) |
 
-## Per-Agent Konfiguration
+## Aktivierung
 
-Plugins unterstuetzen automatisch Per-Agent Overrides. Die Konfiguration wird in `storage/users/{user}/agents/{agent}/skills/{skill_id}.json` gespeichert.
+- **Global:** `skills.<paket>.enabled` in der Welt-Config (Admin-Settings; das Paket
+  liefert das Feld über sein `config_schema`). Pakete mit `always_load`-Verben werden
+  immer geladen.
+- **Per Character:** Skills-Tab im Game-Admin bzw.
+  `.../agents/{agent}/skills/{skill_id}.json` (`enabled`). `_defaults` der Klasse
+  definieren die per-Character-Felder.
 
-Beim ersten Aufruf eines Plugins fuer einen Agent wird die Datei automatisch mit den `_defaults` erstellt. Danach koennen Werte per Agent individuell angepasst werden.
+## Vorhandene Pakete
 
-Beispiel fuer `_defaults`:
-
-```python
-self._defaults = {
-    "engines": "google,bing",
-    "num_results": 10,
-}
-```
-
-Wird zu `storage/users/user1/agents/agent1/skills/mein_plugin.json`:
-
-```json
-{
-    "engines": "google,bing",
-    "num_results": 10
-}
-```
-
-## Aktivierung & Deaktivierung
-
-**Global (`.env`):** `SKILL_{ID}_ENABLED=true|false`
-
-Plugins mit `always_load: true` in `plugin.yaml` werden immer geladen. Die Aktivierung erfolgt dann nur per Character-Konfiguration.
-
-**Per Character:** Ueber die bestehende Skill-Config im UI oder direkt in der Agent-Skill-Datei:
-
-```json
-{
-    "enabled": false
-}
-```
-
-## Vorhandene Plugins
-
-| Plugin | Verzeichnis | Skill-ID | Beschreibung |
-|---|---|---|---|
-| SearX | `plugins/searx/` | `searx` | Web-Suche ueber selbst-gehostete SearX-Instanz |
-| n8n | `plugins/n8n/` | `n8n` | Ruft n8n-Workflows per Webhook auf, Workflows + API-Key pro Character |
+| Paket | Skill-IDs | Beschreibung |
+|---|---|---|
+| `plugins/searx/` | `searx` | Web-Suche über selbst gehostete SearX-Instanz |
+| `plugins/n8n/` | `n8n` | n8n-Workflows per Webhook, Workflows + API-Key pro Character |
+| `plugins/knowledge/` | `knowledge_extract`, `knowledge_search` | Wissens-Extraktion + Suche |
 
 ## Best Practices
 
-- **Keine direkten Imports aus `app.*`** — nutze `self.ctx` fuer Services
-- **`_defaults` definieren** — damit Per-Agent Config und `get_config_fields()` funktionieren
-- **`SKILL_ID` setzen** — muss mit `skill_id` in `plugin.yaml` uebereinstimmen
-- **Fehler abfangen** — und ueber `self.ctx.logger` loggen, nicht per `print()`
-- **`as_tool()` ueberschreiben** — fuer eine aussagekraeftige Tool-Beschreibung fuer das LLM
-- **Verbindungstests im `__init__`** — pruefen ob externe Services erreichbar sind (mit try/except)
+- **Keine direkten Imports aus `app.*`** — Services über `self.ctx`; Core-Engines
+  (Compliance, Stats, Pathfinder) sind über die Verb-Ausführung erreichbar,
+  niemals andersherum (Core kennt keine Paketnamen — R1).
+- **Lebenszyklus vollständig deklarieren** — wer ein Flag setzt, deklariert Löser,
+  Prompt-Sichtbarkeit und Zerfall (R3).
+- **`_defaults` definieren** — für Per-Character-Config und `get_config_fields()`.
+- **Lösch-Test** — Paketordner entfernen ⇒ Server startet ohne Reste (R7).
