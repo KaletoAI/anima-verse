@@ -1,9 +1,10 @@
 /**
  * FieldImage — Bild + „Generieren"-Button unter einem Aussehen-Prompt-Feld.
  * Template-getrieben über das Feld-Flag `image_preview`:
- *   - "appearance" → Aussehen-Bild mit Default-Pose/Expression + leerem Outfit
- *     (no clothes): GET /outfit-expression?override=1&pieces=&items=
- *     (trigger=1 startet die Generierung, force=1 regeneriert).
+ *   - "appearance" → Aussehen-Bild ohne Outfit (Default-Pose/Expression):
+ *     GET /outfit-expression?override=1&pieces=&items= (leerer Equipped-State).
+ *   - "outfit"     → Wardrobe-Preview MIT dem real angezogenen Outfit:
+ *     GET /outfit-expression?trigger=1 (kein override -> Real-State aus Profil).
  *   - "profile"    → Profilbild: POST /generate-profile-image.
  * Kein neues Backend — nutzt die vorhandenen Endpoints.
  */
@@ -46,7 +47,9 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
       ? profileFile
         ? `/characters/${enc}/images/${encodeURIComponent(profileFile)}?v=${bust}`
         : ''
-      : `/characters/${enc}/outfit-expression?override=1&pieces=&items=&fallback=default&v=${bust}`
+      : kind === 'outfit'
+        ? `/characters/${enc}/outfit-expression?fallback=default&v=${bust}`
+        : `/characters/${enc}/outfit-expression?override=1&pieces=&items=&fallback=default&v=${bust}`
 
   // Nach dem Trigger einige Sekunden nachladen (Generierung läuft async in der
   // Queue) — Bild-URL per Cache-Buster auffrischen, bis das echte Bild da ist.
@@ -93,7 +96,10 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     if (busy) return
     setBusy(true)
     try {
-      await fetch(`/characters/${enc}/outfit-expression?override=1&trigger=1&force=1&pieces=&items=`, {
+      const q = kind === 'outfit'
+        ? 'trigger=1&force=1'                       // real equipped state
+        : 'override=1&trigger=1&force=1&pieces=&items='  // empty outfit
+      await fetch(`/characters/${enc}/outfit-expression?${q}`, {
         credentials: 'same-origin',
       })
       toast(t('Generating…'))
@@ -102,7 +108,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       setBusy(false)
     }
-  }, [busy, enc, t, toast, startPoll])
+  }, [busy, enc, kind, t, toast, startPoll])
 
   // Profile image: comes from the ImageGenDialog (backend/LoRAs selectable)
   // -> /generate-profile-image with the dialog params. Empty prompt =

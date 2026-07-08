@@ -256,7 +256,7 @@ export function WardrobeTab({ character }: { character: string }) {
           aktualisiert mit jedem An-/Ausziehen (data reload). ── */}
       <div style={{ flex: '1 1 0', minWidth: 220, display: 'flex', flexDirection: 'column',
                     gap: 10, minHeight: 0, overflow: 'auto' }}>
-        <FieldImage character={character} kind="appearance" />
+        <FieldImage character={character} kind="outfit" />
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 8 }}>
           <PromptPreview character={character}
             refreshKey={JSON.stringify(data.equipped)} />
