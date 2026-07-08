@@ -112,6 +112,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `silhouette` | nein | `{asset: <relpath>}` — UI-Paper-Doll der Spezies (Datei im Paket) |
 | `body_slots` | nein | Körper-Slot-Deklarationen (s.u.) — Sichtbarkeit, Attribute, Prompt-Fragmente |
 | `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies (String oder `{id, label}`); ohne Deklaration gilt der Core-Default (`VALID_PIECE_SLOTS`) inkl. Core-Anzeige-Reihenfolge/-Labels |
+| `capability_description` | nein | Menschenlesbarer UI-Text der Fähigkeit (SkillsTab-Detail) — die Verb-Beschreibungen sind LLM-Tool-Prosa („call FollowDressCode") und adressieren den Charakter, nicht den User |
 | `capability_label` | nein | EIN UI-Toggle für ALLE Verben des Pakets (SkillsTab) — z.B. `"Party"` für invite/join/leave oder `"Sleep"` für sleep/wakeup. Ersetzt das frühere `pair_with` |
 | `enabled_default` | nein | Lade-Gate-Default für Pakete OHNE always_load-Verben, wenn weder `skills.<id>.enabled` in der Config noch die Env-Bridge etwas sagen (z.B. `true` für Kern-Verben wie talk_to) |
 | `env_prefix` | nein | Nur Altbestand (Env-Bridge); neue Pakete nutzen `ctx.get_config` |

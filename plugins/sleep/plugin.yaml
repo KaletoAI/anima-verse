@@ -1,5 +1,6 @@
 name: sleep
 capability_label: "Sleep"   # ONE UI toggle for all verbs of this package
+capability_description: "The character can go to sleep (leaves the visible map) and wake up again on their own."
 version: "1.0.0"
 description: Sleep/WakeUp verbs — set the is_sleeping flag and move the character off-map while asleep
 

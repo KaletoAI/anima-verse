@@ -33,6 +33,7 @@ interface SkillInfo {
   // package render as ONE toggle — e.g. "Party" for invite/join/leave.
   capability_id?: string
   capability_label?: string
+  capability_description?: string
   // Package dependency block (requires/conflicts) — non-empty = the toggle
   // is disabled while the skill is off; the backend refuses enabling too.
   blocked_reason?: string
@@ -241,9 +242,12 @@ export function SkillsTab({ character }: { character: string }) {
                 {t('Blocked by package dependencies')}: {current.blocked_reason}
               </div>
             )}
-            {current.description && (
+            {(current.capability_description || current.description) && (
               <div style={{ opacity: 0.7, fontSize: '0.88em', marginTop: 8, lineHeight: 1.4 }}>
-                {current.description}
+                {/* Group: human-facing capability text — the per-verb
+                    descriptions are LLM tool prose ("call FollowDressCode")
+                    and would address the wrong audience here. */}
+                {current.capability_description || current.description}
               </div>
             )}
             {current.enabled && fields.length > 0 && (

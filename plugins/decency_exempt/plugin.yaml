@@ -1,5 +1,6 @@
 name: decency_exempt
 capability_label: "Dress Code Exception"   # ONE UI toggle for all verbs of this package
+capability_description: "The character may decide in play to ignore the local dress code (and later follow it again). Both directions are the character's own actions; rules and events can set the same state."
 version: "1.0.0"
 description: Decency override — AllowExposed/RequireDecency verbs, deliberate persistent nude_ok state
 

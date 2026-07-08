@@ -1,5 +1,6 @@
 name: party
 capability_label: "Party"   # ONE UI toggle for all verbs of this package
+capability_description: "The character can travel as a group: invite others, join a party, and leave it. Only the leader moves; followers are pulled along."
 version: "1.0.0"
 description: Party verbs — travel together as a group (invite / join / leave); the leader moves, followers are dragged along
 

@@ -107,7 +107,8 @@ class Package:
     body_slots: List[BodySlotSpec] = field(default_factory=list)
     piece_slots: List[str] = field(default_factory=list)      # clothing-slot topology; empty = core default
     piece_slot_labels: Dict[str, str] = field(default_factory=dict)
-    capability_label: str = ""   # one UI toggle for ALL verbs of the package  # optional UI labels per slot
+    capability_label: str = ""   # one UI toggle for ALL verbs of the package
+    capability_description: str = ""  # human-facing UI text (LLM descriptions address the character)  # optional UI labels per slot
     # Package dependencies (F9): ids of other packages.
     # requires — must be PRESENT for this package to load at all, and ACTIVE
     #            on a character before this package's skills can be enabled.

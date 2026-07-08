@@ -1432,6 +1432,9 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
             # 'Party' for invite/join/leave.
             "capability_id": _cap_pkg.id if _cap_pkg else "",
             "capability_label": _cap_pkg.capability_label if _cap_pkg else "",
+            # Human-facing group text — the per-verb descriptions are
+            # LLM tool prose ("call FollowDressCode") and stay LLM-only.
+            "capability_description": _cap_pkg.capability_description if _cap_pkg else "",
             # F9 dependencies: non-empty = enabling is blocked (UI disables
             # the toggle and shows why); the PUT route enforces it too.
             "blocked_reason": skill_dependency_block(character_name, skill_id),

@@ -1,5 +1,6 @@
 name: wet
 capability_label: "Wetness"   # ONE UI toggle for all verbs of this package
+capability_description: "The character can get wet (entering water, rain) and dry off; wetness flows into scene descriptions and images."
 version: "1.0.0"
 description: Wet state — EnterWater/DryOff verbs, swim exemption while wet, auto-dry via TTL
 

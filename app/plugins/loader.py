@@ -163,6 +163,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     """Parse one manifest into a Package (contributions resolved, no skills instantiated)."""
     pkg = Package(id=entry_dir.name, dir=entry_dir, manifest=meta)
     pkg.capability_label = str(meta.get("capability_label", "") or "").strip()
+    pkg.capability_description = str(meta.get("capability_description", "") or "").strip()
     pkg.skills = _parse_skill_entries(meta)
     if not meta.get("name"):
         logger.warning("Package %s: name missing in plugin.yaml", entry_dir.name)
