@@ -2476,12 +2476,23 @@ def _build_full_system_prompt(character_name: str,
     # Identitaetsvermischung: Modell narrierte/uebernahm fremde Figuren, weil der
     # Prompt eine 4-Personen-Szene als "du sprichst mit X" rahmte).
     _present_str = ""
+    _present_details = ""
     if present_characters:
         _others = list(dict.fromkeys(
             c for c in present_characters if c and c != character_name))
         if _others:
             _present_str = ", ".join(_others)
             partner_mode = "room"
+            # Visible outfit/states per present person — same builder as
+            # the thought context (a character SEES the people around it).
+            try:
+                from app.core.thought_context import present_people_details
+                from app.models.character import get_character_current_location
+                _loc = get_character_current_location(character_name) or ""
+                _present_details = present_people_details(
+                    [(n, n) for n in _others], _loc)
+            except Exception:
+                _present_details = ""
 
     # ---- Szenen als kanonische "fruehere Gespraeche" ------------------
     # scene_store-Consolidation (Konversation->Szene). Schliesst den Loop und
@@ -2556,6 +2567,7 @@ def _build_full_system_prompt(character_name: str,
         partner_name=_partner_name,
         partner_lines=_partner_lines,
         present_characters=_present_str,
+        present_details=_present_details,
         skip_partner=skip_partner,
         medium=medium,
         self_wearing=self_wearing,

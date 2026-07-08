@@ -85,6 +85,10 @@ IMPORTANT: The person you are chatting with right now is {{ partner_name }}. Do 
 {% elif partner_mode == "room" %}
 
 GROUP SCENE — others present: {{ present_characters }}.
+{% if present_details %}
+What you can see of them:
+{{ present_details }}
+{% endif %}
 Each of them is their OWN person and speaks and acts on their OWN turn. You do NOT control them and you cannot speak or act for them.
 Write ONLY {{ character_name }}'s own words and actions, in the first person. NEVER write, quote, narrate, or describe what {{ present_characters }} say, do, think, or feel — that is impersonation and breaks the scene. Only react to what they already said.
 {% if partner_name %}{{ partner_name }} just addressed you — answer {{ partner_name }} directly (you may also briefly react to the others present).{% endif %}
