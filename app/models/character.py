@@ -220,13 +220,14 @@ _STATE_TYPED_COLS = (
     ("decency_exempt",  "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
 )
 
-# Weitere Runtime-Keys — landen in character_state.meta (JSON-Blob) statt
-# in profile_json. Inject/Extract analog zu _STATE_COLS.
+# Further runtime keys — stored in character_state.meta (JSON blob) instead
+# of profile_json. Inject/extract analogous to _STATE_COLS.
 _STATE_META_KEYS = ("equipped_pieces", "equipped_items",
                     "active_conditions", "status_effects", "activity_cooldowns",
-                    "outfit_intent",        # neuer Intent-Container (May 2026)
+                    "outfit_intent",        # intent container (May 2026)
                     "current_activity_detail",
-                    "movement_target")
+                    "movement_target",
+                    "state_flag_since")     # flag -> ISO ts (flag lifecycle)
 # Entfernt in Schritt 8 (Cleanup, May 2026):
 # - runtime_outfit_skip → outfit_intent.forbidden_slots
 # - equipped_pieces_meta → Items eindeutig, Farbe im prompt_fragment
@@ -1305,6 +1306,17 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # Hintergrund-Variant fuer den neuen Ort vorgenerieren
     if location and location != old_location:
         _schedule_background_variant(character_name)
+
+    # Flag lifecycle: flags declared with reset_on_location_change end here
+    # (generic — the executor invokes the declaring package's clear verb).
+    if location_changed:
+        try:
+            from app.core.flag_lifecycle import on_location_change
+            on_location_change(character_name)
+        except Exception as _e:
+            from app.core.log import get_logger
+            get_logger("character_model").debug(
+                "flag lifecycle on location change failed: %s", _e)
 
     # Party-Mitziehen: ist der Bewegte Leader einer Party, ziehen alle Follower
     # an denselben Ort mit. _party_drag=True am rekursiven Aufruf verhindert,
@@ -3298,12 +3310,19 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     profile = get_character_profile(character_name) or {}
     was = bool(profile.get("is_sleeping"))
     profile["is_sleeping"] = bool(value)
-    # Aufwachen (True->False): Schlaf-/Alt-Pose verwerfen, sonst bleibt das
-    # Expression-Bild auf "schlafend" haengen. (wake_from_offmap macht das
-    # ebenfalls, greift aber nur fuer off-map Schlaefer.)
+    # Change stamp for the flag lifecycle (same bookkeeping as set_state_flag).
+    _since = dict(profile.get("state_flag_since") or {})
+    if value:
+        _since["is_sleeping"] = utc_now_iso()
+    else:
+        _since.pop("is_sleeping", None)
+    profile["state_flag_since"] = _since
+    # Waking up (True->False): drop the sleep/old pose, otherwise the
+    # expression image stays stuck on "sleeping". (wake_from_offmap does the
+    # same, but only applies to off-map sleepers.)
     if was and not value:
         profile["pose_intent"] = ""
-        profile["pose_variant_id"] = None  # = None, nicht pop: pop wird beim Save uebersprungen
+        profile["pose_variant_id"] = None  # = None, not pop: pop is skipped on save
     save_character_profile(character_name, profile)
     # Schlaf-Längen-Messung für die Tages-Konsolidierung (plan-history-
     # consolidation-cleanup.md, Phase 2): Einschlafen merkt die Startzeit,
@@ -3316,35 +3335,55 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
             pass
 
 
-def set_is_wet(character_name: str, value: bool) -> None:
-    if not character_name:
+def set_state_flag(character_name: str, flag: str, value: bool) -> None:
+    """Generic state-flag setter with change tracking.
+
+    Stamps ``state_flag_since[flag]`` on set and drops the stamp on clear —
+    the flag-lifecycle executor (app/core/flag_lifecycle.py) uses the stamp
+    for TTL decay. The flag-specific setters delegate here.
+    """
+    if not character_name or not flag:
         return
     profile = get_character_profile(character_name) or {}
-    profile["is_wet"] = bool(value)
+    profile[flag] = bool(value)
+    since = dict(profile.get("state_flag_since") or {})
+    if value:
+        since[flag] = utc_now_iso()
+    else:
+        since.pop(flag, None)
+    profile["state_flag_since"] = since
     save_character_profile(character_name, profile)
+
+
+def stamp_state_flag_since(character_name: str, flag: str) -> None:
+    """Baseline timestamp for an already-set flag without a stamp (flags
+    set before the lifecycle executor existed, or after data edits)."""
+    if not character_name or not flag:
+        return
+    profile = get_character_profile(character_name) or {}
+    since = dict(profile.get("state_flag_since") or {})
+    since[flag] = utc_now_iso()
+    profile["state_flag_since"] = since
+    save_character_profile(character_name, profile)
+
+
+def set_is_wet(character_name: str, value: bool) -> None:
+    set_state_flag(character_name, "is_wet", value)
 
 
 def set_is_intimate(character_name: str, value: bool) -> None:
-    if not character_name:
-        return
-    profile = get_character_profile(character_name) or {}
-    profile["is_intimate"] = bool(value)
-    save_character_profile(character_name, profile)
+    set_state_flag(character_name, "is_intimate", value)
 
 
 def set_decency_exempt(character_name: str, value: bool) -> None:
-    """Setzt decency_exempt — Decency-Override auf nude_ok (wie is_intimate,
-    aber als manuell/regelbasiert gesetzter Dauerzustand gedacht)."""
-    if not character_name:
-        return
-    profile = get_character_profile(character_name) or {}
-    profile["decency_exempt"] = bool(value)
-    save_character_profile(character_name, profile)
+    """Sets decency_exempt — decency override to nude_ok (like is_intimate,
+    but meant as a deliberately/rule-set persistent state)."""
+    set_state_flag(character_name, "decency_exempt", value)
 
 
 def get_state_flags(character_name: str) -> Dict[str, bool]:
-    """Liefert alle State-Flags als Dict. Praktisch fuer Compliance-
-    Aufrufe und Prompt-Builder.
+    """Returns all state flags as a dict. Convenient for compliance
+    calls and prompt builders.
     """
     profile = get_character_profile(character_name) or {}
     return {

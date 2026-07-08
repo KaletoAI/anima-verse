@@ -194,9 +194,9 @@ Klasse, mehrere Verben (Muster wie `_Verb` im skill_manager).
 
 ## Best Practices
 
-- **Keine direkten Imports aus `app.*`** — Services über `self.ctx`; Core-Engines
-  (Compliance, Stats, Pathfinder) sind über die Verb-Ausführung erreichbar,
-  niemals andersherum (Core kennt keine Paketnamen — R1).
+- **Abhängigkeits-Richtung:** Pakete dürfen Core-Engines importieren und rufen
+  (`app.models`/`app.core` — Compliance, Stats, Pathfinder); das Core referenziert
+  niemals ein Paket (R1). Externe Services (HTTP, Env, Config) über `self.ctx`.
 - **Lebenszyklus vollständig deklarieren** — wer ein Flag setzt, deklariert Löser,
   Prompt-Sichtbarkeit und Zerfall (R3).
 - **`_defaults` definieren** — für Per-Character-Config und `get_config_fields()`.

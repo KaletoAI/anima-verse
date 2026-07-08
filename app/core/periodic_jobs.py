@@ -98,6 +98,17 @@ def _sub_status_tick():
         logger.debug("status_tick sub error: %s", e)
 
 
+def _sub_flag_lifecycle():
+    """TTL decay for package-declared state flags (flag lifecycle executor).
+    Generic — flag names, prompts and TTLs come from the packages'
+    plugin.yaml declarations."""
+    try:
+        from app.core.flag_lifecycle import decay_tick
+        decay_tick()
+    except Exception as e:
+        logger.debug("flag_lifecycle sub error: %s", e)
+
+
 def _sub_force_rules():
     """Force-Rules pro Char pruefen — z.B. Wake-Rule (stamina>X +
     activity:sleeping → activity=""). Vorher nur 1x/h im hourly tick;
@@ -310,6 +321,7 @@ def _sub_lora_library_sync():
 _SUB_TASKS: List[tuple] = [
     # (func,                         min_interval_s,        label)
     (_sub_status_tick,               60,                    "status_tick"),
+    (_sub_flag_lifecycle,            60,                    "flag_lifecycle"),
     (_sub_force_rules,               0,                     "force_rules"),
     (_sub_assignment_expiry,         60,                    "assignment_expiry"),
     (_sub_random_events_generate,    3600,                  "random_events_generate"),

@@ -29,6 +29,7 @@ interface SkillInfo {
   name: string
   description?: string
   enabled: boolean
+  pair_with?: string
   config_fields: Record<string, ConfigField> | null
 }
 interface LocationOpt {
@@ -36,15 +37,15 @@ interface LocationOpt {
   name: string
 }
 
-// Gegensatz-Paare: im UI EIN gekoppelter Schalter statt zwei (sonst liesse sich
-// z.B. Sleep ohne WakeUp aktivieren — unlogisch). Der LLM sieht weiter beide
-// Verben; nur das per-Character-Enable wird gemeinsam geschaltet.
-const SKILL_PAIRS: Record<string, { partner: string; label: string }> = {
+// Opposite pairs: ONE coupled switch in the UI instead of two (otherwise
+// e.g. Sleep could be enabled without WakeUp — illogical). The LLM still
+// sees both verbs; only the per-character enable is switched together.
+// Skill packages declare their pairs themselves (plugin.yaml pair_with,
+// delivered as `pair_with` by the API); this constant only covers the
+// remaining unmigrated built-in pair.
+const BUILTIN_PAIRS: Record<string, { partner: string; label?: string }> = {
   sleep: { partner: 'wakeup', label: 'Sleep / Wake up' },
-  enter_water: { partner: 'dry_off', label: 'Enter / leave water' },
-  start_intimate: { partner: 'end_intimate', label: 'Start / end intimacy' },
 }
-const PAIR_SECONDARY = new Set(Object.values(SKILL_PAIRS).map((p) => p.partner))
 
 export function SkillsTab({ character }: { character: string }) {
   const { t } = useI18n()
@@ -156,19 +157,33 @@ export function SkillsTab({ character }: { character: string }) {
     return <div className="ga-placeholder">{t('No skills available.')}</div>
   }
 
-  const visible = skills.filter((s) => !PAIR_SECONDARY.has(s.skill_id))
+  // Pair map: package-declared pairs (pair_with from the API) + the
+  // remaining built-in pair. Secondary verbs are hidden from the list.
+  const pairMap: Record<string, { partner: string; label?: string }> = { ...BUILTIN_PAIRS }
+  for (const s of skills) {
+    if (s.pair_with && !pairMap[s.skill_id]) pairMap[s.skill_id] = { partner: s.pair_with }
+  }
+  const pairSecondary = new Set(Object.values(pairMap).map((p) => p.partner))
+  const byId = new Map(skills.map((s) => [s.skill_id, s]))
+
+  const visible = skills.filter((s) => !pairSecondary.has(s.skill_id))
   const current = visible.find((s) => s.skill_id === selected) || visible[0]
-  const nameOf = (s: SkillInfo) =>
-    SKILL_PAIRS[s.skill_id] ? t(SKILL_PAIRS[s.skill_id].label) : (s.name || s.skill_id)
+  const nameOf = (s: SkillInfo) => {
+    const pair = pairMap[s.skill_id]
+    if (!pair) return s.name || s.skill_id
+    if (pair.label) return t(pair.label)
+    const partner = byId.get(pair.partner)
+    return `${s.name || s.skill_id} / ${partner?.name || pair.partner}`
+  }
   const onToggle = (s: SkillInfo, checked: boolean) => {
-    const pair = SKILL_PAIRS[s.skill_id]
+    const pair = pairMap[s.skill_id]
     return pair ? togglePair(s.skill_id, pair.partner, checked) : toggleEnabled(s, checked)
   }
 
   const fields = current?.config_fields ? Object.entries(current.config_fields) : []
   const idHint = current
-    ? (SKILL_PAIRS[current.skill_id]
-        ? `${current.skill_id} + ${SKILL_PAIRS[current.skill_id].partner}`
+    ? (pairMap[current.skill_id]
+        ? `${current.skill_id} + ${pairMap[current.skill_id].partner}`
         : current.skill_id)
     : ''
 

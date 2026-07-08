@@ -1260,6 +1260,11 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
     from app.core.dependencies import get_skill_manager
     from app.models.character import get_character_skill_config
     skill_manager = get_skill_manager()
+    try:
+        from app.plugins.registry import skill_pairs
+        _pairs = skill_pairs()
+    except Exception:
+        _pairs = {}
     skills = []
     for skill in skill_manager.skills:
         skill_id = skill.SKILL_ID
@@ -1286,6 +1291,9 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
             "name": skill.name,
             "description": skill.description,
             "enabled": enabled,
+            # Package-declared verb pair (plugin.yaml pair_with) — the UI
+            # renders one coupled toggle for both verbs.
+            "pair_with": _pairs.get(skill_id, ""),
             "config_fields": config_fields if config_fields else None,
         })
 

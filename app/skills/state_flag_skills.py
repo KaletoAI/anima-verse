@@ -1,19 +1,22 @@
-"""State-Flag-Skills + SetPose (Schritt 6, May 2026).
+"""State-flag skills + SetPose (step 6, May 2026).
 
 Plan: development_instructions/plan-outfit-system-rethink.md §1.4
 
-State-Flag-Skills die jeweils einen State-Flag oder pose_intent setzen. Sie
-ersetzen den generischen SetActivity-Skill fuer die wenigen "Activity-Effekte"
-die wirklich Code-Wirkung haben. Die drei Gegensatz-Paare teilen sich je EINE
-parameterisierte Klasse, werden aber als zwei klare LLM-Verben registriert
-(siehe skill_manager._Verb):
+State-flag skills each set one state flag or pose_intent. They replaced the
+generic SetActivity skill for the few "activity effects" that really have
+code impact. An opposite pair shares ONE parameterized class registered as
+two distinct LLM verbs (see skill_manager._Verb):
 
-    SleepWakeSkill  → is_sleeping + Off-Map   · Sleep (asleep=True) / WakeUp
-    WetSkill        → is_wet (swim-exemption)  · EnterWater (wet=True) / DryOff
-    IntimateSkill   → is_intimate (+ Partner)  · StartIntimate (active=True) / EndIntimate
-    SetPoseSkill    → pose_intent setzen (kein Flag, nur Pose-Pipeline)
+    SleepWakeSkill  → is_sleeping + off-map   · Sleep (asleep=True) / WakeUp
+    SetPoseSkill    → set pose_intent (no flag, pose pipeline only)
 
-Compliance liest die Flags via get_state_flags() und reagiert entsprechend.
+Compliance reads the flags via get_state_flags() and reacts accordingly.
+
+The wet/intimacy/decency flag skills were migrated to self-contained
+packages (plugins/wet, plugins/intimacy, plugins/decency_exempt — wave 2
+pilot of plan-skill-plugin-architecture.md); sleep and set_pose follow in
+a later wave (their semantics are still interwoven with the agent loop /
+pose engine).
 """
 from typing import Any, Dict
 
@@ -31,9 +34,9 @@ def _agent_from_input(skill: BaseSkill, raw_input: str) -> tuple[Dict[str, Any],
 
 
 class _BaseFlagSkill(BaseSkill):
-    """Shared scaffolding fuer alle State-Flag-Skills.
+    """Shared scaffolding for all state-flag skills.
 
-    Subklasse setzt SKILL_ID + SKILL_META + überschreibt _apply().
+    Subclass sets SKILL_ID + SKILL_META and overrides _apply().
     """
     SKILL_META = ""  # name of the shared/templates/llm/skills/*.md file
     ALWAYS_LOAD = True
@@ -47,20 +50,20 @@ class _BaseFlagSkill(BaseSkill):
         self._defaults = {"enabled": True}
 
     def _apply(self, character_name: str, ctx: Dict[str, Any]) -> str:
-        """Subklasse: macht den eigentlichen State-Change. Returns Text fuer LLM."""
+        """Subclass: performs the actual state change. Returns text for the LLM."""
         raise NotImplementedError
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
-            return f"{self.name} Skill ist deaktiviert."
+            return f"{self.name} skill is disabled."
         ctx, char = _agent_from_input(self, raw_input)
         if not char:
-            return "Fehler: character_name fehlt."
+            return "Error: character_name missing."
         try:
             return self._apply(char, ctx)
         except Exception as e:
-            logger.exception("%s [%s] fehlgeschlagen: %s", self.name, char, e)
-            return f"Fehler in {self.name}: {e}"
+            logger.exception("%s [%s] failed: %s", self.name, char, e)
+            return f"Error in {self.name}: {e}"
 
     def as_tool(self, **kwargs) -> ToolSpec:
         return ToolSpec(name=self.name, description=self.description,
@@ -70,8 +73,8 @@ class _BaseFlagSkill(BaseSkill):
 # --- Sleep / WakeUp -------------------------------------------------------
 
 class SleepWakeSkill(_BaseFlagSkill):
-    """Setzt is_sleeping (+ Off-Map). Eine Implementierung, zwei Verben:
-    Sleep (asleep=True) / WakeUp (asleep=False) — der LLM sieht beide Tools."""
+    """Sets is_sleeping (+ off-map). One implementation, two verbs:
+    Sleep (asleep=True) / WakeUp (asleep=False) — the LLM sees both tools."""
 
     def __init__(self, config: Dict[str, Any], asleep: bool):
         self._asleep = asleep
@@ -89,119 +92,9 @@ class SleepWakeSkill(_BaseFlagSkill):
             else:
                 wake_from_offmap(character_name)
         except Exception as e:
-            logger.debug("offmap toggle (asleep=%s) fehlgeschlagen: %s", self._asleep, e)
+            logger.debug("offmap toggle (asleep=%s) failed: %s", self._asleep, e)
         return (f"{character_name} schlaeft jetzt." if self._asleep
                 else f"{character_name} ist wieder wach.")
-
-
-# --- Wet / Dry ------------------------------------------------------------
-
-class WetSkill(_BaseFlagSkill):
-    """Setzt is_wet + Compliance-Reeval (Swim-Exemption). Zwei Verben:
-    EnterWater (wet=True) / DryOff (wet=False)."""
-
-    def __init__(self, config: Dict[str, Any], wet: bool):
-        self._wet = wet
-        self.SKILL_ID = "enter_water" if wet else "dry_off"
-        self.SKILL_META = "enter_water" if wet else "dry_off"
-        super().__init__(config)
-
-    def _apply(self, character_name: str, ctx: Dict[str, Any]) -> str:
-        from app.models.character import set_is_wet
-        set_is_wet(character_name, self._wet)
-        # Compliance re-evaluieren damit swim-exemption greift / faellt
-        try:
-            from app.core.outfit_compliance import apply_outfit_compliance
-            apply_outfit_compliance(character_name)
-        except Exception as e:
-            logger.debug("compliance nach Wet-Toggle (wet=%s): %s", self._wet, e)
-        return (f"{character_name} ist jetzt im Wasser." if self._wet
-                else f"{character_name} ist trocken.")
-
-
-# --- Intimate -------------------------------------------------------------
-
-def _resolve_partner(ctx: Dict[str, Any]) -> str:
-    """partner_name aus JSON-Input oder erstem Token."""
-    partner = (ctx.get("partner") or ctx.get("partner_name") or "").strip()
-    if partner:
-        return partner
-    # Freitext-Fallback
-    text = (ctx.get("input") or "").strip()
-    if text:
-        return text.split()[0]
-    return ""
-
-
-class IntimateSkill(_BaseFlagSkill):
-    """Setzt is_intimate (selbst + Partner) + Compliance-Override (nude_ok).
-    Zwei Verben: StartIntimate (active=True) / EndIntimate (active=False)."""
-
-    def __init__(self, config: Dict[str, Any], active: bool):
-        self._active = active
-        self.SKILL_ID = "start_intimate" if active else "end_intimate"
-        self.SKILL_META = "start_intimate" if active else "end_intimate"
-        super().__init__(config)
-
-    def _apply(self, character_name: str, ctx: Dict[str, Any]) -> str:
-        from app.models.character import set_is_intimate
-        set_is_intimate(character_name, self._active)
-        partner = _resolve_partner(ctx)
-        if partner and partner != character_name:
-            try:
-                set_is_intimate(partner, self._active)
-            except Exception as e:
-                logger.debug("Partner is_intimate=%s fehlgeschlagen: %s", self._active, e)
-        # Compliance reagiert sofort (decency_override → nude_ok bzw. zurueck)
-        try:
-            from app.core.outfit_compliance import apply_outfit_compliance
-            apply_outfit_compliance(character_name)
-            if partner and partner != character_name:
-                apply_outfit_compliance(partner)
-        except Exception as e:
-            logger.debug("compliance nach Intimate-Toggle (active=%s): %s", self._active, e)
-        if self._active:
-            if partner:
-                return f"Intimer Moment zwischen {character_name} und {partner}."
-            return f"{character_name} ist im intimen Modus."
-        # End of intimacy = the "afterwards" signal: one stat-evaluation
-        # round with climax context (post-climax drop of arousal-like
-        # values etc. — the semantics live in the template hints, not here).
-        try:
-            from app.core.stat_effects import on_intimacy_end
-            on_intimacy_end(character_name, partner or "")
-        except Exception as e:
-            logger.debug("intimacy-end stat hook failed: %s", e)
-        return f"{character_name} verlaesst den intimen Modus."
-
-
-# --- DecencyExempt --------------------------------------------------------
-
-class DecencyExemptSkill(_BaseFlagSkill):
-    """Setzt decency_exempt — Decency-Override auf nude_ok, unabhaengig von
-    Anwesenheit/Fremden. Zwei Verben: AllowExposed (active=True) /
-    RequireDecency (active=False). Manuelle/Skill-Entsprechung zu is_intimate,
-    aber als bewusster Dauerzustand (z.B. Exhibitionismus, FKK)."""
-
-    def __init__(self, config: Dict[str, Any], active: bool):
-        self._active = active
-        self.SKILL_ID = "allow_exposed" if active else "require_decency"
-        self.SKILL_META = "allow_exposed" if active else "require_decency"
-        super().__init__(config)
-
-    def _apply(self, character_name: str, ctx: Dict[str, Any]) -> str:
-        from app.models.character import set_decency_exempt
-        set_decency_exempt(character_name, self._active)
-        # Compliance reagiert sofort (nude_ok → kein Zwangs-Anziehen bzw. zurueck)
-        try:
-            from app.core.outfit_compliance import apply_outfit_compliance
-            apply_outfit_compliance(character_name)
-        except Exception as e:
-            logger.debug("compliance nach DecencyExempt-Toggle (active=%s): %s",
-                         self._active, e)
-        if self._active:
-            return f"{character_name} darf sich frei zeigen (Decency aufgehoben)."
-        return f"{character_name} haelt sich wieder an die Kleiderordnung."
 
 
 # --- SetPose --------------------------------------------------------------
@@ -216,7 +109,7 @@ class SetPoseSkill(_BaseFlagSkill):
             return "Fehler: keine Pose angegeben."
         from app.models.character import get_character_profile, save_character_profile
         from app.core.pose_engine import resolve_pose_variant
-        # Variant resolven (normalize + match), pose_intent + id speichern
+        # Resolve variant (normalize + match), store pose_intent + id
         variant = resolve_pose_variant(character_name, pose)
         prof = get_character_profile(character_name) or {}
         prof["pose_intent"] = pose

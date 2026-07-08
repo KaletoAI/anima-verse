@@ -1,0 +1,35 @@
+name: wet
+version: "1.0.0"
+description: Wet state — EnterWater/DryOff verbs, swim exemption while wet, auto-dry via TTL
+
+skills:
+  - skill_id: enter_water
+    class: WetSkill
+    params: {wet: true}
+    always_load: true
+    pair_with: dry_off
+  - skill_id: dry_off
+    class: WetSkill
+    params: {wet: false}
+    always_load: true
+
+templates:
+  llm: templates/llm
+
+config_schema:
+  wet:
+    label: Wet state
+    fields:
+      ttl_minutes:
+        type: int
+        label: Auto-dry after (min)
+        default: 90
+        min: 0
+        max: 1440
+        description: Minutes until a wet character dries off automatically (the DryOff verb runs). 0 = no automatic drying.
+
+state_flags:
+  - flag: is_wet
+    cleared_by: dry_off
+    prompt_when_set: "You are still wet from the water. Once you have dried off or left the water behind, use {clear_tool}."
+    ttl_minutes: 90

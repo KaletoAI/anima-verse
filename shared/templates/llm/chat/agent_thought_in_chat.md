@@ -41,6 +41,10 @@ Current situation:
 - Active effects:
 {{ effects_block }}
 {% endif %}
+{% if state_flags_block %}
+- Ongoing states:
+{{ state_flags_block }}
+{% endif %}
 {% if present_people_block %}
 - Also present here: {{ present_people_block }}
 {% endif %}

@@ -45,6 +45,16 @@ _TEMPLATE_ROOT = Path(__file__).resolve().parents[2] / "shared" / "templates" / 
 # File operations
 # ---------------------------------------------------------------------------
 
+def _package_template_roots() -> Dict[str, Path]:
+    """LLM template roots contributed by skill packages (plugin.yaml
+    templates.llm) — listed/edited under the ``plugin:<package>/`` prefix."""
+    try:
+        from app.plugins.registry import packages
+        return {p.id: p.llm_template_dir for p in packages() if p.llm_template_dir}
+    except Exception:
+        return {}
+
+
 def list_templates() -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for p in sorted(_TEMPLATE_ROOT.rglob("*.md")):
@@ -55,12 +65,29 @@ def list_templates() -> List[Dict[str, Any]]:
             "kind": kind,
             "has_preview": rel in _PREVIEW_DRIVERS,
         })
+    # Package templates, addressable as plugin:<package>/<rel>.
+    for pkg_id, root in sorted(_package_template_roots().items()):
+        for p in sorted(root.rglob("*.md")):
+            rel = p.relative_to(root).as_posix()
+            kind = rel.split("/", 1)[0] if "/" in rel else ""
+            out.append({
+                "path": f"plugin:{pkg_id}/{rel}",
+                "kind": kind,
+                "has_preview": False,
+            })
     return out
 
 
 def _resolve_safe(rel_path: str) -> Path:
-    p = (_TEMPLATE_ROOT / rel_path).resolve()
-    if not str(p).startswith(str(_TEMPLATE_ROOT.resolve())):
+    root = _TEMPLATE_ROOT
+    if rel_path.startswith("plugin:"):
+        pkg_id, _, rel_path = rel_path[len("plugin:"):].partition("/")
+        pkg_root = _package_template_roots().get(pkg_id)
+        if pkg_root is None or not rel_path:
+            raise ValueError(f"Unknown package template path: {pkg_id}/{rel_path}")
+        root = pkg_root
+    p = (root / rel_path).resolve()
+    if not str(p).startswith(str(root.resolve())):
         raise ValueError(f"Path escapes template root: {rel_path}")
     if p.suffix != ".md":
         raise ValueError(f"Only .md files allowed: {rel_path}")

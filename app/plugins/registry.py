@@ -123,11 +123,12 @@ def default_enabled_skill_ids() -> List[str]:
 
 
 def skill_pairs() -> Dict[str, str]:
-    """Map skill_id -> paired skill_id (both directions)."""
+    """Map primary skill_id -> paired skill_id, declared direction only
+    (the declaring verb is the pair's primary; the partner is rendered as
+    part of the primary's coupled toggle in the skills UI)."""
     pairs: Dict[str, str] = {}
     for p in packages():
         for s in p.skills:
             if s.pair_with:
                 pairs[s.skill_id] = s.pair_with
-                pairs.setdefault(s.pair_with, s.skill_id)
     return pairs

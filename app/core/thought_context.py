@@ -61,6 +61,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "assignments_block": _build_assignments_block(character_name),
         "general_task": _build_general_task(profile),
         "commitments_block": _build_commitments_block(character_name),
+        "state_flags_block": _build_state_flags_block(character_name),
         "outfit_decision_block": _build_outfit_decision_block(character_name),
         "arc_block": _build_arc_block(character_name),
         "retrospective_block": _build_retrospective_block(character_name),
@@ -129,6 +130,19 @@ def _build_inbox_block(character_name: str) -> str:
         return "\n".join(lines)
     except Exception as e:
         logger.debug("inbox block failed for %s: %s", character_name, e)
+        return ""
+
+
+def _build_state_flags_block(character_name: str) -> str:
+    """Situation lines for package-declared state flags (flag lifecycle) —
+    e.g. "You are still wet — use DryOff …". Generic: the texts come from
+    the packages' state_flags declarations, this code knows no flag."""
+    try:
+        from app.core.flag_lifecycle import situation_lines
+        lines = situation_lines(character_name)
+        return "\n".join(f"- {line}" for line in lines) if lines else ""
+    except Exception as e:
+        logger.debug("state flags block failed for %s: %s", character_name, e)
         return ""
 
 

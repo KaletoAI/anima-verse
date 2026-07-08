@@ -42,6 +42,10 @@ Current situation:
 - Active effects:
 {{ effects_block }}
 {% endif %}
+{% if state_flags_block %}
+- Ongoing states:
+{{ state_flags_block }}
+{% endif %}
 {% if outfit_self_block %}
 - {{ outfit_self_block }}
 {% endif %}

@@ -23,9 +23,7 @@ from .outfit_creation_skill import OutfitCreationSkill
 from .video_generation_skill import VideoGenerationSkill
 from .markdown_writer_skill import MarkdownWriterSkill
 from .retrospect_skill import RetrospectSkill
-from .state_flag_skills import (
-    SleepWakeSkill, WetSkill, IntimateSkill, DecencyExemptSkill, SetPoseSkill,
-)
+from .state_flag_skills import SleepWakeSkill, SetPoseSkill
 from .party_skills import PartySkill
 
 
@@ -72,15 +70,11 @@ class SkillManager:
         'videogen': VideoGenerationSkill,
         'markdown_writer': MarkdownWriterSkill,
         'retrospect': RetrospectSkill,
-        # State-Flag-Skills — je Paar EINE Klasse, zwei Verben (via _Verb).
+        # State-flag skills — one class per opposite pair, two verbs (via
+        # _Verb). Wet/intimacy/decency migrated to packages under plugins/
+        # (wave 2 pilot, plan-skill-plugin-architecture.md).
         'sleep': _Verb(SleepWakeSkill, asleep=True),
         'wakeup': _Verb(SleepWakeSkill, asleep=False),
-        'enter_water': _Verb(WetSkill, wet=True),
-        'dry_off': _Verb(WetSkill, wet=False),
-        'start_intimate': _Verb(IntimateSkill, active=True),
-        'end_intimate': _Verb(IntimateSkill, active=False),
-        'allow_exposed': _Verb(DecencyExemptSkill, active=True),
-        'require_decency': _Verb(DecencyExemptSkill, active=False),
         'set_pose': SetPoseSkill,
         # Party-System (gemeinsam reisen): EINE Klasse, drei Verben (wie Wet
         # enter/leave). default-on via config.py-Env-Loop, Sichtbarkeit pro Rolle

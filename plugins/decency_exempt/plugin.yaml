@@ -1,0 +1,22 @@
+name: decency_exempt
+version: "1.0.0"
+description: Decency override — AllowExposed/RequireDecency verbs, deliberate persistent nude_ok state
+
+skills:
+  - skill_id: allow_exposed
+    class: DecencyExemptSkill
+    params: {active: true}
+    always_load: true
+    pair_with: require_decency
+  - skill_id: require_decency
+    class: DecencyExemptSkill
+    params: {active: false}
+    always_load: true
+
+templates:
+  llm: templates/llm
+
+state_flags:
+  - flag: decency_exempt
+    cleared_by: require_decency
+    prompt_when_set: "You currently allow yourself to stay exposed (decency override active). Use {clear_tool} when you want to follow the dress code again."
