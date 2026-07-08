@@ -384,7 +384,7 @@ class OutfitCreationSkill(BaseSkill):
 
         cfg = self._get_effective_config(character_name)
         if not cfg.get("enabled", True):
-            return f"OutfitCreation ist fuer {character_name} deaktiviert."
+            return f"CreateOutfit is disabled for {character_name}."
 
         max_daily = cfg.get("max_daily_items", 8)
         max_inventory = cfg.get("max_inventory_pieces", 60)

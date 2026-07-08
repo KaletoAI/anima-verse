@@ -38,7 +38,7 @@ const SKILL_LABELS: Record<string, string> = {
   instagram_comment: 'Instagram Comment',
   instagram_reply: 'Instagram Reply',
   markdown_writer: 'Write Markdown',
-  retrospect: 'Retrospect',
+  retrospect: 'Reflect',
   notify_user: 'Notify User',
 }
 

@@ -19,7 +19,7 @@ class KnowledgeExtractPlugin(PluginSkill):
 
     def __init__(self, config: Dict[str, Any], ctx: PluginContext):
         super().__init__(config, ctx)
-        self.name = "KnowledgeExtract"
+        self.name = "ExtractKnowledge"
         self.description = (
             "Searches local system files for information about characters, events, and internal data. "
             "Use this tool when asked to look up, check, or find information in the system. "

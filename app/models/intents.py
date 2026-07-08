@@ -35,7 +35,7 @@ TOOL_NAME_MAP = {
     "TalkTo": "talkto",
     "SendNotification": "notification",
     "InstagramPost": "instagram",
-    "KnowledgeExtract": "research",
+    "ExtractKnowledge": "research",
 }
 
 _TOOL_LABELS = {

@@ -9,7 +9,7 @@ beim ersten Lesen mit Defaults befüllt.
 
 Whitelist-Skills sind absichtlich klein gehalten — Storyteller ist ein
 GM-Werkzeug, kein vollwertiger Chat-Partner. Defaults aktivieren nur die
-"world action"-Skills (Outfit, Image, Activity, ConsumeItem), während
+"world action" skills (outfit, image, activity, UseItem), while
 Kommunikations- und Bewegungs-Skills aus sind (Avatar steuert seine
 Bewegung über UI, Dialog läuft über reguläre Chat-Sessions).
 """

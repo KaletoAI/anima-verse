@@ -499,7 +499,7 @@ def _build_retrospective_block(character_name: str) -> str:
             lines.append("Goals on record:")
             lines.extend(f"  {g}" for g in goals)
         if overdue:
-            lines.append("(It's been a while since you last reflected — consider Retrospect.)")
+            lines.append("(It's been a while since you last reflected — consider using Reflect.)")
         return "\n".join(lines)
     except Exception as e:
         logger.debug("retrospective block failed for %s: %s", character_name, e)

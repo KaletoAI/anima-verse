@@ -5,7 +5,7 @@ import { apiGet, apiPost } from '../lib/api'
 // Toggle for the per-character decency_exempt state flag. When set, decency
 // rules are overridden (nude_ok) regardless of who is present — the manual
 // equivalent to is_intimate. The same flag is also settable via rule set_flags
-// and the AllowExposed / RequireDecency skills.
+// and the IgnoreDressCode / FollowDressCode skills (decency_exempt package).
 // Backend: GET/POST /characters/{name}/decency-exempt
 export function DecencyExemptToggle({ character }: { character: string }) {
   const { t } = useI18n()

@@ -62,7 +62,7 @@ Decide based on this and other relevant factors — your rhythm is a guideline, 
 
 === What people typically do here ===
 {{ available_activities_block }}
-This is just inspiration for the location. Use SetPose to set what you are
+This is just inspiration for the location. Use SetActivity to set what you are
 doing right now (free text) — e.g. "leaning against the windowsill" or
 "sketching in a notebook".
 {% endif %}

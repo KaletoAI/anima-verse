@@ -741,25 +741,27 @@ class SchedulerManager:
             })
 
     def _action_extract_files(self, action: Dict[str, Any], agent: str) -> Dict[str, Any]:
-        """Administrative File-Extraction-Action.
+        """Administrative file-extraction action.
 
-        Phase-4 Cleanup: ruft den KnowledgeExtract-Skill jetzt direkt auf
-        (vorher Bruecke ueber das entfernte ``_action_execute_tool``).
-        Bleibt admin-only — kein Char-Verhalten, kein LLM-im-Char-Namen.
+        Calls the knowledge-extraction skill directly (phase-4 cleanup;
+        previously bridged via the removed ``_action_execute_tool``).
+        Looked up by SKILL_ID, not tool name — the display name is package
+        template data and may change. Stays admin-only — no character
+        behaviour, no LLM in the character's name.
         """
         try:
             from app.core.dependencies import get_skill_manager
             sm = get_skill_manager()
-            skill = sm.get_skill_by_name("KnowledgeExtract")
+            skill = sm.get_skill("knowledge_extract")
             if not skill:
-                return {"success": False, "error": "KnowledgeExtract Skill nicht geladen"}
+                return {"success": False, "error": "knowledge_extract skill not loaded"}
             payload = json.dumps({
                 "input": action.get("extraction_prompt", ""),
                 "agent_name": agent,
                 "user_id": "",
             })
             result = skill.execute(payload)
-            logger.info("KnowledgeExtract-Ergebnis: %s",
+            logger.info("knowledge_extract result: %s",
                         result[:200] if result else "")
             return {"success": True, "action": "extract_files",
                     "result": result[:500] if result else ""}

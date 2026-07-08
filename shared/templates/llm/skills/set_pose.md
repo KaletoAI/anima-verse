@@ -1,5 +1,5 @@
 ---
-name: SetPose
+name: SetActivity
 action_hint: Character changes what they're physically doing right now (free-text pose)
 ---
 Sets the current pose / what the character is doing right now. Use this for any free-text pose that isn't a listed Activity — e.g. "sitting on the couch reading", "leaning against the windowsill", "stretching by the window".

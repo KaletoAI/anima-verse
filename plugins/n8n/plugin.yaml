@@ -1,7 +1,8 @@
 name: n8n
-version: "1.1.0"
+version: "1.2.0"
 description: Calls n8n workflows via webhook (POST) and returns the JSON response to the LLM
 skills:
   - skill_id: n8n
-    module: skill.py
     always_load: true
+templates:
+  llm: templates/llm

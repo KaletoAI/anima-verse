@@ -2,7 +2,7 @@
 
 Dieser Skill ERZEUGT KEINE neuen Outfits — er ruestet nur Pieces an
 und ab, die der Character bereits in seinem Inventar hat. Fuer das
-Erzeugen neuer Pieces / Outfits ist OutfitCreation zustaendig.
+Creating new pieces / outfits is CreateOutfit's job.
 
 Input-Format (JSON oder Freitext):
   - JSON: {"equip": ["item_id1", "Name2"], "unequip_slots": ["outer"],

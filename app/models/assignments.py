@@ -419,7 +419,7 @@ TOOL_NAME_MAP = {
     "TalkTo": "talkto",
     "SendNotification": "notification",
     "InstagramPost": "instagram",
-    "KnowledgeExtract": "research",
+    "ExtractKnowledge": "research",
 }
 
 # Maps tool types to German labels for progress notes
