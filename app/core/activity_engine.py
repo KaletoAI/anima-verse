@@ -358,6 +358,44 @@ def _evaluate_single_condition_inner(
         # Placeholder fuer Event-Kategorien
         return True, ""
 
+    # --- is_male / is_female — shorthand for gender=male / gender=female ---
+    if cond in ("is_male", "is_female"):
+        try:
+            from app.models.character import get_character_profile
+            g = str((get_character_profile(character_name) or {}).get("gender", "") or "").strip().lower()
+            want = cond[3:]
+            if g == want:
+                return True, ""
+            return False, f"gender ist '{g or '—'}' (braucht '{want}')"
+        except Exception:
+            return False, f"Bedingung nicht auswertbar: {cond}"
+
+    # --- {profile_field}=value / {profile_field}!=value — generic string
+    # compare against a top-level profile field (e.g. gender=male,
+    # template=human-roleplay). Evaluated LAST so it never shadows the
+    # specific handlers above; numeric stat comparisons stay with the
+    # status_effects matcher.
+    field_match = re.match(r"([a-z_][a-z0-9_]*)\s*(!=|=)\s*(.+)$", cond)
+    if field_match:
+        fname = field_match.group(1)
+        op = field_match.group(2)
+        expected = field_match.group(3).strip().lower()
+        try:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+            actual = str(profile.get(fname, "") or "").strip().lower()
+            matches = (actual == expected)
+            if op == "=":
+                if matches:
+                    return True, ""
+                return False, f"{fname} ist '{actual or '—'}' (braucht '{expected}')"
+            if matches:
+                return False, f"{fname} ist '{actual}' (darf nicht sein)"
+            return True, ""
+        except Exception as e:
+            logger.debug("profile-field condition '%s' failed: %s", cond, e)
+            return False, f"Bedingung nicht auswertbar: {cond}"
+
     # Unbekannte Condition: durchlassen mit Warnung
     logger.warning("Unbekannte Condition: '%s'", cond)
     return True, ""

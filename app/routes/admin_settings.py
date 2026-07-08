@@ -292,6 +292,8 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             # Character-Templates befuellt (Stats sind NICHT hartkodiert).
             {"code": "__STATS__", "text": "Status values (from the character template, e.g. stat>N / <N / =N)"},
             {"code": "__FLAGS__", "text": "State flags (declared by skill packages; true while set)"},
+            {"code": "gender=male, template!=human-roleplay", "text": "Profile field equals / differs (string compare, any top-level profile field)"},
+            {"code": "is_male, is_female", "text": "Shorthand for gender=male / gender=female"},
             {"code": "alone, night, day", "text": "Time / presence (day/night accept +/-minutes)"},
             {"code": "present:Name", "text": "Name is in the same room"},
             {"code": "npc_present", "text": "Any non-avatar character is here"},
