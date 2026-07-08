@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 import { TemplateTab } from '../tabs/characters/TemplateTab'
+import { BodyEditor } from '../tabs/characters/BodyEditor'
 import { type DynamicData } from '../tabs/characters/TemplateField'
 import { type TmplSection } from '../tabs/characters/TemplateSectionForm'
 import { SoulEditor } from '../tabs/characters/SoulEditor'
@@ -31,7 +32,7 @@ interface TmplSectionRaw extends TmplSection {
 // Social-Zahlen bleiben Admin-only (auch wenn sie in einer erlaubten Spalte liegen).
 const HIDE_KEYS = ['popularity', 'trustworthiness', 'social_dialog_probability', 'roles', 'romantic_interests']
 const AUSSEHEN_COLS = [1, 6] // Identität + Gesicht(+Profilbild)
-const KOERPER_COLS = [4, 5] // physische Werte + Aussehen-Prompt(+Bild)
+const KOERPER_COLS = [4, 5] // Body editor (species slots) + Aussehen-Prompt
 const PREF_COLS = [2, 10] // Eigenschaften (→ nur Dressing-Preference) + TTS
 
 type Sub = 'look' | 'body' | 'soul' | 'prefs'
@@ -115,6 +116,7 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
               tab={{ id: 'body', columns: KOERPER_COLS }}
               sections={sections}
               dynamicData={dynamicData}
+              specialSlots={{ body_editor: <BodyEditor character={avatar} /> }}
             />
           </div>
         )}
