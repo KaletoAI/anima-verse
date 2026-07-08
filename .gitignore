@@ -87,6 +87,10 @@ env/
 # Shared cross-world files
 shared/templates/**/*nsfw*
 
+# NSFW skill packages — distributed as marketplace content packs
+# (source project: ../anima-verse-packs), never shipped in this repo.
+plugins/intimacy
+
 # Worlds (each world is a separate storage directory)
 worlds/*
 !worlds/demo/
