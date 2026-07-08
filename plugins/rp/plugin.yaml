@@ -1,0 +1,13 @@
+name: rp
+version: "1.0.0"
+description: Roleplay role package — roleplay rules and the RP status stats (attention, courage, stamina)
+
+# Role package: combinable with any species (no silhouette, no body slots,
+# no verbs). Contributes the roleplay_instructions field and the three RP
+# stats as a character-template fragment. NOTE: stamina still has core
+# hardcodes (agent_loop auto-sleep, danger system, …) — the template side
+# lives here, the core side follows in wave 4+
+# (plan-skill-plugin-architecture.md §1.3 / plan-body-slots.md).
+templates:
+  character:
+    - templates/character/rp.json
