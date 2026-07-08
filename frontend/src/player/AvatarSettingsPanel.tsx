@@ -110,7 +110,7 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
           </div>
         )}
         {sub === 'body' && (
-          <div className="avatar-aussehen-tab">
+          <div className="avatar-body-tab">
             <TemplateTab
               character={avatar}
               tab={{ id: 'body', columns: KOERPER_COLS }}

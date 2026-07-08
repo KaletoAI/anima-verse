@@ -701,10 +701,17 @@ html, * {
   flex: 0 0 25%;
   max-width: 25%;
 }
+/* Avatar-Panel Body-Untertab: Body-Editor und Appearance-Prompt teilen
+   sich die Breite 50/50. */
+.avatar-body-tab .tpl-tab-col {
+  flex: 1 1 50%;
+  max-width: 50%;
+}
 /* Nur auf sehr schmalen Fenstern untereinander. */
 @media (max-width: 560px) {
   .tpl-tab-cols { flex-direction: column; }
   .avatar-aussehen-tab .tpl-tab-col:first-child { flex: 1 1 auto; max-width: none; }
+  .avatar-body-tab .tpl-tab-col { flex: 1 1 auto; max-width: none; }
 }
 
 /* Prompt-Feld: eigener vertikaler Container, weil .ga-field-control ein
