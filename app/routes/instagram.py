@@ -266,7 +266,7 @@ async def detect_post_characters(post_id: str, request: Request) -> Dict[str, An
 
 @router.post("/post/{post_id}/regenerate")
 async def regenerate_post_image(post_id: str, request: Request):
-    """Regeneriert das Bild eines Posts ueber die ImageGenerationSkill-Pipeline."""
+    """Regenerates a post image via the core image-service pipeline."""
     from app.skills.image_regenerate import regenerate_image
     from app.models.character import get_character_config
 
@@ -409,8 +409,8 @@ async def suggest_instagram_animate_prompt(post_id: str, request: Request) -> Di
         if not image_analysis:
             logger.info("[suggest-animate] Instagram: Keine Bildanalyse, generiere neu...")
             try:
-                from app.skills.image_generation_skill import ImageGenerationSkill
-                skill = ImageGenerationSkill({})
+                from app.imagegen.service import get_image_service
+                skill = get_image_service()
                 image_analysis = skill._generate_image_analysis(str(image_path), character_name)
                 if image_analysis:
                     meta["image_analysis"] = image_analysis

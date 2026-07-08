@@ -892,9 +892,9 @@ async def imagegen_targets(user=Depends(require_admin)):
     """
     try:
         from app.core.dependencies import get_skill_manager
-        sm = get_skill_manager()
-        img = sm.get_skill("image_generation")
-        if not img:
+        from app.imagegen.service import get_image_service
+        img = get_image_service()
+        if not img.enabled:
             return {"targets": []}
     except Exception as e:
         return {"targets": [], "error": str(e)}

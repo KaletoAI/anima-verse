@@ -548,15 +548,10 @@ def _visualize_scene(character_name: str, text: str,
     if not image_prompt:
         return {}
 
-    # Bild generieren mit skip_gallery=True (keine Galerie, kein Kommentar)
-    sm = get_skill_manager()
-    img_skill = None
-    for skill in sm.skills:
-        if skill.__class__.__name__ == "ImageGenerationSkill":
-            img_skill = skill
-            break
-
-    if not img_skill:
+    # Generate the image with skip_gallery=True (no gallery, no comment)
+    from app.imagegen.service import get_image_service
+    img_skill = get_image_service()
+    if not img_skill.enabled:
         return {}
 
     import json as _json
@@ -569,7 +564,7 @@ def _visualize_scene(character_name: str, text: str,
         "auto_enhance": False,
     })
 
-    result_text = img_skill.execute(input_json)
+    result_text = img_skill.generate_from_input(input_json)
     logger.info("Visualize Result: %s", result_text[:200])
 
     # Bild-URLs aus Ergebnis parsen

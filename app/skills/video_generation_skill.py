@@ -1,7 +1,7 @@
 """Video Generation Skill - Erzeugt ein Bild und animiert es zu einem Video.
 
 Ablauf:
-  1. Bild generieren via ImageGenerationSkill (voller Flow inkl. Analyse)
+  1. Generate the image via the core image service (full flow incl. analysis)
   2. Bild mit dem Animation Service animieren (Together.ai)
 
 Per-Character Konfiguration (skills/video_generation.json):
@@ -32,7 +32,7 @@ class VideoGenerationSkill(BaseSkill):
     """
     Video Generation Skill.
 
-    Generiert ein Bild ueber den ImageGenerationSkill und animiert es
+    Generates an image via the core image service and animates it
     anschliessend mit dem konfigurierten Animation Service.
 
     Input (JSON):
@@ -81,14 +81,10 @@ class VideoGenerationSkill(BaseSkill):
 
     @staticmethod
     def _get_image_skill():
-        """Holt eine Referenz auf den ImageGenerationSkill aus dem SkillManager."""
-        from app.skills.image_generation_skill import ImageGenerationSkill
-        from app.core.dependencies import get_skill_manager
-        _sm = get_skill_manager()
-        for skill in _sm.skills:
-            if isinstance(skill, ImageGenerationSkill):
-                return skill
-        return None
+        """Returns the core image service (wave-6 split) or None."""
+        from app.imagegen.service import get_image_service
+        svc = get_image_service()
+        return svc if svc.enabled else None
 
     # ------------------------------------------------------------------
     # Execute
@@ -125,10 +121,10 @@ class VideoGenerationSkill(BaseSkill):
         # 2. Per-Character Config laden
         cfg = self._get_effective_config(character_name)
 
-        # 3. ImageGenerationSkill holen
+        # 3. Get the image service
         image_skill = self._get_image_skill()
         if not image_skill:
-            return "Fehler: ImageGenerationSkill ist nicht verfuegbar."
+            return "Error: image service is not available."
 
         # Task im Queue-System registrieren
         _tq = get_task_queue()
@@ -173,7 +169,7 @@ class VideoGenerationSkill(BaseSkill):
             if _loras:
                 imagegen_input["loras"] = _loras
 
-            img_result = image_skill.execute(json.dumps(imagegen_input))
+            img_result = image_skill.generate_from_input(json.dumps(imagegen_input))
 
             # Dateiname aus dem Ergebnis extrahieren
             # Format: ![Generated Image 1](/characters/Name/images/filename.png?user_id=...)

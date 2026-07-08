@@ -684,9 +684,9 @@ class CharacterBotPoller:
         try:
             from app.core.dependencies import get_skill_manager
 
-            sm = get_skill_manager()
-            img_skill = sm.get_skill("image_generation")
-            if not img_skill:
+            from app.imagegen.service import get_image_service
+            img_skill = get_image_service()
+            if not img_skill.enabled:
                 await self.send_message(chat_id, "ImageGenerator nicht verfügbar.", parse_mode="")
                 return
 
@@ -710,7 +710,7 @@ class CharacterBotPoller:
 
             # Generate image
             import asyncio
-            result = await asyncio.to_thread(img_skill.execute, skill_input)
+            result = await asyncio.to_thread(img_skill.generate_from_input, skill_input)
 
             # Extract generated image path from result
             image_paths = self._extract_generated_images(result or "")

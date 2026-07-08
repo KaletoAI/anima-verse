@@ -330,18 +330,17 @@ async def visualize_core(request) -> Dict[str, Any]:
     workflow_instruction = ""
     workflow_image_model = ""
     if workflow:
-        sm = get_skill_manager()
-        for skill in sm.skills:
-            if skill.__class__.__name__ == "ImageGenerationSkill":
-                _be = skill.resolve_imagegen_target(workflow)
-                if _be:
-                    from app.core import config as _cfg
-                    workflow_image_model = getattr(_be, "image_family", "") or ""
-                    workflow_instruction = _cfg.resolve_use_case_style(
-                        "character", workflow_image_model,
-                        backend_model=getattr(_be, "model", "") or "",
-                    ).get("prompt_instruction", "")
-                break
+        from app.imagegen.service import get_image_service
+        _svc = get_image_service()
+        if _svc.enabled:
+            _be = _svc.resolve_imagegen_target(workflow)
+            if _be:
+                from app.core import config as _cfg
+                workflow_image_model = getattr(_be, "image_family", "") or ""
+                workflow_instruction = _cfg.resolve_use_case_style(
+                    "character", workflow_image_model,
+                    backend_model=getattr(_be, "model", "") or "",
+                ).get("prompt_instruction", "")
 
     # Generate image prompt via LLM (with scene context)
     agent_config = agent_config_early
@@ -423,16 +422,11 @@ async def instagram_post_core(request) -> Dict[str, Any]:
 
     logger.debug("Instagram-Post Image-Prompt: %s", image_prompt[:150])
 
-    # 2. Generate image via ImageGenerationSkill (skip_gallery=True — not in chat gallery)
-    sm = get_skill_manager()
-    img_skill = None
-    for skill in sm.skills:
-        if skill.__class__.__name__ == "ImageGenerationSkill":
-            img_skill = skill
-            break
-
-    if not img_skill:
-        return {"error": "ImageGenerationSkill not available"}
+    # 2. Generate image via the core image service (skip_gallery=True — not in chat gallery)
+    from app.imagegen.service import get_image_service
+    img_skill = get_image_service()
+    if not img_skill.enabled:
+        return {"error": "image service not available"}
 
     img_payload = {
         "prompt": image_prompt,
@@ -446,7 +440,7 @@ async def instagram_post_core(request) -> Dict[str, Any]:
         img_payload["appearances"] = explicit_appearances
     input_json = json.dumps(img_payload)
 
-    result_text = await asyncio.to_thread(img_skill.execute, input_json)
+    result_text = await asyncio.to_thread(img_skill.generate_from_input, input_json)
     logger.debug("Instagram-Post ImageGen Result: %s", result_text[:200])
 
     # Extract image URL and filename

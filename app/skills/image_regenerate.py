@@ -1,4 +1,4 @@
-"""Bild-Regenerierung — ersetzt ein bestehendes Bild ueber die ImageGenerationSkill-Pipeline.
+"""Image regeneration — replaces an existing image via the core image-service pipeline.
 
 Nutzt den gespeicherten Prompt + optionalen User-Verbesserungswunsch,
 waehlt Workflow + Backend, generiert neu und ueberschreibt die Datei.
@@ -152,12 +152,11 @@ def regenerate_image(character_name: str,
                     final_prompt += _setting
                     logger.info("Room-Override: %s", _room_name)
 
-    # 2. ImageGenerationSkill holen
-    from app.core.dependencies import get_skill_manager
-    skill_mgr = get_skill_manager()
-    skill = skill_mgr.get_skill("image_generation") if skill_mgr else None
-    if not skill:
-        raise RuntimeError("ImageGenerationSkill nicht verfuegbar")
+    # 2. Image service (core engine — wave-6 split)
+    from app.imagegen.service import get_image_service
+    skill = get_image_service()
+    if not skill.enabled:
+        raise RuntimeError("Image service not available")
 
     # 3. Determine backend (backend-only; the ComfyUI workflow axis is gone)
     backend = None

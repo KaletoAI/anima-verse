@@ -145,9 +145,9 @@ def _resolve_backend():
         from app.core.dependencies import get_skill_manager
     except Exception:
         return None
-    sm = get_skill_manager()
-    img_skill = sm.get_skill("image_generation") if sm else None
-    if not img_skill:
+    from app.imagegen.service import get_image_service
+    img_skill = get_image_service()
+    if not img_skill.enabled:
         return None
     default = (str(config.get("image_generation.scene_imagegen_default", "") or "").strip()
                or str(config.get("image_generation.location_imagegen_default", "") or "").strip())

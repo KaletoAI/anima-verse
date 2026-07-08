@@ -108,16 +108,10 @@ class InstagramSkill(PluginSkill):
         return None
 
     def _get_image_skill(self):
-        """Holt eine Referenz auf den ImageGenerationSkill aus dem SkillManager."""
-        # Inline import to avoid circular dependency (instagram_skill <-> image_generation_skill)
-        from app.skills.image_generation_skill import ImageGenerationSkill
-
-        from app.core.dependencies import get_skill_manager  # lazy: circular import
-        _sm = get_skill_manager()
-        for skill in _sm.skills:
-            if isinstance(skill, ImageGenerationSkill):
-                return skill
-        return None
+        """Returns the core image service (wave-6 split) or None."""
+        from app.imagegen.service import get_image_service
+        svc = get_image_service()
+        return svc if svc.enabled else None
 
     def _parse_input(self, raw_input: str) -> Dict[str, Any]:
         """Parst den Input.
@@ -522,7 +516,7 @@ class InstagramSkill(PluginSkill):
             image_payload["workflow"] = _insta_workflow
 
         try:
-            image_result = image_skill.execute(json.dumps(image_payload))
+            image_result = image_skill.generate_from_input(json.dumps(image_payload))
         except Exception as e:
             logger.error(f"Fehler bei Bildgenerierung: {e}")
             _tq.track_finish(_track_id, error=str(e))

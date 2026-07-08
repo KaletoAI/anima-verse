@@ -176,13 +176,12 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
 
     # 1. image_skill via Skill-Manager holen
     try:
-        from app.core.dependencies import get_skill_manager
-        sm = get_skill_manager()
-        image_skill = sm.get_skill("image_generation")
-        if not image_skill:
-            return {"status": "error", "error": "image_generation skill nicht verfuegbar"}
+        from app.imagegen.service import get_image_service
+        image_skill = get_image_service()
+        if not image_skill.enabled:
+            return {"status": "error", "error": "image service not available"}
     except Exception as e:
-        return {"status": "error", "error": f"Skill-Manager fehlt: {e}"}
+        return {"status": "error", "error": f"image service missing: {e}"}
 
     # 2. Target parsen: "workflow:Name" / "backend:Name" / "" (= Auto)
     workflow_name = ""
@@ -222,7 +221,7 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
         if backend_name:
             payload["backend"] = backend_name
         logger.info("Frame-Generierung: target=%s prompt=%.80s", target or "auto", prompt)
-        img_result = image_skill.execute(_json.dumps(payload))
+        img_result = image_skill.generate_from_input(_json.dumps(payload))
 
         # execute() liefert einen Status/Pfad-String — Pfad extrahieren
         import re as _re

@@ -77,11 +77,11 @@ class ChannelHealthMonitor:
         """Resolves a ``backend:<name>`` channel to its backend instance."""
         target = channel_key.split(":", 1)[1]
         try:
-            from app.core.dependencies import get_skill_manager
-            skill = get_skill_manager().get_skill("image_generation")
+            from app.imagegen.service import get_image_service
+            skill = get_image_service()
         except Exception:
             return None
-        for b in getattr(skill, "backends", []) if skill else []:
+        for b in skill.backends:
             if b.name == target and b.instance_enabled:
                 return b
         return None

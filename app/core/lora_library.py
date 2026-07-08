@@ -40,12 +40,12 @@ def sync_lora_library() -> Dict[str, Any]:
     result: Dict[str, Any] = {"changed": False, "added": 0, "removed": 0,
                               "missing": 0, "scanned": []}
     try:
-        from app.core.dependencies import get_skill_manager
-        imagegen = get_skill_manager().get_skill("image_generation")
+        from app.imagegen.service import get_image_service
+        imagegen = get_image_service()
     except Exception as e:
-        logger.debug("lora sync: skill manager unavailable: %s", e)
+        logger.debug("lora sync: image service unavailable: %s", e)
         return result
-    if not imagegen:
+    if not imagegen.enabled:
         return result
 
     with _sync_lock:

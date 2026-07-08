@@ -6,16 +6,11 @@ from app.core.log import get_logger
 from .base import ToolSpec
 
 logger = get_logger("skill_mgr")
-from .image_generation_skill import ImageGenerationSkill
-from .send_message_skill import SendMessageSkill
 from .act_skill import ActSkill
-from .notify_user_skill import NotifyUserSkill
 from .describe_room_skill import DescribeRoomSkill
 from .outfit_change_skill import OutfitChangeSkill
 from .outfit_creation_skill import OutfitCreationSkill
 from .video_generation_skill import VideoGenerationSkill
-from .state_flag_skills import SleepWakeSkill
-from .party_skills import PartySkill
 
 
 class _Verb:
@@ -43,25 +38,11 @@ class SkillManager:
     # Registry aller verfügbaren Skill-Klassen
     # (Plugins aus plugins/ werden automatisch geladen, siehe load_skills)
     SKILL_REGISTRY = {
-        'imagegen': ImageGenerationSkill,
-        'send_message': SendMessageSkill,
         'act': ActSkill,
-        'notify_user': NotifyUserSkill,
         'describe_room': DescribeRoomSkill,
         'outfit_change': OutfitChangeSkill,
         'outfit_creation': OutfitCreationSkill,
         'videogen': VideoGenerationSkill,
-        # State-flag skills — one class per opposite pair, two verbs (via
-        # _Verb). Wet/intimacy/decency migrated to packages under plugins/
-        # (wave 2 pilot, plan-skill-plugin-architecture.md).
-        'sleep': _Verb(SleepWakeSkill, asleep=True),
-        'wakeup': _Verb(SleepWakeSkill, asleep=False),
-        # Party-System (gemeinsam reisen): EINE Klasse, drei Verben (wie Wet
-        # enter/leave). default-on via config.py-Env-Loop, Sichtbarkeit pro Rolle
-        # verfeinert in _get_agent_skills.
-        'invite_to_party': _Verb(PartySkill, verb="invite"),
-        'join_party': _Verb(PartySkill, verb="join"),
-        'leave_party': _Verb(PartySkill, verb="leave"),
     }
 
     def __init__(self):
@@ -112,6 +93,13 @@ class SkillManager:
         self._load_plugins()
 
     def reload_skills(self) -> Dict[str, Any]:
+        # Config may have changed — rebuild the image service backend pool
+        # on next access (core engine, lives outside the skill registry).
+        try:
+            from app.imagegen.service import reset_image_service
+            reset_image_service()
+        except Exception:
+            pass
         """Lädt alle Skills neu ohne Server-Neustart."""
         logger.info("=" * 80)
         logger.info("SKILLS NEU LADEN")

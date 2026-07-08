@@ -29,9 +29,7 @@ DEFAULT_NEW_CHARACTER_SKILLS = (
     # special/niche skills like OutfitCreation, VideoGenerator, Retrospect,
     # MarkdownWriter, KnowledgeExtract stay off because they cost tokens/setup
     # and not every NPC needs them).
-    "imagegen", "send_message", "notify_user",
     "outfit_change",
-    "invite_to_party", "join_party", "leave_party",
 )
 
 
@@ -2729,10 +2727,10 @@ def build_imagegen_workflows(character_name: str) -> Dict[str, Any]:
     import os
     from app.core.dependencies import get_skill_manager
     from app.models.character import get_character_skill_config
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
-        raise HTTPException(status_code=404, detail="ImageGeneration skill not found")
+    from app.imagegen.service import get_image_service
+    imagegen = get_image_service()
+    if not imagegen.enabled:
+        raise HTTPException(status_code=404, detail="Image service not available")
 
     # Re-probe currently unavailable backends — otherwise the dialog keeps
     # showing a backend as "not available" even though the service came back
@@ -2814,9 +2812,10 @@ def build_videogen_options(character_name: str) -> Dict[str, Any]:
     sm = get_skill_manager()
 
     # --- ImageGen options (backends) ---
-    imagegen = sm.get_skill("image_generation")
+    from app.imagegen.service import get_image_service
+    imagegen = get_image_service()
     imagegen_options = []
-    if imagegen:
+    if imagegen.enabled:
         for b in imagegen.backends:
             if not b.available:
                 continue
@@ -2874,14 +2873,11 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     # Prompt aus Dialog oder Face Prompt (Style kommt aus dem "profile"-Use-Case).
     prompt_text = data.get("prompt", "").strip() or (appearance or "").strip()
 
-    # ImageGenerationSkill holen
-    try:
-        skill_manager = get_skill_manager()
-        image_skill = skill_manager.get_skill("image_generation")
-    except Exception:
-        image_skill = None
-    if not image_skill:
-        raise HTTPException(status_code=500, detail="ImageGenerationSkill nicht verfuegbar")
+    # Image service (core engine — wave-6 split)
+    from app.imagegen.service import get_image_service
+    image_skill = get_image_service()
+    if not image_skill.enabled:
+        raise HTTPException(status_code=500, detail="Image service not available")
 
     # Workflow/Backend/Modell aus Request
     workflow_name = data.get("workflow", "").strip()
@@ -2907,7 +2903,7 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
 
     try:
         import asyncio
-        result = await asyncio.to_thread(image_skill.execute, input_data)
+        result = await asyncio.to_thread(image_skill.generate_from_input, input_data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Bildgenerierung fehlgeschlagen: {str(e)}")
 
@@ -2961,15 +2957,11 @@ async def generate_outfit_image_core(character_name: str, outfit_id: str, reques
     if not prompt_text:
         prompt_text = _build_outfit_image_prompt(character_name, outfit_description)
 
-    # ImageGenerationSkill holen
-    try:
-        skill_manager = get_skill_manager()
-        image_skill = skill_manager.get_skill("image_generation")
-    except Exception:
-        image_skill = None
-
-    if not image_skill:
-        raise HTTPException(status_code=500, detail="ImageGenerationSkill nicht verfuegbar")
+    # Image service (core engine — wave-6 split)
+    from app.imagegen.service import get_image_service
+    image_skill = get_image_service()
+    if not image_skill.enabled:
+        raise HTTPException(status_code=500, detail="Image service not available")
 
     # Workflow/Backend/LoRA/Modell-Auswahl:
     #   1) explizit aus Request
@@ -3031,7 +3023,7 @@ async def generate_outfit_image_core(character_name: str, outfit_id: str, reques
 
     try:
         import asyncio
-        result = await asyncio.to_thread(image_skill.execute, input_data)
+        result = await asyncio.to_thread(image_skill.generate_from_input, input_data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Bildgenerierung fehlgeschlagen: {str(e)}")
 
@@ -3112,10 +3104,10 @@ def generate_all_outfit_images_worker(character_name, eligible, workflow_name, b
     profile = get_character_profile(character_name)
     tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
 
-    skill_manager = get_skill_manager()
-    image_skill = skill_manager.get_skill("image_generation")
-    if not image_skill:
-        _tq.track_finish(_track_id, error="ImageGenerationSkill nicht verfuegbar")
+    from app.imagegen.service import get_image_service
+    image_skill = get_image_service()
+    if not image_skill.enabled:
+        _tq.track_finish(_track_id, error="image service not available")
         return
 
     success_count = 0
@@ -3160,7 +3152,7 @@ def generate_all_outfit_images_worker(character_name, eligible, workflow_name, b
             payload["model_override"] = model_override
 
         try:
-            result = image_skill.execute(_json.dumps(payload))
+            result = image_skill.generate_from_input(_json.dumps(payload))
             match = re.search(r'/characters/[^/]+/images/([^?)\n]+)', result)
             if not match:
                 logger.warning("Bulk Outfit %s: Kein Bild im Ergebnis", outfit_name)

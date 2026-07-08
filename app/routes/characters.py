@@ -361,9 +361,9 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
     Response:
         loras: LoRA list (without 'None')
     """
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
+    from app.imagegen.service import get_image_service
+    imagegen = get_image_service()
+    if not imagegen.enabled:
         return {"loras": []}
 
     # LoRA-library entries for the backend that the VARIANT/OUTFIT generation
@@ -515,7 +515,7 @@ async def delete_character_outfit_route(character_name: str, request: Request) -
 
 @router.post("/{character_name}/generate-profile-image")
 async def generate_profile_image_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Generiert ein neues Profilbild via ImageGenerationSkill."""
+    """Generates a new profile image via the core image service."""
     return await character_ops.generate_profile_image_core(character_name, request)
 
 

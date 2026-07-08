@@ -73,9 +73,9 @@ def _resolve_backend():
     except Exception:
         return None
 
-    sm = get_skill_manager()
-    img_skill = sm.get_skill("image_generation") if sm else None
-    if not img_skill:
+    from app.imagegen.service import get_image_service
+    img_skill = get_image_service()
+    if not img_skill.enabled:
         return None
 
     from app.core import config as _cfg

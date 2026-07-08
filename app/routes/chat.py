@@ -283,16 +283,11 @@ def _generate_visualization_image(agent_name: str, image_prompt: str,
     loras: Optional[List[Dict[str, Any]]] = None,
     model_override: str = "",
     item_ids: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Generiert ein Bild via ImageGenerationSkill."""
-    sm = get_skill_manager()
-    img_skill = None
-    for skill in sm.skills:
-        if skill.__class__.__name__ == "ImageGenerationSkill":
-            img_skill = skill
-            break
-
-    if not img_skill:
-        return {"error": "ImageGenerationSkill not available"}
+    """Generates an image via the core image service."""
+    from app.imagegen.service import get_image_service
+    img_skill = get_image_service()
+    if not img_skill.enabled:
+        return {"error": "image service not available"}
 
     payload = {
         "prompt": image_prompt,
@@ -316,7 +311,7 @@ def _generate_visualization_image(agent_name: str, image_prompt: str,
         payload["item_ids"] = item_ids
     input_json = json.dumps(payload)
 
-    result_text = img_skill.execute(input_json)
+    result_text = img_skill.generate_from_input(input_json)
     logger.debug("Visualize result: %s", result_text[:200])
 
     # Fehler-String erkennen

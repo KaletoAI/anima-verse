@@ -13,13 +13,11 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from .base import BaseSkill, ToolSpec
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
 from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
 
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
-from app.core.tool_formats import format_example
 from app.models.character import (
     get_character_images_dir,
     add_character_image,
@@ -65,32 +63,29 @@ def _log_image_failure(lv: dict, error_msg: str) -> None:
         logger.debug("Fehler-Logging (Image) fehlgeschlagen: %s", _le)
 
 
-class ImageGenerationSkill(BaseSkill):
-    PROGRESS_TYPE = "image"  # count-based intent/assignment progress
-    """
-    Multi-Instance Image Generation Skill.
+class ImageService:
+    """Multi-instance image generation SERVICE (core engine, R5).
 
-    Verwaltet mehrere Backends (A1111/Forge, Mammouth/OpenAI-kompatibel)
-    und waehlt automatisch die guenstigste verfuegbare Instanz.
+    Owns the backend pool (A1111/Forge, OpenAI-compatible, ...), instance
+    selection and the full generation pipeline. Split out of the former
+    ImageGenerationSkill (wave 6): every consumer (scene photo, outfits,
+    profile images, instagram, video, events, regenerate) talks to this
+    service via ``get_image_service()`` — the TakePhoto VERB in
+    plugins/take_photo is just the LLM tool surface on top.
 
-    Konfiguration:
-        .env: Nummerierte Instanz-Bloecke SKILL_IMAGEGEN_{N}_*
-        Per-Agent: storage/users/{user}/agents/{agent}/skills/image_generation.json
+    Configuration:
+        Numbered instance blocks SKILL_IMAGEGEN_{N}_* (env bridge)
+        Per character: skills/image_generation.json (SKILL_ID kept as the
+        per-character config key)
     """
 
     SKILL_ID = "image_generation"
-    DEFERRED = True  # Bild wird erst nach Chat-Antwort generiert
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config or {}
+        self.enabled = bool(self.config.get("enabled", True))
 
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("image_generation")
-        self.name = meta["name"]
-        self.description = meta["description"]
-        self.action_hint = meta.get("action_hint", "")
-
-        # Letzter verwendeter enhanced_prompt (fuer Caller wie Instagram)
+        # Last used enhanced_prompt (for callers like Instagram)
         self.last_enhanced_prompt: str = ""
 
         # Thread-lokaler Slot fuer last_image_meta — notwendig damit parallele
@@ -706,8 +701,28 @@ class ImageGenerationSkill(BaseSkill):
 
         return pose
 
+    @staticmethod
+    def _parse_base_input(raw_input: str) -> Dict[str, Any]:
+        """Standard context extraction from a JSON tool/service input
+        (self-contained copy of the BaseSkill helper — the service has no
+        skill base class)."""
+        data: Dict[str, Any] = {"input": raw_input, "agent_name": "", "user_id": ""}
+        if isinstance(raw_input, str) and raw_input.strip().startswith("{"):
+            try:
+                parsed = json.loads(raw_input)
+                if isinstance(parsed, dict):
+                    data.update(parsed)
+            except Exception:
+                try:
+                    parsed, _ = json.JSONDecoder().raw_decode(raw_input.strip())
+                    if isinstance(parsed, dict):
+                        data.update(parsed)
+                except Exception:
+                    pass
+        return data
+
     def _parse_input(self, prompt_input: str) -> Dict[str, Any]:
-        """Parst optionales JSON-Inputformat fuer Tool-Aufrufe."""
+        """Parses the optional JSON input format of tool/service calls."""
         ctx = self._parse_base_input(prompt_input)
 
         data: Dict[str, Any] = {
@@ -740,18 +755,17 @@ class ImageGenerationSkill(BaseSkill):
 
         return data
 
-    def execute(self, prompt: str) -> str:
-        """
-        Generiert ein Bild ueber die guenstigste verfuegbare Instanz.
+    def generate_from_input(self, prompt: str) -> str:
+        """Generates an image via the cheapest available instance.
 
         Args:
-            prompt: Text-Beschreibung des gewuenschten Bildes (oder JSON mit Kontext)
+            prompt: text description of the desired image (or JSON with context)
 
         Returns:
-            String mit Bild-Links oder Fehlermeldung
+            string with image links or an error message
         """
         if not self.enabled:
-            return "Image Generation Skill ist nicht verfuegbar. Keine Instanz konfiguriert oder erreichbar."
+            return "Image generation is not available. No instance configured or reachable."
 
         # Input parsen (vor Backend-Auswahl, da per-Agent enabled beruecksichtigt wird)
         input_data = self._parse_input(prompt)
@@ -1453,17 +1467,23 @@ class ImageGenerationSkill(BaseSkill):
             _log_image_failure(locals(), error_msg)
             return f"Fehler bei {error_msg}"
 
-    def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
-        if 'usage_instructions' in self.config:
-            return self.config['usage_instructions']
+# ---------------------------------------------------------------------------
+# Singleton access — consumers use this instead of fetching a skill
+# ---------------------------------------------------------------------------
 
-        fmt = format_name or "tag"
+_service: Optional[ImageService] = None
 
-        return format_example(fmt, self.name, "young woman with blonde hair at the beach, sunset")
 
-    def as_tool(self, **kwargs) -> ToolSpec:
-        return ToolSpec(
-            name=self.name,
-            description=f"{self.description}. Input should be a detailed description of the desired image.",
-            func=self.execute
-        )
+def get_image_service() -> ImageService:
+    """Lazy singleton. Rebuilt after reset_image_service() (config reload)."""
+    global _service
+    if _service is None:
+        _service = ImageService()
+    return _service
+
+
+def reset_image_service() -> None:
+    """Drop the cached service so the next access reloads the backend pool
+    (called from skill reload / admin settings save)."""
+    global _service
+    _service = None

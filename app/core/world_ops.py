@@ -555,9 +555,9 @@ def build_imagegen_options() -> Dict[str, Any]:
     from app.core.dependencies import get_skill_manager
     from app.core.prompt_adapters import get_target_model
 
-    sm = get_skill_manager()
-    imagegen = sm.get_skill("image_generation")
-    if not imagegen:
+    from app.imagegen.service import get_image_service
+    imagegen = get_image_service()
+    if not imagegen.enabled:
         return {"options": []}
 
     options = []
@@ -1215,9 +1215,9 @@ def _analyze_tile_terrain(loc: Dict[str, Any]):
     cached = (metas.get(fname) or {}).get("terrain")
     if cached:
         return cached
-    from app.core.dependencies import get_skill_manager
-    skill = get_skill_manager().get_skill("image_generation")
-    if not skill:
+    from app.imagegen.service import get_image_service
+    skill = get_image_service()
+    if not skill.enabled:
         return None
     term = skill.describe_map_tile(str(tp))
     if term:

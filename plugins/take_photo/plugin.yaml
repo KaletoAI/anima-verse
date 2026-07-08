@@ -1,0 +1,13 @@
+name: take_photo
+version: "1.0.0"
+description: TakePhoto — the character takes a photo/creates an image (LLM verb over the core image service)
+enabled_default: true        # core verb: loads even without a config entry
+
+skills:
+  - skill_id: image_generation   # per-character config key + F8 capability stay stable
+    module: skill.py
+    class: TakePhotoSkill
+    default_enabled: true        # replaces the 'imagegen' entry in the core default list
+
+templates:
+  llm: templates/llm
