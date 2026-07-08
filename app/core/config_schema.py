@@ -549,12 +549,6 @@ SECTIONS = {
                     "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
                 },
             },
-            "set_mood": {
-                "label": "SetMood",
-                "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
-                },
-            },
             "talk_to": {
                 "label": "TalkTo (face-to-face)",
                 "fields": {

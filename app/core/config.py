@@ -831,8 +831,6 @@ def _flatten_to_env(config: dict) -> None:
 
     for skill_key, env_prefix_map in [
         ("set_location", "SKILL_SETLOCATION"),
-        ("set_activity", "SKILL_SETACTIVITY"),
-        ("set_mood", "SKILL_SETMOOD"),
         ("talk_to", "SKILL_TALK_TO"),
         ("send_message", "SKILL_SEND_MESSAGE"),
         ("act", "SKILL_ACT"),

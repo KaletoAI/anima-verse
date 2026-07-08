@@ -166,11 +166,11 @@ def _sendmessage_wants_attachment(tool_input: str) -> bool:
 _STREAM_END = object()
 
 
-# Tools die State setzen (kein Append-Verhalten) — bei Mehrfach-Aufruf in
-# einem Stream wuerden alle Calls nacheinander laufen und nur der letzte
-# bleibt erhalten. Wir behalten daher pro Stream nur den letzten Call.
+# Tools that set state (no append behaviour) — on multiple calls within one
+# stream all calls would run in sequence and only the last one would stick.
+# We therefore keep only the last call per stream.
 _SINGLETON_TOOLS = frozenset({
-    "SetPose", "SetLocation", "SetMood", "SetFeeling",
+    "SetPose", "SetLocation",
     "OutfitChange", "ChangeOutfit",
 })
 
