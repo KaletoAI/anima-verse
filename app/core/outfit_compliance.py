@@ -201,19 +201,24 @@ def _check_decency_violations(
     eq_pieces: Dict[str, str],
     decency: str,
     *,
+    required_slots: Set[str],
     swim_allowed: bool = False,
     is_wet: bool = False,
 ) -> Set[str]:
     """Liefert die Menge der Slots die laut Decency belegt sein muessten
     aber leer/uneinheitlich sind. Leere Menge = keine Verletzung.
+
+    required_slots kommt vom Aufrufer: PUBLIC_REQUIRED_SLOTS geschnitten mit
+    der Kleidungs-Topologie der Spezies — eine Katze ohne 'top'/'bottom'
+    kann nie unbedeckt sein.
     """
     if decency in ("nude_ok", "private"):
         return set()
     if decency != "public":
         # Unbekannte Decency: defensiv keine Verletzung melden
         return set()
-    # public: top + bottom muessen bedeckt sein
-    missing = {s for s in PUBLIC_REQUIRED_SLOTS if not eq_pieces.get(s)}
+    # public: die required-Slots der Spezies muessen bedeckt sein
+    missing = {s for s in required_slots if not eq_pieces.get(s)}
     if swim_allowed and is_wet:
         # Swim-Exemption: swimwear-Slots zaehlen als bedeckt
         if eq_pieces.get("swimwear_top"):
@@ -365,10 +370,19 @@ def apply_outfit_compliance(
                     logger.debug("forbidden_slots clear [%s/%s]: %s",
                                  character_name, slot, e)
 
-    # 3. Decency-Check
+    # 3. Decency-Check — required-Slots auf die Kleidungs-Topologie der
+    # Spezies geschnitten (Body-Slot-Pakete): eine Spezies ohne top/bottom
+    # (Katze) kann nie unbedeckt sein. Fail-open auf die volle Menge.
     swim_allowed = bool(ctx.get("swim_allowed"))
+    try:
+        from app.core.body_slots import piece_slots_for_character
+        _required = PUBLIC_REQUIRED_SLOTS & set(
+            piece_slots_for_character(character_name))
+    except Exception:
+        _required = set(PUBLIC_REQUIRED_SLOTS)
     missing = _check_decency_violations(
         eq_pieces, decency,
+        required_slots=_required,
         swim_allowed=swim_allowed, is_wet=is_wet,
     )
 

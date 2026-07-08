@@ -227,7 +227,13 @@ class OutfitCreationSkill(BaseSkill):
         type_hint = " ".join(_style_parts)
         lang_hint = f"Use {language} for the `name` field." if language and language != "en" else ""
 
-        allowed_slots = ", ".join(VALID_PIECE_SLOTS)
+        # Species topology (body-slot packages): the LLM only sees the slots
+        # this character's species actually has (a cat gets collar/headwear,
+        # not tops and shoes). Falls back to the core list without a package.
+        from app.core.body_slots import piece_slots_for_character
+        _species_slots = piece_slots_for_character(character_name)
+        _species_slot_set = set(_species_slots)
+        allowed_slots = ", ".join(_species_slots)
 
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
@@ -294,7 +300,7 @@ class OutfitCreationSkill(BaseSkill):
                 seen_ls = set()
                 for s in raw:
                     s = str(s or "").strip().lower()
-                    if not s or s not in VALID_PIECE_SLOTS:
+                    if not s or s not in _species_slot_set:
                         continue
                     if s in exclude or s in seen_ls:
                         continue

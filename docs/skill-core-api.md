@@ -56,7 +56,7 @@ intimacy-Paket). Der Core kennt keinen Stat-Namen.
 | `slot_values(name)` / `set_slot_value(name, slot, attr, value)` | gespeicherte Attribut-Werte (Profil, Stammdaten) |
 | `prompt_fragments(name)` | `{general, exposed}` — general = always+covered (Personenbeschreibung, F1), exposed nur unbedeckt |
 | `appearance_suffix(name)` | kombinierter Text; hängt der PromptBuilder automatisch an die Appearance an |
-| `piece_slots_for_character(name)` | Kleidungs-Slot-Topologie der Spezies (Fallback `VALID_PIECE_SLOTS`) |
+| `piece_slots_for_character(name)` | Kleidungs-Slot-Topologie der Spezies (Fallback `VALID_PIECE_SLOTS`). Konsumenten: Paper-Doll/Belongings, `inventory.equip_piece`-Validierung, `CreateOutfit`-Slot-Liste, Decency-required-Slots (`PUBLIC_REQUIRED_SLOTS ∩ Topologie`) |
 | `declared_piece_slots(name)` | `(slots, labels)` NUR wenn eine Spezies deklariert (sonst None — Aufrufer behalten ihren Core-Default) |
 | `silhouette_for_character(name)` | Silhouetten-Deklaration des Spezies-Pakets (UI) |
 

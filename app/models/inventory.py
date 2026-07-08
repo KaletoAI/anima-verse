@@ -1674,6 +1674,20 @@ def equip_piece(character_name: str, item_id: str) -> Dict[str, Any]:
     if not slots:
         return {"status": "error", "reason": "invalid_slot"}
 
+    # Species topology (body-slot packages): a character can only wear
+    # pieces whose slots exist for their species — a cat has no 'top'.
+    # Fail-open: topology resolution must never block dressing.
+    try:
+        from app.core.body_slots import piece_slots_for_character
+        allowed = set(piece_slots_for_character(character_name))
+        invalid = [s for s in slots if s not in allowed]
+        if invalid:
+            return {"status": "error",
+                    "reason": "slot_not_available_for_species",
+                    "slots": invalid}
+    except Exception:
+        pass
+
     profile = get_character_profile(character_name)
     state = _get_equipped(profile)
     eq = state["equipped_pieces"]
