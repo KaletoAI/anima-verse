@@ -210,7 +210,19 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
                         if isinstance(v, dict)},
             prompt={str(k): str(v) for k, v in (bdef.get("prompt") or {}).items()},
         ))
-    pkg.piece_slots = [str(x).strip() for x in (meta.get("piece_slots") or []) if str(x).strip()]
+    # piece_slots entries: plain string OR {id, label}
+    for pdef in meta.get("piece_slots") or []:
+        if isinstance(pdef, dict):
+            pid = str(pdef.get("id") or "").strip()
+            if not pid:
+                continue
+            pkg.piece_slots.append(pid)
+            if pdef.get("label"):
+                pkg.piece_slot_labels[pid] = str(pdef["label"])
+        else:
+            pid = str(pdef).strip()
+            if pid:
+                pkg.piece_slots.append(pid)
 
     for fdef in meta.get("state_flags") or []:
         if not isinstance(fdef, dict) or not fdef.get("flag"):

@@ -47,10 +47,24 @@ interface Belongings {
   avatar: string; slot_order: string[]; slot_labels: Record<string, string>
   equipped: Record<string, Equipped>; items: Item[]
   outfit_sets: Array<{ id: string; name: string }>; max_slots: number
+  // Species package contributions (body-slot core): silhouette asset +
+  // per-slot anchor positions; empty = core defaults below.
+  silhouette_url?: string
+  slot_anchors?: Record<string, [number, number]>
 }
 const EMPTY: Belongings = {
   avatar: '', slot_order: [], slot_labels: {}, equipped: {}, items: [],
   outfit_sets: [], max_slots: 0,
+}
+
+// Body-slot editor payload (GET /characters/{c}/body-slots)
+interface BodyAttr {
+  key: string; type: string; options: string[]; allow_custom: boolean
+  label: string; value: string
+}
+interface BodySlot {
+  id: string; package_id: string; covered_by: string[]; exposed: boolean
+  attributes: BodyAttr[]
 }
 
 export function WardrobeTab({ character }: { character: string }) {
@@ -131,7 +145,10 @@ export function WardrobeTab({ character }: { character: string }) {
   }
 
   const markerSize = Math.round(Math.max(22, Math.min(80, figH * 0.11)))
-  const figureSlots = data.slot_order.filter((s) => SLOT_ANCHOR[s])
+  // Anchor positions: species package (slot_anchors) wins, core map is the default.
+  const anchorOf = (s: string): [number, number] | undefined =>
+    data.slot_anchors?.[s] || SLOT_ANCHOR[s]
+  const figureSlots = data.slot_order.filter((s) => anchorOf(s))
 
   return (
     <div style={{ display: 'flex', gap: 12, height: '100%', minHeight: 0, fontSize: '0.9em' }}>
@@ -156,7 +173,7 @@ export function WardrobeTab({ character }: { character: string }) {
             <button onClick={() => setSlotFilter('')} style={chip(!slotFilter, true)}>{t('All slots')}</button>
             {slotOptions.map((s) => (
               <button key={s} onClick={() => setSlotFilter(s)} style={chip(slotFilter === s, true)}>
-                {data.slot_labels[s] || s}
+                {t(data.slot_labels[s] || s)}
               </button>
             ))}
           </div>
@@ -204,10 +221,10 @@ export function WardrobeTab({ character }: { character: string }) {
       <div style={{ flex: '0 0 auto', maxWidth: '55%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
           <div ref={figRef} style={{ position: 'relative', height: '100%', display: 'inline-flex' }}>
-            <img src="/static/game_admin/silhouette.svg" alt={data.avatar}
+            <img src={data.silhouette_url || '/static/game_admin/silhouette.svg'} alt={data.avatar}
               style={{ height: '100%', width: 'auto', display: 'block', opacity: 0.45 }} />
             {figureSlots.map((slot) => {
-              const a = SLOT_ANCHOR[slot]
+              const a = anchorOf(slot)!
               const eq = data.equipped[slot]
               const common = {
                 position: 'absolute' as const, left: `${a[0]}%`, top: `${a[1]}%`,
@@ -229,7 +246,7 @@ export function WardrobeTab({ character }: { character: string }) {
                 )
               }
               return (
-                <div key={slot} title={`${data.slot_labels[slot] || slot} (${t('empty')})`}
+                <div key={slot} title={`${t(data.slot_labels[slot] || slot)} (${t('empty')})`}
                   style={{ ...common, border: '2px dashed rgba(255,255,255,0.4)', background: 'rgba(0,0,0,0.25)' }} />
               )
             })}
@@ -238,7 +255,69 @@ export function WardrobeTab({ character }: { character: string }) {
         <div style={{ opacity: 0.5, fontSize: '0.72em', textAlign: 'center' }}>
           {data.items.filter((it) => it.is_outfit).length} {t('outfit pieces')}
         </div>
+        <BodySection character={character} />
       </div>
+    </div>
+  )
+}
+
+/** Generic body-slot editor — renders whatever the character's species
+ * package declares (attributes + options); saves per attribute on change.
+ * Invisible without species packages (no slots -> renders nothing). */
+function BodySection({ character }: { character: string }) {
+  const { t } = useI18n()
+  const [slots, setSlots] = useState<BodySlot[]>([])
+  const enc = encodeURIComponent(character)
+
+  const load = useCallback(async () => {
+    try {
+      const d = await apiGet<{ slots?: BodySlot[] }>(`/characters/${enc}/body-slots`)
+      setSlots(d.slots || [])
+    } catch { setSlots([]) }
+  }, [enc])
+  useEffect(() => { load() }, [load])
+
+  const save = useCallback(async (slotId: string, key: string, value: string) => {
+    setSlots((prev) => prev.map((s) => s.id === slotId
+      ? { ...s, attributes: s.attributes.map((a) => a.key === key ? { ...a, value } : a) }
+      : s))
+    try {
+      await apiPost(`/characters/${enc}/body-slots/${encodeURIComponent(slotId)}`,
+        { values: { [key]: value } })
+    } catch { load() }
+  }, [enc, load])
+
+  if (!slots.length) return null
+  return (
+    <div style={{ flex: '0 0 auto', maxHeight: '45%', overflow: 'auto',
+                  borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 6 }}>
+      <div style={{ fontSize: '0.78em', opacity: 0.6, marginBottom: 4 }}>{t('Body')}</div>
+      {slots.map((s) => (
+        <div key={s.id} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 3, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.78em', minWidth: 70, opacity: 0.75 }}
+            title={s.covered_by.length ? `${t('Covered by')}: ${s.covered_by.join(', ')}` : undefined}>
+            {s.id.replace(/_/g, ' ')}
+          </span>
+          {s.attributes.map((a) => a.options.length > 0 && !a.allow_custom ? (
+            <select key={a.key} className="ga-input" value={a.value} title={a.label}
+              style={{ fontSize: '0.78em', padding: '1px 5px', minWidth: 90 }}
+              onChange={(e) => save(s.id, a.key, e.target.value)}>
+              <option value="">{a.label}…</option>
+              {a.options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : (
+            <input key={a.key} className="ga-input" value={a.value} title={a.label}
+              placeholder={a.label} list={a.options.length ? `body-${s.id}-${a.key}` : undefined}
+              style={{ fontSize: '0.78em', padding: '1px 5px', width: 110 }}
+              onChange={(e) => save(s.id, a.key, e.target.value)} />
+          ))}
+          {s.attributes.map((a) => a.options.length > 0 && a.allow_custom ? (
+            <datalist key={`dl-${a.key}`} id={`body-${s.id}-${a.key}`}>
+              {a.options.map((o) => <option key={o} value={o} />)}
+            </datalist>
+          ) : null)}
+        </div>
+      ))}
     </div>
   )
 }

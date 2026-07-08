@@ -107,7 +107,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `apply_to` | nein | Template-Selektor (Namen/`*`/`{feature}`) für Spezies-Inhalte (silhouette/body_slots/piece_slots); ohne ihn zählen die Fragment-Selektoren |
 | `silhouette` | nein | `{asset: <relpath>}` — UI-Paper-Doll der Spezies (Datei im Paket) |
 | `body_slots` | nein | Körper-Slot-Deklarationen (s.u.) — Sichtbarkeit, Attribute, Prompt-Fragmente |
-| `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies; ohne Deklaration gilt der Core-Default (`VALID_PIECE_SLOTS`) |
+| `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies (String oder `{id, label}`); ohne Deklaration gilt der Core-Default (`VALID_PIECE_SLOTS`) inkl. Core-Anzeige-Reihenfolge/-Labels |
 | `enabled_default` | nein | Lade-Gate-Default für Pakete OHNE always_load-Verben, wenn weder `skills.<id>.enabled` in der Config noch die Env-Bridge etwas sagen (z.B. `true` für Kern-Verben wie talk_to) |
 | `env_prefix` | nein | Nur Altbestand (Env-Bridge); neue Pakete nutzen `ctx.get_config` |
 
@@ -159,7 +159,9 @@ neues Content-Paket:
 
 ```yaml
 apply_to: ["human-roleplay"]      # welche Templates diese Spezies sind
-silhouette: {asset: assets/silhouette.svg}
+silhouette:
+  asset: assets/silhouette.svg
+  anchors: {top: [50, 33], bottom: [50, 55]}   # Slot-Marker-Positionen (x%, y%) im Bild
 piece_slots: [top, bottom, underwear_top, underwear_bottom, feet]
 body_slots:
   - id: breast

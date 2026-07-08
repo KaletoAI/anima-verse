@@ -55,6 +55,8 @@ const RARITY_COLOR: Record<string, string> = {
 interface Equipped { item_id: string; name: string; image: boolean }
 interface Belongings {
   avatar: string; slot_order: string[]; slot_labels: Record<string, string>
+  silhouette_url?: string
+  slot_anchors?: Record<string, [number, number]>
   equipped: Record<string, Equipped>; items: Item[]
   outfit_sets: Array<{ id: string; name: string }>; max_slots: number
 }
@@ -132,7 +134,10 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
   // Marker-Größe skaliert mit der Figurhöhe (geclamped).
   const markerSize = Math.round(Math.max(22, Math.min(80, figH * 0.11)))
   // Alle Slots mit Anker (in Anzeige-Reihenfolge) — leer ODER belegt darstellen.
-  const figureSlots = data.slot_order.filter((s) => SLOT_ANCHOR[s])
+  // Anchor positions: species package (slot_anchors) wins, core map is the default.
+  const anchorOf = (s: string): [number, number] | undefined =>
+    data.slot_anchors?.[s] || SLOT_ANCHOR[s]
+  const figureSlots = data.slot_order.filter((s) => anchorOf(s))
 
   return (
     <div style={{ display: 'flex', gap: 10, height: '100%', minHeight: 0, fontSize: '0.88em' }}>
@@ -151,7 +156,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
             <button onClick={() => setSlotFilter('')} style={chip(!slotFilter, true)}>{t('All slots')}</button>
             {slotOptions.map((s) => (
               <button key={s} onClick={() => setSlotFilter(s)} style={chip(slotFilter === s, true)}>
-                {data.slot_labels[s] || s}
+                {t(data.slot_labels[s] || s)}
               </button>
             ))}
           </div>
@@ -213,10 +218,10 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
       <div style={{ flex: '0 0 auto', maxWidth: '55%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
           <div ref={figRef} style={{ position: 'relative', height: '100%', display: 'inline-flex' }}>
-            <img src="/static/game_admin/silhouette.svg" alt={data.avatar}
+            <img src={data.silhouette_url || '/static/game_admin/silhouette.svg'} alt={data.avatar}
               style={{ height: '100%', width: 'auto', display: 'block', opacity: 0.45 }} />
             {figureSlots.map((slot) => {
-              const a = SLOT_ANCHOR[slot]
+              const a = anchorOf(slot)!
               const eq = data.equipped[slot]
               const common = {
                 position: 'absolute' as const, left: `${a[0]}%`, top: `${a[1]}%`,
@@ -240,7 +245,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
               }
               // leer: gestrichelter, dezenter eckiger Umriss als Slot-Markierung
               return (
-                <div key={slot} title={`${data.slot_labels[slot] || slot} (${t('empty')})`}
+                <div key={slot} title={`${t(data.slot_labels[slot] || slot)} (${t('empty')})`}
                   style={{
                     ...common, border: '2px dashed rgba(255,255,255,0.4)',
                     background: 'rgba(0,0,0,0.25)',

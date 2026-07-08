@@ -1002,5 +1002,16 @@
     "← World adopted": "← Welt übernommen",
     "→ Moved to shared": "→ Shared verschoben",
     "🔍 Search content…": "🔍 Inhalt durchsuchen…"
-  }
+  },
+  "Head": "Kopf",
+  "Neck": "Hals",
+  "Coat & jacket": "Mantel & Jacke",
+  "Top": "Oberteil",
+  "Underwear top": "Unterwäsche oben",
+  "Bottom": "Unterteil",
+  "Underwear bottom": "Unterwäsche unten",
+  "Legs": "Beine",
+  "Feet": "Füße",
+  "Body": "Körper",
+  "Covered by": "Verdeckt durch"
 }

@@ -204,18 +204,28 @@ def appearance_suffix(character_name: str) -> str:
 # Topology & silhouette
 # ---------------------------------------------------------------------------
 
-def piece_slots_for_character(character_name: str) -> Tuple[str, ...]:
-    """Effective clothing-slot topology: the species package's
-    ``piece_slots`` when declared, otherwise the core default
-    (inventory.VALID_PIECE_SLOTS)."""
+def declared_piece_slots(character_name: str) -> Optional[Tuple[Tuple[str, ...], Dict[str, str]]]:
+    """Species-declared clothing topology as ``(slot_ids, labels)`` — or
+    None when no species package declares one (callers keep their core
+    default, including its own display order/labels)."""
     try:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
         for pkg in _species_packages_for(profile):
             if pkg.piece_slots:
-                return tuple(pkg.piece_slots)
+                return tuple(pkg.piece_slots), dict(pkg.piece_slot_labels)
     except Exception as e:
         logger.debug("piece slots for %s failed: %s", character_name, e)
+    return None
+
+
+def piece_slots_for_character(character_name: str) -> Tuple[str, ...]:
+    """Effective clothing-slot topology: the species package's
+    ``piece_slots`` when declared, otherwise the core default
+    (inventory.VALID_PIECE_SLOTS)."""
+    declared = declared_piece_slots(character_name)
+    if declared:
+        return declared[0]
     from app.models.inventory import VALID_PIECE_SLOTS
     return tuple(VALID_PIECE_SLOTS)
 

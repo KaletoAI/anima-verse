@@ -57,10 +57,14 @@ intimacy-Paket). Der Core kennt keinen Stat-Namen.
 | `prompt_fragments(name)` | `{general, exposed}` — general = always+covered (Personenbeschreibung, F1), exposed nur unbedeckt |
 | `appearance_suffix(name)` | kombinierter Text; hängt der PromptBuilder automatisch an die Appearance an |
 | `piece_slots_for_character(name)` | Kleidungs-Slot-Topologie der Spezies (Fallback `VALID_PIECE_SLOTS`) |
+| `declared_piece_slots(name)` | `(slots, labels)` NUR wenn eine Spezies deklariert (sonst None — Aufrufer behalten ihren Core-Default) |
 | `silhouette_for_character(name)` | Silhouetten-Deklaration des Spezies-Pakets (UI) |
 
 Deklaration ausschließlich über das Manifest (`body_slots`/`piece_slots`/
-`silhouette` + `apply_to`) — siehe docs/plugins.md.
+`silhouette` + `apply_to`) — siehe docs/plugins.md. UI-Endpunkte:
+`GET/POST /characters/<c>/body-slots[/<slot>]` (generischer Editor im
+WardrobeTab), `GET /characters/<c>/silhouette` (Paket-Asset); Belongings
+liefert `slot_order`/`slot_labels`/`slot_anchors`/`silhouette_url` spezies-getrieben.
 
 ## Outfit / Decency — `app.core.outfit_compliance` ✅
 
@@ -125,6 +129,21 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 |---|---|
 | `app.models.chat.save_message(msg, character_name=…, partner_name=…)` | Eine Zeile in die Chat-History eines Charakters schreiben (Inbox-Modell: Sender als `assistant`, Empfänger als `user`) |
 | `app.core.pending_reports.add_report / list_open / mark_resolved` | Chain-of-Command-Follow-ups: wer wem noch eine Rückmeldung schuldet (talk_to legt bei Fremd-Initiator einen Report an und löst offene beim Antworten) |
+
+## Pose-Engine — `app.core.pose_engine` ✅ (set_pose-Paket)
+
+| Funktion | Semantik |
+|---|---|
+| `resolve_pose_variant(name, raw_pose, activity_hint="")` | End-to-End: roher `pose_intent` → Variant-Dict (`{id, canonical_pose, …}`), normalisiert + gegen bestehende Bild-Varianten gematcht; `None` bei leerem Input. Die Engine bleibt Core (R5 — 5+ weitere `pose_intent`-Schreiber). Das set_pose-Paket schreibt danach `pose_intent`/`pose_variant_id` ins Profil |
+
+## Instagram — `app.models.instagram` ✅ (instagram-Paket) / ⚠ (Rest)
+
+| Funktion | Semantik |
+|---|---|
+| `get_post(post_id)` | Post-Dict (oder None) — Präsenz-/Besitz-Check vor Comment/Reply |
+| `add_comment(post_id, commenter_name, text)` | Kommentar/Reply an einen Post anhängen (Reply = `@commenter …`-Body) |
+| `add_character_like(post_id, name)` | Auto-Like des Kommentators (Default an) |
+| `create_post(name, image_filename, caption, …)` | Post anlegen — Core-Datenmodell (Feed/Route/`InstagramSkill` bleiben Core bis F6/Welle 5) |
 
 ## LLM & Templates ✅
 

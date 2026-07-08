@@ -96,9 +96,10 @@ class Package:
     # fragment selectors). A species defines the FULL slot topology:
     # body slots AND the clothing-slot list AND the UI silhouette.
     apply_to: Any = None
-    silhouette: Dict[str, Any] = field(default_factory=dict)  # {"asset": relpath, ...}
+    silhouette: Dict[str, Any] = field(default_factory=dict)  # {"asset": relpath, "anchors": {slot: [x,y]}, ...}
     body_slots: List[BodySlotSpec] = field(default_factory=list)
     piece_slots: List[str] = field(default_factory=list)      # clothing-slot topology; empty = core default
+    piece_slot_labels: Dict[str, str] = field(default_factory=dict)  # optional UI labels per slot
     # Package dependencies (F9): ids of other packages.
     # requires — must be PRESENT for this package to load at all, and ACTIVE
     #            on a character before this package's skills can be enabled.

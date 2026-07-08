@@ -30,7 +30,6 @@ DEFAULT_NEW_CHARACTER_SKILLS = (
     # MarkdownWriter, KnowledgeExtract stay off because they cost tokens/setup
     # and not every NPC needs them).
     "imagegen", "setlocation", "send_message", "notify_user",
-    "instagram_comment", "instagram_reply",
     "outfit_change",
     "invite_to_party", "join_party", "leave_party",
 )
@@ -1253,6 +1252,63 @@ def apply_config_update(character_name: str, data: Dict[str, Any]) -> Dict[str, 
             pass
 
     return {"status": "success", "character": character_name, "updated_fields": list(fields.keys())}
+
+
+def build_body_slots(character_name: str) -> Dict[str, Any]:
+    """Body-slot editor payload (species packages, plan-body-slots.md):
+    applicable slots with attribute declarations + current values, plus the
+    silhouette declaration. Generic — everything comes from the packages."""
+    from app.core.body_slots import (silhouette_for_character,
+                                     slot_values, slots_for_character)
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name) or {}
+    values = slot_values(character_name)
+    equipped = dict(profile.get("equipped_pieces") or {})
+    slots = []
+    for spec in slots_for_character(character_name):
+        exposed = (not spec.covered_by
+                   or not any(equipped.get(s) for s in spec.covered_by))
+        attrs = []
+        for key, decl in spec.attributes.items():
+            attrs.append({
+                "key": key,
+                "type": decl.get("type", "select"),
+                "options": list(decl.get("options") or []),
+                "allow_custom": bool(decl.get("allow_custom")),
+                "label": decl.get("label", key.replace("_", " ").title()),
+                "value": (values.get(spec.id) or {}).get(key, ""),
+            })
+        slots.append({
+            "id": spec.id,
+            "package_id": spec.package_id,
+            "covered_by": list(spec.covered_by),
+            "exposed": exposed,
+            "attributes": attrs,
+        })
+    sil = silhouette_for_character(character_name)
+    return {
+        "slots": slots,
+        "silhouette_url": f"/characters/{character_name}/silhouette" if sil else "",
+    }
+
+
+def apply_body_slot_values(character_name: str,
+                           slot_id: str, values: Dict[str, Any]) -> Dict[str, Any]:
+    """Editor setter: store attribute values for one declared slot.
+    Unknown slots/attributes are rejected (declarations are the schema)."""
+    from app.core.body_slots import set_slot_value, slots_for_character
+    spec = next((s for s in slots_for_character(character_name)
+                 if s.id == slot_id), None)
+    if spec is None:
+        raise HTTPException(status_code=404,
+                            detail=f"Unknown body slot '{slot_id}'")
+    unknown = [k for k in values if k not in spec.attributes]
+    if unknown:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown attribute(s): {', '.join(unknown)}")
+    for key, value in values.items():
+        set_slot_value(character_name, slot_id, key, value)
+    return {"status": "success", "slot": slot_id}
 
 
 def _package_active_for(character_name: str, pkg) -> bool:

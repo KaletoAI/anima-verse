@@ -851,12 +851,15 @@ async def play_news(user=Depends(get_current_user)):
     return out
 
 
+# Core default display order + labels (English source; the UI localizes).
+# A species package's `piece_slots` declaration replaces both (F2 —
+# plan-body-slots.md): topology, order and labels then come from the package.
 _SLOT_ORDER = ["head", "neck", "outer", "top", "underwear_top",
                "bottom", "underwear_bottom", "legs", "feet"]
-_SLOT_LABELS = {"head": "Kopf", "neck": "Hals", "outer": "Mantel & Jacke",
-                "top": "Oberteil", "underwear_top": "Unterwäsche oben",
-                "bottom": "Unterteil", "underwear_bottom": "Unterwäsche unten",
-                "legs": "Beine", "feet": "Füße"}
+_SLOT_LABELS = {"head": "Head", "neck": "Neck", "outer": "Coat & jacket",
+                "top": "Top", "underwear_top": "Underwear top",
+                "bottom": "Bottom", "underwear_bottom": "Underwear bottom",
+                "legs": "Legs", "feet": "Feet"}
 
 
 def build_belongings(character_name: str) -> dict:
@@ -866,10 +869,28 @@ def build_belongings(character_name: str) -> dict:
     Item-Liste mit Filter-Attributen (Kategorie/Slot/Outfit-Typ/Spell)."""
     avatar = (character_name or "").strip()
     out = {"avatar": "", "slot_order": _SLOT_ORDER, "slot_labels": _SLOT_LABELS,
-           "equipped": {}, "items": [], "outfit_sets": [], "max_slots": 0}
+           "equipped": {}, "items": [], "outfit_sets": [], "max_slots": 0,
+           "silhouette_url": "", "slot_anchors": {}}
     if not avatar:
         return out
     out["avatar"] = avatar
+    # Species topology + silhouette (body-slot core). Without a species
+    # package the core defaults above stay in effect.
+    try:
+        from app.core.body_slots import declared_piece_slots, silhouette_for_character
+        declared = declared_piece_slots(avatar)
+        if declared:
+            slots, labels = declared
+            out["slot_order"] = list(slots)
+            out["slot_labels"] = {s: labels.get(s, s) for s in slots}
+        sil = silhouette_for_character(avatar)
+        if sil:
+            out["silhouette_url"] = f"/characters/{avatar}/silhouette"
+            anchors = sil.get("anchors")
+            if isinstance(anchors, dict):
+                out["slot_anchors"] = anchors
+    except Exception as e:
+        logger.debug("belongings species topology failed: %s", e)
     from app.models.inventory import (get_character_inventory, get_equipped_pieces,
                                       get_item)
     from app.models.character import get_character_outfits

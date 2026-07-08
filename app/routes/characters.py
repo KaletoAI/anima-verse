@@ -1354,6 +1354,43 @@ def get_available_skills_for_character(character_name: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Body slots — species-package declarations (plan-body-slots.md, phase 3)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{character_name}/body-slots")
+def get_body_slots(character_name: str) -> Dict[str, Any]:
+    """Applicable body slots (declarations + current values) + silhouette."""
+    return character_ops.build_body_slots(character_name)
+
+
+@router.post("/{character_name}/body-slots/{slot_id}")
+async def save_body_slot(character_name: str, slot_id: str, request: Request) -> Dict[str, Any]:
+    """Stores attribute values for one declared slot. Body: {"values": {attr: value}}."""
+    data = await request.json()
+    values = data.get("values") if isinstance(data, dict) else None
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=400, detail="values object required")
+    return character_ops.apply_body_slot_values(character_name, slot_id, values)
+
+
+@router.get("/{character_name}/silhouette")
+def get_character_silhouette(character_name: str):
+    """Serves the species package's silhouette asset (UI paper-doll)."""
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    from app.core.body_slots import silhouette_for_character
+    sil = silhouette_for_character(character_name)
+    if not sil:
+        raise HTTPException(status_code=404, detail="No species silhouette")
+    root = Path(sil["dir"]).resolve()
+    asset = (root / sil["asset"]).resolve()
+    if not str(asset).startswith(str(root)) or not asset.is_file():
+        raise HTTPException(status_code=404, detail="Silhouette asset missing")
+    return FileResponse(asset)
+
+
+# ---------------------------------------------------------------------------
 # Soul Editor — MD-Files unter characters/{Char}/soul/
 # ---------------------------------------------------------------------------
 
