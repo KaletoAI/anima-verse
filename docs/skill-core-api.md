@@ -145,6 +145,19 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 | `add_character_like(post_id, name)` | Auto-Like des Kommentators (Default an) |
 | `create_post(name, image_filename, caption, …)` | Post anlegen — Core-Datenmodell (Feed/Route/`InstagramSkill` bleiben Core bis F6/Welle 5) |
 
+## Soul-Engine — `app.core.soul_writer` ✅ (retrospect-Paket)
+
+Die Soul-Engine besitzt die editierbaren Soul-Dateien (beliefs/lessons/goals) UND
+den Retrospect-Zeitstempel (zwei Konsumenten → Core, R5: das retrospect-Paket
+schreibt, `thought_context` liest die „Zeit zu reflektieren"-Zeile).
+
+| Funktion | Semantik |
+|---|---|
+| `list_categories(file_id)` | Gültige Kategorien einer Soul-Datei (beliefs/lessons/goals) |
+| `load_all_body_lines(name, file_id, limit=…)` | Letzte Nicht-Überschrift-Zeilen einer Soul-Datei |
+| `append_entry(name, file_id, category_id, …)` / `rewrite_file(name, file_id, entries, language=…)` | Einträge anhängen bzw. Datei konsolidiert ersetzen (Sprache-bewusst) |
+| `get_last_retrospect_at(name)` / `mark_retrospect_done(name)` | Letzten Retrospect-Zeitpunkt lesen/stempeln (`world_kv`, `retrospect.last_at:{char}`) |
+
 ## Intents — `app.core.intent_engine` ✅ (F6, deklarationsbasiert)
 
 Skills deklarieren ihre `[INTENT: <typ>]`-Marker selbst (`INTENT_TYPES` +

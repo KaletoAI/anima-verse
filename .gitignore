@@ -90,6 +90,7 @@ shared/templates/**/*nsfw*
 # NSFW skill packages — distributed as marketplace content packs
 # (source project: ../anima-verse-packs), never shipped in this repo.
 plugins/intimacy
+plugins/nsfw_anatomy
 
 # Marketplace-installed skill packages (never repo content)
 plugins/installed/

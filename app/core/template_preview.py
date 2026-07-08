@@ -435,15 +435,18 @@ def _drive_relationship_summary_romantic_interests(agent: str, avatar: str) -> P
 
 
 def _drive_retrospect(agent: str, avatar: str) -> PreviewResult:
-    """RetrospectSkill.execute parses input but the prompt build only
-    needs agent_name. Run with a stub raw_input."""
+    """The Reflect skill parses input but the prompt build only needs
+    agent_name. Run with a stub raw_input via the loaded package skill."""
     import json
-    from app.skills.retrospect_skill import RetrospectSkill
-    skill = RetrospectSkill({})
+    from app.core.dependencies import get_skill_manager
+    skill = get_skill_manager().get_skill("retrospect")
+    if skill is None:
+        return {"ok": False, "output": "",
+                "note": "retrospect skill not loaded (package removed)."}
     raw_input = json.dumps({"input": "", "agent_name": agent, "user_id": ""})
     task, sys, user = _capture_render(lambda: skill.execute(raw_input))
     return {"ok": True, "output": _format(task, sys, user),
-            "note": "Production: RetrospectSkill.execute(agent_name=agent)."}
+            "note": "Production: the Reflect skill runs with agent_name=agent."}
 
 
 def _drive_secret_generation(agent: str, avatar: str) -> PreviewResult:

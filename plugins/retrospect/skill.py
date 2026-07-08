@@ -1,90 +1,58 @@
-"""Retrospect Skill — character self-reflection.
+"""Retrospect package — character self-reflection (tool: Reflect).
 
 Loads recent daily/weekly summaries plus episodic memories, asks the LLM to
-extract new beliefs, lessons and goals from recent experience, and appends
-them under the right ``##`` subsection of the character's editable soul
-files (``soul/beliefs.md``, ``soul/lessons.md``, ``soul/goals.md``).
+extract new beliefs, lessons and goals from recent experience, and rewrites
+the right ``##`` subsection of the character's editable soul files
+(``soul/beliefs.md``, ``soul/lessons.md``, ``soul/goals.md``).
 
 The same files are also user-editable via the Soul-Editor UI — Retrospect
-just appends to the existing structure rather than maintaining a parallel
+consolidates into the existing structure rather than maintaining a parallel
 set of output files.
 
 Tool exposure: takes no arguments — the agent just decides "I want to
 reflect now". The thought-context layer hints at this option when enough
-new material has accumulated since the last retrospect.
+new material has accumulated since the last retrospect. The soul engine
+(``app.core.soul_writer``) owns the last-retrospect timestamp (two consumers,
+core — R5); this package only reads/writes it through that engine.
 """
 import json
 import re
-from datetime import datetime
-
-from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List
 
-from .base import BaseSkill, ToolSpec
-from app.core.log import get_logger
+from app.plugins.base import PluginSkill
+from app.plugins.context import PluginContext
+from app.skills.base import ToolSpec
 from app.core.soul_writer import (
-    SOUL_FILE_SCHEMA, append_entry, list_categories, load_all_body_lines)
-
-logger = get_logger("retrospect")
+    list_categories, load_all_body_lines, mark_retrospect_done)
 
 
-def get_last_retrospect_at(character_name: str) -> str:
-    """Return ISO timestamp of the most recent retrospect, or '' if never."""
-    try:
-        from app.core.db import get_connection
-        conn = get_connection()
-        row = conn.execute(
-            "SELECT value FROM world_kv WHERE key=?",
-            (f"retrospect.last_at:{character_name}",),
-        ).fetchone()
-        return (row[0] or "") if row else ""
-    except Exception:
-        return ""
-
-
-def _mark_retrospect_done(character_name: str) -> None:
-    try:
-        from app.core.db import transaction
-        with transaction() as conn:
-            conn.execute(
-                "INSERT INTO world_kv (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (f"retrospect.last_at:{character_name}",
-                 utc_now_iso()))
-    except Exception as e:
-        logger.debug("mark_retrospect_done failed for %s: %s", character_name, e)
-
-
-class RetrospectSkill(BaseSkill):
+class RetrospectSkill(PluginSkill):
     """Lets a character reflect on recent experience and update their
     beliefs / lessons / goals."""
 
     SKILL_ID = "retrospect"
     ALWAYS_LOAD = True
-    # ALWAYS_LOAD=True heisst: Skill wird in den Manager geladen, aber
-    # versteckt fuer Characters die keinen `<char>/skills/retrospect.json`
-    # mit `{"enabled": true}` haben.
+    # ALWAYS_LOAD=True means the skill is loaded into the manager but hidden
+    # for characters that don't have a <char>/skills/retrospect.json with
+    # {"enabled": true}.
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("retrospect")
-        self.name = meta["name"]
-        self.description = meta["description"]
+    def __init__(self, config: Dict[str, Any], ctx: PluginContext):
+        super().__init__(config, ctx)
+        # name/description come from templates/llm/skills/retrospect.md
         self._defaults = {"enabled": True}
-        logger.info("Retrospect Skill initialized")
+        self.ctx.logger.info("Retrospect skill initialized")
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
             return "Retrospect is disabled."
 
-        ctx = self._parse_base_input(raw_input)
-        character_name = (ctx.get("agent_name") or "").strip()
+        data = self._parse_base_input(raw_input)
+        character_name = (data.get("agent_name") or "").strip()
         if not character_name:
             return "Error: agent_name missing."
 
-        # Per-Character Master-Switch: UI-Toggle "Retrospektive: Nein"
-        # ueberschreibt das Skill-Default.
+        # Per-character master switch: the UI toggle "Retrospect: No"
+        # overrides the skill default.
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "retrospect_enabled"):
             return "Retrospect disabled for this character."
@@ -102,8 +70,8 @@ class RetrospectSkill(BaseSkill):
         if not recent_summaries and not recent_memories:
             return "Nothing to reflect on yet — no recent material."
 
-        # ALLE bestehenden zeigen (nicht nur 15) — die LLM konsolidiert sie und
-        # kann sonst ältere Einträge gar nicht entdoppeln.
+        # Show ALL existing entries (not just 15) — the LLM consolidates them
+        # and otherwise cannot dedupe older entries at all.
         existing_beliefs = "\n".join(load_all_body_lines(character_name, "beliefs", limit=60))
         existing_lessons = "\n".join(load_all_body_lines(character_name, "lessons", limit=60))
         existing_goals = "\n".join(load_all_body_lines(character_name, "goals", limit=60))
@@ -130,35 +98,35 @@ class RetrospectSkill(BaseSkill):
                 agent_name=character_name)
             raw = (response.content or "").strip()
         except Exception as e:
-            logger.error("Retrospect LLM call failed for %s: %s", character_name, e)
+            self.ctx.logger.error("Retrospect LLM call failed for %s: %s", character_name, e)
             return f"Reflection failed: {e}"
 
-        data = self._parse_json(raw)
-        if data is None:
-            logger.warning("Retrospect JSON parse failed for %s: %s",
-                           character_name, raw[:200])
+        parsed = self._parse_json(raw)
+        if parsed is None:
+            self.ctx.logger.warning("Retrospect JSON parse failed for %s: %s",
+                                    character_name, raw[:200])
             return "Reflection produced no usable output."
 
-        # Konsolidieren statt anhängen: die LLM liefert den vollständigen, schon
-        # deduplizierten Satz pro Bucket → Datei komplett ersetzen. Leere Buckets
-        # NICHT wegschreiben (sonst würde "nichts geändert" die Datei leeren).
+        # Consolidate instead of append: the LLM returns the full, already
+        # deduplicated set per bucket → replace the file completely. Do NOT
+        # write empty buckets (otherwise "nothing changed" would clear the file).
         counts = {
             "beliefs": self._replace_entries(character_name, "beliefs",
-                                             data.get("beliefs") or [], lang_code),
+                                             parsed.get("beliefs") or [], lang_code),
             "lessons": self._replace_entries(character_name, "lessons",
-                                             data.get("lessons") or [], lang_code),
+                                             parsed.get("lessons") or [], lang_code),
             "goals":   self._replace_entries(character_name, "goals",
-                                             data.get("goals") or [], lang_code),
+                                             parsed.get("goals") or [], lang_code),
         }
 
-        # Ziele → standing-Intents (plan-intents-unified.md): jedes Goal wird ein
-        # vom Character gesetzter Intent. Dedupe gegen bestehende aktive Intents
-        # gleichen Titels, damit wiederholte Retrospects sie nicht stapeln.
+        # Goals → standing intents (plan-intents-unified.md): each goal becomes
+        # an intent set by the character. Dedupe against existing active intents
+        # of the same title so repeated retrospects don't stack them.
         try:
             from app.models.intents import create_intent, list_intents
             existing = {(i.get("title") or "").strip().lower()
                         for i in list_intents(owner=character_name, status="active")}
-            for g in (data.get("goals") or []):
+            for g in (parsed.get("goals") or []):
                 if not isinstance(g, dict):
                     continue
                 title = (g.get("text") or "").strip()
@@ -168,9 +136,9 @@ class RetrospectSkill(BaseSkill):
                                   meta={"origin": "retrospect_goal"})
                     existing.add(title.lower())
         except Exception as _ge:
-            logger.debug("retrospect goals -> intents failed: %s", _ge)
+            self.ctx.logger.debug("retrospect goals -> intents failed: %s", _ge)
 
-        _mark_retrospect_done(character_name)
+        mark_retrospect_done(character_name)
 
         updated = [(k, v) for k, v in counts.items() if v is not None]
         if not updated:
@@ -224,10 +192,10 @@ class RetrospectSkill(BaseSkill):
 
     def _replace_entries(self, character_name: str, file_id: str,
                          entries: List[Any], lang_code: str):
-        """Ersetzt eine Soul-Datei durch den konsolidierten Satz der LLM. Gibt die
-        Anzahl geschriebener Einträge zurück — oder ``None`` wenn der Bucket leer
-        war, dann bleibt die bestehende Datei unangetastet („nichts geändert")."""
-        CAP_PER_CATEGORY = 5  # Hard-Safety-Net gegen Überproduktion der LLM
+        """Replace a soul file with the LLM's consolidated set. Returns the
+        number of written entries — or ``None`` when the bucket was empty, in
+        which case the existing file is left untouched ("nothing changed")."""
+        CAP_PER_CATEGORY = 5  # hard safety net against LLM overproduction
         valid_categories = set(list_categories(file_id))
         cleaned: List[Dict[str, str]] = []
         seen: set = set()
@@ -246,12 +214,12 @@ class RetrospectSkill(BaseSkill):
             per_cat[category] = per_cat.get(category, 0) + 1
             cleaned.append({"text": text, "category": category})
         if not cleaned:
-            return None  # nichts Brauchbares → bestehende Datei behalten
+            return None  # nothing usable → keep the existing file
         try:
             from app.core.soul_writer import rewrite_file
             return rewrite_file(character_name, file_id, cleaned, language=lang_code)
         except Exception as ex:
-            logger.warning("rewrite_file failed [%s]: %s", file_id, ex)
+            self.ctx.logger.warning("rewrite_file failed [%s]: %s", file_id, ex)
             return None
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:

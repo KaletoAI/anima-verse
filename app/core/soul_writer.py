@@ -214,3 +214,38 @@ def load_all_body_lines(character_name: str, file_id: str,
             continue
         out.append(s)
     return out[-limit:]
+
+
+# ---------------------------------------------------------------------------
+# Retrospect timestamp (soul-engine state; two consumers → core, R5): the
+# thought-context reads it to hint "time to reflect", the Reflect skill writes
+# it after a run. Stored in world_kv under ``retrospect.last_at:{char}``.
+# ---------------------------------------------------------------------------
+
+def get_last_retrospect_at(character_name: str) -> str:
+    """Return ISO timestamp of the most recent retrospect, or '' if never."""
+    try:
+        from app.core.db import get_connection
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM world_kv WHERE key=?",
+            (f"retrospect.last_at:{character_name}",),
+        ).fetchone()
+        return (row[0] or "") if row else ""
+    except Exception:
+        return ""
+
+
+def mark_retrospect_done(character_name: str) -> None:
+    """Stamp the current time as this character's last retrospect."""
+    try:
+        from app.core.db import transaction
+        from app.core.timeutils import utc_now_iso
+        with transaction() as conn:
+            conn.execute(
+                "INSERT INTO world_kv (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"retrospect.last_at:{character_name}",
+                 utc_now_iso()))
+    except Exception as e:
+        logger.debug("mark_retrospect_done failed for %s: %s", character_name, e)

@@ -1,0 +1,10 @@
+name: retrospect
+version: "1.0.0"
+description: Reflect verb — the character consolidates recent experience into beliefs, lessons and goals in its soul files
+
+skills:
+  - skill_id: retrospect
+    always_load: true
+
+templates:
+  llm: templates/llm
