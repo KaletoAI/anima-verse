@@ -1,18 +1,18 @@
-"""Storyteller-Konfiguration pro Welt.
+"""Storyteller configuration per world.
 
-Konfiguriert das Verhalten des Storyteller-Pipelines (act-Skill): welche
-Skills dürfen feuern, in welchem Chat-Modus läuft der Agent (rp_first /
-single / no_tools), welcher LLM-Task wird gerouted.
+Configures the storyteller pipeline (act engine): which skills may fire,
+which chat mode the agent runs in (rp_first / single / no_tools), which
+LLM task is routed.
 
-Storage: ``storage/<world>/storyteller.json`` — single JSON-Objekt. Wird
-beim ersten Lesen mit Defaults befüllt.
+Storage: ``storage/<world>/storyteller.json`` — single JSON object,
+filled with defaults on first read.
 
-Whitelist-Skills sind absichtlich klein gehalten — Storyteller ist ein
-GM-Werkzeug, kein vollwertiger Chat-Partner. Defaults aktivieren nur die
-"world action" skills (outfit, image, activity, UseItem), while
-Kommunikations- und Bewegungs-Skills aus sind (Avatar steuert seine
-Bewegung über UI, Dialog läuft über reguläre Chat-Sessions).
-"""
+The offerable skill list is DYNAMIC — every loaded skill can be toggled
+for the storyteller (no hardcoded skill ids here, R1). Defaults keep the
+whitelist deliberately small: the storyteller is a GM tool, not a full
+chat partner — only the "world action" seeds below start enabled, and
+communication/movement verbs stay off (the avatar moves via UI, dialogue
+runs through regular chat sessions)."""
 from __future__ import annotations
 
 import json
@@ -25,41 +25,31 @@ from app.core.paths import get_storage_dir
 logger = get_logger("storyteller")
 
 
-# Komplette Liste der Skills, die der Storyteller-Pipeline angeboten
-# werden _können_. Andere Skills sind im Storyteller-Modus generell aus
-# (z.B. retrospect, instagram_*, markdown_writer).
-# Keys MUST be real SKILL_IDs (class attribute SKILL_ID, not the
-# SKILL_REGISTRY alias) — the Act toolset filters `sid in enabled_skill_ids`.
-# "setactivity" was removed here: that skill is abolished, the key matched
-# nothing.
-_SKILL_KEYS = [
-    "outfit_change", "image_generation", "consume_item",
-    "setlocation", "talk_to", "send_message", "act",
-    "instagram", "markdown_writer", "retrospect", "describe_room",
-    "notify_user", "video_generation", "instagram_comment", "instagram_reply",
-    "outfit_creation",
-]
+def _known_skill_ids() -> list:
+    """SKILL_IDs of all currently loaded skills — the storyteller
+    whitelist offers exactly the world's skills (packages included)
+    instead of a hardcoded list. Ids missing from a stored config
+    default to the seed value (False unless listed in _DEFAULTS)."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        ids = sorted({s.SKILL_ID for s in get_skill_manager().skills
+                      if getattr(s, "SKILL_ID", "")})
+        if ids:
+            return ids
+    except Exception as e:
+        logger.debug("storyteller: skill enumeration failed: %s", e)
+    return sorted(_DEFAULTS["enabled_skills"].keys())
+
 
 _DEFAULTS: Dict[str, Any] = {
     "chat_mode": "rp_first",
     "llm_task": "storyteller",
+    # Seed values: only the "world action" skills start enabled; every
+    # other loaded skill defaults to False.
     "enabled_skills": {
         "outfit_change": True,
         "image_generation": True,
         "consume_item": True,
-        "setlocation": False,
-        "talk_to": False,
-        "send_message": False,
-        "act": False,
-        "instagram": False,
-        "markdown_writer": False,
-        "retrospect": False,
-        "describe_room": False,
-        "notify_user": False,
-        "video_generation": False,
-        "instagram_comment": False,
-        "instagram_reply": False,
-        "outfit_creation": False,
     },
 }
 
@@ -77,7 +67,8 @@ def _normalize(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "chat_mode": _DEFAULTS["chat_mode"],
         "llm_task": _DEFAULTS["llm_task"],
-        "enabled_skills": dict(_DEFAULTS["enabled_skills"]),
+        "enabled_skills": {k: bool(_DEFAULTS["enabled_skills"].get(k, False))
+                           for k in _known_skill_ids()},
     }
     if not isinstance(cfg, dict):
         return out
@@ -92,7 +83,7 @@ def _normalize(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     skills = cfg.get("enabled_skills") or {}
     if isinstance(skills, dict):
-        for k in _SKILL_KEYS:
+        for k in out["enabled_skills"]:
             if k in skills:
                 out["enabled_skills"][k] = bool(skills[k])
     return out
@@ -124,5 +115,5 @@ def save_storyteller_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def list_skill_keys() -> list:
-    """Stabile Reihenfolge aller bekannten Skill-Keys — für die UI."""
-    return list(_SKILL_KEYS)
+    """Stable order of all offerable skill keys — for the UI."""
+    return _known_skill_ids()

@@ -6,7 +6,6 @@ from app.core.log import get_logger
 from .base import ToolSpec
 
 logger = get_logger("skill_mgr")
-from .act_skill import ActSkill
 from .describe_room_skill import DescribeRoomSkill
 from .outfit_change_skill import OutfitChangeSkill
 from .outfit_creation_skill import OutfitCreationSkill
@@ -38,7 +37,6 @@ class SkillManager:
     # Registry aller verfügbaren Skill-Klassen
     # (Plugins aus plugins/ werden automatisch geladen, siehe load_skills)
     SKILL_REGISTRY = {
-        'act': ActSkill,
         'describe_room': DescribeRoomSkill,
         'outfit_change': OutfitChangeSkill,
         'outfit_creation': OutfitCreationSkill,

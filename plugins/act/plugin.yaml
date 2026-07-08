@@ -1,0 +1,12 @@
+name: act
+version: "1.0.0"
+description: Act — concrete in-scene action, narrated by the storyteller LLM (verb over the core act engine)
+enabled_default: true        # core verb: loads even without a config entry
+
+skills:
+  - skill_id: act
+    module: skill.py
+    class: ActSkill
+
+templates:
+  llm: templates/llm

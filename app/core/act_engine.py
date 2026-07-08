@@ -1,6 +1,8 @@
-"""Act Skill — Storyteller-driven action.
+"""Act engine — the storyteller-driven action pipeline (core, R5).
 
-Replaces the previous Announce-Skill. The actor (avatar or NPC) performs a
+Consumers: the Act VERB in plugins/act (LLM tool surface) and the
+avatar/storyteller-fallback flow in routes/play.py — both drive
+``perform_act``. The actor (avatar or NPC) performs a
 concrete in-scene action; a Storyteller-LLM narrates the immediate
 consequence and may resolve an active disruption/danger event.
 
@@ -30,7 +32,6 @@ from datetime import datetime, timedelta
 from app.core.timeutils import utc_now
 from typing import Any, Dict, List, Optional, Tuple
 
-from .base import BaseSkill, ToolSpec
 
 from app.core.log import get_logger
 logger = get_logger("act")
@@ -77,79 +78,6 @@ def _coerce_to_dict(raw):
         return parsed if isinstance(parsed, dict) else None
     except Exception:
         return None
-
-
-class ActSkill(BaseSkill):
-    """Concrete in-scene action witnessed by everyone in scope.
-
-    Storyteller-LLM narrates consequence; active events may be resolved
-    if the narration includes an [EVENT_RESOLVED:…] marker (gated by
-    category — danger needs independent validator agreement).
-    """
-
-    SKILL_ID = "act"
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("act")
-        self.name = meta["name"]
-        self.description = meta["description"]
-        self._defaults = {"enabled": True}
-        logger.info("Act Skill initialized")
-
-    def execute(self, raw_input: str) -> str:
-        if not self.enabled:
-            return "Act Skill is disabled."
-
-        ctx = self._parse_base_input(raw_input)
-        actor = (ctx.get("agent_name") or "").strip()
-        if not actor:
-            return "Error: actor context missing."
-
-        text, scope = _extract_text_and_scope(ctx)
-        if not text:
-            return "Error: empty action text."
-        if scope not in ("here", "location"):
-            scope = "here"
-
-        if _sender_on_cooldown(actor, scope):
-            return (f"You acted very recently — wait at least "
-                    f"{SENDER_COOLDOWN_MIN} minutes before the next action.")
-
-        # Sync entry point for tool-LLM callers — drive the async pipeline
-        # via asyncio. Top-level routes use ``await perform_act(...)`` directly.
-        import asyncio as _asyncio
-        try:
-            loop = _asyncio.get_event_loop()
-            if loop.is_running():
-                # Already inside an event loop — schedule and wait via thread.
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    fut = pool.submit(_asyncio.run, perform_act(actor, text, scope))
-                    result = fut.result()
-            else:
-                result = _asyncio.run(perform_act(actor, text, scope))
-        except RuntimeError:
-            result = _asyncio.run(perform_act(actor, text, scope))
-        return result.get("summary", "Action performed.")
-
-
-    def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
-        from app.core.tool_formats import format_example
-        fmt = format_name or "tag"
-        return format_example(
-            fmt, self.name,
-            '{"text": "draws her bow and scares off the wolves", "scope": "here"}')
-
-    def as_tool(self, **kwargs) -> ToolSpec:
-        return ToolSpec(
-            name=self.name,
-            description=(
-                f"{self.description} "
-                f"Input JSON: {{\"text\": \"<what you do>\", \"scope\": \"here\"|\"location\"}}."
-            ),
-            func=self.execute)
 
 
 # ---------------------------------------------------------------------------

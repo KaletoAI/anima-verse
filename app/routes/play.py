@@ -439,10 +439,10 @@ async def _storyteller_fallback(actor: str, text: str, location_id: str,
     nur den aktuellen Raum (scope=here) — konsistent mit der Utterance-Hörweite.
     """
     try:
-        from app.skills.act_skill import perform_act
-        # perform_act schreibt Narration + Event-Verdikt jetzt SELBST als
-        # "Erzähler" in den Stream (act_skill._record_act_to_stream) — hier kein
-        # zweites record_utterance mehr, sonst doppelte Einträge.
+        from app.core.act_engine import perform_act
+        # perform_act writes narration + event verdict ITSELF as the
+        # storyteller line into the stream (act_engine._record_act_to_stream)
+        # — no second record_utterance here or entries duplicate.
         scope = "location" if volume == "shout" else "here"
         await perform_act(actor, text, scope)
         logger.info("Storyteller-Fallback narrierte für %s (scope=%s)", actor, scope)

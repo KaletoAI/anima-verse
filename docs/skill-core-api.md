@@ -186,6 +186,24 @@ Die Engine kennt nur die Core-Typen remind/execute_tool; alles andere kommt
 aus den geladenen Skills — ein nicht geladener Skill macht seinen Intent-Typ
 unbekannt (→ Commitment-Memory statt Fehler-Handler).
 
+## Act-Engine — `app.core.act_engine` ✅ (Welle 6)
+
+`perform_act(actor, text, scope)` (async) = die komplette Storyteller-Pipeline
+(Szenen-Kontext, Storyteller-LLM, Event-Verdikt, Erzähler-Zeile in den Stream,
+Memories/Diary/Bumps). Konsumenten: das Act-VERB (plugins/act) und der
+Storyteller-Fallback in routes/play.py. Die Storyteller-Whitelist
+(`models/storyteller.list_skill_keys`) ist dynamisch = alle geladenen Skills.
+
+## Bild-Service — `app.imagegen.service` ✅ (Welle 6)
+
+| Funktion | Semantik |
+|---|---|
+| `get_image_service()` | Singleton der Bild-Engine (Backend-Pool, Auswahl, Pipeline, Vision-Analyse). `svc.enabled` prüfen; `generate_from_input(json)` = voller Generierungslauf (ehem. Skill-execute) |
+| `reset_image_service()` | Pool-Neuaufbau beim nächsten Zugriff (ruft skill_manager.reload_skills automatisch) |
+
+Das TakePhoto-VERB (plugins/take_photo, SKILL_ID `image_generation`) ist nur
+die LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
+
 ## Hooks — `app.core.hooks` ✅ (F5-light)
 
 | Funktion | Semantik |
