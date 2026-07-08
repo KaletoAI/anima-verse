@@ -1,15 +1,18 @@
 """Stat effects from events & ongoing activities (plan-activity-stat-effects.md).
 
-Shared evaluator with three producers:
+Shared evaluator with these producers:
 - chat beats: extraction_chat_state (its template now allows big swings at
   turning points) — unchanged path, only the stat-list builder lives here.
-- EndIntimate hook (on_intimacy_end): ONE "significant event" round right
-  after intimacy ends — the post-climax drop.
 - activity tick (maybe_activity_tick): agent-loop evaluation of the RUNNING
   activity; the LLM returns PER-HOUR deltas, scaled to the elapsed time.
+- skill packages: verbs call evaluate_stat_effects directly for
+  "significant event" rounds with their OWN situation text (e.g. the
+  intimacy package's post-climax round) — the text is package policy, the
+  evaluation is this core mechanism.
 
 Stats stay fully template-driven (store=status_effects incl. per-value
-hint) — this code knows NO stat name.
+hint; packages contribute stats via character-template fragments) — this
+code knows NO stat name.
 """
 import json
 import re
@@ -116,29 +119,6 @@ def evaluate_stat_effects(character_name: str, situation_text: str, *,
     except Exception as e:
         logger.warning("stat apply failed for %s: %s", character_name, e)
         return {}
-
-
-def on_intimacy_end(character_name: str, partner: str = "") -> None:
-    """EndIntimate hook: one 'significant event' round for both
-    participants — the big post-climax swing is allowed; direction/size
-    semantics live in each value's template hint. Background thread, never
-    blocks the skill."""
-    names = [n for n in dict.fromkeys([character_name, partner]) if n]
-
-    def _run():
-        for n in names:
-            other = next((o for o in names if o != n), "")
-            if other:
-                txt = (f"The intimate encounter between {n} and {other} just "
-                       f"ended after reaching its climax. Judge the immediate "
-                       f"aftermath for {n}: release, satisfaction, spent energy.")
-            else:
-                txt = (f"{n}'s intimate moment just ended after reaching its "
-                       f"climax. Judge the immediate aftermath: release, "
-                       f"satisfaction, spent energy.")
-            evaluate_stat_effects(n, txt, source="intimate_end")
-
-    threading.Thread(target=_run, daemon=True, name="intimacy-end-stats").start()
 
 
 def maybe_activity_tick(character_name: str) -> None:
