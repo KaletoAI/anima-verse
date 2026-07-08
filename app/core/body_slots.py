@@ -199,6 +199,22 @@ def prompt_fragments(character_name: str,
     return {"general": general, "exposed": exposed}
 
 
+def being_for_character(character_name: str) -> str:
+    """Prompt noun for what kind of being the character is ('person',
+    'animal', ...) — declared by the species package (manifest ``being``);
+    default 'person'. Used by scene composition to phrase subject counts
+    correctly ('exactly one person and one animal')."""
+    try:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+        for pkg in _species_packages_for(profile):
+            if getattr(pkg, "being", ""):
+                return pkg.being
+    except Exception:
+        pass
+    return "person"
+
+
 def appearance_suffix(character_name: str, face_only: bool = False,
                       profile: Optional[Dict[str, Any]] = None) -> str:
     """Combined fragment text appended to the character's appearance

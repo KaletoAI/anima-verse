@@ -1,4 +1,5 @@
 name: human
+being: person   # species prompt noun for scene composition
 version: "1.0.0"
 description: Human species — anatomy body slots, clothing-slot topology and the UI silhouette
 

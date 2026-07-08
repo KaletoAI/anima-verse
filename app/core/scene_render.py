@@ -40,22 +40,46 @@ logger = get_logger("scene_render")
 
 # Built-in prompt templates per render mode. Overridable via config so each
 # workflow can get its own tuned wording without code changes. Placeholders:
-# {label} = room/location name, {count} = "exactly two people" etc.,
+# {label} = room/location name, {count} = "exactly one person and one animal" etc.,
 # {people} = person list. KEEP IN SYNC with the schema defaults in
 # config_schema.py.
 PROMPT_MULTI_REF_DEFAULT = (
     "The exact {setting} from the first reference image, keeping its "
     "layout, lighting and perspective. Compose {count} into the scene "
-    "and NO ONE else — each person appears exactly once, no additional "
-    "people, no duplicates. A person's reference image provides their "
-    "IDENTITY ONLY (face, hair, body, outfit) — IGNORE the pose and "
-    "background it shows; every person's pose follows the text. "
-    "People: {people}")
+    "and NO ONE else — each of them appears exactly once, no additional "
+    "people or animals, no duplicates. A subject's reference image "
+    "provides their IDENTITY ONLY (face, hair, body, outfit) — IGNORE "
+    "the pose and background it shows; every pose follows the text. "
+    "Subjects: {people}")
 PROMPT_ONLY_BG_DEFAULT = (
     "The exact {setting} from the reference image, keeping its layout, "
     "lighting and perspective. Compose {count} into the scene and NO ONE "
-    "else — each person appears exactly once, no additional people, no "
-    "duplicates. People: {people}")
+    "else — each of them appears exactly once, no additional people or "
+    "animals, no duplicates. Subjects: {people}")
+
+
+_NUM_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+_BEING_PLURAL = {"person": "people"}
+
+
+def _beings_phrase(names) -> str:
+    """'exactly two people' / 'exactly one person and one animal' — the
+    being noun comes from the character's species package (cat = animal),
+    so a cat is never counted as a person."""
+    from app.core.body_slots import being_for_character
+    counts: Dict[str, int] = {}
+    order = []
+    for n in names:
+        b = being_for_character(n)
+        if b not in counts:
+            order.append(b)
+        counts[b] = counts.get(b, 0) + 1
+    parts = []
+    for b in order:
+        c = counts[b]
+        noun = b if c == 1 else _BEING_PLURAL.get(b, b + "s")
+        parts.append(f"{_NUM_WORDS.get(c, str(c))} {noun}")
+    return "exactly " + " and ".join(parts)
 
 
 def _setting_word(loc_obj: Dict[str, Any]) -> str:
@@ -420,9 +444,7 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
 
     mode = state["mode"]
     slots = int(getattr(backend, "ref_slot_count", 0) or 0)
-    n = len(state["chars"])
-    count_word = {1: "exactly one person", 2: "exactly two people"}.get(
-        n, f"exactly {n} people")
+    count_word = _beings_phrase([c["name"] for c in state["chars"]])
     warning = ""
     if getattr(backend, "category", "") == "inpaint":
         # The edits path does img2img on ONE input — it neither composes
@@ -486,8 +508,9 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     if _ucp.get("prompt_style"):
         prompt = f"{_ucp['prompt_style']}, {prompt}"
     # Built-in anti-duplicate negative, merged with the use-case negative.
-    _neg_base = ("additional people, extra person, crowd, duplicated person, "
-                 "clone, twins, second copy of the same person")
+    _neg_base = ("additional people, extra person, extra animal, crowd, "
+                 "duplicated person, duplicated animal, clone, twins, "
+                 "second copy of the same person")
     negative = ", ".join(p for p in (_ucp.get("prompt_negative", ""), _neg_base) if p)
 
     params: Dict[str, Any] = {

@@ -1,4 +1,5 @@
 name: cat
+being: animal   # species prompt noun for scene composition
 version: "1.0.0"
 description: Cat species — feline body slots, minimal clothing topology and its own silhouette
 
