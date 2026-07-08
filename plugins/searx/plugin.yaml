@@ -1,6 +1,9 @@
 name: searx
-version: "1.0.0"
+version: "1.1.0"
 description: Web search via self-hosted SearX meta search engine
-skill_id: searx
-tool_name: WebSearch
 env_prefix: "SKILL_SEARX_"
+skills:
+  - skill_id: searx
+    search_intent: true   # search-forcing hint targets this tool
+templates:
+  llm: templates/llm

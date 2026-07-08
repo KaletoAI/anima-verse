@@ -87,6 +87,7 @@ class ImageGenerationSkill(BaseSkill):
         meta = load_skill_meta("image_generation")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
 
         # Letzter verwendeter enhanced_prompt (fuer Caller wie Instagram)
         self.last_enhanced_prompt: str = ""

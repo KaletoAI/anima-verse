@@ -27,6 +27,7 @@ _LABEL = {(0, -1): "north", (0, 1): "south", (1, 0): "east", (-1, 0): "west"}
 
 class MoveSkill(BaseSkill):
     """Bewegt den Agenten ein Tile in eine Himmelsrichtung (Grid-Nachbar)."""
+    SUPPRESS_IN_PERSON = True
 
     SKILL_ID = "move"
     ALWAYS_LOAD = True  # immer geladen, Aktivierung per Character

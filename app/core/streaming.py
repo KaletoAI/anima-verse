@@ -100,10 +100,12 @@ _SEARCH_INTENT_KEYWORDS_EN = [
 
 _SEARCH_INTENT_KEYWORDS = _SEARCH_INTENT_KEYWORDS_DE + _SEARCH_INTENT_KEYWORDS_EN
 
+# {tool} = the available SEARCH_INTENT-flagged tool (declared by the search
+# skill's manifest) — resolved at runtime, no tool name hardcoded here.
 _SEARCH_INTENT_HINT = (
     "\n\n[SYSTEM HINT: The user is asking about real-world events or current information. "
-    "You MUST use WebSearch to find this information. Do NOT answer from memory or make up facts. "
-    "Call WebSearch with a relevant search query BEFORE giving your response.]"
+    "You MUST use {tool} to find this information. Do NOT answer from memory or make up facts. "
+    "Call {tool} with a relevant search query BEFORE giving your response.]"
 )
 
 # ---------------------------------------------------------------------------
@@ -166,21 +168,36 @@ def _sendmessage_wants_attachment(tool_input: str) -> bool:
 _STREAM_END = object()
 
 
-# Tools that set state (no append behaviour) — on multiple calls within one
-# stream all calls would run in sequence and only the last one would stick.
-# We therefore keep only the last call per stream.
-_SINGLETON_TOOLS = frozenset({
-    "SetPose", "SetLocation",
-    "OutfitChange", "ChangeOutfit",
-})
+# Singleton tools set state (no append behaviour) — on multiple calls within
+# one stream all calls would run in sequence and only the last one would
+# stick. We therefore keep only the last call per stream. Which tools are
+# singletons is declared by the skills themselves (SINGLETON flag — class
+# attribute or plugin.yaml `singleton: true`), never by name here (F7/R1).
+def _singleton_tool_names() -> frozenset:
+    try:
+        from app.core.dependencies import get_skill_manager
+        return get_skill_manager().tool_names_with_flag("SINGLETON")
+    except Exception:
+        return frozenset()
+
+
+def _suppress_in_person_tool_names() -> frozenset:
+    """Tools declared SUPPRESS_IN_PERSON (movement verbs) — hidden while the
+    conversation partners share a room."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        return get_skill_manager().tool_names_with_flag("SUPPRESS_IN_PERSON")
+    except Exception:
+        return frozenset()
 
 
 def _dedupe_singleton_tools(matches: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
-    """Fuer Tools aus _SINGLETON_TOOLS: nur den letzten Call pro Tool-Name behalten.
+    """For SINGLETON-flagged tools: keep only the last call per tool name.
 
-    Reihenfolge der nicht-Singleton-Tools bleibt unangetastet — Singleton-Eintraege
-    werden auf ihre letzte Position verschoben.
+    Order of the non-singleton tools stays untouched — singleton entries
+    move to their last position.
     """
+    _SINGLETON_TOOLS = _singleton_tool_names()
     last_seen: Dict[str, int] = {}
     for i, (name, _) in enumerate(matches):
         if name in _SINGLETON_TOOLS:
@@ -368,32 +385,21 @@ class StreamingAgent:
         self.last_tool_response = ""
 
     # Mapping: Tool-Name → Action-Trigger-Beschreibung (fuer constrained Mode).
-    _TOOL_ACTION_HINTS = {
-        "TalkTo":           "Character speaks to someone present in the room",
-        "SendMessage":      "Character writes a remote text message to another character NOT in the same room (use this to proactively reach out). Text only — to send along a photo from this turn use JSON {\"to\": ..., \"message\": ..., \"attach_image\": true}; never write '[image attached]' as text",
-        "ChangeOutfit":     "Character changes/puts on/takes off clothes (e.g. gets dressed because not alone anymore)",
-        "OutfitCreation":   "Character creates a brand new outfit (when nothing fitting exists)",
-        "SetPose":          "Character changes what they're physically doing right now (free-text pose)",
-        "SetLocation":      "Character moves to a different room/location (e.g. flees, gives privacy)",
-        "ImageGenerator":   "Character takes a photo / makes an image",
-        "Instagram":        "Character posts to Instagram",
-        "InstagramComment": "Character comments on someone's Instagram post",
-        "InstagramReply":   "Character replies to a comment on their post",
-        "WebSearch":        "Character looks something up on the web",
-        "KnowledgeSearch":  "Character searches their own knowledge",
-        "KnowledgeExtract": "Character extracts/saves a fact from the conversation",
-        "DescribeRoom":     "Character looks around and describes what they see",
-        "VideoGenerator":   "Character records a short video",
-        "JoinParty":        "Character agrees to travel together with whoever invited them (leader = the inviter's name)",
-        "InviteToParty":    "Character invites the user or another present character to come along / travel together as a group",
-        "LeaveParty":       "Character splits off / no longer travels with the group",
-    }
-
     def _action_mapping_for_available_tools(self) -> str:
-        """Liste der Action→Tool-Hinweise nur fuer aktuell verfuegbare Tools."""
+        """Action→tool hint lines for the currently available tools.
+
+        Hints are declared by the skills themselves (skill meta frontmatter
+        `action_hint:`, exposed via the skill manager) — no tool names in
+        this code (F7/R1). Fallback: a generic trigger line."""
+        try:
+            from app.core.dependencies import get_skill_manager
+            sm = get_skill_manager()
+        except Exception:
+            sm = None
         lines = []
         for name in self.tools_dict.keys():
-            hint = self._TOOL_ACTION_HINTS.get(name, f"Character triggers {name}")
+            hint = (sm.get_action_hint(name) if sm else "") \
+                or f"Character triggers {name}"
             lines.append(f"  - {hint} → {name}")
         return "\n".join(lines) if lines else "  (no tools available)"
 
@@ -401,11 +407,26 @@ class StreamingAgent:
     # Search-intent detection (user input)
     # ------------------------------------------------------------------
 
+    def _search_intent_tool(self) -> str:
+        """Name of an available SEARCH_INTENT-flagged tool (or '')."""
+        try:
+            from app.core.dependencies import get_skill_manager
+            flagged = get_skill_manager().tool_names_with_flag("SEARCH_INTENT")
+        except Exception:
+            return ""
+        for name in self.tools_dict.keys():
+            if name in flagged:
+                return name
+        return ""
+
     def _detect_search_intent(self, user_input: str) -> bool:
-        """Prueft ob der User nach realen/aktuellen Informationen fragt."""
+        """Checks whether the user asks for real/current information.
+
+        Only fires when a SEARCH_INTENT-flagged tool (declared by the search
+        skill's manifest) is available — no tool names in this code."""
         if not user_input or not self.tools_dict:
             return False
-        if "WebSearch" not in self.tools_dict:
+        if not self._search_intent_tool():
             return False
         input_lower = user_input.lower()
         for kw in _SEARCH_INTENT_KEYWORDS:
@@ -487,7 +508,8 @@ class StreamingAgent:
         Phase 2: LLM-Call mit Tool-Ergebnissen + Original-Nachricht
         """
         _start = time.monotonic()
-        _search_hint = _SEARCH_INTENT_HINT if self._detect_search_intent(user_input) else ""
+        _search_hint = (_SEARCH_INTENT_HINT.format(tool=self._search_intent_tool())
+                        if self._detect_search_intent(user_input) else "")
 
         # Phase 1: LLM-Call mit Tool-Instruktionen
         state1 = _StreamState()
@@ -1096,7 +1118,7 @@ class StreamingAgent:
             # A: Wer in einem in-person-Gespräch gerade geantwortet hat, geht
             # nicht im selben Turn weg (Move/SetLocation aus der RP-Prosa). Teleport
             # (Spell) ist davon NICHT betroffen.
-            if self.suppress_move_in_conversation and tool_name in ("Move", "SetLocation"):
+            if self.suppress_move_in_conversation and tool_name in _suppress_in_person_tool_names():
                 logger.info("%s unterdrueckt — Antwort im selben in-person-Turn "
                             "(man geht nicht weg, waehrend man spricht)", tool_name)
                 continue

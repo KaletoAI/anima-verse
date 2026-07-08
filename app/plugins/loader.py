@@ -136,6 +136,10 @@ def _parse_skill_entries(meta: Dict[str, Any]) -> List[SkillEntry]:
             always_load=bool(d.get("always_load", plugin_always)),
             pair_with=(d.get("pair_with") or "").strip(),
             default_enabled=bool(d.get("default_enabled", False)),
+            singleton=bool(d.get("singleton", False)),
+            suppress_in_person=bool(d.get("suppress_in_person", False)),
+            cascade_brake=bool(d.get("cascade_brake", False)),
+            search_intent=bool(d.get("search_intent", False)),
         )
 
     skills_list = meta.get("skills")
@@ -299,6 +303,8 @@ def _apply_skill_meta(skill: PluginSkill, entry: SkillEntry) -> None:
             meta = load_skill_meta(entry.skill_id)
             skill.name = meta.get("name") or skill.name
             skill.description = meta.get("description") or skill.description
+            skill.action_hint = meta.get("action_hint", "") or getattr(
+                skill, "action_hint", "")
     except Exception as e:
         logger.debug("Skill meta for %s not applied: %s", entry.skill_id, e)
 
@@ -321,6 +327,16 @@ def load_plugin(pkg: Package) -> List[Tuple[str, PluginSkill]]:
                 skill.SKILL_ID = entry.skill_id
             if entry.always_load:
                 skill.ALWAYS_LOAD = True
+            # Tool metadata flags (F7) — manifest can only switch ON
+            # (class attributes remain the baseline).
+            if entry.singleton:
+                skill.SINGLETON = True
+            if entry.suppress_in_person:
+                skill.SUPPRESS_IN_PERSON = True
+            if entry.cascade_brake:
+                skill.CASCADE_BRAKE = True
+            if entry.search_intent:
+                skill.SEARCH_INTENT = True
             _apply_skill_meta(skill, entry)
             logger.info("Package skill loaded: %s/%s (skill_id=%s)",
                         pkg.id, entry.module, entry.skill_id)

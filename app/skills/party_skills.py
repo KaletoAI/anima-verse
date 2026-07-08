@@ -47,6 +47,7 @@ class PartySkill(BaseSkill):
         meta = load_skill_meta(self.SKILL_META) or {}
         self.name = meta.get("name") or self.__class__.__name__
         self.description = meta.get("description") or ""
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {"enabled": True}
 
     def execute(self, raw_input: str) -> str:

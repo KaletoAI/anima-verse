@@ -26,6 +26,7 @@ class TalkToSkill(BaseSkill):
     wird als Skill-Output zurueckgegeben — der anrufende Character
     sieht damit, wie reagiert wurde.
     """
+    CASCADE_BRAKE = True
 
     SKILL_ID = "talk_to"
 
@@ -35,6 +36,7 @@ class TalkToSkill(BaseSkill):
         meta = load_skill_meta("talk_to")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {"enabled": True}
         logger.info("TalkTo Skill initialized")
 

@@ -27,6 +27,7 @@ class InstagramCommentSkill(BaseSkill):
         meta = load_skill_meta("instagram_comment")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {"enabled": True, "auto_like": True}
         logger.info("InstagramComment Skill initialized")
 

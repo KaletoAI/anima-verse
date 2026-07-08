@@ -249,6 +249,17 @@ class SkillManager:
                 return skill
         return None
 
+    def tool_names_with_flag(self, flag: str) -> frozenset:
+        """Tool names of loaded skills with a truthy metadata flag (F7) —
+        e.g. SINGLETON, SUPPRESS_IN_PERSON, CASCADE_BRAKE, SEARCH_INTENT.
+        The generic replacement for hardcoded tool-name lists in the core."""
+        return frozenset(s.name for s in self.skills if getattr(s, flag, False))
+
+    def get_action_hint(self, tool_name: str) -> str:
+        """Declared action hint of a tool (skill meta frontmatter `action_hint:`)."""
+        skill = self.get_skill_by_name(tool_name)
+        return getattr(skill, "action_hint", "") if skill else ""
+
     def get_skill_info(self) -> List[Dict[str, Any]]:
         return [
             {

@@ -38,6 +38,11 @@ class SkillEntry:
     always_load: bool = False     # load always, activation per character
     pair_with: str = ""           # UI hint: render as one paired toggle
     default_enabled: bool = False  # enabled by default for new characters
+    # Tool metadata flags (F7) — stamped onto the instance by the loader:
+    singleton: bool = False           # only the last call per stream sticks
+    suppress_in_person: bool = False  # hidden while partners share a room
+    cascade_brake: bool = False       # reply_only_to gate for messaging cascades
+    search_intent: bool = False       # search-forcing hint targets this tool
 
 
 @dataclass

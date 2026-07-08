@@ -61,6 +61,7 @@ class InstagramSkill(BaseSkill):
         meta = load_skill_meta("instagram")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
 
         self._defaults = {
             "enabled": True,

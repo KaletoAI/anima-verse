@@ -24,13 +24,23 @@ logger = get_logger("thought")
 _thought_runner: Optional["ThoughtRunner"] = None
 
 
-def _check_cascade_brake(tool_input, allowed_target: str) -> str:
-    """Cascade-Brake-Helper: extrahiert das Target aus SendMessage/TalkTo-Input
-    und prueft gegen allowed_target.
+def _cascade_brake_tool_names() -> frozenset:
+    """Messaging verbs declared CASCADE_BRAKE by their skills (F7) — the
+    reply_only_to gate applies to these, no tool names hardcoded here."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        return get_skill_manager().tool_names_with_flag("CASCADE_BRAKE")
+    except Exception:
+        return frozenset()
 
-    SendMessage/TalkTo-Input ist "TargetName, message" oder JSON. Wenn das
-    Target NICHT der allowed_target ist, return das Target (= Block-Reason).
-    Sonst leerer String (= Pass).
+
+def _check_cascade_brake(tool_input, allowed_target: str) -> str:
+    """Cascade-brake helper: extracts the target from a messaging-verb input
+    and checks it against allowed_target.
+
+    The input is "TargetName, message" or JSON. If the target is NOT the
+    allowed_target, return the target (= block reason). Otherwise an empty
+    string (= pass).
     """
     raw = (tool_input or "").strip() if isinstance(tool_input, str) else str(tool_input or "")
     target = ""
@@ -416,11 +426,12 @@ class ThoughtRunner:
             # nur Action-Mapping fuer die tatsaechlich erlaubten Tools.
             constrained_tools=bool(tool_whitelist))
 
-        # Tool-Executor (synchrone Ausfuehrung in Thread).
-        # Cascade-Brake: bei reply_only_to wird SendMessage/TalkTo an andere
-        # Empfaenger geblockt — der Reply-Thought darf nur an den Sender zurueck.
+        # Tool executor (synchronous execution in a thread).
+        # Cascade brake: with reply_only_to, messaging verbs to OTHER
+        # recipients are blocked — the reply thought may only answer the
+        # sender. Which verbs count is declared by the skills (CASCADE_BRAKE).
         async def _tool_executor(tool_name, tool_input):
-            if reply_only_to and tool_name in ("SendMessage", "TalkTo"):
+            if reply_only_to and tool_name in _cascade_brake_tool_names():
                 _blocked = _check_cascade_brake(tool_input, reply_only_to)
                 if _blocked:
                     logger.info("Cascade-Brake: %s.%s an %s blockiert (reply_only_to=%s)",
@@ -487,8 +498,8 @@ class ThoughtRunner:
         _thought_state = {"task_id": _thought_task_id}
 
         async def _tool_executor_queued(tool_name, tool_input):
-            # Cascade-Brake (siehe sibling _tool_executor)
-            if reply_only_to and tool_name in ("SendMessage", "TalkTo"):
+            # Cascade brake (see sibling _tool_executor)
+            if reply_only_to and tool_name in _cascade_brake_tool_names():
                 _blocked = _check_cascade_brake(tool_input, reply_only_to)
                 if _blocked:
                     logger.info("Cascade-Brake: %s.%s an %s blockiert (reply_only_to=%s)",

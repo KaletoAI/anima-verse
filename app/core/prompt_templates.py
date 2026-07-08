@@ -184,7 +184,11 @@ def load_skill_meta(skill_file: str) -> Dict[str, str]:
             f"Skill template {template_name} missing `name:` in frontmatter"
         )
     description = body.strip()
-    meta = {"name": name, "description": description}
+    # All frontmatter keys pass through (e.g. `action_hint:` for the
+    # constrained-mode tool prompt) — name/description keep priority.
+    meta = dict(front)
+    meta["name"] = name
+    meta["description"] = description
     _skill_meta_cache[skill_file] = meta
     return meta
 

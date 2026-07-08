@@ -94,6 +94,10 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `skills[].always_load` | nein | Immer laden, Aktivierung per Character (auch top-level erlaubt) |
 | `skills[].pair_with` | nein | Skill-ID des Partner-Verbs (UI rendert einen gekoppelten Schalter) |
 | `skills[].default_enabled` | nein | Neue Charaktere bekommen den Skill aktiviert |
+| `skills[].singleton` | nein | State-setzendes Tool: nur der LETZTE Call pro Stream zählt (Dedupe) |
+| `skills[].suppress_in_person` | nein | Verb wird unterdrückt, solange die Gesprächspartner im selben Raum sind (Bewegungs-Verben) |
+| `skills[].cascade_brake` | nein | reply_only_to-Gate für Messaging-Kaskaden greift auf dieses Verb |
+| `skills[].search_intent` | nein | Der Search-Forcing-Hint (User fragt nach realen Infos) zielt auf dieses Tool |
 | `templates.llm` | nein | Ordner relativ zum Paket; gleiche Struktur wie `shared/templates/llm/` |
 | `templates.character` | nein | Liste von Fragment-JSONs (siehe unten) |
 | `config_schema` | nein | Subsections für `/admin/settings → Skills` |
@@ -106,7 +110,10 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 `shared/templates/llm/` hat Vorrang). `skills/<skill_id>.md` liefert Tool-Name +
 Beschreibung im bekannten Format (Frontmatter `name:`, Body = Description) und wird
 vom Loader automatisch auf die Skill-Instanz angewandt — die Klasse muss
-`name`/`description` nicht selbst setzen.
+`name`/`description` nicht selbst setzen. Weitere Frontmatter-Keys werden
+durchgereicht: `action_hint:` ist die kurze „Character does X"-Zeile für den
+Constrained-Tool-Prompt (Fallback ohne Deklaration: generische Trigger-Zeile).
+Leerer Body = die Beschreibung der Klasse/Config bleibt erhalten.
 
 ### Character-Template-Fragmente
 

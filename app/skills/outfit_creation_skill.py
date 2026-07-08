@@ -63,6 +63,7 @@ class OutfitCreationSkill(BaseSkill):
         meta = load_skill_meta("outfit_creation")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {
             "enabled": True,
             "outfit_language": os.environ.get('SKILL_OUTFIT_CREATION_LANGUAGE', 'en'),

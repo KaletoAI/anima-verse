@@ -56,6 +56,7 @@ class DescribeRoomSkill(BaseSkill):
         meta = load_skill_meta("describe_room")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {
             "enabled": True,
             "max_custom_rooms": int(os.environ.get("SKILL_DESCRIBEROOM_MAX_ROOMS", "3")),

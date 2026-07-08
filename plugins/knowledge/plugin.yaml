@@ -1,12 +1,15 @@
 name: knowledge
-version: "1.0.0"
+version: "1.1.0"
 description: File knowledge extraction (LLM-based) and search over extracted memories
 always_load: true
 env_prefix: "SKILL_KNOWLEDGE_"
 
-# Mehrere Skills in einem Plugin — jedes Modul wird separat geladen
+# Multiple skills in one package — each module is loaded separately
 skills:
   - skill_id: knowledge_extract
     module: skill_extract.py
   - skill_id: knowledge_search
     module: skill_search.py
+
+templates:
+  llm: templates/llm

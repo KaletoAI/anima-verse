@@ -27,6 +27,7 @@ class InstagramReplySkill(BaseSkill):
         meta = load_skill_meta("instagram_reply")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {"enabled": True}
         logger.info("InstagramReply Skill initialized")
 

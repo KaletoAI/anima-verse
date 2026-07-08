@@ -30,6 +30,7 @@ logger = get_logger("outfit_change")
 
 class OutfitChangeSkill(BaseSkill):
     """Wechselt zwischen Pieces im Inventar — keine Erfindungen."""
+    SINGLETON = True
 
     SKILL_ID = "outfit_change"
     ALWAYS_LOAD = True
@@ -40,6 +41,7 @@ class OutfitChangeSkill(BaseSkill):
         meta = load_skill_meta("outfit_change")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {"enabled": True}
         logger.info("ChangeOutfit Skill initialized (swap-only)")
 

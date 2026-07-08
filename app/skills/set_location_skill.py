@@ -36,6 +36,8 @@ class SetLocationSkill(BaseSkill):
     Der Skill validiert den Ort gegen die definierten World-Locations und
     setzt automatisch einen passenden Raum und eine Aktivitaet.
     """
+    SUPPRESS_IN_PERSON = True
+    SINGLETON = True
 
     SKILL_ID = "setlocation"
 
@@ -46,6 +48,7 @@ class SetLocationSkill(BaseSkill):
         meta = load_skill_meta("set_location")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {}
 
     def execute(self, raw_input: str) -> str:
@@ -503,6 +506,7 @@ class CancelTravelSkill(BaseSkill):
         meta = load_skill_meta("cancel_travel") or {}
         self.name = meta.get("name") or "CancelTravel"
         self.description = meta.get("description") or ""
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {"enabled": True}
 
     def execute(self, raw_input: str) -> str:

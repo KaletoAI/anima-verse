@@ -34,16 +34,26 @@ class BaseSkill(ABC):
     storage/users/{user}/agents/{agent}/skills/{SKILL_ID}.json geladen.
     """
 
-    SKILL_ID = ""  # Subklasse muss definieren
-    ALWAYS_LOAD = False  # True = Skill wird immer geladen, Aktivierung nur per Character
-    DEFERRED = False  # True = Tool-Intent wird erkannt aber erst nach Chat-Antwort ausgefuehrt
-    CONTENT_TOOL = False  # True = Ergebnis muss ins RP einfliessen (Retry im rp_first Modus)
+    SKILL_ID = ""  # subclass must define
+    ALWAYS_LOAD = False  # True = skill always loaded, activation per character
+    DEFERRED = False  # True = tool intent detected but executed after the chat reply
+    CONTENT_TOOL = False  # True = result must flow into the RP (retry in rp_first mode)
+    # Declarative tool metadata (F7) — read generically by the core, never
+    # by skill name. Packages set them via plugin.yaml, built-ins as class
+    # attributes / from their skills/<id>.md frontmatter:
+    SINGLETON = False           # state-setting tool: only the LAST call per stream sticks
+    SUPPRESS_IN_PERSON = False  # hidden while the conversation partners share a room
+    CASCADE_BRAKE = False       # reply_only_to gate for messaging cascades
+    SEARCH_INTENT = False       # search-forcing hint targets this tool
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.enabled = config.get('enabled', True)
         self.name = self.__class__.__name__
         self.description = ""
+        # Short "Character does X" line for the constrained-mode tool prompt
+        # (frontmatter `action_hint:` in the skill meta template).
+        self.action_hint = ""
         self._defaults: Dict[str, Any] = {}
 
     @abstractmethod

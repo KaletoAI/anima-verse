@@ -27,6 +27,7 @@ class SendMessageSkill(BaseSkill):
     Independent of location. The target LLM replies via the central chat
     engine with medium="messaging". The result is returned as skill output.
     """
+    CASCADE_BRAKE = True
 
     SKILL_ID = "send_message"
 
@@ -36,6 +37,7 @@ class SendMessageSkill(BaseSkill):
         meta = load_skill_meta("send_message")
         self.name = meta["name"]
         self.description = meta["description"]
+        self.action_hint = meta.get("action_hint", "")
         self._defaults = {"enabled": True}
         logger.info("SendMessage Skill initialized")
 
