@@ -151,9 +151,8 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     """Parse one manifest into a Package (contributions resolved, no skills instantiated)."""
     pkg = Package(id=entry_dir.name, dir=entry_dir, manifest=meta)
     pkg.skills = _parse_skill_entries(meta)
-    if not meta.get("name") or not pkg.skills:
-        logger.warning("Package %s: name and skill_id/skills missing in plugin.yaml",
-                       entry_dir.name)
+    if not meta.get("name"):
+        logger.warning("Package %s: name missing in plugin.yaml", entry_dir.name)
         return None
 
     tmpl = meta.get("templates") or {}
@@ -191,6 +190,16 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
             ttl_minutes=int(fdef.get("ttl_minutes") or 0),
             reset_on_location_change=bool(fdef.get("reset_on_location_change", False)),
         ))
+
+    # Content-only packages (no verbs) are allowed as long as they contribute
+    # SOMETHING (templates, fragments, config, flags). Contributions apply as
+    # soon as the package sits in the filesystem; the enabled gate only
+    # governs verb loading.
+    if not pkg.skills and not (pkg.llm_template_dir or pkg.character_fragments
+                               or pkg.config_subsections or pkg.flags):
+        logger.warning("Package %s: neither skills nor contributions in plugin.yaml",
+                       entry_dir.name)
+        return None
 
     return pkg
 

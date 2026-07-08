@@ -84,7 +84,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | Feld | Pflicht | Beschreibung |
 |---|---|---|
 | `name` | ja | Eindeutiger Paketname |
-| `skills` / `skill_id` | ja | Listenform oder Single-Skill-Kurzform |
+| `skills` / `skill_id` | nein* | Listenform oder Single-Skill-Kurzform. *Ein Paket ohne Verben („Content-Pack") ist erlaubt, solange es mindestens einen Beitrag liefert (Templates/Fragmente/Config/Flags). Beiträge gelten, sobald das Paket im Dateisystem liegt — das enabled-Gate betrifft nur Verben |
 | `skills[].class` | nein | Explizite Klasse (nötig bei mehreren Klassen pro Modul) |
 | `skills[].params` | nein | Konstruktor-Kwargs — EINE Klasse kann mehrere Verben bedienen |
 | `skills[].always_load` | nein | Immer laden, Aktivierung per Character (auch top-level erlaubt) |
