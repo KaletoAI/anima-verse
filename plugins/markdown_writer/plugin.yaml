@@ -1,0 +1,19 @@
+name: markdown_writer
+version: "1.0.0"
+description: Characters write markdown files (diary, notes, guides) into their own directory
+
+skills:
+  - skill_id: markdown_writer
+    always_load: true
+
+templates:
+  llm: templates/llm
+
+config_schema:
+  markdown_writer:
+    label: Markdown Writer
+    fields:
+      folders: {type: str, label: "Folders (comma-separated)", default: "diary,notes,guides"}
+      default_folder: {type: str, label: "Default folder", default: "diary"}
+      max_size_kb: {type: int, label: "Max size (KB)", default: 512, min: 1}
+      max_files: {type: int, label: "Max files", default: 50, min: 1}

@@ -382,7 +382,6 @@ class StreamingAgent:
         "WebSearch":        "Character looks something up on the web",
         "KnowledgeSearch":  "Character searches their own knowledge",
         "KnowledgeExtract": "Character extracts/saves a fact from the conversation",
-        "ConsumeItem":      "Character drinks/eats/applies one item from their inventory",
         "DescribeRoom":     "Character looks around and describes what they see",
         "VideoGenerator":   "Character records a short video",
         "JoinParty":        "Character agrees to travel together with whoever invited them (leader = the inviter's name)",

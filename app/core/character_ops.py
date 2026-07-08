@@ -31,7 +31,7 @@ DEFAULT_NEW_CHARACTER_SKILLS = (
     # and not every NPC needs them).
     "imagegen", "setlocation", "talk_to", "send_message", "notify_user",
     "instagram_comment", "instagram_reply",
-    "consume_item", "outfit_change",
+    "outfit_change",
     "invite_to_party", "join_party", "leave_party",
 )
 

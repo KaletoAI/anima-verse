@@ -570,15 +570,6 @@ SECTIONS = {
                     "cooldown_minutes": {"type": "int", "label": "Outfit cooldown (min)", "default": 120, "min": 0, "max": 1440, "description": "Minutes until an LLM-driven outfit change at the same location is possible again. 0 = no cooldown. Does not apply on location change or user request."},
                 },
             },
-            "markdown_writer": {
-                "label": "Markdown Writer",
-                "fields": {
-                    "folders": {"type": "str", "label": "Folders (comma-separated)", "default": "diary,notes,guides"},
-                    "default_folder": {"type": "str", "label": "Default folder", "default": "diary"},
-                    "max_size_kb": {"type": "int", "label": "Max size (KB)", "default": 512, "min": 1},
-                    "max_files": {"type": "int", "label": "Max files", "default": 50, "min": 1},
-                },
-            },
         },
     },
     "knowledge": {

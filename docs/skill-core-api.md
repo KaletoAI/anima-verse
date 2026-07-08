@@ -63,9 +63,15 @@ intimacy-Paket). Der Core kennt keinen Stat-Namen.
 | `extract_romantic_interests()` | LLM-Extraktion in die Char-Config |
 | `interest_aliases`-Feld-Property | Attraction-Matching liest Alias-Blöcke aus Template-Feldern — vollständig template-getrieben, Pakete können Felder mit Aliases beisteuern |
 
-## Inventar — `app.models.inventory` ⚠
+## Inventar — `app.models.inventory` ✅ (consume_item-Paket) / ⚠ (Rest)
 
-`resolve_item_id`, `get_item`, `has_item`, `consume_item`, `equip_piece`/`unequip_piece`,
+Vom **consume_item-Paket** genutzt und stabil: `resolve_item_id` (Token→Item-ID),
+`get_item`, `has_item`, `consume_item` (Konsum-Pipeline: qty-Decrement + effects +
+apply_condition; liefert `{success, changes, condition_applied}`). Die Model-Funktion
+`consume_item` ist Core-Vokabular — Routen (`play.py`, `inventory.py`) rufen sie direkt,
+kein Skill-Bezug.
+
+Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
 `equip_item`/`unequip_item`, `add_item`, `add_to_inventory`,
 `find_inventory_piece_by_name_slot`, `VALID_PIECE_SLOTS`.
 
@@ -84,6 +90,7 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 | `get_character_profile(name)` / `save_character_profile(name, prof)` | Profil inkl. Runtime-State (character_state) und Meta-Keys; bei Neuanlage `create_new=True` Pflicht |
 | `save_character_current_location(name, loc)` | ZENTRALE Bewegung — löst Entry-Room, Compliance, Party-Drag, Flag-Location-Resets, Discovery aus. Nie umgehen |
 | `get_character_skill_config` / per-Char-Config | über `BaseSkill._get_effective_config` (Defaults + Overrides, typisiert) |
+| `get_character_dir(name)` ✅ | Per-Charakter-Storage-Verzeichnis — für Pakete, die eigene Dateien pro Charakter persistieren (Beispiel: markdown_writer schreibt nach `<dir>/documents/<folder>/`) |
 
 ## Wahrnehmung & Loop ⚠
 
@@ -100,4 +107,5 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 |---|---|
 | `app.core.llm_router.llm_call(task=…, system_prompt=…, user_prompt=…, agent_name=…)` | IMMER über die Provider-Queue — nie direkt zum Provider |
 | `app.core.prompt_templates.render_task/render` | Jinja-Templates; Paket-Templates liegen im Suchpfad |
-| `PluginContext`: `ctx.get_config(path)`, `ctx.http`, `ctx.logger` | Welt-Config (Dot-Pfad), HTTP, Logging |
+| `app.core.tool_formats.format_example(fmt, tool_name, example_json)` ✅ | Baut ein Tool-Nutzungs-Beispiel im aktiven Tool-Format (für `get_usage_instructions`-Override) |
+| `PluginContext`: `ctx.get_config(path, default)`, `ctx.http`, `ctx.logger` | Welt-Config (Dot-Pfad; Beispiel `skills.markdown_writer.max_size_kb` seedet Per-Character-`_defaults`), HTTP, Logging |

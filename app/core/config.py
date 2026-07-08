@@ -851,14 +851,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_OUTFIT_CHANGE_MAX_OUTFITS", oc.get("max_outfits", 10))
     _set(env, "OUTFIT_CHANGE_COOLDOWN_MINUTES", oc.get("cooldown_minutes", 120))
 
-    mw = skills.get("markdown_writer", {})
-    _set(env, "SKILL_MARKDOWN_WRITER_NAME", mw.get("name", "WriteMarkdown"))
-    _set(env, "SKILL_MARKDOWN_WRITER_DESCRIPTION", mw.get("description", ""))
-    _set(env, "SKILL_MARKDOWN_WRITER_FOLDERS", mw.get("folders", "diary,notes,guides"))
-    _set(env, "SKILL_MARKDOWN_WRITER_DEFAULT_FOLDER", mw.get("default_folder", "diary"))
-    _set(env, "SKILL_MARKDOWN_WRITER_MAX_SIZE_KB", mw.get("max_size_kb", 512))
-    _set(env, "SKILL_MARKDOWN_WRITER_MAX_FILES", mw.get("max_files", 50))
-
     # Knowledge
     kn = config.get("knowledge", {})
     _set(env, "KNOWLEDGE_MAX_PROMPT_ENTRIES", kn.get("max_prompt_entries", 20))

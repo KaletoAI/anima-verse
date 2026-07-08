@@ -17,11 +17,9 @@ from .notify_user_skill import NotifyUserSkill
 from .instagram_comment_skill import InstagramCommentSkill
 from .instagram_reply_skill import InstagramReplySkill
 from .describe_room_skill import DescribeRoomSkill
-from .consume_item_skill import ConsumeItemSkill
 from .outfit_change_skill import OutfitChangeSkill
 from .outfit_creation_skill import OutfitCreationSkill
 from .video_generation_skill import VideoGenerationSkill
-from .markdown_writer_skill import MarkdownWriterSkill
 from .retrospect_skill import RetrospectSkill
 from .state_flag_skills import SleepWakeSkill, SetPoseSkill
 from .party_skills import PartySkill
@@ -64,11 +62,9 @@ class SkillManager:
         'instagram_comment': InstagramCommentSkill,
         'instagram_reply': InstagramReplySkill,
         'describe_room': DescribeRoomSkill,
-        'consume_item': ConsumeItemSkill,
         'outfit_change': OutfitChangeSkill,
         'outfit_creation': OutfitCreationSkill,
         'videogen': VideoGenerationSkill,
-        'markdown_writer': MarkdownWriterSkill,
         'retrospect': RetrospectSkill,
         # State-flag skills — one class per opposite pair, two verbs (via
         # _Verb). Wet/intimacy/decency migrated to packages under plugins/

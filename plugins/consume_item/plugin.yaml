@@ -1,0 +1,11 @@
+name: consume_item
+version: "1.0.0"
+description: Consume an item from the character's own inventory (effects, conditions)
+
+skills:
+  - skill_id: consume_item
+    always_load: true
+    default_enabled: true
+
+templates:
+  llm: templates/llm
