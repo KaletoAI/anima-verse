@@ -1,0 +1,87 @@
+name: human
+version: "1.0.0"
+description: Human species — anatomy body slots, clothing-slot topology and the UI silhouette
+
+# Species content applies to the human character templates (incl. the
+# local-only NSFW marker so those worlds get the slots too).
+apply_to: ["human-default", "human-roleplay", "human-roleplay-nsfw"]
+
+silhouette:
+  asset: assets/silhouette.svg
+  # Slot marker positions (x%, y%) in the image coordinate system.
+  anchors:
+    head: [50, 6]
+    neck: [50, 19]
+    outer: [33, 40]
+    top: [50, 33]
+    underwear_top: [66, 33]
+    bottom: [50, 55]
+    underwear_bottom: [66, 55]
+    legs: [50, 73]
+    feet: [50, 92]
+
+# Full human clothing topology (display order) — replaces the core default.
+piece_slots:
+  - {id: head, label: Head}
+  - {id: neck, label: Neck}
+  - {id: outer, label: "Coat & jacket"}
+  - {id: top, label: Top}
+  - {id: underwear_top, label: "Underwear top"}
+  - {id: bottom, label: Bottom}
+  - {id: underwear_bottom, label: "Underwear bottom"}
+  - {id: legs, label: Legs}
+  - {id: feet, label: Feet}
+
+# SFW human anatomy. Attribute options mirror today's template selects
+# (values migrate per world on demand — plan-body-slots.md). NSFW anatomy
+# is a SEPARATE pack (anima-verse-packs, requires: [human]).
+body_slots:
+  - id: hair
+    attributes:
+      color:
+        type: select
+        allow_custom: true
+        options: [blonde, brunette, black, red, auburn, gray, white, pink]
+      length:
+        type: select
+        allow_custom: true
+        options: [very short, short, medium, long, very long]
+    prompt:
+      always: "{length} {color} hair"
+  - id: eyes
+    attributes:
+      color:
+        type: select
+        allow_custom: true
+        options: [blue, green, brown, hazel, gray, amber]
+    prompt:
+      always: "{color} eyes"
+  - id: skin
+    attributes:
+      tone:
+        type: select
+        allow_custom: true
+        options: [fair, light, medium, olive, tan, brown, dark brown, dark, pale]
+    prompt:
+      always: "{tone} skin"
+  - id: build
+    attributes:
+      height:
+        type: select
+        allow_custom: true
+        options: [petite, short, average height, tall, giant]
+      type:
+        type: select
+        allow_custom: true
+        options: [petite, slim, average, athletic, curvy, muscular, stocky, voluptuous]
+    prompt:
+      always: "{height}, {type} build"
+  - id: facial_hair
+    applies_to: {gender: [male]}
+    attributes:
+      style:
+        type: select
+        allow_custom: true
+        options: [clean-shaven, light stubble, short beard, full beard, mustache]
+    prompt:
+      always: "{style}"
