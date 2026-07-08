@@ -1390,10 +1390,9 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
     from app.models.character import get_character_skill_config
     skill_manager = get_skill_manager()
     try:
-        from app.plugins.registry import skill_pairs
-        _pairs = skill_pairs()
+        from app.plugins.registry import package_of_skill
     except Exception:
-        _pairs = {}
+        package_of_skill = None
     skills = []
     for skill in skill_manager.skills:
         skill_id = skill.SKILL_ID
@@ -1415,14 +1414,24 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
                 else:
                     field_info["value"] = field_info["default"]
 
+        _cap_pkg = None
+        if package_of_skill is not None:
+            try:
+                _p = package_of_skill(skill_id)
+                if _p is not None and _p.capability_label:
+                    _cap_pkg = _p
+            except Exception:
+                pass
         skills.append({
             "skill_id": skill_id,
             "name": skill.name,
             "description": skill.description,
             "enabled": enabled,
-            # Package-declared verb pair (plugin.yaml pair_with) — the UI
-            # renders one coupled toggle for both verbs.
-            "pair_with": _pairs.get(skill_id, ""),
+            # Capability group (plugin.yaml capability_label): the UI
+            # renders ONE toggle for all verbs of the package — e.g.
+            # 'Party' for invite/join/leave.
+            "capability_id": _cap_pkg.id if _cap_pkg else "",
+            "capability_label": _cap_pkg.capability_label if _cap_pkg else "",
             # F9 dependencies: non-empty = enabling is blocked (UI disables
             # the toggle and shows why); the PUT route enforces it too.
             "blocked_reason": skill_dependency_block(character_name, skill_id),

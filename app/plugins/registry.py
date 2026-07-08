@@ -36,7 +36,6 @@ class SkillEntry:
     class_name: str = ""          # empty = first PluginSkill subclass in module
     params: Dict[str, Any] = field(default_factory=dict)  # constructor kwargs
     always_load: bool = False     # load always, activation per character
-    pair_with: str = ""           # UI hint: render as one paired toggle
     default_enabled: bool = False  # enabled by default for new characters
     # Tool metadata flags (F7) — stamped onto the instance by the loader:
     singleton: bool = False           # only the last call per stream sticks
@@ -107,7 +106,8 @@ class Package:
     silhouette: Dict[str, Any] = field(default_factory=dict)  # {"asset": relpath, "anchors": {slot: [x,y]}, ...}
     body_slots: List[BodySlotSpec] = field(default_factory=list)
     piece_slots: List[str] = field(default_factory=list)      # clothing-slot topology; empty = core default
-    piece_slot_labels: Dict[str, str] = field(default_factory=dict)  # optional UI labels per slot
+    piece_slot_labels: Dict[str, str] = field(default_factory=dict)
+    capability_label: str = ""   # one UI toggle for ALL verbs of the package  # optional UI labels per slot
     # Package dependencies (F9): ids of other packages.
     # requires — must be PRESENT for this package to load at all, and ACTIVE
     #            on a character before this package's skills can be enabled.
@@ -183,13 +183,3 @@ def package_of_skill(skill_id: str) -> Optional[Package]:
     return None
 
 
-def skill_pairs() -> Dict[str, str]:
-    """Map primary skill_id -> paired skill_id, declared direction only
-    (the declaring verb is the pair's primary; the partner is rendered as
-    part of the primary's coupled toggle in the skills UI)."""
-    pairs: Dict[str, str] = {}
-    for p in packages():
-        for s in p.skills:
-            if s.pair_with:
-                pairs[s.skill_id] = s.pair_with
-    return pairs

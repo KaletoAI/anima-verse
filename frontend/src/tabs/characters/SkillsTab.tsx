@@ -29,7 +29,10 @@ interface SkillInfo {
   name: string
   description?: string
   enabled: boolean
-  pair_with?: string
+  // Capability group (plugin.yaml capability_label): all verbs of the
+  // package render as ONE toggle — e.g. "Party" for invite/join/leave.
+  capability_id?: string
+  capability_label?: string
   // Package dependency block (requires/conflicts) — non-empty = the toggle
   // is disabled while the skill is off; the backend refuses enabling too.
   blocked_reason?: string
@@ -38,16 +41,6 @@ interface SkillInfo {
 interface LocationOpt {
   id: string
   name: string
-}
-
-// Opposite pairs: ONE coupled switch in the UI instead of two (otherwise
-// e.g. Sleep could be enabled without WakeUp — illogical). The LLM still
-// sees both verbs; only the per-character enable is switched together.
-// Skill packages declare their pairs themselves (plugin.yaml pair_with,
-// delivered as `pair_with` by the API); this constant only covers the
-// remaining unmigrated built-in pair.
-const BUILTIN_PAIRS: Record<string, { partner: string; label?: string }> = {
-  sleep: { partner: 'wakeup', label: 'Sleep / Wake up' },
 }
 
 export function SkillsTab({ character }: { character: string }) {
@@ -99,20 +92,21 @@ export function SkillsTab({ character }: { character: string }) {
     [character, t, toast],
   )
 
-  // Gekoppeltes Paar: beide Verben gemeinsam an/aus (optimistisch + beide PUTs).
-  const togglePair = useCallback(
-    async (primaryId: string, partnerId: string, enabled: boolean) => {
+  // Capability group: all verbs of the package on/off together
+  // (optimistic + one PUT per member).
+  const toggleGroup = useCallback(
+    async (memberIds: string[], enabled: boolean) => {
+      const members = new Set(memberIds)
       setSkills((prev) =>
-        prev.map((s) =>
-          s.skill_id === primaryId || s.skill_id === partnerId ? { ...s, enabled } : s,
-        ),
+        prev.map((s) => (members.has(s.skill_id) ? { ...s, enabled } : s)),
       )
       try {
         const base = `/characters/${encodeURIComponent(character)}/skills`
-        await Promise.all([
-          apiPut(`${base}/${encodeURIComponent(primaryId)}/enabled`, { enabled }),
-          apiPut(`${base}/${encodeURIComponent(partnerId)}/enabled`, { enabled }),
-        ])
+        await Promise.all(
+          memberIds.map((id) =>
+            apiPut(`${base}/${encodeURIComponent(id)}/enabled`, { enabled }),
+          ),
+        )
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
         reload()
@@ -160,35 +154,37 @@ export function SkillsTab({ character }: { character: string }) {
     return <div className="ga-placeholder">{t('No skills available.')}</div>
   }
 
-  // Pair map: package-declared pairs (pair_with from the API) + the
-  // remaining built-in pair. Secondary verbs are hidden from the list.
-  const pairMap: Record<string, { partner: string; label?: string }> = { ...BUILTIN_PAIRS }
+  // Capability groups (capability_label from the API): all verbs of a
+  // package render as ONE entry, named after the capability. The first
+  // member is the representative (selection, config fields); the other
+  // members are hidden from the list and toggled along.
+  const groupMembers: Record<string, SkillInfo[]> = {}
   for (const s of skills) {
-    if (s.pair_with && !pairMap[s.skill_id]) pairMap[s.skill_id] = { partner: s.pair_with }
+    if (s.capability_id) (groupMembers[s.capability_id] ||= []).push(s)
   }
-  const pairSecondary = new Set(Object.values(pairMap).map((p) => p.partner))
-  const byId = new Map(skills.map((s) => [s.skill_id, s]))
+  const secondary = new Set<string>()
+  for (const members of Object.values(groupMembers)) {
+    for (const m of members.slice(1)) secondary.add(m.skill_id)
+  }
 
-  const visible = skills.filter((s) => !pairSecondary.has(s.skill_id))
+  const visible = skills.filter((s) => !secondary.has(s.skill_id))
   const current = visible.find((s) => s.skill_id === selected) || visible[0]
-  const nameOf = (s: SkillInfo) => {
-    const pair = pairMap[s.skill_id]
-    if (!pair) return s.name || s.skill_id
-    if (pair.label) return t(pair.label)
-    const partner = byId.get(pair.partner)
-    return `${s.name || s.skill_id} / ${partner?.name || pair.partner}`
-  }
+  const membersOf = (s: SkillInfo): SkillInfo[] =>
+    s.capability_id ? groupMembers[s.capability_id] || [s] : [s]
+  const nameOf = (s: SkillInfo) =>
+    s.capability_id ? (s.capability_label || s.name) : (s.name || s.skill_id)
+  const groupEnabled = (s: SkillInfo) => membersOf(s).every((m) => m.enabled)
+  const groupBlocked = (s: SkillInfo) =>
+    membersOf(s).map((m) => m.blocked_reason).find(Boolean) || ''
   const onToggle = (s: SkillInfo, checked: boolean) => {
-    const pair = pairMap[s.skill_id]
-    return pair ? togglePair(s.skill_id, pair.partner, checked) : toggleEnabled(s, checked)
+    const members = membersOf(s)
+    return members.length > 1
+      ? toggleGroup(members.map((m) => m.skill_id), checked)
+      : toggleEnabled(s, checked)
   }
 
   const fields = current?.config_fields ? Object.entries(current.config_fields) : []
-  const idHint = current
-    ? (pairMap[current.skill_id]
-        ? `${current.skill_id} + ${pairMap[current.skill_id].partner}`
-        : current.skill_id)
-    : ''
+  const idHint = current ? membersOf(current).map((m) => m.skill_id).join(' + ') : ''
 
   return (
     <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
@@ -208,14 +204,14 @@ export function SkillsTab({ character }: { character: string }) {
                 background: active ? 'rgba(120,170,255,0.16)' : 'transparent',
                 border: '1px solid ' + (active ? 'var(--accent, #6aa9ff)' : 'transparent'),
               }}>
-              <input type="checkbox" checked={s.enabled}
-                disabled={!s.enabled && !!s.blocked_reason}
-                title={!s.enabled && s.blocked_reason ? s.blocked_reason : undefined}
+              <input type="checkbox" checked={groupEnabled(s)}
+                disabled={!groupEnabled(s) && !!groupBlocked(s)}
+                title={!groupEnabled(s) && groupBlocked(s) ? groupBlocked(s) : undefined}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => onToggle(s, e.target.checked)} />
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-                             whiteSpace: 'nowrap', fontSize: '0.9em', opacity: s.enabled ? 1 : 0.6 }}
-                title={!s.enabled && s.blocked_reason ? s.blocked_reason : undefined}>
+                             whiteSpace: 'nowrap', fontSize: '0.9em', opacity: groupEnabled(s) ? 1 : 0.6 }}
+                title={!groupEnabled(s) && groupBlocked(s) ? groupBlocked(s) : undefined}>
                 {nameOf(s)}
               </span>
             </div>

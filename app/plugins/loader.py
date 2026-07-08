@@ -17,7 +17,6 @@ Manifest format (package format v1):
         class: IntimateSkill      # default: first PluginSkill subclass
         params: {active: true}    # constructor kwargs (parameterized verbs)
         always_load: true         # load always, activate per character
-        pair_with: end_intimate   # UI hint: paired toggle
         default_enabled: false    # enabled for newly created characters
     templates:
       llm: templates/llm          # added to the prompt-template search path
@@ -134,7 +133,6 @@ def _parse_skill_entries(meta: Dict[str, Any]) -> List[SkillEntry]:
             class_name=(d.get("class") or "").strip(),
             params=d.get("params") or {},
             always_load=bool(d.get("always_load", plugin_always)),
-            pair_with=(d.get("pair_with") or "").strip(),
             default_enabled=bool(d.get("default_enabled", False)),
             singleton=bool(d.get("singleton", False)),
             suppress_in_person=bool(d.get("suppress_in_person", False)),
@@ -164,6 +162,7 @@ def _parse_skill_entries(meta: Dict[str, Any]) -> List[SkillEntry]:
 def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     """Parse one manifest into a Package (contributions resolved, no skills instantiated)."""
     pkg = Package(id=entry_dir.name, dir=entry_dir, manifest=meta)
+    pkg.capability_label = str(meta.get("capability_label", "") or "").strip()
     pkg.skills = _parse_skill_entries(meta)
     if not meta.get("name"):
         logger.warning("Package %s: name missing in plugin.yaml", entry_dir.name)

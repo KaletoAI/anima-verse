@@ -1,4 +1,5 @@
 name: party
+capability_label: "Party"   # ONE UI toggle for all verbs of this package
 version: "1.0.0"
 description: Party verbs — travel together as a group (invite / join / leave); the leader moves, followers are dragged along
 

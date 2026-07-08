@@ -1,4 +1,5 @@
 name: decency_exempt
+capability_label: "Dress Code Exception"   # ONE UI toggle for all verbs of this package
 version: "1.0.0"
 description: Decency override — AllowExposed/RequireDecency verbs, deliberate persistent nude_ok state
 
@@ -7,7 +8,6 @@ skills:
     class: DecencyExemptSkill
     params: {active: true}
     always_load: true
-    pair_with: require_decency
   - skill_id: require_decency
     class: DecencyExemptSkill
     params: {active: false}
