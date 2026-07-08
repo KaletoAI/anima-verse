@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { PromptPreview } from './PromptPreview'
 
 /** Generic body-slot editor — renders whatever the character's species
  * package declares (attributes + options); saves per attribute on change.
@@ -29,6 +30,7 @@ export function BodyEditor({ character }: { character: string }) {
   // LoRA names for lora_select attributes — resolved against the character's
   // "Backend match (glob)" (same source as the outfit/variant LoRA picker).
   const [loras, setLoras] = useState<string[]>([])
+  const [previewKey, setPreviewKey] = useState(0)
   const enc = encodeURIComponent(character)
 
   const load = useCallback(async () => {
@@ -54,6 +56,7 @@ export function BodyEditor({ character }: { character: string }) {
     try {
       await apiPost(`/characters/${enc}/body-slots/${encodeURIComponent(slotId)}`,
         { values: { [key]: value } })
+      setPreviewKey((k) => k + 1)
     } catch { load() }
   }, [enc, load])
 
@@ -104,6 +107,9 @@ export function BodyEditor({ character }: { character: string }) {
           ) : null)}
         </div>
       ))}
+      <div style={{ marginTop: 8, borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 8 }}>
+        <PromptPreview character={character} refreshKey={String(previewKey)} />
+      </div>
     </div>
   )
 }

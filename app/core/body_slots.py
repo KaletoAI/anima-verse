@@ -199,6 +199,38 @@ def prompt_fragments(character_name: str,
     return {"general": general, "exposed": exposed}
 
 
+def exposed_slot_loras(character_name: str,
+                       profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """LoRAs of currently EXPOSED body slots (lora_select attribute values,
+    e.g. the NSFW anatomy LoRAs) — merged into image-generation inputs by
+    the variant/expression path. Replaces the former per-clothing-slot
+    override LoRAs."""
+    specs = slots_for_character(character_name)
+    if not specs:
+        return []
+    if profile is None:
+        try:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        except Exception:
+            return []
+    stored = profile.get("body_slots")
+    stored = dict(stored) if isinstance(stored, dict) else {}
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for spec in specs:
+        if not _is_exposed(spec, profile):
+            continue
+        for attr, decl in spec.attributes.items():
+            if str(decl.get("type", "")) != "lora_select":
+                continue
+            name = str((stored.get(spec.id) or {}).get(attr, "") or "").strip()
+            if name and name.lower() != "none" and name not in seen:
+                out.append({"name": name, "strength": 1.0})
+                seen.add(name)
+    return out
+
+
 def being_for_character(character_name: str) -> str:
     """Prompt noun for what kind of being the character is ('person',
     'animal', ...) — declared by the species package (manifest ``being``);

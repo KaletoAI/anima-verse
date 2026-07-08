@@ -997,29 +997,6 @@ async def set_outfit_imagegen_route(character_name: str, request: Request) -> Di
     return character_ops.apply_outfit_imagegen(character_name, body)
 
 
-@router.get("/{character_name}/slot-overrides")
-async def get_slot_overrides_route(character_name: str) -> Dict[str, Any]:
-    """Liefert per-Slot Prompt+LoRA-Overrides (9 Slots).
-
-    Struktur: {slot: {prompt: str, lora: {name, strength}}}.
-    Greifen nur wenn der Slot leer und nicht verdeckt ist.
-    """
-    return character_ops.build_slot_overrides(character_name)
-
-
-@router.put("/{character_name}/slot-overrides")
-async def set_slot_overrides_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Speichert per-Slot Prompt+LoRA-Overrides.
-
-    Body: {slots: {slot: {prompt: str, lora: {name, strength}}}}.
-    Leere Eintraege (kein Prompt + kein LoRA) werden entfernt.
-    """
-    body = await request.json()
-    return character_ops.apply_slot_overrides(character_name, body)
-
-
-# --- Profile (bulk read/update) ---
-
 @router.get("/{character_name}/profile")
 def get_profile_route(character_name: str) -> Dict[str, Any]:
     """Gibt das vollstaendige Character-Profil zurueck"""
@@ -1373,6 +1350,14 @@ def apply_body_slot_migration(_: Dict[str, Any] = Depends(require_admin)) -> Dic
     """Applies the body-slot migration for all characters of this world."""
     from app.core.body_slot_migration import apply_world
     return apply_world()
+
+
+@router.get("/{character_name}/prompt-preview")
+async def get_prompt_preview_route(character_name: str) -> Dict[str, Any]:
+    """Effective prompts (scene person description / face / outfit line)
+    as they would render right now — admin preview for the Appearance and
+    Wardrobe editors."""
+    return character_ops.build_prompt_preview(character_name)
 
 
 @router.get("/{character_name}/body-slots")

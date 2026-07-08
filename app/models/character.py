@@ -235,7 +235,7 @@ _STATE_META_KEYS = ("equipped_pieces", "equipped_items",
 # Per-Character User-Config (nicht Stamm) — wandern in config_json, nicht profile_json.
 # Beim Laden aus config_json in Profile injiziert (fuer Abwaerts-Kompatibilitaet der
 # Consumer-APIs), beim Save extrahiert.
-_CONFIG_KEYS_IN_PROFILE = ("outfit_exceptions", "outfit_imagegen", "slot_overrides",
+_CONFIG_KEYS_IN_PROFILE = ("outfit_exceptions", "outfit_imagegen",
                            "no_outfit_prompt_top", "no_outfit_prompt_bottom",
                            "no_outfit_prompt")
 

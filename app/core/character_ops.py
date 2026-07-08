@@ -1265,6 +1265,27 @@ def apply_config_update(character_name: str, data: Dict[str, Any]) -> Dict[str, 
     return {"status": "success", "character": character_name, "updated_fields": list(fields.keys())}
 
 
+def build_prompt_preview(character_name: str) -> Dict[str, str]:
+    """Effective prompt preview for the admin (Appearance/Wardrobe UI):
+    how the person description, face prompt and outfit line actually
+    render right now — including body-slot fragments and how the worn
+    outfit (coverage) suppresses or exposes them."""
+    from app.models.character import get_character_profile, get_character_appearance
+    from app.models.character_template import get_template
+    from app.core.body_slots import appearance_suffix
+    from app.core.outfit_renderer import render_outfit
+    profile = get_character_profile(character_name) or {}
+    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
+    body = (get_character_appearance(character_name) or "").strip().strip(",")
+    sfx = appearance_suffix(character_name)
+    scene = f"{body}, {sfx}" if (body and sfx) else (body or sfx)
+    return {
+        "scene": scene,
+        "face": _resolve_face_prompt(profile, character_name, tmpl),
+        "outfit": (render_outfit(character_name=character_name).get("full", "") or ""),
+    }
+
+
 def build_body_slots(character_name: str) -> Dict[str, Any]:
     """Body-slot editor payload (species packages, plan-body-slots.md):
     applicable slots with attribute declarations + current values, plus the
@@ -1495,81 +1516,6 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
         prof["outfit_imagegen"] = {}
     save_character_profile(character_name, prof)
     return {"status": "ok", "workflow": workflow, "loras": clean_loras}
-
-
-def build_slot_overrides(character_name: str) -> Dict[str, Any]:
-    """Returns per-slot prompt+LoRA overrides (9 slots).
-
-    Structure: {slot: {prompt: str, lora: {name, strength}}}.
-    They only take effect when the slot is empty and not covered.
-    """
-    from app.models.character import get_character_profile
-    from app.models.inventory import VALID_PIECE_SLOTS
-    prof = get_character_profile(character_name) or {}
-    raw = prof.get("slot_overrides") or {}
-    if not isinstance(raw, dict):
-        raw = {}
-    out: Dict[str, Any] = {}
-    for slot in VALID_PIECE_SLOTS:
-        entry = raw.get(slot) or {}
-        if not isinstance(entry, dict):
-            entry = {}
-        lora = entry.get("lora") or {}
-        if not isinstance(lora, dict):
-            lora = {}
-        out[slot] = {
-            "prompt": (entry.get("prompt") or "").strip(),
-            "lora": {
-                "name": (lora.get("name") or "").strip(),
-                "strength": float(lora.get("strength", 1.0) or 1.0),
-            },
-        }
-    return {"slots": out, "order": list(VALID_PIECE_SLOTS)}
-
-
-def apply_slot_overrides(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """Saves per-slot prompt+LoRA overrides.
-
-    Body: {slots: {slot: {prompt: str, lora: {name, strength}}}}.
-    Empty entries (no prompt + no LoRA) are removed.
-    """
-    from app.models.character import get_character_profile, save_character_profile
-    from app.models.inventory import VALID_PIECE_SLOTS
-    slots_in = body.get("slots") or {}
-    if not isinstance(slots_in, dict):
-        slots_in = {}
-    cleaned: Dict[str, Any] = {}
-    for slot in VALID_PIECE_SLOTS:
-        entry = slots_in.get(slot) or {}
-        if not isinstance(entry, dict):
-            continue
-        prompt = (entry.get("prompt") or "").strip()
-        lora_raw = entry.get("lora") or {}
-        lora_name = ""
-        lora_strength = 1.0
-        if isinstance(lora_raw, dict):
-            lora_name = (lora_raw.get("name") or "").strip()
-            if lora_name.lower() == "none":
-                lora_name = ""
-            try:
-                lora_strength = float(lora_raw.get("strength", 1.0))
-            except Exception:
-                lora_strength = 1.0
-        if not prompt and not lora_name:
-            continue
-        out: Dict[str, Any] = {}
-        if prompt:
-            out["prompt"] = prompt
-        if lora_name:
-            out["lora"] = {"name": lora_name, "strength": lora_strength}
-        cleaned[slot] = out
-    prof = get_character_profile(character_name) or {}
-    if cleaned:
-        prof["slot_overrides"] = cleaned
-    elif "slot_overrides" in prof:
-        del prof["slot_overrides"]
-    save_character_profile(character_name, prof)
-    return {"status": "ok", "slots": cleaned}
 
 
 def apply_videogen_config(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:

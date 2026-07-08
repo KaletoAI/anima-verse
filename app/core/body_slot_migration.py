@@ -52,6 +52,10 @@ _GLUE_WORDS = {
     "körperbau", "koerperbau",
     # animal attribute glue (cat package fields)
     "fur", "fell", "pelz", "ears", "ohren", "tail", "schwanz", "markings",
+    # anatomy nouns (NSFW pack fields — '{breast_size} breasts' etc.)
+    "breast", "breasts", "brust", "brüste", "brueste", "bust",
+    "butt", "hintern", "po", "hips", "hüfte", "huefte",
+    "penis", "vagina", "genitals",
 }
 
 

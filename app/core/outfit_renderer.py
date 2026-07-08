@@ -161,10 +161,6 @@ def render_outfit(
     items = equipped_items if equipped_items is not None else (
         profile.get("equipped_items") or [])
 
-    slot_overrides = profile.get("slot_overrides") or {}
-    if not isinstance(slot_overrides, dict):
-        slot_overrides = {}
-
     covered = collect_covered_slots(pieces)
     partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS))
 
@@ -206,33 +202,24 @@ def render_outfit(
             return bool(pieces.get("bottom")) or "underwear_bottom" in covered
         return False
 
-    fallback_parts: List[str] = []
+    # Exposed-anatomy prompts come from the body-slot packages now
+    # (appearance_suffix exposed fragments in the person description);
+    # their LoRAs are collected here so the variant/expression path keeps
+    # its single merge point.
     slot_loras: List[Dict[str, Any]] = []
+    try:
+        from app.core.body_slots import exposed_slot_loras
+        slot_loras = exposed_slot_loras(character_name or "", profile=profile)
+    except Exception:
+        slot_loras = []
+
+    fallback_parts: List[str] = []
     for slot in VALID_PIECE_SLOTS:
         if pieces.get(slot):
             continue
         if slot in covered:
             continue
         if _outer_layer_covers(slot):
-            continue
-        ov = slot_overrides.get(slot) or {}
-        if not isinstance(ov, dict):
-            ov = {}
-        # Slot-override LoRA of an ACTIVE (empty, uncovered) slot — e.g. an
-        # anatomy LoRA bound to the unequipped underwear slot. Collected
-        # independently of the prompt fragment; the generation path merges
-        # it into the LoRA inputs.
-        _lora = ov.get("lora") or {}
-        _lname = (_lora.get("name") or "").strip() if isinstance(_lora, dict) else ""
-        if _lname and _lname != "None":
-            try:
-                _lstrength = float(_lora.get("strength") or 1.0)
-            except (TypeError, ValueError):
-                _lstrength = 1.0
-            slot_loras.append({"name": _lname, "strength": _lstrength})
-        ov_prompt = (ov.get("prompt") or "").strip()
-        if ov_prompt:
-            fallback_parts.append(_resolve_tokens(ov_prompt, profile))
             continue
         # Legacy-Felder nur fuer Unterwaesche-Slots
         if slot == "underwear_top":
@@ -293,22 +280,15 @@ def render_unworn_slots(
 
     pieces = profile.get("equipped_pieces") or {}
     covered = collect_covered_slots(pieces)
-    slot_overrides = profile.get("slot_overrides") or {}
-    if not isinstance(slot_overrides, dict):
-        slot_overrides = {}
 
+    # Exposed-anatomy fragments come from the body-slot packages
+    # (appearance_suffix exposed prompts) — only the legacy underwear
+    # fallback fields remain here.
     parts: List[str] = []
     for slot in VALID_PIECE_SLOTS:
         if pieces.get(slot):
             continue
         if slot in covered:
-            continue
-        ov = slot_overrides.get(slot) or {}
-        ov_prompt = (ov.get("prompt") or "").strip() if isinstance(ov, dict) else ""
-        if ov_prompt:
-            resolved = _resolve_tokens(ov_prompt, profile)
-            if resolved:
-                parts.append(resolved)
             continue
         # Legacy-Felder nur fuer Unterwaesche-Slots
         if slot == "underwear_top":

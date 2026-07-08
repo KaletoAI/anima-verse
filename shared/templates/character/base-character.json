@@ -432,16 +432,6 @@
       "fields": []
     },
     {
-      "id": "appearance_config",
-      "label": "Image Appearance",
-      "label_de": "Bild-Darstellung",
-      "column": 21,
-      "column_span": 2,
-      "row": 0,
-      "special": "slot_overrides",
-      "fields": []
-    },
-    {
       "id": "behavior_config",
       "label": "Behavior",
       "label_de": "Verhalten",

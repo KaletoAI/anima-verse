@@ -835,7 +835,6 @@ def generate_expression_image(character_name: str,
 
     Returns the path to the generated image, or None on failure.
     """
-    from app.skills.image_generation_skill import ImageGenerationSkill
     from app.core.dependencies import get_skill_manager
     from app.models.character import (
         get_character_appearance,
@@ -937,15 +936,11 @@ def generate_expression_image(character_name: str,
         else:
             outfit_prompt = f"{actor_label} {items_desc}"
 
-    # Find ImageGenerationSkill
-    image_skill = None
-    _sm = get_skill_manager()
-    for skill in _sm.skills:
-        if isinstance(skill, ImageGenerationSkill):
-            image_skill = skill
-            break
-    if not image_skill:
-        logger.warning("ImageGenerationSkill nicht verfuegbar")
+    # Core image service (wave-6 split)
+    from app.imagegen.service import get_image_service
+    image_skill = get_image_service()
+    if not image_skill.enabled:
+        logger.warning("image service not available")
         return None
 
     # Read the per-character override early — allows render/model/LoRA
@@ -1044,7 +1039,7 @@ def generate_expression_image(character_name: str,
     payload["image_use_case"] = "expression"
 
     try:
-        img_result = image_skill.execute(json.dumps(payload))
+        img_result = image_skill.generate_from_input(json.dumps(payload))
 
         # Backend fallback on timeout: when the pinned backend is not
         # available, drop the backend binding and re-run execute() with
@@ -1059,7 +1054,7 @@ def generate_expression_image(character_name: str,
             logger.warning(
                 "Expression-Regen: Backend '%s' offline — nutze Auto-Backend",
                 backend_name)
-            img_result = image_skill.execute(json.dumps(payload_fb))
+            img_result = image_skill.generate_from_input(json.dumps(payload_fb))
 
         # Extract filename from result
         match = re.search(r'/images/([^?)\n]+)', img_result)

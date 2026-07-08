@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
-import { useHelp } from '../../help/HelpContext'
-import { collectTokens, type TmplSectionRaw } from './TemplateTab'
 
 /**
  * Per-character image-generation overrides (Characters → Image):
@@ -22,26 +20,6 @@ interface Lora {
   strength: number
 }
 
-interface SlotEntry {
-  prompt: string
-  lora: { name: string; strength: number }
-}
-
-// Fallback clothing slots (core topology) — the effective list comes from
-// the character's species package via GET /characters/{c}/body-slots
-// (piece_slots), so a cat shows Collar/Headwear instead of human slots.
-const FALLBACK_SLOTS: Array<{ id: string; label: string }> = [
-  { id: 'head', label: 'Head' },
-  { id: 'neck', label: 'Neck' },
-  { id: 'outer', label: 'Outerwear' },
-  { id: 'top', label: 'Top' },
-  { id: 'underwear_top', label: 'Underwear (top)' },
-  { id: 'bottom', label: 'Bottom' },
-  { id: 'underwear_bottom', label: 'Underwear (bottom)' },
-  { id: 'legs', label: 'Legs' },
-  { id: 'feet', label: 'Feet' },
-]
-
 // Convert a shell-style glob (only '*' wildcard) to a case-insensitive regex.
 function globToRegex(glob: string): RegExp {
   const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
@@ -56,13 +34,8 @@ function formatMatchSpec(spec: string): string {
 }
 
 export function ImageOverrides({ character }: { character: string }) {
-  const { t, lang } = useI18n()
+  const { t } = useI18n()
   const { toast } = useToast()
-  const { setHelp } = useHelp()
-  // Appearance-{token}-Platzhalter (wie im Appearance-Prompt) + zuletzt
-  // fokussiertes Slot-Input, damit das Help-Panel an die Cursor-Position einfügt.
-  const [appearanceTokens, setAppearanceTokens] = useState<{ token: string; label: string }[]>([])
-  const slotElRef = useRef<{ slot: string; el: HTMLInputElement } | null>(null)
   const [pattern, setPattern] = useState('')
   const [loras, setLoras] = useState<Lora[]>([])
   const [backends, setBackends] = useState<string[]>([])  // image-backend names (match target)
@@ -71,26 +44,10 @@ export function ImageOverrides({ character }: { character: string }) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [addName, setAddName] = useState('')
-  // Per-slot prompt + LoRA overrides (Image Appearance).
-  const [slots, setSlots] = useState<Record<string, SlotEntry>>({})
-  // Species clothing topology (piece_slots) — fallback: core human slots.
-  const [slotDefs, setSlotDefs] = useState<Array<{ id: string; label: string }>>(FALLBACK_SLOTS)
-  const [slotsSaving, setSlotsSaving] = useState(false)
 
   // The server resolves the LoRA list from the SAVED match pattern (backend
   // lora_filter + library, endpoint-filtered) — so the "Add LoRA" choices
   // must be refetched after every pattern save, not loaded just once.
-  useEffect(() => {
-    (async () => {
-      try {
-        const d = await apiGet<{ piece_slots?: Array<{ id: string; label: string }> }>(
-          `/characters/${encodeURIComponent(character)}/body-slots`,
-        )
-        if (d.piece_slots && d.piece_slots.length) setSlotDefs(d.piece_slots)
-      } catch { /* keep fallback */ }
-    })()
-  }, [character])
-
   const refreshLoraOptions = useCallback(async () => {
     try {
       const loraOpts = await apiGet<{ loras?: string[] }>(
@@ -128,17 +85,14 @@ export function ImageOverrides({ character }: { character: string }) {
     setLoading(true)
     ;(async () => {
       try {
-        const [ovr, opts, loraOpts, slotResp] = await Promise.all([
+        const [ovr, opts, loraOpts] = await Promise.all([
           apiGet<{ workflow?: string; loras?: Lora[] }>(
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
           apiGet<{ options?: Array<{ name?: string; category?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
           apiGet<{ loras?: string[] }>(
             `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
-          ),
-          apiGet<{ slots?: Record<string, SlotEntry> }>(
-            `/characters/${encodeURIComponent(character)}/slot-overrides`,
-          ),
+          )
         ])
         if (cancelled) return
         setPattern(ovr.workflow || '')
@@ -152,7 +106,6 @@ export function ImageOverrides({ character }: { character: string }) {
         )
         setOutfitDefault(opts.outfit_imagegen_default || '')
         setAvailableLoras((loraOpts.loras || []).filter((l) => l && l !== 'None'))
-        setSlots(slotResp.slots || {})
       } catch (e) {
         if (!cancelled) toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
       } finally {
@@ -167,27 +120,6 @@ export function ImageOverrides({ character }: { character: string }) {
   // Appearance-Tokens des Characters laden (Template → replacement.target ==
   // character_appearance), damit die Slot-Fragmente dieselben {…}-Platzhalter
   // anbieten wie der Appearance-Prompt. Rein optional (Bequemlichkeit).
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const pr = await apiGet<{ profile?: { template?: string } }>(
-          `/characters/${encodeURIComponent(character)}/profile`,
-        )
-        const tmplId = String(pr.profile?.template || '')
-        if (!tmplId) return
-        const tmpl = await apiGet<{ sections?: TmplSectionRaw[] }>(`/templates/${encodeURIComponent(tmplId)}`)
-        if (cancelled) return
-        setAppearanceTokens(collectTokens(tmpl.sections || [], 'character_appearance', lang))
-      } catch {
-        /* tokens are a convenience — ignore load errors */
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [character, lang])
-
   const matching = useMemo(() => {
     const p = pattern.trim()
     if (!p) return []
@@ -205,61 +137,8 @@ export function ImageOverrides({ character }: { character: string }) {
     [pattern, persist],
   )
 
-  const updateSlot = useCallback((slot: string, patch: Partial<SlotEntry>) => {
-    setSlots((prev) => {
-      const cur = prev[slot] || { prompt: '', lora: { name: '', strength: 1 } }
-      return { ...prev, [slot]: { ...cur, ...patch } }
-    })
-  }, [])
-
-  const updateSlotLora = useCallback((slot: string, patch: Partial<SlotEntry['lora']>) => {
-    setSlots((prev) => {
-      const cur = prev[slot] || { prompt: '', lora: { name: '', strength: 1 } }
-      return { ...prev, [slot]: { ...cur, lora: { ...cur.lora, ...patch } } }
-    })
-  }, [])
-
-  // {token} an der Cursor-Position des zuletzt fokussierten Slot-Inputs einfügen.
-  // Liest den LIVE-Wert/Caret aus dem DOM (Selektion bleibt nach Blur erhalten),
-  // damit der Klick auf den „+"-Button im Help-Panel trotzdem korrekt einfügt.
-  const insertIntoFocusedSlot = useCallback((ins: string) => {
-    const cur = slotElRef.current
-    if (!cur) return
-    const { slot, el } = cur
-    const v = el.value
-    const s = el.selectionStart ?? v.length
-    const e = el.selectionEnd ?? v.length
-    const next = v.slice(0, s) + ins + v.slice(e)
-    updateSlot(slot, { prompt: next })
-    requestAnimationFrame(() => {
-      el.focus()
-      const pos = s + ins.length
-      el.setSelectionRange(pos, pos)
-    })
-  }, [updateSlot])
-
   // Beim Fokus eines Slot-Fragments: Topic + Appearance-Tokens (mit Insert) ans
   // Help-Panel melden — Parität zum Appearance-Prompt.
-  const announceSlotHelp = useCallback((slot: string, el: HTMLInputElement) => {
-    slotElRef.current = { slot, el }
-    setHelp('image_prompt', {
-      items: appearanceTokens.map((tk) => ({ code: `{${tk.token}}`, text: tk.label, insert: `{${tk.token}}` })),
-      insert: insertIntoFocusedSlot,
-    })
-  }, [appearanceTokens, setHelp, insertIntoFocusedSlot])
-
-  const saveSlots = useCallback(async () => {
-    setSlotsSaving(true)
-    try {
-      await apiPut(`/characters/${encodeURIComponent(character)}/slot-overrides`, { slots })
-      toast(t('Saved'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      setSlotsSaving(false)
-    }
-  }, [character, slots, t, toast])
-
 
   if (loading) return <div className="ga-loading">{t('Loading…')}</div>
 
@@ -378,77 +257,6 @@ export function ImageOverrides({ character }: { character: string }) {
         </div>
       </div>
 
-      <div className="ga-fieldset">
-        <div className="ga-fieldset-title">{t('Image Appearance (slot overrides)')}</div>
-        <p className="ga-sched-muted" style={{ margin: '0 0 8px' }}>
-          {t('Per slot: the prompt is added to the image prompt when that slot is empty and uncovered; the LoRA is merged into a free LoRA slot.')}
-        </p>
-        <div className="ga-img-slotgrid">
-          {[slotDefs.slice(0, Math.ceil(slotDefs.length / 2)),
-            slotDefs.slice(Math.ceil(slotDefs.length / 2))].map((col, ci) => (
-            <div key={ci}>
-              {col.map(({ id: slot, label }) => {
-                const entry = slots[slot] || { prompt: '', lora: { name: '', strength: 1 } }
-                const loraName = entry.lora?.name || ''
-                return (
-                  <div key={slot} className="ga-img-slotrow">
-                    <div className="ga-img-slotlabel">{t(label)}</div>
-                    <input
-                      className="ga-input"
-                      placeholder={t('Prompt fragment (e.g. "bare feet")')}
-                      value={entry.prompt || ''}
-                      onFocus={(e) => announceSlotHelp(slot, e.currentTarget)}
-                      onChange={(e) => updateSlot(slot, { prompt: e.target.value })}
-                    />
-                    <div className="ga-img-slotlora">
-                      <span className="ga-sched-muted">LoRA</span>
-                      <select
-                        className="ga-input"
-                        value={loraName}
-                        onChange={(e) => updateSlotLora(slot, { name: e.target.value })}
-                      >
-                        <option value="">— {t('none')} —</option>
-                        {loraName && !availableLoras.includes(loraName) ? (
-                          <option value={loraName}>
-                            {loraName} ({t('unavailable')})
-                          </option>
-                        ) : null}
-                        {availableLoras.map((l) => (
-                          <option key={l} value={l}>
-                            {l}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        className="ga-input"
-                        type="number"
-                        step="0.05"
-                        min="-2"
-                        max="2"
-                        style={{ width: 64 }}
-                        value={entry.lora?.strength ?? 1}
-                        onChange={(e) =>
-                          updateSlotLora(slot, { strength: parseFloat(e.target.value) || 1 })
-                        }
-                      />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ))}
-        </div>
-        <div className="ga-form-row" style={{ marginTop: 8 }}>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm ga-btn-primary"
-            disabled={slotsSaving}
-            onClick={saveSlots}
-          >
-            {slotsSaving ? t('Saving…') : t('Save appearance')}
-          </button>
-        </div>
-      </div>
     </div>
   )
 }
