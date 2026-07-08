@@ -220,6 +220,12 @@ interface MigrationCharPlan {
   character: string
   copies: Array<{ slot: string; attr: string; field: string; value: string }>
   texts: Record<string, { before: string; after: string; dropped: string[] }>
+  // Resulting prompts (dry-run on a simulated profile): lets the admin
+  // judge the migration by its actual effect, not the raw text diff.
+  prompt_preview?: {
+    scene_before: string; scene_after: string
+    face_before: string; face_after: string
+  }
 }
 interface MigrationPlan { characters: MigrationCharPlan[]; total: number }
 
@@ -290,9 +296,24 @@ function BodySlotMigration() {
           )}
           {Object.entries(c.texts).map(([field, info]) => (
             <div key={field} style={{ opacity: 0.65 }}>
-              {field}: −{info.dropped.length} {t('segments removed')} → „{info.after.slice(0, 90)}{info.after.length > 90 ? '…' : ''}"
+              {field}: −{info.dropped.length} {t('segments cleaned')} → „{info.after.slice(0, 90)}{info.after.length > 90 ? '…' : ''}"
             </div>
           ))}
+          {c.prompt_preview && (
+            <div style={{ marginTop: 6, display: 'grid', gap: 6 }}>
+              {([['Scene prompt', c.prompt_preview.scene_before, c.prompt_preview.scene_after],
+                 ['Face prompt', c.prompt_preview.face_before, c.prompt_preview.face_after]] as const)
+                .map(([label, before, after]) => (
+                <div key={label} style={{ borderLeft: '2px solid var(--border, #30363d)', paddingLeft: 8 }}>
+                  <div style={{ fontWeight: 600, opacity: 0.8 }}>{t(label)}</div>
+                  <div style={{ opacity: 0.55, textDecoration: before === after ? 'none' : 'line-through' }}>
+                    {before}
+                  </div>
+                  {before !== after && <div style={{ opacity: 0.9 }}>{after}</div>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ))}
       {done && <div className="ga-form-hint">{t('Migration applied')}.</div>}

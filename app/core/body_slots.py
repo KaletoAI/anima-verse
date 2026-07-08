@@ -156,7 +156,8 @@ def _format_if_complete(text: str, values: Dict[str, str]) -> str:
 
 
 def prompt_fragments(character_name: str,
-                     face_only: bool = False) -> Dict[str, List[str]]:
+                     face_only: bool = False,
+                     profile: Optional[Dict[str, Any]] = None) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
@@ -170,11 +171,12 @@ def prompt_fragments(character_name: str,
         specs = [s for s in specs if getattr(s, "face", False)]
     if not specs:
         return {"general": [], "exposed": []}
-    try:
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name) or {}
-    except Exception:
-        return {"general": [], "exposed": []}
+    if profile is None:
+        try:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        except Exception:
+            return {"general": [], "exposed": []}
     stored = profile.get("body_slots")
     stored = dict(stored) if isinstance(stored, dict) else {}
 
@@ -197,11 +199,14 @@ def prompt_fragments(character_name: str,
     return {"general": general, "exposed": exposed}
 
 
-def appearance_suffix(character_name: str, face_only: bool = False) -> str:
+def appearance_suffix(character_name: str, face_only: bool = False,
+                      profile: Optional[Dict[str, Any]] = None) -> str:
     """Combined fragment text appended to the character's appearance
-    (PromptBuilder; face_only for portrait/expression prompts). Empty
-    without species packages — safe no-op."""
-    frags = prompt_fragments(character_name, face_only=face_only)
+    (PromptBuilder; face_only for portrait/expression prompts; ``profile``
+    overrides the stored profile for dry-run previews). Empty without
+    species packages — safe no-op."""
+    frags = prompt_fragments(character_name, face_only=face_only,
+                             profile=profile)
     parts = frags["general"] + frags["exposed"]
     return ", ".join(parts)
 

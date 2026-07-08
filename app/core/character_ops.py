@@ -65,7 +65,8 @@ def _resolve_face_prompt(profile: dict, character_name: str, tmpl) -> str:
         face = (get_character_appearance(character_name) or "").strip()
     try:
         from app.core.body_slots import appearance_suffix
-        suffix = appearance_suffix(character_name, face_only=True)
+        suffix = appearance_suffix(character_name, face_only=True,
+                                   profile=profile)
     except Exception:
         suffix = ""
     if suffix:

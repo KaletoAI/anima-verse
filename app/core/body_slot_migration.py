@@ -114,8 +114,58 @@ def character_plan(character_name: str) -> Dict[str, Any]:
             if dropped:
                 texts[tf] = {"before": txt, "after": new, "dropped": dropped}
 
-    return {"character": character_name, "copies": copies, "texts": texts,
+    plan = {"character": character_name, "copies": copies, "texts": texts,
             "changes": bool(copies or texts)}
+    if plan["changes"]:
+        try:
+            plan["prompt_preview"] = _prompt_preview(character_name, profile,
+                                                     copies, texts)
+        except Exception as e:
+            logger.debug("prompt preview failed for %s: %s", character_name, e)
+    return plan
+
+
+def _prompt_preview(character_name: str, profile: Dict[str, Any],
+                    copies: List[Dict[str, str]],
+                    texts: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    """Resulting prompts before/after — computed on a SIMULATED profile,
+    nothing is saved. Lets the admin judge the migration by its actual
+    effect (scene + face prompt) instead of the raw text diff."""
+    import copy as _copy
+    from app.models.character import get_character_appearance
+    from app.models.character_template import get_template, resolve_profile_tokens
+    from app.core.body_slots import appearance_suffix
+    from app.core.character_ops import _resolve_face_prompt
+
+    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
+
+    def _join(text: str, suffix: str) -> str:
+        text = (text or "").strip().strip(",")
+        return f"{text}, {suffix}" if (text and suffix) else (text or suffix)
+
+    scene_before = _join(get_character_appearance(character_name) or "",
+                         appearance_suffix(character_name))
+    face_before = _resolve_face_prompt(profile, character_name, tmpl)
+
+    sim = _copy.deepcopy(profile)
+    slots = dict(sim.get("body_slots") or {})
+    for c in copies:
+        slot_vals = dict(slots.get(c["slot"]) or {})
+        slot_vals[c["attr"]] = c["value"]
+        slots[c["slot"]] = slot_vals
+    sim["body_slots"] = slots
+    for tf, info in (texts or {}).items():
+        sim[tf] = info["after"]
+
+    scene_raw = str(sim.get("character_appearance") or "")
+    if "{" in scene_raw:
+        scene_raw = resolve_profile_tokens(scene_raw, sim, template=tmpl,
+                                           target_key="character_appearance")
+    scene_after = _join(scene_raw, appearance_suffix(character_name, profile=sim))
+    face_after = _resolve_face_prompt(sim, character_name, tmpl)
+
+    return {"scene_before": scene_before, "scene_after": scene_after,
+            "face_before": face_before, "face_after": face_after}
 
 
 def apply_character(character_name: str) -> Dict[str, Any]:
