@@ -32,6 +32,7 @@ class SendMessageSkill(BaseSkill):
     SKILL_ID = "send_message"
     # [INTENT: send_message | message=...] (F6) — the deferred follow-up
     # message goes through the chat endpoint, not through execute().
+    REMOTE_COMM = True  # reaches characters not present (setup checklist)
     INTENT_TYPES = ("send_message",)
     INTENT_PAYLOAD_KEYS = ("content", "message")
 
@@ -53,6 +54,21 @@ class SendMessageSkill(BaseSkill):
             return {"success": resp.ok, "status": resp.status_code}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def defer_for_attachment(self, raw_input: str) -> bool:
+        """attach_image requests must run AFTER this turn's deferred image
+        tools — the attachment (the generated image) only exists then."""
+        if not raw_input or "attach_image" not in raw_input:
+            return False
+        stripped = raw_input.strip()
+        if stripped.startswith("{"):
+            import json as _json
+            try:
+                data, _ = _json.JSONDecoder().raw_decode(stripped)
+                return bool(isinstance(data, dict) and data.get("attach_image"))
+            except ValueError:
+                return True  # mentions attach_image but unparseable — defer to be safe
+        return True
 
     def tool_intent_payload(self, raw_input: str) -> str:
         """SendMessage freetext convention: "Recipient, message" — the part

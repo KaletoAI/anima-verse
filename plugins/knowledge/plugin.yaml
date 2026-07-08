@@ -8,6 +8,7 @@ env_prefix: "SKILL_KNOWLEDGE_"
 skills:
   - skill_id: knowledge_extract
     module: skill_extract.py
+    progress_type: research
   - skill_id: knowledge_search
     module: skill_search.py
 

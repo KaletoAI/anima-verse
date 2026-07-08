@@ -45,6 +45,10 @@ class BaseSkill(ABC):
     SUPPRESS_IN_PERSON = False  # hidden while the conversation partners share a room
     CASCADE_BRAKE = False       # reply_only_to gate for messaging cascades
     SEARCH_INTENT = False       # search-forcing hint targets this tool
+    USER_NOTIFICATION = False   # tool result becomes a user notification (Telegram forward)
+    REMOTE_COMM = False         # verb reaches characters NOT present (world-setup checklist)
+    PROGRESS_TYPE = ""          # generic progress type ('image', 'search', ...) for
+                                # count-based intents/assignments — replaces TOOL_NAME_MAP
     # Declarative intents (F6): [INTENT: <type>] markers the skill executes.
     # The intent engine collects these from loaded skills — no intent type
     # is hardcoded in the core. INTENT_PAYLOAD_KEYS lists the INTENT params
@@ -149,6 +153,19 @@ class BaseSkill(ABC):
             return self.config['usage_instructions']
         fmt = format_name or "tag"
         return format_example(fmt, self.name, "[input]")
+
+    def visible_for(self, character_name: str) -> bool:
+        """Per-character visibility gate beyond the enabled config —
+        skills hide themselves based on world state (e.g. party role).
+        Checked generically by the skill manager when assembling a
+        character's tools; no skill name lives in that code."""
+        return True
+
+    def defer_for_attachment(self, raw_input: str) -> bool:
+        """True when this tool call must run AFTER the deferred image
+        tools of the same turn (its input references an attachment that
+        only exists once those ran). Default: never."""
+        return False
 
     def thought_context_block(self, character_name: str) -> str:
         """Optional prompt contribution for the agent-thought context.

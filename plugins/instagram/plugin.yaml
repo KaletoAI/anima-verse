@@ -7,6 +7,7 @@ skills:
     module: skill_post.py
     intents: [instagram_post]
     intent_payload_keys: [caption]
+    progress_type: instagram
     # gated by skills.instagram.enabled (package gate) — reaction verbs
     # below stay always loaded
   - skill_id: instagram_comment

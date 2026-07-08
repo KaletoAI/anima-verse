@@ -175,31 +175,20 @@ class SkillManager:
 
         from app.models.character import get_character_skill_config
 
-        # Party-Rolle bestimmt die Sichtbarkeit der Bewegungs-/Party-Skills:
-        #  - Follower: kein SetLocation/Move (wird mitgezogen) und kein
-        #    invite_to_party (ein Follower laedt nicht ein); leave_party erlaubt.
-        #  - In keiner Party: kein leave_party (nichts zu verlassen).
-        #  - Leader / unpartiet: SetLocation/Move + invite_to_party normal.
-        try:
-            from app.core.party_engine import get_party_of
-            _party = get_party_of(character_name)
-        except Exception:
-            _party = None
-        _is_follower = bool(_party and _party.get("role") == "follower")
-        _in_party = _party is not None
-
         result = []
         for skill in self.skills:
             if not skill.SKILL_ID:
                 result.append(skill)
                 continue
             _sid = skill.SKILL_ID
-            if _is_follower and _sid in ("setlocation", "move", "invite_to_party"):
-                continue
-            if _sid == "join_party" and _in_party:
-                continue  # nur wer in KEINER Party ist kann beitreten
-            if _sid == "leave_party" and not _in_party:
-                continue
+            # Per-character visibility hook (wave 4): skills hide themselves
+            # based on world state (party role etc.) — replaces the former
+            # hardcoded skill-id whitelist here (R1).
+            try:
+                if not skill.visible_for(character_name):
+                    continue
+            except Exception as _ve:
+                logger.debug("visible_for failed for %s: %s", _sid, _ve)
             agent_config = get_character_skill_config(character_name, _sid)
             if agent_config and "enabled" in agent_config:
                 if not bool(agent_config["enabled"]):
@@ -237,6 +226,15 @@ class SkillManager:
             if getattr(skill, 'name', '').lower() == name_lower:
                 return skill
         return None
+
+    def progress_type_for_tool(self, tool_name: str) -> str:
+        """Generic progress type ('image', 'search', …) declared by the
+        skill behind a tool name (PROGRESS_TYPE) — replaces the former
+        hardcoded TOOL_NAME_MAP (wave 4). Empty string = not trackable."""
+        for skill in self.skills:
+            if getattr(skill, "name", "") == tool_name:
+                return getattr(skill, "PROGRESS_TYPE", "") or ""
+        return ""
 
     def tool_names_with_flag(self, flag: str) -> frozenset:
         """Tool names of loaded skills with a truthy metadata flag (F7) —

@@ -181,10 +181,20 @@ def _check_combination_features(character_name: str,
 
     # 4. Cross-Char Kommunikation
     cross_missing = []
-    has_comm_skill = _skill_enabled("talk_to") or _skill_enabled("send_message")
+    # Any verb declared REMOTE_COMM (skill attribute / manifest) counts —
+    # no skill id is named here (wave 4).
+    has_comm_skill = False
+    try:
+        from app.core.dependencies import get_skill_manager
+        for _s in get_skill_manager().skills:
+            if getattr(_s, "REMOTE_COMM", False) and _skill_enabled(_s.SKILL_ID):
+                has_comm_skill = True
+                break
+    except Exception:
+        pass
     if not has_comm_skill:
-        cross_missing.append({"key": "talk_to_or_send_message",
-                              "label": "TalkTo oder SendMessage Skill aktivieren"})
+        cross_missing.append({"key": "remote_comm",
+                              "label": "Enable a communication skill (e.g. TalkTo or SendMessage)"})
     try:
         all_chars = list_available_characters()
         n_chars = sum(1 for c in all_chars if c)

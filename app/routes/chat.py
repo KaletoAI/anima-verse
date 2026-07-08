@@ -1490,9 +1490,9 @@ async def chat(request: Request) -> StreamingResponse:
             # (vereinheitlichte Intents, plan-intents-unified.md)
             if _tool_exec_counts:
                 try:
-                    from app.models.intents import auto_track_progress, TOOL_NAME_MAP
+                    from app.models.intents import auto_track_progress, progress_type_for_tool
                     for _tn, _tc in _tool_exec_counts.items():
-                        _tool_type = TOOL_NAME_MAP.get(_tn)
+                        _tool_type = progress_type_for_tool(_tn)
                         if _tool_type:
                             # Bilder: Anzahl nach URLs, nicht Tool-Calls (ein Call kann mehrere Bilder erzeugen)
                             _count = len(_tool_image_urls) if _tool_type == "image" and _tool_image_urls else _tc

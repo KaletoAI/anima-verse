@@ -140,3 +140,15 @@ class MoveSkill(BaseSkill):
                 f"Input: a single direction — north, east, south, or west."
             ),
             func=self.execute)
+
+    def visible_for(self, character_name: str) -> bool:
+        """Party followers are dragged along by the leader and cannot
+        move on their own (wave 4 — replaces the skill-id whitelist
+        in the skill manager)."""
+        try:
+            from app.core.party_engine import get_party_of
+            party = get_party_of(character_name)
+            return not (party and party.get("role") == "follower")
+        except Exception:
+            return True
+

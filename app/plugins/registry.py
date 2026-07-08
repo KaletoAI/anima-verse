@@ -47,6 +47,9 @@ class SkillEntry:
     # (handle_intent on the class) + params carrying comparable content.
     intents: List[str] = field(default_factory=list)
     intent_payload_keys: List[str] = field(default_factory=list)
+    user_notification: bool = False   # result becomes a user notification
+    remote_comm: bool = False         # verb reaches characters not present
+    progress_type: str = ""           # count-based intent/assignment progress type
 
 
 @dataclass

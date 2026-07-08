@@ -409,19 +409,6 @@ def expire_overdue() -> List[Dict[str, Any]]:
 # Auto-progress tracking
 # ---------------------------------------------------------------------------
 
-# Maps skill/tool names to trackable tool types
-TOOL_NAME_MAP = {
-    "ImageGeneration": "image",
-    "ImageGenerator": "image",
-    "WebSearch": "search",
-    "SearxSearch": "search",
-    "Searx": "search",
-    "TalkTo": "talkto",
-    "SendNotification": "notification",
-    "InstagramPost": "instagram",
-    "ExtractKnowledge": "research",
-}
-
 # Maps tool types to German labels for progress notes
 _TOOL_LABELS = {
     "image": "Foto generiert",

@@ -145,23 +145,17 @@ def _inject_rp_context(tool_input: str, rp_response: str, user_input: str = "") 
     return _json.dumps(wrapper, ensure_ascii=False)
 
 
-def _sendmessage_wants_attachment(tool_input: str) -> bool:
-    """True when a SendMessage tool input requests an image attachment.
-
-    Such calls must run AFTER the deferred image tools of the same turn —
-    the attachment source (this turn's generated image) only exists then.
-    """
-    if not tool_input or "attach_image" not in tool_input:
+def _defers_for_attachment(tool_name: str, tool_input: str) -> bool:
+    """True when a tool call must run AFTER the deferred image tools of the
+    same turn — its input references an attachment (this turn's generated
+    image) that only exists then. The check is the SKILL's own
+    ``defer_for_attachment`` declaration (wave 4) — no tool name here."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        skill = get_skill_manager().get_skill_by_name(tool_name)
+        return bool(skill and skill.defer_for_attachment(tool_input or ""))
+    except Exception:
         return False
-    stripped = tool_input.strip()
-    if stripped.startswith("{"):
-        import json as _json
-        try:
-            data, _ = _json.JSONDecoder().raw_decode(stripped)
-            return bool(isinstance(data, dict) and data.get("attach_image"))
-        except ValueError:
-            return True  # mentions attach_image but unparseable — defer to be safe
-    return True
 
 
 # Sentinel fuer Stream-Ende (safe_anext)
@@ -729,11 +723,10 @@ class StreamingAgent:
         for tm in state_tool.tool_matches:
             t_name = tm[0] if isinstance(tm, (list, tuple)) else tm.get("name", "")
             t_input = tm[1] if isinstance(tm, (list, tuple)) else tm.get("input", "")
-            # SendMessage with attach_image is deferred too — the attachment
+            # Attachment-referencing calls are deferred too — the attachment
             # (this turn's generated image) only exists after the image tools.
-            if t_name in self.deferred_tools or (
-                    t_name == "SendMessage"
-                    and _sendmessage_wants_attachment(str(t_input))):
+            if t_name in self.deferred_tools or _defers_for_attachment(
+                    t_name, str(t_input)):
                 post_rp_matches.append(tm)
             elif t_name in self.content_tools:
                 content_matches.append(tm)
@@ -1106,11 +1099,10 @@ class StreamingAgent:
             tool_input_text = tool_input_text.strip()
 
             # Deferred tools: remember instead of executing → chat LLM answers first.
-            # SendMessage with attach_image rides along: its attachment (this
+            # Attachment-referencing calls ride along: their attachment (this
             # turn's generated image) only exists after the image tools ran.
-            if tool_name in self.deferred_tools or (
-                    tool_name == "SendMessage"
-                    and _sendmessage_wants_attachment(tool_input_text)):
+            if tool_name in self.deferred_tools or _defers_for_attachment(
+                    tool_name, tool_input_text):
                 pending_deferred.append((tool_name, tool_input_text))
                 logger.info("Tool DEFERRED: %s (runs after the chat reply)", tool_name)
                 continue

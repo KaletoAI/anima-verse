@@ -7,6 +7,8 @@ skills:
   - skill_id: talk_to
     default_enabled: true    # replaces the entry in DEFAULT_NEW_CHARACTER_SKILLS
     cascade_brake: true      # replaces the class attribute (F7)
+    remote_comm: true        # reaches characters not present (setup checklist)
+    progress_type: talkto
 
 templates:
   llm: templates/llm

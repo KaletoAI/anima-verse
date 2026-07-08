@@ -25,18 +25,15 @@ _VALID_STATUS = {"active", "done", "expired", "cancelled"}
 _VALID_SOURCE = {"human", "character"}
 _JSON_FIELDS = ("participants", "trigger", "action", "meta")
 
-# Tool-Name → generischer Typ (für Auto-Progress bei zähl-basierten Intents)
-TOOL_NAME_MAP = {
-    "ImageGeneration": "image",
-    "ImageGenerator": "image",
-    "WebSearch": "search",
-    "SearxSearch": "search",
-    "Searx": "search",
-    "TalkTo": "talkto",
-    "SendNotification": "notification",
-    "InstagramPost": "instagram",
-    "ExtractKnowledge": "research",
-}
+# Tool name → generic progress type: declared by the skills themselves
+# (PROGRESS_TYPE attribute / manifest progress_type — wave 4). The former
+# hardcoded map here had already gone stale after tool renames.
+def progress_type_for_tool(tool_name: str) -> str:
+    try:
+        from app.core.dependencies import get_skill_manager
+        return get_skill_manager().progress_type_for_tool(tool_name)
+    except Exception:
+        return ""
 
 _TOOL_LABELS = {
     "image": "Foto generiert",

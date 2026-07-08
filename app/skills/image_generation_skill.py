@@ -66,6 +66,7 @@ def _log_image_failure(lv: dict, error_msg: str) -> None:
 
 
 class ImageGenerationSkill(BaseSkill):
+    PROGRESS_TYPE = "image"  # count-based intent/assignment progress
     """
     Multi-Instance Image Generation Skill.
 

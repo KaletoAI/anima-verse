@@ -179,6 +179,16 @@ unbekannt (→ Commitment-Memory statt Fehler-Handler).
 Events bisher: `instagram.post_created(poster_name, post)` ·
 `instagram.user_comment(character_name, post_id, commenter_name, comment_text, comment_id, post)`.
 
+## Skill-Hooks (Deklarationen an der Klasse / im Manifest) ✅
+
+| Hook | Semantik |
+|---|---|
+| `visible_for(character_name)` | Per-Character-Sichtbarkeit jenseits der enabled-Config (z.B. Party-Rolle) — der skill_manager fragt generisch ab; ersetzt die frühere Skill-ID-Whitelist |
+| `defer_for_attachment(raw_input)` | Call muss NACH den deferred Image-Tools desselben Turns laufen (Input referenziert ein erst dann existierendes Attachment) |
+| `USER_NOTIFICATION` (Flag) | Tool-Ergebnis wird User-Notification — thoughts liest via `tool_names_with_flag` |
+| `REMOTE_COMM` (Flag) | Verb erreicht nicht Anwesende — World-Setup-Checkliste |
+| `PROGRESS_TYPE` (String) | Zählbarer Fortschritts-Typ für Intents/Assignments — `skill_manager.progress_type_for_tool(tool_name)` / `intents.progress_type_for_tool` |
+
 ## Prompt-Beiträge — `thought_context_block` ✅
 
 Skills liefern per `thought_context_block(character_name)` eine

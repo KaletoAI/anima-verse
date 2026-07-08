@@ -36,6 +36,8 @@ class NotifyUserSkill(BaseSkill):
     """
 
     SKILL_ID = "notify_user"
+    USER_NOTIFICATION = True  # result becomes a user notification (F7 flag)
+    PROGRESS_TYPE = "notification"
     ALWAYS_LOAD = True  # Immer laden, Aktivierung per Character
 
     def __init__(self, config: Dict[str, Any]):

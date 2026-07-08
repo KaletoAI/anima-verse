@@ -24,6 +24,16 @@ logger = get_logger("thought")
 _thought_runner: Optional["ThoughtRunner"] = None
 
 
+def _user_notification_tool_names() -> frozenset:
+    """Tools declared USER_NOTIFICATION (F7-style flag) — their result
+    becomes a user notification / Telegram forward."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        return get_skill_manager().tool_names_with_flag("USER_NOTIFICATION")
+    except Exception:
+        return frozenset()
+
+
 def _cascade_brake_tool_names() -> frozenset:
     """Messaging verbs declared CASCADE_BRAKE by their skills (F7) — the
     reply_only_to gate applies to these, no tool names hardcoded here."""
@@ -532,7 +542,7 @@ class ThoughtRunner:
                     full_response += event.content
                 elif isinstance(event, ToolResultEvent):
                     _tool_exec_counts[event.tool_name] = _tool_exec_counts.get(event.tool_name, 0) + 1
-                    if event.tool_name == "SendNotification":
+                    if event.tool_name in _user_notification_tool_names():
                         had_notification_tool = True
                         notification_tool_content = event.result
                     logger.debug("Tool-Result: %s -> %s", event.tool_name, event.result[:100])
@@ -630,13 +640,13 @@ class ThoughtRunner:
         # Auto-Progress: Tool-Ausfuehrungen als Intent-Fortschritt zaehlen
         # (vereinheitlichte Intents, plan-intents-unified.md)
         try:
-            from app.models.intents import auto_track_progress, TOOL_NAME_MAP
+            from app.models.intents import auto_track_progress, progress_type_for_tool
 
             # 1. Echte Tool-Calls aus dem Stream + 2. narrative Tool-Calls
             for _label, _counts in (("", _tool_exec_counts),
                                     (" (narrativ)", _narrative_exec_counts)):
                 for _tn, _tc in _counts.items():
-                    _tool_type = TOOL_NAME_MAP.get(_tn)
+                    _tool_type = progress_type_for_tool(_tn)
                     if not _tool_type:
                         continue
                     _atp = auto_track_progress(character_name, _tool_type, _tc)

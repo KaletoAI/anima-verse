@@ -38,6 +38,22 @@ class PartySkill(BaseSkill):
     Operation; SKILL_ID/SKILL_META leiten sich daraus ab (vor super().__init__,
     damit das Meta-Template geladen werden kann)."""
 
+    def visible_for(self, character_name: str) -> bool:
+        """Party-role visibility: followers cannot invite (they are dragged
+        along); join only outside a party; leave only inside one."""
+        try:
+            from app.core.party_engine import get_party_of
+            party = get_party_of(character_name)
+        except Exception:
+            return True
+        if self._verb == "invite":
+            return not (party and party.get("role") == "follower")
+        if self._verb == "join":
+            return party is None
+        if self._verb == "leave":
+            return party is not None
+        return True
+
     def __init__(self, config: Dict[str, Any], verb: str):
         self._verb = verb
         self.SKILL_ID = _VERB_TO_ID[verb]
