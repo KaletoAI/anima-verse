@@ -105,7 +105,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `templates.llm` | nein | Ordner relativ zum Paket; gleiche Struktur wie `shared/templates/llm/` |
 | `templates.character` | nein | Liste von Fragment-JSONs (siehe unten) |
 | `config_schema` | nein | Subsections für `/admin/settings → Skills` |
-| `state_flags` | nein | Flag-Deklarationen mit Lebenszyklus |
+| `state_flags` | nein | Flag-Deklarationen mit Lebenszyklus. Flags können WERTE tragen (`body_reaction: erected`, gesetzt per Rule-Action `set_flags`, leerer Wert löscht) und stehen als optionale `{platzhalter}` in Body-Slot-Prompts sowie als Rule-Condition (`body_reaction`, `lust>80 AND is_intimate`) zur Verfügung |
 | `requires` | nein | Paket-IDs, die vorhanden UND am Charakter aktiv sein müssen. Fehlt ein Paket im Dateisystem, bleibt dieses Paket komplett inert; ist es am Charakter inaktiv, lassen sich die Verben nicht aktivieren |
 | `conflicts` | nein | Paket-IDs: solange eines davon am Charakter aktiv ist, sind die Verben dieses Pakets nicht aktivierbar (wirkt in beide Richtungen) |
 | `being` | nein | Spezies-Nomen für die Szenen-Komposition (`person`/`animal`/…, Default `person`) — „Compose exactly one person and one animal…" statt Katzen als „people" zu zählen |

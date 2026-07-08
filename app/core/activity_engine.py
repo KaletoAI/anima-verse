@@ -198,9 +198,16 @@ def _evaluate_single_condition_inner(
     # B1: regelbasiertes Bedingen auf den orthogonalen Zustands-Flags — der Flag
     # ist die Autoritaet (nicht der Activity-String). "is_sleeping" → True wenn
     # gesetzt; "NOT is_sleeping" via NOT-Prefix.
-    flag_m = re.match(r"(is_sleeping|is_wet|is_intimate)$", cond)
-    if flag_m:
-        fname = flag_m.group(1)
+    # State flags: core is_sleeping plus every flag DECLARED by a skill
+    # package (registry) — no flag names hardcoded here (R1).
+    _declared_flags = {"is_sleeping"}
+    try:
+        from app.plugins.registry import flag_specs
+        _declared_flags.update(s.flag for s in flag_specs())
+    except Exception:
+        pass
+    if cond in _declared_flags:
+        fname = cond
         try:
             from app.models.character import get_state_flags
             if bool(get_state_flags(character_name).get(fname)):

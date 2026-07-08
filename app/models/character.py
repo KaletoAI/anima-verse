@@ -3335,17 +3335,20 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
             pass
 
 
-def set_state_flag(character_name: str, flag: str, value: bool) -> None:
+def set_state_flag(character_name: str, flag: str, value) -> None:
     """Generic state-flag setter with change tracking.
 
-    Stamps ``state_flag_since[flag]`` on set and drops the stamp on clear —
-    the flag-lifecycle executor (app/core/flag_lifecycle.py) uses the stamp
-    for TTL decay. The flag-specific setters delegate here.
+    Values may be bool OR a short string (value-carrying flags, e.g.
+    ``body_reaction = "erected"`` set by a rule) — a falsy value ("",
+    False, None) clears the flag. Stamps ``state_flag_since[flag]`` on
+    set and drops the stamp on clear — the flag-lifecycle executor
+    (app/core/flag_lifecycle.py) uses the stamp for TTL decay. The
+    flag-specific setters delegate here.
     """
     if not character_name or not flag:
         return
     profile = get_character_profile(character_name) or {}
-    profile[flag] = bool(value)
+    profile[flag] = value if isinstance(value, str) and value else bool(value)
     since = dict(profile.get("state_flag_since") or {})
     if value:
         since[flag] = utc_now_iso()

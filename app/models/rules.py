@@ -651,8 +651,10 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
         if _set_flags:
             from app.models.character import get_state_flags
             _cur_flags = get_state_flags(character_name)
+            def _norm(v):
+                return v if isinstance(v, str) and v else bool(v)
             already_applied = all(
-                bool(_cur_flags.get(_k)) == bool(_v)
+                _norm(_cur_flags.get(_k)) == _norm(_v)
                 for _k, _v in _set_flags.items())
         is_char_specific = bool((rule.get("character") or "").strip())
         if already_applied:

@@ -182,22 +182,50 @@ def prompt_fragments(character_name: str,
 
     general: List[str] = []
     exposed: List[str] = []
+
+    def _render(tpl: str, vals: Dict[str, str]) -> str:
+        """Attribute placeholders are REQUIRED (missing value -> the whole
+        fragment drops). Every OTHER {placeholder} resolves OPTIONALLY from
+        the character's state flags: value-carrying flags
+        (body_reaction="erected") render their string, unset/boolean flags
+        render empty — whitespace artifacts squashed."""
+        if not tpl:
+            return ""
+        import re as _re
+        placeholders = _re.findall(r"\{(\w+)\}", tpl)
+        if any(ph in vals and not (vals.get(ph) or "").strip()
+               for ph in placeholders):
+            return ""
+        merged = dict(vals)
+        for ph in placeholders:
+            if ph not in merged:
+                v = profile.get(ph)
+                merged[ph] = v.strip() if isinstance(v, str) else ""
+        try:
+            out = tpl.format(**merged)
+        except (KeyError, IndexError, ValueError):
+            return ""
+        out = _re.sub(r"\s{2,}", " ", out)
+        out = _re.sub(r"\s+,", ",", out)
+        return out.strip(" ,")
+
     for spec in specs:
         vals = {attr: str((stored.get(spec.id) or {}).get(attr, "") or "")
                 for attr in spec.attributes}
-        frag = _format_if_complete(spec.prompt.get("always", ""), vals)
+        frag = _render(spec.prompt.get("always", ""), vals)
         if frag:
             general.append(frag)
         if _is_exposed(spec, profile):
             # Per-character override of the exposed fragment (stored under
             # the reserved 'exposed_prompt' slot value); the manifest text
             # is only the default. Placeholders resolve in both.
-            tpl = str((stored.get(spec.id) or {}).get("exposed_prompt", "") or "").strip()                 or spec.prompt.get("exposed", "")
-            frag = _format_if_complete(tpl, vals)
+            tpl = (str((stored.get(spec.id) or {}).get("exposed_prompt", "") or "").strip()
+                   or spec.prompt.get("exposed", ""))
+            frag = _render(tpl, vals)
             if frag:
                 exposed.append(frag)
         else:
-            frag = _format_if_complete(spec.prompt.get("covered", ""), vals)
+            frag = _render(spec.prompt.get("covered", ""), vals)
             if frag:
                 general.append(frag)
     return {"general": general, "exposed": exposed}

@@ -170,22 +170,39 @@ def _sub_force_rules():
                 if _set_flags:
                     from app.models.character import (
                         set_is_sleeping, set_is_wet, set_is_intimate,
-                        set_decency_exempt, get_state_flags)
+                        set_decency_exempt, set_state_flag, get_state_flags)
+                    # Flag-specific setters carry side effects (off-map etc.);
+                    # every OTHER flag DECLARED by a skill package goes through
+                    # the generic setter — values may be bool or string
+                    # (value-carrying flags like body_reaction="erected").
                     _setters = {"is_sleeping": set_is_sleeping,
                                 "is_wet": set_is_wet,
                                 "is_intimate": set_is_intimate,
                                 "decency_exempt": set_decency_exempt}
+                    _declared = set()
+                    try:
+                        from app.plugins.registry import flag_specs
+                        _declared = {s.flag for s in flag_specs()}
+                    except Exception:
+                        pass
+                    def _norm(v):
+                        return v if isinstance(v, str) and v else bool(v)
                     _before_flags = get_state_flags(name)
                     for _fk, _fv in _set_flags.items():
-                        _setter = _setters.get(_fk)
-                        if _setter is not None and bool(_before_flags.get(_fk)) != bool(_fv):
-                            _setter(name, bool(_fv))
-                            _flags_changed = True
-                            if _fk == "is_sleeping" and not _fv:
-                                try:
-                                    wake_from_offmap(name)
-                                except Exception:
-                                    pass
+                        if _norm(_before_flags.get(_fk)) == _norm(_fv):
+                            continue
+                        if _fk in _setters:
+                            _setters[_fk](name, bool(_fv))
+                        elif _fk in _declared:
+                            set_state_flag(name, _fk, _norm(_fv))
+                        else:
+                            continue  # unknown flag — not declared anywhere
+                        _flags_changed = True
+                        if _fk == "is_sleeping" and not _fv:
+                            try:
+                                wake_from_offmap(name)
+                            except Exception:
+                                pass
 
                 # Nur loggen + ins Tagebuch wenn sich was geaendert hat.
                 _after_loc = (get_character_current_location(name) or "").strip()
