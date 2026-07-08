@@ -76,7 +76,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "inventory_block": _build_inventory_block(character_name),
         "present_people_block": _build_present_people_block(character_name, location_id),
         "tracker_block": _build_tracker_block(character_name, location_id),
-        "available_activities_block": _build_available_activities_block(character_name, location_id, room_id),
+        "activity_hint_block": _build_activity_hint_block(character_name, location_id, room_id),
         "daily_schedule_block": _build_daily_schedule_block(character_name),
         "tools_hint": tools_hint,
         "has_assignments": False,  # set below if assignments_block non-empty
@@ -682,25 +682,21 @@ def _build_present_people_block(character_name: str, location_id: str) -> str:
         return ""
 
 
-def _build_available_activities_block(character_name: str,
-                                       location_id: str,
-                                       room_id: str) -> str:
-    """Activities the character can pick at the current location/room.
-
-    Filters by conditions/cooldowns so we don't suggest unreachable ones.
-    Cap at 10 to keep prompt slim. Activities marked ``auto_pick=false``
-    are excluded — they're meant for explicit narrative triggers, not
-    casual selection.
-    """
+def _build_activity_hint_block(character_name: str,
+                               location_id: str,
+                               room_id: str) -> str:
+    """Free-text activity direction of the current room (fallback:
+    location) — "what one typically does here". The LLM decides freely;
+    there is no activity library anymore (renamed from the library-era
+    available_activities_block)."""
     if not location_id:
         return ""
     try:
         from app.models.world import get_room_activity_hint
         return get_room_activity_hint(location_id, room_id)
     except Exception as e:
-        logger.debug("available_activities block failed for %s: %s", character_name, e)
+        logger.debug("activity hint block failed for %s: %s", character_name, e)
         return ""
-
 
 def _build_daily_schedule_block(character_name: str) -> str:
     """Soft hint about the character's typical rhythm at the current hour.

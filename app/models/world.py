@@ -486,24 +486,6 @@ def get_room_activity_hint(location_id: str, room_id: str = "") -> str:
         return ""
 
 
-def find_room_by_activity(location: Dict[str, Any], activity_name: str) -> Optional[Dict[str, Any]]:
-    """Findet den Raum, der eine bestimmte Aktivitaet enthaelt."""
-    if not activity_name:
-        return None
-    act_lower = activity_name.lower()
-    for room in location.get("rooms", []):
-        for act in room.get("activities", []):
-            name = act.get("name", "") if isinstance(act, dict) else str(act)
-            if name.lower() == act_lower:
-                return room
-    # Fuzzy
-    for room in location.get("rooms", []):
-        for act in room.get("activities", []):
-            name = act.get("name", "") if isinstance(act, dict) else str(act)
-            if name.lower() and (name.lower() in act_lower or act_lower in name.lower()):
-                return room
-    return None
-
 
 def _validate_room_description(text: str) -> str:
     """Letzte Sicherheitspruefung bevor eine Raum-Beschreibung gespeichert wird.

@@ -20,7 +20,7 @@
      skill_context_blocks      — Medium: self-contained sections contributed by the character's active skills
      inventory_block           — what the character is carrying
      room_items_block          — visible items in the current room
-     available_activities_block — activities possible at current location
+     activity_hint_block       — free-text direction what one typically does here
      daily_schedule_block      — typical-rhythm hint for current hour
      tracker_block             — carried tracker-items revealing target locations
      arc_block                 — Low: active story arc context
@@ -56,10 +56,10 @@ Current situation:
 {{ daily_schedule_block }}
 Decide based on this and other relevant factors — your rhythm is a guideline, not an order.
 {% endif %}
-{% if available_activities_block %}
+{% if activity_hint_block %}
 
 === What people typically do here ===
-{{ available_activities_block }}
+{{ activity_hint_block }}
 This is just inspiration for the location. Use SetActivity to set what you are
 doing right now (free text) — e.g. "leaning against the windowsill" or
 "sketching in a notebook".

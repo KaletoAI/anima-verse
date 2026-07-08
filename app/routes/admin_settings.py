@@ -208,7 +208,7 @@ _PROMPT_FILTER_BLOCK_KEYS = [
     "retrospective_block", "skill_context_blocks", "effects_block",
     "recent_chat_block", "outfit_self_block", "outfit_avatar_block",
     "room_items_block", "inventory_block", "present_people_block",
-    "available_activities_block", "daily_schedule_block",
+    "activity_hint_block", "daily_schedule_block",
 ]
 
 
