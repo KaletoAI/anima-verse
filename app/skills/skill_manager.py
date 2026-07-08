@@ -13,14 +13,12 @@ from .move_skill import MoveSkill
 from .send_message_skill import SendMessageSkill
 from .act_skill import ActSkill
 from .notify_user_skill import NotifyUserSkill
-from .instagram_comment_skill import InstagramCommentSkill
-from .instagram_reply_skill import InstagramReplySkill
 from .describe_room_skill import DescribeRoomSkill
 from .outfit_change_skill import OutfitChangeSkill
 from .outfit_creation_skill import OutfitCreationSkill
 from .video_generation_skill import VideoGenerationSkill
 from .retrospect_skill import RetrospectSkill
-from .state_flag_skills import SleepWakeSkill, SetPoseSkill
+from .state_flag_skills import SleepWakeSkill
 from .party_skills import PartySkill
 
 
@@ -57,8 +55,6 @@ class SkillManager:
         'send_message': SendMessageSkill,
         'act': ActSkill,
         'notify_user': NotifyUserSkill,
-        'instagram_comment': InstagramCommentSkill,
-        'instagram_reply': InstagramReplySkill,
         'describe_room': DescribeRoomSkill,
         'outfit_change': OutfitChangeSkill,
         'outfit_creation': OutfitCreationSkill,
@@ -69,7 +65,6 @@ class SkillManager:
         # (wave 2 pilot, plan-skill-plugin-architecture.md).
         'sleep': _Verb(SleepWakeSkill, asleep=True),
         'wakeup': _Verb(SleepWakeSkill, asleep=False),
-        'set_pose': SetPoseSkill,
         # Party-System (gemeinsam reisen): EINE Klasse, drei Verben (wie Wet
         # enter/leave). default-on via config.py-Env-Loop, Sichtbarkeit pro Rolle
         # verfeinert in _get_agent_skills.

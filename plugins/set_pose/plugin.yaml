@@ -1,0 +1,17 @@
+name: set_pose
+version: "1.0.0"
+description: Sets the character's current free-text activity/pose (pose_intent + pose variant)
+
+skills:
+  - skill_id: set_pose
+    always_load: true
+    singleton: true        # replaces the class attribute (F7)
+
+templates:
+  llm: templates/llm
+
+config_schema:
+  set_pose:
+    label: SetActivity
+    fields:
+      enabled: {type: bool, label: Enabled, default: true}

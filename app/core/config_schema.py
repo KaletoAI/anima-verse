@@ -543,12 +543,6 @@ SECTIONS = {
                     "enabled": {"type": "bool", "label": "Enabled", "default": True},
                 },
             },
-            "set_pose": {
-                "label": "SetPose",
-                "fields": {
-                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
-                },
-            },
             "send_message": {
                 "label": "SendMessage (remote)",
                 "fields": {

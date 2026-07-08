@@ -1,22 +1,21 @@
-"""State-flag skills + SetPose (step 6, May 2026).
+"""State-flag skills (step 6, May 2026).
 
 Plan: development_instructions/plan-outfit-system-rethink.md §1.4
 
-State-flag skills each set one state flag or pose_intent. They replaced the
-generic SetActivity skill for the few "activity effects" that really have
-code impact. An opposite pair shares ONE parameterized class registered as
-two distinct LLM verbs (see skill_manager._Verb):
+State-flag skills each set one state flag. They replaced the generic
+SetActivity skill for the few "activity effects" that really have code
+impact. An opposite pair shares ONE parameterized class registered as two
+distinct LLM verbs (see skill_manager._Verb):
 
     SleepWakeSkill  → is_sleeping + off-map   · Sleep (asleep=True) / WakeUp
-    SetPoseSkill    → set pose_intent (no flag, pose pipeline only)
 
 Compliance reads the flags via get_state_flags() and reacts accordingly.
 
-The wet/intimacy/decency flag skills were migrated to self-contained
-packages (plugins/wet, plugins/intimacy, plugins/decency_exempt — wave 2
-pilot of plan-skill-plugin-architecture.md); sleep and set_pose follow in
-a later wave (their semantics are still interwoven with the agent loop /
-pose engine).
+The wet/intimacy/decency flag skills and set_pose were migrated to
+self-contained packages (plugins/wet, plugins/intimacy,
+plugins/decency_exempt, plugins/set_pose — plan-skill-plugin-architecture.md);
+sleep follows in a later wave (its semantics are still interwoven with the
+agent loop).
 """
 from typing import Any, Dict
 
@@ -96,27 +95,3 @@ class SleepWakeSkill(_BaseFlagSkill):
             logger.debug("offmap toggle (asleep=%s) failed: %s", self._asleep, e)
         return (f"{character_name} schlaeft jetzt." if self._asleep
                 else f"{character_name} ist wieder wach.")
-
-
-# --- SetPose --------------------------------------------------------------
-
-class SetPoseSkill(_BaseFlagSkill):
-    SINGLETON = True
-    SKILL_ID = "set_pose"
-    SKILL_META = "set_pose"
-
-    def _apply(self, character_name: str, ctx: Dict[str, Any]) -> str:
-        pose = (ctx.get("pose") or ctx.get("input") or "").strip()
-        if not pose:
-            return "Fehler: keine Pose angegeben."
-        from app.models.character import get_character_profile, save_character_profile
-        from app.core.pose_engine import resolve_pose_variant
-        # Resolve variant (normalize + match), store pose_intent + id
-        variant = resolve_pose_variant(character_name, pose)
-        prof = get_character_profile(character_name) or {}
-        prof["pose_intent"] = pose
-        if variant:
-            prof["pose_variant_id"] = variant["id"]
-        save_character_profile(character_name, prof)
-        canonical = (variant or {}).get("canonical_pose") or pose
-        return f"{character_name}: {canonical}"

@@ -1,0 +1,16 @@
+name: instagram
+version: "0.1.0"
+description: Instagram reaction verbs — comment on posts and reply to comments (main posting verb follows after F6)
+
+skills:
+  - skill_id: instagram_comment
+    module: skill_comment.py
+    always_load: true
+    default_enabled: true
+  - skill_id: instagram_reply
+    module: skill_reply.py
+    always_load: true
+    default_enabled: true
+
+templates:
+  llm: templates/llm

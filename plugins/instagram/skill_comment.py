@@ -1,46 +1,41 @@
-"""InstagramComment Skill — Character schreibt Kommentar zu einem fremden Post.
+"""InstagramComment skill — a character comments on someone else's post.
 
-Wird typischerweise aus einem forcierten Gedanken aufgerufen, der durch
-einen neuen Post in der Feed-Verarbeitung getriggert wurde.
+Typically invoked from a forced thought triggered by a new post during
+feed processing.
 
-Input-Format: "post_id: kommentar" oder JSON {"post_id": "...", "text": "..."}
+Input format: "post_id: comment" or JSON {"post_id": "...", "text": "..."}
 """
 from typing import Any, Dict
 
-from .base import BaseSkill, ToolSpec
-
-from app.core.log import get_logger
-logger = get_logger("instagram_comment")
+from app.plugins.base import PluginSkill
+from app.plugins.context import PluginContext
+from app.skills.base import ToolSpec
 
 from app.models.instagram import add_comment, add_character_like, get_post
 
 
-class InstagramCommentSkill(BaseSkill):
-    """Schreibt einen Kommentar zu einem Instagram-Post."""
+class InstagramCommentSkill(PluginSkill):
+    """Writes a comment on an Instagram post."""
 
     SKILL_ID = "instagram_comment"
     ALWAYS_LOAD = True
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("instagram_comment")
-        self.name = meta["name"]
-        self.description = meta["description"]
-        self.action_hint = meta.get("action_hint", "")
+    def __init__(self, config: Dict[str, Any], ctx: PluginContext):
+        super().__init__(config, ctx)
+        # name/description/action_hint come from templates/llm/skills/instagram_comment.md
         self._defaults = {"enabled": True, "auto_like": True}
-        logger.info("InstagramComment Skill initialized")
+        self.ctx.logger.info("InstagramComment skill initialized")
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
             return "InstagramComment Skill is disabled."
 
-        ctx = self._parse_base_input(raw_input)
-        commenter = ctx.get("agent_name", "").strip()
+        data = self._parse_base_input(raw_input)
+        commenter = data.get("agent_name", "").strip()
         if not commenter:
             return "Error: agent context missing."
 
-        post_id, text = _parse_input(ctx)
+        post_id, text = _parse_input(data)
         if not post_id:
             return "Error: post_id missing."
         if not text:
@@ -52,12 +47,12 @@ class InstagramCommentSkill(BaseSkill):
 
         try:
             add_comment(post_id=post_id, commenter_name=commenter, text=text)
-            logger.info("Instagram-Kommentar: %s -> post %s: %s", commenter, post_id, text[:80])
+            self.ctx.logger.info("Instagram comment: %s -> post %s: %s", commenter, post_id, text[:80])
         except Exception as e:
-            logger.error("Comment add failed: %s", e)
+            self.ctx.logger.error("Comment add failed: %s", e)
             return f"Error: {e}"
 
-        # Optional Auto-Like (Default an)
+        # Optional auto-like (on by default)
         cfg = self._get_effective_config(commenter)
         if cfg.get("auto_like", True):
             try:
@@ -73,14 +68,14 @@ class InstagramCommentSkill(BaseSkill):
         try:
             _bump_recomment_audience(post, commenter)
         except Exception as e:
-            logger.debug("Recomment bump skipped: %s", e)
+            self.ctx.logger.debug("Recomment bump skipped: %s", e)
 
         return f"Comment posted on {post_id}: {text[:120]}"
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
         from app.core.tool_formats import format_example
         fmt = format_name or "tag"
-        return format_example(fmt, self.name, "post_abc123: Schoenes Bild!")
+        return format_example(fmt, self.name, "post_abc123: Nice picture!")
 
     def as_tool(self, **kwargs) -> ToolSpec:
         return ToolSpec(
@@ -127,21 +122,21 @@ def _bump_recomment_audience(post: Dict[str, Any], commenter: str) -> None:
         prior_count += 1
 
 
-def _parse_input(ctx: Dict[str, Any]) -> tuple:
-    """Extrahiert (post_id, text) aus dem Input.
+def _parse_input(data: Dict[str, Any]) -> tuple:
+    """Extract (post_id, text) from the input.
 
-    Akzeptiert: JSON-Felder im ctx, oder String 'post_id: text'.
+    Accepts: JSON fields in data, or the string 'post_id: text'.
     """
-    post_id = (ctx.get("post_id") or "").strip()
-    text = (ctx.get("text") or ctx.get("comment") or "").strip()
+    post_id = (data.get("post_id") or "").strip()
+    text = (data.get("text") or data.get("comment") or "").strip()
     if post_id and text:
         return post_id, text
 
-    raw = (ctx.get("input") or "").strip()
+    raw = (data.get("input") or "").strip()
     if not raw:
         return "", ""
     if ":" in raw:
         pid, rest = raw.split(":", 1)
         return pid.strip(), rest.strip()
-    # Fallback: nur post_id ohne Text
+    # Fallback: only post_id without text
     return raw.strip(), text
