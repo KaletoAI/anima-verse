@@ -156,7 +156,7 @@ function PromptField({
       <textarea
         ref={taRef}
         className="ga-input"
-        rows={12}
+        rows={Number(field.rows) > 0 ? Number(field.rows) : 12}
         value={local}
         disabled={disabled}
         onFocus={announceHelp}

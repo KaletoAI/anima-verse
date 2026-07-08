@@ -637,7 +637,12 @@ def _build_tracker_block(character_name: str, current_location_id: str) -> str:
 
 
 def _build_present_people_block(character_name: str, location_id: str) -> str:
-    """Characters at the same location, excluding self. Avatar marked."""
+    """Characters at the same location, excluding self. Avatar marked.
+
+    Each person carries what the character can SEE: a short outfit line
+    (worn pieces) and visibly triggered states ('drunk', 'aroused', ...)
+    — without this, an NPC never knows what the people around it look
+    like right now (the rendered image knows, the mind didn't)."""
     if not location_id:
         return ""
     try:
@@ -645,16 +650,33 @@ def _build_present_people_block(character_name: str, location_id: str) -> str:
         from app.models.account import get_active_character
         avatar = (get_active_character() or "").strip()
         people = get_characters_at_location(location_id) or []
-        names = []
-        for p in people:
+        lines = []
+        for p in people[:8]:
             n = (p.get("name") or "").strip()
             if not n or n == character_name:
                 continue
             label = f"{n} (avatar)" if n == avatar else n
-            names.append(label)
-        if not names:
+            details = []
+            try:
+                from app.core.outfit_renderer import render_outfit
+                outfit = (render_outfit(character_name=n).get("full", "") or "").strip()
+                if outfit:
+                    if len(outfit) > 110:
+                        outfit = outfit[:110].rstrip(", ") + "…"
+                    details.append(outfit)
+            except Exception:
+                pass
+            try:
+                from app.core.prompt_filters import triggered_state_labels
+                states = triggered_state_labels(n, location_id)
+                if states:
+                    details.append("visibly " + ", ".join(states[:4]))
+            except Exception:
+                pass
+            lines.append(f"- {label}" + (f": {'; '.join(details)}" if details else ""))
+        if not lines:
             return ""
-        return ", ".join(names)
+        return "\n".join(lines)
     except Exception as e:
         logger.debug("present_people block failed for %s: %s", character_name, e)
         return ""

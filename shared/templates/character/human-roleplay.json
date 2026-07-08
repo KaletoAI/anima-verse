@@ -124,7 +124,7 @@
           "multiline": true,
           "hint": "Free-text personal style hint used when generating outfits, e.g. \"often barefoot, no underwear, shirtless at home\". Room decency still enforces coverage — this only nudges style.",
           "hint_de": "Freitext-Stilhinweis für die Outfit-Erstellung, z.B. \"oft barfuß, keine Unterwäsche, zuhause oben ohne\". Die Raum-Decency erzwingt weiterhin die Bedeckung — das nudged nur den Stil.",
-          "rows": 2
+          "rows": 6
         },
         {
           "key": "popularity",
@@ -214,7 +214,7 @@
           "prompt_label": "Appearance",
           "default": "{gender}, {skin_color} skin, {size} height, {body_type} body frame, {hair_length} {hair_color} hair, {eye_color} colored eyes",
           "llm_generable": true,
-          "rows": 2
+          "rows": 6
         }
       ]
     },
@@ -238,7 +238,7 @@
           "image_preview": "profile",
           "default": "{gender}, {skin_color} skin, {hair_length} {hair_color} hair, {eye_color} colored eyes",
           "llm_generable": true,
-          "rows": 2
+          "rows": 6
         }
       ]
     },

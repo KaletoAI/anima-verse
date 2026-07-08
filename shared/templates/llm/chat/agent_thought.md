@@ -10,7 +10,7 @@
    Optional pre-formatted blocks (omit / empty string to skip):
      effects_block             — active status modifiers (drunk, exhausted, …)
      outfit_self_block         — own equipped outfit summary (situation line)
-     present_people_block      — characters at the same location
+     present_people_block      — characters at the same location incl. visible outfit/states
      inbox_block               — High prio: unread chat-history messages
      events_block              — High prio: acute events at location
      assignments_block         — Medium: active assignments
@@ -47,7 +47,8 @@ Current situation:
 - {{ outfit_self_block }}
 {% endif %}
 {% if present_people_block %}
-- Also present here: {{ present_people_block }}
+- Also present here (what you can see of them):
+{{ present_people_block }}
 {% endif %}
 {% if daily_schedule_block %}
 

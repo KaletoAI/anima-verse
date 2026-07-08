@@ -146,7 +146,7 @@ export function WardrobeTab({ character }: { character: string }) {
   return (
     <div style={{ display: 'flex', gap: 12, height: '100%', minHeight: 0, fontSize: '0.9em' }}>
       {/* ── Links: Item-Vergabe + Slot-Filter + Outfit-Liste ── */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ flex: '1.5 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {/* Items an den Character geben */}
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <select className="ga-input" style={{ flex: 1, minWidth: 0, padding: '3px 8px', fontSize: '0.85em' }}
@@ -254,7 +254,7 @@ export function WardrobeTab({ character }: { character: string }) {
 
       {/* ── Rechts: Vorschaubild oben, Effektiv-Prompts unten — beides
           aktualisiert mit jedem An-/Ausziehen (data reload). ── */}
-      <div style={{ flex: '1 1 30%', minWidth: 220, display: 'flex', flexDirection: 'column',
+      <div style={{ flex: '1 1 0', minWidth: 220, display: 'flex', flexDirection: 'column',
                     gap: 10, minHeight: 0, overflow: 'auto' }}>
         <FieldImage character={character} kind="appearance" />
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 8 }}>
