@@ -55,6 +55,7 @@ app/plugins/                      # Paket-Infrastruktur
 name: intimacy
 version: "1.0.0"
 description: Kurzbeschreibung des Pakets
+capability_label: "Intimacy"    # EIN UI-Toggle für alle Verben des Pakets
 
 # Verben — Kurzform (skill_id/module top-level) oder Listenform:
 skills:
@@ -63,7 +64,6 @@ skills:
     class: IntimateSkill        # Default: erste PluginSkill-Subklasse im Modul
     params: {active: true}      # Konstruktor-Kwargs (parametrisierte Verben)
     always_load: true           # immer laden, Aktivierung per Character
-    pair_with: end_intimate     # UI-Hinweis: gekoppelter Toggle
     default_enabled: false      # bei neuen Charakteren default-aktiv
 
 templates:
