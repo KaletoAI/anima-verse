@@ -63,6 +63,25 @@ class FlagSpec:
 
 
 @dataclass
+class BodySlotSpec:
+    """A body slot declared by a species package (plan-body-slots.md).
+
+    The core executes these declarations generically: visibility comes from
+    ``equipped_pieces`` vs ``covered_by``; prompt fragments carry ``{attr}``
+    placeholders resolved from the character's stored slot values. ``always``
+    renders unconditionally, ``covered`` only while covered, ``exposed`` only
+    while uncovered — covered/always flow into the general person description
+    (decision F1), exposed is the explicit variant.
+    """
+    id: str
+    package_id: str
+    covered_by: List[str] = field(default_factory=list)   # clothing slots that cover it
+    applies_to: Dict[str, List[str]] = field(default_factory=dict)  # profile field -> allowed values
+    attributes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    prompt: Dict[str, str] = field(default_factory=dict)  # always | covered | exposed
+
+
+@dataclass
 class Package:
     id: str
     dir: Path
@@ -72,6 +91,14 @@ class Package:
     character_fragments: List[Dict[str, Any]] = field(default_factory=list)
     config_subsections: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     flags: List[FlagSpec] = field(default_factory=list)
+    # Species content (plan-body-slots.md): scoped by `apply_to` (template
+    # selector, same semantics as fragment apply_to; fallback = the package's
+    # fragment selectors). A species defines the FULL slot topology:
+    # body slots AND the clothing-slot list AND the UI silhouette.
+    apply_to: Any = None
+    silhouette: Dict[str, Any] = field(default_factory=dict)  # {"asset": relpath, ...}
+    body_slots: List[BodySlotSpec] = field(default_factory=list)
+    piece_slots: List[str] = field(default_factory=list)      # clothing-slot topology; empty = core default
     # Package dependencies (F9): ids of other packages.
     # requires — must be PRESENT for this package to load at all, and ACTIVE
     #            on a character before this package's skills can be enabled.

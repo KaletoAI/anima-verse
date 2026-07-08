@@ -48,6 +48,20 @@ intimacy-Paket). Der Core kennt keinen Stat-Namen.
 | Aktivitäts-Tick (automatisch) | Der Agent-Loop bewertet die LAUFENDE Freitext-Aktivität gegen alle Stats — kein Library-Lookup; wiederverwendbar für jedes Paket (Workout ⇒ Stamina/Fitness-Deklaration + Hints genügt) |
 | `app.models.character.adjust_status_effects(name, deltas, source)` | Direkte Deltas ohne LLM-Runde (clamped 0–100) |
 
+## Body-Slots — `app.core.body_slots` ✅ (Spezies-Pakete)
+
+| Funktion | Semantik |
+|---|---|
+| `slots_for_character(name)` | anwendbare Slot-Deklarationen (Spezies-Template + applies_to) |
+| `slot_values(name)` / `set_slot_value(name, slot, attr, value)` | gespeicherte Attribut-Werte (Profil, Stammdaten) |
+| `prompt_fragments(name)` | `{general, exposed}` — general = always+covered (Personenbeschreibung, F1), exposed nur unbedeckt |
+| `appearance_suffix(name)` | kombinierter Text; hängt der PromptBuilder automatisch an die Appearance an |
+| `piece_slots_for_character(name)` | Kleidungs-Slot-Topologie der Spezies (Fallback `VALID_PIECE_SLOTS`) |
+| `silhouette_for_character(name)` | Silhouetten-Deklaration des Spezies-Pakets (UI) |
+
+Deklaration ausschließlich über das Manifest (`body_slots`/`piece_slots`/
+`silhouette` + `apply_to`) — siehe docs/plugins.md.
+
 ## Outfit / Decency — `app.core.outfit_compliance` ✅
 
 | Funktion | Semantik |

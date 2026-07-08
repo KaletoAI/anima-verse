@@ -104,6 +104,10 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `state_flags` | nein | Flag-Deklarationen mit Lebenszyklus |
 | `requires` | nein | Paket-IDs, die vorhanden UND am Charakter aktiv sein müssen. Fehlt ein Paket im Dateisystem, bleibt dieses Paket komplett inert; ist es am Charakter inaktiv, lassen sich die Verben nicht aktivieren |
 | `conflicts` | nein | Paket-IDs: solange eines davon am Charakter aktiv ist, sind die Verben dieses Pakets nicht aktivierbar (wirkt in beide Richtungen) |
+| `apply_to` | nein | Template-Selektor (Namen/`*`/`{feature}`) für Spezies-Inhalte (silhouette/body_slots/piece_slots); ohne ihn zählen die Fragment-Selektoren |
+| `silhouette` | nein | `{asset: <relpath>}` — UI-Paper-Doll der Spezies (Datei im Paket) |
+| `body_slots` | nein | Körper-Slot-Deklarationen (s.u.) — Sichtbarkeit, Attribute, Prompt-Fragmente |
+| `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies; ohne Deklaration gilt der Core-Default (`VALID_PIECE_SLOTS`) |
 | `enabled_default` | nein | Lade-Gate-Default für Pakete OHNE always_load-Verben, wenn weder `skills.<id>.enabled` in der Config noch die Env-Bridge etwas sagen (z.B. `true` für Kern-Verben wie talk_to) |
 | `env_prefix` | nein | Nur Altbestand (Env-Bridge); neue Pakete nutzen `ctx.get_config` |
 
@@ -146,6 +150,33 @@ plus `apply_to`-Selektor:
 `apply_to`: `"*"` (alle Templates) · Liste von Template-Namen · `{"feature": "<flag>"}`
 (alle Templates mit diesem Feature). Wird das Paket entfernt, verschwinden seine
 Felder aus den Templates — paketeigene Stats gehören damit dem Paket (R2).
+
+### Body-Slots (Spezies-Pakete)
+
+Der Body-Slot-Core (`app/core/body_slots.py`, plan-body-slots.md) führt die
+Deklarationen aus — kein Slot-/Spezies-Name im Core; eine neue Spezies ist ein
+neues Content-Paket:
+
+```yaml
+apply_to: ["human-roleplay"]      # welche Templates diese Spezies sind
+silhouette: {asset: assets/silhouette.svg}
+piece_slots: [top, bottom, underwear_top, underwear_bottom, feet]
+body_slots:
+  - id: breast
+    covered_by: [top, underwear_top]      # verdeckende Kleidungs-Slots; ohne = immer sichtbar
+    applies_to: {gender: [female, girl]}  # Profil-Feld-Bedingungen
+    attributes:
+      size: {type: select, options: [small, medium, large], interest_aliases: {...}}
+      lora: {type: lora_select}           # Mechanismus; das konkrete LoRA bleibt per-NPC-Config
+    prompt:
+      always: "…"                         # immer (z.B. Haare)
+      covered: "{size} bust"              # nur bedeckt → fließt in die allgemeine Personenbeschreibung
+      exposed: "exposed {size} breasts"   # nur unbedeckt
+```
+
+Werte pro Charakter liegen im Profil (`body_slots: {breast: {size: large}}`).
+Fragmente mit fehlenden Attribut-Werten entfallen komplett (kein halb gerendertes
+`{size}`). Die Fragmente gehen auch mit Referenzbild mit (F3).
 
 ### State-Flags
 

@@ -403,7 +403,7 @@ class PromptBuilder:
         return persons
 
     def _resolve_character_appearance(self, name: str) -> str:
-        """Loest Appearance-Text mit Template-Token-Ersetzung auf."""
+        """Resolves the appearance text with template token replacement."""
         appearance = get_character_appearance(name)
         if appearance and "{" in appearance:
             profile = get_character_profile(name)
@@ -411,6 +411,17 @@ class PromptBuilder:
             appearance = resolve_profile_tokens(
                 appearance, profile, template=tmpl, target_key="character_appearance"
             )
+        # Body slots (species packages, plan-body-slots.md): always/covered
+        # fragments extend the general person description, exposed fragments
+        # render only while uncovered. Also sent with reference images (F3).
+        # Empty without species packages — safe no-op.
+        try:
+            from app.core.body_slots import appearance_suffix
+            suffix = appearance_suffix(name)
+        except Exception:
+            suffix = ""
+        if suffix:
+            appearance = f"{appearance}, {suffix}" if appearance else suffix
         return appearance or ""
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:

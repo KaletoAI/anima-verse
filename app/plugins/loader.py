@@ -51,7 +51,7 @@ from app.core.log import get_logger
 from app.plugins.context import PluginContext
 from app.plugins.base import PluginSkill
 from app.plugins import registry
-from app.plugins.registry import FlagSpec, Package, SkillEntry
+from app.plugins.registry import BodySlotSpec, FlagSpec, Package, SkillEntry
 
 logger = get_logger("plugin_loader")
 
@@ -190,6 +190,28 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     pkg.requires = [str(x).strip() for x in (meta.get("requires") or []) if str(x).strip()]
     pkg.conflicts = [str(x).strip() for x in (meta.get("conflicts") or []) if str(x).strip()]
 
+    # Species content (plan-body-slots.md): silhouette, body slots and the
+    # clothing-slot topology, scoped by the package-level apply_to selector.
+    pkg.apply_to = meta.get("apply_to")
+    sil = meta.get("silhouette") or {}
+    if isinstance(sil, dict):
+        pkg.silhouette = sil
+    for bdef in meta.get("body_slots") or []:
+        if not isinstance(bdef, dict) or not bdef.get("id"):
+            continue
+        pkg.body_slots.append(BodySlotSpec(
+            id=str(bdef["id"]).strip(),
+            package_id=pkg.id,
+            covered_by=[str(x).strip() for x in (bdef.get("covered_by") or [])],
+            applies_to={str(k): [str(v).strip() for v in vals]
+                        for k, vals in (bdef.get("applies_to") or {}).items()
+                        if isinstance(vals, list)},
+            attributes={str(k): dict(v) for k, v in (bdef.get("attributes") or {}).items()
+                        if isinstance(v, dict)},
+            prompt={str(k): str(v) for k, v in (bdef.get("prompt") or {}).items()},
+        ))
+    pkg.piece_slots = [str(x).strip() for x in (meta.get("piece_slots") or []) if str(x).strip()]
+
     for fdef in meta.get("state_flags") or []:
         if not isinstance(fdef, dict) or not fdef.get("flag"):
             continue
@@ -203,11 +225,13 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
         ))
 
     # Content-only packages (no verbs) are allowed as long as they contribute
-    # SOMETHING (templates, fragments, config, flags). Contributions apply as
-    # soon as the package sits in the filesystem; the enabled gate only
-    # governs verb loading.
+    # SOMETHING (templates, fragments, config, flags, species content).
+    # Contributions apply as soon as the package sits in the filesystem; the
+    # enabled gate only governs verb loading.
     if not pkg.skills and not (pkg.llm_template_dir or pkg.character_fragments
-                               or pkg.config_subsections or pkg.flags):
+                               or pkg.config_subsections or pkg.flags
+                               or pkg.silhouette or pkg.body_slots
+                               or pkg.piece_slots):
         logger.warning("Package %s: neither skills nor contributions in plugin.yaml",
                        entry_dir.name)
         return None
