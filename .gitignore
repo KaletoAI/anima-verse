@@ -91,6 +91,9 @@ shared/templates/**/*nsfw*
 # (source project: ../anima-verse-packs), never shipped in this repo.
 plugins/intimacy
 
+# Marketplace-installed skill packages (never repo content)
+plugins/installed/
+
 # Worlds (each world is a separate storage directory)
 worlds/*
 !worlds/demo/

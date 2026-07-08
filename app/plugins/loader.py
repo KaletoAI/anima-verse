@@ -57,6 +57,10 @@ logger = get_logger("plugin_loader")
 
 # Default directory: <project_root>/plugins/
 PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent / "plugins"
+# Marketplace-installed packages live one level below in a fully gitignored
+# dir — repo files and installed content never collide (same policy as
+# world-level content packs). Repo packages win on id collision.
+INSTALLED_DIR_NAME = "installed"
 
 _discovered = False
 
@@ -218,10 +222,20 @@ def discover_packages(plugin_dir: Optional[Path] = None,
 
     base = plugin_dir or PLUGIN_DIR
     registry.clear_registry()
-    if base.exists():
-        for entry in sorted(base.iterdir()):
+
+    def _scan(root: Path, *, installed: bool) -> None:
+        if not root.exists():
+            if not installed:
+                logger.info("Plugin directory not found: %s", root)
+            return
+        for entry in sorted(root.iterdir()):
             manifest = entry / "plugin.yaml"
             if not entry.is_dir() or not manifest.exists():
+                continue
+            if installed and registry.get_package(entry.name):
+                logger.warning(
+                    "Installed package '%s' shadows a repo package — skipped",
+                    entry.name)
                 continue
             try:
                 meta = _load_yaml(manifest)
@@ -231,8 +245,9 @@ def discover_packages(plugin_dir: Optional[Path] = None,
             pkg = _parse_package(entry, meta)
             if pkg:
                 registry.register_package(pkg)
-    else:
-        logger.info("Plugin directory not found: %s", base)
+
+    _scan(base, installed=False)
+    _scan(base / INSTALLED_DIR_NAME, installed=True)
 
     if plugin_dir is None:
         _discovered = True

@@ -9,6 +9,10 @@ State-Flag-Deklarationen. Regeln und Architektur:
 Der Migrationsstand ist am Dateisystem ablesbar: Was unter `plugins/` liegt, ist
 regelkonform paketiert; was noch in `app/skills/*.py` liegt, ist unmigrierter Altbestand.
 
+Zusätzlich scannt der Loader **`plugins/installed/`** (komplett gitignored) — dort
+landen über den Marketplace installierte Pakete, getrennt von Repo-Inhalten
+(Plan: plan-nsfw-marketplace-packs.md). Bei ID-Kollision gewinnt das Repo-Paket.
+
 Die **aufrufbaren Core-Schnittstellen** (Flags, Stats, Compliance, Beziehung, Welt,
 LLM, …) sind in `docs/skill-core-api.md` dokumentiert — jede Migration pflegt die
 dort genutzten Einträge nach.
