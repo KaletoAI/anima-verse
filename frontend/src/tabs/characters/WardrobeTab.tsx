@@ -210,8 +210,8 @@ export function WardrobeTab({ character }: { character: string }) {
         )}
       </div>
 
-      {/* ── Rechts: Figur + Outfit-Symbole (Paper-Doll) ── */}
-      <div style={{ flex: '0 0 auto', maxWidth: '55%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, overflow: 'hidden' }}>
+      {/* ── Mitte: Figur + Outfit-Symbole (Paper-Doll) ── */}
+      <div style={{ flex: '0 0 auto', maxWidth: '32%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
           <div ref={figRef} style={{ position: 'relative', height: '100%', display: 'inline-flex' }}>
             <img src={data.silhouette_url || '/static/game_admin/silhouette.svg'} alt={data.avatar}
@@ -250,17 +250,16 @@ export function WardrobeTab({ character }: { character: string }) {
         </div>
         {/* Appearance preview under the paper doll: the full-body render
             depends on the worn outfit, so it lives with the wardrobe. */}
-        <div style={{ flex: '0 0 auto', maxHeight: '45%', overflow: 'auto', display: 'flex', gap: 10,
-                      alignItems: 'flex-start', borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 6 }}>
-          {/* Effective prompts (left) incl. coverage — updates with every
-              equip/unequip (data reload); appearance render right. */}
-          <div style={{ flex: '1 1 60%', minWidth: 0 }}>
-            <PromptPreview character={character}
-              refreshKey={JSON.stringify(data.equipped)} />
-          </div>
-          <div style={{ flex: '0 1 40%', minWidth: 120 }}>
-            <FieldImage character={character} kind="appearance" />
-          </div>
+      </div>
+
+      {/* ── Rechts: Vorschaubild oben, Effektiv-Prompts unten — beides
+          aktualisiert mit jedem An-/Ausziehen (data reload). ── */}
+      <div style={{ flex: '1 1 30%', minWidth: 220, display: 'flex', flexDirection: 'column',
+                    gap: 10, minHeight: 0, overflow: 'auto' }}>
+        <FieldImage character={character} kind="appearance" />
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 8 }}>
+          <PromptPreview character={character}
+            refreshKey={JSON.stringify(data.equipped)} />
         </div>
       </div>
     </div>
