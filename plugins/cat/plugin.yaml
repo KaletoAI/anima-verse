@@ -1,0 +1,59 @@
+name: cat
+version: "1.0.0"
+description: Cat species — feline body slots, minimal clothing topology and its own silhouette
+
+# Second species (proof of the species mechanism): different silhouette,
+# different slots, different clothing topology. Mutually exclusive with
+# the human species on a character (F9).
+conflicts: [human]
+apply_to: ["animal-default"]
+
+silhouette:
+  asset: assets/silhouette.svg
+  anchors:
+    head: [50, 12]
+    neck: [50, 42]
+
+# A cat wears at most a collar and maybe headwear — no shoes (F2: the
+# species defines which clothing slots exist).
+piece_slots:
+  - {id: neck, label: Collar}
+  - {id: head, label: Headwear}
+
+body_slots:
+  - id: fur
+    attributes:
+      color:
+        type: select
+        allow_custom: true
+        options: [black, white, gray, orange, brown, cream]
+      pattern:
+        type: select
+        allow_custom: true
+        options: [solid, tabby, tuxedo, calico, tortoiseshell, spotted]
+    prompt:
+      always: "{color} fur with {pattern} markings"
+  - id: eyes
+    attributes:
+      color:
+        type: select
+        allow_custom: true
+        options: [green, yellow, amber, blue, copper, odd-eyed]
+    prompt:
+      always: "{color} eyes"
+  - id: ears
+    attributes:
+      type:
+        type: select
+        allow_custom: true
+        options: [pointed, folded, large, small]
+    prompt:
+      always: "{type} ears"
+  - id: tail
+    attributes:
+      type:
+        type: select
+        allow_custom: true
+        options: [long, short, fluffy, bobbed]
+    prompt:
+      always: "{type} tail"

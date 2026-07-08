@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300">
+  <!-- Schematic sitting-cat silhouette (species paper-doll asset). -->
+  <g fill="#9aa4b2" fill-rule="evenodd">
+    <!-- ears -->
+    <path d="M62 38 L76 6 L92 34 Z"/>
+    <path d="M138 38 L124 6 L108 34 Z"/>
+    <!-- head -->
+    <circle cx="100" cy="52" r="34"/>
+    <!-- body (sitting) -->
+    <path d="M100 84
+             C 62 96, 44 150, 46 210
+             C 47 258, 66 284, 100 286
+             C 134 284, 153 258, 154 210
+             C 156 150, 138 96, 100 84 Z"/>
+    <!-- front legs -->
+    <rect x="78" y="220" width="14" height="66" rx="7"/>
+    <rect x="108" y="220" width="14" height="66" rx="7"/>
+    <!-- tail -->
+    <path d="M154 230
+             C 186 222, 196 252, 184 274
+             C 176 288, 158 292, 150 284
+             C 158 280, 170 272, 170 258
+             C 170 244, 160 238, 148 242 Z"/>
+  </g>
+</svg>
