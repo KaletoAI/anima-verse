@@ -1,4 +1,4 @@
-"""SendMessage skill — remote message to another character.
+"""SendMessage package — remote message to another character.
 
 For remote communication (character not at the same place). Default medium
 is "messaging" (internal message window / phone panel).
@@ -8,33 +8,32 @@ Input formats:
   - JSON: {"to": "Luna", "message": "look!", "attach_image": true} — with
     attach_image the image generated in the SAME turn is attached to the DM
     (the streaming layer defers such calls until after the image tools ran).
+
+Manifest flags (F6/F7): remote_comm, cascade_brake, intents [send_message] +
+intent_payload_keys — the loader stamps them. The declaration METHODS
+(handle_intent / tool_intent_payload / defer_for_attachment) stay as code.
 """
 from typing import Any, Dict
 
-from .base import BaseSkill, ToolSpec
+from app.plugins.base import PluginSkill
+from app.plugins.context import PluginContext
+from app.skills.base import ToolSpec
 
 from app.core.log import get_logger
 logger = get_logger("send_message")
 
 from app.models.character import list_available_characters
-
 from app.core.timeutils import utc_now_iso
 
 
-class SendMessageSkill(BaseSkill):
+class SendMessageSkill(PluginSkill):
     """Sends a remote message to another character.
 
     Independent of location. The target LLM replies via the central chat
     engine with medium="messaging". The result is returned as skill output.
     """
-    CASCADE_BRAKE = True
 
     SKILL_ID = "send_message"
-    # [INTENT: send_message | message=...] (F6) — the deferred follow-up
-    # message goes through the chat endpoint, not through execute().
-    REMOTE_COMM = True  # reaches characters not present (setup checklist)
-    INTENT_TYPES = ("send_message",)
-    INTENT_PAYLOAD_KEYS = ("content", "message")
 
     def handle_intent(self, intent_type, payload):
         """[INTENT: send_message]: post the follow-up via the chat endpoint
@@ -81,33 +80,29 @@ class SendMessageSkill(BaseSkill):
         parts = s.split(",", 1)
         return parts[1] if len(parts) > 1 else s
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("send_message")
-        self.name = meta["name"]
-        self.description = meta["description"]
-        self.action_hint = meta.get("action_hint", "")
+    def __init__(self, config: Dict[str, Any], ctx: PluginContext):
+        super().__init__(config, ctx)
+        # name/description/action_hint come from templates/llm/skills/send_message.md
         self._defaults = {"enabled": True}
-        logger.info("SendMessage Skill initialized")
+        self.ctx.logger.info("SendMessage skill initialized")
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
             return "SendMessage Skill is disabled."
 
-        ctx = self._parse_base_input(raw_input)
-        input_text = ctx.get("input", raw_input).strip()
-        sender_name = ctx.get("agent_name", "").strip()
-        user_id = ctx.get("user_id", "").strip()
+        data = self._parse_base_input(raw_input)
+        input_text = data.get("input", raw_input).strip()
+        sender_name = data.get("agent_name", "").strip()
+        user_id = data.get("user_id", "").strip()
 
         if not sender_name:
             return "Error: sender context missing."
 
-        # JSON form ({"to", "message", "attach_image"} merged into ctx by
+        # JSON form ({"to", "message", "attach_image"} merged into data by
         # _parse_base_input) takes precedence; legacy form: "Name, message".
-        target_raw = str(ctx.get("to") or "").strip()
-        message = str(ctx.get("message") or "").strip()
-        attach_image = bool(ctx.get("attach_image"))
+        target_raw = str(data.get("to") or "").strip()
+        message = str(data.get("message") or "").strip()
+        attach_image = bool(data.get("attach_image"))
         if not (target_raw and message):
             if not input_text:
                 return "Error: empty input. Format: 'CharacterName, message'"
@@ -139,9 +134,9 @@ class SendMessageSkill(BaseSkill):
         from app.models.account import is_player_controlled as _is_pc
         target_is_avatar = _is_pc(target_name)
 
-        logger.info("SendMessage %s -> %s: %s", sender_name, target_name, message[:100])
+        self.ctx.logger.info("SendMessage %s -> %s: %s", sender_name, target_name, message[:100])
 
-        initiator = ctx.get("initiator", "").strip()
+        initiator = data.get("initiator", "").strip()
         if initiator and initiator != sender_name:
             try:
                 from app.core.pending_reports import add_report
@@ -152,7 +147,7 @@ class SendMessageSkill(BaseSkill):
                     target=target_name,
                     trigger_type="message_response")
             except Exception as e:
-                logger.debug("pending_report add failed: %s", e)
+                self.ctx.logger.debug("pending_report add failed: %s", e)
 
         # Optional image attachment: the image generated in this turn. The
         # streaming layer defers attach-sends until after the image tools, so
@@ -162,11 +157,11 @@ class SendMessageSkill(BaseSkill):
         if attach_image:
             attached_image = _resolve_turn_image(sender_name)
             if attached_image:
-                logger.info("SendMessage %s: attaching image %s",
-                            sender_name, attached_image)
+                self.ctx.logger.info("SendMessage %s: attaching image %s",
+                                     sender_name, attached_image)
             else:
-                logger.info("SendMessage %s: attach_image requested but no "
-                            "recent image found — sending text only", sender_name)
+                self.ctx.logger.info("SendMessage %s: attach_image requested but no "
+                                     "recent image found — sending text only", sender_name)
         _msg_meta = {"image": attached_image} if attached_image else {}
 
         # Asynchronous: store the message + notification + schedule a
@@ -174,7 +169,6 @@ class SendMessageSkill(BaseSkill):
         # reply — that is DM semantics (messaging, not a call). Waiting
         # synchronously would blow the outer thought timeout on nested
         # LLM-queue calls.
-        from datetime import datetime
         ts = utc_now_iso()
 
         try:
@@ -192,7 +186,7 @@ class SendMessageSkill(BaseSkill):
                 "metadata": _msg_meta,
             }, character_name=sender_name, partner_name=target_name)
         except Exception as e:
-            logger.error("SendMessage: saving chat history failed: %s", e)
+            self.ctx.logger.error("SendMessage: saving chat history failed: %s", e)
 
         # Push bridge (Telegram option B): if the target is a Telegram-bound
         # avatar of this sender (NPC), deliver the message to the Telegram
@@ -205,7 +199,7 @@ class SendMessageSkill(BaseSkill):
             for cid in tg.chat_ids_for(npc=sender_name, avatar=target_name):
                 enqueue_telegram_outbound(cid, sender_name, message)
         except Exception as _be:
-            logger.debug("telegram outbound enqueue failed: %s", _be)
+            self.ctx.logger.debug("telegram outbound enqueue failed: %s", _be)
 
         # Notification only for character→character (keeps the system event
         # feed clean of "X wrote Y" spam). For an avatar target the chat
@@ -215,11 +209,11 @@ class SendMessageSkill(BaseSkill):
                 from app.models.notifications import create_notification
                 create_notification(
                     character=sender_name,
-                    content=f"Nachricht an {target_name}: {message[:500]}",
+                    content=f"Message to {target_name}: {message[:500]}",
                     notification_type="message",
                     metadata={"trigger": "send_message", "to": target_name})
             except Exception as e:
-                logger.debug("SendMessage: Notification fehlgeschlagen: %s", e)
+                self.ctx.logger.debug("SendMessage: notification failed: %s", e)
 
         # AgentLoop bump: recipient gets prioritised on the next slot so
         # they see the inbox message soon (not waiting for their normal
@@ -229,7 +223,7 @@ class SendMessageSkill(BaseSkill):
                 from app.core.agent_loop import get_agent_loop
                 get_agent_loop().bump(target_name)
             except Exception as e:
-                logger.debug("SendMessage: AgentLoop bump failed: %s", e)
+                self.ctx.logger.debug("SendMessage: AgentLoop bump failed: %s", e)
 
         # Resolve: if this send resolves an open pending_report, mark it.
         # Heuristic: target == initiator of an open report.
@@ -243,7 +237,7 @@ class SendMessageSkill(BaseSkill):
                     mark_resolved(sender_name, r["id"])
                     break
         except Exception as e:
-            logger.debug("pending_report resolve failed: %s", e)
+            self.ctx.logger.debug("pending_report resolve failed: %s", e)
 
         if attached_image:
             return (f"Message with photo sent to {target_name}. "
@@ -277,31 +271,27 @@ def _resolve_turn_image(sender_name: str) -> str:
     thread-local slot first, instance mirror as fallback (the deferred
     SendMessage may run on a different worker thread than the image tool).
     The meta must belong to the sender. Fallback: the sender's newest
-    gallery file, if it is fresh (≤ 15 min).
+    gallery file, if it is fresh (<= 15 min).
     """
     from urllib.parse import quote
     try:
-        from app.core.dependencies import get_skill_manager
-        from app.skills.image_generation_skill import ImageGenerationSkill
-        for sk in get_skill_manager().skills:
-            if not isinstance(sk, ImageGenerationSkill):
+        from app.imagegen.service import get_image_service
+        sk = get_image_service()
+        metas = []
+        tls = getattr(sk, "_meta_tls", None)
+        if tls is not None:
+            metas.append(getattr(tls, "last_image_meta", None))
+        metas.append(getattr(sk, "last_image_meta", None))
+        for meta in metas:
+            if not isinstance(meta, dict):
                 continue
-            metas = []
-            tls = getattr(sk, "_meta_tls", None)
-            if tls is not None:
-                metas.append(getattr(tls, "last_image_meta", None))
-            metas.append(getattr(sk, "last_image_meta", None))
-            for meta in metas:
-                if not isinstance(meta, dict):
-                    continue
-                files = meta.get("filenames") or []
-                owner = str(meta.get("gallery_character") or "")
-                if files and owner == sender_name:
-                    return (f"/characters/{quote(owner)}"
-                            f"/images/{quote(str(files[-1]))}")
-            break
+            files = meta.get("filenames") or []
+            owner = str(meta.get("gallery_character") or "")
+            if files and owner == sender_name:
+                return (f"/characters/{quote(owner)}"
+                        f"/images/{quote(str(files[-1]))}")
     except Exception as e:
-        logger.debug("attach_image: skill meta lookup failed: %s", e)
+        logger.debug("attach_image: service meta lookup failed: %s", e)
     try:
         import time
         from app.models.character import get_character_images_dir

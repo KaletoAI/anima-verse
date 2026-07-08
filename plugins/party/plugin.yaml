@@ -1,0 +1,23 @@
+name: party
+version: "1.0.0"
+description: Party verbs — travel together as a group (invite / join / leave); the leader moves, followers are dragged along
+
+skills:
+  - skill_id: invite_to_party
+    class: PartySkill
+    params: {verb: invite}
+    always_load: true
+    default_enabled: true
+  - skill_id: join_party
+    class: PartySkill
+    params: {verb: join}
+    always_load: true
+    default_enabled: true
+  - skill_id: leave_party
+    class: PartySkill
+    params: {verb: leave}
+    always_load: true
+    default_enabled: true
+
+templates:
+  llm: templates/llm

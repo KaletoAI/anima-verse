@@ -1,0 +1,16 @@
+name: sleep
+version: "1.0.0"
+description: Sleep/WakeUp verbs — set the is_sleeping flag and move the character off-map while asleep
+
+skills:
+  - skill_id: sleep
+    class: SleepWakeSkill
+    params: {asleep: true}
+    always_load: true
+  - skill_id: wakeup
+    class: SleepWakeSkill
+    params: {asleep: false}
+    always_load: true
+
+templates:
+  llm: templates/llm

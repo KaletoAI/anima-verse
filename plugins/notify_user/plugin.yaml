@@ -1,0 +1,13 @@
+name: notify_user
+version: "1.0.0"
+description: SendNotification verb — a character proactively sends a system notification to the active avatar
+
+skills:
+  - skill_id: notify_user
+    always_load: true
+    default_enabled: true
+    user_notification: true       # result becomes a user notification (Telegram forward)
+    progress_type: notification
+
+templates:
+  llm: templates/llm

@@ -822,11 +822,7 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_SEARX_NUM_RESULTS", searx.get("num_results", 5))
 
     for skill_key, env_prefix_map in [
-        ("send_message", "SKILL_SEND_MESSAGE"),
         ("act", "SKILL_ACT"),
-        ("invite_to_party", "SKILL_INVITE_TO_PARTY"),
-        ("join_party", "SKILL_JOIN_PARTY"),
-        ("leave_party", "SKILL_LEAVE_PARTY"),
     ]:
         s = skills.get(skill_key, {})
         _set(env, f"{env_prefix_map}_ENABLED", s.get("enabled", True))

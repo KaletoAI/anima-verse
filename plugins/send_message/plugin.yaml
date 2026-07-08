@@ -1,0 +1,21 @@
+name: send_message
+version: "1.0.0"
+description: SendMessage verb — remote text message to a character not present (optional image attachment from the same turn)
+
+skills:
+  - skill_id: send_message
+    always_load: true
+    default_enabled: true
+    remote_comm: true             # reaches characters NOT present (world-setup checklist)
+    cascade_brake: true           # reply_only_to gate for messaging cascades
+    intents: [send_message]       # [INTENT: send_message] follow-up (F6)
+    intent_payload_keys: [content, message]
+
+templates:
+  llm: templates/llm
+
+config_schema:
+  send_message:
+    label: SendMessage (remote)
+    fields:
+      enabled: {type: bool, label: Enabled, default: true}
