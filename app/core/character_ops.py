@@ -1297,8 +1297,20 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
             "attributes": attrs,
         })
     sil = silhouette_for_character(character_name)
+    # Clothing topology of the species — consumers like the image
+    # slot-overrides editor render per-slot UI from this instead of a
+    # hardcoded human list.
+    from app.core.body_slots import declared_piece_slots
+    _declared = declared_piece_slots(character_name)
+    if _declared:
+        piece_ids, piece_labels = _declared
+    else:
+        from app.models.inventory import VALID_PIECE_SLOTS
+        piece_ids, piece_labels = tuple(VALID_PIECE_SLOTS), {}
     return {
         "slots": slots,
+        "piece_slots": [{"id": pid, "label": piece_labels.get(pid, pid.replace("_", " ").title())}
+                        for pid in piece_ids],
         "silhouette_url": f"/characters/{character_name}/silhouette" if sil else "",
     }
 

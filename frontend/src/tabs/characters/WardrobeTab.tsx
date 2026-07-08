@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
+import { FieldImage } from './FieldImage'
 
 // Anker-Positionen (x%, y%) im Bild-Koordinatensystem (silhouette.svg).
 const SLOT_ANCHOR: Record<string, [number, number]> = {
@@ -57,15 +58,6 @@ const EMPTY: Belongings = {
   outfit_sets: [], max_slots: 0,
 }
 
-// Body-slot editor payload (GET /characters/{c}/body-slots)
-interface BodyAttr {
-  key: string; type: string; options: string[]; allow_custom: boolean
-  label: string; value: string
-}
-interface BodySlot {
-  id: string; package_id: string; covered_by: string[]; exposed: boolean
-  attributes: BodyAttr[]
-}
 
 export function WardrobeTab({ character }: { character: string }) {
   const { t } = useI18n()
@@ -255,69 +247,13 @@ export function WardrobeTab({ character }: { character: string }) {
         <div style={{ opacity: 0.5, fontSize: '0.72em', textAlign: 'center' }}>
           {data.items.filter((it) => it.is_outfit).length} {t('outfit pieces')}
         </div>
-        <BodySection character={character} />
-      </div>
-    </div>
-  )
-}
-
-/** Generic body-slot editor — renders whatever the character's species
- * package declares (attributes + options); saves per attribute on change.
- * Invisible without species packages (no slots -> renders nothing). */
-function BodySection({ character }: { character: string }) {
-  const { t } = useI18n()
-  const [slots, setSlots] = useState<BodySlot[]>([])
-  const enc = encodeURIComponent(character)
-
-  const load = useCallback(async () => {
-    try {
-      const d = await apiGet<{ slots?: BodySlot[] }>(`/characters/${enc}/body-slots`)
-      setSlots(d.slots || [])
-    } catch { setSlots([]) }
-  }, [enc])
-  useEffect(() => { load() }, [load])
-
-  const save = useCallback(async (slotId: string, key: string, value: string) => {
-    setSlots((prev) => prev.map((s) => s.id === slotId
-      ? { ...s, attributes: s.attributes.map((a) => a.key === key ? { ...a, value } : a) }
-      : s))
-    try {
-      await apiPost(`/characters/${enc}/body-slots/${encodeURIComponent(slotId)}`,
-        { values: { [key]: value } })
-    } catch { load() }
-  }, [enc, load])
-
-  if (!slots.length) return null
-  return (
-    <div style={{ flex: '0 0 auto', maxHeight: '45%', overflow: 'auto',
-                  borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 6 }}>
-      <div style={{ fontSize: '0.78em', opacity: 0.6, marginBottom: 4 }}>{t('Body')}</div>
-      {slots.map((s) => (
-        <div key={s.id} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 3, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '0.78em', minWidth: 70, opacity: 0.75 }}
-            title={s.covered_by.length ? `${t('Covered by')}: ${s.covered_by.join(', ')}` : undefined}>
-            {s.id.replace(/_/g, ' ')}
-          </span>
-          {s.attributes.map((a) => a.options.length > 0 && !a.allow_custom ? (
-            <select key={a.key} className="ga-input" value={a.value} title={a.label}
-              style={{ fontSize: '0.78em', padding: '1px 5px', minWidth: 90 }}
-              onChange={(e) => save(s.id, a.key, e.target.value)}>
-              <option value="">{a.label}…</option>
-              {a.options.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          ) : (
-            <input key={a.key} className="ga-input" value={a.value} title={a.label}
-              placeholder={a.label} list={a.options.length ? `body-${s.id}-${a.key}` : undefined}
-              style={{ fontSize: '0.78em', padding: '1px 5px', width: 110 }}
-              onChange={(e) => save(s.id, a.key, e.target.value)} />
-          ))}
-          {s.attributes.map((a) => a.options.length > 0 && a.allow_custom ? (
-            <datalist key={`dl-${a.key}`} id={`body-${s.id}-${a.key}`}>
-              {a.options.map((o) => <option key={o} value={o} />)}
-            </datalist>
-          ) : null)}
+        {/* Appearance preview under the paper doll: the full-body render
+            depends on the worn outfit, so it lives with the wardrobe. */}
+        <div style={{ flex: '0 0 auto', maxHeight: '45%', overflow: 'auto',
+                      borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 6 }}>
+          <FieldImage character={character} kind="appearance" />
         </div>
-      ))}
+      </div>
     </div>
   )
 }

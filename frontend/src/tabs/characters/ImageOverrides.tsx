@@ -27,29 +27,20 @@ interface SlotEntry {
   lora: { name: string; strength: number }
 }
 
-// Body slots in editor order; the second column starts at 'underwear_top'.
-const SLOT_ORDER = [
-  'head',
-  'neck',
-  'outer',
-  'top',
-  'underwear_top',
-  'bottom',
-  'underwear_bottom',
-  'legs',
-  'feet',
-] as const
-const SLOT_LABELS: Record<string, string> = {
-  head: 'Head',
-  neck: 'Neck',
-  outer: 'Outerwear',
-  top: 'Top',
-  underwear_top: 'Underwear (top)',
-  bottom: 'Bottom',
-  underwear_bottom: 'Underwear (bottom)',
-  legs: 'Legs',
-  feet: 'Feet',
-}
+// Fallback clothing slots (core topology) — the effective list comes from
+// the character's species package via GET /characters/{c}/body-slots
+// (piece_slots), so a cat shows Collar/Headwear instead of human slots.
+const FALLBACK_SLOTS: Array<{ id: string; label: string }> = [
+  { id: 'head', label: 'Head' },
+  { id: 'neck', label: 'Neck' },
+  { id: 'outer', label: 'Outerwear' },
+  { id: 'top', label: 'Top' },
+  { id: 'underwear_top', label: 'Underwear (top)' },
+  { id: 'bottom', label: 'Bottom' },
+  { id: 'underwear_bottom', label: 'Underwear (bottom)' },
+  { id: 'legs', label: 'Legs' },
+  { id: 'feet', label: 'Feet' },
+]
 
 // Convert a shell-style glob (only '*' wildcard) to a case-insensitive regex.
 function globToRegex(glob: string): RegExp {
@@ -82,11 +73,24 @@ export function ImageOverrides({ character }: { character: string }) {
   const [addName, setAddName] = useState('')
   // Per-slot prompt + LoRA overrides (Image Appearance).
   const [slots, setSlots] = useState<Record<string, SlotEntry>>({})
+  // Species clothing topology (piece_slots) — fallback: core human slots.
+  const [slotDefs, setSlotDefs] = useState<Array<{ id: string; label: string }>>(FALLBACK_SLOTS)
   const [slotsSaving, setSlotsSaving] = useState(false)
 
   // The server resolves the LoRA list from the SAVED match pattern (backend
   // lora_filter + library, endpoint-filtered) — so the "Add LoRA" choices
   // must be refetched after every pattern save, not loaded just once.
+  useEffect(() => {
+    (async () => {
+      try {
+        const d = await apiGet<{ piece_slots?: Array<{ id: string; label: string }> }>(
+          `/characters/${encodeURIComponent(character)}/body-slots`,
+        )
+        if (d.piece_slots && d.piece_slots.length) setSlotDefs(d.piece_slots)
+      } catch { /* keep fallback */ }
+    })()
+  }, [character])
+
   const refreshLoraOptions = useCallback(async () => {
     try {
       const loraOpts = await apiGet<{ loras?: string[] }>(
@@ -380,14 +384,15 @@ export function ImageOverrides({ character }: { character: string }) {
           {t('Per slot: the prompt is added to the image prompt when that slot is empty and uncovered; the LoRA is merged into a free LoRA slot.')}
         </p>
         <div className="ga-img-slotgrid">
-          {[SLOT_ORDER.slice(0, 4), SLOT_ORDER.slice(4)].map((col, ci) => (
+          {[slotDefs.slice(0, Math.ceil(slotDefs.length / 2)),
+            slotDefs.slice(Math.ceil(slotDefs.length / 2))].map((col, ci) => (
             <div key={ci}>
-              {col.map((slot) => {
+              {col.map(({ id: slot, label }) => {
                 const entry = slots[slot] || { prompt: '', lora: { name: '', strength: 1 } }
                 const loraName = entry.lora?.name || ''
                 return (
                   <div key={slot} className="ga-img-slotrow">
-                    <div className="ga-img-slotlabel">{t(SLOT_LABELS[slot])}</div>
+                    <div className="ga-img-slotlabel">{t(label)}</div>
                     <input
                       className="ga-input"
                       placeholder={t('Prompt fragment (e.g. "bare feet")')}

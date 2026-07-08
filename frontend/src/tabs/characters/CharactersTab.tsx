@@ -19,6 +19,7 @@ import { GalleryTab } from './GalleryTab'
 import { ExpressionsTab } from './ExpressionsTab'
 import { type TmplSection } from './TemplateSectionForm'
 import { TemplateTab } from './TemplateTab'
+import { BodyEditor } from './BodyEditor'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from './TemplateField'
 import { SecretsEditor } from './SecretsEditor'
@@ -525,7 +526,7 @@ export function CharactersTab() {
                     tab={ft.tab}
                     sections={template?.sections || []}
                     dynamicData={dynamicData}
-                    specialSlots={{ placement: placementUI }}
+                    specialSlots={{ placement: placementUI, body_editor: <BodyEditor character={selected} /> }}
                   />
                 ) : null
               })()

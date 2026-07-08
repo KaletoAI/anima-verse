@@ -84,6 +84,15 @@
   ],
   "sections": [
     {
+      "id": "body",
+      "label": "Body",
+      "label_de": "Körper",
+      "column": 4,
+      "row": 0,
+      "special": "body_editor",
+      "fields": []
+    },
+    {
       "id": "identity",
       "label": "Identity",
       "label_de": "Identität",
@@ -705,7 +714,12 @@
       "label_de": "Innere Entwicklung",
       "column": 18,
       "row": 0,
-      "visible_when": {"field": "retrospect_enabled", "values": ["true"]},
+      "visible_when": {
+        "field": "retrospect_enabled",
+        "values": [
+          "true"
+        ]
+      },
       "fields": [
         {
           "key": "character_beliefs",
@@ -743,7 +757,12 @@
       "label_de": "Persönliche Ziele",
       "column": 19,
       "row": 0,
-      "visible_when": {"field": "retrospect_enabled", "values": ["true"]},
+      "visible_when": {
+        "field": "retrospect_enabled",
+        "values": [
+          "true"
+        ]
+      },
       "fields": [
         {
           "key": "character_goals",

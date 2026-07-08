@@ -100,7 +100,7 @@ export function TemplateField({
     return (
       <textarea
         className="ga-input"
-        rows={3}
+        rows={Number(field.rows) > 0 ? Number(field.rows) : 3}
         value={local}
         placeholder={placeholder}
         disabled={disabled}
