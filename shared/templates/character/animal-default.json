@@ -292,7 +292,8 @@
           "in_prompt": true,
           "prompt_label": "Appearance",
           "default": "{animal_size} {species}, {breed}, {fur_type}, {primary_color} {pattern}, {eye_color}",
-          "llm_generable": true
+          "llm_generable": true,
+          "rows": 2
         }
       ]
     }

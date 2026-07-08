@@ -324,7 +324,13 @@ def _appearance_text(name: str) -> str:
             parts.append(outfit)
     except Exception as e:
         logger.debug("scene: outfit lookup failed for %s: %s", name, e)
-    return ", ".join(parts)[:420]
+    text = ", ".join(parts)
+    try:
+        from app.core.prompt_filters import apply_image_modifiers
+        text = apply_image_modifiers(name, text)
+    except Exception:
+        pass
+    return text[:420]
 
 
 def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:

@@ -17,8 +17,9 @@ Public API:
         from accumulated modifier text. Returns the same ctx for chaining.
 """
 import json
+import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -311,6 +312,65 @@ def active_modifiers(character_name: str, location_id: str = "") -> List[str]:
     except Exception as e:
         logger.debug("active_modifiers(%s) failed: %s", character_name, e)
     return out
+
+
+def collect_image_modifiers(character_name: str,
+                            location_id: str = "") -> "Tuple[List[Tuple[str, str]], List[str]]":
+    """image_modifier of every TRIGGERED state (profile tag OR condition
+    expression — same trigger logic as the prompt filters; the old
+    collector only saw tags).
+
+    Each non-empty line is a directive:
+        "A -> B" (or "A → B")  — replacement applied to the person
+                                  description ("exposed penis -> exposed
+                                  erected penis")
+        anything else           — additive fragment, appended
+    Returns (replacements, additive).
+    """
+    replacements: List[Tuple[str, str]] = []
+    additive: List[str] = []
+    try:
+        filters = load_filters()
+        for f in filters:
+            if not f.get("enabled", True):
+                continue
+            fid = (f.get("id") or "").strip()
+            condition = (f.get("condition") or "").strip()
+            triggered = (fid and _has_tag_condition(character_name, fid)) \
+                or (bool(condition) and _evaluate(condition, character_name, location_id))
+            if not triggered:
+                continue
+            for line in (f.get("image_modifier") or "").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = re.split(r"\s*(?:->|→)\s*", line, maxsplit=1)
+                if len(parts) == 2 and parts[0].strip():
+                    replacements.append((parts[0].strip(), parts[1].strip()))
+                else:
+                    additive.append(line)
+    except Exception as e:
+        logger.debug("collect_image_modifiers(%s) failed: %s", character_name, e)
+    return replacements, additive
+
+
+def apply_image_modifiers(character_name: str, text: str,
+                          location_id: str = "") -> str:
+    """Apply the triggered states' image directives to a person
+    description: replacements rewrite (case-insensitive), additive
+    fragments append. Never raises — on any error the text passes
+    through unchanged."""
+    try:
+        replacements, additive = collect_image_modifiers(character_name, location_id)
+        out = text or ""
+        for find, repl in replacements:
+            out = re.sub(re.escape(find), repl, out, flags=re.IGNORECASE)
+        if additive:
+            extra = ", ".join(additive)
+            out = f"{out}, {extra}" if out.strip() else extra
+        return out
+    except Exception:
+        return text
 
 
 def apply_filters(character_name: str,

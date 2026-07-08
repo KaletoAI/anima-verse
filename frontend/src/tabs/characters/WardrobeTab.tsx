@@ -250,13 +250,17 @@ export function WardrobeTab({ character }: { character: string }) {
         </div>
         {/* Appearance preview under the paper doll: the full-body render
             depends on the worn outfit, so it lives with the wardrobe. */}
-        <div style={{ flex: '0 0 auto', maxHeight: '45%', overflow: 'auto', display: 'grid', gap: 6,
-                      borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 6 }}>
-          <FieldImage character={character} kind="appearance" />
-          {/* Effective prompts incl. coverage — updates with every
-              equip/unequip (data reload). */}
-          <PromptPreview character={character}
-            refreshKey={JSON.stringify(data.equipped)} />
+        <div style={{ flex: '0 0 auto', maxHeight: '45%', overflow: 'auto', display: 'flex', gap: 10,
+                      alignItems: 'flex-start', borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 6 }}>
+          {/* Effective prompts (left) incl. coverage — updates with every
+              equip/unequip (data reload); appearance render right. */}
+          <div style={{ flex: '1 1 60%', minWidth: 0 }}>
+            <PromptPreview character={character}
+              refreshKey={JSON.stringify(data.equipped)} />
+          </div>
+          <div style={{ flex: '0 1 40%', minWidth: 120 }}>
+            <FieldImage character={character} kind="appearance" />
+          </div>
         </div>
       </div>
     </div>

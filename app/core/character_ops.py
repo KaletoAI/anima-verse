@@ -71,6 +71,11 @@ def _resolve_face_prompt(profile: dict, character_name: str, tmpl) -> str:
         suffix = ""
     if suffix:
         face = f"{face}, {suffix}" if face else suffix
+    try:
+        from app.core.prompt_filters import apply_image_modifiers
+        face = apply_image_modifiers(character_name, face)
+    except Exception:
+        pass
     return face.strip()
 
 
@@ -1279,10 +1284,20 @@ def build_prompt_preview(character_name: str) -> Dict[str, str]:
     body = (get_character_appearance(character_name) or "").strip().strip(",")
     sfx = appearance_suffix(character_name)
     scene = f"{body}, {sfx}" if (body and sfx) else (body or sfx)
+    outfit = (render_outfit(character_name=character_name).get("full", "") or "").strip()
+    # The scene line mirrors the real scene composition: description +
+    # slot fragments + worn outfit, then the state image modifiers.
+    if outfit:
+        scene = f"{scene}, {outfit}" if scene else outfit
+    try:
+        from app.core.prompt_filters import apply_image_modifiers
+        scene = apply_image_modifiers(character_name, scene)
+    except Exception:
+        pass
     return {
         "scene": scene,
         "face": _resolve_face_prompt(profile, character_name, tmpl),
-        "outfit": (render_outfit(character_name=character_name).get("full", "") or ""),
+        "outfit": outfit,
     }
 
 

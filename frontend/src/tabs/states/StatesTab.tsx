@@ -393,8 +393,8 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
 
       <Field
         label={t('Image modifier')}
-        help="image_prompt"
-        hint={t("Visual hints for image generation, e.g. 'flushed cheeks, glassy eyes'.")}
+        help="image_modifier"
+        hint={t("One directive per line. Plain text is appended to the person description; 'A -> B' replaces a fragment (e.g. exposed penis -> exposed erected penis). Applies to every image type while the state is active.")}
       >
         <textarea
           className="ga-textarea"

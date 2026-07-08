@@ -211,7 +211,8 @@
           ],
           "in_prompt": true,
           "prompt_label": "Appearance",
-          "llm_generable": true
+          "llm_generable": true,
+          "rows": 2
         }
       ]
     },

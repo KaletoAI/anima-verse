@@ -291,6 +291,7 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             # __STATS__ / Stat-Werte werden im Endpoint dynamisch aus den
             # Character-Templates befuellt (Stats sind NICHT hartkodiert).
             {"code": "__STATS__", "text": "Status values (from the character template, e.g. stat>N / <N / =N)"},
+            {"code": "__FLAGS__", "text": "State flags (declared by skill packages; true while set)"},
             {"code": "alone, night, day", "text": "Time / presence (day/night accept +/-minutes)"},
             {"code": "present:Name", "text": "Name is in the same room"},
             {"code": "npc_present", "text": "Any non-avatar character is here"},
@@ -303,6 +304,14 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             {"code": "room_has_item:<item-id>", "text": "The current room contains the item"},
             {"code": "has_secret", "text": "Character has an unrevealed secret"},
             {"code": "AND / OR / NOT", "text": "Combine expressions"},
+        ],
+    },
+    "image_modifier": {
+        "title": "Image modifier",
+        "intro": "One directive per line — applied to the person description in EVERY image type (scene, character, profile/expression) while the state is active:",
+        "items": [
+            {"code": "flushed cheeks, glassy eyes", "text": "Plain text: appended to the description"},
+            {"code": "exposed penis -> exposed erected penis", "text": "Replacement: rewrites a fragment of the description (case-insensitive; '→' works too)"},
         ],
     },
     "prompt_modifier": {
@@ -374,6 +383,12 @@ async def help_topics(user=Depends(require_admin)):
         stat_code = ", ".join(f"{k}>N" for k in keys[:6]) if keys else "stat>N (e.g. stamina>50)"
         change_code = ", ".join(f"{k}_change: +N" for k in keys[:4]) if keys else "stat_change: +/-N"
         repl = {"__STATS__": stat_code, "__STAT_CHANGES__": change_code}
+        try:
+            from app.plugins.registry import flag_specs
+            _flags = sorted({s.flag for s in flag_specs()} | {"is_sleeping"})
+            repl["__FLAGS__"] = ", ".join(_flags[:8]) if _flags else "is_sleeping"
+        except Exception:
+            repl["__FLAGS__"] = "is_sleeping"
         for topic in topics.values():
             for it in topic.get("items", []):
                 if it.get("code") in repl:

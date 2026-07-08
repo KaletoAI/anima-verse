@@ -213,7 +213,8 @@
           "in_prompt": true,
           "prompt_label": "Appearance",
           "default": "{gender}, {skin_color} skin, {size} height, {body_type} body frame, {hair_length} {hair_color} hair, {eye_color} colored eyes",
-          "llm_generable": true
+          "llm_generable": true,
+          "rows": 2
         }
       ]
     },
@@ -236,7 +237,8 @@
           "hint_de": "Wird als Prompt fuer die Profilbild-Generierung verwendet. Nur Kopf beschreiben: Gesichtsform, markante Zuege, Haar (Farbe/Laenge/Stil), Augenfarbe, Hauttyp, Standard-Mimik. Koerper / Outfit irrelevant.",
           "image_preview": "profile",
           "default": "{gender}, {skin_color} skin, {hair_length} {hair_color} hair, {eye_color} colored eyes",
-          "llm_generable": true
+          "llm_generable": true,
+          "rows": 2
         }
       ]
     },

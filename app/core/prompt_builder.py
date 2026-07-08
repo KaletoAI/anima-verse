@@ -422,6 +422,13 @@ class PromptBuilder:
             suffix = ""
         if suffix:
             appearance = f"{appearance}, {suffix}" if appearance else suffix
+        # Triggered states rewrite/extend the description afterwards
+        # (image_modifier replacements + additive fragments).
+        try:
+            from app.core.prompt_filters import apply_image_modifiers
+            appearance = apply_image_modifiers(name, appearance)
+        except Exception:
+            pass
         return appearance or ""
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:

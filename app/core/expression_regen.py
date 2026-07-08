@@ -893,16 +893,10 @@ def generate_expression_image(character_name: str,
     else:
         pose_prompt = DEFAULT_POSE if _humanoid else ""
 
-    # Aktive Conditions (drunk, exhausted, ...) ersetzen den Expression-Prompt.
-    # Activity-Pose bleibt unberuehrt.
-    try:
-        from app.core.danger_system import get_active_condition_image_modifiers
-        _cond_mods = get_active_condition_image_modifiers(character_name)
-        if _cond_mods:
-            expression_prompt = _cond_mods
-            logger.info("Expression-Regen: Expression durch Condition ersetzt: %s", _cond_mods)
-    except Exception as _cm_err:
-        logger.debug("Condition image_modifier Fehler: %s", _cm_err)
+    # Active states (drunk, aroused, ...) flow into the appearance via
+    # prompt_filters.apply_image_modifiers (PromptBuilder person path) —
+    # additive fragments AND "A -> B" replacements, tag- or
+    # condition-triggered alike.
 
     _expr_builder = PromptBuilder(character_name)
     persons = _expr_builder.detect_persons("", character_names=[character_name])
