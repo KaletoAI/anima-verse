@@ -40,7 +40,12 @@ export const DEFAULT_BY_ID: Record<string, Layout> = Object.fromEntries(
 
 // Launcher labels + kind. kind:'dialog' → centered overlay (comes/goes)
 // instead of a grid tile; usable for "tool" windows in general.
-export const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'grid' | 'dialog' }[] = [
+// `requires` = skill id (capability) the panel is bound to — launcher + tile
+// are hidden when GET /play/scene → capabilities lacks it, so a removed
+// skill package degrades the player UI automatically.
+export const PANEL_META: {
+  id: string; label: string; icon: IconName; kind?: 'grid' | 'dialog'; requires?: string
+}[] = [
   { id: 'scene', label: 'Chat', icon: 'chat' },
   { id: 'env', label: 'Surroundings', icon: 'surroundings' },
   { id: 'map', label: 'Move', icon: 'move' },
@@ -50,13 +55,15 @@ export const PANEL_META: { id: string; label: string; icon: IconName; kind?: 'gr
   { id: 'belongings', label: 'Inventory', icon: 'backpack' },
   { id: 'journal', label: 'Mind', icon: 'brain' },
   { id: 'gallery', label: 'Gallery', icon: 'gallery' },
-  { id: 'instagram', label: 'Instagram', icon: 'instagram' },
-  { id: 'phone', label: 'Phone', icon: 'phone' },
+  { id: 'instagram', label: 'Instagram', icon: 'instagram', requires: 'instagram' },
+  { id: 'phone', label: 'Phone', icon: 'phone', requires: 'send_message' },
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
   { id: 'news', label: 'News', icon: 'news' },
   { id: 'settings', label: 'Avatar', icon: 'avatar' },
   { id: 'layouts', label: 'Layouts', icon: 'layouts', kind: 'dialog' },
 ]
+export const REQUIRES_BY_ID: Record<string, string> = Object.fromEntries(
+  PANEL_META.filter((p) => p.requires).map((p) => [p.id, p.requires as string]))
 export const ALL_PANELS = PANEL_META.map((p) => p.id)
 export const GRID_PANELS = PANEL_META.filter((p) => p.kind !== 'dialog').map((p) => p.id)
 export const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((p) => p.id)

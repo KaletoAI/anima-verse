@@ -44,7 +44,7 @@ import { LightboxProvider, useLightbox } from './Lightbox'
 import {
   CELL, MARGIN, DEFAULT_LAYOUT, DEFAULT_BY_ID, PANEL_META, ALL_PANELS,
   GRID_PANELS, DIALOG_PANELS, INITIAL_OPEN, ICON_BY_ID, LABEL_BY_ID,
-  PANEL_COLOR, EXPANDABLE,
+  PANEL_COLOR, EXPANDABLE, REQUIRES_BY_ID,
 } from './panelRegistry'
 
 type IconMode = 'icon' | 'iconText'
@@ -73,6 +73,7 @@ interface SceneData {
   avatar_expr_version?: string
   bg_version?: string
   bg_id?: string
+  capabilities?: string[]
 }
 
 export function PlayerApp() {
@@ -460,6 +461,17 @@ export function PlayerApp() {
   useEffect(() => { if (sceneData) setData(sceneData) }, [sceneData])
   const load = refreshScene
 
+  // Capability gating: skill-bound surfaces disappear when the avatar's
+  // capability list (GET /play/scene) lacks the required skill id — a removed
+  // skill package degrades the UI automatically. Missing list (initial load)
+  // = show everything, no flash-hiding.
+  const hasCapability = (skillId: string) =>
+    !data?.capabilities || data.capabilities.includes(skillId)
+  const capOk = (panelId: string) => {
+    const req = REQUIRES_BY_ID[panelId]
+    return !req || hasCapability(req)
+  }
+
   // Badges: remember the seen IG id once, then poll slowly (open topics).
   useEffect(() => {
     try { igSeenRef.current = localStorage.getItem('play.ig.seen') } catch { /* ignore */ }
@@ -771,11 +783,13 @@ export function PlayerApp() {
                   onClick={() => setPickerOpen(true)} disabled={sending}>🖼</button>
                 <button type="button" className="player-chip" title={t('Give a gift')}
                   onClick={() => setGiftOpen(true)} disabled={sending || present.length === 0}>🎁</button>
-                <button type="button" className="player-chip" style={{ marginLeft: 12 }}
-                  title={t('Take a photo of the current moment (saved to your gallery)')}
-                  onClick={takePhoto} disabled={photoBusy}>
-                  {photoBusy ? '⌛' : '📷'}
-                </button>
+                {hasCapability('image_generation') && (
+                  <button type="button" className="player-chip" style={{ marginLeft: 12 }}
+                    title={t('Take a photo of the current moment (saved to your gallery)')}
+                    onClick={takePhoto} disabled={photoBusy}>
+                    {photoBusy ? '⌛' : '📷'}
+                  </button>
+                )}
                 <span style={{ flex: 1 }} />
                 <button className="player-btn-primary" onClick={send}
                   disabled={sending || attach?.uploading || (!text.trim() && !attach)}>
@@ -1008,7 +1022,8 @@ export function PlayerApp() {
   // Effekt entfernt es → erscheint automatisch sobald jemand da ist, auch beim
   // Location-Wechsel; verschwindet wenn man allein ist).
   const renderedIds = GRID_PANELS.filter(
-    (id) => byId[id] && open.includes(id) && id !== bgPanel && (id !== 'others' || hasOthers))
+    (id) => byId[id] && open.includes(id) && id !== bgPanel
+      && (id !== 'others' || hasOthers) && capOk(id))
   // Vorderstes Panel (höchster z-index) = aktiv → bekommt einen dezenten
   // Akzent-Streifen am Kopf + stärkeren Schatten, damit klar ist welches vorn liegt.
   const frontId = renderedIds.reduce<string | undefined>(
@@ -1141,6 +1156,7 @@ export function PlayerApp() {
   const panelToggles = PANEL_META
     .filter((p) => p.kind !== 'dialog')
     .filter((p) => p.id !== 'others' || hasOthers)
+    .filter((p) => capOk(p.id))  // skill-bound panels only with capability
     .filter((p) => p.id !== 'tasks')  // Tasks = Ueberwachung -> rechts in den Werkzeug-Cluster
     .map((p) => {
       // Surroundings im Background-Modus: Button anders darstellen, Klick stellt

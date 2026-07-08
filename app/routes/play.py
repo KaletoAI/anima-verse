@@ -118,6 +118,22 @@ async def play_page():
     return FileResponse(_SHELL)
 
 
+def _player_capabilities(avatar: str) -> list:
+    """Skill IDs available to the avatar — per-character enablement plus the
+    manager's role filters (party follower etc.). The player UI gates its
+    skill-bound surfaces (panels, buttons) on this list, so removing a skill
+    package degrades the UI automatically. Generic: only IDs from the skill
+    manager, no skill names in this code (F8, plan-skill-plugin-architecture.md)."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        sm = get_skill_manager()
+        skills = sm._get_agent_skills(avatar, check_limits=False)
+        return sorted({getattr(s, "SKILL_ID", "") for s in skills} - {""})
+    except Exception as e:
+        logger.debug("player capabilities failed for %s: %s", avatar, e)
+        return []
+
+
 @router.get("/play/scene")
 async def play_scene(user=Depends(get_current_user), limit: int = 100):
     """Wahrgenommene Raum-Szene + Bewegungs-Kontext (Räume, Nachbarn) des Avatars."""
@@ -132,7 +148,7 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
              "room_id": "", "room_name": "", "present": [], "present_detail": [],
              "scene": [], "rooms": [], "neighbors": {}, "at_entry_room": True,
              "entry_room_name": "", "avatar_expr_version": "", "bg_version": "",
-             "bg_id": ""}
+             "bg_id": "", "capabilities": []}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return empty
@@ -225,6 +241,7 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
         "neighbors": {k: nb.get(k) for k in ("north", "south", "east", "west")},
         "at_entry_room": bool(nb.get("at_entry_room", True)),
         "entry_room_name": nb.get("entry_room_name", "") or "",
+        "capabilities": _player_capabilities(avatar),
     }
 
 
