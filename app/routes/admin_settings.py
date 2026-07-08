@@ -313,7 +313,7 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
         "intro": "One directive per line — applied to the person description in EVERY image type (scene, character, profile/expression) while the state is active:",
         "items": [
             {"code": "flushed cheeks, glassy eyes", "text": "Plain text: appended to the description"},
-            {"code": "exposed penis -> exposed erected penis", "text": "Replacement: rewrites a fragment of the description (case-insensitive; '→' works too)"},
+            {"code": "neat hair -> messy tousled hair", "text": "Replacement: rewrites a matching fragment of the description (case-insensitive; '→' works too). Works on body-slot fragments as well"},
         ],
     },
     "prompt_modifier": {
