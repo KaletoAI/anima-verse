@@ -297,16 +297,34 @@ def _pose_hint(name: str, skip_activity: bool = False) -> str:
 
 def _appearance_text(name: str) -> str:
     """Compact appearance description for persons WITHOUT a reference slot:
-    identity travels as text instead of an image. Outfit placeholders are
-    resolved by the model helper."""
+    identity travels as text instead of an image. Includes the body-slot
+    suffix (post-migration the attributes live in slots, not in the text)
+    and the worn outfit — without it the model dresses text persons
+    arbitrarily."""
+    parts = []
     try:
         from app.models.character import get_character_appearance
         desc = (get_character_appearance(name) or "").strip()
-        desc = " ".join(desc.split())
-        return desc[:300]
+        if desc:
+            parts.append(" ".join(desc.split()))
     except Exception as e:
         logger.debug("scene: appearance lookup failed for %s: %s", name, e)
-        return ""
+    try:
+        from app.core.body_slots import appearance_suffix
+        sfx = appearance_suffix(name)
+        if sfx:
+            parts.append(sfx)
+    except Exception:
+        pass
+    try:
+        from app.core.outfit_renderer import render_outfit
+        # render_outfit 'full' already carries its own 'wearing:' prefix
+        outfit = (render_outfit(character_name=name).get("full", "") or "").strip()
+        if outfit:
+            parts.append(outfit)
+    except Exception as e:
+        logger.debug("scene: outfit lookup failed for %s: %s", name, e)
+    return ", ".join(parts)[:420]
 
 
 def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:

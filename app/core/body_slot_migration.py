@@ -48,8 +48,8 @@ def _mappings_for(character_name: str) -> List[Tuple[Any, str, str, List[str]]]:
 _GLUE_WORDS = {
     "hair", "haare", "haar", "eyes", "eye", "augen", "auge", "skin", "haut",
     "colored", "coloured", "color", "colour", "farbe", "farbene", "farbige",
-    "build", "built", "figur", "statur", "körperbau", "koerperbau",
-    "tall", "groß", "gross",
+    "build", "built", "body", "frame", "height", "figur", "statur",
+    "körperbau", "koerperbau",
     # animal attribute glue (cat package fields)
     "fur", "fell", "pelz", "ears", "ohren", "tail", "schwanz", "markings",
 }
