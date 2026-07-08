@@ -389,8 +389,18 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
             "activity": _pose_hint(n, skip_activity=in_transit),
         })
 
+    # Active event behind the swapped background: its description must
+    # reach the PROMPT too — the reference image alone gets painted over
+    # by a text that knows nothing about the event.
+    event_text = ""
+    try:
+        from app.core.event_images import get_effective_background_event_text
+        event_text = get_effective_background_event_text(loc)
+    except Exception:
+        pass
+
     sig_src = json.dumps([
-        mode, loc, room, bg_path.name,
+        mode, loc, room, bg_path.name, event_text,
         [(c["name"],
           str(c["image"]) if c["image"] else "",
           int(c["image"].stat().st_mtime) if c["image"] else 0)
@@ -399,7 +409,8 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     sig = hashlib.sha1(sig_src.encode("utf-8")).hexdigest()[:16]
 
     return {"location": loc, "room": room, "label": label, "mode": mode,
-            "setting": setting, "bg_path": bg_path, "chars": chars, "sig": sig}
+            "setting": setting, "bg_path": bg_path, "chars": chars,
+            "event_text": event_text, "sig": sig}
 
 
 def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
@@ -525,6 +536,11 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     else:
         prompt = (f"The exact {state['setting']} from the reference image, "
                   f"keeping its layout, lighting and perspective")
+    _ev = (state.get("event_text") or "").strip()
+    if _ev:
+        if len(_ev) > 240:
+            _ev = _ev[:240].rstrip() + "…"
+        prompt += f" Ongoing event shaping this scene: {_ev}"
     _ucp = config.resolve_use_case_style(
         "scene",
         backend_model=getattr(backend, "model", "") or "",

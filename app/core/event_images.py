@@ -163,6 +163,31 @@ def get_effective_background_event(location_id: str) -> Optional[Path]:
     return None
 
 
+def get_effective_background_event_text(location_id: str) -> str:
+    """Description of the ACTIVE event whose image is currently swapped in
+    as the location background (same selection as
+    get_effective_background_event's active branch). Empty during the
+    resolved-linger window — the aftermath image speaks for itself, an
+    'ongoing' line would contradict it — and while no event image is
+    ready (no swap, normal background)."""
+    if not location_id:
+        return ""
+    try:
+        from app.models.events import list_events
+    except Exception:
+        return ""
+    candidates = [e for e in list_events(location_id=location_id)
+                  if e.get("location_id") == location_id
+                  and e.get("category", "") in ("disruption", "danger")
+                  and not e.get("resolved")]
+    candidates.sort(key=lambda e: e.get("created_at", ""), reverse=True)
+    for evt in candidates:
+        img = evt.get("image_path")
+        if img and Path(img).exists():
+            return (evt.get("text") or "").strip()
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Subscribers fuer SSE (Background-Ready Push)
 # ---------------------------------------------------------------------------
