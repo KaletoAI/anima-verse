@@ -91,15 +91,26 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 | `save_character_current_location(name, loc)` | ZENTRALE Bewegung — löst Entry-Room, Compliance, Party-Drag, Flag-Location-Resets, Discovery aus. Nie umgehen |
 | `get_character_skill_config` / per-Char-Config | über `BaseSkill._get_effective_config` (Defaults + Overrides, typisiert) |
 | `get_character_dir(name)` ✅ | Per-Charakter-Storage-Verzeichnis — für Pakete, die eigene Dateien pro Charakter persistieren (Beispiel: markdown_writer schreibt nach `<dir>/documents/<folder>/`) |
+| `list_available_characters()` ✅ | Alle bespielbaren Charakternamen (talk_to löst darüber den Ziel-Namen auf) |
+| `get_character_current_location(name)` ✅ | Aktueller Aufenthaltsort (Präsenz-Check: TalkTo nur bei gleichem Ort) |
+| `is_character_sleeping(name)` ✅ | Schläft der Ziel-Charakter? (nicht erreichbar) |
+| `app.core.activity_engine.is_character_interruptible(name)` ✅ | `(bool, busy_activity)` — ob der Charakter gerade unterbrechbar ist |
 
 ## Wahrnehmung & Loop ⚠
 
 | Funktion | Semantik |
 |---|---|
 | `app.core.perception.record_utterance(…)` | Erzähler-/Sprechakt-Zeile in den Raum-Stream |
-| `app.core.agent_loop.agent_loop().bump(name, reason=…)` | Charakter für einen zeitnahen Thought-Turn vormerken |
+| `app.core.agent_loop.agent_loop().bump(name, reason=…)` ✅ | Charakter für einen zeitnahen Thought-Turn vormerken (talk_to bump'ed den Empfänger) |
 | `app.models.memory.add_memory(…)` | Erinnerung anlegen |
-| `app.models.account.is_player_controlled(name)` / `get_active_character(…)` | Avatar-Erkennung |
+| `app.models.account.is_player_controlled(name)` / `get_active_character(…)` ✅ / `get_chat_partner()` ✅ | Avatar-Erkennung; `get_chat_partner` = aktueller Gesprächspartner (talk_to schließt ihn als Ziel aus) |
+
+## Chat & Messaging — `app.models.chat` / `app.core.pending_reports` ✅ (talk_to-Paket)
+
+| Funktion | Semantik |
+|---|---|
+| `app.models.chat.save_message(msg, character_name=…, partner_name=…)` | Eine Zeile in die Chat-History eines Charakters schreiben (Inbox-Modell: Sender als `assistant`, Empfänger als `user`) |
+| `app.core.pending_reports.add_report / list_open / mark_resolved` | Chain-of-Command-Follow-ups: wer wem noch eine Rückmeldung schuldet (talk_to legt bei Fremd-Initiator einen Report an und löst offene beim Antworten) |
 
 ## LLM & Templates ✅
 

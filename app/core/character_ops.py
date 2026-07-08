@@ -29,7 +29,7 @@ DEFAULT_NEW_CHARACTER_SKILLS = (
     # special/niche skills like OutfitCreation, VideoGenerator, Retrospect,
     # MarkdownWriter, KnowledgeExtract stay off because they cost tokens/setup
     # and not every NPC needs them).
-    "imagegen", "setlocation", "talk_to", "send_message", "notify_user",
+    "imagegen", "setlocation", "send_message", "notify_user",
     "instagram_comment", "instagram_reply",
     "outfit_change",
     "invite_to_party", "join_party", "leave_party",

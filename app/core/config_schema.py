@@ -549,12 +549,6 @@ SECTIONS = {
                     "enabled": {"type": "bool", "label": "Enabled", "default": True},
                 },
             },
-            "talk_to": {
-                "label": "TalkTo (face-to-face)",
-                "fields": {
-                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
-                },
-            },
             "send_message": {
                 "label": "SendMessage (remote)",
                 "fields": {
