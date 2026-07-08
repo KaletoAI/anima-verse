@@ -7,8 +7,6 @@ from .base import ToolSpec
 
 logger = get_logger("skill_mgr")
 from .image_generation_skill import ImageGenerationSkill
-from .set_location_skill import SetLocationSkill, CancelTravelSkill
-from .move_skill import MoveSkill
 from .send_message_skill import SendMessageSkill
 from .act_skill import ActSkill
 from .notify_user_skill import NotifyUserSkill
@@ -46,9 +44,6 @@ class SkillManager:
     # (Plugins aus plugins/ werden automatisch geladen, siehe load_skills)
     SKILL_REGISTRY = {
         'imagegen': ImageGenerationSkill,
-        'setlocation': SetLocationSkill,
-        'cancel_travel': CancelTravelSkill,
-        'move': MoveSkill,
         'send_message': SendMessageSkill,
         'act': ActSkill,
         'notify_user': NotifyUserSkill,

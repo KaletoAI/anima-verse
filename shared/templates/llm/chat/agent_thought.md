@@ -22,9 +22,6 @@
      room_items_block          — visible items in the current room
      available_activities_block — activities possible at current location
      daily_schedule_block      — typical-rhythm hint for current hour
-     surroundings_block        — 4 orthogonally adjacent grid tiles (Move targets)
-     known_locations_block     — visibility-filtered list of places to go
-     travel_block              — active journey info (target + remaining steps)
      tracker_block             — carried tracker-items revealing target locations
      arc_block                 — Low: active story arc context
      retrospective_block       — Low (with boost): "time to reflect"
@@ -110,27 +107,10 @@ doing right now (free text) — e.g. "leaning against the windowsill" or
 
 {{ skill_context_blocks }}
 {% endif %}
-{% if travel_block %}
-
-=== On the road ===
-{{ travel_block }}
-{% endif %}
 {% if tracker_block %}
 
 === Tracker ===
 {{ tracker_block }}
-{% endif %}
-{% if surroundings_block %}
-
-=== Around you ===
-{{ surroundings_block }}
-Use Move <direction> (north/east/south/west) to step ONE tile — this is how you cross terrain or reach someone in an adjacent tile. Unexplored tiles become known once you step onto them.
-{% endif %}
-{% if known_locations_block %}
-
-=== Places you can go ===
-{{ known_locations_block }}
-Use SetLocation to travel to one of these named places (the system walks you there over several ticks).
 {% endif %}
 {% if arc_block %}
 

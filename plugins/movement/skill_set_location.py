@@ -7,7 +7,9 @@ wenn der User z.B. sagt "Du bist jetzt zu Hause" oder "Reise ins Buero".
 import random
 from typing import Any, Dict
 
-from .base import BaseSkill, ToolSpec
+from app.plugins.base import PluginSkill
+from app.plugins.context import PluginContext
+from app.skills.base import ToolSpec
 
 from app.core.log import get_logger
 logger = get_logger("set_location")
@@ -28,7 +30,7 @@ from app.models.world import (
         find_path_through_known)
 
 
-class SetLocationSkill(BaseSkill):
+class SetLocationSkill(PluginSkill):
     """
     Skill zum Setzen des Aufenthaltsortes, Raums und Aktivitaet eines Agenten.
 
@@ -52,15 +54,16 @@ class SetLocationSkill(BaseSkill):
         except Exception:
             return True
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("set_location")
-        self.name = meta["name"]
-        self.description = meta["description"]
-        self.action_hint = meta.get("action_hint", "")
+    def __init__(self, config: Dict[str, Any], ctx: PluginContext):
+        super().__init__(config, ctx)
+        # name/description/action_hint come from templates/llm/skills/set_location.md
         self._defaults = {}
+
+    def thought_context_block(self, character_name: str) -> str:
+        """'Places you can go' — the visibility-filtered travel-target list
+        plus the SetLocation instruction (package-owned prompt section)."""
+        from plugins.movement.blocks import known_locations_section
+        return known_locations_section(character_name)
 
     def execute(self, raw_input: str) -> str:
         """Setzt Location, Raum und Activity fuer den Agenten.
@@ -498,7 +501,7 @@ def _trigger_access_denied_thought(character_name: str, location_label: str, rea
         logger.debug("access_denied bump failed: %s", e)
 
 
-class CancelTravelSkill(BaseSkill):
+class CancelTravelSkill(PluginSkill):
     """Drops the pending movement target — the character stays put.
 
     Surfaced so a character can RECONSIDER a running journey on every loop
@@ -511,14 +514,16 @@ class CancelTravelSkill(BaseSkill):
     SKILL_ID = "cancel_travel"
     ALWAYS_LOAD = True
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("cancel_travel") or {}
-        self.name = meta.get("name") or "CancelTravel"
-        self.description = meta.get("description") or ""
-        self.action_hint = meta.get("action_hint", "")
+    def __init__(self, config: Dict[str, Any], ctx: PluginContext):
+        super().__init__(config, ctx)
+        # name/description/action_hint come from templates/llm/skills/cancel_travel.md
         self._defaults = {"enabled": True}
+
+    def thought_context_block(self, character_name: str) -> str:
+        """'On the road' — active journey status incl. the CancelTravel
+        reconsideration nudge (package-owned prompt section)."""
+        from plugins.movement.blocks import travel_section
+        return travel_section(character_name)
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:

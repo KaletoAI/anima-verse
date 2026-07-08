@@ -1,0 +1,21 @@
+name: movement
+version: "1.0.0"
+description: Structured movement — SetLocation (named places via pathfinder), Move (single grid step), CancelTravel; brings the travel/surroundings/places prompt sections
+enabled_default: true        # core verbs: load even without a config entry
+
+skills:
+  - skill_id: setlocation
+    module: skill_set_location.py
+    class: SetLocationSkill
+    default_enabled: true    # replaces the entry in the core default-skill list
+  - skill_id: cancel_travel
+    module: skill_set_location.py
+    class: CancelTravelSkill
+    always_load: true
+  - skill_id: move
+    module: skill_move.py
+    class: MoveSkill
+    always_load: true        # loaded always, activation per character (default off)
+
+templates:
+  llm: templates/llm

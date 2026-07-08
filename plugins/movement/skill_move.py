@@ -8,7 +8,9 @@ Personen auf Terrain-Tiles erreichen. Ein Tile pro Aufruf, kein Diagonal-Move.
 """
 from typing import Any, Dict
 
-from .base import BaseSkill, ToolSpec
+from app.plugins.base import PluginSkill
+from app.plugins.context import PluginContext
+from app.skills.base import ToolSpec
 from app.core.log import get_logger
 
 logger = get_logger("move")
@@ -25,20 +27,23 @@ _DIRECTIONS = {
 _LABEL = {(0, -1): "north", (0, 1): "south", (1, 0): "east", (-1, 0): "west"}
 
 
-class MoveSkill(BaseSkill):
+class MoveSkill(PluginSkill):
     """Bewegt den Agenten ein Tile in eine Himmelsrichtung (Grid-Nachbar)."""
     SUPPRESS_IN_PERSON = True
 
     SKILL_ID = "move"
     ALWAYS_LOAD = True  # immer geladen, Aktivierung per Character
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("move")
-        self.name = meta["name"]
-        self.description = meta["description"]
+    def __init__(self, config: Dict[str, Any], ctx: PluginContext):
+        super().__init__(config, ctx)
+        # name/description come from templates/llm/skills/move.md
         self._defaults = {}
+
+    def thought_context_block(self, character_name: str) -> str:
+        """'Around you' — the four adjacent grid tiles plus the Move
+        instruction (package-owned prompt section)."""
+        from plugins.movement.blocks import surroundings_section
+        return surroundings_section(character_name)
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:

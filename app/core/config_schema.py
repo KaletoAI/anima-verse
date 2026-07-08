@@ -527,12 +527,6 @@ SECTIONS = {
                     "num_results": {"type": "int", "label": "Max results", "default": 5, "min": 1, "max": 50},
                 },
             },
-            "set_location": {
-                "label": "SetLocation",
-                "fields": {
-                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
-                },
-            },
             "send_message": {
                 "label": "SendMessage (remote)",
                 "fields": {
