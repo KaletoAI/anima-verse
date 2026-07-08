@@ -205,7 +205,7 @@ async def llm_stats_data(
 _PROMPT_FILTER_BLOCK_KEYS = [
     "inbox_block", "events_block", "assignments_block", "general_task",
     "commitments_block", "outfit_decision_block", "arc_block",
-    "retrospective_block", "instagram_pending_block", "effects_block",
+    "retrospective_block", "skill_context_blocks", "effects_block",
     "recent_chat_block", "outfit_self_block", "outfit_avatar_block",
     "room_items_block", "inventory_block", "present_people_block",
     "known_locations_block", "travel_block", "available_activities_block",

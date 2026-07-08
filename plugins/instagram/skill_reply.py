@@ -23,6 +23,8 @@ class InstagramReplySkill(PluginSkill):
         super().__init__(config, ctx)
         # name/description/action_hint come from templates/llm/skills/instagram_reply.md
         self._defaults = {"enabled": True}
+        from plugins.instagram.social_reactions import ensure_registered
+        ensure_registered()
         self.ctx.logger.info("InstagramReply skill initialized")
 
     def execute(self, raw_input: str) -> str:

@@ -192,12 +192,13 @@ def create_post(character_name: str,
         meta["prompt"] = image_prompt
     save_image_meta(image_filename, meta)
 
-    # Social Reactions im Hintergrund triggern
+    # Generic hook (F5): the instagram package's social reactions listen
+    # here — the core model never imports package code (R1).
     try:
-        from app.core.social_reactions import trigger_social_reactions
-        trigger_social_reactions(character_name, post)
+        from app.core.hooks import emit
+        emit("instagram.post_created", poster_name=character_name, post=post)
     except Exception as e:
-        logger.error("Social reactions trigger error: %s", e)
+        logger.error("post_created hook emit error: %s", e)
 
     return post
 

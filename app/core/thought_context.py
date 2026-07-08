@@ -65,7 +65,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "outfit_decision_block": _build_outfit_decision_block(character_name),
         "arc_block": _build_arc_block(character_name),
         "retrospective_block": _build_retrospective_block(character_name),
-        "instagram_pending_block": _build_instagram_pending_block(character_name),
+        "skill_context_blocks": _build_skill_context_blocks(character_name),
         # Additional context — currently rendered in agent_thought_in_chat.md.
         # Agent_thought.md ignores them silently (no template reference).
         "effects_block": _build_effects_block(character_name),
@@ -144,6 +144,31 @@ def _build_state_flags_block(character_name: str) -> str:
     except Exception as e:
         logger.debug("state flags block failed for %s: %s", character_name, e)
         return ""
+
+
+def _build_skill_context_blocks(character_name: str) -> str:
+    """Prompt contributions of the character's active skills (generic).
+
+    Each skill may return a self-contained section via
+    thought_context_block() — e.g. the instagram package's pending block.
+    This code knows no skill content (R1)."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        skills = get_skill_manager()._get_agent_skills(
+            character_name, check_limits=False)
+    except Exception:
+        return ""
+    blocks = []
+    for skill in skills:
+        try:
+            block = (skill.thought_context_block(character_name) or "").strip()
+        except Exception as e:
+            logger.debug("thought context block failed (%s): %s",
+                         getattr(skill, "SKILL_ID", "?"), e)
+            continue
+        if block:
+            blocks.append(block)
+    return "\n\n".join(blocks)
 
 
 def _build_events_block(location_id: str) -> str:
@@ -336,116 +361,6 @@ def _build_outfit_decision_block(character_name: str) -> str:
         return ""
 
 
-def _build_instagram_pending_block(character_name: str) -> str:
-    """Recent Instagram activity the agent might want to react to.
-
-    Two sections (window: ``skills.instagram.pending_window_hours``,
-    default 4, each capped at the 5 newest):
-
-    - Foreign posts the agent hasn't commented on yet (→ InstagramComment).
-    - NEW comments by others under the agent's OWN posts that the agent
-      hasn't answered yet (→ InstagramReply). "Answered" = the agent
-      commented on that post after the comment; filtered by COMMENT time,
-      so an older own post with fresh comments still surfaces.
-    """
-    try:
-        from app.core import config as _cfg
-        window_h = int((_cfg.get("skills.instagram.pending_window_hours") or 4))
-    except Exception:
-        window_h = 4
-    try:
-        from app.models.instagram import load_feed
-        feed = load_feed() or []
-    except Exception as e:
-        logger.debug("instagram_pending feed load failed: %s", e)
-        return ""
-    if not feed:
-        return ""
-
-    def _comment_dt(c):
-        try:
-            return parse_iso(c.get("timestamp") or "")
-        except Exception:
-            return None
-
-    def _comment_author(c):
-        # Saved comments use "author" (instagram.add_comment); legacy data
-        # may have "by" or "character".
-        return c.get("author") or c.get("by") or c.get("character") or ""
-
-    cutoff = utc_now() - timedelta(hours=window_h)
-    relevant = []
-    own_replies = []  # (comment_dt, post, comment)
-    for post in feed:
-        comments = post.get("comments") or []
-        if post.get("agent_name") == character_name:
-            # Own post: surface others' comments the agent hasn't answered.
-            own_times = [dt for c in comments
-                         if _comment_author(c) == character_name
-                         and (dt := _comment_dt(c))]
-            last_own = max(own_times) if own_times else None
-            for c in comments:
-                if _comment_author(c) == character_name:
-                    continue
-                cdt = _comment_dt(c)
-                if cdt is None or cdt < cutoff:
-                    continue
-                if last_own and cdt <= last_own:
-                    continue  # already answered after this comment
-                own_replies.append((cdt, post, c))
-            continue
-        ts = post.get("timestamp", "") or ""
-        try:
-            post_dt = parse_iso(ts)
-        except Exception:
-            continue
-        if post_dt < cutoff:
-            continue
-        # Skip if this character already commented on the post.
-        already = any(_comment_author(c) == character_name for c in comments)
-        if already:
-            continue
-        relevant.append((post_dt, post))
-
-    parts = []
-    if relevant:
-        relevant.sort(key=lambda x: x[0], reverse=True)
-        lines = []
-        for _, post in relevant[:5]:
-            poster = post.get("agent_name", "?")
-            post_id = post.get("post_id") or post.get("id") or ""
-            caption = (post.get("caption") or "").strip()
-            if len(caption) > 140:
-                caption = caption[:140].rstrip() + "…"
-            # Try to surface image_analysis when available — gives the agent
-            # something concrete to react to without us shipping the actual
-            # image (vision-LLM already did that earlier).
-            analysis = ""
-            meta = post.get("image_meta") or {}
-            if isinstance(meta, dict):
-                analysis = (meta.get("image_analysis") or "").strip()
-            line = f"- [{post_id}] {poster}: \"{caption}\""
-            if analysis:
-                if len(analysis) > 140:
-                    analysis = analysis[:140].rstrip() + "…"
-                line += f"\n    Image: {analysis}"
-            lines.append(line)
-        parts.append("Recent Instagram posts you haven't reacted to yet:\n"
-                     + "\n".join(lines))
-    if own_replies:
-        own_replies.sort(key=lambda x: x[0], reverse=True)
-        lines = []
-        for _, post, c in own_replies[:5]:
-            post_id = post.get("post_id") or post.get("id") or ""
-            txt = (c.get("text") or "").strip()
-            if len(txt) > 140:
-                txt = txt[:140].rstrip() + "…"
-            lines.append(f"- [{post_id}] {_comment_author(c) or '?'}: \"{txt}\"")
-        parts.append("New comments under YOUR OWN posts you haven't answered yet:\n"
-                     + "\n".join(lines))
-    return "\n\n".join(parts)
-
-
 def _build_arc_block(character_name: str) -> str:
     """Active story arc context (low priority)."""
     try:
@@ -472,8 +387,7 @@ def _build_retrospective_block(character_name: str) -> str:
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "retrospect_enabled"):
             return ""
-        from app.core.soul_writer import load_all_body_lines
-        from app.skills.retrospect_skill import get_last_retrospect_at
+        from app.core.soul_writer import load_all_body_lines, get_last_retrospect_at
 
         beliefs = load_all_body_lines(character_name, "beliefs", limit=6)
         lessons = load_all_body_lines(character_name, "lessons", limit=6)

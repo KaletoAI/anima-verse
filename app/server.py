@@ -166,8 +166,8 @@ async def lifespan(app: FastAPI):
     skill_manager = get_skill_manager()
 
     logger.info("Registriere Task-Queue Handler...")
-    from app.core.social_reactions import register_social_reaction_handler
-    register_social_reaction_handler()
+    # Social reactions live in the instagram package now — it registers its
+    # queue handlers + hook subscriptions itself when its skills load.
     from app.core.social_dialog import register_social_dialog_handler
     register_social_dialog_handler()
     from app.core.story_engine import register_story_engine_handler

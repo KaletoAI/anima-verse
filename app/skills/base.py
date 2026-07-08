@@ -150,6 +150,16 @@ class BaseSkill(ABC):
         fmt = format_name or "tag"
         return format_example(fmt, self.name, "[input]")
 
+    def thought_context_block(self, character_name: str) -> str:
+        """Optional prompt contribution for the agent-thought context.
+
+        Skills return a full, self-contained section (own '=== header ==='
+        + content + verb instructions) or '' — the thought context joins
+        the non-empty blocks of the character's active skills generically
+        (skill_context_blocks). No skill content lives in the core.
+        """
+        return ""
+
     def handle_intent(self, intent_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute one of the skill's declared intents (dispatched from the
         intent engine's TaskQueue handler).

@@ -328,16 +328,19 @@ def discover_packages(plugin_dir: Optional[Path] = None,
     return registry.packages()
 
 
-def _package_enabled(pkg: Package) -> bool:
-    """Package-level enabled gate for packages without always_load verbs.
+def _package_gate(pkg: Package) -> bool:
+    """Enabled gate for a package's NON-always_load verbs.
 
     Order: explicit ``skills.<id>.enabled`` in the world config wins, then
     the legacy env bridge (SKILL_<ID>_ENABLED), then the manifest's
     ``enabled_default`` (for packages that should load out of the box,
     e.g. core communication verbs like talk_to).
+
+    Applied per verb entry: ``always_load`` entries ignore the gate (they
+    load always, activation is per character) — a package can mix both,
+    e.g. instagram's always-loaded reaction verbs next to the gated
+    posting verb.
     """
-    if any(e.always_load for e in pkg.skills):
-        return True
     try:
         from app.core import config
         val = config.get(f"skills.{pkg.id}.enabled", None)
@@ -372,14 +375,19 @@ def _apply_skill_meta(skill: PluginSkill, entry: SkillEntry) -> None:
 
 
 def load_plugin(pkg: Package) -> List[Tuple[str, PluginSkill]]:
-    """Instantiate all verbs of one package. Returns (skill_id, instance) pairs."""
-    if not _package_enabled(pkg):
-        logger.debug("Package '%s' disabled", pkg.id)
-        return []
+    """Instantiate the enabled verbs of one package.
 
+    always_load entries load unconditionally; the others follow the
+    package gate (config/env/enabled_default). Returns (skill_id,
+    instance) pairs.
+    """
+    gate = _package_gate(pkg) if any(not e.always_load for e in pkg.skills) else True
     ctx = PluginContext(pkg.id)
     results: List[Tuple[str, PluginSkill]] = []
     for entry in pkg.skills:
+        if not entry.always_load and not gate:
+            logger.debug("Package verb '%s/%s' disabled (gate)", pkg.id, entry.skill_id)
+            continue
         skill_class = _import_skill_class(pkg.dir, entry.module, entry.class_name)
         if skill_class is None:
             continue

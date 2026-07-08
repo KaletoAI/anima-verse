@@ -156,6 +156,24 @@ Die Engine kennt nur die Core-Typen remind/execute_tool; alles andere kommt
 aus den geladenen Skills — ein nicht geladener Skill macht seinen Intent-Typ
 unbekannt (→ Commitment-Memory statt Fehler-Handler).
 
+## Hooks — `app.core.hooks` ✅ (F5-light)
+
+| Funktion | Semantik |
+|---|---|
+| `hooks.register(event, fn)` | Paket abonniert ein Core-Event (idempotent pro (event, tag) — Reload-sicher). Aufruf typischerweise im Skill-`__init__` |
+| `hooks.emit(event, **kwargs)` | Core feuert generisch; Fehler in Callbacks erreichen den Core-Pfad nie |
+
+Events bisher: `instagram.post_created(poster_name, post)` ·
+`instagram.user_comment(character_name, post_id, commenter_name, comment_text, comment_id, post)`.
+
+## Prompt-Beiträge — `thought_context_block` ✅
+
+Skills liefern per `thought_context_block(character_name)` eine
+selbst-enthaltene Prompt-Sektion (eigener `=== Header ===` + Inhalt +
+Verb-Anweisungen) — der Thought-Context joint die Blöcke der beim Charakter
+aktiven Skills generisch (`skill_context_blocks` in agent_thought.md).
+Beispiel: der Instagram-Pending-Block des instagram-Pakets.
+
 ## LLM & Templates ✅
 
 | Funktion | Semantik |

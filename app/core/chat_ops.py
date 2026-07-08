@@ -474,13 +474,13 @@ async def instagram_post_core(request) -> Dict[str, Any]:
         caption = _extract_caption_from_text(text)
 
     if not caption:
-        # Vision LLM: analyze image and generate caption
+        # Vision LLM: analyze image and generate caption. The posting verb
+        # lives in the instagram package — resolved by SKILL_ID; without the
+        # package (or gate off) the hashtag fallback below applies.
         logger.debug("Caption via Vision-LLM (Bildanalyse)...")
-        insta_skill = None
-        for skill in sm.skills:
-            if skill.__class__.__name__ == "InstagramSkill":
-                insta_skill = skill
-                break
+        insta_skill = sm.get_skill("instagram")
+        if insta_skill is not None and not hasattr(insta_skill, "_generate_caption"):
+            insta_skill = None
 
         if insta_skill:
             current_location = get_character_current_location(agent_name)

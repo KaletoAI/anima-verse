@@ -7,7 +7,6 @@ from .base import ToolSpec
 
 logger = get_logger("skill_mgr")
 from .image_generation_skill import ImageGenerationSkill
-from .instagram_skill import InstagramSkill
 from .set_location_skill import SetLocationSkill, CancelTravelSkill
 from .move_skill import MoveSkill
 from .send_message_skill import SendMessageSkill
@@ -17,7 +16,6 @@ from .describe_room_skill import DescribeRoomSkill
 from .outfit_change_skill import OutfitChangeSkill
 from .outfit_creation_skill import OutfitCreationSkill
 from .video_generation_skill import VideoGenerationSkill
-from .retrospect_skill import RetrospectSkill
 from .state_flag_skills import SleepWakeSkill
 from .party_skills import PartySkill
 
@@ -48,7 +46,6 @@ class SkillManager:
     # (Plugins aus plugins/ werden automatisch geladen, siehe load_skills)
     SKILL_REGISTRY = {
         'imagegen': ImageGenerationSkill,
-        'instagram': InstagramSkill,
         'setlocation': SetLocationSkill,
         'cancel_travel': CancelTravelSkill,
         'move': MoveSkill,
@@ -59,7 +56,6 @@ class SkillManager:
         'outfit_change': OutfitChangeSkill,
         'outfit_creation': OutfitCreationSkill,
         'videogen': VideoGenerationSkill,
-        'retrospect': RetrospectSkill,
         # State-flag skills — one class per opposite pair, two verbs (via
         # _Verb). Wet/intimacy/decency migrated to packages under plugins/
         # (wave 2 pilot, plan-skill-plugin-architecture.md).

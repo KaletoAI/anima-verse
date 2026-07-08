@@ -1,11 +1,17 @@
-"""Instagram Skill - Erstellt Instagram-Posts mit KI-generiertem Bild und automatischem Caption"""
+"""Instagram posting verb — creates Instagram posts with an AI-generated image and caption.
+
+Part of the instagram package (wave 5): the platform (models/instagram,
+feed routes, panel) stays core, the verbs + social reactions + prompt
+contributions live here."""
 import base64
 import json
 import os
 import re
 from typing import Any, Dict, Optional
 
-from .base import BaseSkill, ToolSpec
+from app.plugins.base import PluginSkill
+from app.plugins.context import PluginContext
+from app.skills.base import ToolSpec
 
 from app.core.log import get_logger
 from app.core.llm_queue import get_llm_queue, Priority
@@ -39,7 +45,7 @@ _LANG_NAMES = {"de": "German", "en": "English", "fr": "French",
 # are now User-Level (no character_name parameter)
 
 
-class InstagramSkill(BaseSkill):
+class InstagramSkill(PluginSkill):
     """
     Erstellt Instagram-Posts fuer Agenten.
 
@@ -69,26 +75,23 @@ class InstagramSkill(BaseSkill):
         success = bool(result) and "Fehler" not in str(result)
         return {"success": success, "result": str(result)[:500]}
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
+    def __init__(self, config: Dict[str, Any], ctx: PluginContext):
+        super().__init__(config, ctx)
 
-        from app.core.prompt_templates import load_skill_meta
-        meta = load_skill_meta("instagram")
-        self.name = meta["name"]
-        self.description = meta["description"]
-        self.action_hint = meta.get("action_hint", "")
-
+        # Package config (skills.instagram.*) seeds the per-character defaults.
         self._defaults = {
             "enabled": True,
-            "caption_style": os.environ.get('SKILL_INSTAGRAM_CAPTION_STYLE', 'casual'),
-            "hashtag_count": int(os.environ.get('SKILL_INSTAGRAM_HASHTAG_COUNT', '5')),
-            "caption_language": os.environ.get('SKILL_INSTAGRAM_CAPTION_LANGUAGE', 'de'),
-            "popularity": int(os.environ.get('SKILL_INSTAGRAM_DEFAULT_POPULARITY', '50')),
-            "imagegen_workflow": os.environ.get('SKILL_INSTAGRAM_IMAGEGEN_DEFAULT', ''),
-            "post_cooldown_hours": int(os.environ.get('SKILL_INSTAGRAM_POST_COOLDOWN_HOURS', '12')),
+            "caption_style": str(ctx.get_config("skills.instagram.caption_style", "casual")),
+            "hashtag_count": int(ctx.get_config("skills.instagram.hashtag_count", 5)),
+            "caption_language": str(ctx.get_config("skills.instagram.caption_language", "en")),
+            "popularity": int(ctx.get_config("skills.instagram.default_popularity", 50)),
+            "imagegen_workflow": str(ctx.get_config("skills.instagram.imagegen_default", "") or ""),
+            "post_cooldown_hours": int(ctx.get_config("skills.instagram.post_cooldown_hours", 12)),
         }
 
-        logger.info("Instagram Skill initialized")
+        from plugins.instagram.social_reactions import ensure_registered
+        ensure_registered()
+        logger.info("Instagram skill initialized")
 
     def _get_vision_llm_config(self, character_name: str) -> Dict[str, Any]:
         """Loads Vision LLM config via Router (Task: image_recognition)."""

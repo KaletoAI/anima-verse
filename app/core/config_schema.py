@@ -527,16 +527,6 @@ SECTIONS = {
                     "num_results": {"type": "int", "label": "Max results", "default": 5, "min": 1, "max": 50},
                 },
             },
-            "instagram": {
-                "label": "Instagram",
-                "fields": {
-                    "enabled": {"type": "bool", "label": "Enabled", "default": False},
-                    "caption_language": {"type": "select", "label": "Caption language", "choices": ["de", "en", "fr", "es", "it"], "default": "en"},
-                    "default_popularity": {"type": "int", "label": "Default popularity", "default": 50, "min": 0, "max": 100, "description": "Default popularity for new characters (0-100%, overridable per character)"},
-                    "imagegen_default": {"type": "imagegen_select", "label": "Default ImageGen"},
-                    "pending_window_hours": {"type": "int", "label": "Recent posts window (h)", "default": 4, "min": 1, "max": 72, "description": "How long new Instagram posts stay visible as 'pending' in the agent-thought prompt (hours). Default 4."},
-                },
-            },
             "set_location": {
                 "label": "SetLocation",
                 "fields": {

@@ -178,18 +178,19 @@ async def comment_post(post_id: str, request: Request) -> Dict[str, Any]:
             except Exception as e:
                 logger.error("Knowledge-Eintrag fehlgeschlagen: %s", e)
 
-            # Character-Reaktion auf User-Kommentar triggern
-            # (nur wenn Kommentar nicht vom Character selbst ist)
+            # Character reaction to a user comment via generic hook (F5) —
+            # the instagram package listens (only when the commenter is not
+            # the character itself).
             if commenter_name != character_name:
                 try:
-                    from app.core.social_reactions import trigger_user_comment_reaction
-                    trigger_user_comment_reaction(
-                        character_name=character_name,
-                        post_id=post_id,
-                        commenter_name=commenter_name,
-                        comment_text=text,
-                        comment_id=comment.get("id", ""),
-                        post=post)
+                    from app.core.hooks import emit
+                    emit("instagram.user_comment",
+                         character_name=character_name,
+                         post_id=post_id,
+                         commenter_name=commenter_name,
+                         comment_text=text,
+                         comment_id=comment.get("id", ""),
+                         post=post)
                 except Exception as e:
                     logger.error("Character-Reaktion Trigger fehlgeschlagen: %s", e)
 

@@ -821,14 +821,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_SEARX_CATEGORIES", searx.get("categories", ""))
     _set(env, "SKILL_SEARX_NUM_RESULTS", searx.get("num_results", 5))
 
-    insta = skills.get("instagram", {})
-    _set(env, "SKILL_INSTAGRAM_ENABLED", insta.get("enabled", False))
-    _set(env, "SKILL_INSTAGRAM_NAME", insta.get("name", "Instagram"))
-    _set(env, "SKILL_INSTAGRAM_DESCRIPTION", insta.get("description", ""))
-    _set(env, "SKILL_INSTAGRAM_CAPTION_LANGUAGE", insta.get("caption_language", "en"))
-    _set(env, "SKILL_INSTAGRAM_DEFAULT_POPULARITY", insta.get("default_popularity", 50))
-    _set(env, "SKILL_INSTAGRAM_IMAGEGEN_DEFAULT", insta.get("imagegen_default", ""))
-
     for skill_key, env_prefix_map in [
         ("set_location", "SKILL_SETLOCATION"),
         ("send_message", "SKILL_SEND_MESSAGE"),

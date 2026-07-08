@@ -24,7 +24,16 @@ class InstagramCommentSkill(PluginSkill):
         super().__init__(config, ctx)
         # name/description/action_hint come from templates/llm/skills/instagram_comment.md
         self._defaults = {"enabled": True, "auto_like": True}
+        from plugins.instagram.social_reactions import ensure_registered
+        ensure_registered()
         self.ctx.logger.info("InstagramComment skill initialized")
+
+    def thought_context_block(self, character_name: str) -> str:
+        """Package-owned prompt contribution: recent posts/comments the
+        character may react to (rendered via the generic
+        skill_context_blocks hook in the thought context)."""
+        from plugins.instagram.pending_block import build_pending_block
+        return build_pending_block(character_name)
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:

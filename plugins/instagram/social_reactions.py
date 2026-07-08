@@ -1,4 +1,8 @@
-"""Instagram Social Reactions - Characters reagieren auf Posts anderer Characters.
+"""Instagram social reactions — characters react to other characters' posts.
+
+Lives in the instagram package (wave 5). The core emits generic hooks
+(instagram.post_created / instagram.user_comment, see app/core/hooks.py);
+this module subscribes and runs the reactions in the background queue.
 
 Wenn ein Character einen Instagram-Post erstellt, "sehen" andere Characters
 den Post basierend auf der Popularitaet des Posters. Reaktionen werden als
@@ -260,11 +264,22 @@ def _handle_user_comment_reaction(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-def register_social_reaction_handler():
-    """Registriert den Handler bei der BackgroundQueue. Beim Startup aufrufen."""
+_registered = False
+
+
+def ensure_registered():
+    """Idempotent package wiring: background-queue handlers + core hook
+    subscriptions. Called from the package's skill constructors."""
+    global _registered
+    if _registered:
+        return
     bq = get_background_queue()
     bq.register_handler("instagram_reaction", _handle_instagram_reaction)
     bq.register_handler("instagram_user_comment_reaction", _handle_user_comment_reaction)
+    from app.core import hooks
+    hooks.register("instagram.post_created", trigger_social_reactions)
+    hooks.register("instagram.user_comment", trigger_user_comment_reaction)
+    _registered = True
 
 
 def trigger_social_reactions(poster_name: str, post: Dict[str, Any]):
@@ -272,8 +287,8 @@ def trigger_social_reactions(poster_name: str, post: Dict[str, Any]):
 
     Wird nach create_post() aufgerufen.
     """
-    enabled = os.environ.get("SOCIAL_REACTIONS_ENABLED", "true").lower()
-    if enabled not in ("true", "1", "yes"):
+    from app.core import config as _cfg
+    if not bool(_cfg.get("social_reactions.enabled", True)):
         return
 
     bq = get_background_queue()
@@ -288,8 +303,8 @@ def trigger_user_comment_reaction(character_name: str, post_id: str,
                                    commenter_name: str, comment_text: str,
                                    comment_id: str = "", post: dict = None):
     """Triggert Character-Reaktion auf einen User-Kommentar."""
-    enabled = os.environ.get("SOCIAL_REACTIONS_ENABLED", "true").lower()
-    if enabled not in ("true", "1", "yes"):
+    from app.core import config as _cfg
+    if not bool(_cfg.get("social_reactions.enabled", True)):
         return
 
     bq = get_background_queue()

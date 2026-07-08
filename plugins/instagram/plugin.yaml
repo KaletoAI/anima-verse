@@ -1,8 +1,14 @@
 name: instagram
-version: "0.1.0"
-description: Instagram reaction verbs — comment on posts and reply to comments (main posting verb follows after F6)
+version: "1.0.0"
+description: Instagram — posting verb, reaction verbs (comment/reply), social reactions and the pending-posts prompt block
 
 skills:
+  - skill_id: instagram
+    module: skill_post.py
+    intents: [instagram_post]
+    intent_payload_keys: [caption]
+    # gated by skills.instagram.enabled (package gate) — reaction verbs
+    # below stay always loaded
   - skill_id: instagram_comment
     module: skill_comment.py
     always_load: true
@@ -14,3 +20,16 @@ skills:
 
 templates:
   llm: templates/llm
+
+config_schema:
+  instagram:
+    label: Instagram
+    fields:
+      enabled: {type: bool, label: Enabled, default: false}
+      caption_language: {type: select, label: Caption language, choices: [de, en, fr, es, it], default: en}
+      caption_style: {type: str, label: Caption style, default: casual}
+      hashtag_count: {type: int, label: Hashtag count, default: 5, min: 0, max: 30}
+      default_popularity: {type: int, label: Default popularity, default: 50, min: 0, max: 100, description: "Default popularity for new characters (0-100%, overridable per character)"}
+      imagegen_default: {type: imagegen_select, label: Default ImageGen}
+      post_cooldown_hours: {type: int, label: Post cooldown (h), default: 12, min: 0, max: 168}
+      pending_window_hours: {type: int, label: "Recent posts window (h)", default: 4, min: 1, max: 72, description: "How long new Instagram posts stay visible as 'pending' in the agent-thought prompt (hours). Default 4."}

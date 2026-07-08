@@ -17,7 +17,7 @@
      general_task              — Medium: static profile task
      commitments_block         — Medium: open promises
      outfit_decision_block     — High when triggered (after location-change or wake)
-     instagram_pending_block   — Medium: recent Instagram posts within window
+     skill_context_blocks      — Medium: self-contained sections contributed by the character's active skills
      inventory_block           — what the character is carrying
      room_items_block          — visible items in the current room
      available_activities_block — activities possible at current location
@@ -106,11 +106,9 @@ doing right now (free text) — e.g. "leaning against the windowsill" or
 === Outfit ===
 {{ outfit_decision_block }}
 {% endif %}
-{% if instagram_pending_block %}
+{% if skill_context_blocks %}
 
-=== Instagram (recent) ===
-{{ instagram_pending_block }}
-You may use InstagramComment to react to other people's posts. Answer new comments under your OWN posts with InstagramReply (input: post_id @commenter: your answer).
+{{ skill_context_blocks }}
 {% endif %}
 {% if travel_block %}
 
