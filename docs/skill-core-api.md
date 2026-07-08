@@ -29,6 +29,7 @@ Default-Aktivierung (`default_enabled`).
 | `get_state_flags(name)` | Alle Kern-Flags als Dict (is_sleeping/is_wet/is_intimate/decency_exempt) |
 | `stamp_state_flag_since(name, flag)` | Baseline-Stempel für ein bereits gesetztes Flag |
 | `set_is_wet / set_is_intimate / set_decency_exempt / set_is_sleeping` | Flag-spezifische Delegates (Kern-Vokabular; auch von Rules/Routen genutzt) |
+| `set_is_sleeping` + `enter_offmap_sleep(name)` / `wake_from_offmap(name)` | Sleep-Paket: Flag + Off-Map-Übergang (Rückkehr zum Vor-Schlaf-Ort beim Wecken). Auto-Sleep im Agent-Loop und B1-Wake-Regel schreiben dasselbe Vokabular — das Paket ist nur ein Auslöser |
 
 Lebenszyklus (Prompt-Zeile, TTL, Location-Reset) NICHT selbst bauen — deklarativ über
 `state_flags` im Manifest; der Executor (`app/core/flag_lifecycle.py`) ruft zum
@@ -123,12 +124,28 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 | `app.models.memory.add_memory(…)` | Erinnerung anlegen |
 | `app.models.account.is_player_controlled(name)` / `get_active_character(…)` ✅ / `get_chat_partner()` ✅ | Avatar-Erkennung; `get_chat_partner` = aktueller Gesprächspartner (talk_to schließt ihn als Ziel aus) |
 
-## Chat & Messaging — `app.models.chat` / `app.core.pending_reports` ✅ (talk_to-Paket)
+## Chat & Messaging — `app.models.chat` / `app.core.pending_reports` ✅ (talk_to/send_message/notify_user)
 
 | Funktion | Semantik |
 |---|---|
 | `app.models.chat.save_message(msg, character_name=…, partner_name=…)` | Eine Zeile in die Chat-History eines Charakters schreiben (Inbox-Modell: Sender als `assistant`, Empfänger als `user`) |
-| `app.core.pending_reports.add_report / list_open / mark_resolved` | Chain-of-Command-Follow-ups: wer wem noch eine Rückmeldung schuldet (talk_to legt bei Fremd-Initiator einen Report an und löst offene beim Antworten) |
+| `app.core.pending_reports.add_report / list_open / mark_resolved` | Chain-of-Command-Follow-ups: wer wem noch eine Rückmeldung schuldet (talk_to/send_message legen bei Fremd-Initiator einen Report an und lösen offene beim Antworten) |
+| `app.models.notifications.create_notification(character=…, content=…, notification_type=…, metadata=…)` | User-Notification anlegen (notify_user; send_message für Char→Char). Forward zum Telegram-Avatar via `user_notification`-Flag |
+| `app.models.account.get_player_identity(...)` | Aktiver Avatar-Name (notify_user spiegelt die Notification in dessen Inbox) |
+| `app.models.telegram_channel.get_telegram_channel / enqueue_telegram_outbound` | Push-Bridge (Telegram Option B): DM an einen Telegram-gebundenen Avatar (send_message) |
+| `app.imagegen.service.get_image_service()` | Bild-Service (Welle 6) — `attach_image` liest die Turn-Bild-Meta (`_meta_tls`/`last_image_meta`) daraus, kein Skill→Skill-Import |
+
+## Party — `app.core.party_engine` ✅ (party-Paket)
+
+Gemeinsames Reisen als Core-Engine (R5 — Konsumenten: Leader-Move-Drag-Hook in
+`models/character`, die `/play`-Route ruft `leave_party` direkt, `visible_for` der
+Movement-Skills). Das party-Paket ist nur der Auslöser.
+
+| Funktion | Semantik |
+|---|---|
+| `get_party_of(name)` / `is_in_party(name)` / `is_party_follower(name)` | Party-Zustand/Rolle eines Charakters (Basis für `visible_for`) |
+| `add_to_party(leader, name)` / `leave_party(name)` | Beitritt / Austritt (Follower steigt aus, Leader = Auflösung) |
+| `create_pending_invite(inviter, avatar)` / `clear_invites_for(name)` | Avatar-Einladung als UI-Frage; offene Einladungen räumen |
 
 ## Pose-Engine — `app.core.pose_engine` ✅ (set_pose-Paket)
 
