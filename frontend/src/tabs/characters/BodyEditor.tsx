@@ -15,6 +15,8 @@ export interface BodySlotAttr {
   allow_custom: boolean
   label: string
   value: string
+  // lora_select only: companion strength value (<key>_strength)
+  strength?: number
 }
 export interface BodySlot {
   id: string
@@ -51,7 +53,10 @@ export function BodyEditor({ character }: { character: string }) {
 
   const save = useCallback(async (slotId: string, key: string, value: string) => {
     setSlots((prev) => prev.map((s) => s.id === slotId
-      ? { ...s, attributes: s.attributes.map((a) => a.key === key ? { ...a, value } : a) }
+      ? { ...s, attributes: s.attributes.map((a) =>
+          a.key === key ? { ...a, value }
+          : key === `${a.key}_strength` ? { ...a, strength: parseFloat(value) || 1 }
+          : a) }
       : s))
     try {
       await apiPost(`/characters/${enc}/body-slots/${encodeURIComponent(slotId)}`,
@@ -72,15 +77,22 @@ export function BodyEditor({ character }: { character: string }) {
           {s.attributes.map((a) => {
             if (a.type === 'lora_select') {
               return (
-                <select key={a.key} className="ga-input" value={a.value} title={a.label}
-                  style={{ fontSize: '0.82em', padding: '2px 6px', minWidth: 120 }}
-                  onChange={(e) => save(s.id, a.key, e.target.value)}>
-                  <option value="">{a.label}…</option>
-                  {loras.map((n) => <option key={n} value={n}>{n}</option>)}
-                  {a.value && !loras.includes(a.value) && (
-                    <option value={a.value}>{a.value}</option>
-                  )}
-                </select>
+                <span key={a.key} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                  <select className="ga-input" value={a.value} title={a.label}
+                    style={{ fontSize: '0.82em', padding: '2px 6px', minWidth: 120 }}
+                    onChange={(e) => save(s.id, a.key, e.target.value)}>
+                    <option value="">{a.label}…</option>
+                    {loras.map((n) => <option key={n} value={n}>{n}</option>)}
+                    {a.value && !loras.includes(a.value) && (
+                      <option value={a.value}>{a.value}</option>
+                    )}
+                  </select>
+                  <input className="ga-input" type="number" step="0.05" min="-2" max="2"
+                    title={`${a.label} — ${t('strength')}`}
+                    style={{ fontSize: '0.82em', padding: '2px 4px', width: 58 }}
+                    value={a.strength ?? 1}
+                    onChange={(e) => save(s.id, `${a.key}_strength`, e.target.value)} />
+                </span>
               )
             }
             if (a.options.length > 0 && !a.allow_custom) {

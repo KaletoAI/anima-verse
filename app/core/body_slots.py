@@ -224,9 +224,14 @@ def exposed_slot_loras(character_name: str,
         for attr, decl in spec.attributes.items():
             if str(decl.get("type", "")) != "lora_select":
                 continue
-            name = str((stored.get(spec.id) or {}).get(attr, "") or "").strip()
+            slot_vals = stored.get(spec.id) or {}
+            name = str(slot_vals.get(attr, "") or "").strip()
             if name and name.lower() != "none" and name not in seen:
-                out.append({"name": name, "strength": 1.0})
+                try:
+                    strength = float(slot_vals.get(f"{attr}_strength") or 1.0)
+                except (TypeError, ValueError):
+                    strength = 1.0
+                out.append({"name": name, "strength": strength})
                 seen.add(name)
     return out
 

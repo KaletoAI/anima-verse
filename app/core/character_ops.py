@@ -1302,14 +1302,21 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
                    or not any(equipped.get(s) for s in spec.covered_by))
         attrs = []
         for key, decl in spec.attributes.items():
-            attrs.append({
+            attr = {
                 "key": key,
                 "type": decl.get("type", "select"),
                 "options": list(decl.get("options") or []),
                 "allow_custom": bool(decl.get("allow_custom")),
                 "label": decl.get("label", key.replace("_", " ").title()),
                 "value": (values.get(spec.id) or {}).get(key, ""),
-            })
+            }
+            if attr["type"] == "lora_select":
+                try:
+                    attr["strength"] = float(
+                        (values.get(spec.id) or {}).get(f"{key}_strength") or 1.0)
+                except (TypeError, ValueError):
+                    attr["strength"] = 1.0
+            attrs.append(attr)
         slots.append({
             "id": spec.id,
             "package_id": spec.package_id,
@@ -1346,7 +1353,13 @@ def apply_body_slot_values(character_name: str,
     if spec is None:
         raise HTTPException(status_code=404,
                             detail=f"Unknown body slot '{slot_id}'")
-    unknown = [k for k in values if k not in spec.attributes]
+    # lora_select attributes implicitly carry a companion '<key>_strength'
+    # value (generic rule bound to the type — no manifest boilerplate).
+    allowed = set(spec.attributes)
+    for k, decl in spec.attributes.items():
+        if str(decl.get("type", "")) == "lora_select":
+            allowed.add(f"{k}_strength")
+    unknown = [k for k in values if k not in allowed]
     if unknown:
         raise HTTPException(status_code=400,
                             detail=f"Unknown attribute(s): {', '.join(unknown)}")
