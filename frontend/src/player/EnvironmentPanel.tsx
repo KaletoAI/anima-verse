@@ -74,7 +74,11 @@ export function EnvironmentPanel({
   // panels on open/close/presence changes) — otherwise every remount would
   // fire a fresh render request. The server additionally rate-limits.
   const [renderSig, setRenderSig] = useState(() =>
-    localStorage.getItem('play-scene-sig') || '')
+    // Persisted sig is only valid for the location it was rendered for —
+    // after moving, the old scene must not bridge the new render.
+    localStorage.getItem('play-scene-sig-loc') === locationId
+      ? localStorage.getItem('play-scene-sig') || ''
+      : '')
   const [renderNonce, setRenderNonce] = useState(0)  // cache-buster after force
   const [rendering, setRendering] = useState(false)
   const [renderErr, setRenderErr] = useState('')
@@ -87,7 +91,10 @@ export function EnvironmentPanel({
       const d = await apiPost<{ sig?: string; warning?: string }>(
         '/play/scene-render', { force })
       setRenderSig(d.sig || '')
-      try { localStorage.setItem('play-scene-sig', d.sig || '') } catch { /* ignore */ }
+      try {
+        localStorage.setItem('play-scene-sig', d.sig || '')
+        localStorage.setItem('play-scene-sig-loc', locationId)
+      } catch { /* ignore */ }
       setRenderWarn(d.warning || '')
       setRenderNonce((n) => n + 1)
     } catch (e) {
@@ -101,6 +108,13 @@ export function EnvironmentPanel({
     localStorage.setItem('play-scene-mode', m)
     if (m === 'rendered') void requestRender(false)
   }, [requestRender])
+  // Location changed while mounted: the old scene sig belongs to the old
+  // place — drop it (rendered mode then requests a fresh render below).
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('play-scene-sig-loc') !== locationId) setRenderSig('')
+    } catch { /* ignore */ }
+  }, [locationId])
   // Panel mounted directly in rendered mode (persisted choice) → render once.
   useEffect(() => {
     if (mode === 'rendered' && !renderSig && !rendering) void requestRender(false)

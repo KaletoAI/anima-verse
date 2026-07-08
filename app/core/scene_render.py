@@ -129,13 +129,41 @@ def _scene_cooldown_s() -> int:
         return 120
 
 
-def _newest_scene_image() -> Optional[Path]:
-    """Most recent rendered scene image (16-hex signature files only)."""
+def _scene_meta_path(sig: str) -> Path:
+    return get_scene_dir() / f"{sig}.json"
+
+
+def _write_scene_meta(sig: str, location: str, room: str) -> None:
+    """Sidecar next to the rendered image — lets the stale-image fallbacks
+    filter by location (a render for the kitchen must never stand in for
+    the beach)."""
+    try:
+        _scene_meta_path(sig).write_text(
+            json.dumps({"location": location, "room": room}),
+            encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _newest_scene_image(location_id: str = "") -> Optional[Path]:
+    """Most recent rendered scene image (16-hex signature files only).
+
+    With ``location_id`` only images whose sidecar meta matches that
+    location qualify — a running render must not be bridged with a scene
+    from a DIFFERENT location (legacy images without sidecar never
+    match)."""
     newest = None
     try:
         for p in get_scene_dir().iterdir():
             if p.suffix != ".png" or not re.fullmatch(r"[0-9a-f]{16}", p.stem):
                 continue
+            if location_id:
+                try:
+                    meta = json.loads(_scene_meta_path(p.stem).read_text(encoding="utf-8"))
+                    if (meta.get("location") or "") != location_id:
+                        continue
+                except Exception:
+                    continue
             if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
                 newest = p
     except Exception as e:
@@ -423,7 +451,13 @@ def render_scene(avatar: str, force: bool = False) -> Dict[str, Any]:
     global _inflight
     with _inflight_lock:
         if _inflight:
-            newest = _newest_scene_image()
+            _loc = ""
+            try:
+                from app.models.character import get_character_current_location
+                _loc = (get_character_current_location(avatar) or "").strip()
+            except Exception:
+                pass
+            newest = _newest_scene_image(_loc)
             logger.info("scene render: generation already in flight — "
                         "serving %s", newest.name if newest else "none yet")
             return {"ok": True, "sig": newest.stem if newest else "",
@@ -461,7 +495,7 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     global _last_gen_ts
     cooldown = _scene_cooldown_s()
     if not force and cooldown > 0 and (time.time() - _last_gen_ts) < cooldown:
-        newest = _newest_scene_image()
+        newest = _newest_scene_image(state["location"])
         if newest:
             logger.info("scene render: cooldown active (%ds) — serving %s",
                         cooldown, newest.name)
@@ -588,6 +622,7 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
 
     try:
         out_path.write_bytes(images[0])
+        _write_scene_meta(sig, state["location"], state["room"])
     except Exception as e:
         _tq.track_finish(_track_id, error=str(e))
         return {"ok": False, "error": str(e)}
