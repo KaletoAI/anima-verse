@@ -1391,6 +1391,16 @@ async def toggle_character_skill(character_name: str, skill_name: str, request: 
         user_id = data.get("user_id", "")
         enabled = data.get("enabled", True)
 
+        # F9 package dependencies: enabling is refused while requires/
+        # conflicts of the providing package are not satisfied.
+        if bool(enabled):
+            from app.core.character_ops import skill_dependency_block
+            reason = skill_dependency_block(character_name, skill_name)
+            if reason:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot enable '{skill_name}': {reason}")
+
         config = get_character_skill_config(character_name, skill_name)
         config["enabled"] = bool(enabled)
         save_character_skill_config(character_name, skill_name, config)

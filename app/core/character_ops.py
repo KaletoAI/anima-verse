@@ -1255,6 +1255,69 @@ def apply_config_update(character_name: str, data: Dict[str, Any]) -> Dict[str, 
     return {"status": "success", "character": character_name, "updated_fields": list(fields.keys())}
 
 
+def _package_active_for(character_name: str, pkg) -> bool:
+    """Whether a package counts as ACTIVE on a character (F9 dependencies).
+
+    Verb packages: any of their skills is enabled for the character
+    (mirrors skill_manager._get_agent_skills semantics — missing per-char
+    config counts as enabled unless the skill is ALWAYS_LOAD).
+    Content-only packages: one of their template fragments applies to the
+    character's template.
+    """
+    from app.models.character import (get_character_profile,
+                                      get_character_skill_config)
+    if pkg.skills:
+        for s in pkg.skills:
+            cfg = get_character_skill_config(character_name, s.skill_id) or {}
+            if "enabled" in cfg:
+                if bool(cfg["enabled"]):
+                    return True
+            elif not s.always_load:
+                return True
+        return False
+    profile = get_character_profile(character_name) or {}
+    tmpl_name = (profile.get("template") or "").strip()
+    if not tmpl_name:
+        return False
+    from app.models.character_template import fragment_applies, get_template
+    tmpl = get_template(tmpl_name) or {}
+    return any(fragment_applies(f, tmpl_name, tmpl)
+               for f in pkg.character_fragments)
+
+
+def skill_dependency_block(character_name: str, skill_id: str) -> str:
+    """Why this skill cannot be enabled for the character (empty = allowed).
+
+    Evaluates the providing package's requires/conflicts declarations (F9)
+    against the character's active packages — including reverse conflicts
+    (an active package declaring a conflict with this one). Built-in skills
+    (no package) are never blocked.
+    """
+    try:
+        from app.plugins import registry as _reg
+        pkg = _reg.package_of_skill(skill_id)
+        if pkg is None:
+            return ""
+        reasons = []
+        for req in pkg.requires:
+            rp = _reg.get_package(req)
+            if rp is None or not _package_active_for(character_name, rp):
+                reasons.append(f"requires package '{req}'")
+        for con in pkg.conflicts:
+            cp = _reg.get_package(con)
+            if cp is not None and _package_active_for(character_name, cp):
+                reasons.append(f"conflicts with active package '{con}'")
+        for other in _reg.packages():
+            if (other.id != pkg.id and pkg.id in other.conflicts
+                    and _package_active_for(character_name, other)):
+                reasons.append(f"active package '{other.id}' conflicts with it")
+        return "; ".join(reasons)
+    except Exception as e:
+        logger.debug("dependency check failed for %s/%s: %s",
+                     character_name, skill_id, e)
+        return ""
+
+
 def build_available_skills(character_name: str) -> Dict[str, Any]:
     """Returns all globally loaded skills with per-character enabled state and config fields."""
     from app.core.dependencies import get_skill_manager
@@ -1294,6 +1357,9 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
             # Package-declared verb pair (plugin.yaml pair_with) — the UI
             # renders one coupled toggle for both verbs.
             "pair_with": _pairs.get(skill_id, ""),
+            # F9 dependencies: non-empty = enabling is blocked (UI disables
+            # the toggle and shows why); the PUT route enforces it too.
+            "blocked_reason": skill_dependency_block(character_name, skill_id),
             "config_fields": config_fields if config_fields else None,
         })
 

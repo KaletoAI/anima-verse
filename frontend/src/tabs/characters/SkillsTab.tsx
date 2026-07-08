@@ -30,6 +30,9 @@ interface SkillInfo {
   description?: string
   enabled: boolean
   pair_with?: string
+  // Package dependency block (requires/conflicts) — non-empty = the toggle
+  // is disabled while the skill is off; the backend refuses enabling too.
+  blocked_reason?: string
   config_fields: Record<string, ConfigField> | null
 }
 interface LocationOpt {
@@ -206,10 +209,13 @@ export function SkillsTab({ character }: { character: string }) {
                 border: '1px solid ' + (active ? 'var(--accent, #6aa9ff)' : 'transparent'),
               }}>
               <input type="checkbox" checked={s.enabled}
+                disabled={!s.enabled && !!s.blocked_reason}
+                title={!s.enabled && s.blocked_reason ? s.blocked_reason : undefined}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => onToggle(s, e.target.checked)} />
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-                             whiteSpace: 'nowrap', fontSize: '0.9em', opacity: s.enabled ? 1 : 0.6 }}>
+                             whiteSpace: 'nowrap', fontSize: '0.9em', opacity: s.enabled ? 1 : 0.6 }}
+                title={!s.enabled && s.blocked_reason ? s.blocked_reason : undefined}>
                 {nameOf(s)}
               </span>
             </div>
@@ -230,9 +236,15 @@ export function SkillsTab({ character }: { character: string }) {
             <label className="ga-form-check"
               style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: '0.9em' }}>
               <input type="checkbox" checked={current.enabled}
+                disabled={!current.enabled && !!current.blocked_reason}
                 onChange={(e) => onToggle(current, e.target.checked)} />
               {current.enabled ? t('Enabled') : t('Disabled')}
             </label>
+            {!current.enabled && current.blocked_reason && (
+              <div style={{ marginTop: 6, fontSize: '0.85em', color: 'var(--warn, #d29922)' }}>
+                {t('Blocked by package dependencies')}: {current.blocked_reason}
+              </div>
+            )}
             {current.description && (
               <div style={{ opacity: 0.7, fontSize: '0.88em', marginTop: 8, lineHeight: 1.4 }}>
                 {current.description}

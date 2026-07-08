@@ -150,6 +150,13 @@ def clear_template_cache() -> None:
         _template_cache.clear()
 
 
+def fragment_applies(frag: Dict[str, Any], template_name: str,
+                     tmpl: Dict[str, Any]) -> bool:
+    """Public check whether a package fragment's ``apply_to`` selector matches
+    a template — also used by the skill dependency evaluation (F9)."""
+    return _fragment_applies(frag, template_name, tmpl)
+
+
 def _fragment_applies(frag: Dict[str, Any], template_name: str,
                       tmpl: Dict[str, Any]) -> bool:
     """Check a package fragment's ``apply_to`` selector against a template.

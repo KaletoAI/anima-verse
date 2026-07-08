@@ -72,6 +72,13 @@ class Package:
     character_fragments: List[Dict[str, Any]] = field(default_factory=list)
     config_subsections: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     flags: List[FlagSpec] = field(default_factory=list)
+    # Package dependencies (F9): ids of other packages.
+    # requires — must be PRESENT for this package to load at all, and ACTIVE
+    #            on a character before this package's skills can be enabled.
+    # conflicts — while the other package is active on a character, this
+    #             package's skills cannot be enabled (checked both ways).
+    requires: List[str] = field(default_factory=list)
+    conflicts: List[str] = field(default_factory=list)
 
 
 _packages: Dict[str, Package] = {}
@@ -83,6 +90,10 @@ def clear_registry() -> None:
 
 def register_package(pkg: Package) -> None:
     _packages[pkg.id] = pkg
+
+
+def unregister_package(package_id: str) -> None:
+    _packages.pop(package_id, None)
 
 
 def get_package(package_id: str) -> Optional[Package]:
@@ -125,6 +136,15 @@ def default_enabled_skill_ids() -> List[str]:
             if s.default_enabled:
                 ids.append(s.skill_id)
     return ids
+
+
+def package_of_skill(skill_id: str) -> Optional[Package]:
+    """The package that provides a skill id (None for built-ins)."""
+    for p in packages():
+        for s in p.skills:
+            if s.skill_id == skill_id:
+                return p
+    return None
 
 
 def skill_pairs() -> Dict[str, str]:

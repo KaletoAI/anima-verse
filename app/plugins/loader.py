@@ -187,6 +187,9 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     if isinstance(cfg_schema, dict):
         pkg.config_subsections = cfg_schema
 
+    pkg.requires = [str(x).strip() for x in (meta.get("requires") or []) if str(x).strip()]
+    pkg.conflicts = [str(x).strip() for x in (meta.get("conflicts") or []) if str(x).strip()]
+
     for fdef in meta.get("state_flags") or []:
         if not isinstance(fdef, dict) or not fdef.get("flag"):
             continue
@@ -252,6 +255,21 @@ def discover_packages(plugin_dir: Optional[Path] = None,
 
     _scan(base, installed=False)
     _scan(base / INSTALLED_DIR_NAME, installed=True)
+
+    # Dependency presence (F9): a package whose `requires` are not all
+    # present stays completely inert (no verbs, no contributions) —
+    # repeated until stable so dependency chains unwind.
+    while True:
+        present = {p.id for p in registry.packages()}
+        broken = [p for p in registry.packages()
+                  if any(r not in present for r in p.requires)]
+        if not broken:
+            break
+        for p in broken:
+            missing = [r for r in p.requires if r not in present]
+            logger.warning("Package '%s' inert — required package(s) missing: %s",
+                           p.id, ", ".join(missing))
+            registry.unregister_package(p.id)
 
     if plugin_dir is None:
         _discovered = True

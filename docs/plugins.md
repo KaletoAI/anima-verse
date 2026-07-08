@@ -102,7 +102,17 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `templates.character` | nein | Liste von Fragment-JSONs (siehe unten) |
 | `config_schema` | nein | Subsections für `/admin/settings → Skills` |
 | `state_flags` | nein | Flag-Deklarationen mit Lebenszyklus |
+| `requires` | nein | Paket-IDs, die vorhanden UND am Charakter aktiv sein müssen. Fehlt ein Paket im Dateisystem, bleibt dieses Paket komplett inert; ist es am Charakter inaktiv, lassen sich die Verben nicht aktivieren |
+| `conflicts` | nein | Paket-IDs: solange eines davon am Charakter aktiv ist, sind die Verben dieses Pakets nicht aktivierbar (wirkt in beide Richtungen) |
 | `env_prefix` | nein | Nur Altbestand (Env-Bridge); neue Pakete nutzen `ctx.get_config` |
+
+**Abhängigkeits-Semantik (F9):** „Aktiv am Charakter" heißt für Verb-Pakete: mindestens
+ein Verb ist für den Charakter aktiviert; für Content-Packs: mindestens ein
+Template-Fragment greift auf das Template des Charakters. Durchsetzung: Lade-Zeit
+(`requires`-Präsenz, Ketten werden aufgelöst), Skills-API (`blocked_reason` in
+`GET /characters/<c>/skills/available`), PUT-Enable (409) und SkillsTab (Toggle
+deaktiviert + Begründung). Beispiel: ein NSFW-Anatomie-Pack `requires: [human]`,
+ein `cat`-Pack `conflicts: [human]`.
 
 ### LLM-Templates
 
