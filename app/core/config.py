@@ -100,6 +100,20 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Write a short prompt for a top-down aerial map view of the area, filling the frame, in the same photorealistic style, colour palette and lighting as the rest of the map. Self-contained — do not continue or invent beyond the edges. No border, no frame, no text.",
         },
     },
+    "scene": {
+        # Composed player scene (room background + present characters).
+        # Without a style the models drift into 3D/CGI looks — the default
+        # pins photorealism; the anti-CGI negative is merged with the
+        # scene renderer's built-in anti-duplicate negative.
+        "keywords": {
+            "prompt_style": "photo, photorealistic, realistic photography, natural lighting, realistic skin texture, high detail, 8k",
+            "prompt_negative": "3d render, cgi, cartoon, anime, illustration, painting, video game screenshot, plastic skin",
+        },
+        "natural": {
+            "prompt_style": "a photorealistic photograph, natural lighting, realistic skin texture, high detail",
+            "prompt_negative": "3d render, cgi, cartoon, anime, illustration, painting, video game screenshot",
+        },
+    },
     "location": {
         "keywords": {
             "prompt_style": "wide establishing shot, environment, atmospheric, detailed, no people",
