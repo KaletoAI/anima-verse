@@ -189,7 +189,11 @@ def prompt_fragments(character_name: str,
         if frag:
             general.append(frag)
         if _is_exposed(spec, profile):
-            frag = _format_if_complete(spec.prompt.get("exposed", ""), vals)
+            # Per-character override of the exposed fragment (stored under
+            # the reserved 'exposed_prompt' slot value); the manifest text
+            # is only the default. Placeholders resolve in both.
+            tpl = str((stored.get(spec.id) or {}).get("exposed_prompt", "") or "").strip()                 or spec.prompt.get("exposed", "")
+            frag = _format_if_complete(tpl, vals)
             if frag:
                 exposed.append(frag)
         else:

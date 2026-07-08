@@ -1317,13 +1317,25 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
                 except (TypeError, ValueError):
                     attr["strength"] = 1.0
             attrs.append(attr)
-        slots.append({
+        entry = {
             "id": spec.id,
             "package_id": spec.package_id,
             "covered_by": list(spec.covered_by),
             "exposed": exposed,
             "attributes": attrs,
-        })
+        }
+        exposed_tpl = spec.prompt.get("exposed", "")
+        if exposed_tpl:
+            from app.core.body_slots import _format_if_complete
+            vals_map = {k: str((values.get(spec.id) or {}).get(k, "") or "")
+                        for k in spec.attributes}
+            entry["exposed_prompt"] = str(
+                (values.get(spec.id) or {}).get("exposed_prompt", "") or "")
+            # Grey placeholder: the resolved manifest default (raw template
+            # when values are still missing) — never materialized as value.
+            entry["exposed_default"] = (_format_if_complete(exposed_tpl, vals_map)
+                                        or exposed_tpl)
+        slots.append(entry)
     sil = silhouette_for_character(character_name)
     # Clothing topology of the species — consumers like the image
     # slot-overrides editor render per-slot UI from this instead of a
@@ -1359,6 +1371,9 @@ def apply_body_slot_values(character_name: str,
     for k, decl in spec.attributes.items():
         if str(decl.get("type", "")) == "lora_select":
             allowed.add(f"{k}_strength")
+    if spec.prompt.get("exposed"):
+        # Reserved: per-character override of the exposed prompt fragment.
+        allowed.add("exposed_prompt")
     unknown = [k for k in values if k not in allowed]
     if unknown:
         raise HTTPException(status_code=400,

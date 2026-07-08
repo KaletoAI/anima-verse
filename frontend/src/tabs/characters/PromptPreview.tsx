@@ -27,6 +27,13 @@ export function PromptPreview({ character, refreshKey = '' }:
   if (!rows.some(([, v]) => v)) return null
   return (
     <div style={{ display: 'grid', gap: 4, fontSize: '0.8em', opacity: 0.85 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontWeight: 600, opacity: 0.7 }}>{t('Prompt preview')}</span>
+        {/* Manual refresh: free-text edits (e.g. the appearance prompt)
+            save elsewhere and don't bump refreshKey. */}
+        <button className="ga-btn ga-btn-sm" title={t('Refresh')}
+          style={{ padding: '0 6px', lineHeight: 1.4 }} onClick={load}>↻</button>
+      </div>
       {rows.map(([label, value]) => value ? (
         <div key={label} style={{ borderLeft: '2px solid var(--border, #30363d)', paddingLeft: 8 }}>
           <div style={{ fontWeight: 600, opacity: 0.7 }}>{label}</div>

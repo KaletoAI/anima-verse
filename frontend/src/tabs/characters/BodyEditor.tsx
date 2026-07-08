@@ -24,6 +24,10 @@ export interface BodySlot {
   covered_by: string[]
   exposed: boolean
   attributes: BodySlotAttr[]
+  // Slots with an exposed prompt: per-character override + the package
+  // default (shown greyed as placeholder, never materialized).
+  exposed_prompt?: string
+  exposed_default?: string
 }
 
 export function BodyEditor({ character }: { character: string }) {
@@ -53,10 +57,12 @@ export function BodyEditor({ character }: { character: string }) {
 
   const save = useCallback(async (slotId: string, key: string, value: string) => {
     setSlots((prev) => prev.map((s) => s.id === slotId
-      ? { ...s, attributes: s.attributes.map((a) =>
-          a.key === key ? { ...a, value }
-          : key === `${a.key}_strength` ? { ...a, strength: parseFloat(value) || 1 }
-          : a) }
+      ? (key === 'exposed_prompt'
+          ? { ...s, exposed_prompt: value }
+          : { ...s, attributes: s.attributes.map((a) =>
+              a.key === key ? { ...a, value }
+              : key === `${a.key}_strength` ? { ...a, strength: parseFloat(value) || 1 }
+              : a) })
       : s))
     try {
       await apiPost(`/characters/${enc}/body-slots/${encodeURIComponent(slotId)}`,
@@ -112,6 +118,13 @@ export function BodyEditor({ character }: { character: string }) {
                 onChange={(e) => save(s.id, a.key, e.target.value)} />
             )
           })}
+          {s.exposed_default !== undefined && (
+            <input className="ga-input" value={s.exposed_prompt || ''}
+              placeholder={s.exposed_default}
+              title={t('Exposed prompt override — empty = package default (grey)')}
+              style={{ fontSize: '0.82em', padding: '2px 6px', flex: '1 1 150px', minWidth: 140 }}
+              onChange={(e) => save(s.id, 'exposed_prompt', e.target.value)} />
+          )}
           {s.attributes.map((a) => a.options.length > 0 && a.allow_custom && a.type !== 'lora_select' ? (
             <datalist key={`dl-${a.key}`} id={`body-${s.id}-${a.key}`}>
               {a.options.map((o) => <option key={o} value={o} />)}
