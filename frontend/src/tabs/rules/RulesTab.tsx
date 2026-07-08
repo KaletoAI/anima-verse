@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { loadActivities, loadCharacters, loadLocations, type ActivityRef, type CharacterRef, type LocationRef } from '../../lib/refs'
+import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } from '../../lib/refs'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
@@ -13,7 +13,9 @@ type TargetScope = 'location' | 'any_room' | 'danger_level'
 
 interface ForceAction {
   go_to?: 'stay' | 'home'
-  set_activity?: string
+  // B1: state flags are the authority — the executor applies these
+  // (is_sleeping true/false wakes from off-map too). set_activity is dead.
+  set_flags?: Record<string, boolean | string>
 }
 
 interface RuleTarget {
@@ -49,7 +51,7 @@ interface DraftRule {
   target_action: 'enter' | 'leave'
   target_min_danger: number
   force_go_to: 'stay' | 'home'
-  force_activity: string
+  force_sleep: '' | 'sleep' | 'wake'
   discover_probability: number
   condition: string
   message: string
@@ -69,7 +71,7 @@ const EMPTY_DRAFT: DraftRule = {
   target_action: 'enter',
   target_min_danger: 3,
   force_go_to: 'stay',
-  force_activity: '',
+  force_sleep: '',
   discover_probability: 0.05,
   condition: '',
   message: '',
@@ -92,7 +94,8 @@ function ruleToDraft(r: Rule): DraftRule {
     target_action: target.action || 'enter',
     target_min_danger: target.min_danger_level ?? 3,
     force_go_to: force.go_to || 'stay',
-    force_activity: force.set_activity || '',
+    force_sleep: force.set_flags?.is_sleeping === true ? 'sleep'
+      : force.set_flags?.is_sleeping === false ? 'wake' : '',
     discover_probability: r.discover?.probability ?? 0.05,
     condition: r.condition || '',
     message: r.message || '',
@@ -121,7 +124,10 @@ function draftToRule(d: DraftRule): Rule {
     }
     r.target = target
   } else if (d.type === 'force') {
-    r.force_action = { go_to: d.force_go_to, set_activity: d.force_activity || undefined }
+    r.force_action = { go_to: d.force_go_to }
+    if (d.force_sleep) {
+      r.force_action.set_flags = { is_sleeping: d.force_sleep === 'sleep' }
+    }
   } else if (d.type === 'discover') {
     r.discover = { probability: d.discover_probability }
   }
@@ -135,7 +141,6 @@ export function RulesTab() {
   const [draft, setDraft] = useState<DraftRule | null>(null)
   const [locations, setLocations] = useState<LocationRef[]>([])
   const [characters, setCharacters] = useState<CharacterRef[]>([])
-  const [activities, setActivities] = useState<ActivityRef[]>([])
 
   const reload = useCallback(async () => {
     try {
@@ -153,7 +158,6 @@ export function RulesTab() {
   useEffect(() => {
     loadLocations().then(setLocations).catch(() => setLocations([]))
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
-    loadActivities().then(setActivities).catch(() => setActivities([]))
   }, [])
 
   const sorted = useMemo(() => {
@@ -352,7 +356,6 @@ export function RulesTab() {
               draft={draft}
               locations={locations}
               characters={characters}
-              activities={activities}
               onUpdate={update}
             />
           </>
@@ -368,11 +371,10 @@ interface RuleFormProps {
   draft: DraftRule
   locations: LocationRef[]
   characters: CharacterRef[]
-  activities: ActivityRef[]
   onUpdate: <K extends keyof DraftRule>(key: K, value: DraftRule[K]) => void
 }
 
-function RuleForm({ draft, locations, characters, activities, onUpdate }: RuleFormProps) {
+function RuleForm({ draft, locations, characters, onUpdate }: RuleFormProps) {
   const { t } = useI18n()
   const selectedLocation = locations.find((l) => l.id === draft.target_location)
   const rooms = selectedLocation?.rooms || []
@@ -533,19 +535,16 @@ function RuleForm({ draft, locations, characters, activities, onUpdate }: RuleFo
               <option value="home">{t('Home (sleep place)')}</option>
             </select>
           </Field>
-          <Field label={t('Activity')}>
+          <Field label={t('Sleep')}
+            hint={t('State flags are the authority: "Fall asleep" sets is_sleeping (goes off-map at the sleep place), "Wake up" clears it and returns the character to where they were. A day/night rule pair needs BOTH directions — a rule that only sends someone to sleep never brings them back.')}>
             <select
               className="ga-input"
-              value={draft.force_activity}
-              onChange={(e) => onUpdate('force_activity', e.target.value)}
+              value={draft.force_sleep}
+              onChange={(e) => onUpdate('force_sleep', e.target.value as '' | 'sleep' | 'wake')}
             >
-              <option value="">-- {t('select')} --</option>
-              {activities.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name || a.id}
-                  {a._group ? ` (${a._group})` : ''}
-                </option>
-              ))}
+              <option value="">-- {t('no change')} --</option>
+              <option value="sleep">{t('Fall asleep')}</option>
+              <option value="wake">{t('Wake up')}</option>
             </select>
           </Field>
         </>
