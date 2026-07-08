@@ -292,8 +292,10 @@ def discover_packages(plugin_dir: Optional[Path] = None,
 def _package_enabled(pkg: Package) -> bool:
     """Package-level enabled gate for packages without always_load verbs.
 
-    Order: explicit ``skills.<id>.enabled`` in the world config wins, the
-    legacy env bridge (SKILL_<ID>_ENABLED) is the fallback.
+    Order: explicit ``skills.<id>.enabled`` in the world config wins, then
+    the legacy env bridge (SKILL_<ID>_ENABLED), then the manifest's
+    ``enabled_default`` (for packages that should load out of the box,
+    e.g. core communication verbs like talk_to).
     """
     if any(e.always_load for e in pkg.skills):
         return True
@@ -305,7 +307,10 @@ def _package_enabled(pkg: Package) -> bool:
     except Exception:
         pass
     env_prefix = pkg.manifest.get("env_prefix", f"SKILL_{pkg.id.upper()}_")
-    return os.getenv(f"{env_prefix}ENABLED", "false").lower() == "true"
+    env_val = os.getenv(f"{env_prefix}ENABLED", "")
+    if env_val:
+        return env_val.lower() == "true"
+    return bool(pkg.manifest.get("enabled_default", False))
 
 
 def _apply_skill_meta(skill: PluginSkill, entry: SkillEntry) -> None:

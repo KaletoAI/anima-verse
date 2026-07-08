@@ -104,6 +104,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `state_flags` | nein | Flag-Deklarationen mit Lebenszyklus |
 | `requires` | nein | Paket-IDs, die vorhanden UND am Charakter aktiv sein müssen. Fehlt ein Paket im Dateisystem, bleibt dieses Paket komplett inert; ist es am Charakter inaktiv, lassen sich die Verben nicht aktivieren |
 | `conflicts` | nein | Paket-IDs: solange eines davon am Charakter aktiv ist, sind die Verben dieses Pakets nicht aktivierbar (wirkt in beide Richtungen) |
+| `enabled_default` | nein | Lade-Gate-Default für Pakete OHNE always_load-Verben, wenn weder `skills.<id>.enabled` in der Config noch die Env-Bridge etwas sagen (z.B. `true` für Kern-Verben wie talk_to) |
 | `env_prefix` | nein | Nur Altbestand (Env-Bridge); neue Pakete nutzen `ctx.get_config` |
 
 **Abhängigkeits-Semantik (F9):** „Aktiv am Charakter" heißt für Verb-Pakete: mindestens
