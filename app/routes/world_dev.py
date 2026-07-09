@@ -167,10 +167,9 @@ def _format_context_locations(location_ids: list) -> str:
             room_desc = room.get("description", "")
             if room_desc:
                 lines.append(f"{room_desc}")
-            activities = [a.get("name", "") for a in (room.get("activities", []) or [])
-                          if isinstance(a, dict) and a.get("name")]
-            if activities:
-                lines.append(f"Aktivitaeten: {', '.join(activities)}")
+            hint = (room.get("activity_hint") or "").strip()
+            if hint:
+                lines.append(f"Activity hint: {hint}")
             lines.append("")
     return "\n".join(lines)
 
@@ -683,10 +682,8 @@ async def apply_world_data(request: Request):
     image_prompt_night = location_data.get("image_prompt_night")
     image_prompt_map = location_data.get("image_prompt_map")
 
-    # Ensure room structure and normalize image_prompt fields
+    # Normalize image_prompt fields
     for room in rooms:
-        if "activities" not in room:
-            room["activities"] = []
         # LLM generates "image_prompt" but system reads "image_prompt_day"/"image_prompt_night"
         if "image_prompt" in room and "image_prompt_day" not in room:
             room["image_prompt_day"] = room.pop("image_prompt")
@@ -1577,8 +1574,6 @@ async def apply_json(request: Request):
         for room in rooms:
             if not isinstance(room, dict):
                 continue
-            if "activities" not in room:
-                room["activities"] = []
             if "image_prompt" in room and "image_prompt_day" not in room:
                 room["image_prompt_day"] = room.pop("image_prompt")
             if "image_prompt_night" not in room:
