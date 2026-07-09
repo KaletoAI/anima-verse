@@ -134,12 +134,13 @@ class PartySkill(PluginSkill):
         try:
             from app.models.character import (get_character_current_location,
                                               get_character_current_room)
-            from app.core.perception import record_utterance, VOLUME_NORMAL
+            from app.core.perception import (record_utterance, VOLUME_NORMAL,
+                                             STORYTELLER_SPEAKER)
             _loc = get_character_current_location(character_name) or ""
             _room = get_character_current_room(character_name) or ""
-            # "Erzähler" is the core narrator-speaker sentinel (filtered out of
-            # participant lists everywhere) — keep it verbatim, not translated.
-            record_utterance(speaker="Erzähler",
+            # Narrator line — STORYTELLER_SPEAKER is the core narrator-speaker
+            # sentinel (filtered out of participant lists everywhere).
+            record_utterance(speaker=STORYTELLER_SPEAKER,
                              content=f"{character_name} joins {leader}'s party.",
                              volume=VOLUME_NORMAL, location_id=_loc, room_id=_room,
                              source="party")

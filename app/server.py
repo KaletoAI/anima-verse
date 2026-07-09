@@ -140,6 +140,14 @@ async def lifespan(app: FastAPI):
     from app.core.expression_regen import migrate_variant_filenames
     migrate_variant_filenames()
 
+    # Migration: rename the legacy narrator-speaker sentinel to the canonical
+    # STORYTELLER_SPEAKER in all persisted rows (idempotent, world_kv-marked).
+    try:
+        from app.models.perception_store import migrate_storyteller_speaker_once
+        migrate_storyteller_speaker_once()
+    except Exception as _se:
+        logger.debug("storyteller-speaker migration failed: %s", _se)
+
     # Initialisiere Multi-Channel Support
     logger.info("Initialisiere Multi-Channel Support...")
     initialize_channels()

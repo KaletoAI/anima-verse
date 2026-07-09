@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from app.core.auth_dependency import get_current_user
 from app.core.log import get_logger
+from app.core.perception import STORYTELLER_SPEAKER
 
 logger = get_logger("play")
 
@@ -201,7 +202,7 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
         _seen: set = set()
         for ln in (scene or [])[-15:]:
             sp = ((ln.get("meta") or {}).get("speaker") or "").strip()
-            if not sp or sp == avatar or sp == "Erzähler" or sp in present_set or sp in _seen:
+            if not sp or sp == avatar or sp == STORYTELLER_SPEAKER or sp in present_set or sp in _seen:
                 continue
             try:
                 if parse_iso(ln.get("ts") or "") < cutoff:
@@ -226,6 +227,21 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
                          for i in get_pending_invites_for(avatar)]
     except Exception:
         party_invites = []
+
+    # Localise the storyteller speaker label for the player's UI — the stored
+    # value stays the canonical STORYTELLER_SPEAKER; only the display shows the
+    # translated name (the localized German label). SceneView renders meta.speaker.
+    try:
+        from app.models.character import get_character_language
+        from app.core.i18n import t as _t
+        _st_label = _t("Storyteller", get_character_language(avatar) or "de")
+        if _st_label != STORYTELLER_SPEAKER:
+            for _ln in scene:
+                _m = _ln.get("meta")
+                if isinstance(_m, dict) and _m.get("speaker") == STORYTELLER_SPEAKER:
+                    _m["speaker"] = _st_label
+    except Exception as _le:
+        logger.debug("storyteller label localisation failed: %s", _le)
 
     return {
         "avatar": avatar,
@@ -430,10 +446,10 @@ async def play_party_leave(user=Depends(get_current_user)):
 
 async def _storyteller_fallback(actor: str, text: str, location_id: str,
                                 room_id: str, volume: str) -> None:
-    """Storyteller-Fallback (plan-room-conversation, Option 3): reagiert kein
-    anwesender Character auf eine Avatar-Äußerung (z.B. allein mit einem Bären),
-    springt der Erzähler ein und narriert die Umgebung/Konsequenz. Die Narration
-    landet als Erzähler-Wahrnehmung im Stream (erscheint im nächsten /play/scene).
+    """Storyteller fallback (plan-room-conversation, option 3): if no present
+    character reacts to an avatar utterance (e.g. alone with a bear), the
+    storyteller steps in and narrates the surroundings/consequence. The narration
+    lands as a storyteller perception in the stream (appears in the next /play/scene).
 
     Lautstärke = Reichweite: schreien narriert ortsweit (scope=location), sonst
     nur den aktuellen Raum (scope=here) — konsistent mit der Utterance-Hörweite.
@@ -558,7 +574,7 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     #     NICHT gezeigt — `chat_substitute` (narrative Beschreibung des Wirkens)
     #     ersetzt sie, damit das Ziel auf die WIRKUNG reagiert, nicht auf die
     #     Worte (sonst „Was bedeutet das?"). Der `hint` (success_/fail_text) wird
-    #     als Erzähler-Ergebniszeile sichtbar gemacht UND dem Ziel beim Reagieren
+    #     made visible as a storyteller result line AND passed to the target when it reacts
     #     mitgegeben. Die komplette Mechanik (Effekte, Anchor-Teleport, Item,
     #     Modus, cast_activity) lief bereits in detect_and_cast→execute_cast.
     _is_spell = bool(spell and spell.get("hint"))
@@ -572,12 +588,12 @@ async def play_say(request: Request, user=Depends(get_current_user)):
                            addressees=addressees, source="play",
                            perception_meta=_pmeta)
 
-    # 2b) Spell-Ergebnis (success_/fail_text) als Erzähler-Zeile sichtbar machen.
-    #     location_id explizit — „Erzähler" hat keinen eigenen Ort.
+    # 2b) Make the spell result (success_/fail_text) visible as a storyteller line.
+    #     location_id explicit — the storyteller has no own location.
     if _is_spell:
         _hint = (spell.get("hint") or "").strip()
         if _hint:
-            record_utterance(speaker="Erzähler", content=_hint, volume=VOLUME_NORMAL,
+            record_utterance(speaker=STORYTELLER_SPEAKER, content=_hint, volume=VOLUME_NORMAL,
                              location_id=loc, room_id=room, source="spell")
 
     # 3) Reaktionen über den Loop verteilen: Adressierte → Pflicht-Antwort,
@@ -1021,8 +1037,8 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
     if not spell:
         raise HTTPException(status_code=404, detail="not a spell or not in inventory")
     res = execute_cast(avatar, avatar, spell)
-    # Effekt als Erzähler-Zeile sichtbar machen (location_id explizit — „Erzähler"
-    # hat keinen eigenen Ort, sonst läuft der Fan-Out ins Leere).
+    # Make the effect visible as a storyteller line (location_id explicit — the
+    # storyteller has no own location, otherwise the fan-out goes nowhere).
     try:
         from app.core.perception import record_utterance, VOLUME_NORMAL
         from app.models.character import (get_character_current_location,
@@ -1031,7 +1047,7 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
         _room = get_character_current_room(avatar) or ""
         _hint = (res.get("hint") or "").strip()
         if _loc and _hint:
-            record_utterance(speaker="Erzähler", content=_hint,
+            record_utterance(speaker=STORYTELLER_SPEAKER, content=_hint,
                              volume=VOLUME_NORMAL, location_id=_loc, room_id=_room,
                              source="spell")
     except Exception as _e:  # noqa: BLE001
@@ -1253,7 +1269,7 @@ async def play_scenes(user=Depends(get_current_user), limit: int = 5):
                 room_name = r.get("name", "") or ""
                 break
         others = [p for p in (sc.get("participants") or [])
-                  if p and p != avatar and p != "Erzähler"]
+                  if p and p != avatar and p != STORYTELLER_SPEAKER]
         out["scenes"].append({
             "ts": sc.get("last_activity_ts", ""),
             "location_name": loc_name, "room_name": room_name,

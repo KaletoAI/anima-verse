@@ -31,6 +31,7 @@ from app.core.timeutils import parse_iso, utc_now
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
+from app.core.perception import STORYTELLER_SPEAKER
 
 logger = get_logger("agent_loop")
 
@@ -807,7 +808,7 @@ class AgentLoop:
                 content = (row.get("content") or "").strip()
                 if not content or (row.get("kind") or "") == "whisper_meta":
                     continue
-                if not sp or sp == character_name or sp == "Erzähler":
+                if not sp or sp == character_name or sp == STORYTELLER_SPEAKER:
                     continue  # Narrator-Events sind Wahrnehmung, kein Gesprächspartner
                 # Frische prüfen
                 try:

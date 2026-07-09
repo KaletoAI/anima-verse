@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 from app.core.log import get_logger
+from app.core.perception import STORYTELLER_SPEAKER
 logger = get_logger("act")
 
 
@@ -161,9 +162,9 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
 
     _record_actor_diary(actor=actor, narration=narration, scope=scope)
 
-    # Stream-Eintrag: die Erzähler-Narration ins Raum-Logbuch (utterances/
-    # perceptions), damit Acts im /play-Chat + Observer erscheinen — wie
-    # gesprochene Utterances (TalkTo). Vorher fehlte das → Acts waren nur im
+    # Stream entry: the storyteller narration into the room log (utterances/
+    # perceptions), so acts appear in the /play chat + observer — like spoken
+    # utterances (TalkTo). Before this they were only in
     # LLM-Log/Memory, nirgends im Stream sichtbar.
     _record_act_to_stream(
         narration=narration, location_id=actor_loc, room_id=actor_room,
@@ -395,8 +396,8 @@ async def _run_storyteller_agent(
     # ── Stream konsumieren ─────────────────────────────────────────────
     narration_chunks: List[str] = []
     tools_fired: List[str] = []
-    # Als chat_active in der Provider-Queue registrieren → der Storyteller-Call
-    # wird im Task-Panel sichtbar ("Erzähler: <actor>"), wie ein Chat-/Thought-Turn.
+    # Register as chat_active in the provider queue → the storyteller call
+    # becomes visible in the task panel ("Storyteller: <actor>"), like a chat/thought turn.
     from app.core.llm_queue import get_llm_queue as _get_llm_queue
     _stq = _get_llm_queue()
     _st_task_id = ""
@@ -407,7 +408,7 @@ async def _run_storyteller_agent(
         # then shows the wrong provider next to the right model.
         _st_task_id = await _stq.register_chat_active_async(
             actor, llm_instance=st_inst, task_type="storyteller",
-            label=f"Erzähler: Aktion von {actor}")
+            label=f"{STORYTELLER_SPEAKER}: action by {actor}")
         agent.chat_task_id = _st_task_id
     except Exception as _re:
         logger.debug("storyteller chat-active register failed: %s", _re)
@@ -765,16 +766,16 @@ def _recipient_recently_perceived(recipient: str, actor: str, text: str) -> bool
 
 def _record_act_to_stream(*, narration: str, location_id: str, room_id: str,
                           scope: str, resolved: bool, event_id, reason: str) -> None:
-    """Schreibt die Erzähler-Narration eines Acts ins Raum-Logbuch (perception
-    stream), damit sie im /play-Chat + Observer erscheint — analog zu gesprochenen
-    Utterances. ``scope='location'`` → shout (alle Räume der Location hören es),
-    sonst nur der aktuelle Raum. Löst der Act ein Event, kommt zusätzlich ein
-    Verdict-Eintrag (vom SceneView farbig gerendert)."""
+    """Writes the storyteller narration of an act into the room log (perception
+    stream), so it appears in the /play chat + observer — like spoken
+    utterances. ``scope='location'`` → shout (all rooms of the location hear it),
+    otherwise only the current room. If the act resolves an event, an extra
+    verdict entry is added (rendered in colour by the SceneView)."""
     try:
         from app.core.perception import record_utterance
         volume = "shout" if scope == "location" else "normal"
         if narration:
-            record_utterance(speaker="Erzähler", content=narration, volume=volume,
+            record_utterance(speaker=STORYTELLER_SPEAKER, content=narration, volume=volume,
                              location_id=location_id, room_id=room_id,
                              addressees=[], source="act_storyteller")
         if event_id:
@@ -783,7 +784,7 @@ def _record_act_to_stream(*, narration: str, location_id: str, room_id: str,
                 "Das Ereignis wurde gelöst." if resolved
                 else "Das Ereignis bleibt ungelöst.")
             record_utterance(
-                speaker="Erzähler", content=verdict_content, volume=volume,
+                speaker=STORYTELLER_SPEAKER, content=verdict_content, volume=volume,
                 location_id=location_id, room_id=room_id, addressees=[],
                 source="event_verdict",
                 perception_meta={"event_verdict": "resolved" if resolved else "unresolved",

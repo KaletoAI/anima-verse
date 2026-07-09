@@ -192,3 +192,42 @@ def get_character_stream(perceiver: str, limit: int = 100,
             "ORDER BY ts DESC, id DESC LIMIT ?",
             (perceiver, limit)).fetchall()
     return [_row_to_dict(r) for r in reversed(rows)]
+
+
+def migrate_storyteller_speaker_once() -> None:
+    """One-time, idempotent rename of the legacy narrator-speaker sentinel to the
+    canonical ``perception.STORYTELLER_SPEAKER`` ("Storyteller") wherever it was
+    persisted: ``utterances.speaker``, ``perceptions.meta.speaker``,
+    ``scenes.participants`` and ``chat_messages.metadata.speaker``.
+
+    Runs per world at boot, guarded by a world_kv marker. This is the ONLY place
+    that still names the old value — it replaces the old rows outright (no
+    backward-compat reader is kept; new code compares only STORYTELLER_SPEAKER).
+    """
+    legacy = "Erz" + "ähler"  # legacy German sentinel, migration-only
+    new = "Storyteller"
+    try:
+        from app.models.world import get_world_setting, set_world_setting
+    except Exception:
+        return
+    if get_world_setting("migration.storyteller_speaker_v1", "") == "done":
+        return
+    try:
+        with transaction() as conn:
+            conn.execute("UPDATE utterances SET speaker=? WHERE speaker=?", (new, legacy))
+            conn.execute(
+                "UPDATE perceptions SET meta=json_set(meta,'$.speaker',?) "
+                "WHERE json_valid(meta) AND json_extract(meta,'$.speaker')=?",
+                (new, legacy))
+            conn.execute(
+                "UPDATE scenes SET participants=replace(participants,?,?) "
+                "WHERE participants LIKE ?",
+                (f'"{legacy}"', f'"{new}"', f'%"{legacy}"%'))
+            conn.execute(
+                "UPDATE chat_messages SET metadata=json_set(metadata,'$.speaker',?) "
+                "WHERE json_valid(metadata) AND json_extract(metadata,'$.speaker')=?",
+                (new, legacy))
+        set_world_setting("migration.storyteller_speaker_v1", "done")
+        logger.info("storyteller-speaker migration applied (%s -> %s)", legacy, new)
+    except Exception as e:
+        logger.warning("storyteller-speaker migration failed: %s", e)

@@ -16,6 +16,7 @@ from typing import Dict, Any
 
 from app.core.log import get_logger
 from app.core.timeutils import utc_now, utc_now_iso
+from app.core.perception import STORYTELLER_SPEAKER
 
 logger = get_logger("scene_manager")
 
@@ -72,9 +73,9 @@ def consolidate_scene(scene: Dict[str, Any]) -> None:
 
     sid = scene.get("id")
     utterances = scene_store.get_scene_utterances(scene)
-    # "Erzähler" (Storyteller-Narration) ist kein Character → kein Teilnehmer-
-    # Gedächtnis. Seine Zeilen bleiben aber im Transkript (Kontext).
-    participants = [p for p in (scene.get("participants") or []) if p and p != "Erzähler"]
+    # The storyteller (narration) is not a character → no participant memory.
+    # Its lines stay in the transcript (context).
+    participants = [p for p in (scene.get("participants") or []) if p and p != STORYTELLER_SPEAKER]
 
     # Leere Szene (nur Geflüster-Meta o.ä. / nichts Inhaltliches) → ohne Summary
     # schließen, aber trotzdem prunen, damit sie nicht offen bleibt.
@@ -134,7 +135,7 @@ def _summarize(scene: Dict[str, Any], lines: list) -> str:
         try:
             from app.models.character import get_character_language, LANGUAGE_MAP
             _parts = [p for p in (scene.get("participants") or [])
-                      if p and p != "Erzähler"]
+                      if p and p != STORYTELLER_SPEAKER]
             if _parts:
                 _code = (get_character_language(_parts[0]) or "en").strip()
                 lang_instruction = f"\nWrite the summary in {LANGUAGE_MAP.get(_code, 'English')}."

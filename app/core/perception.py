@@ -33,6 +33,13 @@ KIND_IN_ROOM = "in_room"
 KIND_WHISPER_META = "whisper_meta"
 KIND_DISTANT_SHOUT = "distant_shout"
 
+# Canonical speaker value for narrator/storyteller lines (act narration, spell
+# results, movement traces, party joins). Persisted AND player-visible, so it is
+# one constant referenced everywhere (write + presence filters) — never a bare
+# string literal (previously a bare narrator literal). Localised for display via
+# t("Storyteller", lang); the stored value stays this canonical English token.
+STORYTELLER_SPEAKER = "Storyteller"
+
 
 @dataclass(frozen=True)
 class EarshotTarget:
@@ -119,7 +126,7 @@ def announce_action(character_name: str, text: str,
     2. Room reactions via the agent loop (present characters get a chime
        opportunity and may react — or SKIP).
 
-    Location/room come from the acting character ("Erzähler" has no own
+    Location/room come from the acting character (the storyteller has no own
     position). Best-effort — never raises into the calling route."""
     try:
         from app.models.character import (get_character_current_location,
@@ -128,7 +135,7 @@ def announce_action(character_name: str, text: str,
         room = get_character_current_room(character_name) or ""
         if not loc:
             return
-        record_utterance(speaker="Erzähler", content=text,
+        record_utterance(speaker=STORYTELLER_SPEAKER, content=text,
                          volume=VOLUME_NORMAL, location_id=loc,
                          room_id=room, source=source,
                          perception_meta=perception_meta)

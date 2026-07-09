@@ -14,6 +14,7 @@ from datetime import datetime
 from app.core.timeutils import utc_now_iso
 
 from app.core.log import get_logger
+from app.core.perception import STORYTELLER_SPEAKER
 
 logger = get_logger("chat_engine")
 
@@ -334,12 +335,12 @@ def build_chat_context(
     present_characters: List[str] = []
     if room_mode:
         messages = _messages_from_room_stream(character_name, room_stream)
-        # Anwesende = die Sprecher im Raum-Stream (außer mir + Erzähler) — daraus
+        # Present = the speakers in the room stream (except me + the storyteller) — from
         # baut der System-Prompt das Gruppen-Szenen-Framing (Anti-Impersonation).
         _seen = set()
         for _row in room_stream:
             _sp = (_row.get("speaker") or (_row.get("meta") or {}).get("speaker") or "").strip()
-            if _sp and _sp != character_name and _sp.lower() != "erzähler" and _sp not in _seen:
+            if _sp and _sp != character_name and _sp != STORYTELLER_SPEAKER and _sp not in _seen:
                 _seen.add(_sp)
                 present_characters.append(_sp)
 
@@ -997,7 +998,7 @@ def post_process_response(
                                    if _old_type else _new_type))
                         if _r_loc:
                             record_utterance(
-                                speaker="Erzähler", content=_txt,
+                                speaker=STORYTELLER_SPEAKER, content=_txt,
                                 volume=VOLUME_NORMAL, location_id=_r_loc,
                                 room_id=_r_room, source="relationship",
                                 perception_meta={"display_only": True,

@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from app.core.log import get_logger
+from app.core.perception import STORYTELLER_SPEAKER
 from app.core.chat_task_manager import get_chat_task_manager
 
 logger = get_logger("chat")
@@ -2521,7 +2522,7 @@ def _build_full_system_prompt(character_name: str,
                 if not summ:
                     continue
                 _osc = [p for p in (sc.get("participants") or [])
-                        if p and p != character_name and p != "Erzähler"]
+                        if p and p != character_name and p != STORYTELLER_SPEAKER]
                 _loc = get_location_by_id(sc.get("location_id", "")) or {}
                 tag = " · ".join([x for x in (_loc.get("name", ""), ", ".join(_osc)) if x])
                 _lines.append(f"- {summ}" + (f"  ({tag})" if tag else ""))

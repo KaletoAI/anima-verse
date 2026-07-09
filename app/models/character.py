@@ -1150,14 +1150,14 @@ def _drag_party_followers_to_room(character_name: str, room_id: str) -> None:
 
 def _movement_trace(character_name: str, location_id: str, room_id: str,
                     content: str) -> None:
-    """C1: Bewegungs-Spur als „Erzähler"-Zeile in den Wahrnehmungs-Stream, damit
-    Raumwechsel im /play-Chat + Observer sichtbar sind (gold/kursiv) — statt dass
-    ein Weggang still passiert und die Konversation stumm abbricht."""
+    """C1: movement trace as a storyteller line in the perception stream, so
+    that room changes are visible in the /play chat + observer (gold/italic) —
+    instead of a silent exit that mutes the conversation."""
     if not (character_name and location_id and content):
         return
     try:
-        from app.core.perception import record_utterance
-        record_utterance(speaker="Erzähler", content=content, volume="normal",
+        from app.core.perception import record_utterance, STORYTELLER_SPEAKER
+        record_utterance(speaker=STORYTELLER_SPEAKER, content=content, volume="normal",
                          location_id=location_id, room_id=room_id or "",
                          addressees=[], source="movement")
     except Exception as _e:
@@ -1248,8 +1248,8 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
     # (Lebenszyklus gemaess plan-outfit-system-rethink.md §3)
     save_character_profile(character_name, profile)
-    # C1: Bewegungs-Spur (Erzähler) bei echtem Location-Wechsel — Weggang im alten
-    # Ort + Ankunft im neuen sichtbar machen. Off-map (Schlaf-Sentinel) ausgenommen.
+    # C1: movement trace (storyteller) on a real location change — make the exit
+    # from the old place + arrival in the new one visible. Off-map (sleep sentinel) excluded.
     if location_changed and old_location and old_location != OFFMAP_SLEEP_SENTINEL \
             and location != OFFMAP_SLEEP_SENTINEL:
         try:
@@ -1436,7 +1436,7 @@ def save_character_current_room(character_name: str, room_id: str,
             pass
         _record_state_change(character_name, "room", room_id,
                               metadata={"name": room_name, "old": old_room})
-        # C1: Bewegungs-Spur (Erzähler) bei Raumwechsel INNERHALB derselben
+        # C1: movement trace (storyteller) on a room change WITHIN the same
         # Location. Guard: beide Räume gehören zum aktuellen Ort → so wird der
         # Raum-Reset während eines Cross-Location-Moves (alter Raum gehört dann
         # zum alten Ort) NICHT fälschlich als Raumwechsel getrackt.
