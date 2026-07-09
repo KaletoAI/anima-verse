@@ -172,12 +172,14 @@ export function TaskPanel() {
     return () => clearInterval(id)
   }, [anyLive])
 
-  const llmChannels = channels.filter((ch) => ch.kind === 'llm')
+  // Show all LLM providers, but only image backends that have a PROBLEM
+  // (unhealthy) — healthy image backends stay hidden to declutter.
+  const shownChannels = channels.filter((ch) => ch.kind === 'llm' || !ch.healthy)
   const hasTasks = llmTasks.length > 0 || pendingLLM.length > 0 || trackedTasks.length > 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {llmChannels.length > 0 && (
+      {shownChannels.length > 0 && (
         // Mehrspaltige Tabelle: auto-fill Grid — so viele Spalten wie in die
         // Panel-Breite passen; pro Zelle Status-Punkt | Name (Ellipsis) |
         // Zaehler rechtsbuendig, damit die Spalten tabellarisch fluchten.
@@ -186,7 +188,7 @@ export function TaskPanel() {
           gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
           gap: '3px 16px',
         }}>
-          {llmChannels.map((ch) => {
+          {shownChannels.map((ch) => {
             const state = ch.healthy ? (ch.busy ? t('busy') : t('available')) : t('unavailable')
             // Icon = Typ, Farbe = Status (wie die Panel-Leisten-Icons).
             const color = !ch.healthy ? '#e05656' : ch.busy ? 'var(--accent, #6aa9ff)' : '#3fa45a'
@@ -225,7 +227,7 @@ export function TaskPanel() {
           })}
         </div>
       )}
-      {llmChannels.length > 0 && hasTasks && (
+      {shownChannels.length > 0 && hasTasks && (
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }} />
       )}
       {!hasTasks && (
