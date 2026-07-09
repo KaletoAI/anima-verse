@@ -323,6 +323,29 @@ def slot_attr_values(character_name: str) -> Dict[str, str]:
     return out
 
 
+def all_interest_alias_phrases() -> List[str]:
+    """Example phrases from ALL loaded species packages' body-slot
+    interest_aliases — for the romantic-interests help panel. SFW basics
+    (human: hair/build) plus, when installed, the NSFW pack's explicit
+    slang. Deduped, one representative phrase per canonical value."""
+    from app.plugins.registry import packages
+    out: List[str] = []
+    seen = set()
+    for pkg in packages():
+        for spec in getattr(pkg, "body_slots", []) or []:
+            for attr, decl in spec.attributes.items():
+                aliases = decl.get("interest_aliases")
+                if not isinstance(aliases, dict):
+                    continue
+                for phrases in aliases.values():
+                    if isinstance(phrases, list) and phrases:
+                        first = str(phrases[0]).strip()
+                        if first and first.lower() not in seen:
+                            seen.add(first.lower())
+                            out.append(first)
+    return out
+
+
 def being_for_character(character_name: str) -> str:
     """Prompt noun for what kind of being the character is ('person',
     'animal', ...) — declared by the species package (manifest ``being``);

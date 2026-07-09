@@ -349,6 +349,15 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             {"code": "neat hair -> messy tousled hair", "text": "Replacement: rewrites a matching fragment of the description (case-insensitive; '→' works too). Works on body-slot fragments as well"},
         ],
     },
+    "romantic_interests": {
+        "title": "Romantic interests",
+        "intro": "Free text. When the attraction package is installed it is matched against OTHER characters' appearance to gate romantic potential. Understood cues:",
+        "items": [
+            # Filled dynamically from the attraction package's provider; this
+            # fallback shows when no attraction package is installed.
+            {"text": "Any free text works. Install the attraction package to enable preference matching against appearance/anatomy."},
+        ],
+    },
     "prompt_modifier": {
         "title": "Prompt modifier placeholders",
         "intro": "Text added to the character's prompt when the filter triggers. Placeholders:",
@@ -430,6 +439,17 @@ async def help_topics(user=Depends(require_admin)):
                     it["code"] = repl[it["code"]]
     except Exception as _se:
         logger.debug("Dynamische Stat-Keys fuer Help-Topics fehlgeschlagen: %s", _se)
+    # Romantic-interests help: filled by the attraction package's provider
+    # (package-aware — anatomy phrases only when those packages are loaded).
+    try:
+        from app.core.hooks import get_provider
+        fn = get_provider("romantic_interests_help")
+        if fn is not None and "romantic_interests" in topics:
+            items = fn()
+            if items:
+                topics["romantic_interests"]["items"] = items
+    except Exception as _re:
+        logger.debug("romantic_interests help provider failed: %s", _re)
     return {"topics": topics}
 
 

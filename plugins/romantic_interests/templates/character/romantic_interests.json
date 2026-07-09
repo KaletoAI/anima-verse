@@ -15,7 +15,8 @@
           "hint": "Describe romantic/sexual interests (e.g. \"women\", \"tall dark men\", \"dominant personalities\"). Empty = none.",
           "hint_de": "Romantische/sexuelle Interessen beschreiben (z.B. \"Frauen\", \"grosse dunkle Maenner\", \"dominante Persoenlichkeiten\"). Leer = keine.",
           "placeholder": "e.g. women, dominant men...",
-          "placeholder_de": "z.B. Frauen, dominante Maenner..."
+          "placeholder_de": "z.B. Frauen, dominante Maenner...",
+          "help": "romantic_interests"
         }
       ]
     }

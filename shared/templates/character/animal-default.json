@@ -256,17 +256,6 @@
           "hint": "How the animal communicates (sounds, body language, thoughts in italics, etc.)",
           "hint_de": "Wie das Tier kommuniziert (Geräusche, Körpersprache, Gedanken in Kursiv, etc.)",
           "llm_generable": true
-        },
-        {
-          "key": "romantic_interests",
-          "label": "Romantic Interests",
-          "label_de": "Romantische Interessen",
-          "type": "text",
-          "store": "config",
-          "hint": "Describe romantic/sexual interests (e.g. \"women\", \"tall dark men\", \"dominant personalities\"). Empty = none.",
-          "hint_de": "Romantische/sexuelle Interessen beschreiben (z.B. \"Frauen\", \"grosse dunkle Maenner\", \"dominante Persoenlichkeiten\"). Leer = keine.",
-          "placeholder": "e.g. women, dominant men...",
-          "placeholder_de": "z.B. Frauen, dominante Maenner..."
         }
       ]
     },
