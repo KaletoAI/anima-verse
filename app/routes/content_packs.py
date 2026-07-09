@@ -35,7 +35,12 @@ logger = get_logger("content_packs")
 router = APIRouter(prefix="/api/content", tags=["marketplace"],
                    dependencies=[Depends(require_admin)])
 
-SUPPORTED_TYPES = {"character", "item", "item_bundle", "rule", "states", "location", "collection"}
+SUPPORTED_TYPES = {"character", "item", "item_bundle", "rule", "states", "location", "collection", "skill_package"}
+
+# Pack types that install EXECUTABLE CODE — the UI must show a trust
+# confirmation and the install runs the package's Python on the next skill
+# load. Content packs above are pure data and never enter this set.
+CODE_PACK_TYPES = {"skill_package"}
 
 _inflight_catalog: Dict[str, float] = {}
 
@@ -418,6 +423,18 @@ def _dispatch_install(pack_type: str, content: bytes) -> Dict[str, Any]:
         return import_location_from_zip(content)
     if pack_type == "collection":
         return _install_collection(content)
+    if pack_type == "skill_package":
+        from app.core.skill_package_io import install_skill_package_from_zip
+        result = install_skill_package_from_zip(content, overwrite=True)
+        # Activate immediately: rescan packages + rebuild the skill set so
+        # the new verbs/templates/fragments are live without a restart.
+        try:
+            from app.core.dependencies import get_skill_manager
+            get_skill_manager().reload_skills()
+        except Exception as e:
+            logger.warning("skill package installed but reload failed: %s", e)
+            result["reload_error"] = str(e)
+        return result
     raise ValueError(f"unsupported pack type: {pack_type!r}")
 
 
@@ -518,6 +535,12 @@ async def install_pack(request: Request) -> Dict[str, Any]:
     pack_type = pack.get("type") or ""
     if pack_type not in SUPPORTED_TYPES:
         raise HTTPException(status_code=400, detail=f"unsupported pack type: {pack_type!r}")
+    # Executable packages need an explicit trust confirmation from the admin
+    # (the body must carry confirm_code=true) — installing runs their code.
+    if pack_type in CODE_PACK_TYPES and not bool(body.get("confirm_code")):
+        raise HTTPException(
+            status_code=428,
+            detail="skill_package installs executable code — resend with confirm_code=true")
     download_url = (pack.get("download_url") or "").strip()
     if not download_url:
         raise HTTPException(status_code=400, detail="pack has no download_url")
@@ -741,7 +764,37 @@ async def character_intro_suggest(
 
 @router.get("/types")
 async def supported_types() -> Dict[str, Any]:
-    return {"types": sorted(SUPPORTED_TYPES)}
+    return {"types": sorted(SUPPORTED_TYPES), "code_types": sorted(CODE_PACK_TYPES)}
+
+
+@router.get("/skill-packages")
+async def list_skill_packages() -> Dict[str, Any]:
+    """Marketplace-installed skill packages (plugins/installed/)."""
+    from app.core.skill_package_io import list_installed_skill_packages
+    return {"packages": list_installed_skill_packages()}
+
+
+@router.post("/skill-packages/remove")
+async def remove_skill_package_route(request: Request) -> Dict[str, Any]:
+    """Body: {"package_id": "..."} — delete an installed skill package and
+    reload skills (R7: folder removal is complete)."""
+    body = await request.json()
+    pkg_id = (body.get("package_id") or "").strip()
+    if not pkg_id:
+        raise HTTPException(status_code=400, detail="package_id required")
+    from app.core.skill_package_io import remove_skill_package
+    try:
+        result = remove_skill_package(pkg_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        from app.core.dependencies import get_skill_manager
+        get_skill_manager().reload_skills()
+    except Exception as e:
+        result["reload_error"] = str(e)
+    return result
 
 
 # ── Publish ──────────────────────────────────────────────────────────────

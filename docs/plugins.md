@@ -9,6 +9,14 @@ State-Flag-Deklarationen. Regeln und Architektur:
 Der Migrationsstand ist am Dateisystem ablesbar: Was unter `plugins/` liegt, ist
 regelkonform paketiert; was noch in `app/skills/*.py` liegt, ist unmigrierter Altbestand.
 
+Marketplace-Installation: der Content-Marketplace kennt den Pack-Typ
+`skill_package` (`app/core/skill_package_io.py`). Ein Paket-ZIP (plugin.yaml an
+der Wurzel bzw. genau ein Paketordner) wird nach `plugins/installed/<id>/`
+entpackt, danach `reload_skills()`. Anders als Content-Packs enthält es
+AUSFÜHRBAREN Code → Install erfordert eine explizite In-App-Trust-Bestätigung
+(`confirm_code`); Deinstallation = Ordner löschen + reload (R7). Katalog-Seite:
+`anima-verse-packs/build_catalog.py` erzeugt `dist/catalog.json` + ZIPs.
+
 Zusätzlich scannt der Loader **`plugins/installed/`** (komplett gitignored) — dort
 landen über den Marketplace installierte Pakete, getrennt von Repo-Inhalten
 (Plan: plan-nsfw-marketplace-packs.md). Bei ID-Kollision gewinnt das Repo-Paket.

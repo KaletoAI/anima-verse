@@ -56,7 +56,12 @@ const PRETTY_TYPE: Record<string, string> = {
   states: 'States',
   location: 'Location',
   collection: 'Collection',
+  skill_package: 'Skill Package',
 }
+
+// Pack types that install executable code — require an explicit trust
+// confirmation before install (kept in sync with the backend CODE_PACK_TYPES).
+const CODE_PACK_TYPES = new Set(['skill_package'])
 
 function formatBytes(n?: number): string {
   if (!n) return ''
@@ -74,6 +79,8 @@ export function MarketplaceTab() {
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [loading, setLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
+  // Skill-package (code) install awaiting the in-app trust confirmation.
+  const [pendingTrust, setPendingTrust] = useState<string | null>(null)
   const [selected, setSelected] = useState<Pack | null>(null)
   const [filterType, setFilterType] = useState<string>('')
   const [filterTag, setFilterTag] = useState<string>('')
@@ -143,12 +150,21 @@ export function MarketplaceTab() {
   }, [catalog, filterType, filterTag, search])
 
   const install = useCallback(
-    async (pack: Pack) => {
+    async (pack: Pack, trusted = false) => {
+      // Executable packages need an explicit in-app trust confirmation
+      // (no JS dialogs — a warning banner replaces the button).
+      if (CODE_PACK_TYPES.has(pack.type) && !trusted) {
+        setPendingTrust(pack.id)
+        return
+      }
+      const body: Record<string, unknown> = { pack_id: pack.id, catalog_id: activeId }
+      if (CODE_PACK_TYPES.has(pack.type)) body.confirm_code = true
+      setPendingTrust(null)
       setInstalling(pack.id)
       try {
         const result = await apiPost<{ result?: { status?: string } }>(
           '/api/content/install',
-          { pack_id: pack.id, catalog_id: activeId },
+          body,
         )
         toast(t('Installed: {name}').replace('{name}', pack.name || pack.id))
         // Soft hint: tell the user which local tab to check.
@@ -384,10 +400,31 @@ export function MarketplaceTab() {
                 {selected.image_count ? `, ${selected.image_count} ${t('images')}` : ''}
               </p>
             ) : null}
+            {CODE_PACK_TYPES.has(selected.type) && pendingTrust === selected.id ? (
+              <div style={{
+                marginTop: 16, padding: 12, borderRadius: 8,
+                border: '1px solid #d29922', background: 'rgba(210,153,34,0.12)',
+              }}>
+                <p style={{ margin: '0 0 8px', fontSize: 13, color: '#e3b341' }}>
+                  ⚠ {t('This skill package contains EXECUTABLE CODE. Installing runs its Python on the next skill load. Only continue if you trust the source.')}
+                </p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="ga-btn ga-btn-primary ga-btn-sm"
+                    disabled={installing === selected.id}
+                    onClick={() => install(selected, true)}>
+                    {installing === selected.id ? t('Installing…') : t('I trust this — install')}
+                  </button>
+                  <button className="ga-btn ga-btn-sm" onClick={() => setPendingTrust(null)}>
+                    {t('Cancel')}
+                  </button>
+                </div>
+              </div>
+            ) : null}
             <div style={{ marginTop: 16 }}>
               <button
                 className="ga-btn ga-btn-primary"
-                disabled={installing === selected.id || !selected.download_url}
+                disabled={installing === selected.id || !selected.download_url
+                  || (CODE_PACK_TYPES.has(selected.type) && pendingTrust === selected.id)}
                 onClick={() => install(selected)}
               >
                 {installing === selected.id ? t('Installing…') : t('Install')}
