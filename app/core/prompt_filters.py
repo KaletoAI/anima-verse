@@ -437,9 +437,25 @@ def apply_filters(character_name: str,
             triggered_modifiers.append(modifier)
         logger.debug("prompt_filter triggered: %s for %s", fid, character_name)
 
+    # Fine-grained skill-block drops: an entry "skill:<package_id>" drops only
+    # that package's thought_context_block, not the whole skill_context_blocks.
+    skill_drops = {b.split(":", 1)[1].strip() for b in dropped
+                   if isinstance(b, str) and b.startswith("skill:") and ":" in b}
+
     for blk in dropped:
+        if isinstance(blk, str) and blk.startswith("skill:"):
+            continue  # handled below (not a plain ctx block key)
         if blk in ctx:
             ctx[blk] = ""
+
+    # Remove the addressed packages' parts and re-join skill_context_blocks. The
+    # coarse "skill_context_blocks" drop (all packages) still works via the loop
+    # above. _skill_block_parts comes from thought_context._build_skill_context_blocks.
+    if skill_drops and isinstance(ctx.get("_skill_block_parts"), list):
+        kept = [(pid, txt) for (pid, txt) in ctx["_skill_block_parts"]
+                if pid not in skill_drops]
+        ctx["_skill_block_parts"] = kept
+        ctx["skill_context_blocks"] = "\n\n".join(txt for _, txt in kept)
 
     # effects_block = aggregated modifiers. Overrides whatever build_thought_context
     # populated for this key (typically empty now since rules are deactivated).

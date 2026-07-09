@@ -212,6 +212,39 @@ _PROMPT_FILTER_BLOCK_KEYS = [
 ]
 
 
+def _skill_block_package_ids() -> List[str]:
+    """Package ids of loaded skills that contribute a ``thought_context_block``
+    — the targets for fine-grained ``skill:<pkg>`` drop-block addressing."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        from app.skills.base import BaseSkill
+        from app.plugins.registry import package_of_skill
+    except Exception:
+        return []
+    ids: List[str] = []
+    seen: set = set()
+    for skill in getattr(get_skill_manager(), "skills", []):
+        try:
+            if type(skill).thought_context_block is BaseSkill.thought_context_block:
+                continue  # not overridden → no contribution
+            sid = getattr(skill, "SKILL_ID", "") or ""
+            pkg = package_of_skill(sid)
+            pid = pkg.id if pkg else sid
+            if pid and pid not in seen:
+                seen.add(pid)
+                ids.append(pid)
+        except Exception:
+            continue
+    return ids
+
+
+def _prompt_filter_block_keys() -> List[str]:
+    """Static block keys + dynamic ``skill:<pkg>`` entries (one per loaded
+    package that contributes a thought_context_block)."""
+    return _PROMPT_FILTER_BLOCK_KEYS + [f"skill:{pid}"
+                                        for pid in _skill_block_package_ids()]
+
+
 @router.get("/prompt-filters/data")
 async def prompt_filters_data(user=Depends(require_admin)):
     """Liste der gemergten Prompt-Filter (shared baseline + world overlay).
@@ -255,7 +288,7 @@ async def prompt_filters_data(user=Depends(require_admin)):
 
     return {
         "filters": out,
-        "block_keys": _PROMPT_FILTER_BLOCK_KEYS,
+        "block_keys": _prompt_filter_block_keys(),
         "condition_hint": (
             "Filter id ALWAYS triggers when present as a tag in the profile (apply_condition). "
             "condition:<this-id> is therefore redundant here. This expression triggers ADDITIONALLY:\n"
@@ -430,7 +463,7 @@ async def prompt_filters_save(request: Request, user=Depends(require_admin)):
     if not isinstance(drop_blocks, list):
         raise HTTPException(status_code=400,
                              detail="drop_blocks must be a list")
-    valid = set(_PROMPT_FILTER_BLOCK_KEYS)
+    valid = set(_prompt_filter_block_keys())
     drop_blocks = [b for b in drop_blocks if b in valid]
 
     with transaction() as conn:

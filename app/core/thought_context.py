@@ -14,7 +14,7 @@ Returns a kwargs dict that can be passed straight into
 from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now, local_now
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from app.core.log import get_logger
 
@@ -65,7 +65,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "outfit_decision_block": _build_outfit_decision_block(character_name),
         "arc_block": _build_arc_block(character_name),
         "retrospective_block": _build_retrospective_block(character_name),
-        "skill_context_blocks": _build_skill_context_blocks(character_name),
+        "skill_context_blocks": "",  # set below from _skill_block_parts (fine-grained drops)
         # Additional context — currently rendered in agent_thought_in_chat.md.
         # Agent_thought.md ignores them silently (no template reference).
         "effects_block": _build_effects_block(character_name),
@@ -82,6 +82,14 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "has_assignments": False,  # set below if assignments_block non-empty
     }
     ctx["has_assignments"] = bool(ctx["assignments_block"])
+
+    # Skill prompt contributions as (package_id, text) parts → the joined string
+    # (skill_context_blocks) plus an internal parts list for fine-grained
+    # skill:<pkg> drop-block filtering in prompt_filters. The underscore key is
+    # internal — the agent_thought.md template never references it (StrictUndefined).
+    _skill_parts = _build_skill_context_blocks(character_name)
+    ctx["_skill_block_parts"] = _skill_parts
+    ctx["skill_context_blocks"] = "\n\n".join(t for _, t in _skill_parts)
 
     # State-driven filters: drop blocks + inject modifier text based on
     # active conditions/stats (drunk, exhausted, …). Replaces the old
@@ -143,29 +151,45 @@ def _build_state_flags_block(character_name: str) -> str:
         return ""
 
 
-def _build_skill_context_blocks(character_name: str) -> str:
-    """Prompt contributions of the character's active skills (generic).
+def _build_skill_context_blocks(character_name: str) -> List[Tuple[str, str]]:
+    """Prompt contributions of the character's active skills as
+    ``(package_id, block_text)`` parts (generic).
 
     Each skill may return a self-contained section via
     thought_context_block() — e.g. the instagram package's pending block.
-    This code knows no skill content (R1)."""
+    The package_id lets prompt_filters drop a single package's block via a
+    ``skill:<pkg>`` drop-block entry (fine-grained), while the joined string
+    stays ``skill_context_blocks`` (coarse, drops all). Knows no skill content (R1)."""
     try:
         from app.core.dependencies import get_skill_manager
         skills = get_skill_manager()._get_agent_skills(
             character_name, check_limits=False)
     except Exception:
-        return ""
-    blocks = []
+        return []
+    try:
+        from app.plugins.registry import package_of_skill
+    except Exception:
+        package_of_skill = None
+    parts: List[Tuple[str, str]] = []
     for skill in skills:
+        sid = getattr(skill, "SKILL_ID", "") or ""
         try:
             block = (skill.thought_context_block(character_name) or "").strip()
         except Exception as e:
-            logger.debug("thought context block failed (%s): %s",
-                         getattr(skill, "SKILL_ID", "?"), e)
+            logger.debug("thought context block failed (%s): %s", sid or "?", e)
             continue
-        if block:
-            blocks.append(block)
-    return "\n\n".join(blocks)
+        if not block:
+            continue
+        pkg_id = sid
+        if package_of_skill:
+            try:
+                pkg = package_of_skill(sid)
+                if pkg:
+                    pkg_id = pkg.id
+            except Exception:
+                pass
+        parts.append((pkg_id, block))
+    return parts
 
 
 def _build_events_block(location_id: str) -> str:

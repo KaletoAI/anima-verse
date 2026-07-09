@@ -232,6 +232,15 @@ Verb-Anweisungen) — der Thought-Context joint die Blöcke der beim Charakter
 aktiven Skills generisch (`skill_context_blocks` in agent_thought.md).
 Beispiel: der Instagram-Pending-Block des instagram-Pakets.
 
+**Feingranulares Unterdrücken (drop_blocks).** `thought_context` legt die Blöcke
+zusätzlich als `(package_id, text)`-Liste im internen ctx-Key `_skill_block_parts`
+ab (package_id via `registry.package_of_skill`). Ein Prompt-Filter kann so ein
+einzelnes Paket adressieren: der drop_blocks-Eintrag **`skill:<paket>`** entfernt nur
+dessen Block und re-joint `skill_context_blocks` (`prompt_filters.apply_filters`);
+der grobe Key `skill_context_blocks` unterdrückt weiterhin ALLE. Die verfügbaren
+`skill:<paket>`-Keys liefert der States-Endpoint dynamisch je geladenem Paket mit
+Block-Beitrag (`admin_settings._prompt_filter_block_keys`).
+
 ## LLM & Templates ✅
 
 | Funktion | Semantik |
