@@ -209,7 +209,12 @@ def render_outfit(
     slot_loras: List[Dict[str, Any]] = []
     try:
         from app.core.body_slots import exposed_slot_loras
-        slot_loras = exposed_slot_loras(character_name or "", profile=profile)
+        # profile + effective pieces: the variant path calls render_outfit
+        # WITHOUT character_name and may override the equipped state
+        # (outfit-set previews) — exposure must follow what is RENDERED.
+        slot_loras = exposed_slot_loras(character_name or "",
+                                        profile=profile,
+                                        equipped_pieces=dict(pieces or {}))
     except Exception:
         slot_loras = []
 

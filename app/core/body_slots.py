@@ -77,13 +77,17 @@ def _slot_applies(spec, profile: Dict[str, Any]) -> bool:
     return True
 
 
-def slots_for_character(character_name: str) -> List[Any]:
-    """All BodySlotSpecs that apply to this character (species + applies_to)."""
-    try:
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name) or {}
-    except Exception:
-        return []
+def slots_for_character(character_name: str,
+                        profile: Optional[Dict[str, Any]] = None) -> List[Any]:
+    """All BodySlotSpecs that apply to this character (species + applies_to).
+    ``profile`` overrides the stored profile (callers that only have a
+    profile dict, e.g. the outfit renderer's variant path)."""
+    if profile is None:
+        try:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        except Exception:
+            return []
     specs: List[Any] = []
     for pkg in _species_packages_for(profile):
         for spec in pkg.body_slots:
@@ -232,20 +236,26 @@ def prompt_fragments(character_name: str,
 
 
 def exposed_slot_loras(character_name: str,
-                       profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+                       profile: Optional[Dict[str, Any]] = None,
+                       equipped_pieces: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """LoRAs of currently EXPOSED body slots (lora_select attribute values,
     e.g. the NSFW anatomy LoRAs) — merged into image-generation inputs by
     the variant/expression path. Replaces the former per-clothing-slot
-    override LoRAs."""
-    specs = slots_for_character(character_name)
-    if not specs:
-        return []
+    override LoRAs. Works purely from ``profile`` when no name is given
+    (outfit renderer's variant path); ``equipped_pieces`` overrides the
+    profile's equipped state (outfit-set previews)."""
     if profile is None:
         try:
             from app.models.character import get_character_profile
             profile = get_character_profile(character_name) or {}
         except Exception:
             return []
+    specs = slots_for_character(character_name, profile=profile)
+    if not specs:
+        return []
+    if equipped_pieces is not None:
+        profile = dict(profile)
+        profile["equipped_pieces"] = equipped_pieces
     stored = profile.get("body_slots")
     stored = dict(stored) if isinstance(stored, dict) else {}
     out: List[Dict[str, Any]] = []
