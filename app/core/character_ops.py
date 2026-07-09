@@ -1389,6 +1389,11 @@ def apply_body_slot_values(character_name: str,
         raise HTTPException(status_code=400,
                             detail=f"Unknown attribute(s): {', '.join(unknown)}")
     for key, value in values.items():
+        if key == "exposed_always":
+            # Boolean flag from the editor arrives as "true"/"false" —
+            # a stored "false" STRING would stay truthy. Store True or
+            # remove the key entirely (empty value deletes).
+            value = True if str(value).strip().lower() in ("true", "1") else ""
         set_slot_value(character_name, slot_id, key, value)
     return {"status": "success", "slot": slot_id}
 
