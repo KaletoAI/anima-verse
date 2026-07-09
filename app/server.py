@@ -298,11 +298,14 @@ async def lifespan(app: FastAPI):
     run_migration_for_all_users()
     logger.info("Memory-System bereit!")
 
-    # Romantic Interests: aus Character-Profilen extrahieren (einmalig per LLM)
-    logger.info("Romantic Interests: Extraktion pruefen...")
-    from app.models.relationship import extract_romantic_interests
-    extract_romantic_interests()
-    logger.info("Romantic Interests bereit!")
+    # Startup event: packages hook one-time bootstrap here (e.g. the
+    # attraction package's romantic-interests extraction). Core names only
+    # the event; without the package nobody listens (R1).
+    try:
+        from app.core import hooks
+        hooks.emit("startup")
+    except Exception as _se:
+        logger.debug("startup hook failed: %s", _se)
 
     # Memory-Konsolidierung: periodisch im Hintergrund
     import asyncio as _aio

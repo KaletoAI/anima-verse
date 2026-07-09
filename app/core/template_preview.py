@@ -422,17 +422,6 @@ def _drive_relationship_summary_pair(agent: str, avatar: str) -> PreviewResult:
                     f"for {agent} → {rel['related_character']}."}
 
 
-def _drive_relationship_summary_romantic_interests(agent: str, avatar: str) -> PreviewResult:
-    """models/relationship.extract_romantic_interests early-exits if any
-    character already has the field populated. We can't easily preview it
-    without hacking. Document the limitation."""
-    return {"ok": False, "output": "",
-            "note": "Preview unavailable: extract_romantic_interests is a "
-                    "one-time bootstrap that early-exits when ANY character "
-                    "already has romantic_interests set. See production "
-                    "code in models/relationship.py for the exact prompt "
-                    "build (kwargs assembled inline before llm_call)."}
-
 
 def _drive_retrospect(agent: str, avatar: str) -> PreviewResult:
     """The Reflect skill parses input but the prompt build only needs
@@ -787,7 +776,6 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "tasks/consolidation_daily_diary.md": _drive_consolidation_daily_diary,
     "tasks/relationship_summary.md": _drive_relationship_summary,
     "tasks/relationship_summary_pair.md": _drive_relationship_summary_pair,
-    "tasks/relationship_summary_romantic_interests.md": _drive_relationship_summary_romantic_interests,
     "tasks/retrospect.md": _drive_retrospect,
     "tasks/secret_generation.md": _drive_secret_generation,
     "tasks/outfit_generation.md": _drive_outfit_generation,
