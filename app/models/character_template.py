@@ -641,3 +641,47 @@ def migrate_nsfw_template_once() -> None:
         clear_template_cache()
     except Exception as e:
         logger.warning("nsfw-template migration failed: %s", e)
+
+
+def migrate_prune_stale_stats_once() -> None:
+    """One-time, idempotent prune of stale status_effects: after a template
+    change (e.g. the lust stat becoming intimacy-package content) a
+    character may carry stat values its template no longer declares. Drops
+    every status_effects key not declared by the character's template.
+
+    Template-driven (no hardcoded stat names), world_kv-marked.
+    """
+    try:
+        from app.models.world import get_world_setting, set_world_setting
+        from app.models.character import (list_available_characters,
+                                          get_character_profile,
+                                          save_character_profile)
+        from app.core.stat_hints import template_stat_keys
+    except Exception:
+        return
+    if get_world_setting("migration.prune_stale_stats_v1", "") == "done":
+        return
+    changed = []
+    try:
+        tmpl_keys: dict = {}
+        for name in list_available_characters():
+            profile = get_character_profile(name) or {}
+            stats = profile.get("status_effects")
+            if not isinstance(stats, dict) or not stats:
+                continue
+            tname = (profile.get("template") or "").strip()
+            if tname not in tmpl_keys:
+                tmpl_keys[tname] = template_stat_keys(get_template(tname) or {})
+            allowed = tmpl_keys[tname]
+            stale = [k for k in stats if k not in allowed]
+            if stale:
+                for k in stale:
+                    stats.pop(k, None)
+                profile["status_effects"] = stats
+                save_character_profile(name, profile)
+                changed.append(f"{name}({','.join(stale)})")
+        set_world_setting("migration.prune_stale_stats_v1", "done")
+        if changed:
+            logger.info("stale-stats prune: %s", ", ".join(changed))
+    except Exception as e:
+        logger.warning("stale-stats prune failed: %s", e)

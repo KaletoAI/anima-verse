@@ -156,6 +156,14 @@ async def lifespan(app: FastAPI):
     except Exception as _te:
         logger.debug("nsfw-template migration failed: %s", _te)
 
+    # Migration: drop stat values a character's template no longer declares
+    # (e.g. lust on an animal after lust became package content).
+    try:
+        from app.models.character_template import migrate_prune_stale_stats_once
+        migrate_prune_stale_stats_once()
+    except Exception as _pe:
+        logger.debug("stale-stats prune failed: %s", _pe)
+
     # Initialisiere Multi-Channel Support
     logger.info("Initialisiere Multi-Channel Support...")
     initialize_channels()

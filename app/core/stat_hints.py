@@ -74,6 +74,16 @@ def get_stat_hints(character_name: str) -> List[str]:
     return hints
 
 
+def template_stat_keys(template: Dict[str, Any]) -> set:
+    """Set of stat keys (store=status_effects) declared by ONE template —
+    the authoritative list of stats a character of that template may have."""
+    keys = set()
+    for field in _iter_template_fields(template or {}):
+        if field.get("store") == "status_effects" and field.get("key"):
+            keys.add(field["key"])
+    return keys
+
+
 def get_all_stat_keys() -> List[str]:
     """Alle Stat-Feld-Keys (store=status_effects) ueber ALLE Character-Templates
     der Welt — generisch, NICHT hartkodiert. Fuer template-agnostische Hilfen
