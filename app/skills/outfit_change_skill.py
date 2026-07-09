@@ -106,7 +106,9 @@ class OutfitChangeSkill(BaseSkill):
         for slot in spec.get("unequip_slots", []):
             res = unequip_piece(character_name, slot=slot)
             if res.get("status") == "ok":
-                results.append(f"Slot '{slot}' geleert")
+                # Name the removed piece, not the slot ("feet" -> the shoes).
+                _nm = self._item_label(res.get("item_id")) or f"slot '{slot}'"
+                results.append(f"'{_nm}' abgelegt")
                 # Multi-Slot-Pieces: ALLE cleared_slots forbidden machen
                 for s in (res.get("cleared_slots") or [slot]):
                     forbidden.add(s)

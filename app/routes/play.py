@@ -997,7 +997,11 @@ async def play_unequip(request: Request, user=Depends(get_current_user)):
     try:
         from app.models.inventory import get_item
         from app.core.perception import announce_action
-        _nm = ((get_item(item_id) or {}).get("name") if item_id else "") or slot
+        # Name the removed PIECE (the shoes), never the slot ("feet"). The
+        # unequip result carries the removed item id — the request may only
+        # have passed a slot.
+        _removed_id = res.get("item_id") or item_id
+        _nm = ((get_item(_removed_id) or {}).get("name") if _removed_id else "") or slot
         announce_action(avatar, f"{avatar} legt {_nm} ab.", source="wardrobe")
     except Exception:
         pass
