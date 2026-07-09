@@ -28,6 +28,9 @@ export interface BodySlot {
   // default (shown greyed as placeholder, never materialized).
   exposed_prompt?: string
   exposed_default?: string
+  // Emit the exposed text even when attribute values are empty
+  // (empty placeholders vanish: 'exposed {size} breasts' -> 'exposed breasts').
+  exposed_always?: boolean
 }
 
 export function BodyEditor({ character }: { character: string }) {
@@ -59,6 +62,8 @@ export function BodyEditor({ character }: { character: string }) {
     setSlots((prev) => prev.map((s) => s.id === slotId
       ? (key === 'exposed_prompt'
           ? { ...s, exposed_prompt: value }
+          : key === 'exposed_always'
+          ? { ...s, exposed_always: value === 'true' }
           : { ...s, attributes: s.attributes.map((a) =>
               a.key === key ? { ...a, value }
               : key === `${a.key}_strength` ? { ...a, strength: parseFloat(value) || 1 }
@@ -119,11 +124,16 @@ export function BodyEditor({ character }: { character: string }) {
             )
           })}
           {s.exposed_default !== undefined && (
-            <input className="ga-input" value={s.exposed_prompt || ''}
-              placeholder={s.exposed_default}
-              title={t('Exposed prompt override — empty = package default (grey)')}
-              style={{ fontSize: '0.82em', padding: '2px 6px', flex: '1 1 150px', minWidth: 140 }}
-              onChange={(e) => save(s.id, 'exposed_prompt', e.target.value)} />
+            <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flex: '1 1 150px', minWidth: 140 }}>
+              <input className="ga-input" value={s.exposed_prompt || ''}
+                placeholder={s.exposed_default}
+                title={t('Exposed prompt override — empty = package default (grey)')}
+                style={{ fontSize: '0.82em', padding: '2px 6px', flex: 1, minWidth: 0 }}
+                onChange={(e) => save(s.id, 'exposed_prompt', e.target.value)} />
+              <input type="checkbox" checked={!!s.exposed_always}
+                title={t('Also emit without attribute values (empty placeholders vanish)')}
+                onChange={(e) => save(s.id, 'exposed_always', String(e.target.checked))} />
+            </span>
           )}
           {s.attributes.map((a) => a.options.length > 0 && a.allow_custom && a.type !== 'lora_select' ? (
             <datalist key={`dl-${a.key}`} id={`body-${s.id}-${a.key}`}>

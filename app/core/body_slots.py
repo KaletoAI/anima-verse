@@ -187,18 +187,20 @@ def prompt_fragments(character_name: str,
     general: List[str] = []
     exposed: List[str] = []
 
-    def _render(tpl: str, vals: Dict[str, str]) -> str:
+    def _render(tpl: str, vals: Dict[str, str], lenient: bool = False) -> str:
         """Attribute placeholders are REQUIRED (missing value -> the whole
-        fragment drops). Every OTHER {placeholder} resolves OPTIONALLY from
-        the character's state flags: value-carrying flags
-        (body_reaction="erected") render their string, unset/boolean flags
-        render empty — whitespace artifacts squashed."""
+        fragment drops) — unless ``lenient`` (the per-character
+        exposed_always flag): then empty attributes simply vanish from the
+        text ('exposed {size} breasts' -> 'exposed breasts'). Every OTHER
+        {placeholder} resolves OPTIONALLY from the character's state flags:
+        value-carrying flags (body_reaction="erected") render their string,
+        unset/boolean flags render empty — whitespace artifacts squashed."""
         if not tpl:
             return ""
         import re as _re
         placeholders = _re.findall(r"\{(\w+)\}", tpl)
-        if any(ph in vals and not (vals.get(ph) or "").strip()
-               for ph in placeholders):
+        if not lenient and any(ph in vals and not (vals.get(ph) or "").strip()
+                               for ph in placeholders):
             return ""
         merged = dict(vals)
         for ph in placeholders:
@@ -223,9 +225,10 @@ def prompt_fragments(character_name: str,
             # Per-character override of the exposed fragment (stored under
             # the reserved 'exposed_prompt' slot value); the manifest text
             # is only the default. Placeholders resolve in both.
-            tpl = (str((stored.get(spec.id) or {}).get("exposed_prompt", "") or "").strip()
+            slot_stored = stored.get(spec.id) or {}
+            tpl = (str(slot_stored.get("exposed_prompt", "") or "").strip()
                    or spec.prompt.get("exposed", ""))
-            frag = _render(tpl, vals)
+            frag = _render(tpl, vals, lenient=bool(slot_stored.get("exposed_always")))
             if frag:
                 exposed.append(frag)
         else:

@@ -1337,6 +1337,8 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
                         for k in spec.attributes}
             entry["exposed_prompt"] = str(
                 (values.get(spec.id) or {}).get("exposed_prompt", "") or "")
+            entry["exposed_always"] = bool(
+                (values.get(spec.id) or {}).get("exposed_always"))
             # Grey placeholder: the resolved manifest default (raw template
             # when values are still missing) — never materialized as value.
             entry["exposed_default"] = (_format_if_complete(exposed_tpl, vals_map)
@@ -1378,8 +1380,10 @@ def apply_body_slot_values(character_name: str,
         if str(decl.get("type", "")) == "lora_select":
             allowed.add(f"{k}_strength")
     if spec.prompt.get("exposed"):
-        # Reserved: per-character override of the exposed prompt fragment.
+        # Reserved: per-character override of the exposed prompt fragment +
+        # the 'emit even without attribute values' flag.
         allowed.add("exposed_prompt")
+        allowed.add("exposed_always")
     unknown = [k for k in values if k not in allowed]
     if unknown:
         raise HTTPException(status_code=400,
