@@ -37,7 +37,7 @@ from app.models.character import (
     is_character_sleeping,
     list_available_characters,
     get_character_images_dir)
-from app.models.world import get_location, get_activity, get_room_by_id, list_locations, get_location_name, resolve_location
+from app.models.world import get_location, get_room_by_id, list_locations, get_location_name, resolve_location
 from app.models.character_template import (
     resolve_profile_tokens, get_template, build_prompt_section)
 from app.models.chat import get_chat_history, save_message

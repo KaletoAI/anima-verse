@@ -1594,20 +1594,6 @@ def delete_location(identifier: str) -> bool:
     return False
 
 
-# === Aktivitaeten (eingebettet in Orte) ===
-
-def get_activity(activity_name: str) -> Optional[Dict[str, str]]:
-    """Sucht eine Aktivitaet ueber alle Orte und Raeume hinweg."""
-    for location in list_locations():
-        for room in location.get("rooms", []):
-            for act in room.get("activities", []):
-                if isinstance(act, dict) and act.get("name") == activity_name:
-                    return act
-                elif isinstance(act, str) and act == activity_name:
-                    return {"name": act, "description": ""}
-    return None
-
-
 # === Hintergrundbilder ===
 
 def get_background_path(location_identifier: str, room: str = "",
@@ -2048,21 +2034,6 @@ def move_gallery_image(src_location: str, target_location: str, image_name: str)
         _save_gallery_meta(src_id, _m)
 
     return new_name
-
-
-def list_all_activities() -> List[Dict[str, str]]:
-    """Gibt eine flache, deduplizierte Liste aller Aktivitaeten zurueck."""
-    seen = {}
-    for location in list_locations():
-        for room in location.get("rooms", []):
-            for act in room.get("activities", []):
-                if isinstance(act, dict):
-                    name = act.get("name", "")
-                    if name and name not in seen:
-                        seen[name] = act
-                elif isinstance(act, str) and act not in seen:
-                    seen[act] = {"name": act, "description": ""}
-    return list(seen.values())
 
 
 # === Room-Migration ===

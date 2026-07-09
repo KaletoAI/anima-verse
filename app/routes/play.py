@@ -646,7 +646,7 @@ async def play_self(user=Depends(get_current_user)):
     from app.models.account import get_active_character
     empty = {"avatar": "", "mood": "", "activity": "", "status_effects": {},
              "bar_meta": {}, "conditions": [], "outfit": "", "profile_image": "",
-             "activities": [], "outfit_sets": []}
+             "outfit_sets": []}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return empty
@@ -675,13 +675,6 @@ async def play_self(user=Depends(get_current_user)):
         out["outfit"] = render_outfit(character_name=avatar).get("full", "") or ""
     except Exception as e:
         logger.debug("play_self outfit render failed: %s", e)
-    try:
-        from app.models.world import list_all_activities
-        out["activities"] = sorted({(a.get("name") or "").strip()
-                                     for a in (list_all_activities() or [])
-                                     if a.get("name")})
-    except Exception as e:
-        logger.debug("play_self activities failed: %s", e)
     try:
         out["outfit_sets"] = [{"id": o.get("id", ""), "name": o.get("name", "")}
                               for o in (get_character_outfits(avatar) or [])

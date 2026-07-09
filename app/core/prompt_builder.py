@@ -40,7 +40,7 @@ from app.models.account import (
     get_user_profile,
     get_user_profile_image,
     get_user_images_dir)
-from app.models.world import get_activity, get_background_path, get_location, get_room_by_id
+from app.models.world import get_background_path, get_location, get_room_by_id
 
 logger = get_logger("prompt_builder")
 

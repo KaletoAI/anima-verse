@@ -30,13 +30,6 @@ export interface CharacterRef {
   display_name?: string
 }
 
-export interface ActivityRef {
-  id: string
-  name?: string
-  _group?: string
-  category?: string
-}
-
 export async function loadLocations(): Promise<LocationRef[]> {
   const data = await apiGet<{ locations?: LocationRef[] }>('/world/locations')
   return data.locations || []
@@ -58,10 +51,6 @@ export async function loadCharacters(): Promise<CharacterRef[]> {
   )
 }
 
-export async function loadActivities(): Promise<ActivityRef[]> {
-  const data = await apiGet<{ activities?: ActivityRef[] }>('/activities/library')
-  return data.activities || []
-}
 
 export interface ItemRef {
   id: string

@@ -842,36 +842,18 @@ def _get_target_danger_level(location_id: str, room_id: str = "") -> int:
 
 
 def _find_nearest_sleep(character_name: str) -> Tuple[str, str]:
-    """Sucht den naechsten Raum mit Sleeping-Aktivitaet.
+    """Fallback sleep spot when no home_location is set: sleep where you are.
 
-    Suche: Aktuelle Location → Nachbar-Locations (via Grid).
-    Returns: (location_id, room_id) oder ("", "")
+    The old activity-library lookup (a room tagged with a "sleeping"
+    activity) is gone — activities are free text now — so there is nothing
+    to search for. The character stays at its current location/room.
+    Returns: (location_id, room_id) or ("", "").
     """
     try:
-        from app.models.character import get_character_current_location
-        from app.models.world import get_location_by_id, get_neighbor_location_ids
-
-        current_loc = get_character_current_location(character_name) or ""
-
-        # Locations durchsuchen: erst aktuelle, dann Nachbarn
-        search_order = [current_loc] if current_loc else []
-        if current_loc:
-            try:
-                search_order.extend(get_neighbor_location_ids(current_loc))
-            except Exception:
-                pass
-
-        for loc_id in search_order:
-            location = get_location_by_id(loc_id)
-            if not location:
-                continue
-            for room in location.get("rooms", []):
-                acts = room.get("activities", [])
-                for act in acts:
-                    act_id = act if isinstance(act, str) else act.get("id", act.get("name", ""))
-                    if act_id.lower() in ("sleeping", "schlafen", "sleep"):
-                        return loc_id, room.get("id", "")
-
-        return "", ""
+        from app.models.character import (
+            get_character_current_location, get_character_current_room)
+        loc = get_character_current_location(character_name) or ""
+        room = get_character_current_room(character_name) or ""
+        return loc, room
     except Exception:
         return "", ""

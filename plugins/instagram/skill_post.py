@@ -28,7 +28,7 @@ from app.models.character import (
     save_character_current_feeling,
     list_available_characters)
 from app.models.character_template import resolve_profile_tokens, get_template
-from app.models.world import get_location, get_activity
+from app.models.world import get_location
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 
@@ -40,10 +40,6 @@ logger = get_logger("instagram_skill")
 _LANG_NAMES = {"de": "German", "en": "English", "fr": "French",
                "es": "Spanish", "it": "Italian", "ja": "Japanese",
                "pt": "Portuguese", "nl": "Dutch", "ru": "Russian"}
-
-# Note: get_location(name) and get_activity(name)
-# are now User-Level (no character_name parameter)
-
 
 class InstagramSkill(PluginSkill):
     """

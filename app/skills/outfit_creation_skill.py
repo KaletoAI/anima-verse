@@ -30,7 +30,7 @@ from app.models.inventory import (
     equip_piece,
     find_inventory_piece_by_name_slot,
     VALID_PIECE_SLOTS)
-from app.models.world import get_location, get_activity
+from app.models.world import get_location
 
 logger = get_logger("outfit_creation")
 

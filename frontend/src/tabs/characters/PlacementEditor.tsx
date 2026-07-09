@@ -1,7 +1,7 @@
 import { type Dispatch, type SetStateAction } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { Field } from '../../components/Field'
-import type { ActivityRef, LocationRef, RoomRef } from '../../lib/refs'
+import type { LocationRef, RoomRef } from '../../lib/refs'
 import type { CurrentLocation, DraftPlacement } from './CharactersTab'
 
 // Canonical moods — kept in sync with shared/config/moods.json. Updating
@@ -33,8 +33,6 @@ export function PlacementEditor({
   currentFeeling,
   locations,
   rooms,
-  activities,
-  activitiesByGroup,
 }: {
   current: CurrentLocation
   draft: DraftPlacement
@@ -42,8 +40,6 @@ export function PlacementEditor({
   currentFeeling: string
   locations: LocationRef[]
   rooms: RoomRef[]
-  activities: ActivityRef[]
-  activitiesByGroup: Array<[string, ActivityRef[]]>
 }) {
   const { t } = useI18n()
   return (
@@ -125,28 +121,16 @@ export function PlacementEditor({
           hint={
             current.current_activity
               ? t('Currently: {name}').replace('{name}', current.current_activity)
-              : t('Setting an activity may auto-move the character into a matching room.')
+              : t('Free text — what the character is currently doing.')
           }
         >
-          <select
+          <input
             className="ga-input"
+            type="text"
             value={draft.activity}
+            placeholder={t('e.g. reading a book')}
             onChange={(e) => setDraft({ ...draft, activity: e.target.value })}
-          >
-            <option value="">— {t('none')} —</option>
-            {draft.activity && !activities.some((a) => a.id === draft.activity) ? (
-              <option value={draft.activity}>{draft.activity}</option>
-            ) : null}
-            {activitiesByGroup.map(([group, list]) => (
-              <optgroup key={group} label={group}>
-                {list.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name || a.id}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+          />
         </Field>
       </div>
     </>

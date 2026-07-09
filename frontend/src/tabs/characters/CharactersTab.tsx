@@ -5,10 +5,8 @@ import { useToast } from '../../lib/Toast'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import {
-  loadActivities,
   loadCharacters,
   loadLocations,
-  type ActivityRef,
   type CharacterRef,
   type LocationRef,
   type RoomRef,
@@ -108,7 +106,6 @@ export function CharactersTab() {
   const { toast } = useToast()
   const [characters, setCharacters] = useState<CharacterRef[]>([])
   const [locations, setLocations] = useState<LocationRef[]>([])
-  const [activities, setActivities] = useState<ActivityRef[]>([])
   const [selected, setSelected] = useState<string>('')
   const [current, setCurrent] = useState<CurrentLocation | null>(null)
   const [currentFeeling, setCurrentFeeling] = useState<string>('')
@@ -144,7 +141,6 @@ export function CharactersTab() {
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
     loadLocations().then(setLocations).catch(() => setLocations([]))
-    loadActivities().then(setActivities).catch(() => setActivities([]))
     apiGet<{ voices?: Array<{ value: string; label: string }> }>('/tts/voices')
       .then((d) => setTtsVoices(d.voices || []))
       .catch(() => setTtsVoices([]))
@@ -268,21 +264,6 @@ export function CharactersTab() {
   )
 
   const rooms: RoomRef[] = selectedLocation?.rooms || []
-
-  // Group activities by their `_group` for the dropdown — same shape
-  // the Library tab uses, makes the long list scannable.
-  const activitiesByGroup = useMemo(() => {
-    const groups = new Map<string, ActivityRef[]>()
-    for (const a of activities) {
-      const g = a._group || 'Other'
-      if (!groups.has(g)) groups.set(g, [])
-      groups.get(g)!.push(a)
-    }
-    for (const list of groups.values()) {
-      list.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
-    }
-    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b))
-  }, [activities])
 
   const dirty = useMemo(() => {
     if (!current || !draft) return false
@@ -435,8 +416,6 @@ export function CharactersTab() {
         currentFeeling={currentFeeling}
         locations={locations}
         rooms={rooms}
-        activities={activities}
-        activitiesByGroup={activitiesByGroup}
       />
     ) : null
 
