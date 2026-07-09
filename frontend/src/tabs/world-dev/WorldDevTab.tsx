@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { ModelPicker, type PickerOption } from '../../components/ModelPicker'
 import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } from '../../lib/refs'
 
 interface ModelEntry {
@@ -52,6 +53,22 @@ export function WorldDevTab() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [models, setModels] = useState<ModelEntry[]>([])
+  // Flat, provider-grouped options with a price sublabel — fed to the
+  // searchable ModelPicker (both the chat model and the validator model).
+  const modelOptions: PickerOption[] = useMemo(() => {
+    const fmt = (v: number) =>
+      v >= 1 ? v.toFixed(2) : v.toFixed(2).replace(/\.?0+$/, '') || v.toFixed(2)
+    return [...models]
+      .sort((a, b) => (a.provider || '').localeCompare(b.provider || '')
+        || a.name.localeCompare(b.name))
+      .map((m) => {
+        const inP = m.pricing?.input || 0
+        const outP = m.pricing?.output || 0
+        const sub = (inP > 0 || outP > 0) ? `$${fmt(inP)} / $${fmt(outP)} per 1M` : ''
+        return { value: `${m.provider || ''}|${m.name}`, label: m.name,
+                 group: m.provider || '', sublabel: sub }
+      })
+  }, [models])
   const [schemas, setSchemas] = useState<SchemaInfo[]>([])
   const [templates, setTemplates] = useState<TemplateInfo[]>([])
   const [characters, setCharacters] = useState<CharacterRef[]>([])
@@ -356,104 +373,31 @@ export function WorldDevTab() {
           <button className="ga-btn ga-btn-sm" onClick={newSession} title={t('Start a fresh conversation')}>
             ↻ {t('New conversation')}
           </button>
-          <select
-            className="ga-input ga-wd-model-select"
+          <ModelPicker
+            className="ga-wd-model-select"
+            options={modelOptions}
             value={model ? `${provider}|${model}` : ''}
-            onChange={(e) => {
-              const v = e.target.value
-              if (!v) {
-                setModel('')
-                setProvider('')
-                return
-              }
+            emptyLabel={t('Pick model')}
+            placeholder={t('Pick model')}
+            onChange={(v) => {
+              if (!v) { setModel(''); setProvider(''); return }
               const [prov, name] = v.split('|', 2)
-              setProvider(prov || '')
-              setModel(name || '')
+              setProvider(prov || ''); setModel(name || '')
             }}
-          >
-            <option value="">— {t('Pick model')} —</option>
-            {(() => {
-              const byProvider = new Map<string, ModelEntry[]>()
-              for (const m of models) {
-                const key = m.provider || ''
-                const arr = byProvider.get(key) || []
-                arr.push(m)
-                byProvider.set(key, arr)
-              }
-              const providers = Array.from(byProvider.keys()).sort()
-              return providers.map((prov) => (
-                <optgroup key={prov} label={prov || t('Other')}>
-                  {byProvider.get(prov)!.map((m) => {
-                    const inP = m.pricing?.input || 0
-                    const outP = m.pricing?.output || 0
-                    // Format prices per 1M tokens. Local / free models
-                    // (zero pricing) get no suffix. External providers
-                    // typically charge in $/M tokens.
-                    let priceTag = ''
-                    if (inP > 0 || outP > 0) {
-                      const fmt = (v: number) =>
-                        v >= 1 ? v.toFixed(2) : v.toFixed(2).replace(/\.?0+$/, '') || v.toFixed(2)
-                      priceTag = `  ·  $${fmt(inP)} / $${fmt(outP)} per 1M`
-                    }
-                    return (
-                      <option key={`${prov}|${m.name}`} value={`${prov}|${m.name}`}>
-                        {m.name}
-                        {priceTag}
-                      </option>
-                    )
-                  })}
-                </optgroup>
-              ))
-            })()}
-          </select>
-          <select
-            className="ga-input ga-wd-model-select"
+          />
+          <ModelPicker
+            className="ga-wd-model-select"
+            options={modelOptions}
             value={validateModel ? `${validateProvider}|${validateModel}` : ''}
-            onChange={(e) => {
-              const v = e.target.value
-              if (!v) {
-                setValidateModel('')
-                setValidateProvider('')
-                return
-              }
-              const [prov, name] = v.split('|', 2)
-              setValidateProvider(prov || '')
-              setValidateModel(name || '')
-            }}
+            emptyLabel={t('Validator: same as chat')}
+            placeholder={t('Validator: same as chat')}
             title={t('Model used by the Validate button. Empty = same as chat model.')}
-          >
-            <option value="">— {t('Validator: same as chat')} —</option>
-            {(() => {
-              const byProvider = new Map<string, ModelEntry[]>()
-              for (const m of models) {
-                const key = m.provider || ''
-                const arr = byProvider.get(key) || []
-                arr.push(m)
-                byProvider.set(key, arr)
-              }
-              const providers = Array.from(byProvider.keys()).sort()
-              return providers.map((prov) => (
-                <optgroup key={prov} label={prov || t('Other')}>
-                  {byProvider.get(prov)!.map((m) => {
-                    const inP = m.pricing?.input || 0
-                    const outP = m.pricing?.output || 0
-                    let priceTag = ''
-                    if (inP > 0 || outP > 0) {
-                      const fmt = (v: number) =>
-                        v >= 1 ? v.toFixed(2) : v.toFixed(2).replace(/\.?0+$/, '') || v.toFixed(2)
-                      priceTag = `  ·  $${fmt(inP)} / $${fmt(outP)} per 1M`
-                    }
-                    return (
-                      <option key={`v-${prov}|${m.name}`} value={`${prov}|${m.name}`}>
-                        {m.name}
-                        {priceTag}
-                      </option>
-                    )
-                  })}
-                </optgroup>
-              ))
-            })()}
-          </select>
+            onChange={(v) => {
+              if (!v) { setValidateModel(''); setValidateProvider(''); return }
+              const [prov, name] = v.split('|', 2)
+              setValidateProvider(prov || ''); setValidateModel(name || '')
+            }}
+          />
           <select
             className="ga-input ga-wd-compact-select"
             value={mode}

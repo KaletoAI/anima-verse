@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
+import { ModelPicker, type PickerOption } from './ModelPicker'
 import { apiGet } from '../lib/api'
 
 /**
@@ -47,6 +48,12 @@ export function AnimateDialog({
   const [serviceId, setServiceId] = useState('')
   const [prompt, setPrompt] = useState(defaultPrompt)
   const [llmModels, setLlmModels] = useState<string[]>([])
+  // 'provider::name' entries → searchable ModelPicker options (grouped).
+  const llmModelOptions: PickerOption[] = useMemo(
+    () => llmModels.map((m) => {
+      const [prov, name] = m.includes('::') ? m.split('::', 2) : ['', m]
+      return { value: m, label: name || m, group: prov }
+    }), [llmModels])
   const [llmOverride, setLlmOverride] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -151,11 +158,13 @@ export function AnimateDialog({
               {showAdvanced ? (
                 <>
                   <label className="ga-imagegen-label">{t('Suggest LLM (optional)')}</label>
-                  <select className="ga-input" value={llmOverride} disabled={submitting}
-                    onChange={(e) => setLlmOverride(e.target.value)}>
-                    <option value="">— {t('default')} —</option>
-                    {llmModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
+                  <ModelPicker
+                    options={llmModelOptions}
+                    value={llmOverride}
+                    emptyLabel={t('default')}
+                    placeholder={t('default')}
+                    onChange={setLlmOverride}
+                  />
                   <label className="ga-imagegen-label">{t('Suggest system prompt (optional)')}</label>
                   <textarea className="ga-textarea" rows={3}
                     placeholder={t('Empty = backend default')}
