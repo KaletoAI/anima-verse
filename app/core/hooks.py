@@ -10,7 +10,7 @@ module+qualname), so a skill reload replaces its callback instead of
 stacking duplicates. Callback errors are logged and never propagate into
 the emitting core path.
 """
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -41,3 +41,28 @@ def emit(event: str, **kwargs: Any) -> int:
         except Exception as e:
             logger.error("hook %s (%s) failed: %s", event, tag, e, exc_info=True)
     return count
+
+
+# ---------------------------------------------------------------------------
+# Provider registry — a single implementation of a named CAPABILITY.
+# ---------------------------------------------------------------------------
+# Distinct from the event bus above: emit()/register() fan out to many
+# listeners; a provider is exactly one function that answers a capability
+# (e.g. "romantic_compatibility"). A package supplies it at load; the core
+# names only the capability string, never the package (R1). Last
+# registration wins; get_provider returns None when nobody supplied it, so
+# the core falls back to a neutral default.
+
+_providers: Dict[str, Callable] = {}
+
+
+def register_provider(capability: str, fn: Callable) -> None:
+    _providers[capability] = fn
+
+
+def unregister_provider(capability: str) -> None:
+    _providers.pop(capability, None)
+
+
+def get_provider(capability: str) -> Optional[Callable]:
+    return _providers.get(capability)

@@ -126,6 +126,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `capability_label` | nein | EIN UI-Toggle für ALLE Verben des Pakets (SkillsTab) — z.B. `"Party"` für invite/join/leave oder `"Sleep"` für sleep/wakeup. Ersetzt das frühere `pair_with` |
 | `enabled_default` | nein | Lade-Gate-Default für Pakete OHNE always_load-Verben, wenn weder `skills.<id>.enabled` in der Config noch die Env-Bridge etwas sagen (z.B. `true` für Kern-Verben wie talk_to) |
 | `env_prefix` | nein | Nur Altbestand (Env-Bridge); neue Pakete nutzen `ctx.get_config` |
+| `on_load` | nein | Modul (relativ zum Paket), das beim Laden importiert wird — für Code-Beiträge OHNE Verb, z.B. Registrierung eines Capability-Providers (`app.core.hooks.register_provider`). Zählt selbst als Paket-Beitrag; läuft bei jedem Force-Reload (Registrierung idempotent halten) |
 
 **Abhängigkeits-Semantik (F9):** „Aktiv am Charakter" heißt für Verb-Pakete: mindestens
 ein Verb ist für den Charakter aktiviert; für Content-Packs: mindestens ein

@@ -91,6 +91,7 @@ shared/templates/**/*nsfw*
 # (source project: ../anima-verse-packs), never shipped in this repo.
 plugins/intimacy
 plugins/nsfw_anatomy
+plugins/attraction
 
 # Marketplace-installed skill packages (never repo content)
 plugins/installed/

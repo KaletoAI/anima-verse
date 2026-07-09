@@ -101,146 +101,24 @@ def get_romantic_interests(character_name: str) -> str:
     return ""
 
 
-def _get_character_gender(character_name: str) -> str:
-    """Get a character's gender from profile."""
-    try:
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name)
-        gender = (profile.get("gender") or "").lower()
-        if gender:
-            return gender
-    except Exception:
-        pass
-    return ""
-
-
-def _get_character_attrs(character_name: str) -> Dict[str, str]:
-    """Physical attributes as {"slot.attr": value} from the body-slot
-    values (the template selects died with the template shrink — slots
-    are the single source now)."""
-    try:
-        from app.core.body_slots import slot_attr_values
-        return slot_attr_values(character_name)
-    except Exception:
-        return {}
-
-
-
-def _slot_alias_tables(character_name: str) -> list:
-    """Attraction alias tables from the character's body-slot declarations
-    (interest_aliases in the species packages — SFW basics in the human
-    package, explicit slang in the NSFW pack). Shape:
-    [(phrases, "slot.attr", {canonical_value}), ...]."""
-    try:
-        from app.core.body_slots import interest_alias_tables
-        return interest_alias_tables(character_name)
-    except Exception:
-        return []
-
-
-
-
-def _get_romantic_blocked_with(character_name: str) -> set:
-    """Return the set of character names this character has hard-blocked romantically.
-
-    Read from character_config.json field 'romantic_blocked_with' (list[str]).
-    Names are normalised to lowercase for comparison.
-    """
-    try:
-        from app.models.character import get_character_config
-        cfg = get_character_config(character_name)
-        raw = cfg.get("romantic_blocked_with", [])
-        if isinstance(raw, str):
-            raw = [s.strip() for s in raw.split(",") if s.strip()]
-        if isinstance(raw, list):
-            return {str(n).strip().lower() for n in raw if str(n).strip()}
-    except Exception:
-        pass
-    return set()
-
-
 def are_romantically_compatible(char_a: str, char_b: str) -> bool:
-    """Check if at least one side could be romantically interested in the other.
+    """Whether two characters could be romantically interested in each other.
 
-    Analyses the free-text 'romantic_interests' field for:
-    1. Explicit name mention (e.g. text contains char_b's name)
-    2. Gender preference (e.g. "Frauen" matches a female char_b)
-    3. General openness (e.g. "offen", "alle", "everyone")
-    4. Physical attributes (e.g. "große Maenner" matches a tall male)
-
-    Returns False if either side has empty romantic_interests — both characters
-    must have declared some interest for romantic potential to exist.
-
-    Hard-Block: if either side lists the other in 'romantic_blocked_with',
-    no romantic potential exists (overrides everything else).
+    The actual matching (preferences vs. appearance/anatomy) is NSFW-flavoured
+    and lives in a separate ``attraction`` package, registered as the
+    ``romantic_compatibility`` capability provider (app.core.hooks). The SFW
+    core does not judge attraction: without the package installed the default
+    is True — romantic tension may build freely from interactions/sentiment,
+    ungated.
     """
-    # Hard-Block: explicit per-character veto list
-    blocked_by_a = _get_romantic_blocked_with(char_a)
-    blocked_by_b = _get_romantic_blocked_with(char_b)
-    if char_b.lower() in blocked_by_a or char_a.lower() in blocked_by_b:
-        return False
-
-    text_a = (get_romantic_interests(char_a) or "").lower()
-    text_b = (get_romantic_interests(char_b) or "").lower()
-
-    # Either side empty = no romantic potential
-    if not text_a or not text_b:
-        return False
-
-    def _has_negation(text: str) -> bool:
-        return any(w in text for w in ("keine", "none", "kein", "never"))
-
-    if _has_negation(text_a) or _has_negation(text_b):
-        return False
-
-    def _matches(text: str, other_name: str, other_gender: str,
-                 other_attrs: Dict[str, str]) -> bool:
-        # Name mentioned directly
-        if other_name.lower() in text:
-            return True
-        # Gender keywords — profile gender values are female/male only
-        # (girl/boy removed entirely, user decision 2026-07-08)
-        female_words = {"frau", "frauen", "woman", "women", "weiblich",
-                        "female"}
-        male_words = {"mann", "maenner", "man", "men", "maennlich",
-                      "male"}
-        both_words = {"alle", "offen", "everyone", "both", "bisexuell",
-                      "bi", "pansexuell"}
-        text_words = set(text.replace(",", " ").split())
-        if text_words & both_words:
-            return True
-        gender_match = False
-        if other_gender in ("female", "weiblich", "f", "w"):
-            gender_match = bool(text_words & female_words)
-        elif other_gender in ("male", "maennlich", "m"):
-            gender_match = bool(text_words & male_words)
-        if gender_match:
-            return True
-
-        # Physical attribute matching (phrases first, then single words).
-        # Phrases come from two sources: hardcoded SFW basics + the other
-        # character's template (which may carry mature/explicit slang in its
-        # interest_aliases blocks — that lives in the template, never in code).
-        if other_attrs:
-            for phrases, key, valid_values in _slot_alias_tables(other_name):
-                actual = other_attrs.get(key, "")
-                if actual not in valid_values:
-                    continue
-                for phrase in phrases:
-                    # Single words match on word boundaries ("klein" must
-                    # not hit "kleinlich"); multi-word phrases as substring.
-                    if (" " in phrase and phrase in text) or phrase in text_words:
-                        return True
-        return False
-
-    gender_a = _get_character_gender(char_a)
-    gender_b = _get_character_gender(char_b)
-    attrs_a = _get_character_attrs(char_a)
-    attrs_b = _get_character_attrs(char_b)
-
-    # Both sides must match the other's profile
-    return (_matches(text_a, char_b, gender_b, attrs_b)
-            and _matches(text_b, char_a, gender_a, attrs_a))
+    try:
+        from app.core.hooks import get_provider
+        fn = get_provider("romantic_compatibility")
+        if fn is not None:
+            return bool(fn(char_a, char_b))
+    except Exception as e:
+        logger.debug("romantic_compatibility provider failed: %s", e)
+    return True
 
 
 def extract_romantic_interests() -> Dict[str, str]:

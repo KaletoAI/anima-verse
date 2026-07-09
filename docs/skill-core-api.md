@@ -210,6 +210,8 @@ die LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
 |---|---|
 | `hooks.register(event, fn)` | Paket abonniert ein Core-Event (idempotent pro (event, tag) — Reload-sicher). Aufruf typischerweise im Skill-`__init__` |
 | `hooks.emit(event, **kwargs)` | Core feuert generisch; Fehler in Callbacks erreichen den Core-Pfad nie |
+| `hooks.register_provider(capability, fn)` | Ein Paket stellt die EINE Implementierung einer benannten Fähigkeit (z.B. `romantic_compatibility`); Core nennt nur den Capability-String (R1). Registrierung via `on_load`-Modul |
+| `hooks.get_provider(capability)` | Core holt den Provider; `None` ⇒ neutraler Default (z.B. Attraction ohne Paket = immer kompatibel) |
 
 Events bisher: `instagram.post_created(poster_name, post)` ·
 `instagram.user_comment(character_name, post_id, commenter_name, comment_text, comment_id, post)`.

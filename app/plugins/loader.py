@@ -251,7 +251,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     if not pkg.skills and not (pkg.llm_template_dir or pkg.character_fragments
                                or pkg.config_subsections or pkg.flags
                                or pkg.silhouette or pkg.body_slots
-                               or pkg.piece_slots):
+                               or pkg.piece_slots or meta.get("on_load")):
         logger.warning("Package %s: neither skills nor contributions in plugin.yaml",
                        entry_dir.name)
         return None
@@ -330,7 +330,39 @@ def discover_packages(plugin_dir: Optional[Path] = None,
     except Exception as e:
         logger.debug("Character template cache clear failed: %s", e)
 
+    # on_load hook (generic): a package may declare `on_load: <module.py>`
+    # in its manifest to run registration code at load — e.g. registering a
+    # capability provider (app.core.hooks.register_provider). This is how a
+    # content package contributes CODE without a verb. The module runs in a
+    # fresh state each force-reload; registration is expected to be
+    # idempotent (register_provider overwrites).
+    for pkg in registry.packages():
+        rel = str(pkg.manifest.get("on_load", "") or "").strip()
+        if not rel:
+            continue
+        try:
+            _run_on_load(pkg, rel)
+        except Exception as e:
+            logger.error("Package '%s' on_load '%s' failed: %s", pkg.id, rel, e)
+
     return registry.packages()
+
+
+def _run_on_load(pkg: Package, rel: str) -> None:
+    """Import a package's on_load module so its top-level registration runs.
+    Loaded by file path (same mechanism as skill modules) so installed and
+    repo packages behave identically."""
+    import importlib.util
+    mod_path = (pkg.dir / rel).resolve()
+    if not str(mod_path).startswith(str(pkg.dir.resolve())):
+        raise ValueError(f"on_load path escapes package dir: {rel}")
+    if not mod_path.exists():
+        raise FileNotFoundError(f"on_load module not found: {mod_path}")
+    spec = importlib.util.spec_from_file_location(
+        f"plugins_onload_{pkg.id}", mod_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    logger.info("Package '%s' on_load ran: %s", pkg.id, rel)
 
 
 def _package_gate(pkg: Package) -> bool:
