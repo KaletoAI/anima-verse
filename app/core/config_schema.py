@@ -237,7 +237,7 @@ SECTIONS = {
         },
     },
     "image_generation": {
-        "label": "Image Generation",
+        "label": "Image/Video Generation",
         "icon": "🎨",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
@@ -381,12 +381,13 @@ SECTIONS = {
                     "api_type": {
                         "type": "select",
                         "label": "API Type",
-                        "choices": ["a1111", "openai_chat", "openai_diffusion", "localai", "civitai", "together"],
+                        "choices": ["a1111", "openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video"],
                         "triggers_rerender": True,
+                        "description": "…_video types produce VIDEO (MEDIA_TYPE=video): localai_video = image-to-video via the LLM gateway (e.g. WAN), together_video = Together.ai image-to-video. Video backends are matched separately from image backends.",
                     },
                     "api_url": {"type": "str", "label": "API URL"},
-                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Required for cloud backends (civitai, together) and the LLM gateway (openai_diffusion, always Bearer); optional for openai_chat/localai (e.g. LocalAI/vLLM without auth)", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together"]},
-                    "model": {"type": "imagegen_model", "label": "Model", "description": "Model ID, gateway generation alias (openai_diffusion) or URN (civitai: urn:air:sdxl:checkpoint:...). Free text + 'Load Models' fetches the list from the backend (/v1/models) as suggestions.", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together"]},
+                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Required for cloud backends (civitai, together, together_video) and the LLM gateway (openai_diffusion, always Bearer); optional for openai_chat/localai/localai_video (e.g. LocalAI/vLLM without auth)", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video"]},
+                    "model": {"type": "imagegen_model", "label": "Model", "description": "Model ID, gateway generation alias (openai_diffusion, localai_video e.g. WAN-LowRAM) or URN (civitai: urn:air:sdxl:checkpoint:...). Free text + 'Load Models' fetches the list from the backend (/v1/models) as suggestions.", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video"]},
                     "lora_url": {"type": "str", "label": "LoRA Query URL", "description": "Optional: endpoint that lists the LoRAs available for the model (GET -> {\"loras\": [...]}). Source for the LoRA-library discovery sync (hourly + on demand in the LoRA Library editor) — every LoRA dropdown feeds from the library. '{alias}' is replaced with the model name; without the placeholder '/v1/generations/<model>/loras' is appended. Example: http://192.168.8.10:4000", "applicable_for": ["openai_diffusion", "localai"]},
                     "cost": {"type": "int", "label": "Cost", "default": 0, "min": 0, "description": "Relative cost (0 = local/free, higher = more expensive)"},
                     "width": {
@@ -434,35 +435,20 @@ SECTIONS = {
                     "inner_crop": {"visible_when": {"category": "inpaint"}, "half": True, "type": "float", "label": "Inner crop", "default": 0.7, "min": 0.05, "max": 1.0, "step": 0.05, "description": "With Full mask (Fit) only: share of the center that gets cut out (0.7 = inner 70%, 1.0 = whole center). Not applied for Match Edges.", "applicable_for": ["openai_diffusion"]},
                     "mask_format": {"visible_when": {"category": "inpaint"}, "type": "select", "label": "Mask format", "choices": ["grayscale", "openai"], "default": "grayscale", "description": "How the inpaint mask reaches the gateway. 'grayscale' (recommended): the L-PNG is sent 1:1 as generated, white = edit region (byte-identical to mapblend_debug/last_mask.png). 'openai': RGBA with transparent = edit, for true OpenAI/DALL-E edits endpoints.", "applicable_for": ["openai_diffusion"]},
                     "disable_safety": {"type": "bool", "label": "Disable safety", "default": False, "description": "Sends disable_safety_checker=true (Together.ai-specific).", "applicable_for": ["together"]},
-                    "poll_interval": {"half": True, "type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together): lower = faster detection, but more API calls.", "applicable_for": ["civitai", "together"]},
-                    "max_wait": {"half": True, "type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed.", "applicable_for": ["civitai", "together"]},
-                    "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout for the image generation (HTTP). Raise it for slow models/large images — be generous with the synchronous gateway (e.g. 300). Applies to together/openai_diffusion/localai/openai_chat.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat"]},
+                    "seconds": {"half": True, "type": "int", "label": "Video length (s)", "default": 5, "min": 1, "max": 30, "description": "Length of the generated video in seconds.", "applicable_for": ["localai_video", "together_video"]},
+                    "video_endpoint": {"type": "str", "label": "Video endpoint path", "default": "/v1/videos/generations", "description": "Request path on the gateway for video generation. Default '/v1/videos/generations'; set to '/v1/images/generations' if the gateway serves the video model through the images endpoint. The response is auto-detected (inline b64/url or an async job that gets polled).", "applicable_for": ["localai_video"]},
+                    "poll_interval": {"half": True, "type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together, video): lower = faster detection, but more API calls.", "applicable_for": ["civitai", "together", "localai_video", "together_video"]},
+                    "max_wait": {"half": True, "type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed.", "applicable_for": ["civitai", "together", "localai_video", "together_video"]},
+                    "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout for the generation (HTTP). Raise it for slow models/large images/video — be generous with the synchronous gateway (e.g. 300). Applies to together/openai_diffusion/localai/openai_chat + video backends.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat", "localai_video", "together_video"]},
                     "max_concurrent": {"half": True, "type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallel jobs on this backend queue. Additional concurrent requests wait until a slot frees up. Applies to all backend types (including cloud/OpenAI)."},
                     "serialize_group": {"half": True, "type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
                 },
             },
         },
     },
-    "animation": {
-        "label": "Animation (Video)",
-        "icon": "🎬",
-        "subsections": {
-            "together": {
-                "label": "Together.ai Animation",
-                "fields": {
-                    "enabled": {"type": "bool", "label": "Aktiviert", "default": False},
-                    "label": {"type": "str", "label": "Anzeigename"},
-                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Leer = wird aus Together-Provider API Key gelesen"},
-                    "model": {"type": "str", "label": "Model"},
-                    "width": {"type": "int", "label": "Breite", "default": 720, "description": "Kling 2.1: 1280x720, 720x1280 oder 720x720"},
-                    "height": {"type": "int", "label": "Höhe", "default": 720},
-                    "seconds": {"type": "int", "label": "Dauer (s)", "default": 5, "min": 1, "max": 30},
-                    "poll_interval": {"type": "float", "label": "Poll Interval (s)", "default": 5.0, "step": 0.5},
-                    "max_wait": {"type": "int", "label": "Max Wait (s)", "default": 600},
-                },
-            },
-        },
-    },
+    # "animation" section retired — video is now a backend type in
+    # image_generation.backends (localai_video / together_video). See
+    # development_instructions/plan-video-generation.md.
     "tts": {
         "label": "Text-to-Speech",
         "icon": "🔊",

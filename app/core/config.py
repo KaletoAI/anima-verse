@@ -771,25 +771,18 @@ def _flatten_to_env(config: dict) -> None:
                      "response_format", "extra_params", "category", "prompt",
                      "ref_slot_count",
                      "full_mask", "terrain_hint", "mask_grow", "inner_crop",
-                     "mask_format", "lora_url", "lora_filter"]:
+                     "mask_format", "lora_url", "lora_filter",
+                     # Video backends (localai_video / together_video)
+                     "seconds", "video_endpoint"]:
             val = be.get(key, "")
             # extra_params can be a dict (JSON editor) — bridge as JSON string.
             if key == "extra_params" and isinstance(val, (dict, list)):
                 val = json.dumps(val)
             _set(env, f"{p}{key.upper()}", val)
 
-    # Animation
-    anim = config.get("animation", {})
-    tog = anim.get("together", {})
-    _set(env, "TOGETHER_ANIMATE_ENABLED", tog.get("enabled", False))
-    _set(env, "TOGETHER_ANIMATE_LABEL", tog.get("label", ""))
-    _set(env, "TOGETHER_ANIMATE_API_KEY", tog.get("api_key", ""))
-    _set(env, "TOGETHER_ANIMATE_MODEL", tog.get("model", ""))
-    _set(env, "TOGETHER_ANIMATE_WIDTH", tog.get("width", 720))
-    _set(env, "TOGETHER_ANIMATE_HEIGHT", tog.get("height", 720))
-    _set(env, "TOGETHER_ANIMATE_SECONDS", tog.get("seconds", 5))
-    _set(env, "TOGETHER_ANIMATE_POLL_INTERVAL", tog.get("poll_interval", 5.0))
-    _set(env, "TOGETHER_ANIMATE_MAX_WAIT", tog.get("max_wait", 600))
+    # Animation/video: folded into image_generation.backends (a video backend
+    # type). The former standalone config.animation + TOGETHER_ANIMATE_* bridge
+    # was retired — see app/imagegen/backends/*_video.py.
 
     # TTS
     tts = config.get("tts", {})

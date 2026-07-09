@@ -78,10 +78,18 @@ class BackendPool:
         never for normal render matching, auto-select or fallback."""
         return getattr(b, "category", "") == "inpaint"
 
+    @staticmethod
+    def _media_of(b: ImageBackend) -> str:
+        """Media kind of a backend ("image" default, or "video"). The pool keeps
+        the two apart so an image render never lands on a video backend and
+        vice-versa."""
+        return getattr(b, "MEDIA_TYPE", "image")
+
     def _select_backend(self) -> Optional[ImageBackend]:
-        """Picks the cheapest available and globally enabled backend."""
+        """Picks the cheapest available and globally enabled IMAGE backend."""
         available = [b for b in self.backends if b.available and b.instance_enabled
-                     and not self._is_inpaint_backend(b)]
+                     and not self._is_inpaint_backend(b)
+                     and self._media_of(b) == "image"]
         return self.pick_lowest_cost(available, rotation_key="_select_backend")
 
     def _select_backend_for_agent(self, character_name: str) -> Optional[ImageBackend]:
@@ -99,8 +107,8 @@ class BackendPool:
             else:
                 is_enabled = b.instance_enabled
             if is_enabled:
-                # Inpaint backends never enter the normal agent render matching
-                if self._is_inpaint_backend(b):
+                # Inpaint + video backends never enter normal agent image render
+                if self._is_inpaint_backend(b) or self._media_of(b) != "image":
                     continue
                 available.append(b)
 
@@ -108,9 +116,13 @@ class BackendPool:
             available, rotation_key=f"agent:{character_name}")
 
     def resolve_imagegen_target(self, spec: str,
-                                preferred_backend: str = ""
+                                preferred_backend: str = "",
+                                media: str = "image"
                                 ) -> Optional[ImageBackend]:
         """Resolves a config/explicit backend spec via the match concept.
+
+        ``media`` ("image" default, or "video") keeps image and video backends
+        apart — a video render passes ``media="video"``.
 
         A spec is one of:
           - ``"<glob>"`` (bare)  → ``match_backend`` (glob over backend names,
@@ -138,15 +150,16 @@ class BackendPool:
         if pref:
             forced = next(
                 (b for b in self.backends
-                 if b.name == pref and b.available and b.instance_enabled),
+                 if b.name == pref and b.available and b.instance_enabled
+                 and self._media_of(b) == media),
                 None)
             if not forced:
                 logger.warning(
                     "Explizites Backend '%s' nicht verfuegbar/aktiviert", pref)
             return forced
-        return self.match_backend(pat)
+        return self.match_backend(pat, media=media)
 
-    def match_backend(self, pattern: str) -> Optional[ImageBackend]:
+    def match_backend(self, pattern: str, media: str = "image") -> Optional[ImageBackend]:
         """Resolves a backend glob (e.g. ``"ComfyUI*"``, ``"Together*"``, ``"*"``)
         to a concrete, available backend — selection among several matches by
         cost. An exact name matches itself. ``None`` if empty / no available
@@ -160,7 +173,8 @@ class BackendPool:
         pl = pat.lower()
         matches = [b for b in self.backends
                    if fnmatch.fnmatch(b.name.lower(), pl)
-                   and b.available and b.instance_enabled]
+                   and b.available and b.instance_enabled
+                   and self._media_of(b) == media]
         # Globs skip inpaint backends so "*"/"Flux*" never lands a normal
         # render there — UNLESS the pattern matches ONLY inpaint backends
         # (e.g. "Qwen Inpaint*"): then the caller explicitly aimed at them
@@ -178,6 +192,7 @@ class BackendPool:
     def list_available_backends(
         self,
         character_name: str = "",
+        media: str = "image",
     ) -> List[ImageBackend]:
         """List of all available backends for helper API + engine.
 
@@ -185,6 +200,7 @@ class BackendPool:
         - b.available (live status; channel_health may set this False)
         - b.instance_enabled (.env flag)
         - per-agent override (agent_config.instances[name].enabled)
+        - media kind (image/video) — image and video are never mixed
 
         Sorted ascending by effective_cost. NO round-robin here — the
         selector (or UI) takes care of distribution. This list is meant
@@ -197,6 +213,8 @@ class BackendPool:
         out: List[ImageBackend] = []
         for b in self.backends:
             if not b.available:
+                continue
+            if self._media_of(b) != media:
                 continue
             agent_inst = agent_instances.get(b.name, {})
             if "enabled" in agent_inst:
@@ -222,7 +240,9 @@ class BackendPool:
         """Next available backend — the match/availability logic IS the
         fallback (no static fallback_mode/fallback_specific anymore).
         """
-        candidates = self.list_available_backends(character_name=character_name)
+        # Fall back within the same media kind (video -> video, image -> image).
+        candidates = self.list_available_backends(
+            character_name=character_name, media=self._media_of(failed))
         candidates = [b for b in candidates if b.name not in exclude]
         # Inpaint backends are no fallback for normal renders. Only if the
         # failed backend itself was inpaint, the chain stays on inpaint.
@@ -330,6 +350,8 @@ class BackendPool:
         for b in self.backends:
             if not b.instance_enabled:
                 continue
+            if self._media_of(b) != "image":
+                continue
             agent_inst = agent_instances.get(b.name, {})
             if "enabled" in agent_inst and not agent_inst["enabled"]:
                 continue
@@ -354,19 +376,20 @@ class BackendPool:
             "(channel_health pollt im Hintergrund weiter)")
         return None
 
-    def _wait_for_explicit_backend(self, backend_name):
+    def _wait_for_explicit_backend(self, backend_name, media: str = "image"):
         """Resolves a backend glob (e.g. "ComfyUI*", "Together*") via the match
         concept to a concrete, available backend. An exact name matches itself.
-        Fail-fast: no polling — recovery is detected by the background poller
-        (channel_health) every 30s.
+        ``media`` keeps image and video apart. Fail-fast: no polling — recovery
+        is detected by the background poller (channel_health) every 30s.
         """
         import fnmatch
         pl = (backend_name or "").strip().lower()
         # Probe fresh availability of the matching candidates, then match.
         for b in self.backends:
-            if b.instance_enabled and fnmatch.fnmatch(b.name.lower(), pl):
+            if (b.instance_enabled and self._media_of(b) == media
+                    and fnmatch.fnmatch(b.name.lower(), pl)):
                 b.check_availability()
-        target = self.match_backend(backend_name)
+        target = self.match_backend(backend_name, media=media)
         if not target:
             logger.warning("Backend '%s' nicht verfuegbar/kein Treffer — fail-fast", backend_name)
         return target

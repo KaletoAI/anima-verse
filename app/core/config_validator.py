@@ -15,7 +15,6 @@ def validate_config(config: dict) -> List[Dict[str, Any]]:
     issues.extend(_check_providers(config))
     issues.extend(_check_llm_routing(config))
     issues.extend(_check_image_backends(config))
-    issues.extend(_check_animation(config))
     issues.extend(_check_tts(config))
     issues.extend(_check_skills(config))
     issues.extend(_check_server(config))
@@ -167,8 +166,9 @@ def _check_image_backends(config: dict) -> list:
             issues.append(_err("image_generation", f"Backend '{name}': API URL missing"))
 
         # Real cloud backends need an API key. openai_chat/localai/openai_diffusion
-        # are generic (may point at LocalAI/vLLM/gateway without a key) -> no requirement.
-        if api_type in ("civitai", "together") and not api_key:
+        # + localai_video are generic (may point at LocalAI/vLLM/gateway without a
+        # key) -> no requirement.
+        if api_type in ("civitai", "together", "together_video") and not api_key:
             issues.append(_err("image_generation", f"Backend '{name}': API key missing (cloud backend '{api_type}')"))
 
     # Use-case default render targets (backend globs)
@@ -212,28 +212,6 @@ def _check_imagegen_ref(val: str, backends: list, section: str, label: str, issu
     be_names = {b.get("name", "") for b in backends}
     if not any(fnmatch.fnmatch(str(n).lower(), pl) for n in be_names):
         issues.append(_warn(section, f"{label} default: no backend matches '{pat}'"))
-
-
-# ── Animation Checks ──
-
-def _check_animation(config: dict) -> list:
-    issues = []
-    anim = config.get("animation", {})
-
-    # ComfyUI was removed entirely (2026-07 review). A leftover legacy block
-    # is dead config — point at it instead of validating a gone subsystem.
-    if anim.get("comfy"):
-        issues.append(_warn(
-            "animation",
-            "Legacy ComfyUI animation block found — ComfyUI was removed; "
-            "delete 'animation.comfy' from the config"))
-
-    together = anim.get("together", {})
-    if together.get("enabled"):
-        if not together.get("model"):
-            issues.append(_warn("animation", "Together animation: no model configured"))
-
-    return issues
 
 
 # ── TTS Checks ──

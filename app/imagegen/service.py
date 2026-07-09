@@ -236,15 +236,17 @@ class ImageService:
         return self._pool._select_backend_for_agent(character_name)
 
     def resolve_imagegen_target(self, spec: str,
-                                preferred_backend: str = ""
+                                preferred_backend: str = "",
+                                media: str = "image"
                                 ) -> Optional[ImageBackend]:
-        return self._pool.resolve_imagegen_target(spec, preferred_backend)
+        return self._pool.resolve_imagegen_target(spec, preferred_backend, media)
 
-    def match_backend(self, pattern: str) -> Optional[ImageBackend]:
-        return self._pool.match_backend(pattern)
+    def match_backend(self, pattern: str, media: str = "image") -> Optional[ImageBackend]:
+        return self._pool.match_backend(pattern, media=media)
 
-    def list_available_backends(self, character_name: str = "") -> List[ImageBackend]:
-        return self._pool.list_available_backends(character_name)
+    def list_available_backends(self, character_name: str = "",
+                                media: str = "image") -> List[ImageBackend]:
+        return self._pool.list_available_backends(character_name, media=media)
 
     def run_with_fallback(self, primary_backend, op, character_name="",
                           max_attempts=3):
@@ -254,8 +256,51 @@ class ImageService:
     def _wait_for_backend(self, character_name):
         return self._pool._wait_for_backend(character_name)
 
-    def _wait_for_explicit_backend(self, backend_name):
-        return self._pool._wait_for_explicit_backend(backend_name)
+    def _wait_for_explicit_backend(self, backend_name, media: str = "image"):
+        return self._pool._wait_for_explicit_backend(backend_name, media=media)
+
+    def generate_video(self, source_image_path: str, action_prompt: str,
+                       output_path: str, backend_glob: str = "",
+                       character_name: str = "") -> bool:
+        """Renders a video from a still via a MEDIA_TYPE=="video" backend.
+
+        Picks a video backend by glob (empty = cheapest available video
+        backend), runs it through the pool's fallback engine, and writes the
+        returned MP4 to ``output_path``. Returns True on success.
+        """
+        params: Dict[str, Any] = {"source_image_path": source_image_path,
+                                  "reference_images": {"frame": source_image_path}}
+        if backend_glob.strip():
+            primary = self._wait_for_explicit_backend(backend_glob, media="video")
+        else:
+            vids = self.list_available_backends(character_name, media="video")
+            primary = vids[0] if vids else None
+        if not primary:
+            logger.warning("generate_video: kein Video-Backend verfuegbar (glob=%r)",
+                           backend_glob)
+            return False
+
+        def _op(backend: ImageBackend):
+            return backend.generate(action_prompt, "", params,
+                                    log_meta={"agent_name": character_name,
+                                              "original_prompt": action_prompt,
+                                              "media": "video"})
+        try:
+            result, _used = self.run_with_fallback(
+                primary, _op, character_name=character_name)
+        except Exception as e:
+            logger.error("generate_video fehlgeschlagen: %s", e)
+            return False
+        if not result:
+            return False
+        try:
+            from pathlib import Path as _P
+            _P(output_path).parent.mkdir(parents=True, exist_ok=True)
+            _P(output_path).write_bytes(result[0])
+            return True
+        except Exception as e:
+            logger.error("generate_video: Schreiben fehlgeschlagen: %s", e)
+            return False
 
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:
         """Holt die Instanz-spezifischen Defaults (nur agent-level Overrides).

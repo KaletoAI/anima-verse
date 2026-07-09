@@ -34,6 +34,13 @@ class ImageBackend(ABC):
     # instance via {env_prefix}REF_SLOT_COUNT (config field ref_slot_count).
     DEFAULT_REF_SLOT_COUNT = 0
 
+    # Media kind produced by this backend: "image" (default) or "video".
+    # The BackendPool keeps the two apart — an image render never matches a
+    # video backend and vice-versa (like the inpaint-category exclusion). Video
+    # backends return one MP4 as a single-element List[bytes]; the central
+    # generate() skips the image-only downscale post-processing for them.
+    MEDIA_TYPE = "image"
+
     def __init__(self, name: str, api_url: str, cost: float, api_type: str, env_prefix: str):
         self.name = name
         self.api_url = api_url.rstrip("/")
@@ -245,8 +252,9 @@ class ImageBackend(ABC):
                 self._active_jobs = max(0, self._active_jobs - 1)
 
         # Only downscale a real result list; empty/error results pass through.
+        # Video backends return MP4 bytes — never run the image downscale on them.
         use_case = (params or {}).get("image_use_case") or ""
-        if use_case and isinstance(result, list) and result:
+        if self.MEDIA_TYPE == "image" and use_case and isinstance(result, list) and result:
             try:
                 from app.core.image_postprocess import downscale_bytes
                 result = [

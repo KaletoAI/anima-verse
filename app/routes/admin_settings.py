@@ -759,10 +759,9 @@ def _apply_section_reloads(changed_keys: list) -> list:
         from app.core.tts_service import reload_tts_service
         _run("tts", reload_tts_service)
 
-    # Animation backends (together).
-    if "animation" in changed_keys:
-        from app.skills.animate import reload_animate_services
-        _run("animation", reload_animate_services)
+    # Video backends live in image_generation.backends now, so the image
+    # service reload above (image_generation changed_keys) covers them — no
+    # separate animation hook anymore.
 
     return triggered
 
@@ -973,6 +972,9 @@ async def imagegen_targets(user=Depends(require_admin)):
     for b in img.backends:
         if not b.instance_enabled:
             continue
+        # These selects pick IMAGE render targets — skip video backends.
+        if getattr(b, "MEDIA_TYPE", "image") != "image":
+            continue
         out.append({
             "value": b.name,
             "label": f"{b.name} ({b.api_type})",
@@ -1091,10 +1093,14 @@ async def imagegen_backend_models(backend_name: str,
     if not api_url:
         return {"backend": backend_name, "models": [], "error": "Keine API URL"}
     models: list = []
+    # Video backends want video models, image backends want image models.
+    _want_type = "video" if api_type in ("localai_video", "together_video") else "image"
     try:
-        if api_type in ("together", "openai_diffusion", "localai", "openai_chat"):
+        if api_type in ("together", "openai_diffusion", "localai", "openai_chat",
+                        "localai_video", "together_video"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
-            # api_key optional for localai (LocalAI without auth); gateway/Together need it
+            # api_key optional for localai/localai_video (LocalAI without auth);
+            # gateway/Together need it
             _hdrs = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(f"{base}/models", headers=_hdrs)
@@ -1104,7 +1110,8 @@ async def imagegen_backend_models(backend_name: str,
                     for m in items:
                         if not isinstance(m, dict):
                             continue
-                        if m.get("type") and m.get("type") != "image":
+                        # Keep models with the wanted type (or no declared type).
+                        if m.get("type") and m.get("type") != _want_type:
                             continue
                         mid = m.get("id") or m.get("name")
                         if mid:

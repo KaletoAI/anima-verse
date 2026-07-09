@@ -5,11 +5,12 @@ Ablauf:
   2. Bild mit dem Animation Service animieren (Together.ai)
 
 Per-Character Konfiguration (skills/video_generation.json):
-  - imagegen_backend:    Backend-Name fuer die Bildgenerierung
+  - imagegen_backend:    Backend-Name fuer die Bildgenerierung (Standbild)
   - imagegen_workflow:   Workflow-Name fuer die Bildgenerierung
   - imagegen_model:      Model-Override fuer die Bildgenerierung
   - imagegen_loras:      LoRA-Liste fuer die Bildgenerierung [{name, strength}, ...]
-  - animate_service:     Animation-Service ("together")
+  - animate_service:     Video-Backend-Name/Glob (MEDIA_TYPE==video im
+                         image_generation-Pool; leer = guenstigstes verfuegbares)
 """
 
 import json
