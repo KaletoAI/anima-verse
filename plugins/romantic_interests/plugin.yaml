@@ -1,0 +1,11 @@
+name: romantic_interests
+version: "1.0.0"
+description: Romantic-interests field — the character's free-text romantic/sexual interests (relationship core)
+
+# Content-only package (no verbs): contributes the romantic_interests
+# characteristics field to the human roleplay templates (SFW + NSFW —
+# romance is not NSFW). The relationship engine (app/models/relationship.py)
+# reads the field as config DATA (core); this package only declares the field.
+templates:
+  character:
+    - templates/character/romantic_interests.json
