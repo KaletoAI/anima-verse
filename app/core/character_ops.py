@@ -2550,15 +2550,10 @@ async def rebuild_image_prompt_core(character_name: str, request) -> Dict[str, A
                 except Exception as _e:
                     logger.debug("Reference-Image-Aufloesung fehlgeschlagen: %s", _e)
 
-        from app.core.dependencies import get_skill_manager
-        sm = get_skill_manager()
-        img_skill = None
-        for skill in sm.skills:
-            if skill.__class__.__name__ == "ImageGenerationSkill":
-                img_skill = skill
-                break
-        if not img_skill:
-            raise HTTPException(status_code=503, detail="ImageGenerationSkill nicht verfuegbar")
+        from app.imagegen.service import get_image_service
+        img_skill = get_image_service()
+        if not img_skill.enabled:
+            raise HTTPException(status_code=503, detail="image service not available")
 
         from app.core.prompt_adapters import (
             get_target_model, render as adapter_render,
@@ -2708,8 +2703,8 @@ async def suggest_animate_prompt_core(character_name: str, image_name: str, requ
         if not image_analysis:
             logger.info("[suggest-animate] Keine Bildanalyse vorhanden, generiere neu...")
             try:
-                from app.skills.image_generation_skill import ImageGenerationSkill
-                skill = ImageGenerationSkill({})
+                from app.imagegen.service import get_image_service
+                skill = get_image_service()
                 image_analysis = skill._generate_image_analysis(str(image_path), character_name)
                 if image_analysis:
                     logger.info("[suggest-animate] Bildanalyse generiert (%d Zeichen)", len(image_analysis))
@@ -2881,7 +2876,7 @@ def build_videogen_options(character_name: str) -> Dict[str, Any]:
 # logic cores and worker bodies moved here 1:1.
 
 async def generate_profile_image_core(character_name: str, request) -> Dict[str, Any]:
-    """Generiert ein neues Profilbild via ImageGenerationSkill."""
+    """Generates a new profile image via the core image service."""
     from app.core.dependencies import get_skill_manager
     import os
     import json as _json
@@ -2949,7 +2944,7 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
 
 
 async def generate_outfit_image_core(character_name: str, outfit_id: str, request) -> Dict[str, Any]:
-    """Generiert ein Bild fuer ein Outfit via ImageGenerationSkill."""
+    """Generates an outfit image via the core image service."""
     from app.models.character import get_character_outfits, get_character_images_dir, update_outfit_image
     from app.core.dependencies import get_skill_manager
     import os

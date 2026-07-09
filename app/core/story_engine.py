@@ -384,14 +384,9 @@ class StoryArcEngine:
             if not image_prompt:
                 return None
 
-            sm = get_skill_manager()
-            img_skill = None
-            for skill in sm.skills:
-                if skill.__class__.__name__ == "ImageGenerationSkill":
-                    img_skill = skill
-                    break
-
-            if not img_skill:
+            from app.imagegen.service import get_image_service
+            img_skill = get_image_service()
+            if not img_skill.enabled:
                 return None
 
             input_data = {
@@ -411,7 +406,7 @@ class StoryArcEngine:
                 elif _type == "backend" and _name:
                     input_data["backend"] = _name
             input_json = _json.dumps(input_data)
-            result_text = img_skill.execute(input_json)
+            result_text = img_skill.generate_from_input(input_json)
 
             char_urls = re.findall(r'!\[.*?\]\((\/characters\/[^)]+)\)', result_text)
             if not char_urls:

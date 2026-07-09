@@ -356,11 +356,11 @@ async def visualize_core(request) -> Dict[str, Any]:
 
     logger.debug("Image-Prompt: %s...", image_prompt[:120])
 
-    # 4. Generate image via ImageGenerationSkill
+    # 4. Generate image via the core image service
     #    When explicit character_names are set: pass appearances through so
     #    execute() uses them instead of auto-detection
     vis_appearances = appearances if character_names is not None else None
-    logger.debug("Generiere Bild via ImageGenerationSkill...")
+    logger.debug("Generating image via the image service...")
     result = await asyncio.to_thread(
         _generate_visualization_image, agent_name, image_prompt,
         vis_appearances, workflow, backend, loras, model_override, item_ids)

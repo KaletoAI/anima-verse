@@ -540,7 +540,7 @@ async def get_outfit_image_prompt(character_name: str, outfit_id: str) -> Dict[s
 
 @router.post("/{character_name}/outfits/{outfit_id}/generate-image")
 async def generate_outfit_image_route(character_name: str, outfit_id: str, request: Request) -> Dict[str, Any]:
-    """Generiert ein Bild fuer ein Outfit via ImageGenerationSkill."""
+    """Generates an outfit image via the core image service."""
     return await character_ops.generate_outfit_image_core(character_name, outfit_id, request)
 
 
@@ -1503,7 +1503,7 @@ async def detect_image_characters(character_name: str, image_name: str, request:
 
 @router.post("/{character_name}/images/{image_name}/regenerate")
 async def regenerate_character_image(character_name: str, image_name: str, request: Request) -> Dict[str, Any]:
-    """Regeneriert ein Bild mit der ImageGenerationSkill-Pipeline.
+    """Regenerates an image via the core image-service pipeline.
 
     Nutzt den gespeicherten Prompt, optional verbessert durch User-Feedback,
     und generiert ein neues Bild das das alte ersetzt.
