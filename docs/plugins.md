@@ -154,7 +154,7 @@ plus `apply_to`-Selektor:
 
 ```json
 {
-  "apply_to": ["human-roleplay-nsfw"],
+  "apply_to": ["human-roleplay"],
   "sections": [
     {"id": "traits", "fields": [
       {"key": "lust", "label": "Desire", "type": "number",
