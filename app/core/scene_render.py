@@ -7,8 +7,11 @@ so any generate backend (Qwen, Flux, Krea2, …) can be used flexibly:
 
 - ``multi_ref``: room background as reference slot 1 + the present
   characters' PROFILE images (canonical identity source, same semantics as
-  the main pipeline's reference slots) on the remaining slots. Persons
-  beyond the slot budget are described in text instead.
+  the main pipeline's reference slots) on the remaining slots. EVERY person
+  is still described in text (appearance + worn outfit + pose); the reference
+  image only pins the face/identity — without the text the model produces
+  garbage (wrong outfit, arbitrary look). Persons beyond the slot budget rely
+  on the text alone.
 - ``only_background``: only the room background as reference — every
   person is described in text (appearance from the profile + pose).
 
@@ -47,9 +50,9 @@ PROMPT_MULTI_REF_DEFAULT = (
     "The exact {setting} from the first reference image, keeping its "
     "layout, lighting and perspective. Compose {count} into the scene "
     "and NO ONE else — each of them appears exactly once, no additional "
-    "people or animals, no duplicates. A subject's reference image "
-    "provides their IDENTITY ONLY (face, hair, body, outfit) — IGNORE "
-    "the pose and background it shows; every pose follows the text. "
+    "people or animals, no duplicates. A subject's reference image pins "
+    "their FACE/IDENTITY ONLY — their appearance, outfit and pose follow "
+    "the text; IGNORE the pose, outfit and background the reference shows. "
     "Subjects: {people}")
 PROMPT_ONLY_BG_DEFAULT = (
     "The exact {setting} from the reference image, keeping its layout, "
@@ -537,18 +540,23 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
                 refs[f"input_reference_image_{i}"] = str(c["image"])
                 ref_slot_of[c["name"]] = i
 
-    # People lines: slotted persons point at their reference image, all
-    # others carry their appearance as text.
+    # People lines: EVERY person carries their appearance/outfit as text —
+    # slotted persons additionally bind their identity to a reference image.
+    # The reference image supplies the face/identity, the text supplies the
+    # appearance + worn outfit (the expression photo's outfit is often wrong);
+    # without the text description multi_ref produces garbage.
     all_names = [c["name"] for c in state["chars"]]
     lines = []
     for c in state["chars"]:
         part = c["name"]
+        bits = []
         if c["name"] in ref_slot_of:
-            part += f" (identity from reference image {ref_slot_of[c['name']]})"
-        else:
-            desc = _appearance_text(c["name"])
-            if desc:
-                part += f" ({desc})"
+            bits.append(f"identity from reference image {ref_slot_of[c['name']]}")
+        desc = _appearance_text(c["name"])
+        if desc:
+            bits.append(desc)
+        if bits:
+            part += f" ({'; '.join(bits)})"
         act = c["activity"]
         if act:
             # Another present character's name inside a pose hint ("lying
