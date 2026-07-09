@@ -151,6 +151,16 @@ class ThoughtRunner:
         for tn in real_tool_names:
             text = re.sub(rf'^\s*{re.escape(tn)}\s*$', '', text, flags=re.MULTILINE)
 
+        # ToolName {json...} / "ToolName west {json...}" — the RP finetune
+        # sometimes invents this JSON tool syntax instead of writing prose
+        # (defense-in-depth; the real fix is the mode-aware thought
+        # instruction). Strip the whole block so it cannot leak into the
+        # utterance / mood / activity (that produced "Stimmung: Move north").
+        if real_tool_names:
+            _names = '|'.join(re.escape(t) for t in real_tool_names)
+            text = re.sub(rf'^[ \t]*(?:{_names})(?:\s+\w+)?[ \t]*\{{[\s\S]*?\n[ \t]*\}}[ \t]*$',
+                          '', text, flags=re.MULTILINE)
+
         # <tool name="...">...</tool> Tags (geschlossen)
         text = re.sub(r'<tool\s+name="[^"]*">[\s\S]*?</tool>', '', text)
 

@@ -132,4 +132,4 @@ doing right now (free text) — e.g. "leaning against the windowsill" or
 {{ lang_instruction }} Any spoken words, messages or narration you produce must be in that language.
 {% endif %}
 
-Decide what you want to do next. Pick ONE meaningful action and execute the corresponding tool. If nothing relevant, reply only with: SKIP.
+{{ action_instruction }}

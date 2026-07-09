@@ -83,6 +83,29 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     }
     ctx["has_assignments"] = bool(ctx["assignments_block"])
 
+    # Closing action instruction — MODE-AWARE (this is why an rp_first RP
+    # model was emitting tool JSON: the old hardcoded line told it to
+    # "execute the corresponding tool"). In rp_first the RP pass must write
+    # pure in-character prose; the separate Tool-LLM translates it into
+    # tool calls afterwards. Single/no_tools keep the tool instruction.
+    try:
+        from app.models.character import get_character_config
+        _chat_mode = (get_character_config(character_name) or {}).get("chat_mode", "")
+    except Exception:
+        _chat_mode = ""
+    if _chat_mode == "rp_first":
+        ctx["action_instruction"] = (
+            "Decide what you want to do next. Pick ONE meaningful action and "
+            "play it out fully IN CHARACTER — narrate what you do and say as "
+            "prose, first person. Do NOT write tool calls, JSON, function "
+            "syntax or field lists; just act it out. If nothing relevant "
+            "right now, reply only with: SKIP.")
+    else:
+        ctx["action_instruction"] = (
+            "Decide what you want to do next. Pick ONE meaningful action and "
+            "execute the corresponding tool. If nothing relevant, reply only "
+            "with: SKIP.")
+
     # Skill prompt contributions as (package_id, text) parts → the joined string
     # (skill_context_blocks) plus an internal parts list for fine-grained
     # skill:<pkg> drop-block filtering in prompt_filters. The underscore key is
