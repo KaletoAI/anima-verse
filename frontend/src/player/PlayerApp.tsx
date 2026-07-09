@@ -15,7 +15,7 @@ import GridLayout, { type Layout } from 'react-grid-layout'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAuth } from '../lib/AuthGate'
 import { useAvatarSwitch } from './AvatarGate'
-import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../lib/api'
+import { apiDelete, apiGet, apiPost, apiPut, apiUpload, ApiError } from '../lib/api'
 import { usePoll } from './usePolling'
 import { useToast } from '../lib/Toast'
 import { ChatGalleryPicker } from './ChatGalleryPicker'
@@ -586,8 +586,16 @@ export function PlayerApp() {
     if (moving) return
     setMoving(true)
     try { await apiPost('/world/avatar/step', { direction: dir }); await load() }
-    catch { /* 404 = kein Nachbar */ } finally { setMoving(false) }
-  }, [moving, load])
+    catch (e) {
+      // 403 = a leave/enter rule blocked the move → surface the reason so
+      // the player knows WHY (e.g. missing key item). 404 = no neighbor in
+      // that direction → stay silent (the pad already hides those).
+      const err = e as ApiError
+      const detail = err?.detail as { message?: string } | string | undefined
+      const msg = detail && typeof detail === 'object' ? detail.message : undefined
+      if (err?.status === 403 && msg) toast(msg, 'error')
+    } finally { setMoving(false) }
+  }, [moving, load, toast])
   const handleEnterRoom = useCallback(async (roomId: string) => {
     if (moving) return
     setMoving(true)
