@@ -840,6 +840,11 @@ def add_location(name: str, description: str,
                   image_prompt_night: str = None,
                   image_prompt_map: str = None,
                   image_prompt_map_2d: str = None,
+                  decency: str = None,
+                  style_hint: str = None,
+                  swim_allowed: bool = None,
+                  indoor: str = None,
+                  activity_hint: str = None,
                   location_id: str = None) -> Dict[str, Any]:
     """Fuegt einen neuen Ort hinzu oder aktualisiert einen bestehenden.
 
@@ -848,8 +853,11 @@ def add_location(name: str, description: str,
         activities: Legacy — wird ignoriert wenn rooms angegeben
         image_prompt_day: Prompt fuer Hintergrundbild bei Tag (6-18 Uhr)
         image_prompt_night: Prompt fuer Hintergrundbild bei Nacht (18-6 Uhr)
-        image_prompt_map: Prompt fuer isometrisches Kartenbild
+        image_prompt_map: Prompt fuer isometrisches Kartenbild (Legacy)
         image_prompt_map_2d: Prompt fuer flaches 2D-Kartenicon
+        decency/style_hint/swim_allowed/indoor/activity_hint: Location-Level
+            Semantik-Felder (nur gesetzt wenn nicht None) — analog zu den
+            Feldern die der LocationEditor per PUT schreibt.
         location_id: Wenn gesetzt, wird der zu aktualisierende Ort per ID
             gefunden (eindeutig) statt per Name. NOETIG bei doppelten Namen —
             sonst trifft die Name-Suche den falschen Ort (z.B. einen Klon).
@@ -917,6 +925,17 @@ def add_location(name: str, description: str,
                 location["image_prompt_map"] = image_prompt_map
             if image_prompt_map_2d is not None:
                 location["image_prompt_map_2d"] = image_prompt_map_2d
+            # Location-Level Semantik-Felder — nur wenn mitgegeben.
+            if decency is not None:
+                location["decency"] = decency
+            if style_hint is not None:
+                location["style_hint"] = style_hint
+            if swim_allowed is not None:
+                location["swim_allowed"] = bool(swim_allowed)
+            if indoor is not None:
+                location["indoor"] = indoor
+            if activity_hint is not None:
+                location["activity_hint"] = activity_hint
             # ID nachrüsten falls fehlend
             if not location.get("id"):
                 location["id"] = _generate_location_id()
@@ -937,6 +956,11 @@ def add_location(name: str, description: str,
         "image_prompt_night": image_prompt_night or "",
         "image_prompt_map": image_prompt_map or "",
         "image_prompt_map_2d": image_prompt_map_2d or "",
+        "decency": decency or "",
+        "style_hint": style_hint or "",
+        "swim_allowed": bool(swim_allowed),
+        "indoor": indoor or "",
+        "activity_hint": activity_hint or "",
     }
     if image_prompt_day or image_prompt_night:
         new_location["prompt_changed"] = True
