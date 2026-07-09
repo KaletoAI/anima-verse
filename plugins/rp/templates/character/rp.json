@@ -1,5 +1,7 @@
 {
-  "apply_to": ["human-roleplay", "human-roleplay-nsfw"],
+  "apply_to": [
+    "human-roleplay"
+  ],
   "sections": [
     {
       "id": "identity",
@@ -12,7 +14,9 @@
           "multiline": true,
           "required": true,
           "source_file": "soul/roleplay_rules.md",
-          "workflow_required": ["chat"],
+          "workflow_required": [
+            "chat"
+          ],
           "in_prompt": true,
           "prompt_label": "Important rules",
           "prompt_self_only": true,
@@ -46,8 +50,14 @@
           "prompt_self_only": true,
           "llm_generable": true,
           "hint_thresholds": [
-            {"min": 70, "text": "aufmerksam"},
-            {"max": 30, "text": "unaufmerksam"}
+            {
+              "min": 70,
+              "text": "aufmerksam"
+            },
+            {
+              "max": 30,
+              "text": "unaufmerksam"
+            }
           ]
         },
         {
@@ -68,8 +78,14 @@
           "prompt_self_only": true,
           "llm_generable": true,
           "hint_thresholds": [
-            {"min": 70, "text": "mutig"},
-            {"max": 30, "text": "aengstlich"}
+            {
+              "min": 70,
+              "text": "mutig"
+            },
+            {
+              "max": 30,
+              "text": "aengstlich"
+            }
           ]
         },
         {
@@ -91,7 +107,10 @@
           "prompt_self_only": true,
           "llm_generable": true,
           "hint_thresholds": [
-            {"max": 20, "text": "erschoepft"}
+            {
+              "max": 20,
+              "text": "erschoepft"
+            }
           ]
         }
       ]

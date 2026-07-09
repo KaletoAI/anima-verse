@@ -1,5 +1,7 @@
 {
-  "apply_to": ["human-roleplay", "human-roleplay-nsfw"],
+  "apply_to": [
+    "human-roleplay"
+  ],
   "sections": [
     {
       "id": "characteristics",

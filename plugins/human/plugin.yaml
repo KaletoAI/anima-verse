@@ -5,7 +5,7 @@ description: Human species — anatomy body slots, clothing-slot topology and th
 
 # Species content applies to the human character templates (incl. the
 # local-only NSFW marker so those worlds get the slots too).
-apply_to: ["human-default", "human-roleplay", "human-roleplay-nsfw"]
+apply_to: ["human-default", "human-roleplay"]
 
 silhouette:
   asset: assets/silhouette.svg

@@ -148,6 +148,14 @@ async def lifespan(app: FastAPI):
     except Exception as _se:
         logger.debug("storyteller-speaker migration failed: %s", _se)
 
+    # Migration: the deleted human-roleplay-nsfw template -> human-roleplay
+    # (its substance lives in packages now; idempotent, world_kv-marked).
+    try:
+        from app.models.character_template import migrate_nsfw_template_once
+        migrate_nsfw_template_once()
+    except Exception as _te:
+        logger.debug("nsfw-template migration failed: %s", _te)
+
     # Initialisiere Multi-Channel Support
     logger.info("Initialisiere Multi-Channel Support...")
     initialize_channels()
