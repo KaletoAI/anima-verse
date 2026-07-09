@@ -615,6 +615,36 @@ class StreamingAgent:
                 f"none of these actions, respond with: NONE"
             )
         else:
+            # Speech handling differs by turn kind. In a CHAT turn the RP prose
+            # IS the reply (recorded/streamed to the addressee), so pure talk
+            # must NOT fire a tool. In a THOUGHT turn the prose is discarded
+            # after this decision — spoken dialogue reaches the room ONLY if it
+            # is mapped to TalkTo, otherwise it is silently dropped
+            # (plan-thought-speech-dropped.md).
+            _is_thought = (self.log_task or "").startswith("thought")
+            if _is_thought:
+                _speech_map_line = (
+                    "     - Character SPEAKS OUT LOUD — quoted dialogue, a called-out line, "
+                    "whispering to someone — → TalkTo (name = the addressed person, "
+                    "message = the spoken words, verbatim). In this autonomous turn the "
+                    "character's prose is NOT delivered to anyone: spoken words reach "
+                    "others ONLY through TalkTo. NEVER drop dialogue.\n")
+                _pure_talk_rule = (
+                    "   BUT a feeling or a trivial gesture alone (shaking their head, smiling, "
+                    "waving something in their hand) is NOT a tool action — do not call a tool "
+                    "for it. SPOKEN DIALOGUE however IS an action here: map it to TalkTo (see "
+                    "above). (Agreeing to travel together, though, IS "
+                    "JoinParty — see above.) Emotions and small gestures are carried by the "
+                    "markers in step 3, never by tools.\n\n")
+            else:
+                _speech_map_line = (
+                    "     - Character relays info to a third party not in chat → TalkTo\n")
+                _pure_talk_rule = (
+                    "   BUT if the character ONLY talks, shows a feeling, or makes a trivial gesture "
+                    "(shaking their head, smiling, waving something in their hand) — that is NOT a "
+                    "tool action. Do NOT call any tool for it. (Agreeing to travel together, though, IS "
+                    "JoinParty — see above.) Emotions and small gestures are carried by the "
+                    "markers in step 3, never by tools.\n\n")
             tool_decision_input = (
                 f"The user said: {user_input}\n\n"
                 f"The character responded:\n{rp_response}\n\n"
@@ -640,7 +670,7 @@ class StreamingAgent:
                 f"     - Character wants to split off / no longer travel with the group → LeaveParty\n"
                 f"     - Character changes what they're physically doing (pose) → SetPose\n"
                 f"     - Character looks something up / searches / checks facts → SearchKnowledge or WebSearch\n"
-                f"     - Character relays info to a third party not in chat → TalkTo\n"
+                f"{_speech_map_line}"
                 f"     - Character sends a remote/text message to someone NOT present → SendMessage. "
                 f"SendMessage carries TEXT ONLY — NEVER write placeholder text like '[image attached]'. "
                 f"Only when the character sends along a photo they take/took THIS turn, use JSON input: "
@@ -648,11 +678,7 @@ class StreamingAgent:
                 f"   For a REAL action listed above, narrative description IS the signal — do not skip the "
                 f"tool just because it was only described. Call every tool that genuinely applies; "
                 f"multiple tools are fine.\n"
-                f"   BUT if the character ONLY talks, shows a feeling, or makes a trivial gesture "
-                f"(shaking their head, smiling, waving something in their hand) — that is NOT a "
-                f"tool action. Do NOT call any tool for it. (Agreeing to travel together, though, IS "
-                f"JoinParty — see above.) Emotions and small gestures are carried by the "
-                f"markers in step 3, never by tools.\n\n"
+                f"{_pure_talk_rule}"
                 f"2. EXTRACTION: Check the character's response for:\n"
                 f"   - Intent: If the character commits to a concrete action (posting something, "
                 f"sending a message, doing something at a specific time), output:\n"
