@@ -112,6 +112,14 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
           </Field>
         </div>
         <div className="ga-form-row">
+          <Field label={t('Indoor/Outdoor')} hint={t('Overrides the location for this room (e.g. a pool room in an indoor house = outdoor). Empty = inherit location.')}>
+            <select className="ga-input" value={draft.indoor || ''}
+              onChange={(e) => upd('indoor', e.target.value)}>
+              <option value="">{t('Inherit from location')}</option>
+              <option value="indoor">{t('Indoor')}</option>
+              <option value="outdoor">{t('Outdoor')}</option>
+            </select>
+          </Field>
           <Field label={t('Swim allowed')}>
             <label className="ga-form-check">
               <input

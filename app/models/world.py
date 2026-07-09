@@ -423,6 +423,18 @@ def get_location_rooms(location: Dict[str, Any]) -> List[Dict[str, Any]]:
     return location.get("rooms", [])
 
 
+def resolve_indoor_flag(location: Optional[Dict[str, Any]],
+                        room: Optional[Dict[str, Any]] = None) -> str:
+    """Effective indoor/outdoor flag for a location+room: the ROOM's own
+    flag wins over the location's (a pool room in an indoor house is
+    'outdoor'). Returns 'indoor' | 'outdoor' | '' (unset)."""
+    flag = str((room or {}).get("indoor") or "").strip().lower()
+    if flag in ("indoor", "outdoor"):
+        return flag
+    flag = str((location or {}).get("indoor") or "").strip().lower()
+    return flag if flag in ("indoor", "outdoor") else ""
+
+
 def get_room_by_id(location: Dict[str, Any], room_id: str) -> Optional[Dict[str, Any]]:
     """Findet einen Raum per ID in einem Ort."""
     if not room_id:

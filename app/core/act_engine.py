@@ -244,8 +244,9 @@ async def _run_storyteller_agent(
         ev_lines.append(f"- {tag}{ev_text}")
     active_events_block = "\n".join(ev_lines)
 
-    # ── Setting (Indoor/Outdoor) ───────────────────────────────────────
-    indoor_flag = (location.get("indoor") or "").strip().lower() if location else ""
+    # ── Setting (Indoor/Outdoor) — room flag wins over the location's ──
+    from app.models.world import resolve_indoor_flag
+    indoor_flag = resolve_indoor_flag(location, room_obj if actor_room and location else None)
     if indoor_flag == "indoor":
         setting_block = ("Setting: Indoor (enclosed place — keep narration "
                           "coherent with an interior space).")

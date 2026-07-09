@@ -82,10 +82,13 @@ def _beings_phrase(names) -> str:
     return "exactly " + " and ".join(parts)
 
 
-def _setting_word(loc_obj: Dict[str, Any]) -> str:
-    """'room'/'outdoor location'/'place' from the location's indoor flag —
-    'room' on an outdoor location makes the model build an interior."""
-    flag = str((loc_obj or {}).get("indoor") or "").strip().lower()
+def _setting_word(loc_obj: Dict[str, Any],
+                  room_obj: Optional[Dict[str, Any]] = None) -> str:
+    """'room'/'outdoor location'/'place' from the effective indoor flag
+    (the room's flag wins over the location's — a pool room in an indoor
+    house renders as 'outdoor location')."""
+    from app.models.world import resolve_indoor_flag
+    flag = resolve_indoor_flag(loc_obj, room_obj)
     if flag == "indoor":
         return "room"
     if flag == "outdoor":
@@ -386,7 +389,7 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     loc_obj = get_location_by_id(loc) or {}
     room_obj = get_room_by_id(loc_obj, room) if (loc_obj and room) else None
     label = (room_obj or {}).get("name") or loc_obj.get("name") or loc
-    setting = _setting_word(loc_obj)
+    setting = _setting_word(loc_obj, room_obj)
 
     names = [avatar] + [n for n in (_list_characters_in_room(loc, room) or [])
                         if n != avatar]

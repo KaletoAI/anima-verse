@@ -2,6 +2,9 @@ export interface Room {
   id?: string
   name?: string
   description?: string
+  // Indoor/outdoor override — the room's flag wins over the location's
+  // (a pool room in an indoor house = outdoor). Empty = inherit location.
+  indoor?: string
   // Decency (plan-outfit-system-rethink.md §1.1) — replaces the old outfit_type model
   decency?: '' | 'public' | 'private' | 'nude_ok'
   style_hint?: string
