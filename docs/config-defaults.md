@@ -1,8 +1,15 @@
 # Konfigurations-Defaults
 
-> **Note:** Diese Liste wird automatisch aus dem Quellcode extrahiert.
+> **Achtung — teilweise veraltet (Stand 2026-07):** Die App liest Konfiguration
+> **nicht** mehr aus `.env`/Umgebungsvariablen (Ausnahmen nur `queue_cli.py` +
+> `docker/`); konfiguriert wird pro Welt über `config.json` (Admin-UI
+> `/admin/settings`). Für migrierte Skill-Pakete (Instagram, MarkdownWriter,
+> NotifyUser, ImageGen …) liegt die Config im **Paket-Manifest** (`config_schema`
+> in `plugins/<pkg>/plugin.yaml`), nicht mehr in den unten gelisteten
+> `SKILL_*`-Variablen. Diese Liste wird nicht automatisch generiert.
 
-Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `config.json` im Welt-Verzeichnis oder als Umgebungsvariablen überschrieben werden.
+Weiterhin gültige Parameter (Provider-URLs, Timeouts, unmigrierte Skills) mit
+ihren Standardwerten.
 
 ---
 
@@ -18,7 +25,7 @@ Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `c
 
 | Variable | Default | Datei |
 |---|---|---|
-| `SKILL_SEARX_URL` | `http://localhost:8888` | app/skills/searx_skill.py |
+| `SKILL_SEARX_URL` | `http://localhost:8888` | plugins/searx (config.json) |
 | `TELEGRAM_API_URL` | `https://api.telegram.org/bot` | app/models/telegram_channel.py |
 | `PORT` | `8000` | app/scheduler/scheduler_manager.py, app/core/intent_engine.py |
 
@@ -50,7 +57,7 @@ Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `c
 
 | Variable | Default | Datei |
 |---|---|---|
-| `LLM_REQUEST_TIMEOUT` | `120` | app/core/llm_router.py, app/skills/image_generation_skill.py, app/skills/instagram_skill.py |
+| `LLM_REQUEST_TIMEOUT` | `120` | app/core/llm_router.py, app/imagegen/service.py |
 
 ---
 
@@ -90,21 +97,10 @@ Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `c
 | `OUTFIT_IMAGEGEN_DEFAULT` | `` | app/routes/characters.py, app/core/expression_regen.py |
 | `LOCATION_IMAGEGEN_DEFAULT` | `` | app/routes/world.py |
 | `EXPRESSION_IMAGEGEN_DEFAULT` | `` | app/core/expression_regen.py |
-| `IMAGE_ANALYSIS_PROMPT` | `` | app/skills/image_generation_skill.py |
-| `IMAGE_ANALYSIS_LANGUAGE` | `de` | app/skills/image_generation_skill.py |
+| `IMAGE_ANALYSIS_PROMPT` | `` | app/imagegen/service.py |
+| `IMAGE_ANALYSIS_LANGUAGE` | `de` | app/imagegen/service.py |
 
 ---
-
-## Instagram
-
-| Variable | Default | Datei |
-|---|---|---|
-| `SKILL_INSTAGRAM_CAPTION_STYLE` | `casual` | app/skills/instagram_skill.py |
-| `SKILL_INSTAGRAM_HASHTAG_COUNT` | `5` | app/skills/instagram_skill.py |
-| `SKILL_INSTAGRAM_CAPTION_LANGUAGE` | `de` | app/skills/instagram_skill.py |
-| `SKILL_INSTAGRAM_DEFAULT_POPULARITY` | `50` | app/skills/instagram_skill.py |
-| `SKILL_INSTAGRAM_IMAGEGEN_DEFAULT` | `` | app/skills/instagram_skill.py |
-| `SKILL_INSTAGRAM_POST_COOLDOWN_HOURS` | `12` | app/skills/instagram_skill.py |
 
 ---
 
@@ -112,18 +108,12 @@ Alle konfigurierbaren Parameter mit ihren Standardwerten. Diese können über `c
 
 | Variable | Default | Datei |
 |---|---|---|
-| `SKILL_IMAGEGEN_{N}_ENABLED` | `true` | app/skills/image_generation_skill.py |
-| `SKILL_IMAGEGEN_{N}_NAME` | `Instance_{N}` | app/skills/image_generation_skill.py |
-| `SKILL_SEARX_NUM_RESULTS` | `10` | app/skills/searx_skill.py |
 | `SKILL_OUTFIT_CREATION_LANGUAGE` | `en` | app/skills/outfit_creation_skill.py |
 | `SKILL_OUTFIT_CREATION_MAX_DAILY_ITEMS` | `8` | app/skills/outfit_creation_skill.py |
 | `SKILL_OUTFIT_CREATION_MAX_INVENTORY` | `60` | app/skills/outfit_creation_skill.py |
 | `SKILL_DESCRIBEROOM_MAX_ROOMS` | `3` | app/skills/describe_room_skill.py |
-| `SKILL_MARKDOWN_WRITER_FOLDERS` | `diary,notes,guides` | app/skills/markdown_writer_skill.py |
-| `SKILL_MARKDOWN_WRITER_MAX_SIZE_KB` | `512` | app/skills/markdown_writer_skill.py |
-| `SKILL_MARKDOWN_WRITER_MAX_FILES` | `50` | app/skills/markdown_writer_skill.py |
-| `SKILL_MARKDOWN_WRITER_DEFAULT_FOLDER` | `diary` | app/skills/markdown_writer_skill.py |
-| `SKILL_NOTIFY_USER_COOLDOWN_MIN` | `30` | app/skills/notify_user_skill.py |
+
+*ImageGen (`SKILL_IMAGEGEN_*`), MarkdownWriter, NotifyUser, Searx und Instagram sind zu Paketen/Service migriert — Config im Manifest bzw. `config.json`, nicht mehr per Env-Variable.*
 
 ---
 
