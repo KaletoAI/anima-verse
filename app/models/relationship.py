@@ -115,115 +115,29 @@ def _get_character_gender(character_name: str) -> str:
 
 
 def _get_character_attrs(character_name: str) -> Dict[str, str]:
-    """Get physical attributes from a character's profile."""
-    data: Dict[str, str] = {}
+    """Physical attributes as {"slot.attr": value} from the body-slot
+    values (the template selects died with the template shrink — slots
+    are the single source now)."""
     try:
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name)
-        for key in ("size", "body_type", "breast_size", "butt_size",
-                     "hair_color", "hair_length", "eye_color", "skin_color",
-                     "penis_size"):
-            val = (profile.get(key) or "").lower().strip()
-            if val:
-                data[key] = val
+        from app.core.body_slots import slot_attr_values
+        return slot_attr_values(character_name)
     except Exception:
-        pass
-    return data
+        return {}
 
 
-# -- Attribute keyword tables for romantic compatibility --
-# Hardcoded SFW phrases. Mature/explicit slang lives in the corresponding
-# character template via the `interest_aliases` field property — see
-# _load_template_aliases() below.
-_ATTR_PHRASES: list = [
-    # Hair length
-    (("lange haare", "long hair"), "hair_length", {"long"}),
-    (("kurze haare", "short hair"), "hair_length", {"short"}),
-    # Hair color
-    (("schwarze haare", "black hair", "dunkle haare", "dark hair"),
-     "hair_color", {"black", "brunette"}),
-    (("rote haare", "red hair"), "hair_color", {"red"}),
-    (("blonde haare", "blond hair"), "hair_color", {"blonde"}),
-]
 
-
-def _load_template_aliases(character_name: str) -> list:
-    """Pulls `interest_aliases` blocks from the character's template.
-
-    Each NSFW-relevant field in a template can declare keyword aliases like:
-        "interest_aliases": {
-            "small": ["small breasts", "flat chest", ...],
-            "large": ["big breasts", "large breasts", ...]
-        }
-    Returns the aliases in the same shape as _ATTR_PHRASES so the matching
-    loop can merge them. Templates that omit the property contribute nothing.
-    """
+def _slot_alias_tables(character_name: str) -> list:
+    """Attraction alias tables from the character's body-slot declarations
+    (interest_aliases in the species packages — SFW basics in the human
+    package, explicit slang in the NSFW pack). Shape:
+    [(phrases, "slot.attr", {canonical_value}), ...]."""
     try:
-        from app.models.character import get_character_profile
-        from app.models.character_template import get_template
-        profile = get_character_profile(character_name)
-        tmpl = get_template(profile.get("template", ""))
+        from app.core.body_slots import interest_alias_tables
+        return interest_alias_tables(character_name)
     except Exception:
         return []
-    if not tmpl:
-        return []
 
-    out: list = []
-    for section in tmpl.get("sections", []):
-        for field in section.get("fields", []):
-            aliases = field.get("interest_aliases")
-            if not isinstance(aliases, dict):
-                continue
-            field_key = field.get("key", "")
-            if not field_key:
-                continue
-            for canonical_value, phrase_list in aliases.items():
-                if not isinstance(phrase_list, list):
-                    continue
-                phrases = tuple(
-                    str(p).lower() for p in phrase_list if isinstance(p, str))
-                if phrases:
-                    out.append((phrases, field_key, {str(canonical_value)}))
-    return out
 
-# Single-word keywords (checked after phrases)
-_ATTR_WORDS: Dict[str, tuple] = {
-    # Height / size
-    "gross": ("size", {"tall", "giant"}),
-    "groß": ("size", {"tall", "giant"}),
-    "große": ("size", {"tall", "giant"}),
-    "grosse": ("size", {"tall", "giant"}),
-    "großer": ("size", {"tall", "giant"}),
-    "grosser": ("size", {"tall", "giant"}),
-    "tall": ("size", {"tall", "giant"}),
-    "klein": ("size", {"short", "petite"}),
-    "kleine": ("size", {"short", "petite"}),
-    "kleiner": ("size", {"short", "petite"}),
-    "short": ("size", {"short", "petite"}),
-    "petite": ("size", {"petite", "short"}),
-    "zierlich": ("size", {"petite", "short"}),
-    "zierliche": ("size", {"petite", "short"}),
-    # Body type
-    "schlank": ("body_type", {"slim", "petite"}),
-    "schlanke": ("body_type", {"slim", "petite"}),
-    "slim": ("body_type", {"slim", "petite"}),
-    "athletisch": ("body_type", {"athletic"}),
-    "athletic": ("body_type", {"athletic"}),
-    "muskuloes": ("body_type", {"muscular", "athletic"}),
-    "muskulös": ("body_type", {"muscular", "athletic"}),
-    "muscular": ("body_type", {"muscular", "athletic"}),
-    "kurvig": ("body_type", {"curvy"}),
-    "kurvige": ("body_type", {"curvy"}),
-    "curvy": ("body_type", {"curvy"}),
-    # Hair color (single word)
-    "blond": ("hair_color", {"blonde"}),
-    "blonde": ("hair_color", {"blonde"}),
-    "blondie": ("hair_color", {"blonde"}),
-    "brunette": ("hair_color", {"brunette"}),
-    "rothaarig": ("hair_color", {"red"}),
-    "rothaarige": ("hair_color", {"red"}),
-    "redhead": ("hair_color", {"red"}),
-}
 
 
 def _get_romantic_blocked_with(character_name: str) -> set:
@@ -308,18 +222,14 @@ def are_romantically_compatible(char_a: str, char_b: str) -> bool:
         # character's template (which may carry mature/explicit slang in its
         # interest_aliases blocks — that lives in the template, never in code).
         if other_attrs:
-            phrase_tables = _ATTR_PHRASES + _load_template_aliases(other_name)
-            for phrases, key, valid_values in phrase_tables:
+            for phrases, key, valid_values in _slot_alias_tables(other_name):
+                actual = other_attrs.get(key, "")
+                if actual not in valid_values:
+                    continue
                 for phrase in phrases:
-                    if phrase in text:
-                        actual = other_attrs.get(key, "")
-                        if actual in valid_values:
-                            return True
-            for word in text_words:
-                if word in _ATTR_WORDS:
-                    key, valid_values = _ATTR_WORDS[word]
-                    actual = other_attrs.get(key, "")
-                    if actual in valid_values:
+                    # Single words match on word boundaries ("klein" must
+                    # not hit "kleinlich"); multi-word phrases as substring.
+                    if (" " in phrase and phrase in text) or phrase in text_words:
                         return True
         return False
 

@@ -45,11 +45,23 @@ body_slots:
         allow_custom: true
         migrate_from: hair_color
         options: [blonde, brunette, black, red, auburn, gray, white, pink]
+        # Attraction matching (relationship engine): phrases in the OTHER
+        # side's romantic_interests text that mean this canonical value.
+        interest_aliases:
+          black: ["schwarze haare", "black hair", "dunkle haare", "dark hair"]
+          brunette: ["schwarze haare", "black hair", "dunkle haare", "dark hair", "braune haare", "brown hair"]
+          red: ["rote haare", "red hair"]
+          blonde: ["blonde haare", "blond hair", "blonde hair"]
       length:
         type: select
         allow_custom: true
         migrate_from: hair_length
         options: [very short, short, medium, long, very long]
+        interest_aliases:
+          long: ["lange haare", "long hair"]
+          very long: ["lange haare", "long hair"]
+          short: ["kurze haare", "short hair"]
+          very short: ["kurze haare", "short hair"]
     prompt:
       always: "{length} {color} hair"
   - id: eyes
@@ -79,11 +91,23 @@ body_slots:
         allow_custom: true
         migrate_from: size
         options: [petite, short, average height, tall, giant]
+        interest_aliases:
+          tall: ["gross", "groß", "große", "grosse", "großer", "grosser", "tall"]
+          giant: ["gross", "groß", "große", "grosse", "großer", "grosser", "tall"]
+          short: ["klein", "kleine", "kleiner", "short", "petite", "zierlich", "zierliche"]
+          petite: ["klein", "kleine", "kleiner", "short", "petite", "zierlich", "zierliche"]
       type:
         type: select
         allow_custom: true
         migrate_from: body_type
         options: [petite, slim, average, athletic, curvy, muscular, stocky, voluptuous]
+        interest_aliases:
+          slim: ["schlank", "schlanke", "slim"]
+          petite: ["schlank", "schlanke", "slim", "zierlich", "zierliche", "petite"]
+          athletic: ["athletisch", "athletic", "sportlich", "muskuloes", "muskulös", "muscular"]
+          muscular: ["muskuloes", "muskulös", "muscular", "athletisch", "athletic"]
+          curvy: ["kurvig", "kurvige", "curvy", "kurven"]
+          voluptuous: ["kurvig", "kurvige", "curvy", "üppig", "ueppig", "voluptuous"]
     prompt:
       always: "{height}, {type} build"
   - id: facial_hair

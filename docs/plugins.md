@@ -111,6 +111,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `being` | nein | Spezies-Nomen für die Szenen-Komposition (`person`/`animal`/…, Default `person`) — „Compose exactly one person and one animal…" statt Katzen als „people" zu zählen |
 | `apply_to` | nein | Template-Selektor (Namen/`*`/`{feature}`) für Spezies-Inhalte (silhouette/body_slots/piece_slots); ohne ihn zählen die Fragment-Selektoren |
 | `silhouette` | nein | `{asset: <relpath>}` — UI-Paper-Doll der Spezies (Datei im Paket) |
+| `body_slots[].attributes.<a>.interest_aliases` | nein | Attraction-Matching: `{kanonischer_wert: [phrase, …]}` — Phrasen im romantic_interests-Text der GEGENSEITE matchen gegen den Slot-Wert dieses Charakters (SFW-Basics im human-Paket, explizite Begriffe im NSFW-Pack; Core hat keine Alias-Tabellen mehr) |
 | `body_slots` | nein | Körper-Slot-Deklarationen (s.u.) — Sichtbarkeit, Attribute, Prompt-Fragmente |
 | `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies (String oder `{id, label}`); ohne Deklaration gilt der Core-Default (`VALID_PIECE_SLOTS`) inkl. Core-Anzeige-Reihenfolge/-Labels |
 | `capability_description` | nein | Menschenlesbarer UI-Text der Fähigkeit (SkillsTab-Detail) — die Verb-Beschreibungen sind LLM-Tool-Prosa („call FollowDressCode") und adressieren den Charakter, nicht den User |

@@ -281,6 +281,48 @@ def exposed_slot_loras(character_name: str,
     return out
 
 
+def interest_alias_tables(character_name: str) -> List[Any]:
+    """Attraction alias tables from the character's slot declarations.
+
+    Each slot attribute may declare ``interest_aliases``
+    ({canonical_value: [phrase, ...]}). Returns
+    [(phrases_tuple, "slot.attr", {canonical_value}), ...] — the
+    relationship engine matches phrases in the OTHER side's
+    romantic_interests text against this character's slot values. SFW
+    basics live in the human package, explicit slang in the NSFW pack —
+    no alias table is hardcoded in core (R1)."""
+    out: List[Any] = []
+    for spec in slots_for_character(character_name):
+        for attr, decl in spec.attributes.items():
+            aliases = decl.get("interest_aliases")
+            if not isinstance(aliases, dict):
+                continue
+            for canonical, phrase_list in aliases.items():
+                if not isinstance(phrase_list, list):
+                    continue
+                phrases = tuple(str(p).lower() for p in phrase_list
+                                if isinstance(p, str) and str(p).strip())
+                if phrases:
+                    out.append((phrases, f"{spec.id}.{attr}",
+                                {str(canonical).lower()}))
+    return out
+
+
+def slot_attr_values(character_name: str) -> Dict[str, str]:
+    """Flat {"slot.attr": value} map of the character's stored slot values
+    (lowercased) — the attraction engine's attribute source."""
+    out: Dict[str, str] = {}
+    vals = slot_values(character_name)
+    for spec in slots_for_character(character_name):
+        for attr, decl in spec.attributes.items():
+            if str(decl.get("type", "")) == "lora_select":
+                continue  # technical, never an attraction attribute
+            v = str((vals.get(spec.id) or {}).get(attr, "") or "").strip().lower()
+            if v:
+                out[f"{spec.id}.{attr}"] = v
+    return out
+
+
 def being_for_character(character_name: str) -> str:
     """Prompt noun for what kind of being the character is ('person',
     'animal', ...) — declared by the species package (manifest ``being``);
