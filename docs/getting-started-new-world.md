@@ -70,7 +70,7 @@ Infermatic) in the [README](../README.md#getting-started).
 7. **Take over the character as your avatar.** Once it has a profile image and a filled profile,
    pick it in the active-character selector. From then on that character is *you*: their location,
    mood and outfit follow your decisions and they no longer act autonomously. Only templates with
-   the `playable_avatar` flag (`human-roleplay`, `human-roleplay-nsfw`, `animal-default`) can be
+   the `playable_avatar` flag (`human-roleplay`, `animal-default`) can be
    controlled; `human-default` is NPC-only.
 
 8. **Create at least one more character to talk to.** A world with a single character means
