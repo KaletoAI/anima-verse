@@ -4,6 +4,7 @@ import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ModelPicker, type PickerOption } from '../../components/ModelPicker'
 import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } from '../../lib/refs'
+import { usePersistentState } from '../../lib/usePersistentState'
 
 interface ModelEntry {
   name: string
@@ -73,27 +74,30 @@ export function WorldDevTab() {
   const [templates, setTemplates] = useState<TemplateInfo[]>([])
   const [characters, setCharacters] = useState<CharacterRef[]>([])
   const [locations, setLocations] = useState<LocationRef[]>([])
-  const [model, setModel] = useState('')
-  const [provider, setProvider] = useState('')
+  // Session-critical state is sessionStorage-backed so the whole World Dev
+  // session (chat, generated data, config picks) survives a Game-Admin tab
+  // switch — which unmounts this component — and a page reload.
+  const [model, setModel] = usePersistentState('worlddev.model', '')
+  const [provider, setProvider] = usePersistentState('worlddev.provider', '')
   // Separate model picker for the JSON validator. Defaults to the chat
   // model when empty so users get a sane fallback without a second pick;
   // can be set to a smaller / cheaper model independently.
-  const [validateModel, setValidateModel] = useState('')
-  const [validateProvider, setValidateProvider] = useState('')
-  const [schema, setSchema] = useState<string>('location')
-  const [mode, setMode] = useState<Mode>('new')
-  const [template, setTemplate] = useState<string>('human-roleplay')
-  const [editTarget, setEditTarget] = useState('')
-  const [contextLocations, setContextLocations] = useState<Set<string>>(new Set())
-  const [contextCharacters, setContextCharacters] = useState<Set<string>>(new Set())
+  const [validateModel, setValidateModel] = usePersistentState('worlddev.validateModel', '')
+  const [validateProvider, setValidateProvider] = usePersistentState('worlddev.validateProvider', '')
+  const [schema, setSchema] = usePersistentState<string>('worlddev.schema', 'location')
+  const [mode, setMode] = usePersistentState<Mode>('worlddev.mode', 'new')
+  const [template, setTemplate] = usePersistentState<string>('worlddev.template', 'human-roleplay')
+  const [editTarget, setEditTarget] = usePersistentState('worlddev.editTarget', '')
+  const [contextLocations, setContextLocations] = usePersistentState<Set<string>>('worlddev.contextLocations', new Set())
+  const [contextCharacters, setContextCharacters] = usePersistentState<Set<string>>('worlddev.contextCharacters', new Set())
 
-  const [sessionId, setSessionId] = useState('')
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [sessionId, setSessionId] = usePersistentState('worlddev.sessionId', '')
+  const [messages, setMessages] = usePersistentState<ChatMessage[]>('worlddev.messages', [])
   const [streaming, setStreaming] = useState(false)
   const [pending, setPending] = useState('')
-  const [extracted, setExtracted] = useState<ExtractedData>({})
-  const [draft, setDraft] = useState('')
-  const [usage, setUsage] = useState<UsageStats | null>(null)
+  const [extracted, setExtracted] = usePersistentState<ExtractedData>('worlddev.extracted', {})
+  const [draft, setDraft] = usePersistentState('worlddev.draft', '')
+  const [usage, setUsage] = usePersistentState<UsageStats | null>('worlddev.usage', null)
 
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
 
