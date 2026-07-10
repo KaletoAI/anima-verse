@@ -1826,6 +1826,16 @@ def memory_list(character_name: str,
         sort=sort, include_completed=include_completed)
 
 
+@router.post("/{character_name}/memory/wipe")
+def memory_wipe(character_name: str,
+                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Wipes ALL derived memory of the character (memories, summaries,
+    weekly/monthly rollups, day cursor, mood history) — admin test tool for
+    the consolidation pipeline. chat_messages and shared scenes/utterances
+    stay untouched."""
+    return character_ops.wipe_character_memory(character_name)
+
+
 @router.get("/{character_name}/memory/relationships")
 def memory_relationships(character_name: str,
                          history_limit: int = 10) -> Dict[str, Any]:

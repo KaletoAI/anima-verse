@@ -137,6 +137,8 @@ export function CharactersTab() {
   const [creating, setCreating] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [confirmWipe, setConfirmWipe] = useState(false)
+  const [wiping, setWiping] = useState(false)
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -239,6 +241,26 @@ export function CharactersTab() {
   )
 
   // Character vollständig löschen (DELETE /characters/{name}). In-App-Bestätigung.
+  // Memory wipe (admin test tool for the consolidation pipeline): clears the
+  // character's derived memory artifacts — memories, summaries, weekly/monthly
+  // rollups, day cursor, mood history. Chat history + shared scenes stay.
+  const wipeMemory = useCallback(async () => {
+    if (!selected || wiping) return
+    setWiping(true)
+    try {
+      const r = await apiPost<{ memories?: number; summaries?: number }>(
+        `/characters/${encodeURIComponent(selected)}/memory/wipe`, {})
+      toast(t('Memory wiped: {m} memories, {s} summaries')
+        .replace('{m}', String(r.memories ?? 0))
+        .replace('{s}', String(r.summaries ?? 0)))
+      setConfirmWipe(false)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setWiping(false)
+    }
+  }, [selected, wiping, t, toast])
+
   const deleteCharacter = useCallback(async () => {
     if (!selected || deleting) return
     setDeleting(true)
@@ -458,6 +480,27 @@ export function CharactersTab() {
                     entityId={selected}
                     defaultName={selected}
                   />
+                  {confirmWipe ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: '0.82em', color: '#e0a356' }}>
+                        {t('Wipe ALL memory of {name}? Memories, summaries, rollups — chat history stays. Irreversible.').replace('{name}', selected)}
+                      </span>
+                      <button className="ga-btn ga-btn-sm ga-btn-danger" disabled={wiping} onClick={() => { void wipeMemory() }}>
+                        {wiping ? t('Wiping…') : t('Wipe')}
+                      </button>
+                      <button className="ga-btn ga-btn-sm" disabled={wiping} onClick={() => setConfirmWipe(false)}>
+                        {t('Cancel')}
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      className="ga-btn ga-btn-sm"
+                      title={t('Delete all derived memory (memories, summaries, weekly/monthly rollups, day cursor, mood history). Chat history and shared scenes stay. Test tool for the consolidation pipeline.')}
+                      onClick={() => setConfirmWipe(true)}
+                    >
+                      🧹 {t('Wipe memory')}
+                    </button>
+                  )}
                   {confirmDel ? (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: '0.82em', color: '#e0a356' }}>
