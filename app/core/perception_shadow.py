@@ -64,7 +64,8 @@ def from_chat_message(message, character_name: str, partner: str) -> None:
         if (getattr(message, "medium", "") or "") in ("messaging", "telegram", "instagram"):
             return
 
-        from app.core.perception import VOLUME_NORMAL, record_utterance
+        from app.core.perception import (VOLUME_NORMAL, VOLUME_SHOUT,
+                                          VOLUME_WHISPER, record_utterance)
 
         if role == "assistant":
             speaker = character_name or ""
@@ -75,7 +76,14 @@ def from_chat_message(message, character_name: str, partner: str) -> None:
         if not speaker:
             return
 
-        record_utterance(speaker=speaker, content=content, volume=VOLUME_NORMAL,
+        # Volume from the message metadata (e.g. TalkTo whisper/shout) — a
+        # whispered line stays private to the addressee, a shout carries
+        # location-wide; same semantics as the avatar's say feature.
+        _md = getattr(message, "metadata", None) or {}
+        _vol = str(_md.get("volume") or "").strip().lower()
+        volume = _vol if _vol in (VOLUME_WHISPER, VOLUME_SHOUT) else VOLUME_NORMAL
+
+        record_utterance(speaker=speaker, content=content, volume=volume,
                          addressees=addressees, ts=ts, source="shadow",
                          dedupe=True)
     except Exception as e:

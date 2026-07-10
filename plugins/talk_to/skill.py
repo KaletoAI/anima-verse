@@ -46,15 +46,26 @@ class TalkToSkill(PluginSkill):
 
         if not sender_name:
             return "Error: sender context missing."
-        if not input_text:
-            return "Error: empty input. Format: 'CharacterName, message'"
 
-        # Parse "Target, message"
-        parts = input_text.split(",", 1)
-        if len(parts) < 2 or not parts[1].strip():
-            parts = input_text.split(" ", 1)
-        target_raw = parts[0].strip()
-        message = parts[1].strip() if len(parts) > 1 else ""
+        # JSON form ({"name"/"to", "message", "volume"} merged into data by
+        # _parse_base_input / the executor envelope) takes precedence;
+        # legacy form: "Target, message". Volume mirrors the avatar's say
+        # feature: whisper = only the addressee hears the content, shout =
+        # location-wide earshot (perception compute_earshot).
+        target_raw = str(data.get("name") or data.get("to") or "").strip()
+        message = str(data.get("message") or "").strip()
+        volume = str(data.get("volume") or "").strip().lower()
+        if volume not in ("whisper", "shout"):
+            volume = ""
+        if not (target_raw and message):
+            if not input_text:
+                return "Error: empty input. Format: 'CharacterName, message'"
+            # Parse "Target, message"
+            parts = input_text.split(",", 1)
+            if len(parts) < 2 or not parts[1].strip():
+                parts = input_text.split(" ", 1)
+            target_raw = target_raw or parts[0].strip()
+            message = message or (parts[1].strip() if len(parts) > 1 else "")
         if not message:
             return f"Error: no message for {target_raw}."
 
@@ -125,14 +136,20 @@ class TalkToSkill(PluginSkill):
         # synchronous reply.
         from app.models.chat import save_message
         ts = utc_now_iso()
+        # Volume travels in the message metadata; the perception shadow reads
+        # it so a whispered line stays private (content only for the addressee)
+        # and a shouted one carries location-wide.
+        _meta = {"volume": volume} if volume else {}
         try:
             save_message({
                 "role": "user", "content": message, "timestamp": ts,
                 "speaker": sender_name, "medium": "in_person",
+                "metadata": _meta,
             }, character_name=target_name, partner_name=sender_name)
             save_message({
                 "role": "assistant", "content": message, "timestamp": ts,
                 "speaker": sender_name, "medium": "in_person",
+                "metadata": _meta,
             }, character_name=sender_name, partner_name=target_name)
         except Exception as e:
             self.ctx.logger.error("TalkTo: chat-history save failed: %s", e)

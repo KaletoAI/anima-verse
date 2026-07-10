@@ -625,10 +625,12 @@ class StreamingAgent:
             if _is_thought:
                 _speech_map_line = (
                     "     - Character SPEAKS OUT LOUD — quoted dialogue, a called-out line, "
-                    "whispering to someone — → TalkTo (name = the addressed person, "
-                    "message = the spoken words, verbatim). In this autonomous turn the "
-                    "character's prose is NOT delivered to anyone: spoken words reach "
-                    "others ONLY through TalkTo. NEVER drop dialogue.\n")
+                    "whispering to someone — → TalkTo with JSON input "
+                    '{"name": "<addressed person>", "message": "<the spoken words, verbatim>"}. '
+                    'When the character whispers, add "volume": "whisper" (only the addressee '
+                    'hears the words); when they shout/call out loudly, add "volume": "shout". '
+                    "In this autonomous turn the character's prose is NOT delivered to anyone: "
+                    "spoken words reach others ONLY through TalkTo. NEVER drop dialogue.\n")
                 _pure_talk_rule = (
                     "   BUT a feeling or a trivial gesture alone (shaking their head, smiling, "
                     "waving something in their hand) is NOT a tool action — do not call a tool "
