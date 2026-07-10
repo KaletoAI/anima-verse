@@ -3250,7 +3250,7 @@ def regenerate_image_worker(character_name, image_path, prompt, improvement_requ
         _tq.track_finish(_track_id, error=str(e))
 
 
-def animate_image_worker(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id):
+def animate_image_worker(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id, loras=None):
     from pathlib import Path
     from app.models.character import add_character_image_metadata
     from app.core.timeutils import utc_now_iso
@@ -3272,7 +3272,8 @@ def animate_image_worker(character_name, image_name, images_dir, image_path, pro
             task_type="image_animate",
             priority=_P.IMAGE_GEN,
             callable_fn=lambda: animate_image(
-                str(image_path), prompt, output_path, service=service),
+                str(image_path), prompt, output_path, service=service,
+                loras=loras),
             agent_name=character_name,
             label="Animation",
             gpu_type=service)

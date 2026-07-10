@@ -33,7 +33,10 @@ def get_animate_services() -> List[Dict[str, Any]]:
         svc = _image_service()
         return [
             {"id": b.name, "label": b.name,
-             "enabled": bool(getattr(b, "instance_enabled", False) and b.available)}
+             "enabled": bool(getattr(b, "instance_enabled", False) and b.available),
+             # LoRAs of the video alias (gateway discovery) — the animate
+             # dialog offers them as optional slots.
+             "loras": list(getattr(b, "available_loras", []) or [])}
             for b in svc.backends
             if getattr(b, "MEDIA_TYPE", "image") == "video"
         ]
@@ -49,7 +52,7 @@ def reload_animate_services() -> None:
 
 
 def animate_image(source_image_path: str, prompt: str, output_path: str,
-                  service: str = "") -> bool:
+                  service: str = "", loras=None) -> bool:
     """Renders a video from a still via a video backend (image-to-video).
 
     Args:
@@ -65,7 +68,8 @@ def animate_image(source_image_path: str, prompt: str, output_path: str,
             source_image_path=source_image_path,
             action_prompt=prompt,
             output_path=output_path,
-            backend_glob=service)
+            backend_glob=service,
+            loras=loras)
     except Exception as e:
         logger.error("animate_image fehlgeschlagen: %s", e)
         return False

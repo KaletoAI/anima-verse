@@ -1617,6 +1617,16 @@ async def animate_character_image(character_name: str, image_name: str, request:
         raise HTTPException(status_code=422, detail="Kein Prompt angegeben")
 
     service = body.get("service", "").strip()
+    # Optional LoRA slots from the animate dialog (gateway video aliases).
+    data = body
+    loras = []
+    for _l in (data.get("loras") or []):
+        if isinstance(_l, dict) and (_l.get("name") or "").strip() not in ("", "None"):
+            try:
+                _s = float(_l.get("strength", 1.0))
+            except (TypeError, ValueError):
+                _s = 1.0
+            loras.append({"name": _l["name"].strip(), "strength": _s})
 
     from app.core.task_queue import get_task_queue
     _tq = get_task_queue()
@@ -1627,7 +1637,7 @@ async def animate_character_image(character_name: str, image_name: str, request:
     import threading
     threading.Thread(
         target=character_ops.animate_image_worker,
-        args=(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id),
+        args=(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id, loras),
         daemon=True).start()
     return {"status": "started", "image": image_name, "track_id": _track_id}
 

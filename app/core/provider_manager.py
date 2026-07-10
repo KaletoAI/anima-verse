@@ -132,10 +132,13 @@ class ProviderManager:
             if not enabled:
                 continue
             api_type = os.environ.get(f"{prefix}API_TYPE", "").strip().lower()
-            # ALL image-backend types get a channel — cloud backends too
-            # (civitai/together/...), otherwise they are invisible in the
-            # queue panel AND find_channel() could not route their jobs.
-            if api_type not in ("a1111", "civitai", "together", "openai_chat", "openai_diffusion", "localai"):
+            # ALL registered backend types get a channel — cloud AND video
+            # backends too, otherwise they are invisible in the queue panel
+            # AND find_channel() could not route their jobs ("No channel for
+            # gpu_type=..."). Derive from the registry instead of a hardcoded
+            # list so new types can never fall out of sync again.
+            from app.imagegen.registry import BACKEND_REGISTRY
+            if api_type not in BACKEND_REGISTRY:
                 continue
             api_url = os.environ.get(f"{prefix}API_URL", "").strip()
             if not api_url:

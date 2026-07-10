@@ -49,6 +49,11 @@ class OpenAIVideoBackend(ImageBackend):
         self.max_wait = int(os.environ.get(f"{env_prefix}MAX_WAIT", "900") or 900)
         self.video_endpoint = (os.environ.get(f"{env_prefix}VIDEO_ENDPOINT", "")
                                or "/v1/videos").strip().rstrip("/")
+        # LoRA discovery (same gateway convention as openai_diffusion): optional
+        # endpoint listing the alias' LoRAs + glob narrowing to this model.
+        self.lora_url = os.environ.get(f"{env_prefix}LORA_URL", "").strip()
+        self.lora_filter = os.environ.get(f"{env_prefix}LORA_FILTER", "").strip()
+        self.available_loras: List[str] = []
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -65,6 +70,8 @@ class OpenAIVideoBackend(ImageBackend):
                 return False
             if resp.status_code == 200:
                 self._mark_available(f"OpenAI video, Alias: {self.model}")
+                if self.lora_url:
+                    self.fetch_loras()
                 return True
             self._mark_unavailable(f"HTTP {resp.status_code}")
             return False
@@ -75,6 +82,58 @@ class OpenAIVideoBackend(ImageBackend):
             logger.error(f"{self.name} Fehler: {e}")
             self._mark_unavailable(str(e))
             return False
+
+    def fetch_loras(self) -> List[str]:
+        """LoRAs of the video alias from the lora_url endpoint (GET ->
+        {"loras": [...]}), narrowed by ``lora_filter`` — same convention as
+        the LocalAI/gateway image backends."""
+        if not self.lora_url or not self.model:
+            return self.available_loras
+        url = (self.lora_url.replace("{alias}", self.model)
+               if "{alias}" in self.lora_url
+               else f"{self.lora_url.rstrip('/')}/v1/generations/{self.model}/loras")
+        try:
+            resp = requests.get(url, headers=self._headers(), timeout=10)
+            if resp.status_code == 200:
+                body = resp.json()
+                loras = body.get("loras") if isinstance(body, dict) else body
+                if isinstance(loras, list):
+                    names = [str(l).strip() for l in loras if l and str(l).strip()]
+                    if self.lora_filter:
+                        import fnmatch
+                        pat = self.lora_filter.lower()
+                        names = [n for n in names if fnmatch.fnmatch(n.lower(), pat)]
+                    self.available_loras = names
+                    logger.info("%s: %d LoRA(s) vom Endpoint geladen%s", self.name,
+                                len(names),
+                                f" (Filter '{self.lora_filter}')" if self.lora_filter else "")
+            else:
+                logger.warning("%s: LoRA-Abfrage HTTP %d", self.name, resp.status_code)
+        except Exception as e:
+            logger.warning("%s: LoRA-Abfrage fehlgeschlagen: %s", self.name, e)
+        return self.available_loras
+
+    @staticmethod
+    def _apply_lora_params(data: Dict[str, Any], params: Dict[str, Any]) -> None:
+        """Selected LoRAs as ``lora_01``/``strength_01`` … form fields —
+        the gateway maps them onto the lora-loader nodes of the alias
+        workflow (same convention as openai_diffusion image aliases)."""
+        idx = 0
+        for l in (params.get("lora_inputs") or params.get("loras") or []):
+            if not isinstance(l, dict):
+                continue
+            name = (l.get("name") or "").strip()
+            if not name or name == "None":
+                continue
+            try:
+                strength = float(l.get("strength", 1.0))
+            except (TypeError, ValueError):
+                strength = 1.0
+            idx += 1
+            data[f"lora_{idx:02d}"] = name
+            data[f"strength_{idx:02d}"] = str(strength)
+        if idx:
+            logger.info("%s: %d LoRA(s) als lora_NN-Params uebertragen", "openai_video", idx)
 
     @staticmethod
     def _first_frame_path(params: Dict[str, Any]) -> str:
@@ -120,19 +179,23 @@ class OpenAIVideoBackend(ImageBackend):
             logger.error("%s: kein Quellbild fuer die Animation (%r)", self.name, src)
             return []
 
-        width = params.get("width") or self.width
-        height = params.get("height") or self.height
+        width = int(params.get("width") or self.width or 0)
+        height = int(params.get("height") or self.height or 0)
         data = {
             "model": params.get("model") or self.model,
             "prompt": prompt,
             "seconds": str(params.get("seconds") or self.seconds),
-            "size": f"{width}x{height}",
         }
+        # 0/unset dimensions: omit size — the alias workflow decides (fixed
+        # sizes are common in ComfyUI video graphs). Never send "0x0".
+        if width > 0 and height > 0:
+            data["size"] = f"{width}x{height}"
+        self._apply_lora_params(data, params)
         mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
                 "webp": "image/webp"}.get(p.suffix.lower().lstrip("."), "image/png")
         url = f"{self.api_url}{self.video_endpoint}"
-        logger.info("%s: starte Video (Alias=%s, %sx%s, %ss)", self.name,
-                    data["model"], width, height, data["seconds"])
+        logger.info("%s: starte Video (Alias=%s, size=%s, %ss)", self.name,
+                    data["model"], data.get("size", "workflow"), data["seconds"])
         try:
             with open(p, "rb") as fh:
                 resp = requests.post(

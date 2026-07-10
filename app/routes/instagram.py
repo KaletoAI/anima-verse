@@ -472,6 +472,15 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
         raise HTTPException(status_code=422, detail="Kein Prompt angegeben")
 
     service = data.get("service", "").strip()
+    # Optional LoRA slots from the animate dialog (gateway video aliases).
+    loras = []
+    for _l in (data.get("loras") or []):
+        if isinstance(_l, dict) and (_l.get("name") or "").strip() not in ("", "None"):
+            try:
+                _s = float(_l.get("strength", 1.0))
+            except (TypeError, ValueError):
+                _s = 1.0
+            loras.append({"name": _l["name"].strip(), "strength": _s})
 
     from app.core.task_queue import get_task_queue
     _tq = get_task_queue()
@@ -500,7 +509,8 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
                 task_type="image_animate",
                 priority=_P.IMAGE_GEN,
                 callable_fn=lambda: animate_image(
-                    str(image_path), prompt, output_path, service=service),
+                    str(image_path), prompt, output_path, service=service,
+                    loras=loras),
                 agent_name=character_name,
                 label="Instagram Animation",
                 gpu_type=service)

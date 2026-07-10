@@ -20,12 +20,16 @@ import { apiGet } from '../lib/api'
 export interface AnimateSubmit {
   prompt: string
   service: string
+  /** Optional LoRA slots for gateway video aliases (lora_NN convention). */
+  loras?: Array<{ name: string; strength: number }>
 }
 
 interface AnimateService {
   id: string
   label: string
   enabled?: boolean
+  /** LoRAs discovered for this video alias (gateway lora_url). */
+  loras?: string[]
 }
 
 interface Props {
@@ -59,6 +63,12 @@ export function AnimateDialog({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // Two optional LoRA slots (e.g. WAN Lightning) — offered when the selected
+  // video backend discovered LoRAs via its lora_url.
+  const [lora1, setLora1] = useState('')
+  const [lora1Str, setLora1Str] = useState('1.0')
+  const [lora2, setLora2] = useState('')
+  const [lora2Str, setLora2Str] = useState('1.0')
 
   useEffect(() => { if (open) setPrompt(defaultPrompt) }, [open, defaultPrompt])
 
@@ -108,12 +118,17 @@ export function AnimateDialog({
     if (!serviceId) return
     setSubmitting(true)
     try {
-      await onSubmit({ prompt: prompt.trim(), service: serviceId })
+      const loras = [
+        { name: lora1, strength: parseFloat(lora1Str) || 1.0 },
+        { name: lora2, strength: parseFloat(lora2Str) || 1.0 },
+      ].filter((l) => l.name && l.name !== 'None')
+      await onSubmit({ prompt: prompt.trim(), service: serviceId,
+                       loras: loras.length ? loras : undefined })
       onClose()
     } finally {
       setSubmitting(false)
     }
-  }, [serviceId, prompt, onSubmit, onClose])
+  }, [serviceId, prompt, lora1, lora1Str, lora2, lora2Str, onSubmit, onClose])
 
   if (!open) return null
 
@@ -141,6 +156,32 @@ export function AnimateDialog({
                 ))}
               </select>
 
+              {(() => {
+                const svcLoras = services.find((s) => s.id === serviceId)?.loras || []
+                if (!svcLoras.length) return null
+                const slot = (val: string, setVal: (v: string) => void,
+                              str: string, setStr: (v: string) => void, label: string) => (
+                  <div className="ga-form-row" style={{ gap: 8, alignItems: 'center' }}>
+                    <select className="ga-input" style={{ flex: 1 }} value={val}
+                      disabled={submitting} aria-label={label}
+                      onChange={(e) => setVal(e.target.value)}>
+                      <option value="">— {t('none')} —</option>
+                      {svcLoras.map((l) => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                    <input className="ga-input" type="number" step={0.05} min={0} max={2}
+                      style={{ width: 76, flex: '0 0 auto' }} value={str}
+                      disabled={submitting} title={t('Strength')}
+                      onChange={(e) => setStr(e.target.value)} />
+                  </div>
+                )
+                return (
+                  <>
+                    <label className="ga-imagegen-label">{t('LoRAs (optional)')}</label>
+                    {slot(lora1, setLora1, lora1Str, setLora1Str, 'LoRA 1')}
+                    {slot(lora2, setLora2, lora2Str, setLora2Str, 'LoRA 2')}
+                  </>
+                )
+              })()}
               {sourceImageUrl ? (
                 <img src={sourceImageUrl} alt="" style={{ maxHeight: 170, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
               ) : null}
