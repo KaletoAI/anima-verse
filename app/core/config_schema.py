@@ -523,6 +523,10 @@ SECTIONS = {
                     "generate_image": {"type": "bool", "label": "Generate image", "default": True},
                     "language": {"type": "select", "label": "Language", "choices": ["de", "en"], "default": "en"},
                     "max_outfits": {"type": "int", "label": "Max outfits", "default": 10, "min": 1, "max": 100, "description": "Maximum number of stored outfits per character (oldest are removed)"},
+                    # DEAD(review): no consumer left — OUTFIT_CHANGE_COOLDOWN_MINUTES
+                    # is bridged to env (config.py) but nothing reads it anymore
+                    # (leftover from the outfit rework). Remove field + bridge at
+                    # the next review. Found 2026-07-10.
                     "cooldown_minutes": {"type": "int", "label": "Outfit cooldown (min)", "default": 120, "min": 0, "max": 1440, "description": "Minutes until an LLM-driven outfit change at the same location is possible again. 0 = no cooldown. Does not apply on location change or user request."},
                 },
             },
