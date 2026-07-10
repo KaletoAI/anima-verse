@@ -2016,7 +2016,9 @@ async def generate_time_variant_core(location_name: str, image_name: str,
         lambda: [b.check_availability()
                  for b in img_skill.backends if b.instance_enabled])
 
-    # Backend selection: explicit spec > explicit backend > reference-capable auto
+    # Backend selection: explicit spec > explicit backend > configured
+    # time-variant default (image_generation.timevariant_imagegen_default)
+    # > reference-capable auto (cheapest).
     backend = None
     if workflow_name:
         # Match concept: glob + availability instead of an exact name.
@@ -2024,6 +2026,12 @@ async def generate_time_variant_core(location_name: str, image_name: str,
         backend = img_skill.resolve_imagegen_target(workflow_name)
     elif backend_name:
         backend = img_skill.match_backend(backend_name)  # backend glob via match concept
+
+    if not backend:
+        from app.core import config as _cfg
+        _tv_default = (_cfg.get("image_generation.timevariant_imagegen_default") or "").strip()
+        if _tv_default:
+            backend = img_skill.resolve_imagegen_target(_tv_default)
 
     if not backend:
         # Prefer an edit-capable backend with at least one reference-image

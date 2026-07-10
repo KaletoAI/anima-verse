@@ -751,6 +751,7 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "OUTFIT_IMAGEGEN_DEFAULT", ig.get("outfit_imagegen_default", ""))
     _set(env, "EXPRESSION_IMAGEGEN_DEFAULT", ig.get("expression_imagegen_default", ""))
     _set(env, "LOCATION_IMAGEGEN_DEFAULT", ig.get("location_imagegen_default", ""))
+    _set(env, "TIMEVARIANT_IMAGEGEN_DEFAULT", ig.get("timevariant_imagegen_default", ""))
     # Map fit/edge: imagegen target (match spec, e.g. "backend:<inpaint-backend>")
     _set(env, "MAPFIT_IMAGEGEN_DEFAULT", ig.get("mapfit_imagegen_default", ""))
     _set(env, "MAP_TILE_VISION_ANALYSIS", ig.get("map_tile_vision_analysis", False))
