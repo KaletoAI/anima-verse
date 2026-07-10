@@ -15,6 +15,10 @@ interface GalleryCardProps {
   meta: { backend?: string; model?: string; loras?: string[] }
   isBusy: boolean
   mapUsage: number
+  /** Multi-select mode: the thumb toggles selection instead of zooming. */
+  selectMode?: boolean
+  isSelected?: boolean
+  onToggleSelect?: (image: string) => void
   onZoom: (url: string) => void
   onSetType: (image: string, type: string) => void
   onGenerateNight: (image: string) => void
@@ -30,6 +34,9 @@ const GalleryCard = memo(function GalleryCard({
   meta,
   isBusy,
   mapUsage,
+  selectMode,
+  isSelected,
+  onToggleSelect,
   onZoom,
   onSetType,
   onGenerateNight,
@@ -39,13 +46,25 @@ const GalleryCard = memo(function GalleryCard({
 }: GalleryCardProps) {
   const { t } = useI18n()
   return (
-    <div className="ga-gallery-card">
+    <div className="ga-gallery-card"
+      style={selectMode && isSelected
+        ? { outline: '2px solid #1f6feb', borderRadius: 6 } : undefined}>
       <button
         type="button"
         className="ga-gallery-thumb"
-        onClick={() => onZoom(url)}
-        title={t('Click to enlarge')}
+        onClick={() => (selectMode ? onToggleSelect?.(filename) : onZoom(url))}
+        title={selectMode ? t('Toggle selection') : t('Click to enlarge')}
+        style={{ position: 'relative' }}
       >
+        {selectMode ? (
+          <span style={{
+            position: 'absolute', top: 6, left: 6, zIndex: 2,
+            width: 22, height: 22, borderRadius: 4, textAlign: 'center',
+            lineHeight: '22px', fontSize: 14, fontWeight: 700,
+            background: isSelected ? '#1f6feb' : 'rgba(0,0,0,0.55)',
+            color: '#fff', border: '1px solid rgba(255,255,255,0.6)',
+          }}>{isSelected ? '✓' : ''}</span>
+        ) : null}
         <img src={url} alt={filename} />
         {type === 'map_2d' ? (
           <span
@@ -357,6 +376,41 @@ export function LocationGallery({
     [locationId, t, toast],
   )
 
+  // Multi-select delete: toggle mode, collect filenames, delete sequentially.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [confirmBulk, setConfirmBulk] = useState(false)
+  const toggleSelect = useCallback((image: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(image)) next.delete(image); else next.add(image)
+      return next
+    })
+  }, [])
+  const exitSelect = useCallback(() => {
+    setSelectMode(false); setSelected(new Set()); setConfirmBulk(false)
+  }, [])
+  const removeSelected = useCallback(async () => {
+    const names = Array.from(selected)
+    if (!names.length) return
+    setBusy('__bulk__')
+    let ok = 0
+    for (const image of names) {
+      try {
+        await apiDelete(
+          `/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(image)}`,
+        )
+        ok++
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    }
+    toast(t('{n} images deleted').replace('{n}', String(ok)))
+    setBusy(null)
+    exitSelect()
+    await reload()
+  }, [selected, locationId, exitSelect, reload, t, toast])
+
   const remove = useCallback(
     async (image: string) => {
       if (!window.confirm(t('Delete image "{name}"?').replace('{name}', image))) return
@@ -444,6 +498,39 @@ export function LocationGallery({
           🖼 {t('Image set…')}
         </button>
       ) : null}
+      {!selectMode ? (
+        <button
+          className="ga-btn ga-btn-sm"
+          disabled={!!busy}
+          onClick={() => setSelectMode(true)}
+          title={t('Select multiple images to delete them at once.')}
+        >
+          ☑ {t('Select')}
+        </button>
+      ) : (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {confirmBulk ? (
+            <>
+              <span style={{ fontSize: '0.82em', color: '#e0a356' }}>
+                {t('Delete {n} images? Irreversible.').replace('{n}', String(selected.size))}
+              </span>
+              <button className="ga-btn ga-btn-sm ga-btn-danger" disabled={!!busy}
+                onClick={() => { void removeSelected() }}>
+                {busy === '__bulk__' ? t('Deleting…') : t('Delete')}
+              </button>
+            </>
+          ) : (
+            <button className="ga-btn ga-btn-sm ga-btn-danger"
+              disabled={!!busy || selected.size === 0}
+              onClick={() => setConfirmBulk(true)}>
+              🗑 {t('Delete selected ({n})').replace('{n}', String(selected.size))}
+            </button>
+          )}
+          <button className="ga-btn ga-btn-sm" disabled={busy === '__bulk__'} onClick={exitSelect}>
+            {t('Cancel')}
+          </button>
+        </span>
+      )}
       <button
         className="ga-btn ga-btn-sm"
         disabled={!!busy}
@@ -552,6 +639,9 @@ export function LocationGallery({
               meta={meta}
               isBusy={isBusy}
               mapUsage={mapUsage[filename] || 0}
+              selectMode={selectMode}
+              isSelected={selected.has(filename)}
+              onToggleSelect={toggleSelect}
               onZoom={setZoom}
               onSetType={setType}
               onGenerateNight={generateNight}
