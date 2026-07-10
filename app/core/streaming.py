@@ -866,11 +866,17 @@ class StreamingAgent:
         _RETRY_WAIT = 30  # Sekunden zwischen Retries
         _TOOL_BUFFER_SIZE = 60
         # Mid-stream loop detect: cancel the stream when the same substantial
-        # line repeats > _LOOP_MAX_REPEAT times. Catches the tool-LLM loop
-        # pattern (same <tool>...</tool> emitted until max_tokens). Threshold
-        # of 16 chars is high enough to ignore conversational repetition.
+        # line repeats _LOOP_MAX_REPEAT+ times WITHIN the last _LOOP_WINDOW
+        # substantial lines (dense repetition = the tool-LLM loop pattern:
+        # same <tool>...</tool> back-to-back until max_tokens). The window is
+        # essential: structured JSON legitimately repeats identical field
+        # lines ("decency": "public",) once per array element — a location
+        # with 5 rooms tripped the old TOTAL count and got cut mid-JSON at
+        # the 5th room. Field repeats sit ~8+ lines apart and never get
+        # dense enough; a stuck LLM repeats back-to-back and still trips.
         _LOOP_MAX_REPEAT = 4
         _LOOP_MIN_LINE_LEN = 16
+        _LOOP_WINDOW = 12
 
         iteration_response = ""
         chunk_count = 0
@@ -895,7 +901,8 @@ class StreamingAgent:
             tool_call_end_pos = -1
             count_sent = 0
             unsent_buffer = ""
-            _loop_line_counts: Dict[str, int] = {}
+            from collections import deque as _deque
+            _loop_recent = _deque(maxlen=_LOOP_WINDOW)
             _loop_processed_pos = 0
             _loop_break = False
 
@@ -984,15 +991,17 @@ class StreamingAgent:
                         _key = _line.strip()
                         if len(_key) < _LOOP_MIN_LINE_LEN:
                             continue
-                        _loop_line_counts[_key] = _loop_line_counts.get(_key, 0) + 1
-                        if _loop_line_counts[_key] > _LOOP_MAX_REPEAT:
+                        if list(_loop_recent).count(_key) >= _LOOP_MAX_REPEAT:
                             _loop_break = True
+                            _loop_offender = _key
                             break
+                        _loop_recent.append(_key)
                     _loop_processed_pos = _last_nl + 1
                 if _loop_break:
                     logger.warning(
-                        "Mid-stream loop detected (line repeated >%d times) — cancelling stream",
-                        _LOOP_MAX_REPEAT)
+                        "Mid-stream loop detected (line repeated %d+ times within "
+                        "the last %d lines: %r) — cancelling stream",
+                        _LOOP_MAX_REPEAT, _LOOP_WINDOW, _loop_offender[:80])
                     _stream_done = True
                     break
 
