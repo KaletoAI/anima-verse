@@ -411,14 +411,15 @@ async def world_dev_chat(request: Request):
     edit_location_id = data.get("edit_location_id", "")
     context_location_ids = data.get("context_location_ids", [])
     context_character_names = data.get("context_character_names", [])
-    # Optional completion budget from the UI field next to the model picker;
-    # empty = built-in default (shown greyed in the field).
+    # Optional completion budget from the UI field next to the model picker.
+    # Empty or 0 = send NO max_tokens at all (provider default) — required for
+    # vLLM, which REJECTS prompt+max_tokens > context instead of clamping.
     try:
         max_tokens = int(data.get("max_tokens") or 0)
     except (TypeError, ValueError):
         max_tokens = 0
     if max_tokens <= 0:
-        max_tokens = 32768
+        max_tokens = None
 
     if not model:
         raise HTTPException(status_code=400, detail="model erforderlich")
@@ -551,10 +552,9 @@ async def world_dev_chat(request: Request):
         _sessions[session_id] = session
 
     # Completion budget INCLUDES the hidden reasoning tokens of thinking
-    # models (GLM, DeepSeek-R1, …) — a heavy thinker can burn >14k tokens
-    # before emitting the visible json:location block, which then gets cut
-    # mid-JSON. Default 32k (thinking + a full location/character JSON);
-    # overridable per request via the UI field next to the model picker.
+    # models (GLM, DeepSeek-R1, …). None = no max_tokens sent (provider
+    # default; vLLM-safe). Set per request via the UI field next to the
+    # model picker.
     llm, llm_instance = _create_llm(model, provider, max_tokens=max_tokens)
     if not llm:
         raise HTTPException(status_code=500, detail=f"Kein Provider fuer Model '{model}' gefunden")

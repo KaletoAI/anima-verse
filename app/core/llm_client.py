@@ -235,9 +235,21 @@ class LLMClient:
                     "LLM busy (503, stream) on %s — retry %d/%d after %.0fs",
                     self.model, attempt, max_attempts, delay)
                 await asyncio.sleep(delay)
+        finish = ""
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield LLMChunk(content=chunk.choices[0].delta.content)
+            if chunk.choices:
+                _c = chunk.choices[0]
+                if _c.delta and _c.delta.content:
+                    yield LLMChunk(content=_c.delta.content)
+                if getattr(_c, "finish_reason", None):
+                    finish = _c.finish_reason
+        # Visibility for cut-off output: 'length' = completion budget hit
+        # (thinking models burn hidden reasoning tokens from the same budget;
+        # some providers silently CLAMP an oversized max_tokens first).
+        if finish and finish != "stop":
+            logger.warning("Stream on %s ended with finish_reason=%r — output "
+                           "likely truncated (length = max_tokens/budget hit)",
+                           self.model, finish)
 
     def __repr__(self) -> str:
         return f"LLMClient(model={self.model!r}, base_url={self.base_url!r})"

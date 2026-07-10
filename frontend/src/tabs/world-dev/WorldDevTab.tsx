@@ -403,12 +403,12 @@ export function WorldDevTab() {
           <input
             className="ga-input"
             type="number"
-            min={1}
+            min={0}
             step={1024}
             style={{ width: 92, flex: '0 0 auto' }}
             value={maxTokens}
-            placeholder="32768"
-            title={t('Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = default.')}
+            placeholder={t('no cap')}
+            title={t('Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty or 0 = no max_tokens sent (provider default) — required for vLLM, which rejects prompt+max_tokens beyond the context window.')}
             onChange={(e) => setMaxTokens(e.target.value)}
           />
           <ModelPicker
