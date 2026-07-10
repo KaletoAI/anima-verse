@@ -1331,10 +1331,19 @@ async def play_set_mood(request: Request, user=Depends(get_current_user)):
 @router.post("/play/self/activity")
 async def play_set_activity(request: Request, user=Depends(get_current_user)):
     """Avatar setzt seine eigene Pose/Tätigkeit (freie Pose)."""
-    from app.models.character import set_pose_intent
+    from app.models.character import (set_pose_intent, is_character_sleeping,
+                                      set_is_sleeping, wake_from_offmap)
     avatar = _require_avatar()
     body = await request.json()
     activity = str((body or {}).get("activity") or "").strip()
+    # Setting an activity while asleep wakes the avatar — the sleeping flag
+    # otherwise overrides the displayed activity ("Sleeping").
+    if activity and is_character_sleeping(avatar):
+        set_is_sleeping(avatar, False)
+        try:
+            wake_from_offmap(avatar)
+        except Exception:
+            pass
     set_pose_intent(avatar, activity)
     return {"ok": True, "activity": activity}
 

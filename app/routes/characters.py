@@ -196,12 +196,28 @@ async def update_character_current_activity(character_name: str, request: Reques
         user_id = data.get("user_id", "")
         activity = data.get("current_activity", "")
 
+        # Explicitly setting an activity on a SLEEPING character wakes them
+        # first — the is_sleeping flag is the display authority
+        # (get_effective_activity returns "Sleeping" and would hide the new
+        # pose, which read like "saving does not work" in the admin UI).
+        woke = False
+        if activity.strip():
+            from app.models.character import is_character_sleeping, set_is_sleeping, wake_from_offmap
+            if is_character_sleeping(character_name):
+                set_is_sleeping(character_name, False)
+                try:
+                    wake_from_offmap(character_name)
+                except Exception:
+                    pass
+                woke = True
+
         # Freie Pose setzen (kein Library-Matching, kein Auto-Raum-Move mehr —
         # Raum/Ort bleiben unveraendert, die Pose ist freier Text).
         set_pose_intent(character_name, activity)
 
         return {"status": "success", "character": character_name,
-                "current_activity": activity, "current_room": "", "current_room_id": ""}
+                "current_activity": activity, "woke": woke,
+                "current_room": "", "current_room_id": ""}
     except HTTPException:
         raise
     except Exception as e:

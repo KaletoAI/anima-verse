@@ -27,6 +27,8 @@ export function SelfPanel() {
   const { data, refresh } = usePoll<SelfData>(
     'play-self', () => apiGet<SelfData>('/play/self'), { intervalMs: 5000 })
   const [moodDraft, setMoodDraft] = useState('')
+  const [activityDraft, setActivityDraft] = useState('')
+  const [activityFocused, setActivityFocused] = useState(false)
   const [moodFocused, setMoodFocused] = useState(false)
   const [busy, setBusy] = useState(false)
   // Bei sehr schmalem Panel die Balken-Beschriftung + Zahl ausblenden und nur
@@ -51,12 +53,23 @@ export function SelfPanel() {
     if (data && !moodFocused) setMoodDraft(data.mood || '')
   }, [data, moodFocused])
 
+  useEffect(() => {
+    if (data && !activityFocused) setActivityDraft(data.activity || '')
+  }, [data, activityFocused])
+
   const setMood = useCallback(async () => {
     if (busy) return
     setBusy(true)
     try { await apiPost('/play/self/mood', { mood: moodDraft.trim() }); await refresh() }
     catch { /* ignore */ } finally { setBusy(false) }
   }, [busy, moodDraft, refresh])
+
+  const setActivity = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    try { await apiPost('/play/self/activity', { activity: activityDraft.trim() }); await refresh() }
+    catch { /* ignore */ } finally { setBusy(false) }
+  }, [busy, activityDraft, refresh])
 
   if (!data || !data.avatar) {
     return <EmptyState icon="self" title={t('No active avatar')} />
@@ -142,13 +155,18 @@ export function SelfPanel() {
           className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
       </label>
 
-      {/* Aktuelle Aktivität (read-only — wird aus dem Chat gesetzt) */}
-      <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {/* Aktuelle Aktivität — editierbar (freier Text; Chat/Loop setzen sie
+          ebenfalls). Setzen weckt einen schlafenden Avatar. */}
+      <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
         <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Activity')}</span>
-        <span style={{ opacity: data.activity ? 0.85 : 0.4, fontSize: '0.9em' }}>
-          {data.activity || '—'}
-        </span>
-      </div>
+        <input value={activityDraft} disabled={busy}
+          onFocus={() => setActivityFocused(true)}
+          onBlur={() => { setActivityFocused(false); setActivity() }}
+          onChange={(e) => setActivityDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          placeholder={t('What are you doing?')}
+          className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
+      </label>
     </div>
   )
 }

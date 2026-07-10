@@ -121,7 +121,7 @@ export function PlacementEditor({
           hint={
             current.current_activity
               ? t('Currently: {name}').replace('{name}', current.current_activity)
-              : t('Free text — what the character is currently doing.')
+              : t('Free text — what the character is currently doing. Saving wakes a sleeping character.')
           }
         >
           <input
