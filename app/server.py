@@ -140,6 +140,14 @@ async def lifespan(app: FastAPI):
     from app.core.expression_regen import migrate_variant_filenames
     migrate_variant_filenames()
 
+    # Migration: legacy weekly/monthly rollup JSON files -> summaries table
+    # (DB-only convention; idempotent — no-op once the files are gone).
+    try:
+        from app.core.memory_service import migrate_rollup_summaries_to_db
+        migrate_rollup_summaries_to_db()
+    except Exception as _rme:
+        logger.debug("rollup-summaries migration failed: %s", _rme)
+
     # Migration: rename the legacy narrator-speaker sentinel to the canonical
     # STORYTELLER_SPEAKER in all persisted rows (idempotent, world_kv-marked).
     try:

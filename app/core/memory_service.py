@@ -715,36 +715,56 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
 # Phase 3: Wochen-Konsolidierung (Tages-Summaries → Wochen-Summary)
 # ---------------------------------------------------------------------------
 
-def _get_weekly_summaries_path(character_name: str) -> Path:
-    from app.models.character import get_character_dir
-    return get_character_dir(character_name) / "weekly_summaries.json"
-
-
 def load_weekly_summaries(character_name: str) -> Dict[str, str]:
-    """Laedt Wochen-Summaries. Returns {week_key: summary_text}. Key = 'YYYY-WNN'."""
-    path = _get_weekly_summaries_path(character_name)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data.get("summaries", {})
-        except Exception:
-            pass
-    return {}
+    """Weekly summaries from the ``summaries`` table (kind='weekly',
+    partner=''). Returns {week_key: summary_text}, key = 'YYYY-WNN'."""
+    from app.core.db import get_connection
+    try:
+        rows = get_connection().execute(
+            "SELECT date_key, content FROM summaries "
+            "WHERE character_name=? AND kind='weekly' AND partner=''",
+            (character_name,)).fetchall()
+        return {r[0]: r[1] for r in rows}
+    except Exception as e:
+        logger.error("load_weekly_summaries failed for %s: %s", character_name, e)
+        return {}
 
 
 def save_weekly_summary(character_name: str, week_key: str, summary: str):
-    path = _get_weekly_summaries_path(character_name)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-    else:
-        data = {}
-    summaries = data.get("summaries", {})
-    summaries[week_key] = summary
-    data["summaries"] = summaries
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _save_rollup_summary(character_name, "weekly", week_key, summary)
+
+
+def _save_rollup_summary(character_name: str, kind: str, date_key: str,
+                         content: str) -> None:
+    from app.core.db import transaction
+    try:
+        with transaction() as conn:
+            conn.execute(
+                "INSERT INTO summaries (character_name, kind, date_key, partner, content) "
+                "VALUES (?, ?, ?, '', ?) "
+                "ON CONFLICT(character_name, kind, date_key, partner) DO UPDATE SET "
+                "content=excluded.content",
+                (character_name, kind, date_key, content))
+    except Exception as e:
+        logger.error("save %s summary failed for %s/%s: %s",
+                     kind, character_name, date_key, e)
+
+
+def delete_weekly_summaries(character_name: str, week_keys) -> None:
+    """Removes weekly rows that were rolled up into a monthly summary."""
+    keys = [k for k in (week_keys or []) if k]
+    if not keys:
+        return
+    from app.core.db import transaction
+    try:
+        with transaction() as conn:
+            ph = ",".join("?" for _ in keys)
+            conn.execute(
+                f"DELETE FROM summaries WHERE character_name=? AND kind='weekly' "
+                f"AND partner='' AND date_key IN ({ph})",
+                (character_name, *keys))
+    except Exception as e:
+        logger.error("delete weekly summaries failed for %s: %s", character_name, e)
 
 
 def _consolidate_daily_to_weekly(character_name: str) -> int:
@@ -833,36 +853,23 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
 # Phase 4: Monats-Konsolidierung (Wochen-Summaries → Monats-Summary)
 # ---------------------------------------------------------------------------
 
-def _get_monthly_summaries_path(character_name: str) -> Path:
-    from app.models.character import get_character_dir
-    return get_character_dir(character_name) / "monthly_summaries.json"
-
-
 def load_monthly_summaries(character_name: str) -> Dict[str, str]:
-    """Laedt Monats-Summaries. Returns {month_key: summary_text}. Key = 'YYYY-MM'."""
-    path = _get_monthly_summaries_path(character_name)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data.get("summaries", {})
-        except Exception:
-            pass
-    return {}
+    """Monthly summaries from the ``summaries`` table (kind='monthly',
+    partner=''). Returns {month_key: summary_text}, key = 'YYYY-MM'."""
+    from app.core.db import get_connection
+    try:
+        rows = get_connection().execute(
+            "SELECT date_key, content FROM summaries "
+            "WHERE character_name=? AND kind='monthly' AND partner=''",
+            (character_name,)).fetchall()
+        return {r[0]: r[1] for r in rows}
+    except Exception as e:
+        logger.error("load_monthly_summaries failed for %s: %s", character_name, e)
+        return {}
 
 
 def save_monthly_summary(character_name: str, month_key: str, summary: str):
-    path = _get_monthly_summaries_path(character_name)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-    else:
-        data = {}
-    summaries = data.get("summaries", {})
-    summaries[month_key] = summary
-    data["summaries"] = summaries
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _save_rollup_summary(character_name, "monthly", month_key, summary)
 
 
 def _consolidate_weekly_to_monthly(character_name: str) -> int:
@@ -925,11 +932,9 @@ def _consolidate_weekly_to_monthly(character_name: str) -> int:
                         character_name, month_key, len(month_weeks))
         break  # Max 1 Monat pro Durchlauf
 
-    # Wochen-Eintraege loeschen
+    # Wochen-Eintraege loeschen (in einen Monat eingeklappt)
     if weeks_to_remove:
-        remaining = {w: s for w, s in weekly.items() if w not in weeks_to_remove}
-        path = _get_weekly_summaries_path(character_name)
-        path.write_text(json.dumps({"summaries": remaining}, ensure_ascii=False, indent=2), encoding="utf-8")
+        delete_weekly_summaries(character_name, weeks_to_remove)
 
     return removed_total
 
@@ -1094,3 +1099,45 @@ Antworte NUR mit der Zusammenfassung."""
     _consolidate_weekly_to_monthly(character_name)
 
     return total_migrated
+
+
+def migrate_rollup_summaries_to_db() -> int:
+    """One-time boot migration: legacy per-character ``weekly_summaries.json``
+    / ``monthly_summaries.json`` files → ``summaries`` table (kind='weekly'/
+    'monthly', partner=''). Files are removed after a successful import —
+    idempotent no-op once no files exist. Unreadable files are renamed to
+    ``*.corrupt`` instead of being deleted."""
+    from app.models.character import list_available_characters, get_character_dir
+    migrated = 0
+    for name in list_available_characters():
+        try:
+            cdir = get_character_dir(name)
+        except Exception:
+            continue
+        for fname, kind in (("weekly_summaries.json", "weekly"),
+                            ("monthly_summaries.json", "monthly")):
+            fp = cdir / fname
+            if not fp.exists():
+                continue
+            try:
+                data = json.loads(fp.read_text(encoding="utf-8")).get("summaries", {})
+            except Exception as e:
+                logger.error("rollup migration: %s unreadable for %s (%s) — "
+                             "renamed to .corrupt", fname, name, e)
+                try:
+                    fp.rename(fp.with_suffix(".json.corrupt"))
+                except Exception:
+                    pass
+                continue
+            for key, content in (data or {}).items():
+                if key and (content or "").strip():
+                    _save_rollup_summary(name, kind, str(key), str(content))
+                    migrated += 1
+            try:
+                fp.unlink()
+            except Exception as e:
+                logger.warning("rollup migration: unlink %s failed: %s", fp, e)
+    if migrated:
+        logger.info("Rollup-Migration: %d Wochen-/Monats-Summaries → summaries-Tabelle",
+                    migrated)
+    return migrated

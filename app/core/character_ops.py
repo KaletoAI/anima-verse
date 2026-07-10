@@ -3300,8 +3300,8 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
     """Wipes ALL derived memory artifacts of one character — the admin test
     tool for the consolidation pipeline (watch it rebuild from a clean slate).
 
-    Included: memories table, summaries table (scene dailies AND per-partner
-    dailies), weekly/monthly rollup JSON files, the day-consolidation cursor +
+    Included: memories table, summaries table (scene dailies, per-partner
+    dailies AND the weekly/monthly rollups), the day-consolidation cursor +
     sleep flags (world_kv), mood history.
 
     Deliberately NOT included: chat_messages (messaging pillar — real
@@ -3323,7 +3323,9 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
     from app.models.memory import clear_memories
     result["memories"] = clear_memories(character_name)
 
-    # 2. Summaries table — scene dailies (partner='') + per-partner dailies
+    # 2. Summaries table — scene dailies, per-partner dailies AND the
+    # weekly/monthly rollups (kind='weekly'/'monthly' live here since the
+    # rollup-file migration).
     from app.core.db import transaction
     try:
         with transaction() as conn:
@@ -3335,22 +3337,7 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
                      character_name, e)
         result["summaries"] = 0
 
-    # 3. Weekly/monthly rollup files (legacy JSON storage)
-    removed_files = 0
-    try:
-        from app.core.memory_service import (_get_weekly_summaries_path,
-                                             _get_monthly_summaries_path)
-        for p in (_get_weekly_summaries_path(character_name),
-                  _get_monthly_summaries_path(character_name)):
-            if p.exists():
-                p.unlink()
-                removed_files += 1
-    except Exception as e:
-        logger.error("wipe memory: rollup files failed for %s: %s",
-                     character_name, e)
-    result["rollup_files"] = removed_files
-
-    # 4. Day-consolidation cursor + sleep flags (cursor -> NOW, see docstring)
+    # 3. Day-consolidation cursor + sleep flags (cursor -> NOW, see docstring)
     try:
         from app.core import day_consolidation as _dc
         _dc.set_cursor(character_name, utc_now().isoformat(timespec="seconds"))
@@ -3362,7 +3349,7 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
                      character_name, e)
         result["day_cursor"] = "error"
 
-    # 5. Mood history
+    # 4. Mood history
     try:
         with transaction() as conn:
             cur = conn.execute(

@@ -185,7 +185,7 @@ SCHEMA_STATEMENTS = [
     """CREATE TABLE IF NOT EXISTS summaries (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,
-        kind           TEXT NOT NULL,          -- daily | weekly | history
+        kind           TEXT NOT NULL,          -- daily | weekly | monthly | history
         date_key       TEXT NOT NULL,          -- YYYY-MM-DD oder ISO-Week
         partner        TEXT NOT NULL DEFAULT '', -- Konversationspartner (Charaktername) — leer fuer kind='history' (sliding window)
         content        TEXT NOT NULL,
