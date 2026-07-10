@@ -568,6 +568,10 @@ def build_imagegen_options() -> Dict[str, Any]:
     for b in imagegen.backends:
         if not b.instance_enabled:
             continue
+        # IMAGE options only — video backends have their own selection
+        # surface (animate dialog) and must not appear as image targets.
+        if getattr(b, "MEDIA_TYPE", "image") != "image":
+            continue
         opt = {
             "type": "backend",
             "name": b.name,

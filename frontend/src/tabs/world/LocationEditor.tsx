@@ -8,6 +8,7 @@ import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { type ItemRef } from '../../lib/refs'
 import { DANGER_LEVELS, type Location } from './worldTypes'
 import { RandomEventsEditor } from './RandomEventsEditor'
+import { ImageSetDialog } from './ImageSetDialog'
 
 // ── Location editor ────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
   const { t } = useI18n()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Location>(() => ({ ...location }))
+  const [imageSetOpen, setImageSetOpen] = useState(false)
 
   useEffect(() => {
     setDraft({ ...location })
@@ -87,6 +89,13 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
         onDelete={remove}
         extra={
           <>
+            <button
+              className="ga-btn ga-btn-sm"
+              title={t('Generate a full image set (location and/or all rooms, day + night) with one chosen backend/model — runs as sequential background jobs.')}
+              onClick={() => setImageSetOpen(true)}
+            >
+              🖼 {t('Image set…')}
+            </button>
             <ExportButton
               endpoint={`/world/locations/${encodeURIComponent(location.id)}/export`}
               filename={`location_${location.id}.zip`}
@@ -276,6 +285,9 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
           + {t('Room')}
         </button>
       </div>
+      {imageSetOpen ? (
+        <ImageSetDialog location={draft} onClose={() => setImageSetOpen(false)} />
+      ) : null}
     </>
   )
 }
