@@ -22,6 +22,37 @@ logger = get_logger("memory")
 
 
 # ---------------------------------------------------------------------------
+# Per-NPC amount caps (plan-memory-consolidation-npc-specific.md §4a)
+# ---------------------------------------------------------------------------
+
+def memory_amount(character_name: str, config_key: str,
+                  global_key: str, default: int) -> int:
+    """Amount-cap resolution: per-character config (>0) → global ``memory.*``
+    → built-in default. The ONE read path for all memory amount caps
+    (semantic/commitment/episodic counts, prompt top-K). Cadences and age
+    thresholds stay global by design — only AMOUNTS are per NPC."""
+    try:
+        from app.models.character import get_character_config
+        raw = (get_character_config(character_name) or {}).get(config_key)
+        if raw not in (None, ""):
+            v = int(raw)
+            if v > 0:
+                return v
+    except Exception:
+        pass
+    try:
+        from app.core import config as _cfg
+        raw = _cfg.get(global_key)
+        if raw not in (None, ""):
+            v = int(raw)
+            if v > 0:
+                return v
+    except Exception:
+        pass
+    return default
+
+
+# ---------------------------------------------------------------------------
 # MemoryEntry helpers
 # ---------------------------------------------------------------------------
 
@@ -468,7 +499,9 @@ def retrieve_relevant_memories(character_name: str,
     Score = importance * decay * (1 + keyword_relevance + type_bonus)
     """
     if max_results <= 0:
-        max_results = int(os.environ.get("MEMORY_MAX_PROMPT_ENTRIES", "20"))
+        # Per-NPC prompt budget (empty = global memory.max_prompt_entries).
+        max_results = memory_amount(character_name, "memory_max_prompt_entries",
+                                    "memory.max_prompt_entries", 20)
 
     entries = load_memories(character_name)
     if not entries:

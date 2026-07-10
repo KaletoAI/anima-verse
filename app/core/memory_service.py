@@ -387,7 +387,8 @@ def consolidate_memories(character_name: str) -> int:
     Returns Anzahl entfernter/archivierter Entries.
     """
     import os as _os
-    from app.models.memory import load_memories, save_memories, _compute_decay
+    from app.models.memory import (load_memories, save_memories, _compute_decay,
+                                   memory_amount)
 
     entries = load_memories(character_name)
     if len(entries) < 30:
@@ -396,10 +397,17 @@ def consolidate_memories(character_name: str) -> int:
     removed = 0
     now = utc_now()
 
-    # Konfiguration
+    # Configuration. Age thresholds are GLOBAL by design; the AMOUNT caps are
+    # per NPC (character config → global memory.* → default), see
+    # plan-memory-consolidation-npc-specific.md §4a.
     commitment_max_days = int(_os.environ.get("MEMORY_COMMITMENT_MAX_DAYS", "7"))
     completed_max_days = int(_os.environ.get("MEMORY_COMMITMENT_COMPLETED_DAYS", "3"))
-    semantic_max = int(_os.environ.get("MEMORY_MAX_SEMANTIC", "50"))
+    semantic_max = memory_amount(character_name, "memory_max_semantic",
+                                 "memory.max_semantic", 50)
+    commitments_max = memory_amount(character_name, "memory_max_commitments",
+                                    "memory.max_commitments", 20)
+    episodic_max = memory_amount(character_name, "memory_max_episodic",
+                                 "memory.max_episodic", 60)
 
     # 1. Commitments cleanup:
     #    a) "completed" → nach 3 Tagen weg
@@ -449,26 +457,48 @@ def consolidate_memories(character_name: str) -> int:
         seen_content.add(content_key)
         deduped.append(entry)
 
-    # 4. Semantic-Cap enforcement: wenn Backlog ueber Cap → schwaechste raus.
-    #    (Reaktiver Cap-Check beim add greift nur auf neue Adds, alte Backlogs
-    #    blieben unangetastet. Hier gleichen wir das einmal pro Konsolidierung
-    #    nach.)
-    semantic = [e for e in deduped if e.get("memory_type") == "semantic"
-                and "relationship" not in (e.get("tags") or [])]
-    if len(semantic) > semantic_max:
-        # Score: importance * decay * (1 + access_bonus). Niedrigster Score zuerst.
-        def _score(e):
-            imp = e.get("importance", 3)
-            decay = e.get("decay_factor", 1.0)
-            access = min(0.3, e.get("access_count", 0) * 0.05)
-            return imp * decay * (1.0 + access)
-        sorted_sem = sorted(semantic, key=_score)
-        excess = len(semantic) - semantic_max
-        kill_ids = {e.get("id") for e in sorted_sem[:excess]}
+    # 4. Amount-cap enforcement per memory type: backlog over cap → weakest
+    #    out (score = importance × decay × (1 + access bonus)). The reactive
+    #    cap check on add only sees new adds; this trues up old backlogs once
+    #    per consolidation. Protected entries ('important' tag / importance
+    #    ≥ 4) count toward the cap but are never auto-removed.
+    def _score(e):
+        imp = e.get("importance", 3)
+        decay = e.get("decay_factor", 1.0)
+        access = min(0.3, e.get("access_count", 0) * 0.05)
+        return imp * decay * (1.0 + access)
+
+    def _is_protected(e):
+        return "important" in (e.get("tags") or []) or e.get("importance", 3) >= 4
+
+    def _enforce_cap(pool_entries, mem_type, cap, label, exclude=None, protect=None):
+        nonlocal deduped, removed
+        pool = [e for e in pool_entries if e.get("memory_type") == mem_type
+                and not (exclude and exclude(e))]
+        excess = len(pool) - cap
+        if excess <= 0:
+            return
+        removable = sorted((e for e in pool if not (protect and protect(e))),
+                           key=_score)
+        kill_ids = {e.get("id") for e in removable[:excess]}
+        if not kill_ids:
+            return
         deduped = [e for e in deduped if e.get("id") not in kill_ids]
         removed += len(kill_ids)
-        logger.info("Semantic-Cap [%s]: %d Eintraege ueber Cap (%d) entfernt",
-                    character_name, len(kill_ids), semantic_max)
+        logger.info("%s-Cap [%s]: %d Eintraege ueber Cap (%d) entfernt",
+                    label, character_name, len(kill_ids), cap)
+
+    # Semantic facts (relationship-tagged entries are structural — excluded,
+    # no protection: identical to the previous behavior).
+    _enforce_cap(deduped, "semantic", semantic_max, "Semantic",
+                 exclude=lambda e: "relationship" in (e.get("tags") or []))
+    # Commitments — count cap NEW (age rules above stay global); important /
+    # importance≥4 protected like the age cleanup.
+    _enforce_cap(deduped, "commitment", commitments_max, "Commitment",
+                 protect=_is_protected)
+    # Episodics awaiting the daily rollup — protects prompt + rollup volume.
+    _enforce_cap(deduped, "episodic", episodic_max, "Episodic",
+                 protect=_is_protected)
 
     if removed > 0:
         save_memories(character_name, deduped)

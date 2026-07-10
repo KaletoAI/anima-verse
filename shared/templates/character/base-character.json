@@ -769,6 +769,63 @@
           "hint_de": "Kurz- und langfristige persönliche Ziele (automatisch, soul/goals.md). Wird bei deaktivierter Retrospektive nicht in den Prompt geladen."
         }
       ]
+    },
+    {
+      "id": "memory_config",
+      "label": "Memory",
+      "label_de": "Memory",
+      "column": 8,
+      "row": 1,
+      "fields": [
+        {
+          "key": "memory_max_semantic",
+          "label": "Max facts",
+          "label_de": "Max. Fakten",
+          "type": "number",
+          "store": "config",
+          "llm_generable": false,
+          "hint": "Cap on semantic memories for THIS character. Empty = global setting (Admin → Memory).",
+          "hint_de": "Mengen-Cap für Fakten DIESES Characters. Leer = globale Einstellung (Admin → Memory).",
+          "placeholder": "global default",
+          "placeholder_de": "globaler Default"
+        },
+        {
+          "key": "memory_max_commitments",
+          "label": "Max commitments",
+          "label_de": "Max. Commitments",
+          "type": "number",
+          "store": "config",
+          "llm_generable": false,
+          "hint": "Cap on commitment memories. 'important'/importance≥4 stay protected. Empty = global.",
+          "hint_de": "Mengen-Cap für Commitments. 'important'/Wichtigkeit≥4 bleiben geschützt. Leer = global.",
+          "placeholder": "global default",
+          "placeholder_de": "globaler Default"
+        },
+        {
+          "key": "memory_max_episodic",
+          "label": "Max episodics",
+          "label_de": "Max. Episoden",
+          "type": "number",
+          "store": "config",
+          "llm_generable": false,
+          "hint": "Cap on episodic memories awaiting the daily rollup. Empty = global.",
+          "hint_de": "Mengen-Cap für episodische Erinnerungen vor dem Tages-Rollup. Leer = global.",
+          "placeholder": "global default",
+          "placeholder_de": "globaler Default"
+        },
+        {
+          "key": "memory_max_prompt_entries",
+          "label": "Max memories in prompt",
+          "label_de": "Max. Memories im Prompt",
+          "type": "number",
+          "store": "config",
+          "llm_generable": false,
+          "hint": "Top-K memories this character sees in their chat prompt. Empty = global.",
+          "hint_de": "Top-K Memories, die dieser Character im Chat-Prompt sieht. Leer = global.",
+          "placeholder": "global default",
+          "placeholder_de": "globaler Default"
+        }
+      ]
     }
   ]
 }

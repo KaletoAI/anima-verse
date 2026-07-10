@@ -1836,6 +1836,22 @@ def memory_wipe(character_name: str,
     return character_ops.wipe_character_memory(character_name)
 
 
+@router.post("/{character_name}/memory/consolidate")
+async def memory_consolidate_now(character_name: str,
+                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Runs the full 5-phase memory consolidation for ONE character right now
+    (admin test tool — exercise the per-NPC amount caps without waiting for
+    the 6h background cycle). Synchronous; returns the removal counts."""
+    import asyncio as _aio
+    from app.models.character import list_available_characters
+    if character_name not in list_available_characters():
+        raise HTTPException(status_code=404,
+                            detail=f"Character '{character_name}' not found")
+    from app.core.memory_service import handle_memory_consolidation
+    return await _aio.to_thread(handle_memory_consolidation,
+                                {"character_name": character_name})
+
+
 @router.get("/{character_name}/memory/relationships")
 def memory_relationships(character_name: str,
                          history_limit: int = 10) -> Dict[str, Any]:

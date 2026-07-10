@@ -139,6 +139,7 @@ export function CharactersTab() {
   const [deleting, setDeleting] = useState(false)
   const [confirmWipe, setConfirmWipe] = useState(false)
   const [wiping, setWiping] = useState(false)
+  const [consolidating, setConsolidating] = useState(false)
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -241,6 +242,23 @@ export function CharactersTab() {
   )
 
   // Character vollständig löschen (DELETE /characters/{name}). In-App-Bestätigung.
+  // Run the full memory consolidation for this character right now (test the
+  // per-NPC amount caps without waiting for the 6h background cycle).
+  const consolidateNow = useCallback(async () => {
+    if (!selected || consolidating) return
+    setConsolidating(true)
+    try {
+      const r = await apiPost<{ removed?: number }>(
+        `/characters/${encodeURIComponent(selected)}/memory/consolidate`, {})
+      toast(t('Consolidation done: {n} entries removed')
+        .replace('{n}', String(r.removed ?? 0)))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setConsolidating(false)
+    }
+  }, [selected, consolidating, t, toast])
+
   // Memory wipe (admin test tool for the consolidation pipeline): clears the
   // character's derived memory artifacts — memories, summaries, weekly/monthly
   // rollups, day cursor, mood history. Chat history + shared scenes stay.
@@ -480,6 +498,14 @@ export function CharactersTab() {
                     entityId={selected}
                     defaultName={selected}
                   />
+                  <button
+                    className="ga-btn ga-btn-sm"
+                    disabled={consolidating}
+                    title={t('Run the 5-phase memory consolidation for this character now (cleanup, caps, daily/weekly/monthly rollup) — normally runs every 6h in the background.')}
+                    onClick={() => { void consolidateNow() }}
+                  >
+                    {consolidating ? t('Consolidating…') : `♻ ${t('Consolidate now')}`}
+                  </button>
                   {confirmWipe ? (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: '0.82em', color: '#e0a356' }}>
