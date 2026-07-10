@@ -87,8 +87,13 @@ export interface ChannelStatus {
   waiting: number
 }
 
-// All image-backend types (kind='image'). Everything else = LLM provider.
-const IMAGE_BACKEND_TYPES = new Set(['civitai', 'together', 'openai_chat', 'openai_diffusion', 'a1111'])
+// Generation-backend types (kind='image' — images AND video). Kept only as a
+// fallback: the authoritative signal is the channel KEY ('backend:<name>'),
+// so new backend types can never misclassify as LLM providers again.
+const IMAGE_BACKEND_TYPES = new Set([
+  'civitai', 'together', 'openai_chat', 'openai_diffusion', 'a1111', 'localai',
+  'localai_video', 'together_video', 'openai_video',
+])
 
 // Non-LLM tasks that also run over provider channels (image/TTS) —
 // they belong in the tracked active_tasks panel, NOT with the chat LLM calls.
@@ -205,7 +210,9 @@ function collectChannels(providers: Record<string, ProviderChannel> | undefined,
   const out: ChannelStatus[] = []
   for (const [key, ch] of Object.entries(providers || {})) {
     const type = (ch?.type || '').toLowerCase()
-    const isImage = IMAGE_BACKEND_TYPES.has(type)
+    // Backend channels are keyed 'backend:<name>' by the provider manager —
+    // that key is the authoritative image/video-vs-LLM signal.
+    const isImage = key.startsWith('backend:') || IMAGE_BACKEND_TYPES.has(type)
     const ca = ch?.chat_active
     const nChat = Array.isArray(ca) ? ca.length : ca ? 1 : 0
     const name = ch?.provider || key
