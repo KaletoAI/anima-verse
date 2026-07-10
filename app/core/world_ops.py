@@ -552,7 +552,6 @@ def build_gallery_payload(location_name: str) -> Dict[str, Any]:
 
 def build_imagegen_options() -> Dict[str, Any]:
     """Returns available image-generation backends (without character binding)."""
-    from app.core.dependencies import get_skill_manager
     from app.core.prompt_adapters import get_target_model
 
     from app.imagegen.service import get_image_service
@@ -801,17 +800,15 @@ async def generate_location_background(location_name: str,
         )
 
     # Get the image backend (cheapest available one)
-    from app.core.dependencies import get_skill_manager
 
-    skill_manager = get_skill_manager()
-    img_skill = None
-    for skill in skill_manager.skills:
-        if getattr(skill, 'SKILL_ID', '') == "image_generation":
-            img_skill = skill
-            break
-
-    if not img_skill:
-        raise HTTPException(status_code=503, detail="ImageGeneration Skill nicht verfuegbar")
+    # Core image SERVICE (wave-6 split) — NOT the skill-manager lookup: the
+    # TakePhoto VERB kept SKILL_ID "image_generation" for its per-character
+    # config, but has no backends/pool (crashed with AttributeError and left
+    # the "Ort-Bild" track pending forever).
+    from app.imagegen.service import get_image_service
+    img_skill = get_image_service()
+    if not img_skill or not img_skill.enabled:
+        raise HTTPException(status_code=503, detail="Image service nicht verfuegbar")
 
     backend = img_skill._select_backend()
     if not backend:
@@ -1467,17 +1464,13 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
 
         # The map/location style now comes from the use case (applied below
         # via resolve_use_case_style) — no separate suffix anymore.
-        from app.core.dependencies import get_skill_manager
 
-        skill_manager = get_skill_manager()
-        img_skill = None
-        for skill in skill_manager.skills:
-            if getattr(skill, 'SKILL_ID', '') == "image_generation":
-                img_skill = skill
-                break
-
-        if not img_skill:
-            raise HTTPException(status_code=503, detail="ImageGeneration Skill nicht verfuegbar")
+        # Core image SERVICE — not the skill-manager lookup (see the
+        # generate_location_image comment; TakePhoto has no backends).
+        from app.imagegen.service import get_image_service
+        img_skill = get_image_service()
+        if not img_skill or not img_skill.enabled:
+            raise HTTPException(status_code=503, detail="Image service nicht verfuegbar")
 
         # Freshly check the availability of all backends — network calls go into
         # a thread, otherwise they block the event loop (the watchdog trips).
@@ -2003,17 +1996,15 @@ async def generate_time_variant_core(location_name: str, image_name: str,
                     f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
                 )
 
-    from app.core.dependencies import get_skill_manager
 
-    skill_manager = get_skill_manager()
-    img_skill = None
-    for skill in skill_manager.skills:
-        if getattr(skill, 'SKILL_ID', '') == "image_generation":
-            img_skill = skill
-            break
-
-    if not img_skill:
-        raise HTTPException(status_code=503, detail="ImageGeneration Skill nicht verfuegbar")
+    # Core image SERVICE (wave-6 split) — NOT the skill-manager lookup: the
+    # TakePhoto VERB kept SKILL_ID "image_generation" for its per-character
+    # config, but has no backends/pool (crashed with AttributeError and left
+    # the "Ort-Bild" track pending forever).
+    from app.imagegen.service import get_image_service
+    img_skill = get_image_service()
+    if not img_skill or not img_skill.enabled:
+        raise HTTPException(status_code=503, detail="Image service nicht verfuegbar")
 
     # Check availability — network calls go into a thread, otherwise
     # they block the event loop (the watchdog trips).
