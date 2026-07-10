@@ -211,6 +211,13 @@ export function WorldDevTab() {
               acc += evt.content
               setPending(acc)
             }
+            if (evt.extraction_warning) {
+              // Truncated/unparseable json:<type> block — surface WHY there
+              // are no Validate/Apply buttons (visible in the chat + toast).
+              acc += `\n\n⚠ *${String(evt.extraction_warning)}*`
+              setPending(acc)
+              toast(String(evt.extraction_warning), 'error')
+            }
             if (evt.usage && typeof evt.usage === 'object') {
               setUsage({
                 tokens_in: Number(evt.usage.tokens_in) || 0,

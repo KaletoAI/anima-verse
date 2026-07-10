@@ -247,7 +247,24 @@ def _extract_json_block(text: str, block_type: str) -> Dict[str, Any] | None:
     pattern = rf'```json:{re.escape(block_type)}\s*\n(.*?)```'
     match = re.search(pattern, text, re.DOTALL)
     if not match:
-        # Fallback: try without the :type suffix (some LLMs omit it)
+        # Missing closing fence — the model stopped right after the JSON or
+        # the output was cut off mid-block. Try to parse from the opening
+        # fence to the end of the text (raw_decode stops at the JSON end, so
+        # trailing prose does not hurt). Truly truncated JSON still fails —
+        # the caller reports that via extraction_warning.
+        open_m = re.search(rf'```json:{re.escape(block_type)}\s*\n', text)
+        if not open_m:
+            return None
+        tail = text[open_m.end():].strip()
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(tail)
+            if isinstance(parsed, dict):
+                logger.info("Extracted %s JSON (unclosed fence): %d keys",
+                            block_type, len(parsed))
+                return parsed
+        except json.JSONDecodeError:
+            logger.warning("json:%s block found but not parseable — output "
+                           "truncated mid-JSON?", block_type)
         return None
     raw = match.group(1).strip()
     try:
@@ -592,23 +609,36 @@ async def world_dev_chat(request: Request):
                 m["content"] for m in history) + message
             _track_cost(all_input, full_response)
 
-            # Check if response contains extractable JSON
-            location_data = _extract_location_json(full_response)
+            # Check if response contains extractable JSON. When the model was
+            # cut off mid-block last turn and the user asked it to continue,
+            # the fence spans TWO assistant messages — retry the extraction on
+            # the previous assistant message joined with this one.
+            _prev_assist = next((m.get("content", "") for m in
+                                 reversed(session["messages"][:-1])
+                                 if m.get("role") == "assistant"), "")
+
+            def _extract2(extractor):
+                d = extractor(full_response)
+                if not d and _prev_assist:
+                    d = extractor(_prev_assist + "\n" + full_response)
+                return d
+
+            location_data = _extract2(_extract_location_json)
             if location_data:
                 yield f"data: {json.dumps({'location_data': location_data})}\n\n"
 
             # Granulare Sub-Block-Updates (Outfit / Soul-Section / Profil-Patch).
-            outfit_data = _extract_outfit_json(full_response)
+            outfit_data = _extract2(_extract_outfit_json)
             if outfit_data:
                 yield f"data: {json.dumps({'outfit_data': outfit_data})}\n\n"
-            soul_data = _extract_soul_json(full_response)
+            soul_data = _extract2(_extract_soul_json)
             if soul_data:
                 yield f"data: {json.dumps({'soul_data': soul_data})}\n\n"
-            profile_patch_data = _extract_profile_patch_json(full_response)
+            profile_patch_data = _extract2(_extract_profile_patch_json)
             if profile_patch_data:
                 yield f"data: {json.dumps({'profile_patch_data': profile_patch_data})}\n\n"
 
-            character_data = _extract_character_json(full_response)
+            character_data = _extract2(_extract_character_json)
             if character_data:
                 # Validate fields — auto-request missing ones
                 selected_tmpl = session.get("selected_template", "") or character_data.get("template", "")
@@ -651,6 +681,20 @@ async def world_dev_chat(request: Request):
                         logger.warning("Completion response had no extractable JSON, using partial data")
 
                 yield f"data: {json.dumps({'character_data': character_data})}\n\n"
+
+            # A json:<type> fence was emitted but NOTHING could be parsed —
+            # tell the user WHY there are no Validate/Apply buttons (typically
+            # the model stopped mid-JSON) instead of failing silently.
+            import re as _re
+            _fence_types = _re.findall(r'```json:([\w-]+)', full_response)
+            if _fence_types and not any([location_data, outfit_data, soul_data,
+                                         profile_patch_data, character_data]):
+                _warn = (f"The json:{_fence_types[0]} block could not be parsed — "
+                         f"the output appears to be cut off mid-JSON. Ask the "
+                         f"model to output the COMPLETE JSON block again (or to "
+                         f"continue exactly where it stopped).")
+                logger.warning("WorldDev: %s", _warn)
+                yield f"data: {json.dumps({'extraction_warning': _warn})}\n\n"
 
             # Send session cost info
             yield f"data: {json.dumps({'usage': {'tokens_in': session['tokens_total_in'], 'tokens_out': session['tokens_total_out'], 'cost_total': round(session['cost_total'], 6)}})}\n\n"
