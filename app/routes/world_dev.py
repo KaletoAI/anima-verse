@@ -411,15 +411,20 @@ async def world_dev_chat(request: Request):
     edit_location_id = data.get("edit_location_id", "")
     context_location_ids = data.get("context_location_ids", [])
     context_character_names = data.get("context_character_names", [])
-    # Optional completion budget from the UI field next to the model picker.
-    # Empty or 0 = send NO max_tokens at all (provider default) — required for
-    # vLLM, which REJECTS prompt+max_tokens > context instead of clamping.
-    try:
-        max_tokens = int(data.get("max_tokens") or 0)
-    except (TypeError, ValueError):
-        max_tokens = 0
-    if max_tokens <= 0:
-        max_tokens = None
+    # Completion budget from the UI field next to the model picker.
+    # EMPTY = built-in default 32768 (shown greyed in the field, never
+    # materialized). EXPLICIT 0 = send NO max_tokens at all (provider
+    # default) — required for vLLM, which REJECTS prompt+max_tokens >
+    # context instead of clamping.
+    _raw_mt = data.get("max_tokens", None)
+    if _raw_mt in (None, ""):
+        max_tokens = 32768
+    else:
+        try:
+            _v = int(_raw_mt)
+        except (TypeError, ValueError):
+            _v = 32768
+        max_tokens = None if _v <= 0 else _v
 
     if not model:
         raise HTTPException(status_code=400, detail="model erforderlich")

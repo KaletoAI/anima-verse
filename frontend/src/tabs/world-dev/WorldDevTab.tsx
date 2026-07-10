@@ -82,8 +82,8 @@ export function WorldDevTab() {
   // Separate model picker for the JSON validator. Defaults to the chat
   // model when empty so users get a sane fallback without a second pick;
   // can be set to a smaller / cheaper model independently.
-  // Completion budget for the chat model. Empty = built-in default (32768),
-  // shown greyed as placeholder — never materialized as a value.
+  // Completion budget for the chat model. Empty = built-in default (32768,
+  // grey placeholder, never materialized); explicit 0 = send NO max_tokens.
   const [maxTokens, setMaxTokens] = usePersistentState('worlddev.maxTokens', '')
   const [validateModel, setValidateModel] = usePersistentState('worlddev.validateModel', '')
   const [validateProvider, setValidateProvider] = usePersistentState('worlddev.validateProvider', '')
@@ -407,8 +407,8 @@ export function WorldDevTab() {
             step={1024}
             style={{ width: 92, flex: '0 0 auto' }}
             value={maxTokens}
-            placeholder={t('no cap')}
-            title={t('Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty or 0 = no max_tokens sent (provider default) — required for vLLM, which rejects prompt+max_tokens beyond the context window.')}
+            placeholder="32768"
+            title={t('Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = default (32768). 0 = no max_tokens sent (provider default) — required for vLLM, which rejects prompt+max_tokens beyond the context window.')}
             onChange={(e) => setMaxTokens(e.target.value)}
           />
           <ModelPicker
