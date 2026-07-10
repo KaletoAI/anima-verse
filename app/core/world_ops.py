@@ -2165,3 +2165,71 @@ async def generate_time_variant_core(location_name: str, image_name: str,
     except Exception as e:
         _tq.track_finish(_track_id, error=str(e))
         raise
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# World sleep mode — all NPCs really fall asleep (plan-game-time.md)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def sleep_world() -> Dict[str, Any]:
+    """Sleep mode ON: every awake NPC falls asleep in place (real
+    ``is_sleeping``; no off-map move, no location change). NPCs that were
+    already sleeping naturally are remembered (``world_sleep_prior``) so
+    ``wake_world`` leaves them asleep. The avatar is untouched. While the
+    mode is on, NPC LLM-chat triggers are gated (agent loop, telegram,
+    direct chat); ticks/memory/scheduler/task queue keep running and the
+    game clock keeps moving (unlike freeze)."""
+    import json as _json
+    from app.models.character import (list_available_characters,
+                                      is_character_sleeping, set_is_sleeping)
+    from app.models.account import is_player_controlled
+    from app.models.world import (set_world_sleeping, set_world_setting,
+                                  WORLD_SLEEP_PRIOR_KEY)
+    prior, slept = [], []
+    for name in list_available_characters():
+        try:
+            if is_player_controlled(name):
+                continue
+            if is_character_sleeping(name):
+                prior.append(name)
+                continue
+            set_is_sleeping(name, True)
+            slept.append(name)
+        except Exception as e:
+            logger.warning("sleep_world: %s fehlgeschlagen: %s", name, e)
+    set_world_setting(WORLD_SLEEP_PRIOR_KEY, _json.dumps(prior))
+    set_world_sleeping(True)
+    logger.info("World sleep AKTIVIERT: %d eingeschlafen, %d schliefen schon",
+                len(slept), len(prior))
+    return {"sleeping": True, "slept": slept, "already_asleep": prior}
+
+
+def wake_world() -> Dict[str, Any]:
+    """Sleep mode OFF: wakes every NPC the sleep mode put to sleep. NPCs from
+    the prior list (asleep before the button) stay asleep — natural sleep is
+    not interrupted."""
+    import json as _json
+    from app.models.character import (list_available_characters,
+                                      is_character_sleeping, set_is_sleeping)
+    from app.models.account import is_player_controlled
+    from app.models.world import (set_world_sleeping, get_world_setting,
+                                  set_world_setting, WORLD_SLEEP_PRIOR_KEY)
+    try:
+        prior = set(_json.loads(get_world_setting(WORLD_SLEEP_PRIOR_KEY, "[]")))
+    except Exception:
+        prior = set()
+    woken = []
+    for name in list_available_characters():
+        try:
+            if is_player_controlled(name) or name in prior:
+                continue
+            if is_character_sleeping(name):
+                set_is_sleeping(name, False)
+                woken.append(name)
+        except Exception as e:
+            logger.warning("wake_world: %s fehlgeschlagen: %s", name, e)
+    set_world_setting(WORLD_SLEEP_PRIOR_KEY, "[]")
+    set_world_sleeping(False)
+    logger.info("World sleep DEAKTIVIERT: %d aufgeweckt (%d schlafen natuerlich weiter)",
+                len(woken), len(prior))
+    return {"sleeping": False, "woken": woken, "still_asleep": sorted(prior)}

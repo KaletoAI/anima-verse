@@ -29,7 +29,7 @@ import json
 import re
 from datetime import datetime, timedelta
 
-from app.core.timeutils import utc_now
+from app.core.timeutils import utc_now, game_local_now
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -258,8 +258,8 @@ async def _run_storyteller_agent(
 
     scope_label = "the whole place" if scope == "location" else "this room"
 
-    # ── Uhrzeit / Tageszeit ────────────────────────────────────────────
-    _now = utc_now()
+    # ── Clock / time of day (in-game) ──────────────────────────────────
+    _now = game_local_now()
     current_time = _now.strftime("%H:%M")
     _hour = _now.hour
     if 6 <= _hour < 12:

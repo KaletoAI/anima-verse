@@ -4,6 +4,8 @@ import { TABS, isTabId, type TabId } from './tabs/registry'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { GenerationIndicator } from './components/GenerationIndicator'
 import { FreezeToggle } from './components/FreezeToggle'
+import { SleepToggle } from './components/SleepToggle'
+import { GameClock } from './components/GameClock'
 import { useAuth } from './lib/AuthGate'
 import { HelpProvider } from './help/HelpContext'
 import { HelpPanel } from './help/HelpPanel'
@@ -48,7 +50,9 @@ export default function App() {
         </a>
         <h1>{t('Game Admin')}</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <GameClock />
           <FreezeToggle />
+          <SleepToggle />
           <GenerationIndicator />
           <select
             className="ga-input"

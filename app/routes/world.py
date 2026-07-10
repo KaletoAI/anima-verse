@@ -158,6 +158,74 @@ async def unfreeze_world(
     return {"frozen": False}
 
 
+@router.get("/game-time")
+async def get_game_time() -> Dict[str, Any]:
+    """Game clock info: both nows, anchors, factor, frozen (for the header
+    clock — the frontend ticks locally from the anchors)."""
+    from app.core.timeutils import get_game_clock_info
+    return get_game_clock_info()
+
+
+@router.post("/game-time")
+async def post_game_time(
+    request: Request,
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Sets game time and/or tick factor. Body: {game_time?: ISO, factor?: number}."""
+    from app.core.timeutils import (get_game_clock_info, parse_iso,
+                                    set_game_factor, set_game_time)
+    data = await request.json()
+    raw_time = (data.get("game_time") or "").strip() if isinstance(data.get("game_time"), str) else ""
+    raw_factor = data.get("factor")
+    if not raw_time and raw_factor is None:
+        raise HTTPException(status_code=400, detail="game_time or factor required")
+    # Factor first: set_game_factor re-anchors at the CURRENT game time; an
+    # explicit game_time afterwards wins as the new anchor.
+    if raw_factor is not None:
+        try:
+            factor = float(raw_factor)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="factor must be a number")
+        if factor < 0:
+            raise HTTPException(status_code=400, detail="factor must be >= 0")
+        set_game_factor(factor)
+    if raw_time:
+        try:
+            set_game_time(parse_iso(raw_time))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="game_time must be an ISO datetime")
+    info = get_game_clock_info()
+    logger.info("Game time set: game_now=%s factor=%s",
+                info["game_now"], info["factor"])
+    return info
+
+
+@router.get("/sleep-status")
+async def get_sleep_status() -> Dict[str, Any]:
+    """Aktueller World-Sleep-Status (alle NPCs schlafen?)."""
+    from app.models.world import is_world_sleeping
+    return {"sleeping": is_world_sleeping()}
+
+
+@router.post("/sleep")
+async def sleep_world_route(
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Schlafmodus AN: alle NPCs schlafen sofort ein — keine NPC-LLM-Chat-Calls
+    mehr. Ticks, Memory-Konsolidierung, Scheduler, TaskQueue und die Game-Uhr
+    laufen weiter (anders als Freeze)."""
+    return world_ops.sleep_world()
+
+
+@router.post("/wake")
+async def wake_world_route(
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Schlafmodus AUS: vom Schlafmodus eingeschlaefte NPCs wachen auf;
+    natuerlich Schlafende schlafen weiter."""
+    return world_ops.wake_world()
+
+
 @router.get("/settings")
 async def get_world_settings() -> Dict[str, Any]:
     """Gibt Welt-Settings + Pose-Settings zurueck."""

@@ -1250,10 +1250,12 @@ class AgentLoop:
 def _is_paused() -> bool:
     """Global pause indicator. Mirrors the existing world-pause toggle so
     Admin/World-Dev pause buttons stop the AgentLoop too — PLUS der
-    persistente World-Freeze (autonome Simulation eingefroren)."""
+    persistente World-Freeze (autonome Simulation eingefroren) und der
+    World-Sleep-Modus (alle NPCs schlafen -> keine NPC-LLM-Turns; die
+    periodischen Jobs/Memory-Konsolidierung laufen separat weiter)."""
     try:
-        from app.models.world import is_world_frozen
-        if is_world_frozen():
+        from app.models.world import is_world_frozen, is_world_sleeping
+        if is_world_frozen() or is_world_sleeping():
             return True
     except Exception:
         pass

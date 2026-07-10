@@ -6,7 +6,7 @@ Wird von set_activity_skill.py und chat.py genutzt.
 import re
 from datetime import datetime, timedelta
 
-from app.core.timeutils import parse_iso, utc_now, utc_now_iso
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_now, game_local_now
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -114,7 +114,7 @@ def _evaluate_single_condition_inner(
             shift = offset_min        # Start spaeter
         else:
             shift = -offset_min       # Start frueher (default fuer "-")
-        now = utc_now()
+        now = game_local_now()  # night/day rules follow the game clock
         now_min = now.hour * 60 + now.minute
         lbl_offset = f"{sign}{offset_min}" if offset_min else ""
         if base == "night":
@@ -249,7 +249,7 @@ def _evaluate_single_condition_inner(
                 # Kein aktiver Schedule — schedule-Bedingungen matchen nicht
                 # (weder sleeping noch awake werden erzwungen).
                 return False, "Tagesablauf nicht aktiv"
-            current_hour = utc_now().hour
+            current_hour = game_local_now().hour  # daily schedule = in-game hours
             slot = next((s for s in schedule.get("slots", [])
                          if s.get("hour") == current_hour), None)
             if target in ("sleeping", "sleep"):
@@ -634,7 +634,7 @@ def cleanup_expired_conditions(character_name: str) -> int:
         _conditions = (_prof or {}).get("active_conditions", []) or []
         if not _conditions:
             return 0
-        _now = utc_now()
+        _now = game_now()  # condition durations are in-world -> game clock
         _active = []
         for cond in _conditions:
             if not isinstance(cond, dict):
@@ -743,7 +743,8 @@ def apply_hourly_status_tick(character_name: str):
         pass
 
     tick_key = character_name
-    now = utc_now()
+    # Hourly = one GAME hour (factor >1 -> decay ticks faster in real time).
+    now = game_now()
 
     # Pruefen ob eine Stunde seit dem letzten Tick vergangen ist
     last_tick_iso = _LAST_HOURLY_TICK.get(tick_key)

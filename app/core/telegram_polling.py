@@ -185,12 +185,13 @@ class CharacterBotPoller:
         backoff = 1
         while self._running:
             try:
-                # World-Freeze: keine eingehenden Nachrichten verarbeiten. getUpdates
-                # auslassen, damit der Offset NICHT vorrueckt — Nachrichten bleiben bei
-                # Telegram gepuffert und gehen nicht verloren.
+                # World-Freeze/-Sleep: keine eingehenden Nachrichten verarbeiten.
+                # getUpdates auslassen, damit der Offset NICHT vorrueckt —
+                # Nachrichten bleiben bei Telegram gepuffert und werden nach dem
+                # Auftauen/Aufwecken verarbeitet.
                 try:
-                    from app.models.world import is_world_frozen
-                    if is_world_frozen():
+                    from app.models.world import is_world_frozen, is_world_sleeping
+                    if is_world_frozen() or is_world_sleeping():
                         await asyncio.sleep(5)
                         continue
                 except Exception:

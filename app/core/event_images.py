@@ -28,7 +28,7 @@ import threading
 import time
 from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now
+from app.core.timeutils import parse_iso, utc_now, game_local_now
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -268,7 +268,7 @@ def _do_generate(event_id: str,
     # waere die Auswahl rein zufaellig zwischen allen Bg-Bildern, was zu
     # einer "alten" oder Tag/Nacht-falschen Vorlage fuer das Event-Bild
     # fuehrt.
-    bg_path = get_background_path(location_id, hour=utc_now().hour)
+    bg_path = get_background_path(location_id, hour=game_local_now().hour)
     if not bg_path or not bg_path.exists():
         logger.info("Event-Bild [%s]: kein Background — skip", event_id)
         return None

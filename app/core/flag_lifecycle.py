@@ -21,7 +21,7 @@ from datetime import timedelta
 from typing import List
 
 from app.core.log import get_logger
-from app.core.timeutils import parse_iso, utc_now
+from app.core.timeutils import parse_iso, game_now
 
 logger = get_logger("flag_lifecycle")
 
@@ -129,7 +129,7 @@ def decay_tick() -> None:
             stamp_state_flag_since)
     except Exception:
         return
-    now = utc_now()
+    now = game_now()  # flag durations are in-world -> game clock
     for name in list_available_characters():
         try:
             profile = get_character_profile(name) or {}

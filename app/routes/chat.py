@@ -725,6 +725,21 @@ async def chat(request: Request) -> StreamingResponse:
     _t0 = _t.perf_counter()
     current_agent = _get_chat_partner()
     _probe("_get_chat_partner", _t0)
+
+    # World-Sleep-Modus: NPCs schlafen tief und werden durch Chat NICHT
+    # geweckt (der normale Wake-Up-Pfad weiter unten wuerde sie wecken und
+    # einen LLM-Call ausloesen — genau das soll der Modus verhindern).
+    try:
+        from app.models.world import is_world_sleeping
+        if is_world_sleeping():
+            raise HTTPException(
+                status_code=423,
+                detail=f"{current_agent} is in deep sleep — the world is in "
+                       f"sleep mode. Wake the world in the Game-Admin header first.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     # Display name = the player's active character (who is writing).
     # Login-Name (z.B. "admin") ist HIER kein gueltiger Fallback — wuerde
     # in chat_messages.partner und Relationships als Pseudo-Character
@@ -2292,8 +2307,8 @@ def _build_full_system_prompt(character_name: str,
     current_room_id = get_character_current_room(character_name)
     current_activity = get_effective_activity(character_name)
 
-    from app.core.timeutils import local_now as _lnow
-    now = _lnow()  # Welt-Uhr in der konfigurierten Zeitzone (Storage bleibt UTC)
+    from app.core.timeutils import game_local_now as _lnow
+    now = _lnow()  # in-game clock in the world timezone (storage stays real UTC)
     time_line = f"Current time: {now.strftime('%H:%M')} ({now.strftime('%A, %d %B %Y')})"
     situation_parts = [time_line]
 

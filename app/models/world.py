@@ -363,8 +363,38 @@ def is_world_frozen() -> bool:
 
 
 def set_world_frozen(frozen: bool) -> None:
-    """Friert die Welt ein (True) oder taut sie wieder auf (False)."""
+    """Friert die Welt ein (True) oder taut sie wieder auf (False).
+
+    Freeze stoppt auch die GAME-Uhr (on_freeze_change re-ankert sie);
+    Unfreeze laesst sie ab dem eingefrorenen Stand weiterlaufen."""
+    from app.core.timeutils import on_freeze_change
     set_world_setting(WORLD_FROZEN_KEY, "1" if frozen else "0")
+    try:
+        on_freeze_change(frozen)
+    except Exception as e:
+        logger.warning("game clock freeze hook failed: %s", e)
+
+
+# --- World Sleep -----------------------------------------------------------
+# Persistenter Schalter: alle NPCs schlafen (echtes is_sleeping, siehe
+# world_ops.sleep_world/wake_world). Waehrend des Schlafmodus loesen NPCs
+# keine LLM-Chat-Calls aus (AgentLoop-Turns/Reaktionen/Bumps, Telegram,
+# direkter Chat) — Memory-Konsolidierung, periodische Ticks, Scheduler,
+# TaskQueue und LLM-Tools laufen bewusst weiter. Die GAME-Uhr laeuft weiter
+# (anders als Freeze). Siehe development_instructions/plan-game-time.md.
+WORLD_SLEEPING_KEY = "world_sleeping"
+# JSON-Liste der Characters, die schon VOR dem Sleep-Button schliefen —
+# wake_world laesst diese schlafen (natuerlicher Schlaf bleibt unangetastet).
+WORLD_SLEEP_PRIOR_KEY = "world_sleep_prior"
+
+
+def is_world_sleeping() -> bool:
+    """True wenn der Welt-Schlafmodus aktiv ist (alle NPCs schlafen)."""
+    return get_world_setting(WORLD_SLEEPING_KEY, "0") == "1"
+
+
+def set_world_sleeping(sleeping: bool) -> None:
+    set_world_setting(WORLD_SLEEPING_KEY, "1" if sleeping else "0")
 
 
 # Erlaubte Werte fuer Welt-Wetter / Temperatur — reine LLM-Hinweise,

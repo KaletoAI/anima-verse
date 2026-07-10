@@ -16,7 +16,7 @@ import random
 import uuid
 from datetime import date, datetime
 
-from app.core.timeutils import utc_now_iso
+from app.core.timeutils import utc_now_iso, game_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -1397,7 +1397,7 @@ def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Di
                         # die {giver}-Substitution + Anzeige im Mind-Tab. Bleibt fuer
                         # die Dauer der Condition gespeichert.
                         "source_character": (giver or "").strip(),
-                        "started_at": utc_now_iso(),
+                        "started_at": game_now_iso(),  # in-world duration -> game clock
                         "duration_hours": max(1, duration),
                     })
                     profile["active_conditions"] = active

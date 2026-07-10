@@ -7,7 +7,7 @@ Storage: world.db — Tabellen characters, character_state
 """
 from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now, utc_now_iso
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_now_iso
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import json
@@ -3312,7 +3312,7 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     # Change stamp for the flag lifecycle (same bookkeeping as set_state_flag).
     _since = dict(profile.get("state_flag_since") or {})
     if value:
-        _since["is_sleeping"] = utc_now_iso()
+        _since["is_sleeping"] = game_now_iso()  # in-world duration stamp
     else:
         _since.pop("is_sleeping", None)
     profile["state_flag_since"] = _since
@@ -3350,7 +3350,7 @@ def set_state_flag(character_name: str, flag: str, value) -> None:
     profile[flag] = value if isinstance(value, str) and value else bool(value)
     since = dict(profile.get("state_flag_since") or {})
     if value:
-        since[flag] = utc_now_iso()
+        since[flag] = game_now_iso()  # in-world duration stamp
     else:
         since.pop(flag, None)
     profile["state_flag_since"] = since
@@ -3364,7 +3364,7 @@ def stamp_state_flag_since(character_name: str, flag: str) -> None:
         return
     profile = get_character_profile(character_name) or {}
     since = dict(profile.get("state_flag_since") or {})
-    since[flag] = utc_now_iso()
+    since[flag] = game_now_iso()  # in-world duration stamp
     profile["state_flag_since"] = since
     save_character_profile(character_name, profile)
 

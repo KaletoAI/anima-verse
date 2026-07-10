@@ -22,7 +22,7 @@ import random
 import re
 from datetime import datetime, timedelta
 
-from app.core.timeutils import parse_iso, utc_now
+from app.core.timeutils import parse_iso, utc_now, game_local_now
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -475,8 +475,8 @@ def _generate_event(loc_id: str,
         mood = get_character_current_feeling(c) or ""
         char_infos.append(f"{c} (mood: {mood})" if mood else c)
 
-    # Tageszeit + Uhrzeit
-    _now = utc_now()
+    # Time of day + clock (in-game)
+    _now = game_local_now()
     hour = _now.hour
     current_time = _now.strftime("%H:%M")
     if 6 <= hour < 12:

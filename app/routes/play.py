@@ -61,7 +61,7 @@ def _bg_version(location_id: str, room: str) -> str:
     aktiv wird/fertig generiert ist (oder das normale Background-File wechselt)."""
     import hashlib
     import os
-    from app.core.timeutils import utc_now
+    from app.core.timeutils import game_local_now
     p = None
     try:
         from app.core.event_images import get_effective_background_event
@@ -71,7 +71,7 @@ def _bg_version(location_id: str, room: str) -> str:
     if not p or not p.exists():
         try:
             from app.models.world import get_background_path
-            p = get_background_path(location_id, room=room, hour=utc_now().hour,
+            p = get_background_path(location_id, room=room, hour=game_local_now().hour,
                                     stable=True)
         except Exception:
             p = None
@@ -85,7 +85,7 @@ def _bg_id(location_id: str, room: str) -> str:
     Vorrang, sonst die regulaere Auswahl. Das Frontend pinnt damit das <img>
     (``/background?file=<bg_id>``) und koppelt die Figuren-Positionen an genau
     dieses Bild. Tageszeit via UTC, konsistent zu :func:`_bg_version`."""
-    from app.core.timeutils import utc_now
+    from app.core.timeutils import game_local_now
     try:
         from app.core.event_images import get_effective_background_event
         p = get_effective_background_event(location_id)
@@ -95,7 +95,7 @@ def _bg_id(location_id: str, room: str) -> str:
         pass
     try:
         from app.models.world import get_background_path
-        p = get_background_path(location_id, room=room, hour=utc_now().hour,
+        p = get_background_path(location_id, room=room, hour=game_local_now().hour,
                                 stable=True)
         if p and p.exists():
             return p.name

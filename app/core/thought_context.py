@@ -13,7 +13,7 @@ Returns a kwargs dict that can be passed straight into
 """
 from datetime import datetime, timedelta
 
-from app.core.timeutils import parse_iso, utc_now, local_now
+from app.core.timeutils import parse_iso, utc_now, game_local_now
 from typing import Any, Dict, List, Tuple
 
 from app.core.log import get_logger
@@ -53,7 +53,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "activity": ("Sleeping" if profile.get("is_sleeping")
                      else (profile.get("pose_intent") or "")) or "None",
         "feeling": (profile.get("current_feeling", "") or "Neutral"),
-        "time_of_day": local_now().strftime("%H:%M"),  # Welt-Uhr = konfigurierte TZ
+        "time_of_day": game_local_now().strftime("%H:%M"),  # in-game clock (world TZ)
         # Defaults for optional blocks — keep them present so StrictUndefined
         # doesn't raise on missing keys.
         "inbox_block": _build_inbox_block(character_name),
