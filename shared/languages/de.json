@@ -476,6 +476,7 @@
     "Min replies": "Min. Antworten",
     "Minimum danger level": "Minimale Gefahrenstufe",
     "Mode": "Modus",
+    "Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = default.": "Max. Tokens (Completion-Budget). Thinking-Modelle verbrauchen auch ihre versteckten Reasoning-Tokens aus diesem Budget. Leer = Default.",
     "Memory wiped: {m} memories, {s} summaries": "Memory gelöscht: {m} Erinnerungen, {s} Summaries",
     "Model": "Modell",
     "Model settings saved": "Modell-Einstellungen gespeichert",

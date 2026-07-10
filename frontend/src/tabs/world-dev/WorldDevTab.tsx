@@ -82,6 +82,9 @@ export function WorldDevTab() {
   // Separate model picker for the JSON validator. Defaults to the chat
   // model when empty so users get a sane fallback without a second pick;
   // can be set to a smaller / cheaper model independently.
+  // Completion budget for the chat model. Empty = built-in default (32768),
+  // shown greyed as placeholder — never materialized as a value.
+  const [maxTokens, setMaxTokens] = usePersistentState('worlddev.maxTokens', '')
   const [validateModel, setValidateModel] = usePersistentState('worlddev.validateModel', '')
   const [validateProvider, setValidateProvider] = usePersistentState('worlddev.validateProvider', '')
   const [schema, setSchema] = usePersistentState<string>('worlddev.schema', 'location')
@@ -172,6 +175,7 @@ export function WorldDevTab() {
           model,
           provider,
           session_id: sessionId,
+          max_tokens: maxTokens.trim() ? parseInt(maxTokens, 10) : undefined,
           message: userMsg,
           schema,
           character_template: schema === 'character' ? template : '',
@@ -248,7 +252,7 @@ export function WorldDevTab() {
     } finally {
       setStreaming(false)
     }
-  }, [contextCharacters, contextLocations, draft, editTarget, mode, model, provider, schema, sessionId, streaming, t, template, toast])
+  }, [contextCharacters, contextLocations, draft, editTarget, maxTokens, mode, model, provider, schema, sessionId, streaming, t, template, toast])
 
   const apply = useCallback(
     async (kind: keyof ExtractedData) => {
@@ -395,6 +399,17 @@ export function WorldDevTab() {
               const [prov, name] = v.split('|', 2)
               setProvider(prov || ''); setModel(name || '')
             }}
+          />
+          <input
+            className="ga-input"
+            type="number"
+            min={1}
+            step={1024}
+            style={{ width: 92, flex: '0 0 auto' }}
+            value={maxTokens}
+            placeholder="32768"
+            title={t('Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = default.')}
+            onChange={(e) => setMaxTokens(e.target.value)}
           />
           <ModelPicker
             className="ga-wd-model-select"

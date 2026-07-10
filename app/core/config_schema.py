@@ -164,7 +164,7 @@ SECTIONS = {
                 "description": "Recommended by task category — Tools: 0.0-0.2 · Image: 0.2-0.4 · Helper: 0.3-0.6 · Chat: 0.7-0.9",
                 "hide_for_embedding": True,
             },
-            "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 100000, "hide_for_embedding": True},
+            "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 200000, "placeholder": "provider default", "hide_for_embedding": True, "description": "Completion budget per request. For thinking models (GLM, DeepSeek-R1, …) the HIDDEN reasoning tokens count against it — too small a value cuts the visible answer mid-output. Empty = no cap sent (provider default)."},
             "chat_template": {
                 "type": "text",
                 "label": "Chat Template (optional)",
