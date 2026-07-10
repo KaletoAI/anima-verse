@@ -412,19 +412,45 @@ async def world_dev_chat(request: Request):
     context_location_ids = data.get("context_location_ids", [])
     context_character_names = data.get("context_character_names", [])
     # Completion budget from the UI field next to the model picker.
-    # EMPTY = built-in default 32768 (shown greyed in the field, never
-    # materialized). EXPLICIT 0 = send NO max_tokens at all (provider
-    # default) — required for vLLM, which REJECTS prompt+max_tokens >
-    # context instead of clamping.
+    # EMPTY = default: the model's LLM-ROUTING entry max_tokens when one is
+    # configured (the per-model place to tune this), else 32768.
+    # EXPLICIT 0 = send NO max_tokens at all (provider default) — required
+    # for vLLM, which REJECTS prompt+max_tokens > context instead of
+    # clamping. CAUTION: Together applies a TINY default when none is sent
+    # (observed finish_reason='length' after ~30 tokens) — for Together
+    # models set a value here or in LLM Routing.
+    def _routing_max_tokens(prov: str, mdl: str):
+        try:
+            from app.core import config as _cfg
+            for entry in (_cfg.get("llm_routing", []) or []):
+                if not isinstance(entry, dict) or entry.get("enabled") is False:
+                    continue
+                if ((entry.get("provider") or "").strip() == prov
+                        and (entry.get("model") or "").strip() == mdl):
+                    mt = entry.get("max_tokens")
+                    if mt not in ("", None, 0):
+                        return int(mt)
+        except Exception:
+            pass
+        return None
+
     _raw_mt = data.get("max_tokens", None)
+    _mt_source = "field"
     if _raw_mt in (None, ""):
-        max_tokens = 32768
+        max_tokens = _routing_max_tokens(provider, model)
+        _mt_source = "routing" if max_tokens else "default"
+        if not max_tokens:
+            max_tokens = 32768
     else:
         try:
             _v = int(_raw_mt)
         except (TypeError, ValueError):
             _v = 32768
         max_tokens = None if _v <= 0 else _v
+        if max_tokens is None:
+            _mt_source = "none (explicit 0)"
+    logger.info("WorldDev LLM: %s/%s max_tokens=%s (source: %s)",
+                provider or "?", model, max_tokens, _mt_source)
 
     if not model:
         raise HTTPException(status_code=400, detail="model erforderlich")

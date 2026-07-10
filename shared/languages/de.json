@@ -477,7 +477,7 @@
     "Min replies": "Min. Antworten",
     "Minimum danger level": "Minimale Gefahrenstufe",
     "Mode": "Modus",
-    "Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = default (32768). 0 = no max_tokens sent (provider default) — required for vLLM, which rejects prompt+max_tokens beyond the context window.": "Max. Tokens (Completion-Budget). Thinking-Modelle verbrauchen auch ihre versteckten Reasoning-Tokens aus diesem Budget. Leer = Default (32768). 0 = kein max_tokens senden (Provider-Default) — nötig für vLLM, das Prompt+max_tokens über dem Kontextfenster ablehnt.",
+    "Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = the model's LLM-Routing max_tokens, else 32768. 0 = no max_tokens sent — required for vLLM (rejects prompt+max_tokens beyond the context window), but Together then applies a TINY default and cuts after a few tokens.": "Max. Tokens (Completion-Budget). Thinking-Modelle verbrauchen auch ihre versteckten Reasoning-Tokens aus diesem Budget. Leer = max_tokens aus dem LLM-Routing des Modells, sonst 32768. 0 = kein max_tokens senden — nötig für vLLM (lehnt Prompt+max_tokens über dem Kontextfenster ab), aber Together setzt dann einen WINZIGEN Default und schneidet nach wenigen Tokens ab.",
     "Memory wiped: {m} memories, {s} summaries": "Memory gelöscht: {m} Erinnerungen, {s} Summaries",
     "Model": "Modell",
     "Model settings saved": "Modell-Einstellungen gespeichert",

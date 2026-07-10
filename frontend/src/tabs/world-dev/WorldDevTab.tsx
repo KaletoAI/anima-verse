@@ -407,8 +407,8 @@ export function WorldDevTab() {
             step={1024}
             style={{ width: 92, flex: '0 0 auto' }}
             value={maxTokens}
-            placeholder="32768"
-            title={t('Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = default (32768). 0 = no max_tokens sent (provider default) — required for vLLM, which rejects prompt+max_tokens beyond the context window.')}
+            placeholder={t('default')}
+            title={t('Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = the model\'s LLM-Routing max_tokens, else 32768. 0 = no max_tokens sent — required for vLLM (rejects prompt+max_tokens beyond the context window), but Together then applies a TINY default and cuts after a few tokens.')}
             onChange={(e) => setMaxTokens(e.target.value)}
           />
           <ModelPicker
