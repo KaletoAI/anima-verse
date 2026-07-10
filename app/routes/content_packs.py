@@ -757,8 +757,13 @@ async def character_intro_suggest(
         resp = llm_call("intro_memory", sys_p, user_p, agent_name=char_name, label="intro_memory")
         intro = (getattr(resp, "content", "") or "").strip()
     except Exception as e:
-        logger.exception("intro suggest failed")
-        raise HTTPException(status_code=500, detail=f"intro suggestion failed: {e}")
+        # The suggestion is OPTIONAL — a temporarily unavailable LLM (e.g. the
+        # gateway busy with a video job) must not read like a failed IMPORT.
+        # Degrade gracefully: empty intro + warning, the user types their own.
+        logger.warning("intro suggest failed (non-fatal): %s", e)
+        return {"character": char_name, "intro": "",
+                "warning": f"Intro suggestion unavailable ({e}) — enter one "
+                           f"manually or press Regenerate later."}
     return {"character": char_name, "intro": intro}
 
 

@@ -350,8 +350,11 @@ export function ImportButton({
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`)
       setIntro((body.intro || '').trim())
+      // Suggestion unavailable (LLM busy/down) — the import still works, the
+      // intro can be typed manually.
+      if (body.warning) toast(String(body.warning), 'error')
     } catch (e) {
-      toast(t('Import failed') + ': ' + (e as Error).message, 'error')
+      toast(t('Intro suggestion failed (import still possible)') + ': ' + (e as Error).message, 'error')
     } finally {
       setIntroBusy(false)
     }
