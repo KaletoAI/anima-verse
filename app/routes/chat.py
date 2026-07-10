@@ -2525,8 +2525,11 @@ def _build_full_system_prompt(character_name: str,
             # Stufe 2b: vergangene Tage
             _days = _dc.recent_daily_entries(character_name, limit=7)
             if _days:
+                # recent_daily_entries returns newest-first; the prompt reads
+                # chronologically -> oldest first.
                 _parts.append("Earlier days:\n" + "\n".join(
-                    f"- {dk}: {txt.strip()}" for dk, txt in _days if (txt or "").strip()))
+                    f"- {dk}: {txt.strip()}" for dk, txt in reversed(_days)
+                    if (txt or "").strip()))
             # Stufe 2: heutige Szenen (nach dem Cursor — eingeklappte fallen raus)
             _cursor = _dc.get_cursor(character_name)
             _lines = []
@@ -2542,6 +2545,8 @@ def _build_full_system_prompt(character_name: str,
                 tag = " · ".join([x for x in (_loc.get("name", ""), ", ".join(_osc)) if x])
                 _lines.append(f"- {summ}" + (f"  ({tag})" if tag else ""))
             if _lines:
+                # get_recent_scenes_for is newest-first -> flip to chronological.
+                _lines.reverse()
                 _parts.append("Earlier scenes today:\n" + "\n".join(_lines))
             scenes_block = "\n\n".join(_parts)
         except Exception as _se:

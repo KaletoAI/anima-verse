@@ -89,6 +89,31 @@ def consolidate_scene(scene: Dict[str, Any]) -> None:
     summary = ""
     if lines and participants:
         summary = _summarize(scene, lines)
+        if not summary:
+            # LLM summary failed for a scene WITH content: leave the scene
+            # OPEN (no prune, no mark_consolidated) so the next idle pass
+            # retries. Closing it with an empty summary would prune the raw
+            # perceptions AND hide the scene from every recap
+            # (summary != '' filter) — the conversation would vanish.
+            # Safety valve: after 24h of failed retries give up and close
+            # without a summary (logged as ERROR) so a permanently broken
+            # consolidation LLM cannot hammer the queue forever.
+            _last = scene.get("last_activity_ts") or ""
+            _too_old = False
+            try:
+                from app.core.timeutils import parse_iso, utc_now as _unow
+                _too_old = bool(_last) and (
+                    (_unow() - parse_iso(_last)).total_seconds() > 24 * 3600)
+            except Exception:
+                pass
+            if not _too_old:
+                logger.warning("Szene %s: Summary-LLM lieferte nichts — Szene "
+                               "bleibt offen für Retry (%d Äußerungen)",
+                               sid, len(lines))
+                return
+            logger.error("Szene %s: Summary scheitert seit >24h — schließe ohne "
+                         "Summary (%d Äußerungen gehen aus dem Recap verloren)",
+                         sid, len(lines))
 
     if summary:
         for p in participants:

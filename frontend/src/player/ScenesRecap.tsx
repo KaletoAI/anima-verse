@@ -34,7 +34,9 @@ export function ScenesRecap() {
     const tick = async () => {
       try {
         const d = await apiGet<{ scenes?: SceneRecap[] }>('/play/scenes')
-        if (alive) setScenes(d?.scenes || [])
+        // Server returns newest-first (limit semantics); the recap reads like
+        // a story -> chronological, oldest at the top.
+        if (alive) setScenes((d?.scenes || []).slice().reverse())
       } catch { /* auth handled in api.ts */ }
     }
     tick()

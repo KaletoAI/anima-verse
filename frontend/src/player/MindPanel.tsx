@@ -100,6 +100,14 @@ function sinceOf(ts: string | null | undefined): string {
   const sameDay = d.toDateString() === new Date().toDateString()
   return sameDay ? clockOf(ts) : `${d.toLocaleDateString()} ${clockOf(ts)}`
 }
+/** Full stamp (always date + time) — list entries span multiple days; a
+ *  mixed „today = time-only“ format makes the list look unsorted. */
+function stampOf(ts: string | null | undefined): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ''
+  return `${d.toLocaleDateString()} ${clockOf(ts)}`
+}
 function stars(n: number): string {
   return '★'.repeat(Math.max(0, Math.min(5, Math.round(n))))
 }
@@ -595,7 +603,7 @@ function MemoriesView({ character, initialRelated = '' }: { character: string; i
                   <span key={tag} style={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8,
                                            padding: '0 6px' }}>{tag}</span>
                 ))}
-                <span style={{ marginLeft: 'auto' }}>{sinceOf(m.timestamp)}</span>
+                <span style={{ marginLeft: 'auto' }}>{stampOf(m.timestamp)}</span>
               </div>
             </div>
           ))}
