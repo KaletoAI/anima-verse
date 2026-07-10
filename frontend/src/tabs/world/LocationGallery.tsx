@@ -4,6 +4,7 @@ import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { IMAGE_TYPES, type GalleryResponse, type Location, type Room } from './worldTypes'
+import { ImageSetDialog } from './ImageSetDialog'
 
 // ── Gallery — list, type-change, night-variant, delete, enlarge. ───────────
 
@@ -149,6 +150,7 @@ export function LocationGallery({
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | null>(null)
+  const [imageSetOpen, setImageSetOpen] = useState(false)
   // "Regenerate" target: recreate an existing map image using it as a reference.
   const [regenTarget, setRegenTarget] = useState<{ filename: string; type: string } | null>(null)
   // Independent config suffixes for map icons (editable in the dialog instead of
@@ -403,6 +405,9 @@ export function LocationGallery({
 
   const generatePanel = (
     <div className="ga-gallery-generate">
+      {imageSetOpen ? (
+        <ImageSetDialog location={location} onClose={() => setImageSetOpen(false)} />
+      ) : null}
       <button
         className="ga-btn ga-btn-sm"
         disabled={!!busy}
@@ -427,6 +432,16 @@ export function LocationGallery({
           title={t('Open the image generation dialog for the flat 2D map icon.')}
         >
           🟦 {t('Generate 2D icon')}
+        </button>
+      ) : null}
+      {!roomFilter ? (
+        <button
+          className="ga-btn ga-btn-sm"
+          disabled={!!busy}
+          onClick={() => setImageSetOpen(true)}
+          title={t('Generate a full image set (location and/or all rooms, day + night) with one chosen backend/model — runs as sequential background jobs.')}
+        >
+          🖼 {t('Image set…')}
         </button>
       ) : null}
       <button
