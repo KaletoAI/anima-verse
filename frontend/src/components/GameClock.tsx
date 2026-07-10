@@ -35,7 +35,13 @@ function toLocalInput(d: Date): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}:${two(d.getMinutes())}`
 }
 
-export function GameClock() {
+export function GameClock({ readOnly = false, showSystem = true }: {
+  /** true = display only (player UI) — no set popover; setting the game
+   *  time/speed happens in the Game-Admin header. */
+  readOnly?: boolean
+  /** false = hide the system clock (compact player header). */
+  showSystem?: boolean
+} = {}) {
   const { t } = useI18n()
   const [info, setInfo] = useState<ClockInfo | null>(null)
   const fetchedAt = useRef<number>(0)
@@ -110,11 +116,26 @@ export function GameClock() {
     }
   }
 
+  const clockBody = (
+    <>
+      🕰 {fmtGame(gameNow)}
+      {info.factor !== 1 ? <span style={{ opacity: 0.7, marginLeft: 4 }}>×{info.factor}</span> : null}
+      {info.frozen ? <span style={{ marginLeft: 4 }}>❄</span> : null}
+    </>
+  )
+
   return (
     <div ref={rootRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85em' }}>
-      <span style={{ opacity: 0.6 }} title={t('System time')}>
-        🖥 {fmtClock(sysNow)}
-      </span>
+      {showSystem && (
+        <span style={{ opacity: 0.6 }} title={t('System time')}>
+          🖥 {fmtClock(sysNow)}
+        </span>
+      )}
+      {readOnly ? (
+        <span title={t('Game time')} style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.85 }}>
+          {clockBody}
+        </span>
+      ) : (
       <button
         className="ga-btn ga-btn-sm"
         onClick={openEditor}
@@ -123,10 +144,9 @@ export function GameClock() {
           : t('Game time. Click to set time & speed.')}
         style={{ fontVariantNumeric: 'tabular-nums' }}
       >
-        🕰 {fmtGame(gameNow)}
-        {info.factor !== 1 ? <span style={{ opacity: 0.7, marginLeft: 4 }}>×{info.factor}</span> : null}
-        {info.frozen ? <span style={{ marginLeft: 4 }}>❄</span> : null}
+        {clockBody}
       </button>
+      )}
       {open && (
         <div style={{
           position: 'absolute', top: '100%', right: 0, zIndex: 60, marginTop: 4,

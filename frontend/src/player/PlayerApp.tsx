@@ -38,6 +38,7 @@ import { GalleryPanel } from './GalleryPanel'
 import { InstagramPanel } from './InstagramPanel'
 import { PhonePanel } from './PhonePanel'
 import { NoticeBanner } from './NoticeBanner'
+import { GameClock } from '../components/GameClock'
 import { useQueue } from './useQueue'
 import { Icon, type IconName } from './icons'
 import { LightboxProvider, useLightbox } from './Lightbox'
@@ -1177,6 +1178,7 @@ export function PlayerApp() {
   const layoutsMeta = PANEL_META.find((p) => p.id === 'layouts')!
   const fixedCluster = (
     <>
+      <GameClock readOnly showSystem={false} />
       {tbBtn('tasks', 'Tasks', 'tasks', open.includes('tasks'), () => togglePanel('tasks'))}
       {tbBtn('layouts', layoutsMeta.label, layoutsMeta.icon, open.includes('layouts'), () => togglePanel('layouts'))}
       <button onClick={toggleFreeze} aria-pressed={frozen}

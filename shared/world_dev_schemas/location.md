@@ -62,7 +62,7 @@ non-English words are not understood by the image model and produce poor images.
 
 
 - `activity_hint` (per room, optional): free-text direction of what one typically does in that room. Activities are NOT a fixed library — characters act freely; this hint only inspires the LLM. Keep it short and in the user's language. Leave empty when nothing specific applies.
-- `danger_level` (0-5): 0 = safe, 1-2 = mildly risky, 3 = dangerous, 4-5 = very dangerous. At locations with danger_level >= 2 characters lose stamina hourly. Default: 0.
+- `danger_level` (0-5): 0 = safe, 1-2 = mildly risky, 3 = dangerous, 4-5 = very dangerous. At locations with danger_level >= 2 characters lose stamina per game hour. Default: 0.
 - `indoor` (location AND per room): `"indoor"`, `"outdoor"` or `""` (empty). A room value overrides the location (e.g. a pool room inside an indoor house = `"outdoor"`); empty room = inherit the location. Drives scene rendering and event coherence. Leave `""` when unsure.
 - `decency` (location AND per room): `"public"` (default — top+bottom must stay covered), `"private"` (nudity allowed when alone/intimate) or `"nude_ok"` (always allowed). A room value overrides the location; empty = inherit. Use `""`/`"public"` for normal places.
 - `swim_allowed` (location AND per room, bool): `true` only where swimming fits (beach, pool, lake) — lets swimwear replace top/bottom when a character is wet. Default `false`.

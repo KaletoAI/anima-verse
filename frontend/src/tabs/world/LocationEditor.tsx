@@ -139,7 +139,7 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
             />
           </Field>
           <Field label={t('Danger level')}
-            hint={t('Drives hourly stamina/stat drain and danger-based rules; higher = more dangerous.')}>
+            hint={t('Drives stamina/stat drain per GAME hour (game clock) and danger-based rules; higher = more dangerous.')}>
             <select
               className="ga-input"
               value={draft.danger_level ?? 0}

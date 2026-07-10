@@ -58,13 +58,13 @@ SECTIONS = {
             },
             "log_retention_days": {
                 "type": "int",
-                "label": "Log Aufbewahrung (Tage)",
+                "label": "Log retention (days)",
                 "default": 5,
                 "min": 1,
                 "max": 365,
-                "description": "Eintraege in logs/llm_calls.jsonl und logs/image_prompts.jsonl, "
-                               "die aelter als diese Anzahl Tage sind, werden beim Server-Start "
-                               "automatisch entfernt.",
+                "description": "Entries in logs/llm_calls.jsonl and logs/image_prompts.jsonl "
+                               "older than this many days are removed at server start. "
+                               "SYSTEM time (real days).",
             },
             "world_admin_tick_interval_seconds": {
                 "type": "int",
@@ -72,12 +72,14 @@ SECTIONS = {
                 "default": 60,
                 "min": 10,
                 "max": 3600,
-                "description": "Frequenz des zentralen Hintergrund-Ticks. Triggert: "
-                               "Status-Decay, Force-Rules (z.B. Wake-Up), Assignment-Expiry, "
-                               "Random-Events, Relationship-Decay. Sub-Tasks haben eigene "
-                               "Sub-Frequenzen — Status-Decay laeuft z.B. nur stuendlich, "
-                               "Force-Rules jeden Tick. Niedrigere Werte = schnellere Reaktion "
-                               "auf Stat-Schwellen, hoehere Werte = weniger CPU-Last.",
+                "description": "Frequency of the central background tick — SYSTEM time "
+                               "(real seconds). Triggers: status decay, force rules (e.g. "
+                               "wake-up), assignment expiry, random events, relationship "
+                               "decay. Sub-tasks have their own sub-frequencies — the "
+                               "status decay inside is gated per GAME hour (follows the "
+                               "game clock/factor; the tick interval is its upper bound), "
+                               "force rules run every tick. Lower = faster reaction to "
+                               "stat thresholds, higher = less CPU load.",
             },
             "api_key": {
                 "type": "password",
@@ -105,7 +107,7 @@ SECTIONS = {
             },
             "api_base": {"type": "str", "label": "API Base URL", "required": True, "placeholder": "http://host:port/v1"},
             "api_key": {"type": "password", "label": "API Key", "sensitive": True, "default": "not-needed", "description": "API Key (bei lokalen Providern: 'not-needed')"},
-            "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request Timeout in Sekunden"},
+            "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout in seconds — SYSTEM time (HTTP)."},
             "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Maximale gleichzeitige Anfragen"},
             "serialize_group": {"type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
         },
@@ -115,7 +117,7 @@ SECTIONS = {
         "icon": "🔁",
         "fields": {
             "busy_max_attempts": {"type": "int", "label": "Max Busy Retries", "default": 3, "min": 0, "max": 10, "description": "When an LLM provider answers 503 ('busy' — the gateway is at its parallel-call limit), wait and retry the SAME model this many times before giving up. 0 disables busy-retry. Triggers ONLY on a real 503 / Service Unavailable; other errors (500/502/504/timeout) keep the cooldown + fallback path."},
-            "busy_base_delay_seconds": {"type": "float", "label": "Busy Retry Base Delay (s)", "default": 10, "min": 1, "max": 120, "step": 1, "description": "Backoff base wait before retrying a busy (503) model. Doubles each attempt (e.g. 10 → 20 → 40s), capped at 120s. Keep total backoff under the provider Timeout so the queue worker does not abort mid-wait."},
+            "busy_base_delay_seconds": {"type": "float", "label": "Busy Retry Base Delay (s)", "default": 10, "min": 1, "max": 120, "step": 1, "description": "Backoff base wait before retrying a busy (503) model. Doubles each attempt (e.g. 10 → 20 → 40s), capped at 120s. Keep total backoff under the provider Timeout so the queue worker does not abort mid-wait. SYSTEM time."},
         },
     },
     "llm_simple": {
@@ -226,14 +228,14 @@ SECTIONS = {
         "label": "Memory / Gedaechtnis",
         "icon": "🧠",
         "fields": {
-            "short_term_days": {"type": "int", "label": "Kurzzeit (Tage)", "default": 3, "min": 1, "max": 14, "description": "Chat-History im Prompt (Stufe 1). Ab diesem Alter werden Episodics zu Tages-Summaries konsolidiert."},
-            "mid_term_days": {"type": "int", "label": "Mittelzeit (Tage)", "default": 30, "min": 7, "max": 180, "description": "Ab diesem Alter werden Tages-Summaries zu Wochen-Summaries konsolidiert (Stufe 2 → 3)."},
-            "long_term_days": {"type": "int", "label": "Langzeit (Tage)", "default": 90, "min": 30, "max": 365, "description": "Ab diesem Alter werden Wochen-Summaries zu Monats-Summaries konsolidiert."},
+            "short_term_days": {"type": "int", "label": "Short-term (days)", "default": 3, "min": 1, "max": 14, "description": "Chat history in the prompt (stage 1). Episodics older than this are consolidated into daily summaries. SYSTEM time (real days — consolidation follows the real calendar, not the game clock)."},
+            "mid_term_days": {"type": "int", "label": "Mid-term (days)", "default": 30, "min": 7, "max": 180, "description": "Daily summaries older than this are consolidated into weekly summaries (stage 2 → 3). SYSTEM time (real days)."},
+            "long_term_days": {"type": "int", "label": "Long-term (days)", "default": 90, "min": 30, "max": 365, "description": "Weekly summaries older than this are consolidated into monthly summaries. SYSTEM time (real days)."},
             "max_messages": {"type": "int", "label": "Max Nachrichten", "default": 100, "min": 10, "max": 500, "description": "Safety-Cap: Maximale Anzahl Chat-Nachrichten im Prompt."},
-            "session_gap_hours": {"type": "int", "label": "Session-Bruch (Stunden)", "default": 4, "min": 0, "max": 24, "description": "Zeitluecke zwischen Turns, ab der die Chat-History abgeschnitten wird — Turns vor der letzten solchen Luecke wandern in die Session-Summary. 0 = deaktiviert."},
+            "session_gap_hours": {"type": "int", "label": "Session gap (hours)", "default": 4, "min": 0, "max": 24, "description": "Gap between turns after which the chat history is cut — turns before the last such gap move into the session summary. 0 = disabled. SYSTEM time (real hours)."},
             "max_semantic": {"type": "int", "label": "Max Fakten", "default": 50, "min": 10, "max": 200, "description": "Maximale Anzahl semantischer Memories pro Character (Hard-Cap)."},
-            "commitment_max_days": {"type": "int", "label": "Commitment Max-Alter (Tage)", "default": 5, "min": 1, "max": 30, "description": "Offene Commitments ohne 'completed'/'important'-Tag und importance<4 werden nach diesem Alter beim Cleanup entfernt."},
-            "commitment_completed_days": {"type": "int", "label": "Erledigtes Commitment (Tage)", "default": 3, "min": 1, "max": 14, "description": "Erledigte Commitments (Tag 'completed') werden nach diesem Alter entfernt."},
+            "commitment_max_days": {"type": "int", "label": "Commitment max age (days)", "default": 5, "min": 1, "max": 30, "description": "Open commitments without a 'completed'/'important' tag and importance<4 are removed by the cleanup after this age. SYSTEM time (real days)."},
+            "commitment_completed_days": {"type": "int", "label": "Completed commitment (days)", "default": 3, "min": 1, "max": 14, "description": "Completed commitments (tag 'completed') are removed after this age. SYSTEM time (real days)."},
         },
     },
     "image_generation": {
@@ -252,7 +254,7 @@ SECTIONS = {
             "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Backend-name glob (e.g. 'Flux*') — resolved by availability + cost."},
             "scene_imagegen_default": {"type": "imagegen_select", "label": "Scene Render Default (Match)", "description": "Backend-name glob (e.g. 'Krea2') for the player's 'Rendered' environment view — composes the room background + present characters (expression images as references) into one image. Empty = location default."},
             "scene_render_mode": {"type": "select", "label": "Scene Render Mode", "choices": ["multi_ref", "only_background"], "default": "multi_ref", "description": "How the 'Rendered' view builds its request. 'multi_ref': background + the present characters' expression images as reference images, pose from text. 'only_background': only the background as reference — every person is described in text (appearance + pose). Both work with any generate backend (Qwen, Flux, Krea2, …)."},
-            "scene_render_cooldown_s": {"type": "int", "label": "Scene Render Cooldown (s)", "default": 120, "min": 0, "description": "Minimum seconds between fresh scene generations (cache misses) — panel remounts and signature churn (variant updates, presence changes) must not burn renders back to back. While cooling down, the newest existing scene image is served. 0 = off; the ⟳ button always bypasses."},
+            "scene_render_cooldown_s": {"type": "int", "label": "Scene Render Cooldown (s)", "default": 120, "min": 0, "description": "Minimum seconds between fresh scene generations (cache misses) — panel remounts and signature churn (variant updates, presence changes) must not burn renders back to back. While cooling down, the newest existing scene image is served. 0 = off; the ⟳ button always bypasses. SYSTEM time."},
             # KEEP the two defaults IN SYNC with PROMPT_*_DEFAULT in app/core/scene_render.py.
             # Built-in default shown as PLACEHOLDER only (never prefilled as a
             # value): a prefilled template gets persisted on save and freezes
@@ -437,8 +439,8 @@ SECTIONS = {
                     "disable_safety": {"type": "bool", "label": "Disable safety", "default": False, "description": "Sends disable_safety_checker=true (Together.ai-specific).", "applicable_for": ["together"]},
                     "seconds": {"half": True, "type": "int", "label": "Video length (s)", "default": 5, "min": 1, "max": 30, "description": "Length of the generated video in seconds.", "applicable_for": ["localai_video", "together_video"]},
                     "video_endpoint": {"type": "str", "label": "Video endpoint path", "default": "/v1/videos/generations", "description": "Request path on the gateway for video generation. Default '/v1/videos/generations'; set to '/v1/images/generations' if the gateway serves the video model through the images endpoint. The response is auto-detected (inline b64/url or an async job that gets polled).", "applicable_for": ["localai_video"]},
-                    "poll_interval": {"half": True, "type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together, video): lower = faster detection, but more API calls.", "applicable_for": ["civitai", "together", "localai_video", "together_video"]},
-                    "max_wait": {"half": True, "type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed.", "applicable_for": ["civitai", "together", "localai_video", "together_video"]},
+                    "poll_interval": {"half": True, "type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together, video): lower = faster detection, but more API calls. SYSTEM time.", "applicable_for": ["civitai", "together", "localai_video", "together_video"]},
+                    "max_wait": {"half": True, "type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed. SYSTEM time.", "applicable_for": ["civitai", "together", "localai_video", "together_video"]},
                     "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout for the generation (HTTP). Raise it for slow models/large images/video — be generous with the synchronous gateway (e.g. 300). Applies to together/openai_diffusion/localai/openai_chat + video backends.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat", "localai_video", "together_video"]},
                     "max_concurrent": {"half": True, "type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallel jobs on this backend queue. Additional concurrent requests wait until a slot frees up. Applies to all backend types (including cloud/OpenAI)."},
                     "serialize_group": {"half": True, "type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
@@ -532,7 +534,7 @@ SECTIONS = {
         "fields": {
             "max_prompt_entries": {"type": "int", "label": "Max Prompt Entries", "default": 20, "min": 1, "description": "Max Eintraege im System-Prompt (Token-Budget)"},
             "max_entries": {"type": "int", "label": "Max Entries", "default": 200, "min": 1, "description": "Max gespeicherte Eintraege pro Character (Sliding Window)"},
-            "daily_summary_days": {"type": "int", "label": "Daily Summary Tage", "default": 7, "min": 1, "description": "Anzahl vergangene Tage im System-Prompt"},
+            "daily_summary_days": {"type": "int", "label": "Daily summary days", "default": 7, "min": 1, "description": "Number of past days shown in the system prompt. SYSTEM time (real days)."},
             "batch_size": {"type": "int", "label": "Batch Size", "default": 5, "min": 1},
             "max_input_tokens": {"type": "int", "label": "Max Input Tokens", "default": 12000, "min": 100},
             "max_output_tokens": {"type": "int", "label": "Max Output Tokens", "default": 1500, "min": 100},
@@ -545,7 +547,7 @@ SECTIONS = {
         "icon": "❤",
         "fields": {
             "summary_enabled": {"type": "bool", "label": "Summaries Aktiviert", "default": True, "description": "Periodische Zusammenfassung der Beziehungen"},
-            "summary_interval_minutes": {"type": "int", "label": "Summary Interval (min)", "default": 120, "min": 10},
+            "summary_interval_minutes": {"type": "int", "label": "Summary interval (min)", "default": 120, "min": 10, "description": "Interval of the periodic relationship summary job. SYSTEM time (real minutes)."},
         },
     },
     "social_reactions": {
@@ -559,8 +561,8 @@ SECTIONS = {
         "label": "Gedanken",
         "icon": "🧠",
         "fields": {
-            "min_turn_gap_seconds": {"type": "int", "label": "Min Turn Gap (s)", "default": 30, "min": 0, "max": 600, "description": "Mindest-Pause (Sekunden) zwischen zwei aufeinanderfolgenden Thought-Turns. Verhindert dass der AgentLoop bei wenigen Charakteren zu eng taktet. Gilt nicht fuer in_chat_skip / Fehler (die haben eigene Backoffs)."},
-            "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 5, "min": 0, "max": 240, "description": "Mindest-Wartezeit (Minuten) bevor derselbe Charakter wieder einen echten Thought-Turn bekommt. Bumps (externe Trigger wie Avatar-Roomentry) umgehen den Cooldown."},
+            "min_turn_gap_seconds": {"type": "int", "label": "Min Turn Gap (s)", "default": 30, "min": 0, "max": 600, "description": "Minimum pause (seconds) between two consecutive thought turns. Keeps the AgentLoop from over-pacing with few characters. Does not apply to in_chat_skip / errors (those have their own backoffs). SYSTEM time."},
+            "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 5, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
         },
     },
     "random_events": {
@@ -568,14 +570,14 @@ SECTIONS = {
         "icon": "🎲",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": True, "description": "Automatische Event-Generierung an besetzten Locations"},
-            "base_probability": {"type": "int", "label": "Basis-Wahrscheinlichkeit %", "default": 0, "min": 0, "max": 50, "description": "Wahrscheinlichkeit pro Stunde pro Location. Pro Location ueberschreibbar."},
+            "base_probability": {"type": "int", "label": "Base probability %", "default": 0, "min": 0, "max": 50, "description": "Probability per hour per location; overridable per location. The generator rolls on a SYSTEM-time hourly tick (real hours, independent of the game-clock factor)."},
             "entry_roll_enabled": {"type": "bool", "label": "Roll-on-Entry", "default": True, "description": "Sofort wuerfeln wenn ein Avatar/Character eine Location betritt — zusaetzlich zum stuendlichen Tick. Macht 'beim Betreten passiert was' moeglich."},
-            "entry_roll_cooldown_minutes": {"type": "int", "label": "Entry Cooldown (min)", "default": 10, "min": 0, "max": 120, "description": "Mindestabstand zwischen zwei Roll-on-Entry-Wuerfen pro (Character, Location). Verhindert Wuerfel-Spam beim schnellen Rein-Raus."},
-            "entry_roll_jitter_seconds": {"type": "int", "label": "Entry Jitter (s)", "default": 3, "min": 0, "max": 30, "description": "Zufaellige Verzoegerung 0–N Sekunden bevor das Event nach Eintritt aufploppt. 0 = sofort, sonst fuehlt es sich an als wuerde was 'passieren' nach Ankunft."},
+            "entry_roll_cooldown_minutes": {"type": "int", "label": "Entry Cooldown (min)", "default": 10, "min": 0, "max": 120, "description": "Minimum distance between two roll-on-entry rolls per (character, location). Prevents dice spam on quick in-and-out. SYSTEM time (real minutes)."},
+            "entry_roll_jitter_seconds": {"type": "int", "label": "Entry Jitter (s)", "default": 3, "min": 0, "max": 30, "description": "Random delay of 0–N seconds before the event pops up after entry. 0 = immediately; otherwise it feels like something 'happens' after arrival. SYSTEM time."},
             "resolution_proactive": {"type": "bool", "label": "Proaktive Event-Aufloesung", "default": True, "description": "Characters an betroffener Location versuchen offene disruption/danger Events automatisch zu loesen (alle 5 Min)."},
-            "resolution_cooldown_minutes": {"type": "int", "label": "Resolution Cooldown (min)", "default": 15, "min": 1, "max": 240, "description": "Mindestabstand zwischen zwei Loesungsversuchen am gleichen Event."},
+            "resolution_cooldown_minutes": {"type": "int", "label": "Resolution Cooldown (min)", "default": 15, "min": 1, "max": 240, "description": "Minimum distance between two resolution attempts on the same event. SYSTEM time (real minutes)."},
             "event_imagegen_default": {"type": "imagegen_select", "label": "Event Illustration Default Backend", "description": "Backend-name glob used to render disruption/danger event illustrations that swap the location background while the event is active. Empty = the Scene Render Default (image_generation.scene_imagegen_default), then the location default."},
-            "resolved_image_linger_minutes": {"type": "int", "label": "Resolved-Image Linger (min)", "default": 30, "min": 0, "max": 240, "description": "How long the 'after' illustration of a resolved disruption/danger event keeps overriding the normal location background before reverting."},
+            "resolved_image_linger_minutes": {"type": "int", "label": "Resolved-Image Linger (min)", "default": 30, "min": 0, "max": 240, "description": "How long the 'after' illustration of a resolved disruption/danger event keeps overriding the normal location background before reverting. SYSTEM time (real minutes)."},
         },
     },
     "story_engine": {
@@ -584,7 +586,7 @@ SECTIONS = {
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": False, "description": "Story Arc Fortschritt (Background-Prozess)"},
             "max_active_arcs": {"type": "int", "label": "Max Active Arcs", "default": 2, "min": 1, "description": "Maximale aktive Arcs pro User"},
-            "cooldown_hours": {"type": "int", "label": "Cooldown (Stunden)", "default": 6, "min": 1, "description": "Mindest-Cooldown zwischen Arc-Advances pro User"},
+            "cooldown_hours": {"type": "int", "label": "Cooldown (hours)", "default": 6, "min": 1, "description": "Minimum cooldown between arc advances per user. SYSTEM time (real hours)."},
             "max_beats": {"type": "int", "label": "Max Beats", "default": 5, "min": 1, "description": "Maximale Beats pro Arc bevor Aufloesung"},
             "beat_images": {"type": "bool", "label": "Beat Bilder", "default": True, "description": "Bilder pro Story-Beat generieren"},
             "imagegen_default": {"type": "imagegen_select", "label": "Default ImageGen"},
@@ -692,7 +694,7 @@ SECTIONS = {
                 "default": 60,
                 "min": 0,
                 "max": 1440,
-                "description": "How long each catalog response is cached locally. 0 = always re-fetch.",
+                "description": "How long each catalog response is cached locally. 0 = always re-fetch. SYSTEM time.",
             },
             "allow_install_url": {
                 "type": "bool",

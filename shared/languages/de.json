@@ -232,6 +232,7 @@
     "Diary / timeline": "Tagebuch / Timeline",
     "Discover": "Entdecken",
     "Discovery probability per tick": "Entdeckungs-Wahrscheinlichkeit pro Tick",
+    "Drives stamina/stat drain per GAME hour (game clock) and danger-based rules; higher = more dangerous.": "Steuert Stamina-/Stat-Drain pro SPIEL-Stunde (Spieluhr) und gefahrbasierte Regeln; höher = gefährlicher.",
     "Drop blocks": "Drop-Blöcke",
     "Duplicate the selected entry": "Aktuellen Eintrag duplizieren",
     "Duration": "Dauer",
