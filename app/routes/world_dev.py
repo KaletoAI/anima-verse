@@ -542,7 +542,11 @@ async def world_dev_chat(request: Request):
         }
         _sessions[session_id] = session
 
-    llm, llm_instance = _create_llm(model, provider, max_tokens=16384)
+    # Completion budget INCLUDES the hidden reasoning tokens of thinking
+    # models (GLM, DeepSeek-R1, …) — a heavy thinker can burn >14k tokens
+    # before emitting the visible json:location block, which then gets cut
+    # mid-JSON. 32k leaves room for thinking + a full location/character JSON.
+    llm, llm_instance = _create_llm(model, provider, max_tokens=32768)
     if not llm:
         raise HTTPException(status_code=500, detail=f"Kein Provider fuer Model '{model}' gefunden")
 
