@@ -166,9 +166,10 @@ def _check_image_backends(config: dict) -> list:
             issues.append(_err("image_generation", f"Backend '{name}': API URL missing"))
 
         # Real cloud backends need an API key. openai_chat/localai/openai_diffusion
-        # + localai_video are generic (may point at LocalAI/vLLM/gateway without a
-        # key) -> no requirement.
-        if api_type in ("civitai", "together", "together_video") and not api_key:
+        # + localai_video/openai_video are generic (gateway may run keyless) and
+        # together_video falls back to the Together PROVIDER key at runtime ->
+        # no hard requirement for those.
+        if api_type in ("civitai", "together") and not api_key:
             issues.append(_err("image_generation", f"Backend '{name}': API key missing (cloud backend '{api_type}')"))
 
     # Use-case default render targets (backend globs)

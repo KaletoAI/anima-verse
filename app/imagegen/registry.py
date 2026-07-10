@@ -5,6 +5,7 @@ from app.imagegen.backends.localai import LocalAIBackend
 from app.imagegen.backends.localai_video import LocalAIVideoBackend
 from app.imagegen.backends.openai_chat import OpenAIChatImageBackend
 from app.imagegen.backends.openai_diffusion import OpenAIDiffusionBackend
+from app.imagegen.backends.openai_video import OpenAIVideoBackend
 from app.imagegen.backends.together import TogetherBackend
 from app.imagegen.backends.together_video import TogetherVideoBackend
 
@@ -20,4 +21,5 @@ BACKEND_REGISTRY = {
     # Video (MEDIA_TYPE == "video")
     "localai_video": LocalAIVideoBackend,
     "together_video": TogetherVideoBackend,
+    "openai_video": OpenAIVideoBackend,
 }

@@ -1094,10 +1094,10 @@ async def imagegen_backend_models(backend_name: str,
         return {"backend": backend_name, "models": [], "error": "Keine API URL"}
     models: list = []
     # Video backends want video models, image backends want image models.
-    _want_type = "video" if api_type in ("localai_video", "together_video") else "image"
+    _want_type = "video" if api_type in ("localai_video", "together_video", "openai_video") else "image"
     try:
         if api_type in ("together", "openai_diffusion", "localai", "openai_chat",
-                        "localai_video", "together_video"):
+                        "localai_video", "together_video", "openai_video"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
             # api_key optional for localai/localai_video (LocalAI without auth);
             # gateway/Together need it
