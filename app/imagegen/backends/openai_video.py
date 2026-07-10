@@ -1,25 +1,34 @@
-"""LLM-gateway image-to-video backend — strict OpenAI video API.
+"""LLM-gateway image-to-video backend (gateway generations/jobs API).
 
-Video counterpart of ``OpenAIDiffusionBackend``: the gateway hosts a video
-workflow (e.g. a ComfyUI img2video graph) under a generation alias and exposes
-it via the OpenAI video endpoints:
+Video counterpart of ``OpenAIDiffusionBackend`` for the LLM gateway: the
+gateway hosts a video workflow (e.g. a ComfyUI Wan img2video graph) under a
+generation alias. API (gateway spec, e.g. alias ``Wan-LowRAM``):
 
-    POST {api_url}/v1/videos                (multipart: model, prompt, seconds,
-                                             size, input_reference = first frame)
-    GET  {api_url}/v1/videos/{id}           (status: queued|in_progress|completed|failed)
-    GET  {api_url}/v1/videos/{id}/content   (MP4 bytes)
+    POST {api_url}/v1/generations            JSON:
+        {"model": alias, "prompt": …, "images": {"image": <base64|http-URL>},
+         "params": {"frames": N}, "mode": "async",
+         "negative_prompt"?: …, "lora1_high"/"lora1_high_strength" +
+         "lora1_low"/"lora1_low_strength" … "lora3_*"}
+        → 202 {"job_id": …, "status": "queued"}
+    GET  {api_url}/v1/jobs/{job_id}           status: queued|running|done|failed
+    GET  {api_url}/v1/jobs/{job_id}/result/0  the MP4 (owner-gated: the key
+                                              that created the job)
+    POST {api_url}/v1/jobs/{job_id}/cancel
 
-``MEDIA_TYPE == "video"`` keeps it out of image matching. A Bearer header is
-sent whenever an api_key is configured (gateways on a trusted network may run
-keyless). Tolerant response handling: a synchronous body carrying the video
-inline (``b64_json``/``url``/``video_url``) is accepted too, and the endpoint
-path is overridable via ``video_endpoint`` for gateway deviations.
+Generation takes MINUTES → always ``mode:"async"`` + polling. ``MEDIA_TYPE ==
+"video"`` keeps it out of image matching. A Bearer header is sent whenever an
+api_key is configured (same key as chat; note the owner-gated result
+download). Wan LoRAs come in HIGH/LOW pairs — the dialog's flat {name,
+strength} selections are auto-paired into ``lora{n}_high``/``lora{n}_low`` by
+the high/low token in the filename. Valid names: the alias' LoRA endpoint
+(``fetch_loras``).
 """
 import base64
 import os
+import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import requests
 
@@ -28,9 +37,13 @@ from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
 
+# Frames per second of the Wan graphs — the gateway takes a FRAME count
+# (default 81 ≈ 5 s); the backend maps its `seconds` field onto frames.
+_WAN_FPS = 16
+
 
 class OpenAIVideoBackend(ImageBackend):
-    """Gateway image-to-video via the OpenAI-style /v1/videos API."""
+    """Gateway image-to-video via /v1/generations + /v1/jobs (async)."""
 
     MEDIA_TYPE = "video"
     DEFAULT_REF_SLOT_COUNT = 1
@@ -41,16 +54,16 @@ class OpenAIVideoBackend(ImageBackend):
                          env_prefix=env_prefix)
         self.api_key = (api_key or os.environ.get(f"{env_prefix}API_KEY", "")).strip()
         self.model = (model or os.environ.get(f"{env_prefix}MODEL", "")).strip()
-        self.width = int(os.environ.get(f"{env_prefix}WIDTH", "768") or 768)
-        self.height = int(os.environ.get(f"{env_prefix}HEIGHT", "768") or 768)
+        self.width = int(os.environ.get(f"{env_prefix}WIDTH", "0") or 0)
+        self.height = int(os.environ.get(f"{env_prefix}HEIGHT", "0") or 0)
         self.seconds = int(os.environ.get(f"{env_prefix}SECONDS", "5") or 5)
-        self.timeout = int(os.environ.get(f"{env_prefix}TIMEOUT", "300") or 300)
+        self.timeout = int(os.environ.get(f"{env_prefix}TIMEOUT", "120") or 120)
         self.poll_interval = float(os.environ.get(f"{env_prefix}POLL_INTERVAL", "5.0") or 5.0)
         self.max_wait = int(os.environ.get(f"{env_prefix}MAX_WAIT", "900") or 900)
         self.video_endpoint = (os.environ.get(f"{env_prefix}VIDEO_ENDPOINT", "")
-                               or "/v1/videos").strip().rstrip("/")
-        # LoRA discovery (same gateway convention as openai_diffusion): optional
-        # endpoint listing the alias' LoRAs + glob narrowing to this model.
+                               or "/v1/generations").strip().rstrip("/")
+        # LoRA discovery: GET {lora_url}/v1/generations/{alias}/loras (same
+        # convention as the gateway image backends), narrowed by lora_filter.
         self.lora_url = os.environ.get(f"{env_prefix}LORA_URL", "").strip()
         self.lora_filter = os.environ.get(f"{env_prefix}LORA_FILTER", "").strip()
         self.available_loras: List[str] = []
@@ -69,7 +82,7 @@ class OpenAIVideoBackend(ImageBackend):
                 self._mark_unavailable(f"API-Key ungueltig ({resp.status_code})")
                 return False
             if resp.status_code == 200:
-                self._mark_available(f"OpenAI video, Alias: {self.model}")
+                self._mark_available(f"Gateway video, Alias: {self.model}")
                 if self.lora_url:
                     self.fetch_loras()
                 return True
@@ -84,9 +97,8 @@ class OpenAIVideoBackend(ImageBackend):
             return False
 
     def fetch_loras(self) -> List[str]:
-        """LoRAs of the video alias from the lora_url endpoint (GET ->
-        {"loras": [...]}), narrowed by ``lora_filter`` — same convention as
-        the LocalAI/gateway image backends."""
+        """LoRAs of the video alias (GET -> {"loras": [...]}), narrowed by
+        ``lora_filter``."""
         if not self.lora_url or not self.model:
             return self.available_loras
         url = (self.lora_url.replace("{alias}", self.model)
@@ -114,11 +126,19 @@ class OpenAIVideoBackend(ImageBackend):
         return self.available_loras
 
     @staticmethod
-    def _apply_lora_params(data: Dict[str, Any], params: Dict[str, Any]) -> None:
-        """Selected LoRAs as ``lora_01``/``strength_01`` … form fields —
-        the gateway maps them onto the lora-loader nodes of the alias
-        workflow (same convention as openai_diffusion image aliases)."""
-        idx = 0
+    def _apply_lora_params(payload: Dict[str, Any], params: Dict[str, Any]) -> None:
+        """Maps flat dialog selections ({name, strength}) onto the gateway's
+        Wan HIGH/LOW pair labels: ``lora{n}_high``/``lora{n}_high_strength`` +
+        ``lora{n}_low``/``lora{n}_low_strength`` (n = 1..3).
+
+        Files carrying a high/low token in the name are paired by their base
+        name (token stripped) — selecting the HIGH and LOW variant of the same
+        LoRA in two dialog slots lands them in ONE pair slot. A file without a
+        recognizable token occupies both halves of its slot (the gateway may
+        ignore the irrelevant half)."""
+        _tok = re.compile(r'(high|low)', re.IGNORECASE)
+        slots: List[Dict[str, Any]] = []
+        by_base: Dict[str, int] = {}
         for l in (params.get("lora_inputs") or params.get("loras") or []):
             if not isinstance(l, dict):
                 continue
@@ -129,11 +149,36 @@ class OpenAIVideoBackend(ImageBackend):
                 strength = float(l.get("strength", 1.0))
             except (TypeError, ValueError):
                 strength = 1.0
-            idx += 1
-            data[f"lora_{idx:02d}"] = name
-            data[f"strength_{idx:02d}"] = str(strength)
-        if idx:
-            logger.info("%s: %d LoRA(s) als lora_NN-Params uebertragen", "openai_video", idx)
+            m = _tok.search(name)
+            kind = m.group(1).lower() if m else ""
+            base = _tok.sub("*", name).lower() if m else name.lower()
+            if base in by_base:
+                slot = slots[by_base[base]]
+            else:
+                if len(slots) >= 3:
+                    logger.warning("openai_video: mehr als 3 LoRA-Paare — '%s' ignoriert", name)
+                    continue
+                slot = {"high": "", "high_s": 1.0, "low": "", "low_s": 1.0}
+                by_base[base] = len(slots)
+                slots.append(slot)
+            if kind == "low":
+                slot["low"], slot["low_s"] = name, strength
+            elif kind == "high":
+                slot["high"], slot["high_s"] = name, strength
+            else:
+                # No token — use for both halves.
+                slot["high"], slot["high_s"] = name, strength
+                slot["low"], slot["low_s"] = name, strength
+        for n, slot in enumerate(slots, start=1):
+            if slot["high"]:
+                payload[f"lora{n}_high"] = slot["high"]
+                payload[f"lora{n}_high_strength"] = slot["high_s"]
+            if slot["low"]:
+                payload[f"lora{n}_low"] = slot["low"]
+                payload[f"lora{n}_low_strength"] = slot["low_s"]
+        if slots:
+            logger.info("openai_video: %d LoRA-Paar(e) als lora{n}_high/low uebertragen",
+                        len(slots))
 
     @staticmethod
     def _first_frame_path(params: Dict[str, Any]) -> str:
@@ -146,62 +191,43 @@ class OpenAIVideoBackend(ImageBackend):
                     return str(path)
         return str(params.get("source_image_path") or "")
 
-    def _extract_inline_video(self, body: Any) -> Optional[bytes]:
-        """MP4 from a synchronous response body (b64 or URL) — gateway shortcut."""
-        items = []
-        if isinstance(body, dict):
-            data = body.get("data")
-            items = data if isinstance(data, list) else [body]
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            b64 = item.get("b64_json") or item.get("video") or ""
-            if b64 and isinstance(b64, str):
-                try:
-                    return base64.b64decode(b64)
-                except Exception:
-                    pass
-            url = item.get("url") or item.get("video_url") or ""
-            if url:
-                try:
-                    dl = requests.get(url, headers=self._headers(), timeout=120)
-                    if dl.status_code == 200 and len(dl.content) > 1000:
-                        return dl.content
-                except Exception as e:
-                    logger.error("%s: Video-Download-Fehler: %s", self.name, e)
-        return None
-
     def _generate(self, prompt: str, negative_prompt: str,
                   params: Dict[str, Any]) -> List[bytes]:
         src = self._first_frame_path(params)
-        p = Path(src) if src else None
-        if not p or not p.exists():
-            logger.error("%s: kein Quellbild fuer die Animation (%r)", self.name, src)
+        image_val = ""
+        if src.startswith(("http://", "https://")):
+            image_val = src
+        elif src:
+            p = Path(src)
+            if not p.exists():
+                logger.error("%s: Quellbild fehlt: %s", self.name, src)
+                return []
+            image_val = base64.b64encode(p.read_bytes()).decode("utf-8")
+        if not image_val:
+            # Without a reference image the gateway animates an 8x8 placeholder
+            # — the result is garbage. Fail loudly instead.
+            logger.error("%s: kein Quellbild fuer die Animation", self.name)
             return []
 
-        width = int(params.get("width") or self.width or 0)
-        height = int(params.get("height") or self.height or 0)
-        data = {
+        seconds = int(params.get("seconds") or self.seconds or 5)
+        frames = max(1, seconds * _WAN_FPS + 1)  # 5 s → 81 (gateway default)
+        payload: Dict[str, Any] = {
             "model": params.get("model") or self.model,
             "prompt": prompt,
-            "seconds": str(params.get("seconds") or self.seconds),
+            "images": {"image": image_val},
+            "params": {"frames": frames},
+            "mode": "async",
         }
-        # 0/unset dimensions: omit size — the alias workflow decides (fixed
-        # sizes are common in ComfyUI video graphs). Never send "0x0".
-        if width > 0 and height > 0:
-            data["size"] = f"{width}x{height}"
-        self._apply_lora_params(data, params)
-        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-                "webp": "image/webp"}.get(p.suffix.lower().lstrip("."), "image/png")
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        self._apply_lora_params(payload, params)
+
         url = f"{self.api_url}{self.video_endpoint}"
-        logger.info("%s: starte Video (Alias=%s, size=%s, %ss)", self.name,
-                    data["model"], data.get("size", "workflow"), data["seconds"])
+        logger.info("%s: starte Video-Job (Alias=%s, %d Frames ≈ %ds)",
+                    self.name, payload["model"], frames, seconds)
         try:
-            with open(p, "rb") as fh:
-                resp = requests.post(
-                    url, data=data,
-                    files={"input_reference": (p.name, fh, mime)},
-                    headers=self._headers(), timeout=self.timeout)
+            resp = requests.post(url, json=payload, headers=self._headers(),
+                                 timeout=self.timeout)
         except Exception as e:
             logger.error("%s: Verbindungsfehler: %s", self.name, e)
             return []
@@ -209,54 +235,46 @@ class OpenAIVideoBackend(ImageBackend):
             logger.error("%s: Video-Request HTTP %d - %s", self.name,
                          resp.status_code, resp.text[:300])
             return []
-
         body = resp.json() if resp.content else {}
-
-        # Gateway shortcut: video already inline.
-        video = self._extract_inline_video(body)
-        if video:
-            return [video]
-
-        job_id = str(body.get("id") or "") if isinstance(body, dict) else ""
+        job_id = str(body.get("job_id") or body.get("id") or "") if isinstance(body, dict) else ""
         if not job_id:
-            logger.error("%s: keine Video-Daten und keine Job-ID in Response",
-                         self.name)
+            logger.error("%s: keine job_id in Response: %s", self.name, str(body)[:200])
             return []
 
         start = time.time()
         while time.time() - start < self.max_wait:
             time.sleep(self.poll_interval)
             try:
-                poll = requests.get(f"{url}/{job_id}",
+                poll = requests.get(f"{self.api_url}/v1/jobs/{job_id}",
                                     headers=self._headers(), timeout=30)
                 if poll.status_code != 200:
+                    logger.debug("%s: Job-Poll HTTP %d", self.name, poll.status_code)
                     continue
-                sd = poll.json()
+                sd = poll.json() if poll.content else {}
                 status = (sd.get("status") or "").lower() if isinstance(sd, dict) else ""
                 if status in ("failed", "error"):
-                    logger.error("%s: Video failed: %s", self.name,
-                                 str(sd.get("error", ""))[:300])
+                    logger.error("%s: Video-Job failed: %s", self.name,
+                                 str(sd.get("error") or sd)[:300])
                     return []
-                if status == "completed":
-                    # Spec path: dedicated content endpoint. Fallback: inline.
-                    try:
-                        dl = requests.get(f"{url}/{job_id}/content",
-                                          headers=self._headers(), timeout=120)
-                        if dl.status_code == 200 and len(dl.content) > 1000:
-                            logger.info("%s: Video fertig (%.1fs, %d bytes)",
-                                        self.name, time.time() - start,
-                                        len(dl.content))
-                            return [dl.content]
-                    except Exception as e:
-                        logger.warning("%s: /content-Download fehlgeschlagen: %s",
-                                       self.name, e)
-                    video = self._extract_inline_video(sd)
-                    if video:
-                        return [video]
-                    logger.error("%s: completed, aber kein Video abrufbar", self.name)
+                if status in ("done", "completed"):
+                    dl = requests.get(f"{self.api_url}/v1/jobs/{job_id}/result/0",
+                                      headers=self._headers(), timeout=180)
+                    if dl.status_code == 200 and len(dl.content) > 1000:
+                        logger.info("%s: Video fertig (%.1fs, %d bytes)", self.name,
+                                    time.time() - start, len(dl.content))
+                        return [dl.content]
+                    logger.error("%s: Result-Download HTTP %d (%d bytes)",
+                                 self.name, dl.status_code, len(dl.content))
                     return []
+                # queued / running → weiter warten
             except Exception as e:
                 logger.warning("%s: Poll-Fehler: %s", self.name, e)
                 continue
-        logger.error("%s: Timeout nach %ds", self.name, self.max_wait)
+        logger.error("%s: Timeout nach %ds — Job %s wird abgebrochen",
+                     self.name, self.max_wait, job_id)
+        try:
+            requests.post(f"{self.api_url}/v1/jobs/{job_id}/cancel",
+                          headers=self._headers(), timeout=10)
+        except Exception:
+            pass
         return []
