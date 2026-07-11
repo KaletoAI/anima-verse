@@ -30,6 +30,42 @@ interface LoadedModel {
   height: number; // Welthöhe nach Skalierung
 }
 
+/** Alle Knochennamen (Node-Namen unterhalb von Skinnen) eines Modells. */
+function boneNames(root: THREE.Object3D): Set<string> {
+  const names = new Set<string>();
+  root.traverse((o) => {
+    if ((o as THREE.Bone).isBone) names.add(o.name);
+  });
+  return names;
+}
+
+/**
+ * Mixamo-Clips auf ein Skelett mit anderen Knochennamen umschreiben
+ * (z.B. "mixamorig:Hips" -> "Hips" bei Make-It-Animatable-Rigs).
+ * Positions-Tracks außer Hips werden verworfen (Proportionsunterschiede);
+ * Rotations-Tracks übertragen sauber, solange die Skeleton-Topologie
+ * (Mixamo-Standard) gleich ist.
+ */
+function retargetClip(clip: THREE.AnimationClip, targetBones: Set<string>): THREE.AnimationClip | null {
+  const tracks: THREE.KeyframeTrack[] = [];
+  for (const track of clip.tracks) {
+    const dot = track.name.lastIndexOf('.');
+    const nodeName = track.name.slice(0, dot);
+    const prop = track.name.slice(dot + 1);
+    let target = nodeName;
+    if (!targetBones.has(target)) {
+      target = nodeName.replace(/^mixamorig:?/i, '');
+      if (!targetBones.has(target)) continue;
+    }
+    if (prop === 'position' || prop === 'scale') continue;
+    const cloned = track.clone();
+    cloned.name = `${target}.${prop}`;
+    tracks.push(cloned);
+  }
+  if (tracks.length < 8) return null; // zu wenig übertragen -> unbrauchbar
+  return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+}
+
 type ClipKind = 'idle' | 'walk' | 'run' | 'sit' | 'dance' | 'wave';
 
 const CLIP_SYNONYMS: Record<ClipKind, string[]> = {
@@ -76,7 +112,8 @@ export class FigureLibrary {
         const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
         const height = m.height ?? defaultHeight;
         const usable = gltf.animations.filter((c) => c.tracks.length > 0);
-        if (!usable.length) throw new Error(`${m.name}: keine Animationen`);
+        const skinned = boneNames(template).size > 0;
+        if (!usable.length && !skinned) throw new Error(`${m.name}: weder Animationen noch Skelett`);
         return { name: m.name, template, clips: usable, scale: height / rawHeight, height };
       })
     );
@@ -84,6 +121,20 @@ export class FigureLibrary {
       if (r.status === 'fulfilled') this.models.push(r.value);
       else console.warn('[figures]', r.reason);
     }
+
+    // Modelle mit Skelett, aber ohne Clips (z.B. Make-It-Animatable-Rigs):
+    // Clips vom ersten Modell MIT Animationen leihen und auf die
+    // Ziel-Knochennamen umschreiben (mixamorig-Präfix-Mapping).
+    const donor = this.models.find((m) => m.clips.length > 0);
+    for (const m of this.models) {
+      if (m.clips.length || !donor) continue;
+      const bones = boneNames(m.template);
+      m.clips = donor.clips
+        .map((c) => retargetClip(c, bones))
+        .filter((c): c is THREE.AnimationClip => !!c);
+      if (!m.clips.length) console.warn(`[figures] ${m.name}: Clip-Retargeting fehlgeschlagen`);
+    }
+    this.models = this.models.filter((m) => m.clips.length > 0);
     return this.models.length > 0;
   }
 
