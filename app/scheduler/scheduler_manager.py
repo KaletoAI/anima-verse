@@ -16,8 +16,6 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 
 from app.core.log import get_logger
 
@@ -43,6 +41,15 @@ class SchedulerManager:
         # APScheduler
         self.scheduler = BackgroundScheduler()
         self.scheduler.start()
+        # GAME-TIME dispatcher (user decision 2026-07-11): character jobs
+        # ('at 08:00', 'every 2h', one-shot dates) are IN-WORLD schedules and
+        # follow the game clock. Jobs register in _game_jobs instead of
+        # per-job APScheduler triggers; one 30s real-time tick checks
+        # due-ness in game time (factor-aware; frozen world = frozen clock =
+        # nothing advances).
+        self._game_jobs = {}
+        self.scheduler.add_job(self._game_dispatch, IntervalTrigger(seconds=30),
+                               id="_game_dispatch", replace_existing=True)
 
         # Job-Daten im Speicher (flache Liste aller Jobs)
         self.jobs_data = {
@@ -239,14 +246,14 @@ class SchedulerManager:
                         self._schedule_job(job)
 
     def _resync_daily_schedules(self):
-        """Phase-2/4 Cleanup: Daily-Schedule-Force ist weg, der Tagesablauf
-        wirkt nur noch als Hint im AgentLoop (``daily_schedule_block``).
+        """Phase-2/4 cleanup: daily-schedule enforcement is gone, the daily
+        schedule only acts as a hint in the AgentLoop (``daily_schedule_block``).
 
-        Hier werden noch Legacy-Cron-Job-Eintraege aus der jobs-Liste
-        entfernt (per-char ``daily_schedule`` Type + ``daily_schedule_marker``
-        Stubs), aber keine neuen Marker mehr angelegt. Welt-administrative
-        Aufgaben laufen ueber den ``world_admin_tick`` in
-        ``app/core/periodic_jobs.py`` (nicht mehr ueber diesen Scheduler).
+        This only removes legacy cron-job entries from the jobs list
+        (per-char ``daily_schedule`` type + ``daily_schedule_marker`` stubs)
+        and no longer creates new markers. World-administrative tasks run
+        via the ``world_admin_tick`` in ``app/core/periodic_jobs.py``
+        (not through this scheduler anymore).
         """
         try:
             stale_types = {"daily_schedule", "daily_schedule_marker"}
@@ -255,7 +262,6 @@ class SchedulerManager:
             for j in stale:
                 logger.info("Entferne Legacy daily-Job: %s", j.get("id"))
                 self.remove_job(j["id"])
-            self._ensure_world_hourly_job()
         except Exception as e:
             logger.warning("Daily-Schedule Resync fehlgeschlagen: %s", e)
 
@@ -279,94 +285,187 @@ class SchedulerManager:
         self.jobs_data["metadata"]["total_jobs"] = len(self.jobs_data["jobs"])
 
     def _schedule_job(self, job_config: Dict[str, Any]):
-        """Plant einen Job im Scheduler basierend auf Konfiguration."""
+        """Registers a job for game-time dispatch based on its config."""
         job_id = job_config.get('id')
         trigger_config = job_config.get('trigger', {})
         trigger_type = trigger_config.get('type', 'interval')
 
-        # Marker-Jobs sind rein visuell (z.B. Tagesablauf-Indikator pro Char) —
-        # nicht im APScheduler registrieren, nur in jobs_data fuehren.
+        # Marker jobs are purely visual (e.g. per-char daily-schedule
+        # indicator) — never dispatched, only kept in jobs_data.
         if trigger_type == 'marker':
             return
 
         try:
-            # Random Offset (Jitter) in Sekunden
-            jitter_seconds = int(trigger_config.get('random_offset_minutes', 0)) * 60
+            from app.core.timeutils import game_now
 
-            if trigger_type == 'interval':
-                kwargs = dict(
-                    seconds=trigger_config.get('seconds', 0),
-                    minutes=trigger_config.get('minutes', 0),
-                    hours=trigger_config.get('hours', 0),
-                    days=trigger_config.get('days', 0))
-                total = kwargs['seconds'] + kwargs['minutes'] * 60 + kwargs['hours'] * 3600 + kwargs['days'] * 86400
-                if total == 0:
-                    logger.warning("Job %s ist als Interval-Job geplant, aber die Frequenz ist nicht angegeben. Ueberspringe.", job_id)
-                    return
-                if jitter_seconds > 0:
-                    kwargs['jitter'] = jitter_seconds
-
-                # start_date berechnen damit der Timer nach Server-Neustarts
-                # korrekt weiterlaeuft statt sich jedes Mal zurueckzusetzen.
-                last_exec = job_config.get('last_execution', {}).get('timestamp')
-                created_at = job_config.get('created_at')
-                anchor = last_exec or created_at
-                if anchor:
-                    try:
-                        anchor_dt = parse_iso(anchor)
-                        kwargs['start_date'] = anchor_dt
-                        logger.debug("Interval-Job %s: start_date=%s (aus %s)",
-                                     job_id, anchor_dt, "last_execution" if last_exec else "created_at")
-                    except (ValueError, TypeError):
-                        pass  # Fallback: kein start_date → default (now)
-
-                trigger = IntervalTrigger(**kwargs)
-            elif trigger_type == 'cron':
-                kwargs = dict(
-                    hour=trigger_config.get('hour'),
-                    minute=trigger_config.get('minute'),
-                    day=trigger_config.get('day'),
-                    month=trigger_config.get('month'),
-                    day_of_week=trigger_config.get('day_of_week'))
-                if jitter_seconds > 0:
-                    kwargs['jitter'] = jitter_seconds
-                trigger = CronTrigger(**kwargs)
-            elif trigger_type == 'date':
+            if trigger_type == 'date':
+                # Stale-Date-Check in GAME time: a run_date more than 3 game
+                # days in the past is dropped instead of fired late.
                 run_date = trigger_config.get('run_date')
-                # Stale-Date-Check: wenn run_date >3 Tage in der Vergangenheit
-                # liegt, Job NICHT registrieren und aus jobs_data entfernen.
-                # Sonst feuert APScheduler einen "missed by N days"-Warning und
-                # versucht ggf. nachzuholen — selten sinnvoll.
                 try:
                     rd = parse_iso(run_date) if isinstance(run_date, str) else run_date
-                    if rd and (utc_now() - rd).total_seconds() > 3 * 86400:
-                        logger.info("Stale Date-Job %s uebersprungen (run_date %s liegt >3 Tage zurueck) — wird entfernt",
+                    if rd and (game_now() - rd).total_seconds() > 3 * 86400:
+                        logger.info("Stale Date-Job %s uebersprungen (run_date %s liegt >3 Game-Tage zurueck) — wird entfernt",
                                      job_id, run_date)
                         self._purge_job_from_data(job_id)
                         return
                 except Exception as _stale_e:
                     logger.debug("Stale-Check fuer Job %s fehlgeschlagen: %s", job_id, _stale_e)
-                trigger = DateTrigger(run_date=run_date)
-            else:
+            elif trigger_type == 'interval':
+                total = (int(trigger_config.get('seconds', 0) or 0)
+                         + int(trigger_config.get('minutes', 0) or 0) * 60
+                         + int(trigger_config.get('hours', 0) or 0) * 3600
+                         + int(trigger_config.get('days', 0) or 0) * 86400)
+                if total == 0:
+                    logger.warning("Job %s ist als Interval-Job geplant, aber die Frequenz ist nicht angegeben. Ueberspringe.", job_id)
+                    return
+            elif trigger_type != 'cron':
                 logger.warning("Unbekannter Trigger-Typ: %s", trigger_type)
                 return
 
-            # misfire_grace_time=3 Tage: Misses innerhalb 3 Tagen werden
-            # ausgefuehrt, danach silent skip (nicht mehr "missed by N days").
-            self.scheduler.add_job(
-                func=self._execute_job,
-                trigger=trigger,
-                args=[job_config],
-                id=job_id,
-                name=job_config.get('name', job_id),
-                replace_existing=True,
-                misfire_grace_time=3 * 86400,
-            )
-
-            jitter_info = f", jitter={jitter_seconds}s" if jitter_seconds > 0 else ""
-            logger.info("Job geplant: %s (%s%s)", job_id, trigger_type, jitter_info)
+            # Baseline for jobs without a prior execution: registration time
+            # in GAME time — a daily-08:00 job created at 10:00 must not fire
+            # for the already-passed occurrence.
+            job_config.setdefault('_registered_game',
+                                  game_now().isoformat(timespec="seconds"))
+            self._game_jobs[job_id] = job_config
+            logger.info("Job geplant (game-time): %s (%s)", job_id, trigger_type)
         except Exception as e:
             logger.error("Fehler beim Planen von Job %s: %s", job_id, e)
+
+    # ── Game-time dispatch ────────────────────────────────────────────────
+
+    @staticmethod
+    def _cron_field(cfg, key):
+        """Cron field as int or None (=any). Expressions ('*/2', lists) are
+        not supported by the game-time matcher — treated as 'any' with a
+        warning (character jobs from the UI use plain values)."""
+        v = cfg.get(key)
+        if v in (None, "", "*"):
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            logger.warning("Cron-Feld %s=%r nicht unterstuetzt (game-time) — als 'any' behandelt", key, v)
+            return None
+
+    def _last_cron_occurrence(self, cfg, now_local):
+        """Most recent cron occurrence <= now (game-local). Supports plain
+        int fields (minute/hour/day/month/day_of_week); None = any."""
+        from datetime import timedelta
+        minute = self._cron_field(cfg, 'minute')
+        hour = self._cron_field(cfg, 'hour')
+        day = self._cron_field(cfg, 'day')
+        month = self._cron_field(cfg, 'month')
+        dow = self._cron_field(cfg, 'day_of_week')
+
+        def _date_ok(dt):
+            if day is not None and dt.day != day:
+                return False
+            if month is not None and dt.month != month:
+                return False
+            if dow is not None and dt.weekday() != dow:
+                return False
+            return True
+
+        occ = now_local.replace(second=0, microsecond=0)
+        if minute is not None:
+            occ = occ.replace(minute=minute)
+        if hour is not None:
+            occ = occ.replace(hour=hour, minute=minute if minute is not None else 0)
+        if occ > now_local:
+            occ -= timedelta(hours=1) if hour is None else timedelta(days=1)
+        # Walk back until the date constraints match (bounded).
+        step = timedelta(minutes=1) if (hour is None and minute is None) else (
+            timedelta(hours=1) if hour is None else timedelta(days=1))
+        for _ in range(400):
+            if _date_ok(occ):
+                return occ
+            occ -= step
+        return None
+
+    def _job_due(self, job_config) -> bool:
+        """Due-ness of a registered job in GAME time."""
+        from datetime import timezone as _tz
+        from app.core.timeutils import game_now, game_local_now
+        cfg = job_config.get('trigger', {}) or {}
+        ttype = cfg.get('type', 'interval')
+        now_g = game_now()
+        last = job_config.get('last_execution', {}) or {}
+        anchor_iso = (last.get('game_timestamp') or last.get('timestamp')
+                      or job_config.get('_registered_game')
+                      or job_config.get('created_at'))
+        try:
+            anchor = parse_iso(anchor_iso) if anchor_iso else None
+        except (ValueError, TypeError):
+            anchor = None
+        # Game clock set backwards (or a legacy real-time anchor ahead of
+        # game time): re-anchor to now instead of ghost-firing.
+        if anchor and anchor > now_g:
+            stamp = now_g.isoformat(timespec="seconds")
+            job_config['_registered_game'] = stamp
+            if last:
+                last['game_timestamp'] = stamp
+            return False
+
+        if ttype == 'date':
+            rd_raw = cfg.get('run_date')
+            try:
+                rd = parse_iso(rd_raw) if isinstance(rd_raw, str) else rd_raw
+            except (ValueError, TypeError):
+                return False
+            if not rd:
+                return False
+            fired = last.get('game_timestamp') or last.get('timestamp')
+            return now_g >= rd and not fired
+
+        if ttype == 'interval':
+            period = (int(cfg.get('seconds', 0) or 0)
+                      + int(cfg.get('minutes', 0) or 0) * 60
+                      + int(cfg.get('hours', 0) or 0) * 3600
+                      + int(cfg.get('days', 0) or 0) * 86400)
+            if period <= 0 or not anchor:
+                return False
+            return (now_g - anchor).total_seconds() >= period
+
+        if ttype == 'cron':
+            occ_local = self._last_cron_occurrence(cfg, game_local_now())
+            if occ_local is None:
+                return False
+            occ = occ_local.astimezone(_tz.utc)
+            if anchor and occ <= anchor:
+                return False  # occurrence already covered
+            # Catch-up window: mirror the old 3-day misfire grace (game days);
+            # older occurrences are skipped silently.
+            return (now_g - occ).total_seconds() <= 3 * 86400
+
+        return False
+
+    def _game_dispatch(self):
+        """30s real-time tick: fires every registered job that is due in
+        GAME time. _execute_job keeps its frozen-check, one-time cleanup and
+        last_execution persistence."""
+        # Frozen world = frozen game clock: nothing can become due, and a
+        # job that was already due must wait (fires once after unfreeze).
+        # Checking here once avoids a per-job skip log every 30s.
+        try:
+            from app.models.world import is_world_frozen
+            if is_world_frozen():
+                return
+        except Exception:
+            pass
+        for job_id, job_config in list(self._game_jobs.items()):
+            try:
+                if not self._job_due(job_config):
+                    continue
+                self._execute_job(job_config)
+                # Date jobs fire once — drop them from the live registry
+                # (one_time additionally removes them from jobs_data inside
+                # _execute_job; plain date jobs stay listed but done).
+                if (job_config.get('trigger', {}) or {}).get('type') == 'date':
+                    self._game_jobs.pop(job_id, None)
+            except Exception as e:
+                logger.error("Game-Dispatch fuer Job %s fehlgeschlagen: %s", job_id, e)
 
     def _purge_job_from_data(self, job_id: str):
         """Entfernt einen Job aus jobs_data + persistiert pro Character.
@@ -392,7 +491,7 @@ class SchedulerManager:
             logger.error("Stale-Job-Purge fuer %s fehlgeschlagen: %s", job_id, e)
 
     def _execute_job(self, job_config: Dict[str, Any]):
-        """Fuehrt einen Job aus basierend auf seiner Konfiguration."""
+        """Executes a job based on its configuration."""
         job_id = job_config.get('id')
         action = job_config.get('action', {})
         action_type = action.get('type')
@@ -412,12 +511,26 @@ class SchedulerManager:
         except Exception:
             pass
 
-        # Sleep-Check: Schlafende Characters fuehren keine Jobs aus.
+        # Sleep check: sleeping characters do not execute jobs.
         if agent and user_id:
             from app.models.character import is_character_sleeping
             if is_character_sleeping(agent):
                 logger.info("Job %s uebersprungen: %s schlaeft", job_id, agent)
                 self._log_execution(job_id, "skipped", {"reason": "Character schlaeft"})
+                # Re-anchor: the occurrence counts as consumed ("slept
+                # through it"), otherwise the game-time dispatcher would
+                # retry every 30s until the character wakes up.
+                from app.core.timeutils import game_now_iso
+                job_config["last_execution"] = {
+                    "timestamp": utc_now_iso(),
+                    "game_timestamp": game_now_iso(),
+                    "success": False,
+                    "skipped": "sleeping",
+                }
+                try:
+                    self._save_jobs_for_character(agent)
+                except Exception as e:
+                    logger.error("Fehler beim Speichern von last_execution: %s", e)
                 return
 
         try:
@@ -475,30 +588,35 @@ class SchedulerManager:
 
             self._log_execution(job_id, "success", result)
             logger.info("Job erfolgreich: %s", job_id)
+            from app.core.timeutils import game_now_iso
             job_config["last_execution"] = {
                 "timestamp": utc_now_iso(),
+                "game_timestamp": game_now_iso(),
                 "success": True
             }
 
         except Exception as e:
             logger.error("Fehler beim Ausfuehren von Job %s: %s", job_id, e)
             self._log_execution(job_id, "error", {"error": str(e)})
+            from app.core.timeutils import game_now_iso
             job_config["last_execution"] = {
                 "timestamp": utc_now_iso(),
+                "game_timestamp": game_now_iso(),
                 "success": False
             }
 
-        # One-time (date trigger) Jobs nach Ausführung entfernen
+        # Remove one-time (date trigger) jobs after execution
         if job_config.get('trigger', {}).get('one_time'):
             try:
                 self.jobs_data['jobs'] = [
                     j for j in self.jobs_data['jobs'] if j.get('id') != job_id
                 ]
+                self._game_jobs.pop(job_id, None)
                 logger.info("One-time Job entfernt: %s", job_id)
             except Exception as e:
                 logger.error("One-time Job cleanup: %s", e)
 
-        # last_execution persistieren
+        # Persist last_execution
         if agent:
             try:
                 self._save_jobs_for_character(agent)
@@ -851,7 +969,7 @@ class SchedulerManager:
         }
 
     def remove_job(self, job_id: str) -> Dict[str, Any]:
-        """Entfernt einen Job"""
+        """Removes a job"""
         job_index = None
         job = None
         for i, j in enumerate(self.jobs_data['jobs']):
@@ -863,10 +981,7 @@ class SchedulerManager:
         if job_index is None:
             return {"success": False, "error": f"Job {job_id} nicht gefunden"}
 
-        try:
-            self.scheduler.remove_job(job_id)
-        except:
-            pass
+        self._game_jobs.pop(job_id, None)
 
         character = job.get("character", job.get("agent", ""))
         self.jobs_data['jobs'].pop(job_index)
@@ -1042,7 +1157,7 @@ class SchedulerManager:
         return False
 
     def toggle_job(self, job_id: str) -> Dict[str, Any]:
-        """Aktiviert/Deaktiviert einen Job"""
+        """Enables/disables a job"""
         job = None
         for j in self.jobs_data['jobs']:
             if j['id'] == job_id:
@@ -1057,10 +1172,7 @@ class SchedulerManager:
         if job['enabled']:
             self._schedule_job(job)
         else:
-            try:
-                self.scheduler.remove_job(job_id)
-            except:
-                pass
+            self._game_jobs.pop(job_id, None)
 
         character = job.get("character", job.get("agent", ""))
         self._save_jobs_for_character(character)

@@ -229,7 +229,10 @@ def _submit_to_task_queue(intent: Intent, character_name: str) -> None:
 def _schedule_intent(intent: Intent, character_name: str,
                      scheduler_manager: Any) -> None:
     try:
-        run_at = (utc_now() + timedelta(seconds=intent.delay_seconds)).isoformat()
+        # delay_seconds is an in-world delay — run_date must be a GAME-time
+        # stamp (character scheduler jobs dispatch on the game clock).
+        from app.core.timeutils import game_now
+        run_at = (game_now() + timedelta(seconds=intent.delay_seconds)).isoformat()
         job_id = f"intent_{character_name}_{int(utc_now().timestamp())}_{intent.type}"
 
         if intent.type == "send_message":

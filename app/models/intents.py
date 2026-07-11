@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
-from app.core.timeutils import utc_now, utc_now_iso, parse_iso
+from app.core.timeutils import game_now, utc_now_iso, parse_iso
 
 logger = get_logger("intents")
 
@@ -239,8 +239,12 @@ def auto_track_progress(character_name: str, tool_type: str,
 
 
 def expire_overdue() -> int:
-    """Aktive Intents mit überschrittenem ``expires_at`` auf ``expired`` setzen."""
-    now = utc_now()
+    """Active intents whose ``expires_at`` has passed are set to ``expired``.
+
+    ``expires_at`` is a GAME-time stamp (it comes from the at_time trigger's
+    ``run_date``, which is in-world time) — compare against the game clock.
+    """
+    now = game_now()
     n = 0
     for it in list_intents(status="active"):
         exp = (it.get("expires_at") or "").strip()
@@ -348,7 +352,7 @@ def _parse_duration_to_seconds(s: str) -> int:
 
 
 def _when_to_trigger(when: str) -> Dict[str, Any]:
-    """Parst das ``when=``-Feld des Markers in ein trigger-Dict."""
+    """Parses the marker's ``when=`` field into a trigger dict."""
     w = (when or "standing").strip()
     low = w.lower()
     if low in ("standing", ""):
@@ -359,8 +363,10 @@ def _when_to_trigger(when: str) -> Dict[str, Any]:
         secs = _parse_duration_to_seconds(w[3:])
         if secs > 0:
             from datetime import timedelta
+            # "in 2h" is an in-world delay — run_date is a GAME-time stamp
+            # (the scheduler dispatches character jobs on the game clock).
             return {"kind": "at_time",
-                    "run_date": (utc_now() + timedelta(seconds=secs)).isoformat()}
+                    "run_date": (game_now() + timedelta(seconds=secs)).isoformat()}
         return {"kind": "standing"}
     if low.startswith("at_location:"):
         name = w.split(":", 1)[1].strip()
