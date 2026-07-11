@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
+import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { seededRandom } from './textures';
 
-const WALK_SPEED = 6; // Welteinheiten pro Sekunde
+const WALK_SPEED = 3.4; // Welteinheiten pro Sekunde (~Gehtempo bei 10er-Zellen)
+const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
 
 function ringColor(name: string): string {
   const rnd = seededRandom(name);
@@ -22,7 +24,6 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
   const draw = (img: HTMLImageElement | null) => {
     ctx.clearRect(0, 0, S, S);
     const r = S / 2 - 6;
-    // Zeiger-Spitze nach unten
     ctx.fillStyle = isAvatar ? '#e8b83a' : ringColor(name);
     ctx.beginPath();
     ctx.moveTo(S / 2 - 10, S - 26);
@@ -69,14 +70,16 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
 interface Npc {
   name: string;
   root: THREE.Group;
-  sprite: THREE.Sprite;
+  figure: Figure | null;
+  ring: THREE.Mesh | null;
+  sprite: THREE.Sprite | null;
   label: CSS2DObject;
   labelName: HTMLSpanElement;
   labelActivity: HTMLSpanElement;
   target: THREE.Vector3;
+  activity: string;
   travelLine: THREE.Line | null;
   travelKey: string;
-  moving: boolean;
   bobPhase: number;
 }
 
@@ -90,6 +93,8 @@ export class NpcManager {
   group = new THREE.Group();
   private npcs = new Map<string, Npc>();
   private avatarName = '';
+
+  constructor(private figures: FigureLibrary | null = null) {}
 
   setAvatar(name: string) {
     this.avatarName = name;
@@ -108,7 +113,8 @@ export class NpcManager {
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
       }
       npc.target.copy(st.pos);
-      npc.labelActivity.textContent = st.char.activity || '';
+      npc.activity = st.char.activity || '';
+      npc.labelActivity.textContent = npc.activity;
       const travelling = !!st.travelTo;
       npc.labelName.textContent = (travelling ? '🚶 ' : '') + st.char.name;
       this.updateTravelLine(npc, st);
@@ -116,6 +122,7 @@ export class NpcManager {
     for (const [name, npc] of this.npcs) {
       if (!seen.has(name)) {
         this.group.remove(npc.root);
+        if (npc.travelLine) this.group.remove(npc.travelLine);
         npc.label.element.remove();
         this.npcs.delete(name);
       }
@@ -125,24 +132,45 @@ export class NpcManager {
   private createNpc(st: NpcState): Npc {
     const isAvatar = st.char.name === this.avatarName;
     const root = new THREE.Group();
+    const figure = this.figures?.instantiate(st.char.name) ?? null;
+    let sprite: THREE.Sprite | null = null;
+    let ring: THREE.Mesh | null = null;
+    let labelY: number;
 
-    const tex = makePortraitTexture(st.char.name, st.char.avatar_url, isAvatar);
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: true }));
-    sprite.center.set(0.5, 0.02);
-    sprite.scale.setScalar(2.6);
-    sprite.position.y = 0.15;
-    root.add(sprite);
-
-    const blob = new THREE.Mesh(
-      new THREE.CircleGeometry(0.7, 18),
-      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28 })
-    );
-    blob.rotation.x = -Math.PI / 2;
-    blob.position.y = 0.08;
-    root.add(blob);
+    if (figure) {
+      root.add(figure.root);
+      // farbiger Bodenring als Wiedererkennung (gold = eigener Avatar)
+      ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.55, 0.7, 28),
+        new THREE.MeshBasicMaterial({
+          color: isAvatar ? 0xe8b83a : new THREE.Color(ringColor(st.char.name)),
+          transparent: true,
+          opacity: 0.85,
+        })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.09;
+      root.add(ring);
+      labelY = figure.height + 0.45;
+    } else {
+      const tex = makePortraitTexture(st.char.name, st.char.avatar_url, isAvatar);
+      sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: true }));
+      sprite.center.set(0.5, 0.02);
+      sprite.scale.setScalar(2.6);
+      sprite.position.y = 0.15;
+      root.add(sprite);
+      const blob = new THREE.Mesh(
+        new THREE.CircleGeometry(0.7, 18),
+        new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28 })
+      );
+      blob.rotation.x = -Math.PI / 2;
+      blob.position.y = 0.08;
+      root.add(blob);
+      labelY = -0.15;
+    }
 
     const el = document.createElement('div');
-    el.className = 'npc-label' + (isAvatar ? ' npc-avatar' : '');
+    el.className = 'npc-label' + (isAvatar ? ' npc-avatar' : '') + (figure ? ' above' : '');
     const nameEl = document.createElement('span');
     nameEl.className = 'npc-name';
     nameEl.textContent = st.char.name;
@@ -150,13 +178,14 @@ export class NpcManager {
     actEl.className = 'npc-activity';
     el.append(nameEl, actEl);
     const label = new CSS2DObject(el);
-    label.position.set(0, -0.15, 0);
+    label.position.set(0, labelY, 0);
     root.add(label);
 
     return {
-      name: st.char.name, root, sprite, label,
+      name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
-      target: st.pos.clone(), travelLine: null, travelKey: '', moving: false,
+      target: st.pos.clone(), activity: st.char.activity || '',
+      travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
     };
   }
@@ -183,7 +212,7 @@ export class NpcManager {
     }
   }
 
-  /** Pro Frame: Richtung Ziel laufen, leichtes Bobbing während der Bewegung. */
+  /** Pro Frame: Richtung Ziel laufen, Animation nach Zustand wählen. */
   tick(dt: number, camDist: number) {
     const labelVisible = camDist < 55;
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
@@ -191,16 +220,28 @@ export class NpcManager {
       const delta = npc.target.clone().sub(npc.root.position);
       delta.y = 0;
       const dist = delta.length();
-      npc.moving = dist > 0.05;
-      if (npc.moving) {
-        const step = Math.min(dist, WALK_SPEED * dt);
-        npc.root.position.addScaledVector(delta.normalize(), step);
-        npc.bobPhase += dt * 14;
-        npc.sprite.position.y = 0.15 + Math.abs(Math.sin(npc.bobPhase)) * 0.35;
-      } else {
-        npc.sprite.position.y = 0.15;
+      const moving = dist > 0.05;
+      if (moving) {
+        const step = Math.min(dist, WALK_SPEED * dt * (dist > RUN_DISTANCE ? 1.8 : 1));
+        const dir = delta.clone().normalize();
+        npc.root.position.addScaledVector(dir, step);
+        npc.figure?.faceTowards(dir);
       }
-      npc.sprite.scale.setScalar(spriteScale);
+
+      if (npc.figure) {
+        npc.figure.play(moving ? (dist > RUN_DISTANCE ? 'run' : 'walk') : activityToClipKind(npc.activity));
+        npc.figure.update(dt);
+        // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
+        npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
+      } else if (npc.sprite) {
+        if (moving) {
+          npc.bobPhase += dt * 14;
+          npc.sprite.position.y = 0.15 + Math.abs(Math.sin(npc.bobPhase)) * 0.35;
+        } else {
+          npc.sprite.position.y = 0.15;
+        }
+        npc.sprite.scale.setScalar(spriteScale);
+      }
       npc.label.visible = labelVisible;
     }
   }

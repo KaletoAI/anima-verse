@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as api from './api';
 import { Engine } from './scene/engine';
+import { FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
 import { applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -27,11 +28,15 @@ async function boot() {
 
 async function startApp(username: string) {
   const engine = new Engine(app);
-  const npcs = new NpcManager();
+  const figures = new FigureLibrary();
+  const [allLocs, firstMap, figuresOk] = await Promise.all([
+    api.getLocations(),
+    api.getWorldMap(),
+    figures.load(),
+  ]);
+  const npcs = new NpcManager(figuresOk ? figures : null);
   engine.scene.add(npcs.group);
   const panel = new InfoPanel();
-
-  const [allLocs, firstMap] = await Promise.all([api.getLocations(), api.getWorldMap()]);
 
   const hud = createHud({
     username,

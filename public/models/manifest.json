@@ -1,0 +1,14 @@
+{
+  "comment": "Beispiel-Figuren (Stufe 1, AV3D-5). height = Zielgröße in Welteinheiten. assignments mappt Charakternamen fest auf ein Modell, sonst deterministische Zuweisung per Namens-Hash. Später ersetzt GET /characters/{name}/model diese Datei.",
+  "defaultHeight": 1.75,
+  "models": [
+    { "name": "Soldier", "url": "/models/Soldier.glb" },
+    { "name": "Xbot", "url": "/models/Xbot.glb" },
+    { "name": "Robot", "url": "/models/RobotExpressive.glb", "height": 1.55 }
+  ],
+  "assignments": {
+    "Damian Demo": "Robot",
+    "Amelia Lane": "Xbot",
+    "Marcus Hale": "Soldier"
+  }
+}

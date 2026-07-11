@@ -62,6 +62,7 @@ html, body, #app {
   white-space: nowrap;
 }
 .npc-avatar .npc-name { color: #f2d98c; }
+.npc-label.above { transform: translateY(-35%); }
 
 /* ---------- HUD ---------- */
 .hud-top {
