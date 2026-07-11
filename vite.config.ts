@@ -5,6 +5,7 @@ const proxied = ['/auth', '/play', '/world', '/characters', '/state', '/events']
 
 export default defineConfig({
   server: {
+    host: '0.0.0.0',
     port: 5183,
     proxy: Object.fromEntries(
       proxied.map((p) => [p, { target, changeOrigin: true }])
