@@ -400,7 +400,7 @@ def consolidate_memories(character_name: str) -> int:
     # Configuration. Age thresholds are GLOBAL by design; the AMOUNT caps are
     # per NPC (character config → global memory.* → default), see
     # plan-memory-consolidation-npc-specific.md §4a.
-    commitment_max_days = int(_os.environ.get("MEMORY_COMMITMENT_MAX_DAYS", "7"))
+    commitment_max_days = int(_os.environ.get("MEMORY_COMMITMENT_MAX_DAYS", "5"))
     completed_max_days = int(_os.environ.get("MEMORY_COMMITMENT_COMPLETED_DAYS", "3"))
     semantic_max = memory_amount(character_name, "memory_max_semantic",
                                  "memory.max_semantic", 50)

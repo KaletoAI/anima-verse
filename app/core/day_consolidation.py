@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Tuple
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
-from app.core.timeutils import utc_now, utc_now_iso, parse_iso
+from app.core.timeutils import utc_now, utc_now_iso, parse_iso, game_now
 
 logger = get_logger("day_consolidation")
 
@@ -182,8 +182,11 @@ def maybe_consolidate(character_name: str) -> int:
 
 
 def note_sleep_start(character_name: str) -> None:
-    """Beim Einschlafen: Startzeit merken (für die Schlaf-Längen-Messung)."""
-    _kv_set(f"sleep_start:{character_name}", utc_now_iso())
+    """On falling asleep: remember the start time (for the sleep-length
+    measurement). GAME time — sleeping is an in-world duration; with a game
+    factor >1 a real-time measurement would never reach the main-sleep
+    threshold (an in-game night lasts minutes of real time)."""
+    _kv_set(f"sleep_start:{character_name}", game_now().isoformat(timespec="seconds"))
 
 
 def note_wake(character_name: str) -> None:
@@ -194,7 +197,8 @@ def note_wake(character_name: str) -> None:
     if not start:
         return
     try:
-        slept_h = (utc_now() - parse_iso(start)).total_seconds() / 3600.0
+        # GAME hours (see note_sleep_start).
+        slept_h = (game_now() - parse_iso(start)).total_seconds() / 3600.0
     except Exception:
         return
     min_h = float(_cfg("memory.main_sleep_min_hours", _DEFAULT_MAIN_SLEEP_MIN_HOURS))

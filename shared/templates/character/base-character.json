@@ -824,6 +824,42 @@
           "hint_de": "Top-K Memories, die dieser Character im Chat-Prompt sieht. Leer = global.",
           "placeholder": "global default",
           "placeholder_de": "globaler Default"
+        },
+        {
+          "key": "memory_daily_entries_in_prompt",
+          "label": "Day entries in prompt",
+          "label_de": "Tages-Einträge im Prompt",
+          "type": "number",
+          "store": "config",
+          "llm_generable": false,
+          "hint": "How many day recaps this character's prompt shows. Empty = global.",
+          "hint_de": "Wie viele Tages-Recaps der Prompt dieses Characters zeigt. Leer = global.",
+          "placeholder": "global default",
+          "placeholder_de": "globaler Default"
+        },
+        {
+          "key": "memory_partner_days_in_prompt",
+          "label": "Partner days in prompt",
+          "label_de": "Partner-Tage im Prompt",
+          "type": "number",
+          "store": "config",
+          "llm_generable": false,
+          "hint": "How many per-partner chat day summaries the prompt shows. Empty = global.",
+          "hint_de": "Wie viele Partner-Tages-Summaries der Prompt zeigt. Leer = global.",
+          "placeholder": "global default",
+          "placeholder_de": "globaler Default"
+        },
+        {
+          "key": "memory_scenes_in_prompt",
+          "label": "Earlier scenes in prompt",
+          "label_de": "Frühere Szenen im Prompt",
+          "type": "number",
+          "store": "config",
+          "llm_generable": false,
+          "hint": "How many not-yet-collapsed scenes the prompt shows. Empty = global.",
+          "hint_de": "Wie viele noch nicht eingeklappte Szenen der Prompt zeigt. Leer = global.",
+          "placeholder": "global default",
+          "placeholder_de": "globaler Default"
         }
       ]
     }

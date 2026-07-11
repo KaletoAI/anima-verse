@@ -2482,7 +2482,11 @@ def _build_full_system_prompt(character_name: str,
     if _has("memory_enabled"):
         from app.utils.history_manager import build_longterm_summary_prompt_section
         longterm_section = build_longterm_summary_prompt_section(character_name) or ""
-        daily_summary_section = build_daily_summary_prompt_section(character_name, max_days=5) or ""
+        from app.models.memory import memory_amount as _mem_amt2
+        daily_summary_section = build_daily_summary_prompt_section(
+            character_name,
+            max_days=_mem_amt2(character_name, "memory_partner_days_in_prompt",
+                               "memory.partner_days_in_prompt", 5)) or ""
 
         if history_summary:
             history_summary_block = f"Summary of previous conversations:\n{history_summary}"
@@ -2523,7 +2527,11 @@ def _build_full_system_prompt(character_name: str,
             from app.core import day_consolidation as _dc
             _parts = []
             # Stufe 2b: vergangene Tage
-            _days = _dc.recent_daily_entries(character_name, limit=7)
+            from app.models.memory import memory_amount as _mem_amt
+            _days = _dc.recent_daily_entries(
+                character_name,
+                limit=_mem_amt(character_name, "memory_daily_entries_in_prompt",
+                               "memory.daily_entries_in_prompt", 7))
             if _days:
                 # recent_daily_entries returns newest-first; the prompt reads
                 # chronologically -> oldest first.
@@ -2533,7 +2541,10 @@ def _build_full_system_prompt(character_name: str,
             # Stufe 2: heutige Szenen (nach dem Cursor — eingeklappte fallen raus)
             _cursor = _dc.get_cursor(character_name)
             _lines = []
-            for sc in scene_store.get_recent_scenes_for(character_name, limit=8):
+            for sc in scene_store.get_recent_scenes_for(
+                    character_name,
+                    limit=_mem_amt(character_name, "memory_scenes_in_prompt",
+                                   "memory.scenes_in_prompt", 8)):
                 if (sc.get("last_activity_ts") or "") <= _cursor:
                     continue
                 summ = (sc.get("summary") or "").strip()
