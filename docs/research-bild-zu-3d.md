@@ -43,6 +43,13 @@ Backend-Registry-Philosophie von anima-verse.
   **<1 s**, festes **Mixamo-kompatibles 52-Bone-Skelett** (inkl. Finger),
   akzeptiert Meshes aus Meshy/Tripo/TRELLIS-artigen Generatoren. Nur bipedale
   Humanoide — für unsere NPCs genau richtig.
+- **SkinTokens/TokenRig** (VAST-AI, arXiv 02/2026, MIT inkl. Weights, 14+ GB
+  VRAM) — UniRig-Nachfolger, Skelett+Skinning in einem autoregressiven
+  Durchgang, ~2× Skinning-Genauigkeit, Checkpoints diesmal veröffentlicht.
+  ABER: erzeugt individuelle Skelette pro Asset → bricht die
+  „ein Standard-Skelett, geteilter Mixamo-Clip-Fundus"-Strategie.
+  Merkliste für Nicht-Humanoide (Kreaturen) und als Plan B bei
+  MIA-Qualitätsproblemen; für humanoide NPCs bleibt MIA erste Wahl.
 
 ### 3. API-Dienste (Mesh + Rigging aus einer Hand)
 
