@@ -52,7 +52,7 @@ def reload_animate_services() -> None:
 
 
 def animate_image(source_image_path: str, prompt: str, output_path: str,
-                  service: str = "", loras=None) -> bool:
+                  service: str = "", loras=None, seconds=None) -> bool:
     """Renders a video from a still via a video backend (image-to-video).
 
     Args:
@@ -69,7 +69,8 @@ def animate_image(source_image_path: str, prompt: str, output_path: str,
             action_prompt=prompt,
             output_path=output_path,
             backend_glob=service,
-            loras=loras)
+            loras=loras,
+            seconds=seconds)
     except Exception as e:
         logger.error("animate_image fehlgeschlagen: %s", e)
         return False

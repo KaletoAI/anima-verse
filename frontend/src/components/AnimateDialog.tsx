@@ -20,8 +20,11 @@ import { apiGet } from '../lib/api'
 export interface AnimateSubmit {
   prompt: string
   service: string
-  /** Optional LoRA slots for gateway video aliases (lora_NN convention). */
+  /** Optional LoRAs for gateway video aliases — ONE half of a Wan high/low
+   *  pair suffices, the gateway resolves the counterpart. */
   loras?: Array<{ name: string; strength: number }>
+  /** Optional video length in seconds (empty = backend default). */
+  seconds?: number
 }
 
 interface AnimateService {
@@ -69,6 +72,8 @@ export function AnimateDialog({
   const [lora1Str, setLora1Str] = useState('1.0')
   const [lora2, setLora2] = useState('')
   const [lora2Str, setLora2Str] = useState('1.0')
+  // Video length in seconds — empty = backend default (shown greyed).
+  const [seconds, setSeconds] = useState('')
 
   useEffect(() => { if (open) setPrompt(defaultPrompt) }, [open, defaultPrompt])
 
@@ -122,13 +127,15 @@ export function AnimateDialog({
         { name: lora1, strength: parseFloat(lora1Str) || 1.0 },
         { name: lora2, strength: parseFloat(lora2Str) || 1.0 },
       ].filter((l) => l.name && l.name !== 'None')
+      const secs = parseInt(seconds, 10)
       await onSubmit({ prompt: prompt.trim(), service: serviceId,
-                       loras: loras.length ? loras : undefined })
+                       loras: loras.length ? loras : undefined,
+                       seconds: Number.isFinite(secs) && secs > 0 ? secs : undefined })
       onClose()
     } finally {
       setSubmitting(false)
     }
-  }, [serviceId, prompt, lora1, lora1Str, lora2, lora2Str, onSubmit, onClose])
+  }, [serviceId, prompt, lora1, lora1Str, lora2, lora2Str, seconds, onSubmit, onClose])
 
   if (!open) return null
 
@@ -179,9 +186,20 @@ export function AnimateDialog({
                     <label className="ga-imagegen-label">{t('LoRAs (optional)')}</label>
                     {slot(lora1, setLora1, lora1Str, setLora1Str, 'LoRA 1')}
                     {slot(lora2, setLora2, lora2Str, setLora2Str, 'LoRA 2')}
+                    <div className="ga-form-hint">
+                      {t('One half of a high/low pair is enough — the gateway adds the counterpart.')}
+                    </div>
                   </>
                 )
               })()}
+              <div className="ga-form-row" style={{ gap: 8, alignItems: 'center' }}>
+                <label className="ga-imagegen-label" style={{ margin: 0 }}>{t('Length (s)')}</label>
+                <input className="ga-input" type="number" min={1} max={30} step={1}
+                  style={{ width: 76, flex: '0 0 auto' }} value={seconds}
+                  disabled={submitting} placeholder={t('default')}
+                  title={t('Video length in seconds. Empty = backend default.')}
+                  onChange={(e) => setSeconds(e.target.value)} />
+              </div>
               {sourceImageUrl ? (
                 <img src={sourceImageUrl} alt="" style={{ maxHeight: 170, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
               ) : null}

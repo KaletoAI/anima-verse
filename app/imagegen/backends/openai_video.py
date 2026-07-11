@@ -2,30 +2,28 @@
 
 Video counterpart of ``OpenAIDiffusionBackend`` for the LLM gateway: the
 gateway hosts a video workflow (e.g. a ComfyUI Wan img2video graph) under a
-generation alias. API (gateway spec, e.g. alias ``Wan-LowRAM``):
+generation alias. API (gateway spec v2, e.g. alias ``Wan-LowRAM``):
 
     POST {api_url}/v1/generations            JSON:
         {"model": alias, "prompt": …, "images": {"image": <base64|http-URL>},
-         "params": {"frames": N}, "mode": "async",
-         "negative_prompt"?: …, "lora1_high"/"lora1_high_strength" +
-         "lora1_low"/"lora1_low_strength" … "lora3_*"}
-        → 202 {"job_id": …, "status": "queued"}
-    GET  {api_url}/v1/jobs/{job_id}           status: queued|running|done|failed
-    GET  {api_url}/v1/jobs/{job_id}/result/0  the MP4 (owner-gated: the key
-                                              that created the job)
+         "params": {"seconds": N}, "loras": [{"name": …, "strength": …}],
+         "mode": "async", "negative_prompt"?: …}
+        → 202 {"job_id": …}   (429/503 carry Retry-After)
+    GET  {api_url}/v1/jobs/{job_id}           status queued|running|done|failed;
+                                              running adds elapsed_s/progress/eta_s;
+                                              done adds results[].url
     POST {api_url}/v1/jobs/{job_id}/cancel
 
-Generation takes MINUTES → always ``mode:"async"`` + polling. ``MEDIA_TYPE ==
-"video"`` keeps it out of image matching. A Bearer header is sent whenever an
-api_key is configured (same key as chat; note the owner-gated result
-download). Wan LoRAs come in HIGH/LOW pairs — the dialog's flat {name,
-strength} selections are auto-paired into ``lora{n}_high``/``lora{n}_low`` by
-the high/low token in the filename. Valid names: the alias' LoRA endpoint
-(``fetch_loras``).
+Generation takes MINUTES → always ``mode:"async"`` + polling. The gateway owns
+backend choice/queueing/failover (never send a backend field), converts
+``seconds`` to the frame raster itself, and resolves Wan HIGH/LOW LoRA pairs
+from ONE half — the flat {name, strength} list from the dialog goes through
+verbatim. ``MEDIA_TYPE == "video"`` keeps it out of image matching; results
+are owner-gated (downloaded with the creating key). Valid LoRA names: the
+alias' LoRA endpoint (``fetch_loras``).
 """
 import base64
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -36,10 +34,6 @@ from app.core.log import get_logger
 from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
-
-# Frames per second of the Wan graphs — the gateway takes a FRAME count
-# (default 81 ≈ 5 s); the backend maps its `seconds` field onto frames.
-_WAN_FPS = 16
 
 
 class OpenAIVideoBackend(ImageBackend):
@@ -126,19 +120,12 @@ class OpenAIVideoBackend(ImageBackend):
         return self.available_loras
 
     @staticmethod
-    def _apply_lora_params(payload: Dict[str, Any], params: Dict[str, Any]) -> None:
-        """Maps flat dialog selections ({name, strength}) onto the gateway's
-        Wan HIGH/LOW pair labels: ``lora{n}_high``/``lora{n}_high_strength`` +
-        ``lora{n}_low``/``lora{n}_low_strength`` (n = 1..3).
-
-        Files carrying a high/low token in the name are paired by their base
-        name (token stripped) — selecting the HIGH and LOW variant of the same
-        LoRA in two dialog slots lands them in ONE pair slot. A file without a
-        recognizable token occupies both halves of its slot (the gateway may
-        ignore the irrelevant half)."""
-        _tok = re.compile(r'(high|low)', re.IGNORECASE)
-        slots: List[Dict[str, Any]] = []
-        by_base: Dict[str, int] = {}
+    def _lora_list(params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Flat ``loras`` list for the gateway (spec v2): the gateway resolves
+        Wan HIGH/LOW pairs from ONE half itself — selections go through
+        verbatim; a missing file fails the job immediately with the exact
+        filename in the error text."""
+        out: List[Dict[str, Any]] = []
         for l in (params.get("lora_inputs") or params.get("loras") or []):
             if not isinstance(l, dict):
                 continue
@@ -149,36 +136,8 @@ class OpenAIVideoBackend(ImageBackend):
                 strength = float(l.get("strength", 1.0))
             except (TypeError, ValueError):
                 strength = 1.0
-            m = _tok.search(name)
-            kind = m.group(1).lower() if m else ""
-            base = _tok.sub("*", name).lower() if m else name.lower()
-            if base in by_base:
-                slot = slots[by_base[base]]
-            else:
-                if len(slots) >= 3:
-                    logger.warning("openai_video: mehr als 3 LoRA-Paare — '%s' ignoriert", name)
-                    continue
-                slot = {"high": "", "high_s": 1.0, "low": "", "low_s": 1.0}
-                by_base[base] = len(slots)
-                slots.append(slot)
-            if kind == "low":
-                slot["low"], slot["low_s"] = name, strength
-            elif kind == "high":
-                slot["high"], slot["high_s"] = name, strength
-            else:
-                # No token — use for both halves.
-                slot["high"], slot["high_s"] = name, strength
-                slot["low"], slot["low_s"] = name, strength
-        for n, slot in enumerate(slots, start=1):
-            if slot["high"]:
-                payload[f"lora{n}_high"] = slot["high"]
-                payload[f"lora{n}_high_strength"] = slot["high_s"]
-            if slot["low"]:
-                payload[f"lora{n}_low"] = slot["low"]
-                payload[f"lora{n}_low_strength"] = slot["low_s"]
-        if slots:
-            logger.info("openai_video: %d LoRA-Paar(e) als lora{n}_high/low uebertragen",
-                        len(slots))
+            out.append({"name": name, "strength": strength})
+        return out
 
     @staticmethod
     def _first_frame_path(params: Dict[str, Any]) -> str:
@@ -210,30 +169,48 @@ class OpenAIVideoBackend(ImageBackend):
             return []
 
         seconds = int(params.get("seconds") or self.seconds or 5)
-        frames = max(1, seconds * _WAN_FPS + 1)  # 5 s → 81 (gateway default)
         payload: Dict[str, Any] = {
             "model": params.get("model") or self.model,
             "prompt": prompt,
             "images": {"image": image_val},
-            "params": {"frames": frames},
+            # The gateway converts seconds to the frame raster itself.
+            "params": {"seconds": seconds},
             "mode": "async",
         }
         if negative_prompt:
             payload["negative_prompt"] = negative_prompt
-        self._apply_lora_params(payload, params)
+        loras = self._lora_list(params)
+        if loras:
+            payload["loras"] = loras
+            logger.info("%s: %d LoRA(s) (Gateway ergaenzt High/Low-Paare)",
+                        self.name, len(loras))
 
         url = f"{self.api_url}{self.video_endpoint}"
-        logger.info("%s: starte Video-Job (Alias=%s, %d Frames ≈ %ds)",
-                    self.name, payload["model"], frames, seconds)
-        try:
-            resp = requests.post(url, json=payload, headers=self._headers(),
-                                 timeout=self.timeout)
-        except Exception as e:
-            logger.error("%s: Verbindungsfehler: %s", self.name, e)
-            return []
-        if resp.status_code not in (200, 201, 202):
-            logger.error("%s: Video-Request HTTP %d - %s", self.name,
-                         resp.status_code, resp.text[:300])
+        logger.info("%s: starte Video-Job (Alias=%s, %ds)",
+                    self.name, payload["model"], seconds)
+        resp = None
+        for _attempt in range(3):
+            try:
+                resp = requests.post(url, json=payload, headers=self._headers(),
+                                     timeout=self.timeout)
+            except Exception as e:
+                logger.error("%s: Verbindungsfehler: %s", self.name, e)
+                return []
+            # 429/503 carry Retry-After (gateway busy) — wait and retry.
+            if resp.status_code in (429, 503) and _attempt < 2:
+                try:
+                    wait_s = min(120.0, float(resp.headers.get("Retry-After", "10")))
+                except (TypeError, ValueError):
+                    wait_s = 10.0
+                logger.info("%s: Gateway busy (HTTP %d) — retry in %.0fs",
+                            self.name, resp.status_code, wait_s)
+                time.sleep(wait_s)
+                continue
+            break
+        if resp is None or resp.status_code not in (200, 201, 202):
+            logger.error("%s: Video-Request HTTP %s - %s", self.name,
+                         getattr(resp, "status_code", "?"),
+                         (resp.text[:300] if resp is not None else ""))
             return []
         body = resp.json() if resp.content else {}
         job_id = str(body.get("job_id") or body.get("id") or "") if isinstance(body, dict) else ""
@@ -256,9 +233,21 @@ class OpenAIVideoBackend(ImageBackend):
                     logger.error("%s: Video-Job failed: %s", self.name,
                                  str(sd.get("error") or sd)[:300])
                     return []
+                if status == "running" and sd.get("progress") is not None:
+                    logger.info("%s: Job %s laeuft — %.0f%% (ETA %ss)", self.name,
+                                job_id, float(sd.get("progress") or 0) * 100,
+                                sd.get("eta_s", "?"))
                 if status in ("done", "completed"):
-                    dl = requests.get(f"{self.api_url}/v1/jobs/{job_id}/result/0",
-                                      headers=self._headers(), timeout=180)
+                    # Spec v2: results[].url (owner-gated, same key);
+                    # fallback: the older /result/0 path.
+                    _results = sd.get("results") or []
+                    _r_url = (_results[0].get("url") if _results
+                              and isinstance(_results[0], dict) else "") or ""
+                    if _r_url and not _r_url.startswith(("http://", "https://")):
+                        _r_url = f"{self.api_url}{_r_url}"
+                    if not _r_url:
+                        _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/0"
+                    dl = requests.get(_r_url, headers=self._headers(), timeout=180)
                     if dl.status_code == 200 and len(dl.content) > 1000:
                         logger.info("%s: Video fertig (%.1fs, %d bytes)", self.name,
                                     time.time() - start, len(dl.content))

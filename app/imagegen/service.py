@@ -261,7 +261,8 @@ class ImageService:
 
     def generate_video(self, source_image_path: str, action_prompt: str,
                        output_path: str, backend_glob: str = "",
-                       character_name: str = "", loras=None) -> bool:
+                       character_name: str = "", loras=None,
+                       seconds=None) -> bool:
         """Renders a video from a still via a MEDIA_TYPE=="video" backend.
 
         Picks a video backend by glob (empty = cheapest available video
@@ -272,6 +273,8 @@ class ImageService:
                                   "reference_images": {"frame": source_image_path}}
         if loras:
             params["lora_inputs"] = loras
+        if seconds:
+            params["seconds"] = int(seconds)
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="video")
         else:

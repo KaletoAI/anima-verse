@@ -1633,6 +1633,10 @@ async def animate_character_image(character_name: str, image_name: str, request:
         raise HTTPException(status_code=422, detail="Kein Prompt angegeben")
 
     service = body.get("service", "").strip()
+    try:
+        seconds = int(body.get("seconds") or 0)
+    except (TypeError, ValueError):
+        seconds = 0
     # Optional LoRA slots from the animate dialog (gateway video aliases).
     data = body
     loras = []
@@ -1653,7 +1657,7 @@ async def animate_character_image(character_name: str, image_name: str, request:
     import threading
     threading.Thread(
         target=character_ops.animate_image_worker,
-        args=(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id, loras),
+        args=(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id, loras, seconds or None),
         daemon=True).start()
     return {"status": "started", "image": image_name, "track_id": _track_id}
 
