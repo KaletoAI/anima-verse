@@ -65,8 +65,21 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   lokal gehostet oder API-Dienst), Task-Queue-Job `character_model`:
   Referenzbild → Mesh → Rigging → Ablage wie Stufe 1.
   **Recherche liegt vor → `docs/research-bild-zu-3d.md`** (Kurzfassung:
-  Hunyuan3D in der EU lizenzblockiert; Start mit Tripo/Meshy-API empfohlen,
-  Rigging selbsthostbar via Make-It-Animatable/UniRig, beide MIT).
+  Hunyuan3D in der EU lizenzblockiert; TRELLIS.2 lokal für nicht-kommerzielle
+  Betreiber, Tripo/Meshy als API-Alternative; Rigging selbsthostbar via
+  Make-It-Animatable/UniRig, beide MIT).
+  **Präzisierung Zielbild (2026-07-11):**
+  - Quelle = EIN kanonisches Ganzkörper-Referenzbild pro Charakter/Outfit
+    (neutrale A-/T-Pose; ggf. eigener Prompt-Slot analog `image_prompt_map`,
+    damit die Bildpipeline es gezielt erzeugen kann).
+  - Outfits: pro Outfit(-Variante) ein GLB (`model/<outfit>.glb`), Server
+    liefert das zum aktuellen Outfit passende; Client-Cache via ETag.
+  - Expressions/Mood: NICHT pro Stimmung neu generieren (Blendshapes liefern
+    Auto-Pipelines nicht zuverlässig) — Mood bleibt Sache von Animation/
+    Haltung im Client bzw. später VRM-Expressions; Expression-Bilder bleiben
+    das Medium für Chat-UI/Environment-Panel.
+  - Rigging-Service: Make-It-Animatable läuft als Gradio-App → Anbindung über
+    das vorhandene `gradio_client`-Muster (wie TTS-Backends).
 - **Workaround:** Portrait-Kreis-Sprites; Stufe-1-Beweis im Client läuft mit
   lokal mitgelieferten Beispiel-GLBs.
 
