@@ -341,7 +341,10 @@ _SUB_TASKS: List[tuple] = [
     (_sub_flag_lifecycle,            60,                    "flag_lifecycle"),
     (_sub_force_rules,               0,                     "force_rules"),
     (_sub_assignment_expiry,         60,                    "assignment_expiry"),
-    (_sub_random_events_generate,    3600,                  "random_events_generate"),
+    # 60s tick — the generator gates itself to one roll per GAME hour
+    # (random_events._LAST_GENERATE_GAME), so events keep pace with the
+    # game-clock factor instead of rolling once per REAL hour.
+    (_sub_random_events_generate,    60,                    "random_events_generate"),
     (_sub_random_events_escalate,    300,                   "random_events_escalate"),
     (_sub_random_events_resolve,     300,                   "random_events_resolve"),
     (_sub_relationship_decay,        24 * 3600,             "relationship_decay"),

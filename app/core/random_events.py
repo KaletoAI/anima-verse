@@ -86,13 +86,31 @@ def default_event_settings() -> Dict[str, Any]:
 # Public API
 # ---------------------------------------------------------------------------
 
+# Last generator roll in GAME time — the base probability is "per hour",
+# which means per GAME hour since the game clock exists: with factor 60 an
+# in-game hour passes per real minute and the roll must keep pace. The 60s
+# periodic tick is the natural upper bound on roll frequency.
+_LAST_GENERATE_GAME: list = [None]
+
+
 def check_and_generate():
     """Prueft alle besetzten Locations und generiert ggf. Events.
 
-    Aufgerufen aus ThoughtLoop._tick() alle 60 Sekunden.
+    Called from the periodic tick (60s); internally gated to one roll per
+    GAME hour (see _LAST_GENERATE_GAME).
     """
     if not is_enabled():
         return
+
+    from app.core.timeutils import game_now
+    _now_g = game_now()
+    _last = _LAST_GENERATE_GAME[0]
+    if _last is not None:
+        _delta = (_now_g - _last).total_seconds()
+        if 0 <= _delta < 3600:
+            return  # noch keine Game-Stunde vergangen
+        # negative delta = game clock was set backwards -> re-anchor
+    _LAST_GENERATE_GAME[0] = _now_g
 
     try:
         from app.models.character import list_available_characters, get_character_current_location
