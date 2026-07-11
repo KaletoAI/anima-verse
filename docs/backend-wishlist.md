@@ -63,8 +63,10 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
 - **Vorschlag, Ausbau (Stufe 2 — Generierung):** neuer Backend-Typ
   „3D-Asset-Generierung" in der BACKEND_REGISTRY (Bild-zu-3D + Auto-Rigging,
   lokal gehostet oder API-Dienst), Task-Queue-Job `character_model`:
-  Referenzbild → Mesh → Rigging → Ablage wie Stufe 1. Kandidaten-Recherche
-  (Hunyuan3D/TRELLIS/Meshy/Tripo, Stand 2026) vor Umsetzung.
+  Referenzbild → Mesh → Rigging → Ablage wie Stufe 1.
+  **Recherche liegt vor → `docs/research-bild-zu-3d.md`** (Kurzfassung:
+  Hunyuan3D in der EU lizenzblockiert; Start mit Tripo/Meshy-API empfohlen,
+  Rigging selbsthostbar via Make-It-Animatable/UniRig, beide MIT).
 - **Workaround:** Portrait-Kreis-Sprites; Stufe-1-Beweis im Client läuft mit
   lokal mitgelieferten Beispiel-GLBs.
 
