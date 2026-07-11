@@ -88,6 +88,37 @@ End-to-End-Dauer wurde durch keinen verifizierten Claim quantifiziert.
    EU-Lizenz + Qualität bei stilisierten Charakteren; Tripo-Ownership;
    UniRig/MIA → VRM-Bone-Namen-Konformität.
 
+## Nachrecherche TRELLIS / TripoSR (2026-07-11, Primärquellen)
+
+- **TripoSR: durchgängig MIT und damit der einzige komplett saubere
+  Selbsthosting-Kandidat.** Code (GitHub VAST-AI-Research/TripoSR) und Weights
+  (HF stabilityai/TripoSR, Model-Card „License: MIT") beide MIT, keine
+  Geo-/Kommerz-Einschränkungen. ~6 GB VRAM, <0,5 s/Mesh auf A100. Aber:
+  2024er Modellgeneration — Geometrie brauchbar, Texturen basic
+  (`--bake-texture`), für stilisierte Ganzkörper-Charaktere qualitativ klar
+  unter TRELLIS/den APIs.
+- **TRELLIS (v1, Microsoft): MIT mit Sternchen.** Code + Modelle MIT — aber
+  zwei Komponenten sind es NICHT: die Mesh-Extraktion nutzt modifizierte
+  **FlexiCubes** (NVIDIA Source Code License, non-commercial; kaolin führt
+  FlexiCubes explizit unter `non_commercial/`) und der Radiance-Field-Renderer
+  **diffoctreerast** hat eine Custom-Research-Lizenz („CANNOT USE … FOR
+  COMMERCIAL PURPOSES"). ≥16 GB VRAM. Konsequenz: für ein nicht-kommerzielles
+  Homelab-/OSS-Projekt vertretbar, aber kommerzielle Nachnutzer von anima-verse
+  wären beim TRELLIS-Backend eingeschränkt — als optionales, klar
+  gekennzeichnetes Backend okay, nicht als Default.
+- **TRELLIS.2 (4B, Ende 2025): gleiche Konstellation.** Repo MIT, aber
+  nvdiffrast/nvdiffrec-Abhängigkeiten unter NVIDIA-1-Way-Commercial-Lizenz
+  (non-commercial); GitHub-Issue #22 dazu ist unbeantwortet.
+- **InstantMesh (TencentARC): Apache-2.0**, sauber — ältere Generation,
+  als sauberer Fallback neben TripoSR notierenswert.
+- ⚠ Blog-Quellen, die „Hunyuan3D unter Apache 2.0" behaupten, widersprechen
+  dem verifizierten Original-Lizenztext (EU-Ausschluss) — nicht verlassen.
+
+**Konsequenz für die Empfehlung:** unverändert API-first (Meshy Paid /
+Tripo) für Qualität + saubere Lizenz; TRELLIS lokal nur als optionales
+Non-Commercial-Backend (Qualitäts-Test via ComfyUI lohnt); TripoSR/InstantMesh
+als 100 % lizenzsaubere, aber qualitativ einfachere Selbsthosting-Stufe.
+
 ## Quellen (Auswahl, primär)
 
 - github.com/Tencent-Hunyuan/Hunyuan3D-2.1 + LICENSE (EU-Ausschluss, VRAM)
