@@ -60,6 +60,16 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   - `GET /characters/{name}/model` → Modell-Bytes; 404 wenn keins → Client
     fällt auf Portrait-Marker zurück.
   - `GET /characters/{name}/model/meta` → `{"format":"vrm|glb","scale":1.0}`.
+  - **Konkretisiert nach Pipeline-Praxis (2026-07-11):**
+    - Format: GLB mit Mixamo-Skelett (ComfyUI: TRELLIS.2 → ComfyUI-UniRig/MIA
+      liefert genau das). Dateien sind 20–30 MB → unbedingt `ETag` +
+      `Cache-Control` (Client cacht aggressiv, Modelle ändern sich selten).
+    - `meta` zusätzlich: `{"rig":"mixamo|custom|none","source":"upload|generated"}`
+      — Client entscheidet daran, ob geteilte Clips anwendbar sind.
+    - Upload-Validierung: GLB-Magic + hat Skin/Joints (sonst Hinweis
+      „ungeriggt — Figur wäre statisch").
+    - Keine Orientierungs-/Größen-Pflicht: Client normalisiert selbst
+      (Z-up/Y-up, Skalierung, Boden-Offset bereits implementiert).
 - **Vorschlag, Ausbau (Stufe 2 — Generierung):** neuer Backend-Typ
   „3D-Asset-Generierung" in der BACKEND_REGISTRY (Bild-zu-3D + Auto-Rigging,
   lokal gehostet oder API-Dienst), Task-Queue-Job `character_model`:
