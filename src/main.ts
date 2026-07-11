@@ -155,23 +155,35 @@ async function startApp(username: string) {
 
   // --- Polling: Worldmap + Raumbelegung -------------------------------------
   let lastMap: WorldMap | null = firstMap;
-  const roomOf = new Map<string, string>(); // Charaktername -> Raum (Name oder ID)
+  const roomOf = new Map<string, string>(); // Charaktername -> Raum (ID oder Name)
+
+  // AV3D-8: room_id kommt direkt mit der Worldmap
+  function takeRoomsFrom(map: WorldMap) {
+    for (const c of map.characters) {
+      if (c.room_id) roomOf.set(c.name, c.room_id);
+    }
+  }
 
   async function pollWorldMap() {
     try {
       lastMap = await api.getWorldMap();
       hud.setOnline(true);
+      takeRoomsFrom(lastMap);
       updatePins(lastMap);
     } catch {
       hud.setOnline(false);
     }
   }
+  takeRoomsFrom(firstMap);
   updatePins(firstMap);
   setInterval(pollWorldMap, WORLDMAP_POLL_MS);
 
+  // Fallback für Backends ohne room_id im Worldmap-Payload (Prä-AV3D-8)
   async function pollRooms() {
     const zoomed = [...tiles.values()].filter((t) => t.fadeTarget === 1 && t.loc.rooms.length);
     for (const tile of zoomed) {
+      const charsHere = (lastMap?.characters ?? []).filter((c) => c.location_id === tile.loc.id);
+      if (charsHere.every((c) => c.room_id)) continue;
       try {
         const chars = await api.getCharactersAtLocation(tile.loc.id);
         for (const c of chars) {

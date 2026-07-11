@@ -4,6 +4,13 @@ export interface Room {
   description?: string;
 }
 
+/** AV3D-1: optionale 3D-Metadaten einer Location. */
+export interface Map3dMeta {
+  style?: string;   // house | tower | shop | hall | generic | ...
+  floors?: number;
+  color?: string;   // Grundfarbe der Fassade, z.B. "#8fa3b0"
+}
+
 export interface WorldLocation {
   id: string;
   name: string;
@@ -17,6 +24,8 @@ export interface WorldLocation {
   map_rotation_2d?: number;
   indoor?: string;
   background_images?: string[];
+  terrain?: string;   // AV3D-7: grass | forest | road | water | ...
+  map3d?: Map3dMeta;  // AV3D-1
 }
 
 export interface MapLocation {
@@ -27,11 +36,15 @@ export interface MapLocation {
   passable?: boolean;
   template_location_id?: string;
   map_rotation_2d?: number;
+  terrain?: string;   // AV3D-7
+  map3d?: Map3dMeta;  // AV3D-1 (nur emittiert, wenn gesetzt)
 }
 
 export interface MapCharacter {
   name: string;
   location_id: string;
+  room_id?: string;   // AV3D-8
+  mood?: string;      // AV3D-8
   activity?: string;
   movement_target_id?: string;
   movement_target_name?: string;

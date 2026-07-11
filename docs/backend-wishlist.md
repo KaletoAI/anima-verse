@@ -9,7 +9,12 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
 
 ---
 
-## AV3D-1: 3D-Metadaten pro Location — offen
+## AV3D-1: 3D-Metadaten pro Location — umgesetzt (Backend 2026-07-11, Client-Support eingebaut)
+
+> Client wertet `map3d {style, floors, color}` aus (Priorität über Terrain und
+> Namens-Heuristik). Verifiziert bisher nur per injizierten Testdaten — in der
+> Kai-Welt waren noch keine Werte gesetzt; Feldform bitte gegenprüfen, falls
+> das Backend andere Keys emittiert.
 
 - **Motivation:** Gebäudedarstellung (Stockwerke, Grundfläche, Stilklasse) wird
   derzeit aus Namens-Keywords + Raumanzahl geraten.
@@ -71,7 +76,13 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   Feld `animation: "sit|stand|walk|lie|dance|…"` je Activity; Fallback `idle`.
 - **Workaround:** Keyword-Mapping im Client.
 
-## AV3D-7: Expliziter Terrain-Typ pro Location — offen
+## AV3D-7: Expliziter Terrain-Typ pro Location — umgesetzt (Backend 2026-07-11, Client-Support eingebaut)
+
+> `terrain` wird in `/play/worldmap` emittiert (bestätigt). Client matcht
+> tolerant de/en (`water|see|lake|…`, `forest|wald|…`, `road|street|…`,
+> `grass|wiese|…`); nicht-passable Natur-Locations (See!) rendern als
+> Naturfläche mit Raum-Slabs statt als Gebäude. In der Kai-Welt sind noch
+> keine Werte gesetzt — z.B. Mondscheinsee auf `lake` setzen.
 
 - **Motivation:** Wald/Straße wird per Namens-Match erkannt — bricht bei
   anderssprachigen Weltennamen. Praxisbeleg (Kai-Welt, 2026-07-11): der See
@@ -81,7 +92,12 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   an (Template-)Locations.
 - **Workaround:** Regex auf den Namen in `detectStyle()`.
 
-## AV3D-8: Worldmap um Raum & Stimmung erweitern — offen
+## AV3D-8: Worldmap um Raum & Stimmung erweitern — umgesetzt & verifiziert (Backend 2026-07-11)
+
+> `room_id` + `mood` kommen in `/play/worldmap.characters` (gegen Kai-Welt
+> bestätigt). Client nutzt `room_id` direkt für die Raum-Platzierung; der
+> `/characters/at-location`-Zweitpoll läuft nur noch als Fallback für ältere
+> Backends. `mood` erscheint im Info-Panel.
 
 - **Motivation:** `/play/worldmap` liefert pro Charakter keinen Raum und keine
   Stimmung; der Client pollt dafür zusätzlich `/characters/at-location`.

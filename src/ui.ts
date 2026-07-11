@@ -79,7 +79,7 @@ export class InfoPanel {
       : '';
     const charsHtml = chars.length
       ? `<h3>Anwesend</h3><ul>${chars.map((c) =>
-          `<li>${esc(c.name)}${c.activity ? ` <span class="who">· ${esc(c.activity)}</span>` : ''}${c.movement_target_name ? ` <span class="who">🚶 → ${esc(c.movement_target_name)}</span>` : ''}</li>`
+          `<li>${esc(c.name)}${c.activity ? ` <span class="who">· ${esc(c.activity)}</span>` : ''}${c.mood ? ` <span class="who">· ${esc(c.mood)}</span>` : ''}${c.movement_target_name ? ` <span class="who">🚶 → ${esc(c.movement_target_name)}</span>` : ''}</li>`
         ).join('')}</ul>`
       : '';
     const eventsHtml = events.length

@@ -58,6 +58,23 @@ export function asphaltTexture(): THREE.CanvasTexture {
   });
 }
 
+export function waterTexture(): THREE.CanvasTexture {
+  return canvasTexture(256, (ctx) => {
+    const rnd = seededRandom('water');
+    ctx.fillStyle = '#3f7fb8';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 30; i++) {
+      ctx.strokeStyle = `rgba(220,240,255,${0.10 + rnd() * 0.12})`;
+      ctx.lineWidth = 1.5 + rnd() * 1.5;
+      ctx.beginPath();
+      const y = rnd() * 256;
+      ctx.moveTo(rnd() * 60, y);
+      ctx.bezierCurveTo(80 + rnd() * 40, y - 8 + rnd() * 16, 150 + rnd() * 40, y - 8 + rnd() * 16, 200 + rnd() * 56, y);
+      ctx.stroke();
+    }
+  });
+}
+
 export function paversTexture(): THREE.CanvasTexture {
   return canvasTexture(256, (ctx) => {
     ctx.fillStyle = '#b8ac97';

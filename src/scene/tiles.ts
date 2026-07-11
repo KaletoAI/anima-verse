@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { WorldLocation } from '../types';
 import { mapIconUrl } from '../api';
 import {
-  asphaltTexture, awningTexture, facadeTexture, grassTexture, paversTexture, seededRandom,
+  asphaltTexture, awningTexture, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
 
 export const CELL = 10;
@@ -12,7 +12,29 @@ export function gridToWorld(gx: number, gy: number): THREE.Vector3 {
   return new THREE.Vector3(gx * CELL, 0, gy * CELL);
 }
 
-type TileStyle = 'forest' | 'road' | 'grass' | 'cafe' | 'house' | 'highrise' | 'generic';
+type TileStyle = 'forest' | 'road' | 'grass' | 'water' | 'cafe' | 'house' | 'highrise' | 'generic';
+
+/** AV3D-7: tolerantes Terrain-Vokabular (de/en). Leer -> null. */
+function terrainKind(raw: string | undefined): TileStyle | null {
+  const t = (raw || '').toLowerCase().trim();
+  if (!t) return null;
+  if (/water|see|lake|meer|ocean|fluss|river|teich|pond/.test(t)) return 'water';
+  if (/forest|wald|wood|park/.test(t)) return 'forest';
+  if (/road|street|stra|weg|path|asphalt/.test(t)) return 'road';
+  if (/grass|wiese|meadow|feld|field|gras/.test(t)) return 'grass';
+  return null;
+}
+
+/** AV3D-1: map3d.style -> Gebäudestil. Leer/unbekannt -> null. */
+function styleKind(raw: string | undefined): TileStyle | null {
+  const s = (raw || '').toLowerCase().trim();
+  if (!s) return null;
+  if (/tower|highrise|high-rise|hochhaus|skyscraper/.test(s)) return 'highrise';
+  if (/shop|cafe|caf|store|laden|bar|restaurant/.test(s)) return 'cafe';
+  if (/house|haus|home|residence|cottage|villa/.test(s)) return 'house';
+  if (/generic|hall|block|building/.test(s)) return 'generic';
+  return terrainKind(s); // erlaubt auch style: "lake"/"forest"
+}
 
 export interface Tile {
   loc: WorldLocation;
@@ -32,6 +54,10 @@ export interface Tile {
 }
 
 function detectStyle(loc: WorldLocation): TileStyle {
+  // Priorität: map3d.style (AV3D-1) > terrain (AV3D-7) > Namens-Heuristik
+  const explicit = styleKind(loc.map3d?.style) ?? terrainKind(loc.terrain);
+  if (explicit) return explicit;
+
   const n = (loc.name || '').toLowerCase();
   if (loc.passable || loc.template_location_id) {
     if (/forest|wald|park|wood/.test(n)) return 'forest';
@@ -47,6 +73,7 @@ function detectStyle(loc: WorldLocation): TileStyle {
 const loader = new THREE.TextureLoader();
 let grassTex: THREE.Texture | null = null;
 let asphaltTex: THREE.Texture | null = null;
+let waterTex: THREE.Texture | null = null;
 
 function std(opts: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02, transparent: true, ...opts });
@@ -99,12 +126,12 @@ interface BuildingSpec {
 function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
   switch (style) {
     case 'highrise': {
-      const floors = Math.max(5, Math.min(10, 4 + loc.rooms.length * 2));
+      const floors = Math.min(14, Math.max(2, loc.map3d?.floors ?? Math.max(5, Math.min(10, 4 + loc.rooms.length * 2))));
       return {
         w: 6.4, d: 6.4, h: floors * 2,
         build(tile, _rnd) {
           const h = this.h;
-          const facade = facadeTexture('#8fa3b0', 4, floors, loc.id);
+          const facade = facadeTexture(loc.map3d?.color || '#8fa3b0', 4, floors, loc.id);
           const wallMat = std({ map: facade });
           const walls = box(this.w, h, this.d, wallMat);
           walls.position.y = h / 2;
@@ -126,7 +153,7 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
       return {
         w: 7, d: 5.2, h: 3.4,
         build(tile, rnd) {
-          const wallMat = std({ map: facadeTexture('#cdb694', 3, 1, loc.id) });
+          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#cdb694', 3, 1, loc.id) });
           const walls = box(this.w, this.h, this.d, wallMat);
           walls.position.set(0, this.h / 2, -1.2);
           tile.group.add(walls);
@@ -169,7 +196,7 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
       return {
         w: 6.6, d: 5.6, h: 3,
         build(tile, _rnd) {
-          const wallMat = std({ map: facadeTexture('#dbc9a9', 3, 1, loc.id) });
+          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#dbc9a9', 3, 1, loc.id) });
           const walls = box(this.w, this.h, this.d, wallMat);
           walls.position.y = this.h / 2;
           tile.group.add(walls);
@@ -193,11 +220,12 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
           tile.group.add(hedge);
         },
       };
-    default:
+    default: {
+      const floors = Math.min(6, Math.max(1, loc.map3d?.floors ?? 2));
       return {
-        w: 7, d: 6, h: 6,
+        w: 7, d: 6, h: floors * 3,
         build(tile, _rnd) {
-          const wallMat = std({ map: facadeTexture('#b3a48f', 3, 3, loc.id) });
+          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#b3a48f', 3, floors + 1, loc.id) });
           const walls = box(this.w, this.h, this.d, wallMat);
           walls.position.y = this.h / 2;
           tile.group.add(walls);
@@ -210,11 +238,12 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
           tile.roofMats.push(roofMat);
         },
       };
+    }
   }
 }
 
 /** Innenansicht: Raum-Slabs im Auto-Grid, Labels, Eingangs-Marker. */
-function buildInterior(tile: Tile, spec: BuildingSpec) {
+function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean } = {}) {
   const loc = tile.loc;
   if (!loc.rooms.length) return;
   const g = new THREE.Group();
@@ -222,20 +251,22 @@ function buildInterior(tile: Tile, spec: BuildingSpec) {
 
   const W = spec.w;
   const D = spec.d;
-  const floorMat = std({ color: 0xd8d0c2 });
-  const floor = box(W, 0.25, D, floorMat);
-  floor.position.y = 0.125;
-  g.add(floor);
+  if (opts.walls !== false) {
+    const floorMat = std({ color: 0xd8d0c2 });
+    const floor = box(W, 0.25, D, floorMat);
+    floor.position.y = 0.125;
+    g.add(floor);
 
-  // niedrige Außenwände, damit man "hineinsehen" kann
-  const wallMat = std({ color: 0xa89a86 });
-  const t = 0.22, wh = 1.1;
-  for (const [w, d, x, z] of [
-    [W, t, 0, -D / 2], [W, t, 0, D / 2], [t, D, -W / 2, 0], [t, D, W / 2, 0],
-  ] as const) {
-    const wall = box(w, wh, d, wallMat);
-    wall.position.set(x, wh / 2 + 0.25, z);
-    g.add(wall);
+    // niedrige Außenwände, damit man "hineinsehen" kann
+    const wallMat = std({ color: 0xa89a86 });
+    const t = 0.22, wh = 1.1;
+    for (const [w, d, x, z] of [
+      [W, t, 0, -D / 2], [W, t, 0, D / 2], [t, D, -W / 2, 0], [t, D, W / 2, 0],
+    ] as const) {
+      const wall = box(w, wh, d, wallMat);
+      wall.position.set(x, wh / 2 + 0.25, z);
+      g.add(wall);
+    }
   }
 
   const n = loc.rooms.length;
@@ -251,8 +282,12 @@ function buildInterior(tile: Tile, spec: BuildingSpec) {
     const x = -W / 2 + 0.3 + cx * (rw + gap) + rw / 2;
     const z = -D / 2 + 0.3 + cz * (rd + gap) + rd / 2;
     const hue = (i * 67) % 360;
-    const plate = box(rw, 0.18, rd, std({ color: new THREE.Color(`hsl(${hue}, 42%, 72%)`) }));
-    plate.position.set(x, 0.35, z);
+    const open = opts.walls === false; // Naturfläche: flacher + durchscheinend
+    const plate = box(rw, open ? 0.08 : 0.18, rd, std({
+      color: new THREE.Color(`hsl(${hue}, 42%, 72%)`),
+      opacity: open ? 0.55 : 1,
+    }));
+    plate.position.set(x, open ? 0.18 : 0.35, z);
     g.add(plate);
 
     const el = document.createElement('div');
@@ -279,9 +314,10 @@ function buildInterior(tile: Tile, spec: BuildingSpec) {
   tile.group.add(g);
 }
 
-export function buildTile(loc: WorldLocation, fallbacks?: { grass: THREE.Texture; asphalt: THREE.Texture }): Tile {
-  grassTex = fallbacks?.grass ?? grassTex ?? grassTexture();
-  asphaltTex = fallbacks?.asphalt ?? asphaltTex ?? asphaltTexture();
+export function buildTile(loc: WorldLocation): Tile {
+  grassTex = grassTex ?? grassTexture();
+  asphaltTex = asphaltTex ?? asphaltTexture();
+  waterTex = waterTex ?? waterTexture();
 
   const style = detectStyle(loc);
   const isBuilding = !(loc.passable || loc.template_location_id);
@@ -303,10 +339,21 @@ export function buildTile(loc: WorldLocation, fallbacks?: { grass: THREE.Texture
   };
 
   const rnd = seededRandom(loc.id);
+  const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
+  // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
+  const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
+
+  const addLabel = () => {
+    const el = document.createElement('div');
+    el.className = 'loc-label';
+    el.textContent = loc.name;
+    const label = new CSS2DObject(el);
+    label.position.set(0, tile.height + 2.2, 0);
+    group.add(label);
+  };
 
   if (!isBuilding) {
-    const fallbackTex = style === 'road' ? asphaltTex : grassTex;
-    group.add(groundPlate(loc, fallbackTex));
+    group.add(groundPlate(loc, fallbackFor(style)));
     if (style === 'forest') {
       for (let i = 0; i < 8; i++) {
         const tree = makeTree(rnd);
@@ -315,6 +362,21 @@ export function buildTile(loc: WorldLocation, fallbacks?: { grass: THREE.Texture
       }
     }
     tile.height = style === 'forest' ? 3 : 0.3;
+  } else if (natureSite) {
+    group.add(groundPlate(loc, fallbackFor(style)));
+    if (style === 'forest') {
+      // Bäume am Rand, Mitte bleibt frei für die Raum-Slabs
+      for (let i = 0; i < 7; i++) {
+        const tree = makeTree(rnd);
+        const a = (i / 7) * Math.PI * 2 + rnd() * 0.5;
+        tree.position.set(Math.cos(a) * (3.2 + rnd()), 0, Math.sin(a) * (3.2 + rnd()));
+        group.add(tree);
+      }
+    }
+    tile.height = style === 'forest' ? 3 : 0.6;
+    const spec: BuildingSpec = { w: 8, d: 8, h: 0, build() { /* Naturfläche */ } };
+    buildInterior(tile, spec, { walls: false });
+    addLabel();
   } else {
     // Sockel-Platte unter Gebäuden (Pflaster)
     const plinth = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), std({ map: paversTexture() }));
@@ -327,13 +389,7 @@ export function buildTile(loc: WorldLocation, fallbacks?: { grass: THREE.Texture
     spec.build(tile, rnd);
     tile.height = spec.h;
     buildInterior(tile, spec);
-
-    const el = document.createElement('div');
-    el.className = 'loc-label';
-    el.textContent = loc.name;
-    const label = new CSS2DObject(el);
-    label.position.set(0, tile.height + 2.2, 0);
-    group.add(label);
+    addLabel();
   }
 
   group.add(ring);
