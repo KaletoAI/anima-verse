@@ -74,7 +74,9 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
 ## AV3D-7: Expliziter Terrain-Typ pro Location — offen
 
 - **Motivation:** Wald/Straße wird per Namens-Match erkannt — bricht bei
-  anderssprachigen Weltennamen.
+  anderssprachigen Weltennamen. Praxisbeleg (Kai-Welt, 2026-07-11): der See
+  „Mondscheinsee" rendert als braunes Bürogebäude mit fünf Zimmern, weil er
+  eine nicht-passable Location ohne Terrain-Info ist.
 - **Vorschlag:** optionales Feld `terrain: "grass|forest|road|water|sand|rock"`
   an (Template-)Locations.
 - **Workaround:** Regex auf den Namen in `detectStyle()`.
