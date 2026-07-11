@@ -93,6 +93,15 @@
       "fields": []
     },
     {
+      "id": "model3d",
+      "label": "3D model",
+      "label_de": "3D-Modell",
+      "column": 6,
+      "row": 5,
+      "special": "model3d",
+      "fields": []
+    },
+    {
       "id": "identity",
       "label": "Identity",
       "label_de": "Identität",

@@ -49,7 +49,12 @@ from app.models.character import (
     get_character_current_room,
     add_character_image_prompt,
     add_character_image_metadata,
-    get_character_outfits_dir)
+    get_character_outfits_dir,
+    get_character_model_info,
+    save_character_model,
+    set_character_model_rig,
+    delete_character_model,
+    MODEL_RIG_VALUES)
 from app.core import character_ops
 from app.core.dependencies import reload_skill_manager, get_skill_manager
 
@@ -1236,6 +1241,99 @@ def get_character_outfit_image(character_name: str, image_filename: str):
         raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- 3D model asset (AV3D-5 stage 1) ---
+#
+# One GLB/VRM per character for external 3D map clients. Files are 20-30 MB
+# in the normal case (Mixamo-rigged GLB), so the GET route serves with an
+# ETag + conditional-request handling instead of re-sending the bytes.
+
+_MODEL_MAX_BYTES = 100 * 1024 * 1024
+
+
+@router.post("/{character_name}/model")
+async def upload_character_model(character_name: str, request: Request) -> Dict[str, Any]:
+    """Uploads/replaces the character's 3D model (GLB/VRM, one active model).
+
+    Optional form field `rig`: mixamo|custom|none (default mixamo — the
+    shared animation-clip library of the 3D client applies)."""
+    try:
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(status_code=400, detail="No file uploaded")
+        filename = (file.filename or "").lower()
+        if not filename.endswith((".glb", ".vrm")):
+            raise HTTPException(status_code=400, detail="Format not supported (GLB/VRM only)")
+        rig = str(form.get("rig") or "mixamo").strip().lower()
+        if rig not in MODEL_RIG_VALUES:
+            raise HTTPException(status_code=400,
+                                detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
+        if not get_character_dir(character_name).exists():
+            raise HTTPException(status_code=404, detail="Character not found")
+        contents = await file.read()
+        if len(contents) > _MODEL_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+        meta = save_character_model(character_name, file.filename, contents, rig=rig)
+        return {"status": "success", **meta,
+                "url": f"/characters/{character_name}/model"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{character_name}/model/meta")
+def get_character_model_meta(character_name: str) -> Dict[str, Any]:
+    """Meta of the stored 3D model ({format, rig, size, ...}); 404 if none."""
+    meta = get_character_model_info(character_name)
+    if not meta:
+        raise HTTPException(status_code=404, detail="No model")
+    return meta
+
+
+@router.post("/{character_name}/model/meta")
+async def update_character_model_meta(character_name: str, request: Request) -> Dict[str, Any]:
+    """Updates model meta (currently only `rig`); 404 if no model exists."""
+    body = await request.json()
+    rig = str(body.get("rig") or "").strip().lower()
+    if rig not in MODEL_RIG_VALUES:
+        raise HTTPException(status_code=400,
+                            detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
+    meta = set_character_model_rig(character_name, rig)
+    if not meta:
+        raise HTTPException(status_code=404, detail="No model")
+    return meta
+
+
+@router.get("/{character_name}/model")
+def get_character_model_file(character_name: str, request: Request):
+    """Serves the 3D model bytes; 404-fallback lets clients degrade to the
+    portrait marker. ETag/If-None-Match so the 20-30 MB file transfers only
+    when it actually changed."""
+    from fastapi.responses import Response
+    meta = get_character_model_info(character_name)
+    if not meta:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    model_path = get_character_dir(character_name) / "model" / meta["filename"]
+    stat = model_path.stat()
+    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304,
+                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+    media_type = "model/gltf-binary" if meta.get("format") == "glb" else "application/octet-stream"
+    return FileResponse(model_path, media_type=media_type,
+                        filename=meta["filename"],
+                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+
+@router.delete("/{character_name}/model")
+def delete_character_model_endpoint(character_name: str) -> Dict[str, Any]:
+    """Removes the character's 3D model + meta; 404 if none exists."""
+    if not delete_character_model(character_name):
+        raise HTTPException(status_code=404, detail="No model")
+    return {"status": "success"}
 
 
 @router.post("/{character_name}/images/{image_filename}/comment")

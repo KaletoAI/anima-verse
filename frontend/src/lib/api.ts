@@ -104,9 +104,11 @@ export async function apiUpload<T = any>(
   path: string,
   file: File,
   field = 'file',
+  extra?: Record<string, string>,
 ): Promise<T> {
   const fd = new FormData()
   fd.append(field, file)
+  for (const [k, v] of Object.entries(extra || {})) fd.append(k, v)
   const res = await fetch(path, { ...COMMON, method: 'POST', body: fd })
   return parseJsonOrThrow(res)
 }

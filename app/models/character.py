@@ -2578,6 +2578,98 @@ def get_character_outfits_dir(character_name: str) -> Path:
     return outfits_dir
 
 
+# --- Character 3D model asset (AV3D-5 stage 1) ---
+#
+# One active model per character under characters/<name>/model/: the file is
+# stored as model.<ext> (glb/vrm) plus a meta.json sidecar. Consumers are
+# external 3D map clients; orientation/scale/ground offset are deliberately
+# NOT normalized here — the client does that itself. `rig` tells the client
+# whether its shared animation-clip library applies (mixamo) or not.
+
+MODEL_RIG_VALUES = ("mixamo", "custom", "none")
+
+
+def get_character_model_dir(character_name: str) -> Path:
+    """Returns the 3D-model directory for a character (see
+    get_character_images_dir for the base-dir existence gate)."""
+    base = get_character_dir(character_name)
+    model_dir = base / "model"
+    if base.exists():
+        model_dir.mkdir(parents=True, exist_ok=True)
+    return model_dir
+
+
+def get_character_model_info(character_name: str) -> Optional[Dict[str, Any]]:
+    """Meta of the stored 3D model (meta.json, file verified) or None."""
+    model_dir = get_character_dir(character_name) / "model"
+    meta_path = model_dir / "meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    filename = meta.get("filename") or ""
+    file_path = model_dir / filename
+    if not filename or "/" in filename or ".." in filename or not file_path.exists():
+        return None
+    meta["size"] = file_path.stat().st_size
+    return meta
+
+
+def save_character_model(character_name: str, original_filename: str,
+                         contents: bytes, rig: str = "mixamo") -> Dict[str, Any]:
+    """Stores/replaces the character's 3D model + meta.json sidecar.
+
+    The previous model file is removed first (also across a glb<->vrm format
+    switch). Extension must be pre-validated by the caller."""
+    ext = Path(original_filename.lower()).suffix
+    model_dir = get_character_model_dir(character_name)
+    for old in model_dir.glob("model.*"):
+        old.unlink()
+    target = model_dir / f"model{ext}"
+    target.write_bytes(contents)
+    meta = {
+        "format": ext.lstrip("."),
+        "rig": rig if rig in MODEL_RIG_VALUES else "custom",
+        "filename": target.name,
+        "original_filename": original_filename,
+        "size": len(contents),
+        "uploaded_at": utc_now_iso(),
+    }
+    (model_dir / "meta.json").write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    return meta
+
+
+def set_character_model_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
+    """Updates the rig type in the model sidecar; None if no model exists."""
+    if rig not in MODEL_RIG_VALUES:
+        return None
+    meta = get_character_model_info(character_name)
+    if not meta:
+        return None
+    meta["rig"] = rig
+    model_dir = get_character_dir(character_name) / "model"
+    persisted = {k: v for k, v in meta.items() if k != "size"}
+    (model_dir / "meta.json").write_text(
+        json.dumps(persisted, indent=2, ensure_ascii=False), encoding="utf-8")
+    return meta
+
+
+def delete_character_model(character_name: str) -> bool:
+    """Removes the character's 3D model + sidecar; True if anything existed."""
+    model_dir = get_character_dir(character_name) / "model"
+    if not model_dir.exists():
+        return False
+    removed = False
+    for f in list(model_dir.glob("model.*")) + [model_dir / "meta.json"]:
+        if f.exists():
+            f.unlink()
+            removed = True
+    return removed
+
+
 def get_character_images(character_name: str) -> List[str]:
     """Gibt eine Liste aller Galerie-Bild-Dateinamen zurueck.
 
