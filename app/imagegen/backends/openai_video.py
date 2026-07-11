@@ -61,6 +61,12 @@ class OpenAIVideoBackend(ImageBackend):
         self.lora_url = os.environ.get(f"{env_prefix}LORA_URL", "").strip()
         self.lora_filter = os.environ.get(f"{env_prefix}LORA_FILTER", "").strip()
         self.available_loras: List[str] = []
+        # Alias self-discovery (GET /v1/generations/{alias}/schema): image
+        # slot name, fps, seconds support. Filled on availability; every
+        # value has a safe fallback so a gateway without the endpoint works.
+        self._image_slot: str = ""
+        self._fps: float = 0.0
+        self._seconds_supported: bool = True
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -79,6 +85,7 @@ class OpenAIVideoBackend(ImageBackend):
                 self._mark_available(f"Gateway video, Alias: {self.model}")
                 if self.lora_url:
                     self.fetch_loras()
+                self._fetch_alias_schema()
                 return True
             self._mark_unavailable(f"HTTP {resp.status_code}")
             return False
@@ -89,6 +96,46 @@ class OpenAIVideoBackend(ImageBackend):
             logger.error(f"{self.name} Fehler: {e}")
             self._mark_unavailable(str(e))
             return False
+
+    def _fetch_alias_schema(self) -> None:
+        """Self-discovery via GET /v1/generations/{alias}/schema (gateway spec
+        v2): required image slot, fps, seconds support. Tolerant parsing —
+        unknown shapes fall back to the defaults (slot "image", seconds
+        passthrough)."""
+        try:
+            resp = requests.get(
+                f"{self.api_url}/v1/generations/{self.model}/schema",
+                headers=self._headers(), timeout=10)
+            if resp.status_code != 200:
+                logger.debug("%s: kein Alias-Schema (HTTP %d)", self.name,
+                             resp.status_code)
+                return
+            sc = resp.json() if resp.content else {}
+            if not isinstance(sc, dict):
+                return
+            # Image slots: dict {slot: {required: bool, ...}} under one of the
+            # known keys; pick the first REQUIRED slot, else the first slot.
+            slots = None
+            for key in ("images", "image_slots", "slots"):
+                if isinstance(sc.get(key), dict):
+                    slots = sc[key]
+                    break
+            if slots:
+                required = [k for k, v in slots.items()
+                            if isinstance(v, dict) and v.get("required")]
+                self._image_slot = (required[0] if required
+                                    else next(iter(slots.keys()), ""))
+            try:
+                self._fps = float(sc.get("fps") or 0)
+            except (TypeError, ValueError):
+                self._fps = 0.0
+            if sc.get("seconds_supported") is not None:
+                self._seconds_supported = bool(sc.get("seconds_supported"))
+            logger.info("%s: Alias-Schema geladen (slot=%s, fps=%s, seconds=%s)",
+                        self.name, self._image_slot or "image",
+                        self._fps or "?", self._seconds_supported)
+        except Exception as e:
+            logger.debug("%s: Alias-Schema-Abfrage fehlgeschlagen: %s", self.name, e)
 
     def fetch_loras(self) -> List[str]:
         """LoRAs of the video alias (GET -> {"loras": [...]}), narrowed by
@@ -169,12 +216,20 @@ class OpenAIVideoBackend(ImageBackend):
             return []
 
         seconds = int(params.get("seconds") or self.seconds or 5)
+        # Discovered per-alias values (safe fallbacks without the schema
+        # endpoint): image slot name and seconds-vs-frames support.
+        _slot = self._image_slot or "image"
+        if self._seconds_supported:
+            _p: Dict[str, Any] = {"seconds": seconds}
+        else:
+            _fps = self._fps or 16.0
+            _p = {"frames": max(1, int(seconds * _fps) + 1)}
         payload: Dict[str, Any] = {
             "model": params.get("model") or self.model,
             "prompt": prompt,
-            "images": {"image": image_val},
+            "images": {_slot: image_val},
             # The gateway converts seconds to the frame raster itself.
-            "params": {"seconds": seconds},
+            "params": _p,
             "mode": "async",
         }
         if negative_prompt:
