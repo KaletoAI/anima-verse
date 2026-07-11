@@ -842,10 +842,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_OUTFIT_CHANGE_GENERATE_IMAGE", oc.get("generate_image", True))
     _set(env, "SKILL_OUTFIT_CHANGE_LANGUAGE", oc.get("language", "en"))
     _set(env, "SKILL_OUTFIT_CHANGE_MAX_OUTFITS", oc.get("max_outfits", 10))
-    # DEAD(review): no consumer reads OUTFIT_CHANGE_COOLDOWN_MINUTES anymore
-    # (leftover from the outfit rework) — remove together with the
-    # outfit_change.cooldown_minutes schema field. Found 2026-07-10.
-    _set(env, "OUTFIT_CHANGE_COOLDOWN_MINUTES", oc.get("cooldown_minutes", 120))
 
     # Knowledge
     kn = config.get("knowledge", {})
