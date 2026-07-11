@@ -243,6 +243,36 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
     return {"locations": locations}
 
 
+def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
+    """Whitelist + coerce the optional 3D-map metadata object (AV3D-1).
+
+    Consumed by external 3D map clients; the 2D UI stores/edits but never
+    renders it. Unknown keys are dropped, invalid values skipped; an empty
+    result means "unset"."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    try:
+        floors = int(raw.get("floors"))
+        if floors > 0:
+            out["floors"] = floors
+    except (TypeError, ValueError):
+        pass
+    fp = raw.get("footprint")
+    if isinstance(fp, (list, tuple)) and len(fp) == 2:
+        try:
+            w, d = int(fp[0]), int(fp[1])
+            if w > 0 and d > 0:
+                out["footprint"] = [w, d]
+        except (TypeError, ValueError):
+            pass
+    for key in ("style", "color"):
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = val.strip()
+    return out
+
+
 def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     """Create or update a location from a parsed request body (incl. extra fields)."""
     user_id = data.get("user_id", "").strip()
@@ -264,10 +294,12 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     passable = data.get("passable")
     entry_room = data.get("entry_room")
     indoor = data.get("indoor")
+    terrain = data.get("terrain")
+    map3d = data.get("map3d")
     if not location_name:
-        raise HTTPException(status_code=400, detail="Name fehlt")
+        raise HTTPException(status_code=400, detail="Name missing")
     if not isinstance(rooms, list):
-        raise HTTPException(status_code=400, detail="rooms muss eine Liste sein")
+        raise HTTPException(status_code=400, detail="rooms must be a list")
 
     location = add_location(location_name, description, rooms=rooms,
                             image_prompt_day=image_prompt_day,
@@ -281,7 +313,8 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                   or passable is not None
                   or entry_room is not None or indoor is not None
                   or decency is not None or style_hint is not None
-                  or swim_allowed is not None or activity_hint is not None)
+                  or swim_allowed is not None or activity_hint is not None
+                  or terrain is not None or map3d is not None)
     if _has_extra and location:
         from app.models.world import _load_world_data, _save_world_data
         wdata = _load_world_data()
@@ -314,6 +347,14 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                 if indoor is not None:
                     _v = (indoor or "").strip().lower()
                     _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
+                if terrain is not None:
+                    _l["terrain"] = (terrain or "").strip()
+                if map3d is not None:
+                    _m3 = _sanitize_map3d(map3d)
+                    if _m3:
+                        _l["map3d"] = _m3
+                    else:
+                        _l.pop("map3d", None)
                 break
         _save_world_data(wdata)
         location = get_location_by_id(location["id"])
@@ -343,10 +384,12 @@ def update_location_with_extras(location_id: str,
     passable = data.get("passable")
     entry_room = data.get("entry_room")
     indoor = data.get("indoor")
+    terrain = data.get("terrain")
+    map3d = data.get("map3d")
 
     loc = get_location_by_id(location_id)
     if not loc:
-        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+        raise HTTPException(status_code=404, detail="Location not found")
 
     if new_name:
         rename_location(location_id, new_name)
@@ -371,7 +414,8 @@ def update_location_with_extras(location_id: str,
                   or passable is not None
                   or entry_room is not None or indoor is not None
                   or decency is not None or style_hint is not None
-                  or swim_allowed is not None or activity_hint is not None)
+                  or swim_allowed is not None or activity_hint is not None
+                  or terrain is not None or map3d is not None)
     if _has_extra:
         from app.models.world import _load_world_data, _save_world_data
         wdata = _load_world_data()
@@ -404,6 +448,14 @@ def update_location_with_extras(location_id: str,
                 if indoor is not None:
                     _v = (indoor or "").strip().lower()
                     _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
+                if terrain is not None:
+                    _l["terrain"] = (terrain or "").strip()
+                if map3d is not None:
+                    _m3 = _sanitize_map3d(map3d)
+                    if _m3:
+                        _l["map3d"] = _m3
+                    else:
+                        _l.pop("map3d", None)
                 break
         _save_world_data(wdata)
 
@@ -1231,10 +1283,11 @@ def _analyze_tile_terrain(loc: Dict[str, Any]):
 
 def _terrain_term(loc: Dict[str, Any]) -> str:
     """Short terrain term of a tile: vision analysis of the CURRENT tile (if
-    enabled), otherwise its own 2D map prompt, otherwise description,
-    otherwise name — first statement, ~80 chars at a word boundary, without
-    dangling function words."""
-    term = " ".join((_analyze_tile_terrain(loc) or loc.get("image_prompt_map_2d")
+    enabled), otherwise the structured ``terrain`` field, otherwise its own 2D
+    map prompt, otherwise description, otherwise name — first statement, ~80
+    chars at a word boundary, without dangling function words."""
+    term = " ".join((_analyze_tile_terrain(loc) or loc.get("terrain")
+                     or loc.get("image_prompt_map_2d")
                      or loc.get("description") or loc.get("name") or "").split())
     for _sep in (".", ";"):
         if _sep in term:

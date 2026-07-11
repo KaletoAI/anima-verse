@@ -14,6 +14,16 @@ export interface Room {
   image_prompt_night?: string
 }
 
+// Optional 3D metadata for external 3D map clients (AV3D-1). The 2D UI
+// stores/edits it but never renders it; absent fields mean "let the client
+// decide" (procedural heuristics).
+export interface Map3D {
+  floors?: number
+  footprint?: number[]
+  style?: string
+  color?: string
+}
+
 export interface EventSettings {
   event_probability?: number
   max_concurrent_events?: number
@@ -46,7 +56,14 @@ export interface Location {
   grid_y?: number | null
   map_image_2d?: string
   event_settings?: EventSettings
+  terrain?: string
+  map3d?: Map3D
 }
+
+// Suggested values only — both fields accept free text (the consuming map
+// client decides what it can render; unknown values fall back to defaults).
+export const TERRAIN_TYPES = ['grass', 'forest', 'road', 'water', 'sand', 'rock'] as const
+export const MAP3D_STYLES = ['tower', 'house', 'shop', 'generic'] as const
 
 export const EVENT_CATEGORIES = ['ambient', 'social', 'disruption', 'danger'] as const
 

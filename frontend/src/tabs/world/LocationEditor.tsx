@@ -6,7 +6,7 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { type ItemRef } from '../../lib/refs'
-import { DANGER_LEVELS, type Location } from './worldTypes'
+import { DANGER_LEVELS, MAP3D_STYLES, TERRAIN_TYPES, type Location, type Map3D } from './worldTypes'
 import { RandomEventsEditor } from './RandomEventsEditor'
 
 // ── Location editor ────────────────────────────────────────────────────────
@@ -31,6 +31,30 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
     setDraft((prev) => ({ ...prev, [k]: v }))
   }, [])
 
+  // undefined removes the key; the backend drops an all-empty map3d object
+  const updMap3d = useCallback(<K extends keyof Map3D>(k: K, v: Map3D[K] | undefined) => {
+    setDraft((prev) => {
+      const m3 = { ...(prev.map3d || {}) }
+      if (v === undefined) delete m3[k]
+      else m3[k] = v
+      return { ...prev, map3d: m3 }
+    })
+  }, [])
+
+  const footprint = draft.map3d?.footprint || []
+  const setFootprint = useCallback((idx: 0 | 1, raw: string) => {
+    const n = parseInt(raw, 10)
+    setDraft((prev) => {
+      const cur = prev.map3d?.footprint || []
+      const next = [cur[0] || 0, cur[1] || 0]
+      next[idx] = Number.isFinite(n) && n > 0 ? n : 0
+      const m3 = { ...(prev.map3d || {}) }
+      if (!next[0] && !next[1]) delete m3.footprint
+      else m3.footprint = [next[0] || 1, next[1] || 1]
+      return { ...prev, map3d: m3 }
+    })
+  }, [])
+
   const save = useCallback(async () => {
     try {
       await apiPut(`/world/locations/${encodeURIComponent(location.id)}`, {
@@ -46,6 +70,8 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
         activity_hint: draft.activity_hint,
         knowledge_item_id: draft.knowledge_item_id,
         passable: draft.passable,
+        terrain: draft.terrain,
+        map3d: draft.map3d,
         image_prompt_day: draft.image_prompt_day,
         image_prompt_night: draft.image_prompt_night,
         image_prompt_map_2d: draft.image_prompt_map_2d,
@@ -226,6 +252,91 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
               value={draft.activity_hint || ''}
               onChange={(e) => upd('activity_hint', e.target.value)}
             />
+          </Field>
+        </div>
+
+        <div className="ga-form-section-label">{t('Map metadata (3D clients)')}</div>
+        <div className="ga-form-row">
+          <Field label={t('Terrain')} hint={t('Ground type of this map cell. Free text; without it, clients guess from the name.')}>
+            <input
+              className="ga-input"
+              list="terrain-type-options"
+              value={draft.terrain || ''}
+              placeholder={t('auto (from name)')}
+              onChange={(e) => upd('terrain', e.target.value)}
+            />
+            <datalist id="terrain-type-options">
+              {TERRAIN_TYPES.map((v) => (
+                <option key={v} value={v} />
+              ))}
+            </datalist>
+          </Field>
+          <Field label={t('Building style')} hint={t('Style class for procedural 3D buildings. Free text; suggestions provided.')}>
+            <input
+              className="ga-input"
+              list="map3d-style-options"
+              value={draft.map3d?.style || ''}
+              placeholder={t('auto')}
+              onChange={(e) => updMap3d('style', e.target.value.trim() ? e.target.value : undefined)}
+            />
+            <datalist id="map3d-style-options">
+              {MAP3D_STYLES.map((v) => (
+                <option key={v} value={v} />
+              ))}
+            </datalist>
+          </Field>
+          <Field label={t('Floors')} hint={t('Number of floors of the building.')}>
+            <input
+              className="ga-input"
+              type="number"
+              min={1}
+              value={draft.map3d?.floors ?? ''}
+              placeholder={t('auto')}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10)
+                updMap3d('floors', Number.isFinite(n) && n > 0 ? n : undefined)
+              }}
+            />
+          </Field>
+        </div>
+        <div className="ga-form-row">
+          <Field label={t('Footprint (W × D)')} hint={t('Building base size in map grid cells.')}>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input
+                className="ga-input"
+                type="number"
+                min={1}
+                style={{ width: 70 }}
+                value={footprint[0] || ''}
+                placeholder="1"
+                onChange={(e) => setFootprint(0, e.target.value)}
+              />
+              <span>×</span>
+              <input
+                className="ga-input"
+                type="number"
+                min={1}
+                style={{ width: 70 }}
+                value={footprint[1] || ''}
+                placeholder="1"
+                onChange={(e) => setFootprint(1, e.target.value)}
+              />
+            </div>
+          </Field>
+          <Field label={t('Building color')} hint={t('Base color for procedural buildings (hex).')}>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input
+                type="color"
+                value={draft.map3d?.color || '#8fa3b0'}
+                onChange={(e) => updMap3d('color', e.target.value)}
+              />
+              <input
+                className="ga-input"
+                value={draft.map3d?.color || ''}
+                placeholder="#8fa3b0"
+                onChange={(e) => updMap3d('color', e.target.value.trim() ? e.target.value.trim() : undefined)}
+              />
+            </div>
           </Field>
         </div>
 

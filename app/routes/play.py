@@ -1176,15 +1176,17 @@ async def play_gallery_delete_image(character: str, filename: str, user=Depends(
 
 @router.get("/play/worldmap")
 async def play_worldmap(user=Depends(get_current_user)):
-    """Aggregierte 2D-Weltkarte: Orte (Grid/Passable/Rotation), Character-
-    Positionen (+Avatar/Aktivitaet/Reiseziel) und aktive disruption/danger-Events.
-    Eine Anfrage statt N×Fetch — read-only fuer das Player-Karten-Panel."""
+    """Aggregated 2D world map: locations (grid/passable/rotation + optional
+    terrain/map3d metadata), character positions (+avatar/activity/room/mood/
+    travel target) and active disruption/danger events. One request instead of
+    N fetches — read-only, for the player map panel and external map clients."""
     from app.models.account import get_active_character
     from app.models.world import list_locations
     from app.models.events import list_events
     from app.models.character import (
         list_available_characters, get_character_current_location,
         get_effective_activity, get_movement_target, get_character_profile_image,
+        get_character_current_room, get_character_current_feeling,
     )
 
     avatar = (get_active_character() or "").strip()
@@ -1194,7 +1196,7 @@ async def play_worldmap(user=Depends(get_current_user)):
     for loc in list_locations():
         lid = loc.get("id") or ""
         name_by_id[lid] = loc.get("name") or ""
-        locations.append({
+        entry = {
             "id": lid,
             "name": loc.get("name") or "",
             "grid_x": loc.get("grid_x"),
@@ -1202,19 +1204,26 @@ async def play_worldmap(user=Depends(get_current_user)):
             "passable": bool(loc.get("passable")),
             "template_location_id": (loc.get("template_location_id") or ""),
             "map_rotation_2d": int(loc.get("map_rotation_2d") or 0),
-        })
+            "terrain": (loc.get("terrain") or ""),
+        }
+        map3d = loc.get("map3d")
+        if isinstance(map3d, dict) and map3d:
+            entry["map3d"] = map3d
+        locations.append(entry)
 
     characters = []
     for name in list_available_characters():
         loc_id = get_character_current_location(name) or ""
         if not loc_id:
-            continue  # offmap (z.B. avatar-only & ungesteuert) -> nicht auf der Karte
+            continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
         mt = get_movement_target(name) or ""
         prof = get_character_profile_image(name) or ""
         characters.append({
             "name": name,
             "location_id": loc_id,
+            "room_id": get_character_current_room(name) or "",
             "activity": get_effective_activity(name) or "",
+            "mood": get_character_current_feeling(name) or "",
             "movement_target_id": mt,
             "movement_target_name": name_by_id.get(mt, "") or mt,
             "avatar_url": (f"/characters/{name}/images/{prof}" if prof else ""),
