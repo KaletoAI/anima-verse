@@ -114,10 +114,18 @@ End-to-End-Dauer wurde durch keinen verifizierten Claim quantifiziert.
 - ⚠ Blog-Quellen, die „Hunyuan3D unter Apache 2.0" behaupten, widersprechen
   dem verifizierten Original-Lizenztext (EU-Ausschluss) — nicht verlassen.
 
-**Konsequenz für die Empfehlung:** unverändert API-first (Meshy Paid /
-Tripo) für Qualität + saubere Lizenz; TRELLIS lokal nur als optionales
-Non-Commercial-Backend (Qualitäts-Test via ComfyUI lohnt); TripoSR/InstantMesh
-als 100 % lizenzsaubere, aber qualitativ einfachere Selbsthosting-Stufe.
+**Konsequenz für die Empfehlung (präzisiert):** anima-verse liefert nur
+Schnittstellen/Adapter — die Lizenzlast der Modelle liegt beim jeweiligen
+Backend-Betreiber, NICHT beim Projekt. Die Backend-Wahl ist damit rein
+praktisch (Qualität/API/Kosten). Drei verbleibende Lizenz-Fakten:
+(1) Hunyuan3D ist für EU-*Betreiber* territorial gesperrt (kein Lizenzgrant,
+auch nicht-kommerziell) — Adapter im Projekt okay, Nutzung auf EU-Instanzen
+nicht. (2) Keine Weights/Non-Commercial-Code (diffoctreerast etc.) ins
+öffentliche Repo vendoren — nur HTTP-Adapter. (3) Output-Lizenzen werden nur
+relevant, wenn generierte Assets ins Repo committet werden (z.B. worlds/demo:
+Meshy-Free = CC BY 4.0 mit Attribution). Für nicht-kommerzielle Betreiber im
+Homelab ist TRELLIS lokal uneingeschränkt nutzbar — Qualitäts-Test via
+ComfyUI lohnt als erster Schritt.
 
 ## Quellen (Auswahl, primär)
 
