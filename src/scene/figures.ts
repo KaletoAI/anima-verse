@@ -197,8 +197,8 @@ export class FigureLibrary {
         const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
         const height = m.height ?? defaultHeight;
         const usable = gltf.animations.filter((c) => c.tracks.length > 0);
-        const skinned = boneNames(template).size > 0;
-        if (!usable.length && !skinned) throw new Error(`${m.name}: weder Animationen noch Skelett`);
+        // Auch statische Meshes (ohne Skelett/Clips) zulassen — Interimszustand,
+        // bis ein geriggtes Modell vorliegt; solche Figuren gleiten ohne Laufanimation.
         console.info(`[figures] ${m.name}: rawHeight=${rawHeight.toFixed(3)} -> scale=${(height / rawHeight).toFixed(3)}, clips=${usable.length}, bones=${boneNames(template).size}`);
         return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly };
       })
@@ -213,12 +213,11 @@ export class FigureLibrary {
     // Ziel-Knochennamen umschreiben (mixamorig-Präfix-Mapping).
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
-      if (m.clips.length || !donor) continue;
+      if (m.clips.length || !donor || !boneNames(m.template).size) continue;
       m.clips = retargetClips(m.template, donor.template, donor.clips);
       if (!m.clips.length) console.warn(`[figures] ${m.name}: Clip-Retargeting fehlgeschlagen`);
       else console.info(`[figures] ${m.name}: ${m.clips.length} Clips von ${donor.name} retargetet`);
     }
-    this.models = this.models.filter((m) => m.clips.length > 0);
     return this.models.length > 0;
   }
 
