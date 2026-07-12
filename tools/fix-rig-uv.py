@@ -16,7 +16,7 @@ def read_glb(path):
 def acc_arr(j, b, idx):
     acc = j['accessors'][idx]
     bv = j['bufferViews'][acc['bufferView']]
-    dt = {5126:('<f4',4),5123:('<u2',2),5125:('<u4',4)}[acc['componentType']]
+    dt = {5126:('<f4',4),5123:('<u2',2),5125:('<u4',4),5121:('<u1',1)}[acc['componentType']]
     n = {'SCALAR':1,'VEC2':2,'VEC3':3,'VEC4':4}[acc['type']]
     s = bv.get('byteOffset',0)+acc.get('byteOffset',0)
     return np.frombuffer(bytes(b[s:s+acc['count']*n*dt[1]]), dtype=dt[0]).reshape(acc['count'],n), (s, acc['count']*n*dt[1])
@@ -84,6 +84,41 @@ corner = dm.argmin(axis=2)              # (F,3)
 for c in range(3):
     new_uv[d_idx[:,c]] = s_tri_uv[np.arange(len(fmap)), corner[:,c]]
 dst_bin[uv_start:uv_start+uv_len] = new_uv.tobytes()
+
+# Weight-Welding: positionsgleiche Vertices (UV-Naht-Duplikate) bekommen
+# identische, gemittelte Skinning-Gewichte — behebt "klebende" Vertices an
+# Naehten (Ellenbogen/Knie/Fuesse), da MIA Duplikate unabhaengig gewichtet.
+ja = dp['attributes'].get('JOINTS_0')
+wa = dp['attributes'].get('WEIGHTS_0')
+if ja is not None and wa is not None:
+    joints, (j_start, j_len) = acc_arr(dst_j, dst_bin, ja)
+    weights, (w_start, w_len) = acc_arr(dst_j, dst_bin, wa)
+    joints = joints.copy(); weights = weights.copy()
+    key = np.round(d_pos * 1e5).astype(np.int64)
+    _, inv, counts = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+    welded = 0
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for vi, gi in enumerate(inv):
+        if counts[gi] > 1:
+            groups[gi].append(vi)
+    for vids in groups.values():
+        acc = {}
+        for v in vids:
+            for j, w in zip(joints[v], weights[v]):
+                if w > 0: acc[int(j)] = acc.get(int(j), 0.0) + float(w)
+        top = sorted(acc.items(), key=lambda kv: -kv[1])[:4]
+        total = sum(w for _, w in top) or 1.0
+        jj = [j for j, _ in top] + [0] * (4 - len(top))
+        ww = [w / total for _, w in top] + [0.0] * (4 - len(top))
+        for v in vids:
+            joints[v] = jj
+            weights[v] = ww
+        welded += len(vids)
+    j_dt = {5126:'<f4',5123:'<u2',5125:'<u4',5121:'<u1'}[dst_j['accessors'][ja]['componentType']]
+    dst_bin[j_start:j_start+j_len] = joints.astype(j_dt).tobytes()
+    dst_bin[w_start:w_start+w_len] = weights.astype('<f4').tobytes()
+    print(f'Weight-Welding: {welded} Naht-Vertices in {len(groups)} Gruppen vereinheitlicht')
 
 # Textur einbetten + Material aufhellen
 png = png_bytes
