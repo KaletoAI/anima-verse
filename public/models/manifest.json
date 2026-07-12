@@ -45,6 +45,18 @@
       "url": "/models/Trellis2BetterTextured_00001__mia.glb",
       "height": 1.7,
       "assignOnly": true
+    },
+    {
+      "name": "Low",
+      "url": "/models/Bianca-Low_Textured_00001__mia.glb",
+      "height": 1.7,
+      "assignOnly": true
+    },
+    {
+      "name": "High20k",
+      "url": "/models/BiancaHigh_Textured_00001__mia.glb",
+      "height": 1.7,
+      "assignOnly": true
     }
   ],
   "assignments": {
@@ -52,7 +64,7 @@
     "Amelia Lane": "Xbot",
     "Marcus Hale": "Soldier",
     "Kira": "Kira",
-    "Bianca Voss": "Bianca"
+    "Bianca Voss": "Low"
   },
   "clipFiles": {
     "walk": "/models/Walking.fbx",
