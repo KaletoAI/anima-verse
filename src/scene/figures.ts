@@ -28,6 +28,9 @@ interface Manifest {
   defaultHeight?: number;
   models: ManifestModel[];
   assignments?: Record<string, string>;
+  /** Mixamo-Animations-Dateien (FBX/GLB), direkt auf Mixamo-Rigs anwendbar:
+   *  {"run": "/models/StandardRun.fbx", ...} — Key = Clip-Kategorie */
+  clipFiles?: Record<string, string>;
 }
 
 interface LoadedModel {
@@ -74,60 +77,217 @@ function retargetClips(
   const donorSkin = findSkinnedMesh(donor);
   if (!targetSkin || !donorSkin) return [];
 
-  // Welt-Rest-Rotationen beider Skelette (Templates stehen in Bind-Pose)
+  // Hierarchisches FK-Retargeting: Spender-Clip framebasiert abtasten,
+  // Welt-Rotations-Deltas top-down auf das Ziel-Skelett heben. Im Gegensatz
+  // zum Rest-Pose-Konjugieren werden dabei die bereits animierten
+  // ELTERN-Rotationen des Ziels berücksichtigt — sonst verrenken sich Ketten
+  // (Schulter/Arm), sobald sich Knochenkonventionen unterscheiden.
+  const FPS = 24;
+
+  // Spender-Klon zum Abtasten (Template nicht mutieren)
+  const donorClone = SkeletonUtils.clone(donor);
+  donorClone.updateMatrixWorld(true);
+  const donorSkinClone = findSkinnedMesh(donorClone)!;
   target.updateMatrixWorld(true);
-  donor.updateMatrixWorld(true);
-  const restOf = (skin: THREE.SkinnedMesh) => {
-    const map = new Map<string, { q: THREE.Quaternion; parent: THREE.Quaternion }>();
-    for (const bone of skin.skeleton.bones) {
-      const q = bone.getWorldQuaternion(new THREE.Quaternion());
-      const parent = bone.parent
-        ? bone.parent.getWorldQuaternion(new THREE.Quaternion())
-        : new THREE.Quaternion();
-      map.set(bone.name, { q, parent });
-    }
-    return map;
-  };
-  const targetRest = restOf(targetSkin);
-  const donorRest = restOf(donorSkin);
 
-  // Quell-Knochenname -> Ziel-Knochenname (mixamorig-Präfix tolerant)
-  const toTarget = new Map<string, string>();
-  for (const donorName of donorRest.keys()) {
-    if (targetRest.has(donorName)) toTarget.set(donorName, donorName);
-    else {
-      const stripped = donorName.replace(/^mixamorig:?/i, '');
-      const match = [...targetRest.keys()].find((t) => t === stripped || t.replace(/^mixamorig:?/i, '') === stripped);
-      if (match) toTarget.set(donorName, match);
-    }
+  const donorRestW = new Map<string, THREE.Quaternion>();
+  for (const b of donorSkinClone.skeleton.bones) {
+    donorRestW.set(b.name, b.getWorldQuaternion(new THREE.Quaternion()));
   }
-  if (toTarget.size < 8) return [];
 
-  // Pro Keyframe: q_target = inv(Rp_t) * (Rp_s * q_s * inv(R_s)) * R_t
-  // (Delta der Quell-Lokalrotation in Weltkoordinaten, auf Ziel-Restpose gehoben —
-  // das Verfahren aus dem three-vrm Mixamo-Beispiel, verallgemeinert auf
-  // nicht-normalisierte Ziel-Rigs.)
+  // Ziel-Knochen: Rest-Welt-Rotationen + Hierarchie-Reihenfolge (Eltern zuerst)
+  const targetBones: THREE.Bone[] = [];
+  const collect = (o: THREE.Object3D) => {
+    if ((o as THREE.Bone).isBone) targetBones.push(o as THREE.Bone);
+    for (const c of o.children) collect(c);
+  };
+  // ab Wurzel sammeln, damit die Reihenfolge Eltern->Kind garantiert ist
+  let skRoot: THREE.Object3D = targetSkin.skeleton.bones[0];
+  while (skRoot.parent && (skRoot.parent as THREE.Bone).isBone) skRoot = skRoot.parent;
+  collect(skRoot);
+
+  const targetRestW = new Map<THREE.Bone, THREE.Quaternion>();
+  for (const b of targetBones) targetRestW.set(b, b.getWorldQuaternion(new THREE.Quaternion()));
+
+  // Zuordnung Ziel-Knochen -> Spender-Knochen (mixamorig-Präfix tolerant)
+  const donorByKey = new Map<string, THREE.Bone>();
+  for (const b of donorSkinClone.skeleton.bones) {
+    donorByKey.set(b.name.replace(/^mixamorig:?/i, '').toLowerCase(), b as THREE.Bone);
+  }
+  // Spiegel-Erkennung: sitzt der "Left*"-Knochen des Ziels auf der anderen
+  // Welt-Seite als beim Spender, Links/Rechts in der Zuordnung tauschen.
+  const worldX = (b: THREE.Object3D) => b.getWorldPosition(new THREE.Vector3()).x;
+  const pair = new Map<THREE.Bone, THREE.Bone>();
+  for (const tb of targetBones) {
+    const key = tb.name.replace(/^mixamorig:?/i, '').toLowerCase();
+    let db = donorByKey.get(key);
+    if (db && /left|right/.test(key)) {
+      const tx = worldX(tb);
+      const dx = worldX(db);
+      if (Math.abs(tx) > 1e-3 && Math.abs(dx) > 1e-3 && Math.sign(tx) !== Math.sign(dx)) {
+        const mirrored = key.includes('left') ? key.replace('left', 'right') : key.replace('right', 'left');
+        db = donorByKey.get(mirrored) ?? db;
+      }
+    }
+    if (db) pair.set(tb, db);
+  }
+  if (pair.size < 8) return [];
+
+  // Hüfte für Positions-Track (Lauf-Bounce), skaliert über Hüfthöhen-Verhältnis
+  const targetHips = targetBones.find((b) => /hips$/i.test(b.name));
+  const donorHips = donorHipsBone(donorSkinClone);
+  const tHipsRestPos = targetHips?.getWorldPosition(new THREE.Vector3());
+  const dHipsRestPos = donorHips?.getWorldPosition(new THREE.Vector3());
+  const hipScale = tHipsRestPos && dHipsRestPos && dHipsRestPos.y > 1e-6 ? tHipsRestPos.y / dHipsRestPos.y : 1;
+  const hipsParentInv = targetHips
+    ? new THREE.Matrix4().copy((targetHips.parent as THREE.Object3D).matrixWorld).invert()
+    : null;
+
+  // Aim-Retargeting: pro Knochen die Richtung zum Kind übertragen statt
+  // Rotations-Deltas — robust gegen gespiegelte/abweichende Knochen-Frames.
+  const firstBoneChild = (b: THREE.Object3D): THREE.Bone | undefined =>
+    b.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
+  const donorChild = new Map<THREE.Bone, THREE.Bone>();
+  for (const db of donorSkinClone.skeleton.bones) {
+    const c = firstBoneChild(db);
+    if (c) donorChild.set(db as THREE.Bone, c);
+  }
+  const targetRestDir = new Map<THREE.Bone, THREE.Vector3>();
+  for (const tb of targetBones) {
+    const c = firstBoneChild(tb);
+    if (!c) continue;
+    const dir = c.getWorldPosition(new THREE.Vector3()).sub(tb.getWorldPosition(new THREE.Vector3()));
+    if (dir.lengthSq() > 1e-10) targetRestDir.set(tb, dir.normalize());
+  }
+
+  const mixer = new THREE.AnimationMixer(donorClone);
   const out: THREE.AnimationClip[] = [];
-  const qS = new THREE.Quaternion();
+  const desired = new THREE.Quaternion();
+  const qLocal = new THREE.Quaternion();
+  const vA = new THREE.Vector3();
+  const vB = new THREE.Vector3();
+  const qAlign = new THREE.Quaternion();
+
+  for (const clip of clips) {
+    const action = mixer.clipAction(clip);
+    action.play();
+    const frames = Math.max(2, Math.round(clip.duration * FPS) + 1);
+    const times = new Float32Array(frames);
+    const values = new Map<THREE.Bone, Float32Array>();
+    for (const tb of pair.keys()) values.set(tb, new Float32Array(frames * 4));
+    const hipPos = targetHips ? new Float32Array(frames * 3) : null;
+
+    for (let f = 0; f < frames; f++) {
+      const t = Math.min(clip.duration, f / FPS);
+      times[f] = t;
+      mixer.setTime(t);
+      donorClone.updateMatrixWorld(true);
+
+      // Ziel-Welt-Rotationen dieses Frames, top-down aufgebaut
+      const worldQ = new Map<THREE.Object3D, THREE.Quaternion>();
+      for (const tb of targetBones) {
+        const parent = tb.parent as THREE.Object3D;
+        const pW = (parent as THREE.Bone).isBone
+          ? worldQ.get(parent) ?? targetRestW.get(parent as THREE.Bone)!
+          : parent.getWorldQuaternion(new THREE.Quaternion());
+        const db = pair.get(tb);
+        if (!db) {
+          // unanimierter Knochen: Rest-Lokalrotation beibehalten
+          worldQ.set(tb, pW.clone().multiply(tb.quaternion));
+          continue;
+        }
+        const dc = donorChild.get(db);
+        const restDir = targetRestDir.get(tb);
+        if (dc && restDir) {
+          // Aim: Ziel-Knochen so drehen, dass er in die Welt-Richtung des
+          // Spender-Knochens zeigt (Rest-Richtung -> aktuelle Richtung)
+          dc.getWorldPosition(vA);
+          db.getWorldPosition(vB);
+          vA.sub(vB);
+          if (vA.lengthSq() > 1e-10) {
+            qAlign.setFromUnitVectors(restDir, vA.normalize());
+            desired.copy(qAlign).multiply(targetRestW.get(tb)!);
+          } else {
+            desired.copy(targetRestW.get(tb)!);
+          }
+        } else {
+          // End-Knochen (Hände, Zehen): Eltern-Bewegung erben, Rest-Lokalrotation halten
+          worldQ.set(tb, pW.clone().multiply(tb.quaternion));
+          const rest = new THREE.Quaternion().copy(tb.quaternion);
+          rest.toArray(values.get(tb)!, f * 4);
+          continue;
+        }
+        qLocal.copy(pW).invert().multiply(desired);
+        worldQ.set(tb, desired.clone());
+        qLocal.toArray(values.get(tb)!, f * 4);
+      }
+
+      if (targetHips && donorHips && hipPos && tHipsRestPos && dHipsRestPos && hipsParentInv) {
+        const dPos = donorHips.getWorldPosition(new THREE.Vector3());
+        const worldPos = tHipsRestPos.clone().add(dPos.sub(dHipsRestPos).multiplyScalar(hipScale));
+        worldPos.applyMatrix4(hipsParentInv);
+        worldPos.toArray(hipPos, f * 3);
+      }
+    }
+
+    const tracks: THREE.KeyframeTrack[] = [];
+    for (const [tb, vals] of values) {
+      tracks.push(new THREE.QuaternionKeyframeTrack(`${tb.name}.quaternion`, [...times], [...vals]));
+    }
+    if (targetHips && hipPos) {
+      tracks.push(new THREE.VectorKeyframeTrack(`${targetHips.name}.position`, [...times], [...hipPos]));
+    }
+    action.stop();
+    mixer.uncacheClip(clip);
+    if (tracks.length >= 8) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
+  }
+  return out;
+}
+
+function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
+  return skin.skeleton.bones.find((b) => /hips$/i.test(b.name.replace(/^mixamorig:?/i, '')));
+}
+
+/**
+ * Mixamo-Animations-Clips (aus FBX) direkt auf ein Mixamo-Rig anwenden:
+ * Tracknamen auf die tatsächlichen Knochennamen des Ziels normalisieren,
+ * Hips-Positions-Track auf die Rig-Größe skalieren, übrige Positions-/
+ * Scale-Tracks verwerfen. Kein Retargeting — funktioniert, weil beide Seiten
+ * dieselbe Mixamo-Bind-Pose verwenden.
+ */
+function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D): THREE.AnimationClip[] {
+  const norm = (s: string) => s.replace(/^mixamorig:?/i, '').replace(/:/g, '').toLowerCase();
+  const boneByKey = new Map<string, THREE.Bone>();
+  target.traverse((o) => {
+    if ((o as THREE.Bone).isBone) boneByKey.set(norm(o.name), o as THREE.Bone);
+  });
+  if (!boneByKey.size) return [];
+  const hips = [...boneByKey.entries()].find(([k]) => /hips$/.test(k))?.[1];
+
+  const out: THREE.AnimationClip[] = [];
   for (const clip of clips) {
     const tracks: THREE.KeyframeTrack[] = [];
     for (const track of clip.tracks) {
-      if (!(track instanceof THREE.QuaternionKeyframeTrack)) continue;
-      const nodeName = track.name.slice(0, track.name.lastIndexOf('.'));
-      const targetName = toTarget.get(nodeName);
-      if (!targetName) continue;
-      const dr = donorRest.get(nodeName)!;
-      const tr = targetRest.get(targetName)!;
-      const invRs = dr.q.clone().invert();
-      const invRpT = tr.parent.clone().invert();
-      const values = new Float32Array(track.values.length);
-      for (let i = 0; i < track.values.length; i += 4) {
-        qS.fromArray(track.values, i);
-        qS.premultiply(dr.parent).multiply(invRs);   // Welt-Delta der Quelle
-        qS.premultiply(invRpT).multiply(tr.q);       // in Ziel-Lokalraum heben
-        qS.toArray(values, i);
+      const dot = track.name.lastIndexOf('.');
+      const node = track.name.slice(0, dot);
+      const prop = track.name.slice(dot + 1);
+      const bone = boneByKey.get(norm(node));
+      if (!bone) continue;
+      if (prop === 'quaternion') {
+        const t = track.clone();
+        t.name = `${bone.name}.quaternion`;
+        tracks.push(t);
+      } else if (prop === 'position' && bone === hips && hips) {
+        // Größenverhältnis aus Rest-Position ableiten (Mixamo-FBX ist in cm)
+        const first = new THREE.Vector3().fromArray(track.values, 0);
+        const restLen = hips.position.length();
+        const animLen = first.length();
+        if (animLen > 1e-6 && restLen > 1e-6) {
+          const s = restLen / animLen;
+          const vals = Float32Array.from(track.values, (v) => v * s);
+          tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, [...track.times], [...vals]));
+        }
       }
-      tracks.push(new THREE.QuaternionKeyframeTrack(`${targetName}.quaternion`, [...track.times], [...values]));
     }
     if (tracks.length >= 8) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
   }
@@ -223,9 +383,32 @@ export class FigureLibrary {
     // Modelle mit Skelett, aber ohne Clips (z.B. Make-It-Animatable-Rigs):
     // Clips vom ersten Modell MIT Animationen leihen und auf die
     // Ziel-Knochennamen umschreiben (mixamorig-Präfix-Mapping).
+    // Externe Mixamo-Clips laden (passen ohne Retargeting auf Mixamo-Rigs)
+    const externalClips: THREE.AnimationClip[] = [];
+    for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) {
+      try {
+        const { animations } = await loadFile(url);
+        if (animations[0]) {
+          const c = animations[0].clone();
+          c.name = kind;
+          externalClips.push(c);
+        }
+      } catch (e) {
+        console.warn('[figures] clipFile nicht ladbar:', url, e);
+      }
+    }
+
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
-      if (m.clips.length || m.noClips || !donor || !boneNames(m.template).size) continue;
+      if (m.clips.length || m.noClips || !boneNames(m.template).size) continue;
+      if (externalClips.length) {
+        m.clips = adaptExternalClips(externalClips, m.template);
+        if (m.clips.length) {
+          console.info(`[figures] ${m.name}: ${m.clips.length} Mixamo-Clips direkt angewandt`);
+          continue;
+        }
+      }
+      if (!donor) continue;
       m.clips = retargetClips(m.template, donor.template, donor.clips);
       if (!m.clips.length) console.warn(`[figures] ${m.name}: Clip-Retargeting fehlgeschlagen`);
       else console.info(`[figures] ${m.name}: ${m.clips.length} Clips von ${donor.name} retargetet`);

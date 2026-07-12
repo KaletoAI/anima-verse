@@ -2,11 +2,32 @@
   "comment": "Beispiel-Figuren (Stufe 1, AV3D-5). height = Zielgröße in Welteinheiten. assignments mappt Charakternamen fest auf ein Modell, sonst deterministische Zuweisung per Namens-Hash. Später ersetzt GET /characters/{name}/model diese Datei.",
   "defaultHeight": 1.75,
   "models": [
-    { "name": "Soldier", "url": "/models/Soldier.glb" },
-    { "name": "Xbot", "url": "/models/Xbot.glb" },
-    { "name": "Robot", "url": "/models/RobotExpressive.glb", "height": 1.55 },
-    { "name": "Kira", "url": "/models/Kira-fixed.glb", "height": 1.7, "assignOnly": true, "noClips": true },
-    { "name": "Bianca", "url": "/models/Bianca.glb", "height": 1.7, "assignOnly": true }
+    {
+      "name": "Soldier",
+      "url": "/models/Soldier.glb"
+    },
+    {
+      "name": "Xbot",
+      "url": "/models/Xbot.glb"
+    },
+    {
+      "name": "Robot",
+      "url": "/models/RobotExpressive.glb",
+      "height": 1.55
+    },
+    {
+      "name": "Kira",
+      "url": "/models/Kira-fixed.glb",
+      "height": 1.7,
+      "assignOnly": true,
+      "noClips": false
+    },
+    {
+      "name": "Bianca",
+      "url": "/models/Bianca.glb",
+      "height": 1.7,
+      "assignOnly": true
+    }
   ],
   "assignments": {
     "Damian Demo": "Robot",
@@ -14,5 +35,8 @@
     "Marcus Hale": "Soldier",
     "Kira": "Kira",
     "Bianca Voss": "Bianca"
+  },
+  "clipFiles": {
+    "run": "/models/StandardRun.fbx"
   }
 }
