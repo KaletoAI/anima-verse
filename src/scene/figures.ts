@@ -308,7 +308,7 @@ const CLIP_SYNONYMS: Record<ClipKind, string[]> = {
 /** Freitext-Activity -> Animations-Kategorie (Client-Workaround für AV3D-6). */
 export function activityToClipKind(activity: string): ClipKind {
   const a = activity.toLowerCase();
-  if (/sit|sitz|coffee|kaffee|eat|ess|meeting|read|les|sleep|schlaf|rest|ruh/.test(a)) return 'sit';
+  if (/sit|sitz|eat|ess|meeting|read|les|sleep|schlaf/.test(a)) return 'sit';
   if (/dance|tanz|party|feier/.test(a)) return 'dance';
   if (/wave|wink|greet|begrüß/.test(a)) return 'wave';
   return 'idle';
