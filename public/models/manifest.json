@@ -68,7 +68,6 @@
   },
   "clipFiles": {
     "walk": "/models/Walking.fbx",
-    "run": "/models/StandardRun.fbx",
     "sit": "/models/Sitting.fbx"
   }
 }

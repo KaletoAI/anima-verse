@@ -498,8 +498,10 @@ export class Figure {
       if (this.current) this.current.timeScale = kind === 'idle' && !this.actions.has('idle') ? 0.1 : 1;
       return;
     }
-    // Kein Idle-Clip vorhanden: Ersatz-Clip stark verlangsamen (wirkt wie Wippen)
-    resolved.timeScale = kind === 'idle' && !this.actions.has('idle') ? 0.1 : 1;
+    // Fallback-Tempo: fehlender Idle-Clip -> Zeitlupe (wirkt wie Wippen);
+    // fehlender Run-Clip -> Walk beschleunigt
+    resolved.timeScale = kind === 'idle' && !this.actions.has('idle') ? 0.1
+      : kind === 'run' && !this.actions.has('run') ? 1.5 : 1;
     resolved.reset().fadeIn(0.25).play();
     this.current?.fadeOut(0.25);
     this.current = resolved;
