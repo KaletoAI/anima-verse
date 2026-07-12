@@ -57,17 +57,30 @@
       "url": "/models/BiancaHigh_Textured_00001__mia.glb",
       "height": 1.7,
       "assignOnly": true
+    },
+    {
+      "name": "BiancaHigh2",
+      "url": "/models/BiancaHigh_Textured2_00006__mia.glb",
+      "height": 1.7,
+      "assignOnly": true
+    },
+    {
+      "name": "KiraFast",
+      "url": "/models/KiraFast_00002__mia.glb",
+      "height": 1.7,
+      "assignOnly": true
     }
   ],
   "assignments": {
     "Damian Demo": "Robot",
     "Amelia Lane": "Xbot",
     "Marcus Hale": "Soldier",
-    "Kira": "Kira",
-    "Bianca Voss": "Low"
+    "Kira": "KiraFast",
+    "Bianca Voss": "BiancaHigh2"
   },
   "clipFiles": {
     "walk": "/models/Walking.fbx",
-    "sit": "/models/Sitting.fbx"
+    "sit": "/models/Sitting.fbx",
+    "idle": "/models/Idle.fbx"
   }
 }
