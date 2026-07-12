@@ -52,8 +52,17 @@ Neuer Job-Typ `character_model`: Referenzbild → fertiges GLB.
      → (a) Trellis2ExportTrimesh [GLB]  (b) MIAAutoRig [GLB]`
    - Feste Parameter: `ProcessMesh.target_face_count=20000`,
      `floater_threshold` ggf. auf 0.005 erhöhen (Geometrie-Fetzen),
-     `RasterizePBR.texture_size=2048`, `MIAAutoRig.use_normal=true`,
+     `RasterizePBR.texture_size=2048`, `LoadTrellis2Models.resolution=1024`,
+     `MIAAutoRig: use_normal=true, no_fingers=false, reset_to_rest=true`
+     (**reset_to_rest ist Pflicht** — sonst passt die Mixamo-Clip-Bibliothek
+     nicht; `no_fingers=false` behebt klebende Vertices an den Händen),
      `fbx_name=<charakter>`, Seeds fest (Reproduzierbarkeit).
+   - **Kein UV-Unwrap-Node zwischen RasterizePBR und dem Rigger.** Er
+     zerstört die Bake-Zuordnung UND sein Seam-Splitting dupliziert Vertices,
+     die dann divergierende Skinning-Gewichte bekommen — sichtbar als
+     „klebende"/reißende Stellen an Nähten (z.B. Ellenbogen). Und **nur der
+     MIA-Zweig** — kein paralleler UniRigAutoRig-Zweig (doppelte Laufzeit/RAM,
+     sporadischer Bones-Fehler).
    - Fertigstellung pollen: `GET /history/<prompt_id>`; Output-Dateien aus
      `output/` einsammeln (`GET /view?filename=...` oder Dateisystem-Zugriff).
 3. **Nachbearbeitung:** `fix-rig-uv.py` (siehe oben) → `<Name>.glb`.
