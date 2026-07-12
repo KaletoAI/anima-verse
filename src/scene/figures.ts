@@ -301,6 +301,10 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
       const prop = track.name.slice(dot + 1);
       const bone = boneByKey.get(norm(node));
       if (!bone) continue;
+      // Fingerknochen auslassen: Auto-Rigging-Finger haben unzuverlässige
+      // Ruhe-Orientierungen — Clip-Tracks zerreißen dort die Hand. Finger
+      // erben stattdessen die Handbewegung (Rest-Pose innerhalb der Hand).
+      if (/(thumb|index|middle|ring|pinky)/i.test(bone.name)) continue;
       if (prop === 'quaternion') {
         if (bone === hips) {
           const vals = new Float32Array(track.values.length);
