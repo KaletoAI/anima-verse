@@ -88,6 +88,30 @@ if (rawUrl) {
   });
 }
 
+// Diagnose: ?diag=1 -> nach 3s Welt-Ausrichtung der Wirbelsäule loggen
+if (params.get('diag') === '1') {
+  setTimeout(() => {
+    const root = figure?.root ?? rawRoot;
+    if (!root) { console.log('[diag] kein Modell'); return; }
+    root.updateMatrixWorld(true);
+    const find = (re: RegExp) => {
+      let hit: THREE.Object3D | null = null;
+      root.traverse((o) => { if (!hit && (o as THREE.Bone).isBone && re.test(o.name)) hit = o; });
+      return hit as THREE.Object3D | null;
+    };
+    const hips = find(/hips$/i);
+    const head = find(/head$/i);
+    if (hips && head) {
+      const hp = hips.getWorldPosition(new THREE.Vector3());
+      const kp = head.getWorldPosition(new THREE.Vector3());
+      const spine = kp.clone().sub(hp).normalize();
+      console.log(`[diag] Hips=(${hp.x.toFixed(2)},${hp.y.toFixed(2)},${hp.z.toFixed(2)}) Head=(${kp.x.toFixed(2)},${kp.y.toFixed(2)},${kp.z.toFixed(2)}) SpineUp-Y=${spine.y.toFixed(3)} ${spine.y > 0.8 ? 'AUFRECHT' : spine.y < 0.3 ? 'LIEGEND' : 'SCHRÄG'}`);
+    } else {
+      console.log('[diag] Knochen nicht gefunden');
+    }
+  }, 3000);
+}
+
 const autoRotate = params.get('spin') === '1'; // Standard: selbst drehen per Maus
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();

@@ -264,9 +264,37 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
   if (!boneByKey.size) return [];
   const hips = [...boneByKey.entries()].find(([k]) => /hips$/.test(k))?.[1];
 
+  // Hüfte: Mixamo-Clips sind für ein Rig ohne Armature-Rotation autoriert
+  // (Hüft-Rest ~ Identität). Unsere Rigs kompensieren die +90°-Armature-
+  // Rotation in der Hüft-Ruhe-Rotation — direktes Kopieren überschreibt die
+  // Kompensation und kippt die Figur auf den Bauch. Deshalb: Clip-Werte in
+  // den Eltern-Raum der Ziel-Hüfte heben (Rotation UND Position).
+  target.updateMatrixWorld(true);
+  let hipsRotFix = new THREE.Quaternion();
+  let hipsPosMatrix: THREE.Matrix4 | null = null;
+  let hipsPosScale = 1;
+  if (hips && hips.parent) {
+    const parent = hips.parent as THREE.Object3D;
+    hipsRotFix = parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+    hipsPosMatrix = parent.matrixWorld.clone().invert();
+    const restWorldY = hips.getWorldPosition(new THREE.Vector3()).y;
+    // Mixamo-Hüfthöhe (~98cm) auf die Welthöhe des Ziel-Rigs skalieren
+    hipsPosScale = restWorldY > 1e-6 ? restWorldY : 1;
+  }
+
+  const q = new THREE.Quaternion();
+  const v = new THREE.Vector3();
   const out: THREE.AnimationClip[] = [];
   for (const clip of clips) {
     const tracks: THREE.KeyframeTrack[] = [];
+    let clipHipsY = 0;
+    // Referenz: Hüfthöhe des Clips im ersten Frame (für die Skalierung)
+    for (const track of clip.tracks) {
+      if (track.name.endsWith('.position') && /hips\./i.test(track.name.replace(/^mixamorig:?/i, ''))) {
+        clipHipsY = Math.abs(track.values[1]) || Math.abs(track.values[0]) || 1;
+        break;
+      }
+    }
     for (const track of clip.tracks) {
       const dot = track.name.lastIndexOf('.');
       const node = track.name.slice(0, dot);
@@ -274,19 +302,33 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
       const bone = boneByKey.get(norm(node));
       if (!bone) continue;
       if (prop === 'quaternion') {
-        const t = track.clone();
-        t.name = `${bone.name}.quaternion`;
-        tracks.push(t);
-      } else if (prop === 'position' && bone === hips && hips) {
-        // Größenverhältnis aus Rest-Position ableiten (Mixamo-FBX ist in cm)
-        const first = new THREE.Vector3().fromArray(track.values, 0);
-        const restLen = hips.position.length();
-        const animLen = first.length();
-        if (animLen > 1e-6 && restLen > 1e-6) {
-          const s = restLen / animLen;
-          const vals = Float32Array.from(track.values, (v) => v * s);
-          tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, [...track.times], [...vals]));
+        if (bone === hips) {
+          const vals = new Float32Array(track.values.length);
+          for (let i = 0; i < track.values.length; i += 4) {
+            q.fromArray(track.values, i).premultiply(hipsRotFix);
+            q.toArray(vals, i);
+          }
+          tracks.push(new THREE.QuaternionKeyframeTrack(`${bone.name}.quaternion`, [...track.times], [...vals]));
+        } else {
+          const t = track.clone();
+          t.name = `${bone.name}.quaternion`;
+          tracks.push(t);
         }
+      } else if (prop === 'position' && bone === hips && hips && hipsPosMatrix && clipHipsY > 1e-6) {
+        // Nur das vertikale Wippen übernehmen (relativ zum ersten Frame),
+        // Lokomotion/Drift verwerfen — die Wurzel bewegt der Client selbst.
+        const k = hipsPosScale / clipHipsY;
+        const y0 = track.values[1];
+        const rest = hips.position;
+        const vals = new Float32Array(track.values.length);
+        for (let i = 0; i < track.values.length; i += 3) {
+          const bounce = (track.values[i + 1] - y0) * k; // Welt-Delta in m
+          v.set(0, bounce, 0).applyMatrix4(hipsPosMatrix); // in Eltern-Raum (Richtung+Skala)
+          v.sub(new THREE.Vector3().setFromMatrixPosition(hipsPosMatrix!)); // nur Richtungsanteil
+          v.add(rest);
+          v.toArray(vals, i);
+        }
+        tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, [...track.times], [...vals]));
       }
     }
     if (tracks.length >= 8) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
