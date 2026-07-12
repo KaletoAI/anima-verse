@@ -23,6 +23,18 @@ def acc_arr(j, b, idx):
 
 src_j, src_bin = read_glb(sys.argv[1])
 dst_j, dst_bin = read_glb(sys.argv[2])
+
+# Aufruf: fix-rig-uv.py <texturiert.glb> <gerigged.glb> <out.glb>
+# (3 Argumente: baseColor wird aus dem texturierten GLB extrahiert;
+#  4 Argumente wie bisher: ... <basecolor.png> <out.glb>)
+if len(sys.argv) == 4:
+    bct = src_j['materials'][0]['pbrMetallicRoughness']['baseColorTexture']['index']
+    bv = src_j['bufferViews'][src_j['images'][src_j['textures'][bct]['source']]['bufferView']]
+    png_bytes = bytes(src_bin[bv.get('byteOffset',0):bv.get('byteOffset',0)+bv['byteLength']])
+    out_path = sys.argv[3]
+else:
+    png_bytes = open(sys.argv[3], 'rb').read()
+    out_path = sys.argv[4]
 sp = src_j['meshes'][0]['primitives'][0]
 dp = dst_j['meshes'][0]['primitives'][0]
 s_pos,_ = acc_arr(src_j, src_bin, sp['attributes']['POSITION'])
@@ -74,7 +86,7 @@ for c in range(3):
 dst_bin[uv_start:uv_start+uv_len] = new_uv.tobytes()
 
 # Textur einbetten + Material aufhellen
-png = open(sys.argv[3],'rb').read()
+png = png_bytes
 img_bv = dst_j['images'][0]['bufferView']
 chunks = []; offset = 0
 for i,bv in enumerate(dst_j['bufferViews']):
@@ -90,5 +102,5 @@ for m in dst_j.get('materials',[]):
 jb=json.dumps(dst_j,separators=(',',':')).encode(); jb+=b' '*((4-len(jb)%4)%4)
 out=b'glTF'+struct.pack('<II',2,12+8+len(jb)+8+len(nb))
 out+=struct.pack('<I',len(jb))+b'JSON'+jb+struct.pack('<I',len(nb))+b'BIN\x00'+nb
-open(sys.argv[4],'wb').write(out)
-print('geschrieben:', sys.argv[4], len(out))
+open(out_path,'wb').write(out)
+print('geschrieben:', out_path, len(out))
