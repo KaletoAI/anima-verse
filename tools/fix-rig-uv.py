@@ -125,7 +125,10 @@ if ja is not None and wa is not None:
 # falschen Knochen zu (beobachtet: Spine-Kette rotiert, Fuss/Zehe getauscht).
 # Empirische Reparatur: Spalten-Schwerpunkt vs. Knochensegment-Mitte,
 # optimale bijektive Zuordnung (Hungarian).
-def _remap_weight_columns(dst_j, dst_bin, dp, d_pos):
+def # DEAKTIVIERT: Die Schwerpunkt-Heuristik wird von langen Haaren getäuscht
+# (Head-Spalte enthält Kopf+Haar, Schwerpunkt liegt am Oberkörper) und
+# sortiert dann KORREKTE Gewichte falsch um. Nur zu Diagnosezwecken nutzen.
+# _remap_weight_columns(dst_j, dst_bin, dp, d_pos):
     try:
         from scipy.optimize import linear_sum_assignment
     except ImportError:
@@ -181,7 +184,10 @@ def _remap_weight_columns(dst_j, dst_bin, dp, d_pos):
         print('Spalten-Korrektur:', ', '.join(moved))
     else:
         print('Spalten-Korrektur: keine noetig')
-_remap_weight_columns(dst_j, dst_bin, dp, d_pos)
+# DEAKTIVIERT: Die Schwerpunkt-Heuristik wird von langen Haaren getäuscht
+# (Head-Spalte enthält Kopf+Haar, Schwerpunkt liegt am Oberkörper) und
+# sortiert dann KORREKTE Gewichte falsch um. Nur zu Diagnosezwecken nutzen.
+# _remap_weight_columns(dst_j, dst_bin, dp, d_pos)
 
 # Textur einbetten + Material aufhellen
 png = png_bytes
