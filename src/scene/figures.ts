@@ -12,8 +12,14 @@ import { seededRandom } from './textures';
 
 interface ManifestModel {
   name: string;
-  url: string;
+  url: string;   // .glb oder .fbx
   height?: number;
+  /** true = nur über assignments nutzbar, nicht im Zufalls-Pool (Charakter-Modelle) */
+  assignOnly?: boolean;
+  /** Textur separat anwenden (z.B. FBX mit externer Referenz + Bake aus GLB) */
+  texture?: string;
+  /** V-Flip der separaten Textur (FBX/GLB-UV-Konventionen), Default false */
+  textureFlipY?: boolean;
 }
 
 interface Manifest {
@@ -28,6 +34,7 @@ interface LoadedModel {
   clips: THREE.AnimationClip[];
   scale: number;
   height: number; // Welthöhe nach Skalierung
+  assignOnly: boolean;
 }
 
 /** Alle Knochennamen (Node-Namen unterhalb von Skinnen) eines Modells. */
@@ -39,31 +46,89 @@ function boneNames(root: THREE.Object3D): Set<string> {
   return names;
 }
 
+function findSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
+  let skin: THREE.SkinnedMesh | null = null;
+  root.traverse((o) => {
+    if (!skin && (o as THREE.SkinnedMesh).isSkinnedMesh) skin = o as THREE.SkinnedMesh;
+  });
+  return skin;
+}
+
 /**
- * Mixamo-Clips auf ein Skelett mit anderen Knochennamen umschreiben
- * (z.B. "mixamorig:Hips" -> "Hips" bei Make-It-Animatable-Rigs).
- * Positions-Tracks außer Hips werden verworfen (Proportionsunterschiede);
- * Rotations-Tracks übertragen sauber, solange die Skeleton-Topologie
- * (Mixamo-Standard) gleich ist.
+ * Clips eines Spender-Modells auf ein anderes Skelett übertragen.
+ * SkeletonUtils.retargetClip arbeitet über Welt-Transformationen und
+ * kompensiert damit unterschiedliche Bind-Posen (naives Track-Kopieren
+ * verrenkt die Figur, sobald die Ruhe-Rotationen der Knochen abweichen).
+ * Knochennamen müssen übereinstimmen (Mixamo-Standard; das mixamorig:-Präfix
+ * wird beim Ziel notfalls abgeschnitten).
  */
-function retargetClip(clip: THREE.AnimationClip, targetBones: Set<string>): THREE.AnimationClip | null {
-  const tracks: THREE.KeyframeTrack[] = [];
-  for (const track of clip.tracks) {
-    const dot = track.name.lastIndexOf('.');
-    const nodeName = track.name.slice(0, dot);
-    const prop = track.name.slice(dot + 1);
-    let target = nodeName;
-    if (!targetBones.has(target)) {
-      target = nodeName.replace(/^mixamorig:?/i, '');
-      if (!targetBones.has(target)) continue;
+function retargetClips(
+  target: THREE.Object3D,
+  donor: THREE.Object3D,
+  clips: THREE.AnimationClip[]
+): THREE.AnimationClip[] {
+  const targetSkin = findSkinnedMesh(target);
+  const donorSkin = findSkinnedMesh(donor);
+  if (!targetSkin || !donorSkin) return [];
+
+  // Welt-Rest-Rotationen beider Skelette (Templates stehen in Bind-Pose)
+  target.updateMatrixWorld(true);
+  donor.updateMatrixWorld(true);
+  const restOf = (skin: THREE.SkinnedMesh) => {
+    const map = new Map<string, { q: THREE.Quaternion; parent: THREE.Quaternion }>();
+    for (const bone of skin.skeleton.bones) {
+      const q = bone.getWorldQuaternion(new THREE.Quaternion());
+      const parent = bone.parent
+        ? bone.parent.getWorldQuaternion(new THREE.Quaternion())
+        : new THREE.Quaternion();
+      map.set(bone.name, { q, parent });
     }
-    if (prop === 'position' || prop === 'scale') continue;
-    const cloned = track.clone();
-    cloned.name = `${target}.${prop}`;
-    tracks.push(cloned);
+    return map;
+  };
+  const targetRest = restOf(targetSkin);
+  const donorRest = restOf(donorSkin);
+
+  // Quell-Knochenname -> Ziel-Knochenname (mixamorig-Präfix tolerant)
+  const toTarget = new Map<string, string>();
+  for (const donorName of donorRest.keys()) {
+    if (targetRest.has(donorName)) toTarget.set(donorName, donorName);
+    else {
+      const stripped = donorName.replace(/^mixamorig:?/i, '');
+      const match = [...targetRest.keys()].find((t) => t === stripped || t.replace(/^mixamorig:?/i, '') === stripped);
+      if (match) toTarget.set(donorName, match);
+    }
   }
-  if (tracks.length < 8) return null; // zu wenig übertragen -> unbrauchbar
-  return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+  if (toTarget.size < 8) return [];
+
+  // Pro Keyframe: q_target = inv(Rp_t) * (Rp_s * q_s * inv(R_s)) * R_t
+  // (Delta der Quell-Lokalrotation in Weltkoordinaten, auf Ziel-Restpose gehoben —
+  // das Verfahren aus dem three-vrm Mixamo-Beispiel, verallgemeinert auf
+  // nicht-normalisierte Ziel-Rigs.)
+  const out: THREE.AnimationClip[] = [];
+  const qS = new THREE.Quaternion();
+  for (const clip of clips) {
+    const tracks: THREE.KeyframeTrack[] = [];
+    for (const track of clip.tracks) {
+      if (!(track instanceof THREE.QuaternionKeyframeTrack)) continue;
+      const nodeName = track.name.slice(0, track.name.lastIndexOf('.'));
+      const targetName = toTarget.get(nodeName);
+      if (!targetName) continue;
+      const dr = donorRest.get(nodeName)!;
+      const tr = targetRest.get(targetName)!;
+      const invRs = dr.q.clone().invert();
+      const invRpT = tr.parent.clone().invert();
+      const values = new Float32Array(track.values.length);
+      for (let i = 0; i < track.values.length; i += 4) {
+        qS.fromArray(track.values, i);
+        qS.premultiply(dr.parent).multiply(invRs);   // Welt-Delta der Quelle
+        qS.premultiply(invRpT).multiply(tr.q);       // in Ziel-Lokalraum heben
+        qS.toArray(values, i);
+      }
+      tracks.push(new THREE.QuaternionKeyframeTrack(`${targetName}.quaternion`, [...track.times], [...values]));
+    }
+    if (tracks.length >= 8) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
+  }
+  return out;
 }
 
 type ClipKind = 'idle' | 'walk' | 'run' | 'sit' | 'dance' | 'wave';
@@ -104,17 +169,38 @@ export class FigureLibrary {
     const loader = new GLTFLoader();
     const defaultHeight = manifest.defaultHeight ?? 1.75;
 
+    const loadFile = async (url: string): Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }> => {
+      if (/\.fbx(\?|$)/i.test(url)) {
+        const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
+        const obj = await new FBXLoader().loadAsync(url);
+        return { scene: obj, animations: obj.animations ?? [] };
+      }
+      const gltf = await loader.loadAsync(url);
+      return { scene: gltf.scene, animations: gltf.animations };
+    };
+
     const results = await Promise.allSettled(
       (manifest.models ?? []).map(async (m): Promise<LoadedModel> => {
-        const gltf = await loader.loadAsync(m.url);
+        const gltf = await loadFile(m.url);
         const template = gltf.scene;
+        if (m.texture) {
+          const tex = await new THREE.TextureLoader().loadAsync(m.texture);
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.flipY = !!m.textureFlipY;
+          template.traverse((o) => {
+            if ((o as THREE.Mesh).isMesh) {
+              (o as THREE.Mesh).material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0.0 });
+            }
+          });
+        }
         const bbox = new THREE.Box3().setFromObject(template);
         const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
         const height = m.height ?? defaultHeight;
         const usable = gltf.animations.filter((c) => c.tracks.length > 0);
         const skinned = boneNames(template).size > 0;
         if (!usable.length && !skinned) throw new Error(`${m.name}: weder Animationen noch Skelett`);
-        return { name: m.name, template, clips: usable, scale: height / rawHeight, height };
+        console.info(`[figures] ${m.name}: rawHeight=${rawHeight.toFixed(3)} -> scale=${(height / rawHeight).toFixed(3)}, clips=${usable.length}, bones=${boneNames(template).size}`);
+        return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly };
       })
     );
     for (const r of results) {
@@ -128,11 +214,9 @@ export class FigureLibrary {
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
       if (m.clips.length || !donor) continue;
-      const bones = boneNames(m.template);
-      m.clips = donor.clips
-        .map((c) => retargetClip(c, bones))
-        .filter((c): c is THREE.AnimationClip => !!c);
+      m.clips = retargetClips(m.template, donor.template, donor.clips);
       if (!m.clips.length) console.warn(`[figures] ${m.name}: Clip-Retargeting fehlgeschlagen`);
+      else console.info(`[figures] ${m.name}: ${m.clips.length} Clips von ${donor.name} retargetet`);
     }
     this.models = this.models.filter((m) => m.clips.length > 0);
     return this.models.length > 0;
@@ -144,8 +228,10 @@ export class FigureLibrary {
     const assigned = this.assignments[charName];
     let model = this.models.find((m) => m.name === assigned);
     if (!model) {
+      const pool = this.models.filter((m) => !m.assignOnly);
+      if (!pool.length) return null;
       const rnd = seededRandom('model:' + charName);
-      model = this.models[Math.floor(rnd() * this.models.length)];
+      model = pool[Math.floor(rnd() * pool.length)];
     }
     return new Figure(model);
   }
@@ -171,6 +257,15 @@ export class Figure {
         o.frustumCulled = false; // Skinned-Mesh-Bounds stimmen sonst beim Laufen nicht
       }
     });
+    // Mesh-Origin liegt nicht immer bei den Füßen: XZ zentrieren, Füße auf y=0
+    inst.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(inst);
+    if (!box.isEmpty()) {
+      const center = box.getCenter(new THREE.Vector3());
+      inst.position.x -= center.x;
+      inst.position.z -= center.z;
+      inst.position.y -= box.min.y;
+    }
     this.root.add(inst);
 
     this.mixer = new THREE.AnimationMixer(inst);

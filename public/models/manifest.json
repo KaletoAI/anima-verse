@@ -4,11 +4,15 @@
   "models": [
     { "name": "Soldier", "url": "/models/Soldier.glb" },
     { "name": "Xbot", "url": "/models/Xbot.glb" },
-    { "name": "Robot", "url": "/models/RobotExpressive.glb", "height": 1.55 }
+    { "name": "Robot", "url": "/models/RobotExpressive.glb", "height": 1.55 },
+    { "name": "Kira", "url": "/models/rigged_1783852173_mixamo.fbx", "texture": "/models/Kira-basecolor.png", "textureFlipY": true, "height": 1.7, "assignOnly": true },
+    { "name": "Bianca", "url": "/models/Bianca.glb", "height": 1.7, "assignOnly": true }
   ],
   "assignments": {
     "Damian Demo": "Robot",
     "Amelia Lane": "Xbot",
-    "Marcus Hale": "Soldier"
+    "Marcus Hale": "Soldier",
+    "Kira": "Kira",
+    "Bianca Voss": "Bianca"
   }
 }
