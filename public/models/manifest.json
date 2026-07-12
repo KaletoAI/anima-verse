@@ -27,6 +27,12 @@
       "url": "/models/Bianca-fixed.glb",
       "height": 1.7,
       "assignOnly": true
+    },
+    {
+      "name": "TestNeu",
+      "url": "/models/rigged_mia_20260712_191203.glb",
+      "height": 1.7,
+      "assignOnly": true
     }
   ],
   "assignments": {

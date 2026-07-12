@@ -24,6 +24,15 @@ const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerH
 camera.position.set(0, 1.4, 3.4);
 camera.lookAt(0, 0.9, 0);
 
+// Interaktiv: Ziehen = drehen, Rad = zoomen, rechte Taste = verschieben
+let controls: import('three/addons/controls/OrbitControls.js').OrbitControls | null = null;
+import('three/addons/controls/OrbitControls.js').then(({ OrbitControls }) => {
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0.9, 0);
+  controls.enableDamping = true;
+  controls.update();
+});
+
 const lib = new FigureLibrary();
 const clock = new THREE.Clock();
 let figure: ReturnType<FigureLibrary['instantiate']> = null;
@@ -79,10 +88,14 @@ if (rawUrl) {
   });
 }
 
+const autoRotate = params.get('spin') === '1'; // Standard: selbst drehen per Maus
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
   figure?.update(dt);
-  if (figure) figure.root.rotation.y += dt * 0.4;
-  if (rawRoot) rawRoot.rotation.y += dt * 0.4; // langsam drehen
+  if (autoRotate) {
+    if (figure) figure.root.rotation.y += dt * 0.4;
+    if (rawRoot) rawRoot.rotation.y += dt * 0.4;
+  }
+  controls?.update();
   renderer.render(scene, camera);
 });
