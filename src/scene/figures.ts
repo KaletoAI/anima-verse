@@ -20,6 +20,8 @@ interface ManifestModel {
   texture?: string;
   /** V-Flip der separaten Textur (FBX/GLB-UV-Konventionen), Default false */
   textureFlipY?: boolean;
+  /** true = keine Spender-Clips retargeten (Figur bleibt in Rest-Pose) */
+  noClips?: boolean;
 }
 
 interface Manifest {
@@ -35,6 +37,7 @@ interface LoadedModel {
   scale: number;
   height: number; // Welthöhe nach Skalierung
   assignOnly: boolean;
+  noClips: boolean;
 }
 
 /** Alle Knochennamen (Node-Namen unterhalb von Skinnen) eines Modells. */
@@ -183,6 +186,15 @@ export class FigureLibrary {
       (manifest.models ?? []).map(async (m): Promise<LoadedModel> => {
         const gltf = await loadFile(m.url);
         const template = gltf.scene;
+        // Z-up-Exporte (Blender/FBX-Route) automatisch aufrichten
+        {
+          const b = new THREE.Box3().setFromObject(template);
+          const s = b.getSize(new THREE.Vector3());
+          if (s.z > s.y * 1.5) {
+            template.rotation.x = -Math.PI / 2;
+            template.updateMatrixWorld(true);
+          }
+        }
         if (m.texture) {
           const tex = await new THREE.TextureLoader().loadAsync(m.texture);
           tex.colorSpace = THREE.SRGBColorSpace;
@@ -200,7 +212,7 @@ export class FigureLibrary {
         // Auch statische Meshes (ohne Skelett/Clips) zulassen — Interimszustand,
         // bis ein geriggtes Modell vorliegt; solche Figuren gleiten ohne Laufanimation.
         console.info(`[figures] ${m.name}: rawHeight=${rawHeight.toFixed(3)} -> scale=${(height / rawHeight).toFixed(3)}, clips=${usable.length}, bones=${boneNames(template).size}`);
-        return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly };
+        return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly, noClips: !!m.noClips };
       })
     );
     for (const r of results) {
@@ -213,7 +225,7 @@ export class FigureLibrary {
     // Ziel-Knochennamen umschreiben (mixamorig-Präfix-Mapping).
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
-      if (m.clips.length || !donor || !boneNames(m.template).size) continue;
+      if (m.clips.length || m.noClips || !donor || !boneNames(m.template).size) continue;
       m.clips = retargetClips(m.template, donor.template, donor.clips);
       if (!m.clips.length) console.warn(`[figures] ${m.name}: Clip-Retargeting fehlgeschlagen`);
       else console.info(`[figures] ${m.name}: ${m.clips.length} Clips von ${donor.name} retargetet`);
