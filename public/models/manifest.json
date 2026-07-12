@@ -37,6 +37,8 @@
     "Bianca Voss": "Bianca"
   },
   "clipFiles": {
-    "run": "/models/StandardRun.fbx"
+    "walk": "/models/Walking.fbx",
+    "run": "/models/StandardRun.fbx",
+    "sit": "/models/Sitting.fbx"
   }
 }

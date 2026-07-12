@@ -308,7 +308,7 @@ const CLIP_SYNONYMS: Record<ClipKind, string[]> = {
 /** Freitext-Activity -> Animations-Kategorie (Client-Workaround für AV3D-6). */
 export function activityToClipKind(activity: string): ClipKind {
   const a = activity.toLowerCase();
-  if (/sit|sitz|coffee|kaffee|eat|ess|meeting|read|les/.test(a)) return 'sit';
+  if (/sit|sitz|coffee|kaffee|eat|ess|meeting|read|les|sleep|schlaf|rest|ruh/.test(a)) return 'sit';
   if (/dance|tanz|party|feier/.test(a)) return 'dance';
   if (/wave|wink|greet|begrüß/.test(a)) return 'wave';
   return 'idle';
@@ -479,14 +479,18 @@ export class Figure {
   /** Clip mit Crossfade wechseln; fehlt der Clip, auf idle zurückfallen. */
   play(kind: ClipKind) {
     if (this.currentKind === kind) return;
-    const action = this.actions.get(kind) ?? this.actions.get('idle') ?? [...this.actions.values()][0];
-    if (!action || action === this.current) {
+    const resolved = this.actions.get(kind) ?? this.actions.get('idle') ?? [...this.actions.values()][0];
+    if (!resolved || resolved === this.current) {
       this.currentKind = kind;
+      // Fallback-Fall: gleicher Clip, aber ggf. Tempo anpassen (siehe unten)
+      if (this.current) this.current.timeScale = kind === 'idle' && !this.actions.has('idle') ? 0.1 : 1;
       return;
     }
-    action.reset().fadeIn(0.25).play();
+    // Kein Idle-Clip vorhanden: Ersatz-Clip stark verlangsamen (wirkt wie Wippen)
+    resolved.timeScale = kind === 'idle' && !this.actions.has('idle') ? 0.1 : 1;
+    resolved.reset().fadeIn(0.25).play();
     this.current?.fadeOut(0.25);
-    this.current = action;
+    this.current = resolved;
     this.currentKind = kind;
   }
 
