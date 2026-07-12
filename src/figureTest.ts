@@ -76,7 +76,7 @@ if (rawUrl) {
     }
   });
 } else {
-  lib.load().then(() => {
+  lib.load({ only: who }).then(() => {
     figure = lib.instantiate(who);
     if (!figure) {
       document.title = 'Modell nicht gefunden: ' + who;

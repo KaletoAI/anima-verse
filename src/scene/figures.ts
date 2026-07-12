@@ -318,8 +318,11 @@ export class FigureLibrary {
   private models: LoadedModel[] = [];
   private assignments: Record<string, string> = {};
 
-  /** true, wenn mindestens ein Modell nutzbar ist; sonst Portrait-Fallback. */
-  async load(): Promise<boolean> {
+  /** true, wenn mindestens ein Modell nutzbar ist; sonst Portrait-Fallback.
+   *  opts.only: nur dieses Modell laden (Name oder Charaktername) —
+   *  sonst alle Standard-Modelle + zugewiesene (assignOnly ohne Zuweisung
+   *  wird übersprungen; Test-Modelle blähen sonst jeden Seitenaufruf auf). */
+  async load(opts: { only?: string } = {}): Promise<boolean> {
     let manifest: Manifest;
     try {
       const res = await fetch('/models/manifest.json');
@@ -342,8 +345,17 @@ export class FigureLibrary {
       return { scene: gltf.scene, animations: gltf.animations };
     };
 
+    let wanted = manifest.models ?? [];
+    if (opts.only) {
+      const name = this.assignments[opts.only] ?? opts.only;
+      wanted = wanted.filter((m) => m.name === name);
+    } else {
+      const assigned = new Set(Object.values(this.assignments));
+      wanted = wanted.filter((m) => !m.assignOnly || assigned.has(m.name));
+    }
+
     const results = await Promise.allSettled(
-      (manifest.models ?? []).map(async (m): Promise<LoadedModel> => {
+      wanted.map(async (m): Promise<LoadedModel> => {
         const gltf = await loadFile(m.url);
         const template = gltf.scene;
         // Z-up-Exporte (Blender/FBX-Route) automatisch aufrichten
@@ -419,7 +431,7 @@ export class FigureLibrary {
   /** Modellwahl: explizites Assignment, sonst deterministisch per Namens-Hash. */
   instantiate(charName: string): Figure | null {
     if (!this.models.length) return null;
-    const assigned = this.assignments[charName];
+    const assigned = this.assignments[charName] ?? charName; // direkter Modellname zählt auch
     let model = this.models.find((m) => m.name === assigned);
     if (!model) {
       const pool = this.models.filter((m) => !m.assignOnly);
