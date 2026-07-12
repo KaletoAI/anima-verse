@@ -120,6 +120,69 @@ if ja is not None and wa is not None:
     dst_bin[w_start:w_start+w_len] = weights.astype('<f4').tobytes()
     print(f'Weight-Welding: {welded} Naht-Vertices in {len(groups)} Gruppen vereinheitlicht')
 
+
+# Gewichts-Spalten-Korrektur: Der Node ordnet einzelne Gewichtsspalten den
+# falschen Knochen zu (beobachtet: Spine-Kette rotiert, Fuss/Zehe getauscht).
+# Empirische Reparatur: Spalten-Schwerpunkt vs. Knochensegment-Mitte,
+# optimale bijektive Zuordnung (Hungarian).
+def _remap_weight_columns(dst_j, dst_bin, dp, d_pos):
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError:
+        print('scipy fehlt - Spalten-Korrektur uebersprungen'); return
+    skin = dst_j.get('skins', [None])[0]
+    ja_i = dp['attributes'].get('JOINTS_0'); wa_i = dp['attributes'].get('WEIGHTS_0')
+    if not skin or ja_i is None or wa_i is None: return
+    joints, (js, jl) = acc_arr(dst_j, dst_bin, ja_i)
+    weights, _ = acc_arr(dst_j, dst_bin, wa_i)
+    names = [dst_j['nodes'][i].get('name','?') for i in skin['joints']]
+    K = len(names)
+    parents = {}
+    for ni, n in enumerate(dst_j['nodes']):
+        for c in n.get('children', []): parents[c] = ni
+    def nmat(n):
+        m = np.eye(4)
+        q = n.get('rotation'); t = n.get('translation'); s = n.get('scale')
+        if q:
+            x,y,z,w = q
+            m[:3,:3] = np.array([[1-2*(y*y+z*z),2*(x*y-z*w),2*(x*z+y*w)],[2*(x*y+z*w),1-2*(x*x+z*z),2*(y*z-x*w)],[2*(x*z-y*w),2*(y*z+x*w),1-2*(x*x+y*y)]])
+        if s: m[:3,:3] = m[:3,:3] @ np.diag(s)
+        if t: m[:3,3] = t
+        return m
+    def world(ni):
+        m = nmat(dst_j['nodes'][ni])
+        while ni in parents:
+            ni = parents[ni]
+            m = nmat(dst_j['nodes'][ni]) @ m
+        return m[:3,3]
+    bpos = np.array([world(i) for i in skin['joints']])
+    n2j = {ni: k for k, ni in enumerate(skin['joints'])}
+    mid = bpos.copy()
+    for k, ni in enumerate(skin['joints']):
+        kids = [n2j[c] for c in dst_j['nodes'][ni].get('children', []) if c in n2j]
+        if kids: mid[k] = (bpos[k] + bpos[kids].mean(axis=0)) / 2
+    acc_pos = np.zeros((K,3)); acc_w = np.zeros(K)
+    for c in range(4):
+        idx = joints[:,c].astype(int); w = weights[:,c].astype(np.float64)
+        np.add.at(acc_pos, idx, d_pos.astype(np.float64) * w[:,None])
+        np.add.at(acc_w, idx, w)
+    cent = acc_pos / np.maximum(acc_w[:,None], 1e-9)
+    D = np.linalg.norm(cent[:,None,:] - mid[None,:,:], axis=2)
+    D[acc_w < 1e-6] = D.max()
+    rows, cols = linear_sum_assignment(D)
+    perm = np.arange(K)
+    moved = []
+    for r, c in zip(rows, cols):
+        perm[r] = c
+        if r != c and acc_w[r] > 100: moved.append(f"{names[r].replace('mixamorig:','')}->{names[c].replace('mixamorig:','')}")
+    if moved:
+        j_dt = {5126:'<f4',5123:'<u2',5125:'<u4',5121:'<u1'}[dst_j['accessors'][ja_i]['componentType']]
+        dst_bin[js:js+jl] = perm[joints.astype(np.int64)].astype(j_dt).tobytes()
+        print('Spalten-Korrektur:', ', '.join(moved))
+    else:
+        print('Spalten-Korrektur: keine noetig')
+_remap_weight_columns(dst_j, dst_bin, dp, d_pos)
+
 # Textur einbetten + Material aufhellen
 png = png_bytes
 img_bv = dst_j['images'][0]['bufferView']

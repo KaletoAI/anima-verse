@@ -115,5 +115,11 @@ als Dev-/Offline-Modus erhalten. Aufwand: klein, Schnittstellen sind isoliert.
 - **Schwingende lose Kleidung** (Auto-Skinning bindet Stoff voll an
   Armknochen) → eng anliegende Kleidung im Referenzbild, `use_normal=true`.
 - Kleine Geometrie-Fetzen → `floater_threshold` erhöhen.
-- Upstream-Fix wünschenswert: ComfyUI-UniRig müsste PBR-Texturen übernehmen
-  und UVs erhalten — bis dahin bleibt `fix-rig-uv.py` Teil der Pipeline.
+- **Dritter Node-Bug (bestätigt): Gewichtsspalten falsch zugeordnet.** Die
+  Spine-Kette ist rotiert (Head-Spalte hält Torso-Vertices usw.) und
+  Fuß/Zehe sind vertauscht — Ursache des „Klebens" an Gliedmaßen. 
+  `fix-rig-uv.py` erkennt und korrigiert das automatisch (Spalten-Schwerpunkt
+  vs. Knochensegment, optimale Zuordnung) und loggt die Korrekturen.
+- Upstream-Fix wünschenswert: ComfyUI-UniRig müsste PBR-Texturen übernehmen,
+  UVs erhalten und die Gewichtsspalten korrekt zuordnen — bis dahin bleibt
+  `fix-rig-uv.py` (UV-Transfer + Welding + Spalten-Korrektur) Teil der Pipeline.
