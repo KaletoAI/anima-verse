@@ -118,7 +118,16 @@ export function FieldModelRefs({ character }: { character: string }) {
                 <img
                   src={`/characters/${enc}/model-refs/${kind}?v=${bust}`}
                   alt=""
-                  style={{ width: '100%', borderRadius: 4 }}
+                  style={{
+                    // Fixed shared height so both panes always line up
+                    // (320px = the tpl-field-image preview cap).
+                    width: '100%',
+                    height: 320,
+                    objectFit: 'contain',
+                    borderRadius: 8,
+                    border: '1px solid var(--border, #30363d)',
+                    background: 'rgba(255, 255, 255, 0.04)',
+                  }}
                   onError={(e) => {
                     ;(e.target as HTMLImageElement).style.visibility = 'hidden'
                   }}
