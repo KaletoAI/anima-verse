@@ -24,12 +24,15 @@ from app.core.log import get_logger
 logger = get_logger(__name__)
 
 # Prompt layering: this default is PURE POSE — framing, lighting and
-# background come from the "outfit" use-case style, the face from the
+# background come from the "tpose" use-case style, the face from the
 # expression layer (REF_EXPRESSION_PROMPT below). Keep it that way.
+# Redundant arm phrasing on purpose: "T-pose" alone is weakly trained in
+# photo models and drifts into an A-pose (arms angled downward).
 TPOSE_PROMPT_DEFAULT = (
-    "T-pose, standing upright facing the camera, arms stretched straight "
-    "out horizontally to both sides, palms down, fingers extended, legs "
-    "straight and slightly apart"
+    "T-pose, standing upright facing the camera, arms raised straight out "
+    "to the sides at exact shoulder height, fully extended and parallel to "
+    "the floor, body and arms forming the letter T, palms down, fingers "
+    "extended, legs straight and slightly apart"
 )
 
 # Expression layer of both reference renders: deliberately neutral (the
@@ -228,14 +231,20 @@ def generate_model_ref_images(character_name: str,
     error = ""
     try:
         for kind in kinds:
+            # T-pose: the pose leads the prompt (prompt_prefix) instead of
+            # trailing a long outfit description — trailing pose text gets
+            # too little weight and the render drifts into an A-pose. The
+            # default-pose ref keeps the canonical content order.
+            _tpose = kind == "tpose"
             path = generate_expression_image(
                 character_name, mood="", activity="",
                 equipped_pieces=pieces, equipped_items=items,
-                pose_prompt_override=prompts[kind],
+                prompt_prefix=prompts[kind] if _tpose else "",
+                pose_prompt_override="" if _tpose else prompts[kind],
                 expression_prompt_override=REF_EXPRESSION_PROMPT,
                 # tpose has its own style (flat shadowless light for
                 # image->3D input); the default-pose ref shares "outfit".
-                image_use_case="tpose" if kind == "tpose" else "outfit",
+                image_use_case="tpose" if _tpose else "outfit",
                 output_stem=refs_dir / f"{kind}_{signature}")
             results[kind] = str(path) if path else None
             if path is None:

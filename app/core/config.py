@@ -185,12 +185,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     "tpose": {
         "keywords": {
             "prompt_style": "full body view, head to toe, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
-            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame",
+            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body",
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
             "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus",
-            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame",
+            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body",
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
     },
