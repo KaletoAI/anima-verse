@@ -1,82 +1,66 @@
 # Implementierungs-Anleitung: 3D-Charakter-Pipeline
 
-Stand 2026-07-12, verifiziert mit Kira und Bianca (Kai-Welt).
-Zielbild: **LLM-Gateway** orchestriert ComfyUI und erzeugt pro Charakter ein
-fertiges GLB; **anima-verse** speichert es und liefert es an den 3D-Client aus
+Stand 2026-07-13, verifiziert mit Kira („Fast") und Bianca („High") in der
+Kai-Welt. Zielbild: **LLM-Gateway** orchestriert ComfyUI und erzeugt pro
+Charakter ein fertiges GLB; **anima-verse** speichert und liefert es aus
 (AV3D-5 Stufe 1, siehe `backend-wishlist.md`).
 
-## Die Dateien — was wovon gebraucht wird
+## Die Kette (final)
 
-Ein ComfyUI-Lauf erzeugt mehrere Dateien; **nur zwei davon werden verwendet**,
-und sie müssen aus **demselben Lauf** stammen (die UV-Layouts sind pro Lauf
-nicht deterministisch identisch):
+**ComfyUI, zwei Node-Packs:**
+`visualbruno/ComfyUI-Trellis2` (Mesh + Texturierung) und
+`PozzettiAndrea/ComfyUI-UniRig` (nur der MIAAutoRig-Node).
 
-| Datei (ComfyUI `output/`) | Inhalt | Verwendung |
-|---|---|---|
-| `<name>_<ts>.glb` (Trellis2ExportTrimesh) | Mesh **texturiert**, ungeriggt | Quelle für Textur + korrekte UVs |
-| `<name>_mia.glb` (MIAAutoRig) | Mesh **geriggt** (52 Mixamo-Joints), Textur = 2×2-Dummy, UVs verwürfelt | Quelle für Skelett + Skinning-Gewichte |
-| ~~`<name>_mia.fbx`~~, ~~`<name>_mia.fbm/`~~, ~~`preview_*.glb`~~ | | **nicht benötigt** (fbm enthält nur den Dummy) |
-
-Nachbearbeitung (repariert die zwei bekannten Bugs des ComfyUI-UniRig-Nodes —
-Texturverlust + UV-Verwürfelung):
-
-```bash
-python tools/fix-rig-uv.py <texturiert.glb> <gerigged.glb> <Name>.glb
-# benötigt: numpy, scipy
+```
+LoadImage → TRELLIS.2-Mesh-Generierung (vb)
+  → Simplify Trimesh (Ziel ~20.000–30.000 Faces)
+  → Mesh Texturing Multi-View (Textur 2048)
+  → MIAAutoRig  →  <name>_mia.glb   ← DIE eine Datei pro Charakter
 ```
 
-Das Script matcht die identische Topologie Dreieck-für-Dreieck (mit
-automatischer Achsen-/Spiegel-Ausrichtung), überträgt die UVs und bettet die
-baseColor-Textur ein. **Output = die eine Datei pro Charakter** (~8–10 MB,
-GLB, 52-Bone-Mixamo-Rig, Textur eingebettet). Validierung: GLB-Magic,
-`skins`-Array nicht leer, Face-Matching-Ausgabe `mean < 0.01`.
+- **MIAAutoRig-Einstellungen:** `use_normal=true`, **`reset_to_rest=false`**
+  (die vb-Kette liefert die Mixamo-kompatible Bind-Pose von sich aus;
+  `true` verbiegt sie), `no_fingers` nach Hand-Qualität (bei zersplitterten
+  Händen `true` = Finger-Gewichte in die Hand mergen), `fbx_name=<charakter>`.
+- **Varianten:** „Fast" ~200 s, „High" ~600 s Generierungszeit — Rigging
+  selbst ~10 s. Beide liefern 52-Bone-Mixamo-Rigs mit eingebetteter Textur.
+- **Zielgröße:** ~10 MB pro Charakter (bei Textur 2048; 4K-Texturen
+  verdreifachen die Datei ohne sichtbaren Gewinn auf Kartendistanz).
+- Der frühere Reparatur-Schritt (`tools/fix-rig-uv.py`) ist **obsolet** —
+  er gehörte zur alten Kette (RasterizePBR→UniRig-Node, drei Node-Bugs)
+  und bleibt nur als Werkzeug für Altbestände im Repo.
 
-**Einmalig global** (nicht pro Charakter): Mixamo-Animations-FBX
-(Walking, Standard Run, Sitting, empfohlen zusätzlich Breathing Idle;
-Export „FBX, Without Skin", 30 fps). Sie passen ohne Retargeting auf jedes
-MIA-Rig, weil die Bind-Pose identisch ist.
+## Animations-Clips (global, einmalig)
+
+- Quelle: **Mixamo** (mixamo.com, kostenloser Adobe-Login), Export
+  „FBX, **Without Skin**", 30 fps. **Alle Clips aus dieser einen Quelle** —
+  Fremd-FBX (z.B. aus Modell-Repos) haben abweichende Skelett-Konventionen
+  und kippen die Figur.
+- Aktueller Bestand: Walking, Sitting, Breathing Idle. Wunschliste: Standard
+  Run, Dance, Wave, Lie/Sleep.
+- Der Client wendet die Clips direkt an (kein Retargeting nötig) und
+  transformiert dabei automatisch den Hüft-Track in den Skelett-Raum des
+  Rigs (Rotations-Konjugation; von der Hüft-Position wird nur das vertikale
+  Wippen übernommen, Lokomotion verworfen — die Wurzel bewegt der Client).
+  Das ist generisch für alle MIA-Rigs und braucht keine Konfiguration.
 
 ## Anleitung A: LLM-Gateway (ComfyUI ansprechen)
 
-Neuer Job-Typ `character_model`: Referenzbild → fertiges GLB.
+Job `character_model`: Referenzbild → fertiges GLB.
 
-1. **Input:** Ganzkörper-Referenzbild (aus der anima-verse-Bildpipeline).
-   Prompt-Anforderungen: A-Pose (`arms angled 45 degrees down` — T-Pose
-   erzeugt Achsel-Webbing), frontal, freigestellt/neutraler Hintergrund,
-   eng anliegende Kleidung (lockere Kleidung schwingt beim Skinning),
-   Hose oder Rock mit Schlitz (Beine müssen trennbar sein), flache Schuhe.
-2. **ComfyUI-Aufruf** über dessen HTTP-API:
-   - `POST /prompt` mit dem Workflow im API-JSON-Format. Workflow-Kette:
-     `LoadImage → Trellis2GetConditioning → Trellis2ImageToShape →
-     Trellis2ProcessMesh → Trellis2ShapeToTexturedMesh → Trellis2RasterizePBR
-     → (a) Trellis2ExportTrimesh [GLB]  (b) MIAAutoRig [GLB]`
-   - Feste Parameter: `ProcessMesh.target_face_count=20000`,
-     `floater_threshold` ggf. auf 0.005 erhöhen (Geometrie-Fetzen),
-     `RasterizePBR.texture_size=2048`, `LoadTrellis2Models.resolution=1024`,
-     `MIAAutoRig: use_normal=true, no_fingers=false, reset_to_rest=true`
-     (**reset_to_rest ist Pflicht** — sonst passt die Mixamo-Clip-Bibliothek
-     nicht; `no_fingers=false` behebt klebende Vertices an den Händen),
-     `fbx_name=<charakter>`, Seeds fest (Reproduzierbarkeit).
-   - **Kein UV-Unwrap-Node zwischen RasterizePBR und dem Rigger.** Er
-     zerstört die Bake-Zuordnung UND sein Seam-Splitting dupliziert Vertices,
-     die dann divergierende Skinning-Gewichte bekommen — sichtbar als
-     „klebende"/reißende Stellen an Nähten (z.B. Ellenbogen). Und **nur der
-     MIA-Zweig** — kein paralleler UniRigAutoRig-Zweig (doppelte Laufzeit/RAM,
-     sporadischer Bones-Fehler).
-   - Fertigstellung pollen: `GET /history/<prompt_id>`; Output-Dateien aus
-     `output/` einsammeln (`GET /view?filename=...` oder Dateisystem-Zugriff).
-3. **Nachbearbeitung:** `fix-rig-uv.py` (siehe oben) → `<Name>.glb`.
-4. **Ablieferung:** `PUT`/Upload an anima-verse (siehe Anleitung B).
-5. **Betriebshinweise:**
-   - **Ein Job zur Zeit** (VRAM; zwei Bildjobs parallel sind schon Tabu-Regel
-     der bestehenden Queue — gleiche Channel-Logik verwenden).
-   - **RAM-Leak im UniRig-Worker:** Nach mehreren Läufen steigt der RAM des
-     ComfyUI-Prozesses (beobachtet >90 % bei 36 GB) und die Skelett-Vorhersage
-     wird instabil. Watchdog einplanen: ComfyUI-Neustart nach N Jobs oder
-     bei RAM-Schwelle.
-   - Nur den **MIA-Modus** verwenden (deterministisch). Der UniRig-Modus
-     würfelt sporadisch `Expected 52 bones, got N` (sampelnde Generierung,
-     temperature 1.5) — wenn doch genutzt: einfach neu versuchen.
+1. **Referenzbild-Prompt (fest):** Ganzkörper, frontal, freigestellt,
+   A-Pose (`arms angled 45 degrees away from body`), `legs clearly apart`,
+   eng anliegende Kleidung, Hose oder Rock mit Schlitz, flache Schuhe,
+   Haare hinter den Schultern. (Berührungen/Verschmelzungen im Bild werden
+   zu verschmolzener Geometrie — Gliedmaßen brauchen sichtbaren Abstand.)
+2. **ComfyUI HTTP-API:** `POST /prompt` mit dem Workflow-JSON (API-Format),
+   `GET /history/<id>` pollen, `<name>_mia.glb` aus `output/` einsammeln.
+3. **Validierung:** GLB-Magic, `skins` vorhanden (52 Joints), Größe < 30 MB.
+4. **Ablieferung:** Upload an anima-verse (Anleitung B).
+5. **Betrieb:** ein Job zur Zeit (VRAM); RAM-Watchdog für ComfyUI
+   (UniRig-Worker leckt über Läufe; Neustart nach N Jobs oder RAM-Schwelle);
+   nur den MIA-Modus verwenden (deterministisch — der UniRig-Modus würfelt
+   sporadisch "Expected 52 bones").
 
 ## Anleitung B: anima-verse (Dateien liefern — AV3D-5 Stufe 1)
 
