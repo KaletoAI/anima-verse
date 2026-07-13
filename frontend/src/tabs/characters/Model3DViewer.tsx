@@ -96,6 +96,46 @@ export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
           if (disposed) return
           const clip = clipObj.animations?.[0]
           if (!clip) throw new Error('Clip contains no animation track')
+
+          // Up-axis fix. The mixer overwrites the model's root-bone rotation
+          // with the clip's values, so a convention mismatch (Mixamo clips are
+          // Y-up, the generated meshes need not be) lays the figure down.
+          //
+          // The correction is measured from the two REST skeletons — the
+          // model's and the clip file's — NEVER from the animated pose: a
+          // sitting or lying clip is legitimately not upright, and judging by
+          // the rendered pose would "correct" exactly those into nonsense.
+          // We want pivot ∘ modelRest ≈ clipRest at the root bone's parent,
+          // so we pick the axis rotation that aligns the two rest frames.
+          const hipsOf = (root: Object3D): Object3D | null => {
+            let found: Object3D | null = null
+            root.traverse((o) => {
+              if (!found && /hips/i.test(o.name)) found = o
+            })
+            return found
+          }
+          const modelHips = hipsOf(object)
+          const clipHips = hipsOf(clipObj)
+          if (modelHips?.parent && clipHips?.parent) {
+            object.updateMatrixWorld(true)
+            clipObj.updateMatrixWorld(true)
+            const restModel = modelHips.parent.getWorldQuaternion(new THREE.Quaternion())
+            const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
+            let bestRx = 0
+            let bestAngle = Infinity
+            for (const rx of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+              const candidate = new THREE.Quaternion()
+                .setFromEuler(new THREE.Euler(rx, 0, 0))
+                .multiply(restModel)
+              const angle = candidate.angleTo(restClip)
+              if (angle < bestAngle) {
+                bestAngle = angle
+                bestRx = rx
+              }
+            }
+            pivot.rotation.x = bestRx
+          }
+
           // Play IN PLACE: drop the root/hips position track. Otherwise a walk
           // clip with root motion carries the figure out of frame — and the
           // track is in the clip's units (Mixamo: centimetres), which would
@@ -105,25 +145,9 @@ export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
           )
           mixer = new THREE.AnimationMixer(object)
           mixer.clipAction(clip).play()
-          mixer.update(0)  // apply frame 0, so the pose below is measured
+          mixer.update(0)  // apply frame 0 so the framing below fits the pose
         }
         const clock = new THREE.Clock()
-
-        // Up-axis fix: Mixamo clips are Y-up, the generated meshes are not
-        // necessarily — a mismatch animates the figure lying on its belly.
-        // Rather than guess the sign, MEASURE: a standing figure is taller
-        // than it is deep, so try the candidate rotations and keep the one
-        // with the most upright bounding box.
-        const measure = (rx: number) => {
-          pivot.rotation.x = rx
-          pivot.updateMatrixWorld(true)
-          const s = new THREE.Box3().setFromObject(pivot).getSize(new THREE.Vector3())
-          return { rx, upright: s.y / Math.max(s.x, s.z, 1e-6) }
-        }
-        const best = [0, -Math.PI / 2, Math.PI / 2]
-          .map(measure)
-          .reduce((a, b) => (b.upright > a.upright ? b : a))
-        pivot.rotation.x = best.rx
         pivot.updateMatrixWorld(true)
 
         // Frame the model: centre it and pull the camera back to fit.
