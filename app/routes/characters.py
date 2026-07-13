@@ -1399,9 +1399,11 @@ def get_character_model3d(character_name: str) -> Dict[str, Any]:
 
 
 @router.post("/{character_name}/model3d/generate")
-def generate_character_model3d(character_name: str, force: bool = False) -> Dict[str, Any]:
+def generate_character_model3d(character_name: str, force: bool = False,
+                               backend: str = "") -> Dict[str, Any]:
     """Starts the mesh generation for the current outfit (T-pose render as
-    input). Cached per combination — ``force=1`` re-generates."""
+    input). ``backend`` picks the mesh backend (empty = admin default);
+    cached per combination — ``force=1`` re-generates."""
     from app.core.model3d import trigger_generation
     from app.core.model_refs import find_ref_image
     if not get_character_dir(character_name).exists():
@@ -1410,7 +1412,8 @@ def generate_character_model3d(character_name: str, force: bool = False) -> Dict
         raise HTTPException(
             status_code=409,
             detail="No T-pose render for the current outfit — generate it first")
-    if not trigger_generation(character_name, force=force):
+    if not trigger_generation(character_name, force=force,
+                              backend_glob=(backend or "").strip()):
         return {"status": "already_running"}
     return {"status": "generating"}
 

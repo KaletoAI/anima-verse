@@ -11,6 +11,7 @@
  * GET .../model3d/file (bytes), DELETE .../model3d.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -26,11 +27,20 @@ interface Model3DInfo {
   source_filename?: string
 }
 
+interface MeshBackend {
+  name: string
+  model?: string
+  cost?: number
+  face_num?: number | null
+}
+
 interface Model3DStatus {
   signature?: string
   has_input?: boolean
   model?: Model3DInfo | null
   options?: { no_fingers?: boolean | null }
+  backends?: MeshBackend[]
+  default?: string
   pending?: boolean
 }
 
@@ -50,6 +60,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [clips, setClips] = useState<AnimationClip[]>([])
   const [clipUrl, setClipUrl] = useState('')
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [pickedBackend, setPickedBackend] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
@@ -92,12 +104,24 @@ export function FieldModel3D({ character }: { character: string }) {
     }, 5000)
   }, [load])
 
+  // Open the picker; preselect the admin default (or the only backend).
+  const openDialog = useCallback(() => {
+    const list = st.backends || []
+    setPickedBackend(st.default || (list.length === 1 ? list[0].name : ''))
+    setDialogOpen(true)
+  }, [st.backends, st.default])
+
   const generate = useCallback(
-    async (force: boolean) => {
+    async (force: boolean, backend: string) => {
       if (busy) return
+      setDialogOpen(false)
       setBusy(true)
       try {
-        await apiPost(`/characters/${enc}/model3d/generate${force ? '?force=1' : ''}`, {})
+        const q = new URLSearchParams()
+        if (force) q.set('force', '1')
+        if (backend) q.set('backend', backend)
+        const qs = q.toString()
+        await apiPost(`/characters/${enc}/model3d/generate${qs ? `?${qs}` : ''}`, {})
         toast(t('Generating…'))
         startPoll()
       } catch (e) {
@@ -220,7 +244,7 @@ export function FieldModel3D({ character }: { character: string }) {
           type="button"
           className="ga-btn ga-btn-sm"
           disabled={pending || !st.has_input}
-          onClick={() => generate(!!model)}
+          onClick={openDialog}
         >
           {pending ? t('Generating…') : model ? t('Regenerate') : t('Generate 3D model')}
         </button>
@@ -241,6 +265,76 @@ export function FieldModel3D({ character }: { character: string }) {
           </>
         ) : null}
       </div>
+
+      {dialogOpen
+        ? createPortal(
+            <div className="ga-modal-backdrop" onClick={() => setDialogOpen(false)}>
+              <div
+                className="ga-modal"
+                role="dialog"
+                aria-label={t('Generate 3D model')}
+                style={{ maxWidth: 460 }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="ga-modal-header">
+                  <span>{model ? t('Regenerate') : t('Generate 3D model')}</span>
+                  <button
+                    type="button"
+                    className="ga-modal-close"
+                    onClick={() => setDialogOpen(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="ga-modal-body">
+                  {(st.backends || []).length === 0 ? (
+                    <div className="ga-hint">
+                      {t('No mesh backend available — configure one (api_type openai_mesh) in Media Generation.')}
+                    </div>
+                  ) : (
+                    <div className="ga-form">
+                      <label className="ga-hint">{t('Backend')}</label>
+                      <select
+                        className="ga-input"
+                        value={pickedBackend}
+                        onChange={(e) => setPickedBackend(e.target.value)}
+                      >
+                        <option value="">{t('— default (cheapest available) —')}</option>
+                        {(st.backends || []).map((b) => (
+                          <option key={b.name} value={b.name}>
+                            {b.name}
+                            {b.face_num ? ` · ${b.face_num.toLocaleString()} ${t('faces')}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="ga-hint">
+                        {t('Higher face counts mean more detail, bigger files and a slower run.')}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="ga-modal-footer" style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm"
+                    onClick={() => setDialogOpen(false)}
+                  >
+                    {t('Cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm ga-btn-primary"
+                    disabled={(st.backends || []).length === 0}
+                    onClick={() => generate(!!model, pickedBackend)}
+                  >
+                    {t('Generate')}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   )
 }

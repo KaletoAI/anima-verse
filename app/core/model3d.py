@@ -91,6 +91,27 @@ def find_model3d(character_name: str,
     return None
 
 
+def list_mesh_backends() -> Dict[str, Any]:
+    """Available mesh backends (MEDIA_TYPE=="mesh") + the admin default, so the
+    generate dialog can offer a choice (e.g. Trellis2-Low vs -High)."""
+    from app.core import config
+    from app.imagegen.service import get_image_service
+    out = []
+    try:
+        svc = get_image_service()
+        for b in svc.list_available_backends(media="mesh"):
+            out.append({
+                "name": b.name,
+                "model": getattr(b, "model", ""),
+                "cost": getattr(b, "cost", 0),
+                "face_num": getattr(b, "face_num", None),
+            })
+    except Exception as e:
+        logger.debug("Mesh-Backends listen fehlgeschlagen: %s", e)
+    default = str(config.get("image_generation.mesh_imagegen_default", "") or "").strip()
+    return {"backends": out, "default": default}
+
+
 def get_model3d_info(character_name: str) -> Dict[str, Any]:
     """Status of the mesh for the CURRENTLY worn outfit: cached file + meta,
     whether a T-pose input exists, and whether a generation is running."""
@@ -122,6 +143,7 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 pass
         out["model"] = info
     out["options"] = get_model3d_options(character_name)
+    out.update(list_mesh_backends())
     with _lock:
         out["pending"] = character_name in _generating
     return out
@@ -216,10 +238,11 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                 pass
 
 
-def _run(character_name: str, force: bool) -> None:
+def _run(character_name: str, force: bool, backend_glob: str = "") -> None:
     with _char_lock(character_name):
         try:
-            generate_for_current_outfit(character_name, force=force)
+            generate_for_current_outfit(character_name, force=force,
+                                        backend_glob=backend_glob)
         except Exception as e:
             logger.error("Model3D-Generierung fuer %s fehlgeschlagen: %s",
                          character_name, e)
@@ -228,14 +251,16 @@ def _run(character_name: str, force: bool) -> None:
                 _generating.discard(character_name)
 
 
-def trigger_generation(character_name: str, *, force: bool = False) -> bool:
+def trigger_generation(character_name: str, *, force: bool = False,
+                       backend_glob: str = "") -> bool:
     """Starts the mesh generation in the background (manual button today).
+    ``backend_glob`` picks the mesh backend (empty = admin default → cheapest).
     False when one is already running for this character."""
     with _lock:
         if character_name in _generating:
             return False
         _generating.add(character_name)
-    threading.Thread(target=_run, args=[character_name, force],
+    threading.Thread(target=_run, args=[character_name, force, backend_glob],
                      daemon=True).start()
     return True
 
