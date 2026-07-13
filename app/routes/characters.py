@@ -1415,6 +1415,23 @@ def generate_character_model3d(character_name: str, force: bool = False) -> Dict
     return {"status": "generating"}
 
 
+@router.post("/{character_name}/model3d/options")
+async def set_character_model3d_options(character_name: str, request: Request) -> Dict[str, Any]:
+    """Per-character overrides for the mesh generation.
+    Body: {"no_fingers": true|false|null} — null clears the override (the
+    backend's configured default applies again)."""
+    from app.core.model3d import set_model3d_options
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    body = await request.json()
+    if not isinstance(body, dict) or "no_fingers" not in body:
+        raise HTTPException(status_code=400, detail="no_fingers missing")
+    nf = body["no_fingers"]
+    if nf is not None and not isinstance(nf, bool):
+        raise HTTPException(status_code=400, detail="no_fingers must be bool or null")
+    return {"options": set_model3d_options(character_name, {"no_fingers": nf})}
+
+
 @router.get("/{character_name}/model3d/file")
 def get_character_model3d_file(character_name: str, request: Request):
     """Serves the generated mesh of the current outfit combination. ETag +

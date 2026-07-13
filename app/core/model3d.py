@@ -31,6 +31,37 @@ _generating: set = set()
 _char_locks: Dict[str, threading.Lock] = {}
 
 
+def get_model3d_options(character_name: str) -> Dict[str, Any]:
+    """Per-character overrides for the mesh generation (profile field
+    ``model3d_opts``). A key that is absent/None means "use the backend's
+    configured default" — the default is never materialized here."""
+    from app.models.character import get_character_profile
+    try:
+        raw = (get_character_profile(character_name) or {}).get("model3d_opts") or {}
+    except Exception:
+        raw = {}
+    nf = raw.get("no_fingers")
+    return {"no_fingers": None if nf is None else bool(nf)}
+
+
+def set_model3d_options(character_name: str,
+                        updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Merges mesh-generation overrides into the character profile.
+    ``no_fingers=None`` clears the override (back to the backend default)."""
+    from app.models.character import get_character_profile, save_character_profile
+    profile = get_character_profile(character_name) or {}
+    opts = dict(profile.get("model3d_opts") or {})
+    if "no_fingers" in updates:
+        nf = updates["no_fingers"]
+        if nf is None:
+            opts.pop("no_fingers", None)
+        else:
+            opts["no_fingers"] = bool(nf)
+    profile["model3d_opts"] = opts
+    save_character_profile(character_name, profile)
+    return get_model3d_options(character_name)
+
+
 def get_model3d_dir(character_name: str) -> Path:
     """Directory of the generated meshes (see get_character_images_dir for the
     base-dir existence gate that avoids ghost dirs on read paths)."""
@@ -90,6 +121,7 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
             except (OSError, ValueError):
                 pass
         out["model"] = info
+    out["options"] = get_model3d_options(character_name)
     with _lock:
         out["pending"] = character_name in _generating
     return out
@@ -147,7 +179,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             output_path=str(out_dir / f"{signature}.fbx"),
             backend_glob=backend_glob,
             character_name=character_name,
-            mesh_name=character_name)
+            mesh_name=character_name,
+            # Per-character override; None = the backend's configured default.
+            no_fingers=get_model3d_options(character_name).get("no_fingers"))
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
             logger.error("Model3D %s fehlgeschlagen: %s", character_name, error)
@@ -166,6 +200,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             "source_image": src.name,
             "signature": signature,
             "character": character_name,
+            "no_fingers": get_model3d_options(character_name).get("no_fingers"),
         }
         path.with_suffix(".json").write_text(
             json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")

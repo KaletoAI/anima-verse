@@ -30,6 +30,7 @@ interface Model3DStatus {
   signature?: string
   has_input?: boolean
   model?: Model3DInfo | null
+  options?: { no_fingers?: boolean | null }
   pending?: boolean
 }
 
@@ -110,6 +111,25 @@ export function FieldModel3D({ character }: { character: string }) {
     [busy, enc, startPoll, t, toast],
   )
 
+  // Per-character override of the alias param "no fingers".
+  // '' = backend default (never materialized), '1' = on, '0' = off.
+  const setNoFingers = useCallback(
+    async (raw: string) => {
+      const value = raw === '' ? null : raw === '1'
+      setSt((prev) => ({ ...prev, options: { ...(prev.options || {}), no_fingers: value } }))
+      try {
+        const d = await apiPost<{ options: Model3DStatus['options'] }>(
+          `/characters/${enc}/model3d/options`, { no_fingers: value })
+        setSt((prev) => ({ ...prev, options: d.options }))
+        toast(t('Saved'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        load()
+      }
+    },
+    [enc, load, t, toast],
+  )
+
   const remove = useCallback(async () => {
     if (!confirmDelete) {
       setConfirmDelete(true)
@@ -178,6 +198,22 @@ export function FieldModel3D({ character }: { character: string }) {
       )}
       <div className="ga-hint">
         {t('Generated from the T-pose render of the currently worn outfit and cached per outfit combination.')}
+      </div>
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('No fingers')}</span>
+        <select
+          className="ga-input"
+          value={st.options?.no_fingers == null ? '' : st.options.no_fingers ? '1' : '0'}
+          disabled={pending}
+          onChange={(e) => setNoFingers(e.target.value)}
+        >
+          <option value="">{t('— backend default —')}</option>
+          <option value="1">{t('On (no separate fingers)')}</option>
+          <option value="0">{t('Off (model the fingers)')}</option>
+        </select>
+      </label>
+      <div className="ga-hint">
+        {t('Overrides the mesh backend setting for this character. Takes effect on the next generation — use Regenerate for the current outfit.')}
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <button

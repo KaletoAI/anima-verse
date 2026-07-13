@@ -314,7 +314,8 @@ class ImageService:
 
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
-                      mesh_name: str = "", face_num=None) -> Dict[str, Any]:
+                      mesh_name: str = "", face_num=None,
+                      no_fingers=None) -> Dict[str, Any]:
         """Generates a 3D mesh from ONE image via a MEDIA_TYPE=="mesh" backend.
 
         Picks a mesh backend by glob (empty = cheapest available mesh backend),
@@ -333,6 +334,9 @@ class ImageService:
         }
         if face_num:
             params["face_num"] = int(face_num)
+        # None = keep the backend's configured default (per-character override).
+        if no_fingers is not None:
+            params["no_fingers"] = bool(no_fingers)
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
         else:
