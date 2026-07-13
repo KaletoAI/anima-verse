@@ -52,9 +52,8 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
 
 ## AV3D-5: 3D-Charakter-Assets pro Charakter (GLB/VRM) — spezifiziert, drüben umsetzbar — ⭐ Kernwunsch
 
-> **Vollständige Spezifikationen liegen vor:** `docs/spec-av3d5-stufe1.md`
-> (anima-verse: Endpoints, Ablage, Validierung, Game-Admin-Reiter „3D") und
-> `docs/spec-character-model-job.md` (LLM-Gateway-Job). Pipeline verifiziert
+> **Schnittstellen & Erwartungen:** `docs/schnittstellen-3d.md` — die
+> Implementierung entscheiden die jeweiligen Sessions. Pipeline verifiziert
 > mit KiraFast/BiancaHigh2.
 
 - **Motivation:** Der Client soll NPCs als animierte 3D-Figuren zeigen. Die
