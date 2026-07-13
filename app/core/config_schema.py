@@ -279,6 +279,13 @@ SECTIONS = {
             # app/core/model_refs.py and with the "_default" entry of
             # shared/templates/pose/pose_presets.json. EMPTY = built-in
             # default (shown greyed, never persisted).
+            "_grp_pose_refs": {"type": "group_header", "label": "Pose Prompts & 3D Reference Renders"},
+            "_pose_layer_note": {"type": "note", "text": (
+                "Prompt layering: the two pose prompts below are CONTENT "
+                "(pose layer only). Framing, lighting and background come "
+                "from the use-case STYLES (e.g. 'outfit'), edited in the "
+                "use-cases editor; facial expression is its own layer. "
+                "Keep pose text pure — no style fragments.")},
             "tpose_prompt": {"type": "text", "label": "T-pose prompt", "placeholder": "T-pose, standing upright facing the camera, arms stretched straight out horizontally to both sides, palms down, fingers extended, legs straight and slightly apart", "description": "POSE LAYER ONLY for the T-pose reference render (input for image-to-3D/rigging chains) — framing, lighting and background come from the 'outfit' use-case style, the face from the expression layer. EMPTY = built-in default."},
             "default_pose_prompt": {"type": "text", "label": "Default pose prompt", "placeholder": "standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up", "description": "POSE LAYER ONLY — replaces the built-in default pose everywhere it applies: expression variants without an activity, wardrobe outfit previews and the default-pose reference render. No style/framing/expression fragments here. EMPTY = built-in default from pose_presets.json."},
             "model_ref_renders_enabled": {"type": "bool", "label": "Reference renders on outfit change", "default": True, "description": "After an outfit change (equip/unequip/outfit switch), automatically render the T-pose + default-pose reference pair in the character's current outfit (stored under characters/<name>/model_refs/, separate from expression variants). Shown on the character editor's 3D tab."},
