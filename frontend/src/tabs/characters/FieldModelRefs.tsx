@@ -22,6 +22,7 @@ interface RefInfo {
 interface RefsInfo {
   tpose?: RefInfo | null
   pose?: RefInfo | null
+  auto?: { tpose?: boolean; pose?: boolean }
   pending?: boolean
 }
 
@@ -82,6 +83,26 @@ export function FieldModelRefs({ character }: { character: string }) {
     }
   }, [busy, enc, startPoll, t, toast])
 
+  // Per-image toggle for the automatic outfit-change render (persisted per
+  // character); the Generate button fires exactly the checked ones.
+  const setAuto = useCallback(
+    async (kind: (typeof KINDS)[number], value: boolean) => {
+      setInfo((prev) => ({ ...prev, auto: { ...(prev.auto || {}), [kind]: value } }))
+      try {
+        const d = await apiPost<{ auto: RefsInfo['auto'] }>(
+          `/characters/${enc}/model-refs/auto`, { [kind]: value })
+        setInfo((prev) => ({ ...prev, auto: d.auto }))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        load()
+      }
+    },
+    [enc, load, t, toast],
+  )
+
+  const autoOn = (kind: (typeof KINDS)[number]) => info.auto?.[kind] !== false
+  const anyAuto = KINDS.some((k) => autoOn(k))
+
   const label = (kind: (typeof KINDS)[number]) =>
     kind === 'tpose' ? t('T-pose') : t('Default pose')
 
@@ -113,12 +134,31 @@ export function FieldModelRefs({ character }: { character: string }) {
         })}
       </div>
       <div className="ga-hint">
-        {t('Rendered automatically after outfit changes (debounced). The T-pose image feeds the image-to-3D pipeline.')}
+        {t('Checked images are rendered automatically after outfit changes (debounced); Generate fires the same render immediately. The T-pose image feeds the image-to-3D pipeline.')}
       </div>
-      <div>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={generate}>
-          {busy ? t('Generating…') : t('Generate now')}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={busy || !anyAuto}
+          onClick={generate}
+        >
+          {busy ? t('Generating…') : t('Generate')}
         </button>
+        {KINDS.map((kind) => (
+          <label
+            key={kind}
+            style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
+            title={t('Render this image automatically after outfit changes')}
+          >
+            <input
+              type="checkbox"
+              checked={autoOn(kind)}
+              onChange={(e) => setAuto(kind, e.target.checked)}
+            />
+            <span>{label(kind)}</span>
+          </label>
+        ))}
       </div>
     </div>
   )

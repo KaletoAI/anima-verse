@@ -1347,12 +1347,26 @@ def get_character_model_refs(character_name: str) -> Dict[str, Any]:
 
 @router.post("/{character_name}/model-refs/generate")
 def generate_character_model_refs(character_name: str) -> Dict[str, Any]:
-    """Manually renders the T-pose + default-pose pair (skips the debounce)."""
+    """Manually fires the automatic outfit-change render (per-image toggles
+    apply, debounce is skipped)."""
     from app.core.model_refs import trigger_now
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     trigger_now(character_name)
     return {"status": "generating"}
+
+
+@router.post("/{character_name}/model-refs/auto")
+async def set_character_model_refs_auto(character_name: str, request: Request) -> Dict[str, Any]:
+    """Per-image toggles for the automatic outfit-change render
+    (body: {tpose?: bool, pose?: bool})."""
+    from app.core.model_refs import set_auto_kinds
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    return {"auto": set_auto_kinds(character_name, body)}
 
 
 @router.get("/{character_name}/model-refs/{kind}")

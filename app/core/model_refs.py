@@ -61,6 +61,31 @@ def _debounce_seconds() -> float:
     return float(val) if val > 0 else 60.0
 
 
+def get_auto_kinds(character_name: str) -> Dict[str, bool]:
+    """Per-character, per-image toggles for the automatic outfit-change
+    render (profile field ``model_ref_auto``; missing key = enabled)."""
+    from app.models.character import get_character_profile
+    try:
+        raw = (get_character_profile(character_name) or {}).get("model_ref_auto") or {}
+    except Exception:
+        raw = {}
+    return {k: bool(raw.get(k, True)) for k in REF_KINDS}
+
+
+def set_auto_kinds(character_name: str, updates: Dict[str, Any]) -> Dict[str, bool]:
+    """Merges per-image auto-render toggles into the character profile."""
+    from app.models.character import get_character_profile, save_character_profile
+    profile = get_character_profile(character_name) or {}
+    current = profile.get("model_ref_auto") or {}
+    merged = {k: bool(current.get(k, True)) for k in REF_KINDS}
+    for key, val in (updates or {}).items():
+        if key in REF_KINDS:
+            merged[key] = bool(val)
+    profile["model_ref_auto"] = merged
+    save_character_profile(character_name, profile)
+    return merged
+
+
 def get_model_refs_dir(character_name: str) -> Path:
     """Reference-render directory (see get_character_images_dir for the
     base-dir existence gate that avoids ghost dirs on read paths)."""
@@ -107,17 +132,30 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
             except (OSError, ValueError):
                 pass
         out[kind] = info
+    out["auto"] = get_auto_kinds(character_name)
     with _lock:
         out["pending"] = character_name in _pending_timers
     return out
 
 
-def generate_model_ref_images(character_name: str) -> Dict[str, Optional[str]]:
-    """Render both reference images sequentially (the image queue serializes
-    per backend anyway). Blocking — call from a worker thread."""
+def generate_model_ref_images(character_name: str,
+                              kinds: Optional[tuple] = None) -> Dict[str, Optional[str]]:
+    """Render the reference images sequentially (the image queue serializes
+    per backend anyway). Blocking — call from a worker thread.
+
+    ``kinds`` None = exactly what the automatic outfit-change trigger would
+    render: the kinds enabled via the per-character toggles."""
     from app.core.expression_regen import generate_expression_image
     from app.core.expression_pose_maps import default_pose_prompt
     from app.core.task_queue import get_task_queue
+
+    if kinds is None:
+        auto = get_auto_kinds(character_name)
+        kinds = tuple(k for k in REF_KINDS if auto.get(k))
+    else:
+        kinds = tuple(k for k in kinds if k in REF_KINDS)
+    if not kinds:
+        return {}
 
     refs_dir = get_model_refs_dir(character_name)
     prompts = {"tpose": get_tpose_prompt(), "pose": default_pose_prompt()}
@@ -132,7 +170,7 @@ def generate_model_ref_images(character_name: str) -> Dict[str, Optional[str]]:
         pass
     error = ""
     try:
-        for kind in REF_KINDS:
+        for kind in kinds:
             path = generate_expression_image(
                 character_name, mood="", activity="",
                 pose_prompt_override=prompts[kind],
@@ -178,8 +216,11 @@ def _fire(character_name: str) -> None:
 
 def schedule_outfit_render(character_name: str) -> None:
     """Debounced trigger after an outfit mutation (trailing edge, latest
-    state wins). No-op when disabled in config."""
+    state wins). No-op when disabled in config or when every per-image
+    toggle of this character is off."""
     if not _enabled():
+        return
+    if not any(get_auto_kinds(character_name).values()):
         return
     delay = _debounce_seconds()
     with _lock:
@@ -193,7 +234,8 @@ def schedule_outfit_render(character_name: str) -> None:
 
 
 def trigger_now(character_name: str) -> None:
-    """Manual trigger (UI button): skip the debounce window."""
+    """Manual trigger (UI button): fires the automatic outfit-change render
+    immediately — same per-image toggles, just without the debounce."""
     with _lock:
         old = _pending_timers.pop(character_name, None)
         if old:
