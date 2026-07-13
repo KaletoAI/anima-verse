@@ -51,6 +51,11 @@ interface AnimationClip {
   url: string
 }
 
+// The chosen clip is a VIEW preference, not character data: it survives the
+// character switch (and a reload) instead of snapping back on every change.
+const CLIP_PREF_KEY = 'model3d.clip'
+const DEFAULT_CLIP_KIND = 'idle'
+
 export function FieldModel3D({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -84,10 +89,26 @@ export function FieldModel3D({ character }: { character: string }) {
   }, [load])
 
   // Shared animation clips (world-independent, same rig as the models).
+  // Initial pick: the last choice (if that clip still exists), else an "idle"
+  // clip, else none.
   useEffect(() => {
     apiGet<{ clips?: AnimationClip[] }>('/assets/animation-clips')
-      .then((d) => setClips(d.clips || []))
+      .then((d) => {
+        const list = d.clips || []
+        setClips(list)
+        setClipUrl((cur) => {
+          if (cur && list.some((c) => c.url === cur)) return cur
+          const saved = localStorage.getItem(CLIP_PREF_KEY) || ''
+          if (saved && list.some((c) => c.url === saved)) return saved
+          return list.find((c) => c.kind === DEFAULT_CLIP_KIND)?.url || ''
+        })
+      })
       .catch(() => setClips([]))
+  }, [])
+
+  const pickClip = useCallback((url: string) => {
+    setClipUrl(url)
+    localStorage.setItem(CLIP_PREF_KEY, url)
   }, [])
 
   // Meshing takes minutes — poll until the backend reports it finished.
@@ -188,7 +209,7 @@ export function FieldModel3D({ character }: { character: string }) {
               <select
                 className="ga-input"
                 value={clipUrl}
-                onChange={(e) => setClipUrl(e.target.value)}
+                onChange={(e) => pickClip(e.target.value)}
               >
                 <option value="">{t('— none (static) —')}</option>
                 {clips.map((c) => (
