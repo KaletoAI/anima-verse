@@ -184,13 +184,13 @@ _DEFAULT_IMAGE_USE_CASES = {
     # would fight the T-pose / flat-light goal). Pose-free like all styles.
     "tpose": {
         "keywords": {
-            "prompt_style": "full body view, head to toe, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
-            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body",
+            "prompt_style": "full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body",
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus",
-            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body",
+            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body",
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
     },
@@ -386,6 +386,34 @@ def _seed_default_marketplace_catalogs(config: dict, config_path: Path) -> bool:
         return False
 
 
+def _migrate_backend_categories(config: dict, config_path: Path) -> bool:
+    """One-time rename of the backend category ``generate`` -> ``txt2img``.
+
+    The category vocabulary became explicit about the direction of the alias
+    (txt2img / img2img / inpaint / img2mesh). Nothing ever branched on the old
+    ``generate`` value (only ``inpaint`` carries behaviour), so this is a pure
+    label migration — image-to-image aliases can be re-tagged in the admin.
+    Runs BEFORE the secrets overlay, so no secrets can leak into config.json.
+    """
+    backends = (config.get("image_generation") or {}).get("backends") or []
+    changed = False
+    for be in backends:
+        if isinstance(be, dict) and be.get("category") == "generate":
+            be["category"] = "txt2img"
+            changed = True
+    if not changed:
+        return False
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        logger.info("Backend categories migrated: 'generate' -> 'txt2img' (%s)",
+                    config_path)
+        return True
+    except OSError as e:
+        logger.error("Failed to migrate backend categories in %s: %s", config_path, e)
+        return False
+
+
 def _seed_default_use_cases(config: dict, config_path: Path) -> bool:
     """Legt die Use-Case-Prompt-Struktur an (leere Felder, 2 Familien je Use-Case).
 
@@ -478,6 +506,7 @@ def load(config_path: Optional[Path] = None) -> dict:
     _seed_default_use_cases(_CONFIG, path)
     _strip_legacy_imagegen_prompt_fields(_CONFIG, path)
     _seed_default_marketplace_catalogs(_CONFIG, path)
+    _migrate_backend_categories(_CONFIG, path)
 
     # Overlay secrets.json (gitignored — holds api keys / passwords)
     if _SECRETS_PATH.exists():
@@ -794,7 +823,10 @@ def _flatten_to_env(config: dict) -> None:
                      "full_mask", "terrain_hint", "mask_grow", "inner_crop",
                      "mask_format", "lora_url", "lora_filter",
                      # Video backends (localai_video / together_video)
-                     "seconds", "video_endpoint"]:
+                     "seconds", "video_endpoint",
+                     # Mesh backend (openai_mesh, img2mesh)
+                     "mesh_endpoint", "remove_background", "face_num",
+                     "no_fingers"]:
             val = be.get(key, "")
             # extra_params can be a dict (JSON editor) — bridge as JSON string.
             if key == "extra_params" and isinstance(val, (dict, list)):

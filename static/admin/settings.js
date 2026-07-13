@@ -907,6 +907,16 @@ function renderFields(fields, data, path) {
                 continue;
             }
         }
+        // Inverse of applicable_for: a field that applies to every type EXCEPT
+        // a few (e.g. Width/Height/Image Family make no sense for a mesh
+        // backend). Cheaper than listing every other api_type — and new types
+        // keep inheriting the field by default.
+        if (Array.isArray(f.not_applicable_for) && f.not_applicable_for.length) {
+            const cur = (data && data.api_type) || '';
+            if (cur && f.not_applicable_for.includes(cur)) {
+                continue;
+            }
+        }
         // Sibling-value visibility: `visible_when: {field: value}` shows the
         // field only while every referenced sibling field holds the required
         // value (e.g. the inpaint-only mask fields behind Category=inpaint).

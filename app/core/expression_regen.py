@@ -831,7 +831,9 @@ def generate_expression_image(character_name: str,
                               pose_prompt_override: Optional[str] = None,
                               expression_prompt_override: Optional[str] = None,
                               image_use_case: str = "expression",
-                              output_stem: Optional[Path] = None) -> Optional[Path]:
+                              output_stem: Optional[Path] = None,
+                              override_width: Optional[int] = None,
+                              override_height: Optional[int] = None) -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -851,6 +853,8 @@ def generate_expression_image(character_name: str,
     - ``output_stem`` (path without extension) stores the result there
       instead of the expression-variant cache — no cache bookkeeping, no
       pose-variant analysis.
+    - ``override_width`` / ``override_height`` win over the outfit image
+      format (a T-pose needs a wider frame than a portrait).
 
     Returns the path to the generated image, or None on failure.
     """
@@ -1008,9 +1012,10 @@ def generate_expression_image(character_name: str,
 
     # Resolution from admin config (image_generation.outfit_image_width/height)
     # — expression variants use the same resolution as wardrobe outfit images.
-    # When unset, generation falls back to the backend default.
-    outfit_w = int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None
-    outfit_h = int(os.environ.get("OUTFIT_IMAGE_HEIGHT", 0) or 0) or None
+    # An explicit override wins (the T-pose needs a wider frame than the
+    # portrait format). When unset, generation falls back to the backend default.
+    outfit_w = override_width or int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None
+    outfit_h = override_height or int(os.environ.get("OUTFIT_IMAGE_HEIGHT", 0) or 0) or None
 
     # Single prompt: prefix + character + outfit + pose + expression in one string
     parts = [_prompt_prefix, character_prompt]

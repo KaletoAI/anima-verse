@@ -307,6 +307,67 @@ class ImageService:
             logger.error("generate_video: Schreiben fehlgeschlagen: %s", e)
             return False
 
+    def generate_mesh(self, source_image_path: str, output_path: str,
+                      backend_glob: str = "", character_name: str = "",
+                      mesh_name: str = "", face_num=None) -> Dict[str, Any]:
+        """Generates a 3D mesh from ONE image via a MEDIA_TYPE=="mesh" backend.
+
+        Picks a mesh backend by glob (empty = cheapest available mesh backend),
+        runs it through the pool's fallback engine and writes the returned model
+        file to ``output_path`` — the SUFFIX of output_path is replaced by the
+        one the gateway produced (e.g. .fbx), because the format is the
+        backend's choice, not ours.
+
+        Returns {"ok": bool, "path": str, "filename": str, "backend": str}.
+        """
+        from pathlib import Path as _P
+        params: Dict[str, Any] = {
+            "source_image_path": source_image_path,
+            "reference_images": {"input_image": source_image_path},
+            "mesh_name": mesh_name or character_name,
+        }
+        if face_num:
+            params["face_num"] = int(face_num)
+        if backend_glob.strip():
+            primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
+        else:
+            meshes = self.list_available_backends(character_name, media="mesh")
+            primary = meshes[0] if meshes else None
+        if not primary:
+            logger.warning("generate_mesh: kein Mesh-Backend verfuegbar (glob=%r)",
+                           backend_glob)
+            return {"ok": False, "error": "no mesh backend available"}
+
+        def _op(backend: ImageBackend):
+            return backend.generate("", "", params,
+                                    log_meta={"agent_name": character_name,
+                                              "original_prompt": "",
+                                              "media": "mesh"})
+        try:
+            result, used = self.run_with_fallback(
+                primary, _op, character_name=character_name)
+        except Exception as e:
+            logger.error("generate_mesh fehlgeschlagen: %s", e)
+            return {"ok": False, "error": str(e)}
+        if not result:
+            return {"ok": False, "error": "generation failed"}
+
+        # The gateway decides the format (Trellis2 -> .fbx). Keep our stem,
+        # adopt its suffix so the viewer/client can pick the right loader.
+        gw_name = getattr(used, "last_result_name", "") or ""
+        suffix = _P(gw_name).suffix.lower() if gw_name else ""
+        out = _P(output_path)
+        if suffix and suffix != out.suffix.lower():
+            out = out.with_suffix(suffix)
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(result[0])
+        except Exception as e:
+            logger.error("generate_mesh: Schreiben fehlgeschlagen: %s", e)
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "path": str(out), "filename": gw_name or out.name,
+                "backend": getattr(used, "name", "")}
+
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:
         """Holt die Instanz-spezifischen Defaults (nur agent-level Overrides).
 

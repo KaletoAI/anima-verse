@@ -1093,11 +1093,17 @@ async def imagegen_backend_models(backend_name: str,
     if not api_url:
         return {"backend": backend_name, "models": [], "error": "Keine API URL"}
     models: list = []
-    # Video backends want video models, image backends want image models.
-    _want_type = "video" if api_type in ("localai_video", "together_video", "openai_video") else "image"
+    # Each media kind wants its own models (declared type on the gateway).
+    if api_type in ("localai_video", "together_video", "openai_video"):
+        _want_type = "video"
+    elif api_type == "openai_mesh":
+        _want_type = "mesh"
+    else:
+        _want_type = "image"
     try:
         if api_type in ("together", "openai_diffusion", "localai", "openai_chat",
-                        "localai_video", "together_video", "openai_video"):
+                        "localai_video", "together_video", "openai_video",
+                        "openai_mesh"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
             # api_key optional for localai/localai_video (LocalAI without auth);
             # gateway/Together need it
@@ -1533,6 +1539,9 @@ def _fill_item_defaults(item: dict, fields: dict) -> None:
             continue
         applicable = field_def.get("applicable_for")
         if applicable and (item.get("api_type") or "") not in applicable:
+            continue
+        not_applicable = field_def.get("not_applicable_for")
+        if not_applicable and (item.get("api_type") or "") in not_applicable:
             continue
         cond = field_def.get("visible_when")
         if isinstance(cond, dict) and any(

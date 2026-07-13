@@ -120,6 +120,15 @@
       "fields": []
     },
     {
+      "id": "model3d_gen",
+      "label": "Generated 3D model (from T-pose)",
+      "label_de": "Generiertes 3D-Modell (aus T-Pose)",
+      "column": 24,
+      "row": 1,
+      "special": "model3d_gen",
+      "fields": []
+    },
+    {
       "id": "identity",
       "label": "Identity",
       "label_de": "Identität",

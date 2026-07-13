@@ -1384,6 +1384,61 @@ def get_character_model_ref_image(character_name: str, kind: str):
                         headers={"Cache-Control": "no-cache"})
 
 
+# --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---
+
+@router.get("/{character_name}/model3d")
+def get_character_model3d(character_name: str) -> Dict[str, Any]:
+    """Status of the generated mesh for the CURRENT outfit combination
+    ({signature, has_input, model, pending})."""
+    from app.core.model3d import get_model3d_info
+    return get_model3d_info(character_name)
+
+
+@router.post("/{character_name}/model3d/generate")
+def generate_character_model3d(character_name: str, force: bool = False) -> Dict[str, Any]:
+    """Starts the mesh generation for the current outfit (T-pose render as
+    input). Cached per combination — ``force=1`` re-generates."""
+    from app.core.model3d import trigger_generation
+    from app.core.model_refs import find_ref_image
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    if not find_ref_image(character_name, "tpose"):
+        raise HTTPException(
+            status_code=409,
+            detail="No T-pose render for the current outfit — generate it first")
+    if not trigger_generation(character_name, force=force):
+        return {"status": "already_running"}
+    return {"status": "generating"}
+
+
+@router.get("/{character_name}/model3d/file")
+def get_character_model3d_file(character_name: str, request: Request):
+    """Serves the generated mesh of the current outfit combination. ETag +
+    If-None-Match — the files are several MB. 404 when absent."""
+    from fastapi.responses import Response
+    from app.core.model3d import find_model3d
+    path = find_model3d(character_name)
+    if not path:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    stat = path.stat()
+    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304,
+                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+    return FileResponse(path, media_type="application/octet-stream",
+                        filename=path.name,
+                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+
+@router.delete("/{character_name}/model3d")
+def delete_character_model3d(character_name: str) -> Dict[str, Any]:
+    """Deletes the cached mesh of the current outfit combination."""
+    from app.core.model3d import delete_model3d
+    if not delete_model3d(character_name):
+        raise HTTPException(status_code=404, detail="No model")
+    return {"status": "success"}
+
+
 @router.post("/{character_name}/images/{image_filename}/comment")
 async def save_image_comment_endpoint(character_name: str, image_filename: str, request: Request) -> Dict[str, Any]:
     """Speichert einen Kommentar fuer ein Bild"""

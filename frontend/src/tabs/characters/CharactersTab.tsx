@@ -19,6 +19,7 @@ import { type TmplSection } from './TemplateSectionForm'
 import { TemplateTab } from './TemplateTab'
 import { BodyEditor } from './BodyEditor'
 import { FieldModel } from './FieldModel'
+import { FieldModel3D } from './FieldModel3D'
 import { FieldModelRefs } from './FieldModelRefs'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from './TemplateField'
@@ -581,6 +582,7 @@ export function CharactersTab() {
                       body_editor: <BodyEditor character={selected} />,
                       model3d: <FieldModel character={selected} />,
                       model_refs: <FieldModelRefs character={selected} />,
+                      model3d_gen: <FieldModel3D character={selected} />,
                     }}
                   />
                 ) : null

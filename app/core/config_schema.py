@@ -247,7 +247,7 @@ SECTIONS = {
         },
     },
     "image_generation": {
-        "label": "Image/Video Generation",
+        "label": "Media Generation",
         "icon": "🎨",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
@@ -288,6 +288,11 @@ SECTIONS = {
                 "Keep pose text pure — no style fragments.")},
             "tpose_prompt": {"type": "text", "label": "T-pose prompt", "placeholder": "T-pose, standing upright facing the camera, arms raised straight out to the sides at exact shoulder height, fully extended and parallel to the floor, body and arms forming the letter T, palms down, fingers extended, legs straight and slightly apart", "description": "POSE LAYER ONLY for the T-pose reference render (input for image-to-3D/rigging chains) — placed at the START of the prompt so the pose outweighs the outfit text. Framing/lighting/background come from the 'tpose' use-case style, the face from the expression layer. EMPTY = built-in default."},
             "default_pose_prompt": {"type": "text", "label": "Default pose prompt", "placeholder": "standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up", "description": "POSE LAYER ONLY — replaces the built-in default pose everywhere it applies: expression variants without an activity, wardrobe outfit previews and the default-pose reference render. No style/framing/expression fragments here. EMPTY = built-in default from pose_presets.json."},
+            # T-pose needs its OWN aspect: arm span ≈ body height, so the
+            # portrait outfit format (832x1216) crops the hands. Square is the
+            # natural fit; the default-pose ref keeps the outfit format.
+            "tpose_image_width": {"half": True, "type": "int", "label": "T-pose width (px)", "default": 1024, "min": 64, "max": 4096, "description": "Width of the T-pose reference render. Outstretched arms span roughly the body height — a square (or wider) format keeps the hands inside the frame, unlike the portrait outfit format. Empty = 1024."},
+            "tpose_image_height": {"half": True, "type": "int", "label": "T-pose height (px)", "default": 1024, "min": 64, "max": 4096, "description": "Height of the T-pose reference render. Empty = 1024."},
             "model_ref_renders_enabled": {"type": "bool", "label": "Reference renders on outfit change", "default": True, "description": "After an outfit change (equip/unequip/outfit switch), automatically render the T-pose + default-pose reference pair in the character's current outfit (stored under characters/<name>/model_refs/, separate from expression variants). Shown on the character editor's 3D tab."},
             "model_ref_debounce_seconds": {"type": "int", "label": "Outfit render debounce (s)", "default": 60, "min": 5, "max": 3600, "description": "Wait this long after the LAST outfit mutation before rendering — getting fully dressed changes several pieces in quick succession and must trigger ONE render pair, not one per piece. Every further change within the window resets the timer."},
 
@@ -404,18 +409,18 @@ SECTIONS = {
                 "fields": {
                     "name": {"half": True, "type": "str", "label": "Name", "required": True},
                     "lora_filter": {"half": True, "type": "str", "label": "LoRA Filter", "description": "Glob for this backend's LoRAs (e.g. 'Qwen*' or 'Wan*'). Applied by the discovery sync AND every LoRA dropdown — only matching LoRAs are stored/offered for this backend. Empty = all.", "applicable_for": ["localai", "openai_diffusion", "openai_video"]},
-                    "category": {"type": "select", "label": "Category", "choices": ["generate", "inpaint"], "default": "generate", "triggers_rerender": True, "description": "Purpose category. 'generate' = standard generation via POST /v1/images/generations. 'inpaint' = generation via POST /v1/images/edits (canvas + mask as two images); the backend is offered as inpaint target in the map fit/edge dialog, and the alias workflow needs image + mask slots on the gateway side.", "applicable_for": ["openai_diffusion"]},
+                    "category": {"type": "select", "label": "Category", "choices": ["txt2img", "img2img", "inpaint", "img2mesh"], "default": "txt2img", "triggers_rerender": True, "description": "What the alias does. 'txt2img' = generate from text (POST /v1/images/generations); reference images may still be sent when the alias has slots. 'img2img' = edit/transform an input image (same endpoint, image slots). 'inpaint' = POST /v1/images/edits (canvas + mask as two images); offered as inpaint target in the map fit/edge dialog. 'img2mesh' = image to 3D mesh (openai_mesh, async job on /v1/generations).", "applicable_for": ["openai_diffusion", "openai_mesh"]},
                     "enabled": {"type": "bool", "label": "Enabled", "default": True},
                     "api_type": {
                         "type": "select",
                         "label": "API Type",
-                        "choices": ["a1111", "openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video", "openai_video"],
+                        "choices": ["a1111", "openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video", "openai_video", "openai_mesh"],
                         "triggers_rerender": True,
-                        "description": "…_video types produce VIDEO (MEDIA_TYPE=video): openai_video = LLM-gateway video alias via the strict OpenAI /v1/videos API (e.g. a ComfyUI img2video workflow), localai_video = LocalAI-style video endpoint, together_video = Together.ai image-to-video. Video backends are matched separately from image backends.",
+                        "description": "…_video types produce VIDEO (MEDIA_TYPE=video): openai_video = LLM-gateway video alias via the strict OpenAI /v1/videos API (e.g. a ComfyUI img2video workflow), localai_video = LocalAI-style video endpoint, together_video = Together.ai image-to-video. openai_mesh produces a 3D MESH (MEDIA_TYPE=mesh) from one input image via an LLM-gateway generation alias (e.g. Trellis2-Low → FBX). Each media kind is matched separately.",
                     },
                     "api_url": {"type": "str", "label": "API URL"},
-                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Required for cloud backends (civitai, together, together_video) and the LLM gateway (openai_diffusion, always Bearer); optional for openai_chat/localai/localai_video (e.g. LocalAI/vLLM without auth)", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video", "openai_video"]},
-                    "model": {"type": "imagegen_model", "label": "Model", "description": "Model ID, gateway generation alias (openai_diffusion / openai_video, localai_video e.g. WAN-LowRAM) or URN (civitai: urn:air:sdxl:checkpoint:...). Free text + 'Load Models' fetches the list from the backend (/v1/models) as suggestions.", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video", "openai_video"]},
+                    "api_key": {"type": "password", "label": "API Key", "sensitive": True, "description": "Required for cloud backends (civitai, together, together_video) and the LLM gateway (openai_diffusion, openai_mesh, always Bearer); optional for openai_chat/localai/localai_video (e.g. LocalAI/vLLM without auth)", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video", "openai_video", "openai_mesh"]},
+                    "model": {"type": "imagegen_model", "label": "Model", "description": "Model ID, gateway generation alias (openai_diffusion / openai_video / openai_mesh e.g. Trellis2-Low, localai_video e.g. WAN-LowRAM) or URN (civitai: urn:air:sdxl:checkpoint:...). Free text + 'Load Models' fetches the list from the backend (/v1/models) as suggestions.", "applicable_for": ["openai_chat", "openai_diffusion", "localai", "civitai", "together", "localai_video", "together_video", "openai_video", "openai_mesh"]},
                     "lora_url": {"type": "str", "label": "LoRA Query URL", "description": "Optional: endpoint that lists the LoRAs available for the model (GET -> {\"loras\": [...]}). Source for the LoRA-library discovery sync (hourly + on demand in the LoRA Library editor) — every LoRA dropdown feeds from the library. '{alias}' is replaced with the model name; without the placeholder '/v1/generations/<model>/loras' is appended. Example: http://192.168.8.10:4000", "applicable_for": ["openai_diffusion", "localai", "openai_video"]},
                     "cost": {"type": "int", "label": "Cost", "default": 0, "min": 0, "description": "Relative cost (0 = local/free, higher = more expensive)"},
                     "width": {
@@ -425,6 +430,7 @@ SECTIONS = {
                         "min": 64,
                         "max": 4096,
                         "half": True,
+                        "not_applicable_for": ["openai_mesh"],
                     },
                     "height": {
                         "type": "int",
@@ -433,8 +439,10 @@ SECTIONS = {
                         "min": 64,
                         "max": 4096,
                         "half": True,
+                        "not_applicable_for": ["openai_mesh"],
                     },
                     "_size_note": {
+                        "not_applicable_for": ["openai_mesh"],
                         "type": "note",
                         "text": (
                             "Square default format (~1:1). Render time scales roughly "
@@ -450,7 +458,7 @@ SECTIONS = {
                             "images prefer an upscale pass afterwards."
                         ),
                     },
-                    "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "How the model wants its prompts: keywords = comma tags (Z-Image/SD), natural = flowing prose (Flux/Qwen). Selects the prompt adapter and which use-case style family applies. Empty = fallback via backend model name."},
+                    "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "How the model wants its prompts: keywords = comma tags (Z-Image/SD), natural = flowing prose (Flux/Qwen). Selects the prompt adapter and which use-case style family applies. Empty = fallback via backend model name.", "not_applicable_for": ["openai_mesh"]},
                     "ref_slot_count": {"type": "number", "label": "Reference Slots", "default": 4, "description": "How many reference images this backend consumes per generation (slot priority: agent > room > others > items). 0 = no reference images.", "applicable_for": ["localai", "openai_diffusion"]},
                     "guidance_scale": {"type": "float", "label": "Guidance Scale", "min": 0, "max": 50, "step": 0.5, "applicable_for": ["a1111"]},
                     "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200, "applicable_for": ["a1111", "together", "openai_diffusion", "localai"]},
@@ -465,9 +473,20 @@ SECTIONS = {
                     "disable_safety": {"type": "bool", "label": "Disable safety", "default": False, "description": "Sends disable_safety_checker=true (Together.ai-specific).", "applicable_for": ["together"]},
                     "seconds": {"half": True, "type": "int", "label": "Video length (s)", "default": 5, "min": 1, "max": 30, "description": "Length of the generated video in seconds.", "applicable_for": ["localai_video", "together_video", "openai_video"]},
                     "video_endpoint": {"type": "str", "label": "Video endpoint path", "default": "/v1/videos/generations", "description": "Request path on the gateway for video generation. localai_video default '/v1/videos/generations'; openai_video default '/v1/generations' (gateway spec: async job → poll /v1/jobs/{id} → download /result/0).", "applicable_for": ["localai_video", "openai_video"]},
-                    "poll_interval": {"half": True, "type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together, video): lower = faster detection, but more API calls. SYSTEM time.", "applicable_for": ["civitai", "together", "localai_video", "together_video", "openai_video"]},
-                    "max_wait": {"half": True, "type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed. SYSTEM time.", "applicable_for": ["civitai", "together", "localai_video", "together_video", "openai_video"]},
-                    "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout for the generation (HTTP). Raise it for slow models/large images/video — be generous with the synchronous gateway (e.g. 300). Applies to together/openai_diffusion/localai/openai_chat + video backends.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat", "localai_video", "together_video", "openai_video"]},
+
+                    # --- img2mesh (openai_mesh): 3D mesh from ONE input image ---
+                    # Param names mirror the gateway alias schema
+                    # (GET /v1/generations/<alias>/schema), e.g. Trellis2-Low:
+                    # images[input_image] + params{name, remove background,
+                    # face num, no fingers}. No prompt, no size, no families.
+                    "mesh_endpoint": {"type": "str", "label": "Mesh endpoint path", "default": "/v1/generations", "description": "Request path on the gateway for mesh generation (async job → poll /v1/jobs/{id} → download the result). Same generation API as openai_video.", "applicable_for": ["openai_mesh"]},
+                    "remove_background": {"half": True, "type": "bool", "label": "Remove background", "default": True, "description": "Alias param 'remove background': cut the subject out before meshing. Keep ON for character renders on a plain background.", "applicable_for": ["openai_mesh"]},
+                    "no_fingers": {"half": True, "type": "bool", "label": "No fingers", "default": True, "description": "Alias param 'no fingers': skip separate finger geometry (more robust hands at this mesh resolution).", "applicable_for": ["openai_mesh"]},
+                    "face_num": {"type": "int", "label": "Face count", "default": 20000, "min": 1000, "max": 500000, "description": "Alias param 'face num': target polygon count of the generated mesh. Higher = more detail, bigger file, slower.", "applicable_for": ["openai_mesh"]},
+
+                    "poll_interval": {"half": True, "type": "float", "label": "Poll Interval (s)", "default": 3.0, "min": 0.5, "step": 0.5, "description": "Wait time between status polls on async cloud backends (CivitAI, Together, video, mesh): lower = faster detection, but more API calls. SYSTEM time.", "applicable_for": ["civitai", "together", "localai_video", "together_video", "openai_video", "openai_mesh"]},
+                    "max_wait": {"half": True, "type": "int", "label": "Max Wait (s)", "default": 300, "min": 30, "description": "Maximum wait time before the generation counts as failed. SYSTEM time.", "applicable_for": ["civitai", "together", "localai_video", "together_video", "openai_video", "openai_mesh"]},
+                    "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout for the generation (HTTP). Raise it for slow models/large images/video/mesh — be generous with the synchronous gateway (e.g. 300). Applies to together/openai_diffusion/localai/openai_chat + video/mesh backends.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat", "localai_video", "together_video", "openai_video", "openai_mesh"]},
                     "max_concurrent": {"half": True, "type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallel jobs on this backend queue. Additional concurrent requests wait until a slot frees up. Applies to all backend types (including cloud/OpenAI)."},
                     "serialize_group": {"half": True, "type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
                 },

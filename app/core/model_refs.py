@@ -64,6 +64,19 @@ def _enabled() -> bool:
     return bool(True if val is None else val)
 
 
+def _tpose_size() -> tuple:
+    """(width, height) of the T-pose render — square by default. Outstretched
+    arms span roughly the body height, so the portrait outfit format crops the
+    hands."""
+    def _px(key: str, fallback: int) -> int:
+        try:
+            val = int(_cfg(key, 0) or 0)
+        except (TypeError, ValueError):
+            val = 0
+        return val if val > 0 else fallback
+    return _px("tpose_image_width", 1024), _px("tpose_image_height", 1024)
+
+
 def _debounce_seconds() -> float:
     try:
         val = int(_cfg("model_ref_debounce_seconds", 0) or 0)
@@ -236,6 +249,7 @@ def generate_model_ref_images(character_name: str,
             # too little weight and the render drifts into an A-pose. The
             # default-pose ref keeps the canonical content order.
             _tpose = kind == "tpose"
+            _w, _h = _tpose_size() if _tpose else (None, None)
             path = generate_expression_image(
                 character_name, mood="", activity="",
                 equipped_pieces=pieces, equipped_items=items,
@@ -245,6 +259,9 @@ def generate_model_ref_images(character_name: str,
                 # tpose has its own style (flat shadowless light for
                 # image->3D input); the default-pose ref shares "outfit".
                 image_use_case="tpose" if _tpose else "outfit",
+                # ... and its own aspect: the portrait outfit format cuts the
+                # outstretched hands off at the edges.
+                override_width=_w, override_height=_h,
                 output_stem=refs_dir / f"{kind}_{signature}")
             results[kind] = str(path) if path else None
             if path is None:
