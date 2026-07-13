@@ -162,16 +162,20 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe a head-and-shoulders portrait — face, hair, expression. Neutral background, no full body.",
         },
     },
+    # NOTE prompt layering: use-case styles carry camera/quality/framing/
+    # lighting/background ONLY. Pose comes exclusively from the pose layer
+    # (pose presets / default_pose_prompt / tpose_prompt), expression from
+    # the expression layer — never from a style. Keep styles pose-free.
     "outfit": {
         "keywords": {
-            "prompt_style": "full body view, standing, plain neutral background, even lighting, sharp focus, high detail",
+            "prompt_style": "full body view, head to toe, plain neutral background, even lighting, sharp focus, high detail",
             "prompt_negative": _NEG_PHOTO,
-            "prompt_instruction": "Write comma-separated tags describing the full outfit head-to-toe on a standing figure, plain background.",
+            "prompt_instruction": "Write comma-separated tags describing the full outfit head-to-toe, plain background. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body photo of the character standing against a plain neutral background, even lighting, sharp focus",
+            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, even lighting, sharp focus",
             "prompt_negative": _NEG_PHOTO,
-            "prompt_instruction": "Describe the full outfit head-to-toe on a standing figure against a plain background.",
+            "prompt_instruction": "Describe the full outfit head-to-toe against a plain background. Do not mention pose or facial expression.",
         },
     },
     "expression": {

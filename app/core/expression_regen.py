@@ -829,7 +829,7 @@ def generate_expression_image(character_name: str,
                               equipped_items: Optional[list] = None,
                               prompt_prefix: str = "",
                               pose_prompt_override: Optional[str] = None,
-                              include_expression: bool = True,
+                              expression_prompt_override: Optional[str] = None,
                               image_use_case: str = "expression",
                               output_stem: Optional[Path] = None) -> Optional[Path]:
     """Generate an expression/pose variant.
@@ -837,10 +837,16 @@ def generate_expression_image(character_name: str,
     Character + equipped items + pose + expression -> text-prompt-based
     image generation. No outfit reference image needed.
 
+    Prompt layering: the use-case style (camera/framing/lighting/background)
+    is prepended by the image service; THIS function composes the content
+    layers actor+appearance -> outfit -> pose -> expression. Overrides feed
+    a single layer verbatim and must not carry style fragments.
+
     Reference-render extras (model_refs, AV3D):
     - ``pose_prompt_override`` uses the given pose text verbatim (bypasses
       activity resolution and the default pose).
-    - ``include_expression=False`` omits the expression fragment.
+    - ``expression_prompt_override`` uses the given expression text verbatim
+      (``""`` omits the expression layer entirely).
     - ``image_use_case`` picks the style use case (default "expression").
     - ``output_stem`` (path without extension) stores the result there
       instead of the expression-variant cache — no cache bookkeeping, no
@@ -890,10 +896,10 @@ def generate_expression_image(character_name: str,
 
     # Resolve prompts via PromptBuilder — separated for correct ordering
     from app.core.prompt_builder import PromptBuilder
-    if include_expression:
-        expression_prompt = resolve_expression_prompt(mood) if mood else DEFAULT_EXPRESSION
+    if expression_prompt_override is not None:
+        expression_prompt = expression_prompt_override.strip()
     else:
-        expression_prompt = ""
+        expression_prompt = resolve_expression_prompt(mood) if mood else DEFAULT_EXPRESSION
     # Pose presets ("The person is seated…") are human-centric. Apply them
     # only for humanoid characters; animals get the raw activity text as the
     # pose ("sleeping", "lying down") — the image model maps that onto their

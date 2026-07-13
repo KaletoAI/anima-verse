@@ -23,11 +23,19 @@ from app.core.log import get_logger
 
 logger = get_logger(__name__)
 
+# Prompt layering: this default is PURE POSE — framing, lighting and
+# background come from the "outfit" use-case style, the face from the
+# expression layer (REF_EXPRESSION_PROMPT below). Keep it that way.
 TPOSE_PROMPT_DEFAULT = (
-    "full body T-pose, standing upright facing the camera, arms stretched "
-    "straight out horizontally to both sides, palms down, fingers extended, "
-    "legs straight and slightly apart, neutral relaxed face, even lighting"
+    "T-pose, standing upright facing the camera, arms stretched straight "
+    "out horizontally to both sides, palms down, fingers extended, legs "
+    "straight and slightly apart"
 )
+
+# Expression layer of both reference renders: deliberately neutral (the
+# character presets default to expressive looks, which would bake into 3D
+# textures). Verbatim expression content, no style fragments.
+REF_EXPRESSION_PROMPT = "neutral relaxed facial expression"
 
 REF_KINDS = ("tpose", "pose")
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
@@ -224,7 +232,7 @@ def generate_model_ref_images(character_name: str,
                 character_name, mood="", activity="",
                 equipped_pieces=pieces, equipped_items=items,
                 pose_prompt_override=prompts[kind],
-                include_expression=False,
+                expression_prompt_override=REF_EXPRESSION_PROMPT,
                 image_use_case="outfit",
                 output_stem=refs_dir / f"{kind}_{signature}")
             results[kind] = str(path) if path else None

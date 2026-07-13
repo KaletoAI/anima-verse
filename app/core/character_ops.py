@@ -3160,6 +3160,9 @@ def generate_all_outfit_images_worker(character_name, eligible, workflow_name, b
             "user_id": "",
             "auto_enhance": False,
             "skip_gallery": True,
+            # Same style layer as the single outfit-image path — without
+            # this the bulk path silently fell back to the "character" style.
+            "image_use_case": "outfit",
             "appearances": [{"name": character_name, "appearance": appearance or ""}],
             "profile_only": True,
         }
