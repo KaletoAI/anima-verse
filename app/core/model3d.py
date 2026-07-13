@@ -104,11 +104,18 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "") -> Dict[str, Any]:
     """Generates the mesh for the currently worn outfit from its T-pose render.
 
-    Cached per combination — an existing mesh is kept unless ``force``.
+    Backend: ``backend_glob`` → admin default (``image_generation.
+    mesh_imagegen_default``) → cheapest available mesh backend. Cached per
+    combination — an existing mesh is kept unless ``force``.
     Blocking (minutes); call from a worker thread.
     """
+    from app.core import config
     from app.imagegen.service import get_image_service
     from app.core.task_queue import get_task_queue
+
+    if not backend_glob:
+        backend_glob = str(
+            config.get("image_generation.mesh_imagegen_default", "") or "").strip()
 
     _, _, signature = _current_outfit_state(character_name)
     if not force:
