@@ -70,6 +70,13 @@ class ImageBackend(ABC):
         # Style/negative belong to the use cases, not to the backend.
         self.image_family = os.environ.get(f"{env_prefix}IMAGE_FAMILY", "").strip()
 
+        # Purpose category (txt2img / img2img / inpaint / img2mesh) — set for
+        # EVERY backend type, so an inpaint alias on any api_type is kept out
+        # of normal matching and offered as an inpaint target. Backends that
+        # need it for routing (openai_diffusion: /v1/images/edits vs
+        # /v1/images/generations) read the same attribute.
+        self.category = os.environ.get(f"{env_prefix}CATEGORY", "").strip().lower()
+
         # Reference-image slot budget (see DEFAULT_REF_SLOT_COUNT).
         _slots_str = os.environ.get(f"{env_prefix}REF_SLOT_COUNT", "").strip()
         try:

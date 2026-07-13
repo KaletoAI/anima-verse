@@ -51,7 +51,6 @@ class OpenAIMeshBackend(ImageBackend):
                          env_prefix=env_prefix)
         self.api_key = (api_key or os.environ.get(f"{env_prefix}API_KEY", "")).strip()
         self.model = (model or os.environ.get(f"{env_prefix}MODEL", "")).strip()
-        self.category = os.environ.get(f"{env_prefix}CATEGORY", "").strip().lower()
         self.timeout = int(os.environ.get(f"{env_prefix}TIMEOUT", "120") or 120)
         self.poll_interval = float(os.environ.get(f"{env_prefix}POLL_INTERVAL", "5.0") or 5.0)
         self.max_wait = int(os.environ.get(f"{env_prefix}MAX_WAIT", "900") or 900)

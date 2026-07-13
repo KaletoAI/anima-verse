@@ -42,11 +42,9 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         self.api_type = "openai_diffusion"
         rf = os.environ.get(f"{env_prefix}RESPONSE_FORMAT", "").strip().lower()
         self.response_format = rf if rf in ("b64_json", "url") else "b64_json"
-        # Purpose category (e.g. "inpaint") — controls which endpoint generates:
-        # "inpaint" -> POST /v1/images/edits (canvas + mask as two images),
-        # otherwise /v1/images/generations. Also marks the backend as an inpaint
-        # target for the map-fit/edge dialog.
-        self.category = os.environ.get(f"{env_prefix}CATEGORY", "").strip().lower()
+        # self.category (txt2img/img2img/inpaint) comes from the base class —
+        # here it also routes the request: "inpaint" -> POST /v1/images/edits
+        # (canvas + mask as two images), otherwise /v1/images/generations.
         # Default prompt (e.g. inpaint fill instruction) — fallback when the caller
         # provides no prompt.
         self.default_prompt = os.environ.get(f"{env_prefix}PROMPT", "").strip()
