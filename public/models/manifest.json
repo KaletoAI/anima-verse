@@ -16,45 +16,8 @@
       "height": 1.55
     },
     {
-      "name": "Kira",
-      "url": "/models/Kira-fixed.glb",
-      "height": 1.7,
-      "assignOnly": true,
-      "noClips": false
-    },
-    {
-      "name": "Bianca",
-      "url": "/models/Bianca-fixed.glb",
-      "height": 1.7,
-      "assignOnly": true
-    },
-    {
-      "name": "TestNeu",
-      "url": "/models/rigged_mia_20260712_191203.glb",
-      "height": 1.7,
-      "assignOnly": true
-    },
-    {
-      "name": "BiancaMax",
-      "url": "/models/BiancaMax_Textured_00001_mia.glb",
-      "height": 1.7,
-      "assignOnly": true
-    },
-    {
-      "name": "Better",
-      "url": "/models/Trellis2BetterTextured_00001__mia.glb",
-      "height": 1.7,
-      "assignOnly": true
-    },
-    {
-      "name": "Low",
-      "url": "/models/Bianca-Low_Textured_00001__mia.glb",
-      "height": 1.7,
-      "assignOnly": true
-    },
-    {
-      "name": "High20k",
-      "url": "/models/BiancaHigh_Textured_00001__mia.glb",
+      "name": "KiraFast",
+      "url": "/models/KiraFast_00002__mia.glb",
       "height": 1.7,
       "assignOnly": true
     },
@@ -63,20 +26,14 @@
       "url": "/models/BiancaHigh_Textured2_00006__mia.glb",
       "height": 1.7,
       "assignOnly": true
-    },
-    {
-      "name": "KiraFast",
-      "url": "/models/KiraFast_00002__mia.glb",
-      "height": 1.7,
-      "assignOnly": true
     }
   ],
   "assignments": {
+    "Kira": "KiraFast",
+    "Bianca Voss": "BiancaHigh2",
     "Damian Demo": "Robot",
     "Amelia Lane": "Xbot",
-    "Marcus Hale": "Soldier",
-    "Kira": "KiraFast",
-    "Bianca Voss": "BiancaHigh2"
+    "Marcus Hale": "Soldier"
   },
   "clipFiles": {
     "walk": "/models/Walking.fbx",
