@@ -12,6 +12,9 @@ anima-verse kodiert nichts davon fest.
 
 **Ergebnis:** genau **eine GLB-Datei** pro Auftrag (binär, unverändert aus
 ComfyUI) plus minimale Metadaten (Workflow-Kennung, Referenzbild, Hash).
+Die parallel erzeugte FBX (und der `.fbm`-Ordner) wird **nicht** gebraucht:
+gleicher Inhalt, aber Textur nur extern referenziert — das GLB trägt sie
+eingebettet. Nur die Animations-Clips sind FBX (reine Keyframes, s.u.).
 
 **Erwartungen an die GLB, damit der 3D-Client sie nutzen kann:**
 - ein Skin mit **Mixamo-Skelett** (52 Joints, `mixamorig:`-Namen) — darauf
