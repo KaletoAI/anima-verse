@@ -232,8 +232,9 @@ class ImageService:
         logger.info("Auto-Config fuer %s erstellt: %s", character_name, list(agent_config["instances"].keys()))
         return agent_config
 
-    def _select_backend_for_agent(self, character_name: str) -> Optional[ImageBackend]:
-        return self._pool._select_backend_for_agent(character_name)
+    def _select_backend_for_agent(self, character_name: str,
+                                  has_input_image: bool = False) -> Optional[ImageBackend]:
+        return self._pool._select_backend_for_agent(character_name, has_input_image)
 
     def resolve_imagegen_target(self, spec: str,
                                 preferred_backend: str = "",
@@ -241,8 +242,10 @@ class ImageService:
                                 ) -> Optional[ImageBackend]:
         return self._pool.resolve_imagegen_target(spec, preferred_backend, media)
 
-    def match_backend(self, pattern: str, media: str = "image") -> Optional[ImageBackend]:
-        return self._pool.match_backend(pattern, media=media)
+    def match_backend(self, pattern: str, media: str = "image",
+                      has_input_image: bool = False) -> Optional[ImageBackend]:
+        return self._pool.match_backend(pattern, media=media,
+                                        has_input_image=has_input_image)
 
     def list_available_backends(self, character_name: str = "",
                                 media: str = "image") -> List[ImageBackend]:
@@ -253,11 +256,13 @@ class ImageService:
         return self._pool.run_with_fallback(
             primary_backend, op, character_name, max_attempts)
 
-    def _wait_for_backend(self, character_name):
-        return self._pool._wait_for_backend(character_name)
+    def _wait_for_backend(self, character_name, has_input_image: bool = False):
+        return self._pool._wait_for_backend(character_name, has_input_image)
 
-    def _wait_for_explicit_backend(self, backend_name, media: str = "image"):
-        return self._pool._wait_for_explicit_backend(backend_name, media=media)
+    def _wait_for_explicit_backend(self, backend_name, media: str = "image",
+                                   has_input_image: bool = False):
+        return self._pool._wait_for_explicit_backend(
+            backend_name, media=media, has_input_image=has_input_image)
 
     def generate_video(self, source_image_path: str, action_prompt: str,
                        output_path: str, backend_glob: str = "",
@@ -912,14 +917,31 @@ class ImageService:
             # Bare glob: try as a backend glob, fall back to default selection.
             _soft_backend = _target_spec
 
+        # Will this render carry an input/reference image? Reference slots are
+        # only resolved AFTER the backend is known (the slot budget is the
+        # backend's), so decide it here from the request: an explicit reference,
+        # a profile-pinned render (variants/outfits), or a character that has a
+        # profile image to slot as its identity reference. With an image in
+        # play, matching prefers img2img backends (see _prefer_img2img).
+        _has_input_image = bool(input_data.get("profile_only")) or bool(
+            input_data.get("reference_images"))
+        if not _has_input_image and character_name:
+            try:
+                from app.models.character import get_character_profile_image
+                _has_input_image = bool(get_character_profile_image(character_name))
+            except Exception:
+                _has_input_image = False
+
         if explicit_backend:
             # Explicit backend — no fallback
-            backend = self._wait_for_explicit_backend(explicit_backend)
+            backend = self._wait_for_explicit_backend(
+                explicit_backend, has_input_image=_has_input_image)
             if not backend:
                 return f"Fehler: Backend '{explicit_backend}' nicht verfuegbar (Timeout)."
             logger.info("Explizites Backend: %s", explicit_backend)
         elif _soft_backend:
-            backend = self._wait_for_explicit_backend(_soft_backend)
+            backend = self._wait_for_explicit_backend(
+                _soft_backend, has_input_image=_has_input_image)
             if backend:
                 logger.info("Backend (Render-Match '%s'): %s", _soft_backend, backend.name)
             else:
@@ -928,7 +950,7 @@ class ImageService:
                     "Fallback auf Standard-Auswahl", _soft_backend)
 
         if not backend:
-            backend = self._wait_for_backend(character_name)
+            backend = self._wait_for_backend(character_name, _has_input_image)
         if not backend:
             return "Fehler: Keine Image-Generation Instanz ist aktuell verfuegbar (Timeout)."
 

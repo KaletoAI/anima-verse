@@ -80,19 +80,34 @@ class BackendPool:
 
     @staticmethod
     def _media_of(b: ImageBackend) -> str:
-        """Media kind of a backend ("image" default, or "video"). The pool keeps
-        the two apart so an image render never lands on a video backend and
-        vice-versa."""
+        """Media kind of a backend ("image" default, "video" or "mesh"). The
+        pool keeps them apart so an image render never lands on a video backend
+        and vice-versa."""
         return getattr(b, "MEDIA_TYPE", "image")
 
-    def _select_backend(self) -> Optional[ImageBackend]:
+    @staticmethod
+    def _prefer_img2img(candidates: List[ImageBackend],
+                        has_input_image: bool) -> List[ImageBackend]:
+        """When the render carries an input/reference image, narrow the field to
+        the backends tagged ``img2img`` — those are the models built for it.
+        Without such a candidate (or without an input image) nothing is
+        narrowed: the category is a preference, never a hard requirement."""
+        if not has_input_image:
+            return candidates
+        img2img = [b for b in candidates
+                   if getattr(b, "category", "") == "img2img"]
+        return img2img or candidates
+
+    def _select_backend(self, has_input_image: bool = False) -> Optional[ImageBackend]:
         """Picks the cheapest available and globally enabled IMAGE backend."""
         available = [b for b in self.backends if b.available and b.instance_enabled
                      and not self._is_inpaint_backend(b)
                      and self._media_of(b) == "image"]
+        available = self._prefer_img2img(available, has_input_image)
         return self.pick_lowest_cost(available, rotation_key="_select_backend")
 
-    def _select_backend_for_agent(self, character_name: str) -> Optional[ImageBackend]:
+    def _select_backend_for_agent(self, character_name: str,
+                                  has_input_image: bool = False) -> Optional[ImageBackend]:
         """Picks the cheapest instance taking the per-agent enabled flags into account."""
         agent_instances = self._agent_instances_provider(character_name)
 
@@ -112,6 +127,7 @@ class BackendPool:
                     continue
                 available.append(b)
 
+        available = self._prefer_img2img(available, has_input_image)
         return self.pick_lowest_cost(
             available, rotation_key=f"agent:{character_name}")
 
@@ -159,7 +175,8 @@ class BackendPool:
             return forced
         return self.match_backend(pat, media=media)
 
-    def match_backend(self, pattern: str, media: str = "image") -> Optional[ImageBackend]:
+    def match_backend(self, pattern: str, media: str = "image",
+                      has_input_image: bool = False) -> Optional[ImageBackend]:
         """Resolves a backend glob (e.g. ``"ComfyUI*"``, ``"Together*"``, ``"*"``)
         to a concrete, available backend — selection among several matches by
         cost. An exact name matches itself. ``None`` if empty / no available
@@ -185,6 +202,10 @@ class BackendPool:
                            if not self._is_inpaint_backend(b)]
             if non_inpaint:
                 matches = non_inpaint
+            # A glob leaves the choice to us — with an input image, prefer the
+            # img2img backends among the matches. An exact name never gets
+            # second-guessed.
+            matches = self._prefer_img2img(matches, has_input_image)
         if not matches:
             return None
         return self.pick_lowest_cost(matches, rotation_key=f"backend_match:{pat}")
@@ -332,7 +353,7 @@ class BackendPool:
             f"Fallback-Engine: alle {len(tried)} probierten Backends fehlgeschlagen "
             f"({', '.join(sorted(tried))}){_err_suffix}")
 
-    def _wait_for_backend(self, character_name):
+    def _wait_for_backend(self, character_name, has_input_image: bool = False):
         """Picks an available backend for this agent.
 
         Fail-fast: if NO backend is instance_enabled at all (i.e. structurally
@@ -368,7 +389,7 @@ class BackendPool:
         # call sees the fresh status.
         for b in plausible:
             b.check_availability()
-        backend = self._select_backend_for_agent(character_name)
+        backend = self._select_backend_for_agent(character_name, has_input_image)
         if backend:
             return backend
         logger.warning(
@@ -376,10 +397,11 @@ class BackendPool:
             "(channel_health pollt im Hintergrund weiter)")
         return None
 
-    def _wait_for_explicit_backend(self, backend_name, media: str = "image"):
+    def _wait_for_explicit_backend(self, backend_name, media: str = "image",
+                                   has_input_image: bool = False):
         """Resolves a backend glob (e.g. "ComfyUI*", "Together*") via the match
         concept to a concrete, available backend. An exact name matches itself.
-        ``media`` keeps image and video apart. Fail-fast: no polling — recovery
+        ``media`` keeps the media kinds apart. Fail-fast: no polling — recovery
         is detected by the background poller (channel_health) every 30s.
         """
         import fnmatch
@@ -389,7 +411,8 @@ class BackendPool:
             if (b.instance_enabled and self._media_of(b) == media
                     and fnmatch.fnmatch(b.name.lower(), pl)):
                 b.check_availability()
-        target = self.match_backend(backend_name, media=media)
+        target = self.match_backend(backend_name, media=media,
+                                    has_input_image=has_input_image)
         if not target:
             logger.warning("Backend '%s' nicht verfuegbar/kein Treffer — fail-fast", backend_name)
         return target

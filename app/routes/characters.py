@@ -402,7 +402,10 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
                 _ovr = (get_character_profile(character_name) or {}).get("outfit_imagegen") or {}
                 _glob = (_ovr.get("workflow") or "").strip() if isinstance(_ovr, dict) else ""
                 if _glob:
-                    eff = imagegen.match_backend(_glob)
+                    # Character renders pin the profile image as identity
+                    # reference -> same img2img preference the render applies,
+                    # so this LoRA list matches the backend that will run.
+                    eff = imagegen.match_backend(_glob, has_input_image=True)
             except Exception:
                 eff = None
         if not eff:
@@ -411,7 +414,8 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
             if _default:
                 eff = imagegen.resolve_imagegen_target(_default)
         if not eff and character_name:
-            eff = imagegen._select_backend_for_agent(character_name)
+            eff = imagegen._select_backend_for_agent(character_name,
+                                                     has_input_image=True)
         lib_names = get_lora_library_names(
             eff.name if eff else None,
             lora_filter=(getattr(eff, "lora_filter", "") or "") if eff else "")
