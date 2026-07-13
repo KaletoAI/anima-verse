@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
-import { FieldImage } from './FieldImage'
+import { FieldModelRefs } from './FieldModelRefs'
 import { PromptPreview } from './PromptPreview'
 
 // Anker-Positionen (x%, y%) im Bild-Koordinatensystem (silhouette.svg).
@@ -252,11 +252,11 @@ export function WardrobeTab({ character }: { character: string }) {
             depends on the worn outfit, so it lives with the wardrobe. */}
       </div>
 
-      {/* ── Rechts: Vorschaubild oben, Effektiv-Prompts unten — beides
-          aktualisiert mit jedem An-/Ausziehen (data reload). ── */}
+      {/* ── Right: reference renders (default pose + T-pose, replaces the
+          old single outfit preview) on top, effective prompts below. ── */}
       <div style={{ flex: '1 1 0', minWidth: 220, display: 'flex', flexDirection: 'column',
                     gap: 10, minHeight: 0, overflow: 'auto' }}>
-        <FieldImage character={character} kind="outfit" />
+        <FieldModelRefs character={character} />
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 8 }}>
           <PromptPreview character={character}
             refreshKey={JSON.stringify(data.equipped)} />

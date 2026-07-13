@@ -25,7 +25,8 @@ interface RefsInfo {
   pending?: boolean
 }
 
-const KINDS = ['tpose', 'pose'] as const
+// Display order: default pose first, T-pose second (wardrobe + 3D tab).
+const KINDS = ['pose', 'tpose'] as const
 
 export function FieldModelRefs({ character }: { character: string }) {
   const { t } = useI18n()
