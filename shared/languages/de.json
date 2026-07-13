@@ -129,7 +129,7 @@
     "Chat is busy right now — please wait a moment": "Chat ist gerade beschäftigt — bitte kurz warten",
     "Chat summary": "Chat-Summary",
     "Check failed": "Fehler beim Prüfen",
-    "Checked images are rendered automatically after outfit changes (debounced); Generate fires the same render immediately. The T-pose image feeds the image-to-3D pipeline.": "Angehakte Bilder werden nach Outfit-Wechseln automatisch gerendert (per Verzögerung gebündelt); Generieren startet denselben Render sofort. Das T-Pose-Bild ist das Input für die Bild→3D-Pipeline.",
+    "Checked images are rendered automatically after outfit changes (debounced, cached per outfit combination); Generate re-renders the current combination. The T-pose image feeds the image-to-3D pipeline.": "Angehakte Bilder werden nach Outfit-Wechseln automatisch gerendert (per Verzögerung gebündelt, gecacht pro Outfit-Kombination); Generieren rendert die aktuelle Kombination neu. Das T-Pose-Bild ist das Input für die Bild→3D-Pipeline.",
     "Checking connection…": "Prüfe Verbindung…",
     "Choose a character": "Character wählen",
     "Choose a location first": "Erst einen Ort waehlen",

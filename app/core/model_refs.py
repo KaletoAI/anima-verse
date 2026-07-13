@@ -97,32 +97,66 @@ def get_model_refs_dir(character_name: str) -> Path:
     return refs_dir
 
 
-def find_ref_image(character_name: str, kind: str) -> Optional[Path]:
-    """Path of the stored reference render of the given kind, or None."""
+def _current_outfit_state(character_name: str) -> tuple:
+    """(equipped_pieces, equipped_items, signature) of the CURRENT worn
+    state. The signature reuses the expression cache's equipped-signature
+    (pieces + items, stably sorted) so both caches agree on what counts as
+    "the same outfit combination"."""
+    import hashlib
+    from app.models.inventory import get_equipped_pieces, get_equipped_items
+    from app.core.expression_regen import _equipped_signature
+    pieces = get_equipped_pieces(character_name)
+    items = get_equipped_items(character_name)
+    sig = hashlib.md5(_equipped_signature(pieces, items).encode()).hexdigest()[:12]
+    return pieces, items, sig
+
+
+def find_ref_image(character_name: str, kind: str,
+                   signature: Optional[str] = None) -> Optional[Path]:
+    """Path of the stored render of this kind for the given outfit
+    combination (default: the currently worn one), or None."""
     if kind not in REF_KINDS:
         return None
+    if signature is None:
+        try:
+            _, _, signature = _current_outfit_state(character_name)
+        except Exception:
+            return None
     from app.models.character import get_character_dir
     refs_dir = get_character_dir(character_name) / "model_refs"
     for ext in _IMAGE_EXTS:
-        p = refs_dir / f"{kind}{ext}"
+        p = refs_dir / f"{kind}_{signature}{ext}"
         if p.exists():
             return p
     return None
 
 
+def _cleanup_legacy(refs_dir: Path, kind: str) -> None:
+    """Drops leftovers of the retired fixed-name scheme ({kind}.ext). The
+    per-combination cache itself is NOT pruned — its size is naturally
+    bounded by the number of outfit combinations actually worn."""
+    for ext in _IMAGE_EXTS + (".json",):
+        legacy = refs_dir / f"{kind}{ext}"
+        if legacy.exists():
+            legacy.unlink()
+
+
 def get_model_refs_info(character_name: str) -> Dict[str, Any]:
-    """Per-kind info for the UI: filename + sidecar meta (or None)."""
+    """Per-kind info for the UI — always for the CURRENTLY worn outfit
+    combination (filename + sidecar meta, or None if not rendered yet)."""
     import json
-    from app.models.character import get_character_dir
-    refs_dir = get_character_dir(character_name) / "model_refs"
-    out: Dict[str, Any] = {}
+    try:
+        _, _, signature = _current_outfit_state(character_name)
+    except Exception:
+        signature = ""
+    out: Dict[str, Any] = {"signature": signature}
     for kind in REF_KINDS:
-        path = find_ref_image(character_name, kind)
+        path = find_ref_image(character_name, kind, signature) if signature else None
         if not path:
             out[kind] = None
             continue
         info: Dict[str, Any] = {"filename": path.name}
-        meta_path = refs_dir / f"{kind}.json"
+        meta_path = path.with_suffix(".json")
         if meta_path.exists():
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -139,12 +173,16 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
 
 
 def generate_model_ref_images(character_name: str,
-                              kinds: Optional[tuple] = None) -> Dict[str, Optional[str]]:
+                              kinds: Optional[tuple] = None,
+                              force: bool = False) -> Dict[str, Optional[str]]:
     """Render the reference images sequentially (the image queue serializes
     per backend anyway). Blocking — call from a worker thread.
 
-    ``kinds`` None = exactly what the automatic outfit-change trigger would
-    render: the kinds enabled via the per-character toggles."""
+    Cached per outfit combination: kinds whose render for the CURRENT
+    combination already exists are skipped unless ``force`` — switching
+    back to a known outfit costs no GPU run. ``kinds`` None = exactly what
+    the automatic outfit-change trigger would render (per-character
+    toggles)."""
     from app.core.expression_regen import generate_expression_image
     from app.core.expression_pose_maps import default_pose_prompt
     from app.core.task_queue import get_task_queue
@@ -154,6 +192,17 @@ def generate_model_ref_images(character_name: str,
         kinds = tuple(k for k in REF_KINDS if auto.get(k))
     else:
         kinds = tuple(k for k in kinds if k in REF_KINDS)
+    if not kinds:
+        return {}
+
+    pieces, items, signature = _current_outfit_state(character_name)
+    if not force:
+        cached = tuple(k for k in kinds
+                       if find_ref_image(character_name, k, signature))
+        if cached:
+            logger.info("Model-Refs fuer %s: Kombination %s bereits gerendert (%s)",
+                        character_name, signature, ", ".join(cached))
+        kinds = tuple(k for k in kinds if k not in cached)
     if not kinds:
         return {}
 
@@ -173,14 +222,17 @@ def generate_model_ref_images(character_name: str,
         for kind in kinds:
             path = generate_expression_image(
                 character_name, mood="", activity="",
+                equipped_pieces=pieces, equipped_items=items,
                 pose_prompt_override=prompts[kind],
                 include_expression=False,
                 image_use_case="outfit",
-                output_stem=refs_dir / kind)
+                output_stem=refs_dir / f"{kind}_{signature}")
             results[kind] = str(path) if path else None
             if path is None:
                 error = f"{kind} render failed"
-        logger.info("Model-Refs fuer %s: %s", character_name,
+            else:
+                _cleanup_legacy(refs_dir, kind)
+        logger.info("Model-Refs fuer %s (%s): %s", character_name, signature,
                     {k: bool(v) for k, v in results.items()})
     finally:
         if task_id:
@@ -196,12 +248,12 @@ def _char_lock(character_name: str) -> threading.Lock:
         return _char_locks.setdefault(character_name, threading.Lock())
 
 
-def _run_generation(character_name: str) -> None:
-    # Serial per character; the equipped state is read at run time inside
-    # generate_expression_image, so the latest outfit always wins.
+def _run_generation(character_name: str, force: bool = False) -> None:
+    # Serial per character; the equipped state is read at run time, so the
+    # latest outfit always wins.
     with _char_lock(character_name):
         try:
-            generate_model_ref_images(character_name)
+            generate_model_ref_images(character_name, force=force)
         except Exception as e:
             logger.error("Model-Ref-Render fuer %s fehlgeschlagen: %s",
                          character_name, e)
@@ -235,10 +287,11 @@ def schedule_outfit_render(character_name: str) -> None:
 
 def trigger_now(character_name: str) -> None:
     """Manual trigger (UI button): fires the automatic outfit-change render
-    immediately — same per-image toggles, just without the debounce."""
+    immediately — same per-image toggles, no debounce, and force=True so a
+    fresh render replaces the cached one of the current combination."""
     with _lock:
         old = _pending_timers.pop(character_name, None)
         if old:
             old.cancel()
-    threading.Thread(target=_run_generation, args=[character_name],
+    threading.Thread(target=_run_generation, args=[character_name, True],
                      daemon=True).start()

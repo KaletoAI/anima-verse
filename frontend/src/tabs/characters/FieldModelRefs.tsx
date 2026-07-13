@@ -143,7 +143,7 @@ export function FieldModelRefs({ character }: { character: string }) {
         })}
       </div>
       <div className="ga-hint">
-        {t('Checked images are rendered automatically after outfit changes (debounced); Generate fires the same render immediately. The T-pose image feeds the image-to-3D pipeline.')}
+        {t('Checked images are rendered automatically after outfit changes (debounced, cached per outfit combination); Generate re-renders the current combination. The T-pose image feeds the image-to-3D pipeline.')}
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <button
