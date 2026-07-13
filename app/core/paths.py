@@ -52,6 +52,13 @@ def get_shared_dir() -> Path:
     return _project_root / "shared"
 
 
+def get_animation_clips_dir() -> Path:
+    """Shared 3D animation clips (Mixamo FBX, "Without Skin") — world-independent,
+    consumed by every 3D client. See the README in that folder for the hard
+    requirements (same rig source, no mesh)."""
+    return get_shared_dir() / "models" / "clips"
+
+
 def get_templates_dir() -> Path:
     """Character templates directory (shared across all worlds).
 

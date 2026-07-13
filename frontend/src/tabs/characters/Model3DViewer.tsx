@@ -12,8 +12,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { Material, Mesh, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 
-export function Model3DViewer({ url, format, height = 320 }:
-  { url: string; format: string; height?: number }) {
+export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
+  { url: string; format: string; clipUrl?: string; height?: number }) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -76,6 +76,21 @@ export function Model3DViewer({ url, format, height = 320 }:
         object.position.sub(center)
         scene.add(object)
 
+        // Animation clip (shared Mixamo FBX, "Without Skin" = keyframes only).
+        // It drives the model's own skeleton by bone name, so model and clip
+        // MUST come from the same rig — see shared/models/clips/README.md.
+        let mixer: InstanceType<typeof THREE.AnimationMixer> | null = null
+        if (clipUrl) {
+          const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
+          const clipObj = await new FBXLoader().loadAsync(clipUrl)
+          if (disposed) return
+          const clip = clipObj.animations?.[0]
+          if (!clip) throw new Error('Clip contains no animation track')
+          mixer = new THREE.AnimationMixer(object)
+          mixer.clipAction(clip).play()
+        }
+        const clock = new THREE.Clock()
+
         const maxDim = Math.max(size.x, size.y, size.z) || 1
         const dist = (maxDim / 2) / Math.tan((Math.PI * camera.fov) / 360)
         camera.position.set(0, 0, dist * 1.6)
@@ -90,6 +105,7 @@ export function Model3DViewer({ url, format, height = 320 }:
         let raf = 0
         const animate = () => {
           raf = requestAnimationFrame(animate)
+          if (mixer) mixer.update(clock.getDelta())
           controls.update()
           renderer.render(scene, camera)
         }
@@ -106,6 +122,7 @@ export function Model3DViewer({ url, format, height = 320 }:
         cleanup = () => {
           cancelAnimationFrame(raf)
           window.removeEventListener('resize', onResize)
+          mixer?.stopAllAction()
           controls.dispose()
           renderer.dispose()
           scene.traverse((o: Object3D) => {
@@ -129,7 +146,7 @@ export function Model3DViewer({ url, format, height = 320 }:
       disposed = true
       cleanup?.()
     }
-  }, [url, format, height])
+  }, [url, format, clipUrl, height])
 
   return (
     <div style={{ position: 'relative' }}>

@@ -181,3 +181,8 @@ node_modules/
 worlds/*/suitability_cases.json
 worlds/*/model_capabilities.json
 exports/
+
+# Shared 3D animation clips: binary Mixamo FBX, provided per installation
+shared/models/clips/*.fbx
+shared/models/clips/*.glb
+shared/models/clips/*.gltf

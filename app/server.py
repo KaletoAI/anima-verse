@@ -52,6 +52,7 @@ except Exception:
 from app.routes import auth, store, characters, chat, group_chat, scheduler, instagram, world, telegram, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
 from app.routes import admin_settings
 from app.routes import user_gallery
+from app.routes import assets
 from app.routes import secrets
 from app.routes import inventory
 from app.routes import account
@@ -405,6 +406,7 @@ app.middleware("http")(user_context_middleware)
 # Include routers
 app.include_router(auth.router)
 app.include_router(store.router)
+app.include_router(assets.router)
 app.include_router(characters.router)
 app.include_router(chat.router)
 app.include_router(group_chat.router, tags=["group_chat"])

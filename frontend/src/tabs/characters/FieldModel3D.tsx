@@ -33,6 +33,13 @@ interface Model3DStatus {
   pending?: boolean
 }
 
+interface AnimationClip {
+  kind: string
+  name: string
+  filename: string
+  url: string
+}
+
 export function FieldModel3D({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -40,6 +47,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const [st, setSt] = useState<Model3DStatus>({})
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [clips, setClips] = useState<AnimationClip[]>([])
+  const [clipUrl, setClipUrl] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
@@ -60,6 +69,13 @@ export function FieldModel3D({ character }: { character: string }) {
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [load])
+
+  // Shared animation clips (world-independent, same rig as the models).
+  useEffect(() => {
+    apiGet<{ clips?: AnimationClip[] }>('/assets/animation-clips')
+      .then((d) => setClips(d.clips || []))
+      .catch(() => setClips([]))
+  }, [])
 
   // Meshing takes minutes — poll until the backend reports it finished.
   const startPoll = useCallback(() => {
@@ -121,7 +137,28 @@ export function FieldModel3D({ character }: { character: string }) {
     <div className="ga-form">
       {model ? (
         <>
-          <Model3DViewer url={viewerUrl} format={model.format || 'fbx'} />
+          <Model3DViewer url={viewerUrl} format={model.format || 'fbx'} clipUrl={clipUrl} />
+          {clips.length ? (
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Animation')}</span>
+              <select
+                className="ga-input"
+                value={clipUrl}
+                onChange={(e) => setClipUrl(e.target.value)}
+              >
+                <option value="">{t('— none (static) —')}</option>
+                {clips.map((c) => (
+                  <option key={c.filename} value={c.url}>
+                    {c.kind} · {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div className="ga-hint">
+              {t('No animation clips — drop Mixamo FBX files ("Without Skin") into shared/models/clips/.')}
+            </div>
+          )}
           <div className="ga-hint">
             {(model.format || '').toUpperCase()}
             {sizeMb ? ` · ${sizeMb} MB` : ''}
