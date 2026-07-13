@@ -104,6 +104,19 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
   return fs.some((f) => !f.readonly)
 }
 
+// Special sections this editor can render (keys of `specialSlots` below).
+// A tab made up ONLY of special sections — like the 3D tab — is visible
+// exactly when its sections have a slot here; without this it would be
+// filtered out as "no generic fields".
+const SPECIAL_SLOTS = new Set([
+  'placement', 'body_editor', 'model3d', 'model_refs', 'model3d_gen',
+])
+
+function sectionIsRenderable(s: TmplSectionRaw): boolean {
+  if (s.special) return SPECIAL_SLOTS.has(String(s.special))
+  return sectionIsGeneric(s)
+}
+
 export function CharactersTab() {
   const { t, lang } = useI18n()
   const { toast } = useToast()
@@ -399,7 +412,7 @@ export function CharactersTab() {
     return tabs
       .filter((tb) => !tb.special && Array.isArray(tb.columns) && tb.columns.length > 0)
       .filter((tb) =>
-        secs.some((s) => sectionIsGeneric(s) && (tb.columns || []).includes(s.column || 1)),
+        secs.some((s) => sectionIsRenderable(s) && (tb.columns || []).includes(s.column || 1)),
       )
       .map((tb) => ({ id: `tab:${tb.id}`, label: tmplText(tb, 'label', lang) || tb.id, tab: tb }))
   }, [template, lang])
