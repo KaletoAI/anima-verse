@@ -1,5 +1,5 @@
 {
-  "comment": "Beispiel-Figuren (Stufe 1, AV3D-5). height = Zielgröße in Welteinheiten. assignments mappt Charakternamen fest auf ein Modell, sonst deterministische Zuweisung per Namens-Hash. Später ersetzt GET /characters/{name}/model diese Datei.",
+  "comment": "Fallback-Modelle für den Dev-/Offline-Betrieb (Demo-Welt). Charakter-Modelle und Animations-Clips kommen im Normalfall vom Server (AV3D-5: /characters/{name}/model3d, /assets/animation-clips); dieses Manifest greift nur, wenn der Server nichts liefert.",
   "defaultHeight": 1.75,
   "models": [
     {
@@ -14,23 +14,9 @@
       "name": "Robot",
       "url": "/models/RobotExpressive.glb",
       "height": 1.55
-    },
-    {
-      "name": "KiraFast",
-      "url": "/models/KiraFast_00002__mia.glb",
-      "height": 1.7,
-      "assignOnly": true
-    },
-    {
-      "name": "BiancaHigh2",
-      "url": "/models/BiancaHigh_Textured2_00006__mia.glb",
-      "height": 1.7,
-      "assignOnly": true
     }
   ],
   "assignments": {
-    "Kira": "KiraFast",
-    "Bianca Voss": "BiancaHigh2",
     "Damian Demo": "Robot",
     "Amelia Lane": "Xbot",
     "Marcus Hale": "Soldier"
@@ -38,7 +24,6 @@
   "clipFiles": {
     "walk": "/models/Walking.fbx",
     "sit": "/models/Sitting.fbx",
-    "idle": "/models/Idle.fbx",
-    "cmuwalk": "/models/CmuWalk.fbx"
+    "idle": "/models/Idle.fbx"
   }
 }

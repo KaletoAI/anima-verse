@@ -43,3 +43,36 @@ export async function getCharactersAtLocation(locationId: string): Promise<AtLoc
 export function mapIconUrl(locationId: string): string {
   return `/world/locations/${encodeURIComponent(locationId)}/map-icon-2d`;
 }
+
+// --- 3D-Assets (AV3D-5) ------------------------------------------------------
+
+export interface ApiClip {
+  kind: string;
+  name: string;
+  filename: string;
+  url: string;
+}
+
+/** Globale Animations-Bibliothek des Servers; leer, wenn nicht verfügbar. */
+export async function getAnimationClips(): Promise<ApiClip[]> {
+  try {
+    const res = await fetch('/assets/animation-clips');
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.clips ?? []) as ApiClip[];
+  } catch {
+    return [];
+  }
+}
+
+/** URL des Charakter-Modells; null wenn der Server keins hat (404). */
+export async function getCharacterModelUrl(name: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/characters/${encodeURIComponent(name)}/model3d`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.model?.url ?? null;
+  } catch {
+    return null;
+  }
+}

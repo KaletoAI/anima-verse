@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { seededRandom } from './textures';
+import { getAnimationClips, getCharacterModelUrl } from '../api';
 
 /**
  * Animierte 3D-Figuren für NPCs (Stufe 1 von AV3D-5): Modelle kommen aus
@@ -336,22 +337,37 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
   return out;
 }
 
-type ClipKind = 'idle' | 'walk' | 'run' | 'sit' | 'dance' | 'wave' | 'cmuwalk';
+type ClipKind = 'idle' | 'walk' | 'run' | 'sit' | 'lie' | 'dance' | 'wave';
 
 const CLIP_SYNONYMS: Record<ClipKind, string[]> = {
-  cmuwalk: ['cmuwalk'],
   idle: ['idle', 'stand', 'breath'],
   walk: ['walk'],
   run: ['run'],
   sit: ['sit'],
+  lie: ['lie', 'lay', 'sleep'],
   dance: ['dance', 'samba'],
   wave: ['wave', 'greet'],
 };
 
+/** Server-Kategorie/Dateiname -> Clip-Kategorie des Clients.
+ *  Der Server liefert Kinds wie "walking"/"sitting"/"female" — normalisieren. */
+function toClipKind(kind: string, name: string): ClipKind | null {
+  const s = `${kind} ${name}`.toLowerCase();
+  if (/\blay|lying|sleep/.test(s)) return 'lie';
+  if (/sit/.test(s)) return 'sit';
+  if (/run|jog|sprint/.test(s)) return 'run';
+  if (/walk/.test(s)) return 'walk';
+  if (/idle|stand|breath/.test(s)) return 'idle';
+  if (/dance/.test(s)) return 'dance';
+  if (/wave|greet/.test(s)) return 'wave';
+  return null;
+}
+
 /** Freitext-Activity -> Animations-Kategorie (Client-Workaround für AV3D-6). */
 export function activityToClipKind(activity: string): ClipKind {
   const a = activity.toLowerCase();
-  if (/sit|sitz|eat|ess|meeting|read|les|sleep|schlaf/.test(a)) return 'sit';
+  if (/sleep|schlaf|liege|lying|nap|bett/.test(a)) return 'lie';
+  if (/sit|sitz|eat|ess|meeting|read|les/.test(a)) return 'sit';
   if (/dance|tanz|party|feier/.test(a)) return 'dance';
   if (/wave|wink|greet|begrüß/.test(a)) return 'wave';
   return 'idle';
@@ -360,6 +376,13 @@ export function activityToClipKind(activity: string): ClipKind {
 export class FigureLibrary {
   private models: LoadedModel[] = [];
   private assignments: Record<string, string> = {};
+  /** Vom Server geladene Charakter-Modelle (null = Server hat keins). */
+  private apiModels = new Map<string, LoadedModel | null>();
+  private pending = new Set<string>();
+  private externalClips: THREE.AnimationClip[] = [];
+  private defaultHeight = 1.75;
+  /** wird gerufen, sobald ein nachgeladenes Charakter-Modell bereit ist */
+  onModelReady: ((charName: string) => void) | null = null;
 
   /** true, wenn mindestens ein Modell nutzbar ist; sonst Portrait-Fallback.
    *  opts.only: nur dieses Modell laden (Name oder Charaktername) —
@@ -438,9 +461,24 @@ export class FigureLibrary {
     // Modelle mit Skelett, aber ohne Clips (z.B. Make-It-Animatable-Rigs):
     // Clips vom ersten Modell MIT Animationen leihen und auf die
     // Ziel-Knochennamen umschreiben (mixamorig-Präfix-Mapping).
-    // Externe Mixamo-Clips laden (passen ohne Retargeting auf Mixamo-Rigs)
+    // Clips: bevorzugt die globale Bibliothek des Servers (AV3D-5),
+    // sonst die lokalen Manifest-Clips (Dev-/Offline-Betrieb).
+    const clipSources: Array<{ kind: ClipKind; url: string }> = [];
+    for (const c of await getAnimationClips()) {
+      const kind = toClipKind(c.kind, c.name);
+      // pro Kategorie den ersten Treffer nehmen (Server-Reihenfolge entscheidet)
+      if (kind && !clipSources.some((x) => x.kind === kind)) clipSources.push({ kind, url: c.url });
+    }
+    if (!clipSources.length) {
+      for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) {
+        const k = toClipKind(kind, kind);
+        if (k) clipSources.push({ kind: k, url });
+      }
+    } else {
+      console.info(`[figures] ${clipSources.length} Clips vom Server: ${clipSources.map((c) => c.kind).join(', ')}`);
+    }
     const externalClips: THREE.AnimationClip[] = [];
-    for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) {
+    for (const { kind, url } of clipSources) {
       try {
         const { animations } = await loadFile(url);
         if (animations[0]) {
@@ -449,9 +487,12 @@ export class FigureLibrary {
           externalClips.push(c);
         }
       } catch (e) {
-        console.warn('[figures] clipFile nicht ladbar:', url, e);
+        console.warn('[figures] Clip nicht ladbar:', url, e);
       }
     }
+    this.externalClips = externalClips;
+    this.defaultHeight = defaultHeight;
+    this.loadFile = loadFile;
 
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
@@ -471,10 +512,66 @@ export class FigureLibrary {
     return this.models.length > 0;
   }
 
-  /** Modellwahl: explizites Assignment, sonst deterministisch per Namens-Hash. */
+  private loadFile!: (url: string) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
+
+  /** Modell eines Charakters vom Server nachladen (einmal pro Name).
+   *  Ergebnis landet im Cache; onModelReady meldet die Fertigstellung. */
+  private fetchCharacterModel(charName: string) {
+    if (this.apiModels.has(charName) || this.pending.has(charName)) return;
+    this.pending.add(charName);
+    void (async () => {
+      try {
+        const url = await getCharacterModelUrl(charName);
+        if (!url) {
+          this.apiModels.set(charName, null);   // Server hat keins -> Portrait
+          return;
+        }
+        const model = await this.buildModel(charName, url);
+        this.apiModels.set(charName, model);
+        console.info(`[figures] ${charName}: Modell vom Server (${model.clips.length} Clips)`);
+        this.onModelReady?.(charName);
+      } catch (e) {
+        console.warn(`[figures] ${charName}: Modell nicht ladbar`, e);
+        this.apiModels.set(charName, null);
+      } finally {
+        this.pending.delete(charName);
+      }
+    })();
+  }
+
+  /** GLB laden, aufrichten, normalisieren, Clips anwenden. */
+  private async buildModel(name: string, url: string): Promise<LoadedModel> {
+    const gltf = await this.loadFile(url);
+    const template = gltf.scene;
+    const b = new THREE.Box3().setFromObject(template);
+    const s = b.getSize(new THREE.Vector3());
+    if (s.z > s.y * 1.5) {                       // Z-up-Export aufrichten
+      template.rotation.x = -Math.PI / 2;
+      template.updateMatrixWorld(true);
+    }
+    const bbox = new THREE.Box3().setFromObject(template);
+    const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
+    const height = this.defaultHeight;
+    const model: LoadedModel = {
+      name, template,
+      clips: gltf.animations.filter((c) => c.tracks.length > 0),
+      scale: height / rawHeight, height, assignOnly: true, noClips: false,
+    };
+    if (!model.clips.length && boneNames(template).size && this.externalClips.length) {
+      model.clips = adaptExternalClips(this.externalClips, template);
+    }
+    return model;
+  }
+
+  /** Modellwahl: Server-Modell > Manifest-Assignment > Pool (Demo-Welt). */
   instantiate(charName: string): Figure | null {
+    const api = this.apiModels.get(charName);
+    if (api) return new Figure(api);
+    if (api === undefined) this.fetchCharacterModel(charName);   // nachladen anstoßen
+    if (api === null) return null;                               // Server hat keins
+
     if (!this.models.length) return null;
-    const assigned = this.assignments[charName] ?? charName; // direkter Modellname zählt auch
+    const assigned = this.assignments[charName] ?? charName;
     let model = this.models.find((m) => m.name === assigned);
     if (!model) {
       const pool = this.models.filter((m) => !m.assignOnly);

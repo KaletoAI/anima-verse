@@ -29,13 +29,18 @@ async function boot() {
 async function startApp(username: string) {
   const engine = new Engine(app);
   const figures = new FigureLibrary();
-  const [allLocs, firstMap, figuresOk] = await Promise.all([
+  const [allLocs, firstMap] = await Promise.all([
     api.getLocations(),
     api.getWorldMap(),
     figures.load(),
   ]);
-  const npcs = new NpcManager(figuresOk ? figures : null);
+  const npcs = new NpcManager(figures);
   engine.scene.add(npcs.group);
+  // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
+  figures.onModelReady = (charName) => {
+    npcs.rebuild(charName);
+    if (lastMap) npcs.update(computeNpcStates(lastMap));
+  };
   const panel = new InfoPanel();
 
   const hud = createHud({

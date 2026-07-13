@@ -100,6 +100,17 @@ export class NpcManager {
     this.avatarName = name;
   }
 
+  /** NPC verwerfen, damit er beim nächsten update() neu gebaut wird —
+   *  z.B. wenn sein 3D-Modell vom Server nachgeladen wurde. */
+  rebuild(charName: string) {
+    const npc = this.npcs.get(charName);
+    if (!npc) return;
+    this.group.remove(npc.root);
+    if (npc.travelLine) this.group.remove(npc.travelLine);
+    npc.label.element.remove();
+    this.npcs.delete(charName);
+  }
+
   /** Soll-Zustand aus dem Worldmap-Poll übernehmen. */
   update(states: NpcState[]) {
     const seen = new Set<string>();

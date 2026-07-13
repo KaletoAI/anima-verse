@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
 const target = process.env.ANIMA_API ?? 'http://localhost:8000';
-const proxied = ['/auth', '/play', '/world', '/characters', '/state', '/events'];
+const proxied = ['/auth', '/play', '/world', '/characters', '/state', '/events', '/assets'];
 
 export default defineConfig({
   server: {
