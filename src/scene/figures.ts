@@ -336,9 +336,10 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
   return out;
 }
 
-type ClipKind = 'idle' | 'walk' | 'run' | 'sit' | 'dance' | 'wave';
+type ClipKind = 'idle' | 'walk' | 'run' | 'sit' | 'dance' | 'wave' | 'cmuwalk';
 
 const CLIP_SYNONYMS: Record<ClipKind, string[]> = {
+  cmuwalk: ['cmuwalk'],
   idle: ['idle', 'stand', 'breath'],
   walk: ['walk'],
   run: ['run'],

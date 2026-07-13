@@ -38,6 +38,7 @@
   "clipFiles": {
     "walk": "/models/Walking.fbx",
     "sit": "/models/Sitting.fbx",
-    "idle": "/models/Idle.fbx"
+    "idle": "/models/Idle.fbx",
+    "cmuwalk": "/models/CmuWalk.fbx"
   }
 }
