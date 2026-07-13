@@ -1653,6 +1653,22 @@ def get_equipped_item_ids(character_name: str) -> List[str]:
     return dedup
 
 
+def _notify_outfit_changed(character_name: str, source: str) -> None:
+    """Single funnel for "worn state changed": SSE outfit event + debounced
+    3D reference renders (T-pose + default pose, app/core/model_refs.py).
+    All five worn-state mutations below go through here."""
+    try:
+        from app.core.outfit_events import publish as _publish_outfit
+        _publish_outfit(character_name, source)
+    except Exception as _pe:
+        logger.debug("%s outfit-event publish failed: %s", source, _pe)
+    try:
+        from app.core.model_refs import schedule_outfit_render
+        schedule_outfit_render(character_name)
+    except Exception as _re:
+        logger.debug("%s model-ref schedule failed: %s", source, _re)
+
+
 def equip_piece(character_name: str, item_id: str) -> Dict[str, Any]:
     """Legt ein Outfit-Piece an. Belegt alle Slots aus item.outfit_piece.slots
     symmetrisch und verdraengt jedes Piece, das aktuell in einem dieser Slots sitzt.
@@ -1729,11 +1745,7 @@ def equip_piece(character_name: str, item_id: str) -> Dict[str, Any]:
     logger.info("equip_piece [%s]: slots=%s item=%s%s",
                 character_name, slots, item_id,
                 f" (verdraengt {displaced})" if displaced else "")
-    try:
-        from app.core.outfit_events import publish as _publish_outfit
-        _publish_outfit(character_name, "equip_piece")
-    except Exception as _pe:
-        logger.debug("equip_piece outfit-event publish fehlgeschlagen: %s", _pe)
+    _notify_outfit_changed(character_name, "equip_piece")
     return {"status": "ok", "slots": slots, "displaced": displaced}
 
 
@@ -1773,11 +1785,7 @@ def unequip_piece(character_name: str,
     save_character_profile(character_name, profile)
     logger.info("unequip_piece [%s]: item=%s slots=%s",
                 character_name, removed, cleared_slots)
-    try:
-        from app.core.outfit_events import publish as _publish_outfit
-        _publish_outfit(character_name, "unequip_piece")
-    except Exception as _pe:
-        logger.debug("unequip_piece outfit-event publish fehlgeschlagen: %s", _pe)
+    _notify_outfit_changed(character_name, "unequip_piece")
     return {"status": "ok", "slot": target_slot, "item_id": removed,
             "cleared_slots": cleared_slots}
 
@@ -1804,11 +1812,7 @@ def equip_item(character_name: str, item_id: str) -> Dict[str, Any]:
     profile["equipped_items"] = items
     save_character_profile(character_name, profile)
     logger.info("equip_item [%s]: %s", character_name, item_id)
-    try:
-        from app.core.outfit_events import publish as _publish_outfit
-        _publish_outfit(character_name, "equip_item")
-    except Exception as _pe:
-        logger.debug("equip_item outfit-event publish fehlgeschlagen: %s", _pe)
+    _notify_outfit_changed(character_name, "equip_item")
     return {"status": "ok"}
 
 
@@ -1824,11 +1828,7 @@ def unequip_item(character_name: str, item_id: str) -> Dict[str, Any]:
     profile["equipped_items"] = items
     save_character_profile(character_name, profile)
     logger.info("unequip_item [%s]: %s", character_name, item_id)
-    try:
-        from app.core.outfit_events import publish as _publish_outfit
-        _publish_outfit(character_name, "unequip_item")
-    except Exception as _pe:
-        logger.debug("unequip_item outfit-event publish fehlgeschlagen: %s", _pe)
+    _notify_outfit_changed(character_name, "unequip_item")
     return {"status": "ok"}
 
 
@@ -2030,11 +2030,7 @@ def apply_equipped_pieces(character_name: str, *,
         logger.info(
             "apply_equipped_pieces [%s] source=%s pieces=%d items=%d changed=1",
             character_name, source or "?", len(target_pieces), len(target_items))
-        try:
-            from app.core.outfit_events import publish as _publish_outfit
-            _publish_outfit(character_name, source)
-        except Exception as _pe:
-            logger.debug("outfit-event publish fehlgeschlagen: %s", _pe)
+        _notify_outfit_changed(character_name, source)
 
     return {
         "status": "ok",

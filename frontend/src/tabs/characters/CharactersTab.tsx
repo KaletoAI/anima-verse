@@ -19,6 +19,7 @@ import { type TmplSection } from './TemplateSectionForm'
 import { TemplateTab } from './TemplateTab'
 import { BodyEditor } from './BodyEditor'
 import { FieldModel } from './FieldModel'
+import { FieldModelRefs } from './FieldModelRefs'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from './TemplateField'
 import { SecretsEditor } from './SecretsEditor'
@@ -579,6 +580,7 @@ export function CharactersTab() {
                       placement: placementUI,
                       body_editor: <BodyEditor character={selected} />,
                       model3d: <FieldModel character={selected} />,
+                      model_refs: <FieldModelRefs character={selected} />,
                     }}
                   />
                 ) : null

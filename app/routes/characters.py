@@ -1336,6 +1336,40 @@ def delete_character_model_endpoint(character_name: str) -> Dict[str, Any]:
     return {"status": "success"}
 
 
+# --- 3D reference renders (T-pose / default pose, app/core/model_refs.py) ---
+
+@router.get("/{character_name}/model-refs")
+def get_character_model_refs(character_name: str) -> Dict[str, Any]:
+    """Info about the stored reference renders ({tpose, pose, pending})."""
+    from app.core.model_refs import get_model_refs_info
+    return get_model_refs_info(character_name)
+
+
+@router.post("/{character_name}/model-refs/generate")
+def generate_character_model_refs(character_name: str) -> Dict[str, Any]:
+    """Manually renders the T-pose + default-pose pair (skips the debounce)."""
+    from app.core.model_refs import trigger_now
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    trigger_now(character_name)
+    return {"status": "generating"}
+
+
+@router.get("/{character_name}/model-refs/{kind}")
+def get_character_model_ref_image(character_name: str, kind: str):
+    """Serves a reference render (kind: tpose|pose); 404 when absent."""
+    from fastapi.responses import Response
+    from app.core.model_refs import REF_KINDS, find_ref_image
+    if kind not in REF_KINDS:
+        raise HTTPException(status_code=400, detail="kind must be tpose|pose")
+    path = find_ref_image(character_name, kind)
+    if not path:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media_type, _ = mimetypes.guess_type(str(path))
+    return FileResponse(path, media_type=media_type or "application/octet-stream",
+                        headers={"Cache-Control": "no-cache"})
+
+
 @router.post("/{character_name}/images/{image_filename}/comment")
 async def save_image_comment_endpoint(character_name: str, image_filename: str, request: Request) -> Dict[str, Any]:
     """Speichert einen Kommentar fuer ein Bild"""

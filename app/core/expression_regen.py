@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional, Set
 from app.core.log import get_logger
 from app.core.expression_pose_maps import (
     DEFAULT_EXPRESSION,
-    DEFAULT_POSE,
+    default_pose_prompt,
     is_partner_activity,
     mood_bucket,
     resolve_expression_prompt,
@@ -827,11 +827,24 @@ def generate_expression_image(character_name: str,
                               mood: str, activity: str,
                               equipped_pieces: Optional[Dict[str, str]] = None,
                               equipped_items: Optional[list] = None,
-                              prompt_prefix: str = "") -> Optional[Path]:
+                              prompt_prefix: str = "",
+                              pose_prompt_override: Optional[str] = None,
+                              include_expression: bool = True,
+                              image_use_case: str = "expression",
+                              output_stem: Optional[Path] = None) -> Optional[Path]:
     """Generate an expression/pose variant.
 
-    Character + Equipped-Items + Pose + Expression -> Text-Prompt-basierte
-    Bildgenerierung. Kein Outfit-Referenzbild noetig.
+    Character + equipped items + pose + expression -> text-prompt-based
+    image generation. No outfit reference image needed.
+
+    Reference-render extras (model_refs, AV3D):
+    - ``pose_prompt_override`` uses the given pose text verbatim (bypasses
+      activity resolution and the default pose).
+    - ``include_expression=False`` omits the expression fragment.
+    - ``image_use_case`` picks the style use case (default "expression").
+    - ``output_stem`` (path without extension) stores the result there
+      instead of the expression-variant cache — no cache bookkeeping, no
+      pose-variant analysis.
 
     Returns the path to the generated image, or None on failure.
     """
@@ -875,23 +888,28 @@ def generate_expression_image(character_name: str,
                 character_name, mood, activity,
                 len(equipped_pieces or {}), len(equipped_items or []))
 
-    # Resolve prompts via PromptBuilder — separiert fuer korrekte Reihenfolge
+    # Resolve prompts via PromptBuilder — separated for correct ordering
     from app.core.prompt_builder import PromptBuilder
-    expression_prompt = resolve_expression_prompt(mood) if mood else DEFAULT_EXPRESSION
-    # Pose-Preset ("The person is seated…") ist menschzentriert. Nur fuer
-    # menschartige Characters anwenden; Tiere bekommen den rohen Aktivitaets-
-    # Text als Pose ("sleeping", "lying down") — das Bildmodell setzt das auf
-    # ihre Anatomie um, ohne menschliche Pose-Schablone.
+    if include_expression:
+        expression_prompt = resolve_expression_prompt(mood) if mood else DEFAULT_EXPRESSION
+    else:
+        expression_prompt = ""
+    # Pose presets ("The person is seated…") are human-centric. Apply them
+    # only for humanoid characters; animals get the raw activity text as the
+    # pose ("sleeping", "lying down") — the image model maps that onto their
+    # anatomy without a human pose template.
     _humanoid = True
     try:
         from app.models.character_template import is_feature_enabled as _ife
         _humanoid = _ife(character_name, "humanoid")
     except Exception:
         pass
-    if activity:
+    if pose_prompt_override is not None:
+        pose_prompt = pose_prompt_override.strip()
+    elif activity:
         pose_prompt = resolve_pose_prompt(activity) if _humanoid else activity.strip()
     else:
-        pose_prompt = DEFAULT_POSE if _humanoid else ""
+        pose_prompt = default_pose_prompt() if _humanoid else ""
 
     # Active states (drunk, aroused, ...) flow into the appearance via
     # prompt_filters.apply_image_modifiers (PromptBuilder person path) —
@@ -1030,7 +1048,7 @@ def generate_expression_image(character_name: str,
             _have.add(str(_sl.get("name")))
     if _merged_loras:
         payload["loras"] = _merged_loras
-    payload["image_use_case"] = "expression"
+    payload["image_use_case"] = image_use_case
 
     try:
         img_result = image_skill.generate_from_input(json.dumps(payload))
@@ -1064,11 +1082,18 @@ def generate_expression_image(character_name: str,
             logger.warning("Generiertes Bild nicht gefunden: %s", src_path)
             return None
 
-        # Post-process (rembg + crop) in temporaerem Pfad,
-        # erst danach in Cache verschieben — verhindert dass das Frontend
-        # das unverarbeitete Bild per Polling abholt.
-        expr_dir = _get_expressions_dir(character_name)
-        tmp_path = expr_dir / f".tmp_{cache_key}{src_path.suffix}"
+        # Post-process (rembg + crop) in a temporary path, then move into
+        # place — prevents the frontend from picking up the unprocessed
+        # image via polling. With output_stem the target is the model_refs
+        # location instead of the expression-variant cache.
+        if output_stem is not None:
+            out_dir = output_stem.parent
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_stem_name = output_stem.name
+        else:
+            out_dir = _get_expressions_dir(character_name)
+            out_stem_name = cache_key
+        tmp_path = out_dir / f".tmp_{out_stem_name}{src_path.suffix}"
         shutil.move(str(src_path), str(tmp_path))
 
         try:
@@ -1077,15 +1102,21 @@ def generate_expression_image(character_name: str,
             logger.warning("Post-Processing fehlgeschlagen, nutze Original: %s", pp_err)
             final_tmp = tmp_path
 
-        # Atomar in den Cache-Pfad umbenennen
-        final_path = expr_dir / f"{cache_key}{final_tmp.suffix}"
+        # Rename atomically into the target path
+        final_path = out_dir / f"{out_stem_name}{final_tmp.suffix}"
+        if output_stem is not None:
+            # Fixed stem: drop a stale ref with a different extension
+            # (e.g. old tpose.jpg being replaced by tpose.png).
+            for _old in out_dir.glob(f"{out_stem_name}.*"):
+                if _old.suffix.lower() != ".json" and _old != final_path:
+                    _old.unlink()
         final_tmp.rename(final_path)
-        # Temporaere Datei aufräumen falls anderer Suffix (z.B. .jpg -> .png)
+        # Clean up the temp file if the suffix changed (e.g. .jpg -> .png)
         if tmp_path != final_tmp and tmp_path.exists():
             tmp_path.unlink()
 
-        # Cleanup: alle liegen gebliebenen temp-Dateien entfernen
-        _cleanup_stale_temps(expr_dir)
+        # Cleanup: remove any leftover temp files
+        _cleanup_stale_temps(out_dir)
 
         # Metadaten-JSON neben das Bild speichern. equipped_pieces/items werden
         # hier festgehalten, damit invalidate_variants_for_item gezielt nur die
@@ -1122,11 +1153,13 @@ def generate_expression_image(character_name: str,
 
         logger.info("Expression-Bild generiert: %s", final_path.name)
 
-        # Visual-Analyse fuer frische Pose-Variants triggern (Schritt 5e).
-        # Idempotent ueber example_image: nur wenn leer (= noch nie analysiert)
-        # → Worker schreibt es spaeter mit dem Pfad.
+        # Trigger visual analysis for fresh pose variants (step 5e).
+        # Idempotent via example_image: only when empty (= never analyzed)
+        # → the worker fills in the path later. Not applicable to reference
+        # renders stored outside the variant cache.
         try:
-            variant_id = _resolve_variant_for_cache(character_name, activity)
+            variant_id = None if output_stem is not None else \
+                _resolve_variant_for_cache(character_name, activity)
             if variant_id:
                 from app.core.pose_variants import (
                     get_variant, set_example_image,

@@ -210,6 +210,23 @@ logger.info("Mood-Buckets geladen: %d Eintraege, default='%s'",
 # ---------------------------------------------------------------------------
 
 
+def default_pose_prompt() -> str:
+    """Default pose prompt: admin override or the pose_presets.json default.
+
+    The admin setting (image_generation.default_pose_prompt, editable at
+    /admin/settings) wins when set; empty means the built-in ``_default``
+    entry of pose_presets.json (DEFAULT_POSE). Read fresh on every call so
+    config changes apply without restart."""
+    try:
+        from app.core import config
+        override = (config.get("image_generation.default_pose_prompt", "") or "").strip()
+        if override:
+            return override
+    except Exception:
+        pass
+    return DEFAULT_POSE
+
+
 def get_expression_prompt(mood: str) -> Optional[str]:
     """Look up expression prompt from presets. Returns None if not found."""
     if not mood:
@@ -226,7 +243,7 @@ def get_expression_prompt(mood: str) -> Optional[str]:
 def get_pose_prompt(activity: str) -> Optional[str]:
     """Look up pose prompt from presets. Returns None if not found."""
     if not activity:
-        return DEFAULT_POSE
+        return default_pose_prompt()
     key = activity.strip().lower()
     if key in POSE_PRESETS:
         return POSE_PRESETS[key]
@@ -321,7 +338,7 @@ def resolve_pose_prompt(activity: str) -> str:
     result = _llm_generate_and_save("pose", activity)
     if result:
         return result
-    return DEFAULT_POSE
+    return default_pose_prompt()
 
 
 # ---------------------------------------------------------------------------

@@ -274,6 +274,16 @@ SECTIONS = {
             "mapfit_imagegen_default": {"type": "imagegen_select", "label": "Map Fit/Match-edges target", "default": "", "description": "Imagegen target (backend-name glob) for 'Fit to neighbors' and 'Match edges'. Must resolve to a category=inpaint backend, which generates via POST /v1/images/edits (canvas + mask as two images)."},
             "map_tile_vision_analysis": {"type": "bool", "label": "Analyze neighbor tiles for map prompts", "default": False, "description": "For Fit/Match-edges: run a short vision-LLM analysis of each neighbour's ACTUAL 2D tile to build the north/south/east/west prompt (instead of the stored description, which drifts after regeneration). Cached per tile — re-analysed only when a tile changes. Costs one vision call per new tile."},
 
+            # --- 3D reference renders (T-pose / default pose) ---
+            # Placeholders kept IN SYNC with TPOSE_PROMPT_DEFAULT in
+            # app/core/model_refs.py and with the "_default" entry of
+            # shared/templates/pose/pose_presets.json. EMPTY = built-in
+            # default (shown greyed, never persisted).
+            "tpose_prompt": {"type": "text", "label": "T-pose prompt", "placeholder": "full body T-pose, standing upright facing the camera, arms stretched straight out horizontally to both sides, palms down, fingers extended, legs straight and slightly apart, neutral relaxed face, even lighting", "description": "Pose prompt for the T-pose reference render (input for image-to-3D/rigging chains). EMPTY = built-in default."},
+            "default_pose_prompt": {"type": "text", "label": "Default pose prompt", "placeholder": "standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up", "description": "Replaces the built-in default pose EVERYWHERE it applies: expression variants without an activity, wardrobe outfit previews and the default-pose reference render. EMPTY = built-in default from pose_presets.json."},
+            "model_ref_renders_enabled": {"type": "bool", "label": "Reference renders on outfit change", "default": True, "description": "After an outfit change (equip/unequip/outfit switch), automatically render the T-pose + default-pose reference pair in the character's current outfit (stored under characters/<name>/model_refs/, separate from expression variants). Shown on the character editor's 3D tab."},
+            "model_ref_debounce_seconds": {"type": "int", "label": "Outfit render debounce (s)", "default": 60, "min": 5, "max": 3600, "description": "Wait this long after the LAST outfit mutation before rendering — getting fully dressed changes several pieces in quick succession and must trigger ONE render pair, not one per piece. Every further change within the window resets the timer."},
+
             # --- Prompt-Prefixes ---
 
             # --- Outfit-Bild Groesse ---

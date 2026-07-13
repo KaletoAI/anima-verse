@@ -56,6 +56,15 @@
       ]
     },
     {
+      "id": "model3d_tab",
+      "label": "3D",
+      "label_de": "3D",
+      "columns": [
+        24,
+        25
+      ]
+    },
+    {
       "id": "activities",
       "label": "Activities",
       "label_de": "Aktivitäten",
@@ -96,9 +105,18 @@
       "id": "model3d",
       "label": "3D model",
       "label_de": "3D-Modell",
-      "column": 6,
-      "row": 5,
+      "column": 24,
+      "row": 0,
       "special": "model3d",
+      "fields": []
+    },
+    {
+      "id": "model_refs",
+      "label": "Reference renders (T-pose / default pose)",
+      "label_de": "Referenz-Renders (T-Pose / Standard-Pose)",
+      "column": 25,
+      "row": 0,
+      "special": "model_refs",
       "fields": []
     },
     {

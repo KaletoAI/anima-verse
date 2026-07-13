@@ -83,7 +83,7 @@ def _build_outfit_image_prompt(character_name: str, outfit_description: str) -> 
     """Builds the prompt for an outfit image (separated: character + outfit + pose + expression)."""
     import os
     from app.core.prompt_builder import PromptBuilder
-    from app.core.expression_pose_maps import DEFAULT_EXPRESSION, DEFAULT_POSE
+    from app.core.expression_pose_maps import DEFAULT_EXPRESSION, default_pose_prompt
 
     _builder = PromptBuilder(character_name)
     _persons = _builder.detect_persons("", character_names=[character_name])
@@ -94,7 +94,7 @@ def _build_outfit_image_prompt(character_name: str, outfit_description: str) -> 
     character_prompt = f"{_actor}, {_appearance}"
     outfit_prompt = f"{_actor} is wearing {outfit_description}"
     return ", ".join(p for p in [
-        character_prompt, outfit_prompt, DEFAULT_POSE, DEFAULT_EXPRESSION,
+        character_prompt, outfit_prompt, default_pose_prompt(), DEFAULT_EXPRESSION,
     ] if p)
 
 
