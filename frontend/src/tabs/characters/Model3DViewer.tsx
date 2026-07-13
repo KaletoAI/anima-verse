@@ -43,11 +43,21 @@ export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
         renderer.setSize(width, height)
         mount.appendChild(renderer.domElement)
 
-        // Flat, even lighting — the mesh is inspected, not staged.
-        scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2.2))
-        const dir = new THREE.DirectionalLight(0xffffff, 1.2)
-        dir.position.set(1, 2, 3)
-        scene.add(dir)
+        // Bright, flat, even lighting — the mesh is inspected, not staged.
+        // three.js uses physical light units, so a single dim key light leaves
+        // the model near-black: ambient + hemisphere + a 3-point rig.
+        scene.add(new THREE.AmbientLight(0xffffff, 2.0))
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 3.0))
+        const key = new THREE.DirectionalLight(0xffffff, 3.0)
+        key.position.set(1, 2, 3)
+        scene.add(key)
+        const fill = new THREE.DirectionalLight(0xffffff, 1.5)
+        fill.position.set(-2, 1, 2)
+        scene.add(fill)
+        const back = new THREE.DirectionalLight(0xffffff, 1.5)
+        back.position.set(0, 1, -3)
+        scene.add(back)
+        renderer.toneMappingExposure = 1.2
 
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.enableDamping = true
@@ -69,12 +79,12 @@ export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
         }
         if (disposed) return
 
-        // Frame the model: centre it and pull the camera back to fit.
-        const box = new THREE.Box3().setFromObject(object)
-        const size = box.getSize(new THREE.Vector3())
-        const center = box.getCenter(new THREE.Vector3())
-        object.position.sub(center)
-        scene.add(object)
+        // A pivot carries the orientation fix: the clip animates the model's
+        // OWN root bone, so rotating the model itself would fight the
+        // animation. The pivot sits above it, untouched by the mixer.
+        const pivot = new THREE.Group()
+        pivot.add(object)
+        scene.add(pivot)
 
         // Animation clip (shared Mixamo FBX, "Without Skin" = keyframes only).
         // It drives the model's own skeleton by bone name, so model and clip
@@ -86,10 +96,41 @@ export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
           if (disposed) return
           const clip = clipObj.animations?.[0]
           if (!clip) throw new Error('Clip contains no animation track')
+          // Play IN PLACE: drop the root/hips position track. Otherwise a walk
+          // clip with root motion carries the figure out of frame — and the
+          // track is in the clip's units (Mixamo: centimetres), which would
+          // fling a differently scaled model across the scene.
+          clip.tracks = clip.tracks.filter(
+            (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')),
+          )
           mixer = new THREE.AnimationMixer(object)
           mixer.clipAction(clip).play()
+          mixer.update(0)  // apply frame 0, so the pose below is measured
         }
         const clock = new THREE.Clock()
+
+        // Up-axis fix: Mixamo clips are Y-up, the generated meshes are not
+        // necessarily — a mismatch animates the figure lying on its belly.
+        // Rather than guess the sign, MEASURE: a standing figure is taller
+        // than it is deep, so try the candidate rotations and keep the one
+        // with the most upright bounding box.
+        const measure = (rx: number) => {
+          pivot.rotation.x = rx
+          pivot.updateMatrixWorld(true)
+          const s = new THREE.Box3().setFromObject(pivot).getSize(new THREE.Vector3())
+          return { rx, upright: s.y / Math.max(s.x, s.z, 1e-6) }
+        }
+        const best = [0, -Math.PI / 2, Math.PI / 2]
+          .map(measure)
+          .reduce((a, b) => (b.upright > a.upright ? b : a))
+        pivot.rotation.x = best.rx
+        pivot.updateMatrixWorld(true)
+
+        // Frame the model: centre it and pull the camera back to fit.
+        const box = new THREE.Box3().setFromObject(pivot)
+        const size = box.getSize(new THREE.Vector3())
+        const center = box.getCenter(new THREE.Vector3())
+        pivot.position.sub(center)
 
         const maxDim = Math.max(size.x, size.y, size.z) || 1
         const dist = (maxDim / 2) / Math.tan((Math.PI * camera.fov) / 360)
