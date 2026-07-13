@@ -233,7 +233,9 @@ def generate_model_ref_images(character_name: str,
                 equipped_pieces=pieces, equipped_items=items,
                 pose_prompt_override=prompts[kind],
                 expression_prompt_override=REF_EXPRESSION_PROMPT,
-                image_use_case="outfit",
+                # tpose has its own style (flat shadowless light for
+                # image->3D input); the default-pose ref shares "outfit".
+                image_use_case="tpose" if kind == "tpose" else "outfit",
                 output_stem=refs_dir / f"{kind}_{signature}")
             results[kind] = str(path) if path else None
             if path is None:

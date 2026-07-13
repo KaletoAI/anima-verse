@@ -178,6 +178,22 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the full outfit head-to-toe against a plain background. Do not mention pose or facial expression.",
         },
     },
+    # Style for the T-pose reference render (image->3D / texture-baking
+    # input): flat shadowless light — shadows would bake into the 3D
+    # texture. Deliberately NOT _NEG_PHOTO ("posed", "studio lighting"
+    # would fight the T-pose / flat-light goal). Pose-free like all styles.
+    "tpose": {
+        "keywords": {
+            "prompt_style": "full body view, head to toe, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame",
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+        "natural": {
+            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame",
+            "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+    },
     "expression": {
         "keywords": {
             "prompt_style": "RAW photo, natural light, skin texture, detailed face, expressive, high detail",
