@@ -45,6 +45,116 @@ interface LoadedModel {
   noClips: boolean;
 }
 
+/**
+ * Fehlgeleitete Skinning-Gewichte reparieren.
+ *
+ * Auto-Rigger binden Vertices gelegentlich an den falschen Knochen (ein
+ * Ärmel-Vertex an die Wirbelsäule, ein Fuß-Vertex an den Kopf). In Bind-Pose
+ * fällt das nicht auf; sobald animiert wird, werden diese Vertices quer durch
+ * die Figur gezogen — die Figur "zersplittert".
+ *
+ * Kriterium: Ein Vertex sollte an dem Knochen-SEGMENT hängen, dem er am
+ * nächsten liegt. Ist sein dominantes Segment deutlich weiter weg als das
+ * nächstgelegene, wird er neu gewichtet (invers-distanzgewichtet über die
+ * drei nächsten Segmente).
+ */
+function repairSkinWeights(root: THREE.Object3D): number {
+  let repaired = 0;
+  root.traverse((o) => {
+    const mesh = o as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh || !mesh.skeleton) return;
+    const geo = mesh.geometry;
+    const pos = geo.getAttribute('position');
+    const si = geo.getAttribute('skinIndex');
+    const sw = geo.getAttribute('skinWeight');
+    if (!pos || !si || !sw) return;
+
+    const bones = mesh.skeleton.bones;
+    const head = bones.map((_, i) =>
+      new THREE.Vector3().setFromMatrixPosition(
+        new THREE.Matrix4().copy(mesh.skeleton.boneInverses[i]).invert()
+      )
+    );
+    // Segment-Ende = Position des ersten Kind-Knochens (sonst der Knochen selbst)
+    const idxOf = new Map(bones.map((b, i) => [b, i]));
+    const tail = head.map((h, i) => {
+      const child = bones[i].children.find((c) => idxOf.has(c as THREE.Bone));
+      const ci = child ? idxOf.get(child as THREE.Bone)! : -1;
+      return ci >= 0 ? head[ci] : h;
+    });
+
+    const distToSegment = (p: THREE.Vector3, i: number) => {
+      const a = head[i], b = tail[i];
+      const ab = new THREE.Vector3().subVectors(b, a);
+      const len2 = ab.lengthSq();
+      if (len2 < 1e-8) return p.distanceTo(a);
+      const t = THREE.MathUtils.clamp(new THREE.Vector3().subVectors(p, a).dot(ab) / len2, 0, 1);
+      return p.distanceTo(a.clone().addScaledVector(ab, t));
+    };
+
+    const v = new THREE.Vector3();
+    const d: number[] = new Array(bones.length);
+    for (let i = 0; i < pos.count; i++) {
+      v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+      for (let b = 0; b < bones.length; b++) d[b] = distToSegment(v, b);
+
+      let dom = 0, bw = -1;
+      for (let c = 0; c < 4; c++) {
+        const w = sw.getComponent(i, c);
+        if (w > bw) { bw = w; dom = si.getComponent(i, c); }
+      }
+      let bestIdx = 0;
+      for (let b = 1; b < bones.length; b++) if (d[b] < d[bestIdx]) bestIdx = b;
+
+      // dominantes Segment plausibel? (max. 2,5x weiter als das nächste)
+      if (d[dom] <= d[bestIdx] * 2.5 + 1e-4) continue;
+
+      const order = d.map((dist, b) => ({ b, dist })).sort((x, y) => x.dist - y.dist).slice(0, 3);
+      const inv = order.map((t) => 1 / Math.max(t.dist, 1e-4));
+      const sum = inv.reduce((s, x) => s + x, 0);
+      for (let c = 0; c < 4; c++) {
+        si.setComponent(i, c, order[c]?.b ?? 0);
+        sw.setComponent(i, c, order[c] ? inv[c] / sum : 0);
+      }
+      repaired++;
+    }
+    // Schritt 2: Naht-Duplikate vereinheitlichen. Positionsgleiche Vertices
+    // (UV-/Normalen-Nähte) müssen identische Gewichte haben — sonst reißen sie
+    // beim Animieren auf (die verbleibenden "Fetzen").
+    const groups = new Map<string, number[]>();
+    for (let i = 0; i < pos.count; i++) {
+      const key = `${Math.round(pos.getX(i) * 1e4)},${Math.round(pos.getY(i) * 1e4)},${Math.round(pos.getZ(i) * 1e4)}`;
+      const g = groups.get(key);
+      if (g) g.push(i); else groups.set(key, [i]);
+    }
+    for (const idx of groups.values()) {
+      if (idx.length < 2) continue;
+      const acc = new Map<number, number>();
+      for (const i of idx) {
+        for (let c = 0; c < 4; c++) {
+          const w = sw.getComponent(i, c);
+          if (w > 0) {
+            const j = si.getComponent(i, c);
+            acc.set(j, (acc.get(j) ?? 0) + w);
+          }
+        }
+      }
+      const top = [...acc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+      const total = top.reduce((s, [, w]) => s + w, 0) || 1;
+      for (const i of idx) {
+        for (let c = 0; c < 4; c++) {
+          si.setComponent(i, c, top[c]?.[0] ?? 0);
+          sw.setComponent(i, c, top[c] ? top[c][1] / total : 0);
+        }
+      }
+    }
+
+    (si as THREE.BufferAttribute).needsUpdate = true;
+    (sw as THREE.BufferAttribute).needsUpdate = true;
+  });
+  return repaired;
+}
+
 /** Alle Knochennamen (Node-Namen unterhalb von Skinnen) eines Modells. */
 function boneNames(root: THREE.Object3D): Set<string> {
   const names = new Set<string>();
@@ -560,6 +670,8 @@ export class FigureLibrary {
       template.rotation.x = -Math.PI / 2;
       template.updateMatrixWorld(true);
     }
+    const repaired = repairSkinWeights(template);
+    if (repaired) console.info(`[figures] ${name}: ${repaired} fehlgeleitete Vertex-Gewichte repariert (Anti-Zersplittern)`);
     const bbox = new THREE.Box3().setFromObject(template);
     const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
     const height = this.defaultHeight;

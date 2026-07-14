@@ -76,15 +76,20 @@ if (rawUrl) {
     }
   });
 } else {
-  lib.load({ only: who }).then(() => {
-    figure = lib.instantiate(who);
-    if (!figure) {
-      document.title = 'Modell nicht gefunden: ' + who;
-      return;
-    }
+  const show = () => {
+    const f = lib.instantiate(who);
+    if (!f) return false;
+    if (figure) scene.remove(figure.root);
+    figure = f;
     figure.play(clipKind);
     scene.add(figure.root);
     document.title = `Figur-Test: ${who} (${clipKind})`;
+    return true;
+  };
+  // Server-Modelle kommen asynchron nach -> dann erneut versuchen
+  lib.onModelReady = () => { show(); };
+  lib.load({ only: who }).then(() => {
+    if (!show()) document.title = 'Lade Modell vom Server: ' + who;
   });
 }
 
