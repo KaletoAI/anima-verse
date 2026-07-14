@@ -48,6 +48,8 @@ export function mapIconUrl(locationId: string): string {
 
 export interface ApiClip {
   kind: string;
+  /** Figur, für die der Clip autoriert wurde (female/male/animal/…); leer = Default */
+  set?: string;
   name: string;
   filename: string;
   url: string;

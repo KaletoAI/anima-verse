@@ -163,10 +163,11 @@ async function startApp(username: string) {
   let lastMap: WorldMap | null = firstMap;
   const roomOf = new Map<string, string>(); // Charaktername -> Raum (ID oder Name)
 
-  // AV3D-8: room_id kommt direkt mit der Worldmap
+  // AV3D-8: room_id kommt direkt mit der Worldmap; dazu die Clip-Set-Kette
   function takeRoomsFrom(map: WorldMap) {
     for (const c of map.characters) {
       if (c.room_id) roomOf.set(c.name, c.room_id);
+      figures.setCharacterSets(c.name, c.animation_sets);
     }
   }
 

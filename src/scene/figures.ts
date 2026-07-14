@@ -448,9 +448,9 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
   return out;
 }
 
-type ClipKind = 'idle' | 'walk' | 'run' | 'sit' | 'lie' | 'dance' | 'wave';
+type ClipKind = string;   // offenes Vokabular — der Server bestimmt die kinds
 
-const CLIP_SYNONYMS: Record<ClipKind, string[]> = {
+const CLIP_SYNONYMS: Record<string, string[]> = {
   idle: ['idle', 'stand', 'breath'],
   walk: ['walk'],
   run: ['run'],
@@ -460,19 +460,6 @@ const CLIP_SYNONYMS: Record<ClipKind, string[]> = {
   wave: ['wave', 'greet'],
 };
 
-/** Server-Kategorie/Dateiname -> Clip-Kategorie des Clients.
- *  Der Server liefert Kinds wie "walking"/"sitting"/"female" — normalisieren. */
-function toClipKind(kind: string, name: string): ClipKind | null {
-  const s = `${kind} ${name}`.toLowerCase();
-  if (/\blay|lying|sleep/.test(s)) return 'lie';
-  if (/sit/.test(s)) return 'sit';
-  if (/run|jog|sprint/.test(s)) return 'run';
-  if (/walk/.test(s)) return 'walk';
-  if (/idle|stand|breath/.test(s)) return 'idle';
-  if (/dance/.test(s)) return 'dance';
-  if (/wave|greet/.test(s)) return 'wave';
-  return null;
-}
 
 /** Freitext-Activity -> Animations-Kategorie (Client-Workaround für AV3D-6). */
 export function activityToClipKind(activity: string): ClipKind {
@@ -490,7 +477,10 @@ export class FigureLibrary {
   /** Vom Server geladene Charakter-Modelle (null = Server hat keins). */
   private apiModels = new Map<string, LoadedModel | null>();
   private pending = new Set<string>();
-  private externalClips: THREE.AnimationClip[] = [];
+  /** Server-Clips: kind -> (set|'' -> Clip) */
+  private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
+  /** Set-Fallback-Kette pro Charakter (aus der Worldmap) */
+  private charSets = new Map<string, string[]>();
   private defaultHeight = 1.75;
   /** wird gerufen, sobald ein nachgeladenes Charakter-Modell bereit ist */
   onModelReady: ((charName: string) => void) | null = null;
@@ -573,42 +563,39 @@ export class FigureLibrary {
     // Ziel-Knochennamen umschreiben (mixamorig-Präfix-Mapping).
     // Clips: bevorzugt die globale Bibliothek des Servers (AV3D-5),
     // sonst die lokalen Manifest-Clips (Dev-/Offline-Betrieb).
-    const clipSources: Array<{ kind: ClipKind; url: string }> = [];
-    for (const c of await getAnimationClips()) {
-      const kind = toClipKind(c.kind, c.name);
-      // pro Kategorie den ersten Treffer nehmen (Server-Reihenfolge entscheidet)
-      if (kind && !clipSources.some((x) => x.kind === kind)) clipSources.push({ kind, url: c.url });
-    }
-    if (!clipSources.length) {
-      for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) {
-        const k = toClipKind(kind, kind);
-        if (k) clipSources.push({ kind: k, url });
-      }
+    const serverClips = await getAnimationClips();
+    const sources: Array<{ kind: string; set: string; url: string }> = serverClips.map((c) => ({
+      kind: c.kind, set: c.set ?? '', url: c.url,
+    }));
+    if (!sources.length) {
+      // Dev-/Offline-Fallback: lokale Manifest-Clips (ohne Sets)
+      for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) sources.push({ kind, set: '', url });
     } else {
-      console.info(`[figures] ${clipSources.length} Clips vom Server: ${clipSources.map((c) => c.kind).join(', ')}`);
+      const desc = sources.map((s) => s.set ? `${s.kind}/${s.set}` : s.kind).join(', ');
+      console.info(`[figures] ${sources.length} Clips vom Server: ${desc}`);
     }
-    const externalClips: THREE.AnimationClip[] = [];
-    for (const { kind, url } of clipSources) {
+    for (const { kind, set, url } of sources) {
       try {
         const { animations } = await loadFile(url);
-        if (animations[0]) {
-          const c = animations[0].clone();
-          c.name = kind;
-          externalClips.push(c);
-        }
+        if (!animations[0]) continue;
+        const clip = animations[0].clone();
+        clip.name = kind;
+        if (!this.clipIndex.has(kind)) this.clipIndex.set(kind, new Map());
+        const bySet = this.clipIndex.get(kind)!;
+        if (!bySet.has(set)) bySet.set(set, clip);   // erster Treffer je kind+set
       } catch (e) {
         console.warn('[figures] Clip nicht ladbar:', url, e);
       }
     }
-    this.externalClips = externalClips;
     this.defaultHeight = defaultHeight;
     this.loadFile = loadFile;
 
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
       if (m.clips.length || m.noClips || !boneNames(m.template).size) continue;
-      if (externalClips.length) {
-        m.clips = adaptExternalClips(externalClips, m.template);
+      const fallbackClips = this.clipsFor(m.name);
+      if (fallbackClips.length) {
+        m.clips = adaptExternalClips(fallbackClips, m.template);
         if (m.clips.length) {
           console.info(`[figures] ${m.name}: ${m.clips.length} Mixamo-Clips direkt angewandt`);
           continue;
@@ -623,6 +610,30 @@ export class FigureLibrary {
   }
 
   private loadFile!: (url: string, forceFbx?: boolean) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
+
+  /** Set-Fallback-Kette eines Charakters merken (aus /play/worldmap). */
+  setCharacterSets(charName: string, sets: string[] | undefined) {
+    if (sets?.length) this.charSets.set(charName, sets);
+  }
+
+  /** Clips für einen Charakter gemäß seiner Set-Kette auswählen:
+   *  <kind>_<set1> → <kind>_<set2> → … → <kind> (ohne Set). */
+  private clipsFor(charName: string): THREE.AnimationClip[] {
+    const chain = [...(this.charSets.get(charName) ?? []), ''];
+    const out: THREE.AnimationClip[] = [];
+    for (const [kind, bySet] of this.clipIndex) {
+      for (const set of chain) {
+        const clip = bySet.get(set);
+        if (clip) {
+          const c = clip.clone();
+          c.name = kind;
+          out.push(c);
+          break;
+        }
+      }
+    }
+    return out;
+  }
 
   /** Modell eines Charakters vom Server nachladen (einmal pro Name).
    *  Ergebnis landet im Cache; onModelReady meldet die Fertigstellung. */
@@ -680,10 +691,11 @@ export class FigureLibrary {
       clips: gltf.animations.filter((c) => c.tracks.length > 0),
       scale: height / rawHeight, height, assignOnly: true, noClips: false,
     };
-    // Clips nur auf Mixamo-Rigs anwenden; "generic" (Tiere) bleibt clip-los
-    // und bekommt im Client ein prozedurales Idle.
-    if (info.rig !== 'generic' && !model.clips.length && boneNames(template).size && this.externalClips.length) {
-      model.clips = adaptExternalClips(this.externalClips, template);
+    // Clips gemäß der Set-Kette des Charakters (female/male/animal/custom).
+    // "generic"-Rigs (eigene Skelette) bleiben clip-los -> prozedurales Idle.
+    if (info.rig !== 'generic' && !model.clips.length && boneNames(template).size) {
+      const candidates = this.clipsFor(name);
+      if (candidates.length) model.clips = adaptExternalClips(candidates, template);
     }
     return model;
   }

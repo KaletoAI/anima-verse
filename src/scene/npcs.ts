@@ -69,6 +69,8 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
 
 interface Npc {
   name: string;
+  /** AV3D-6: vom Server gelieferte Animations-Kategorie (schlägt das Raten) */
+  animation?: string;
   root: THREE.Group;
   figure: Figure | null;
   ring: THREE.Mesh | null;
@@ -125,6 +127,7 @@ export class NpcManager {
       }
       npc.target.copy(st.pos);
       npc.activity = st.char.activity || '';
+      npc.animation = st.char.activity_animation || undefined;
       npc.labelActivity.textContent = npc.activity;
       const travelling = !!st.travelTo;
       npc.labelName.textContent = (travelling ? '🚶 ' : '') + st.char.name;
@@ -196,6 +199,7 @@ export class NpcManager {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
       target: st.pos.clone(), activity: st.char.activity || '',
+      animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
     };
@@ -267,7 +271,9 @@ export class NpcManager {
       }
 
       if (npc.figure) {
-        npc.figure.play(moving ? (dist > RUN_DISTANCE ? 'run' : 'walk') : activityToClipKind(npc.activity));
+        // Server-Kategorie schlägt das Keyword-Raten (AV3D-6)
+        const standingClip = npc.animation || activityToClipKind(npc.activity);
+        npc.figure.play(moving ? (dist > RUN_DISTANCE ? 'run' : 'walk') : standingClip);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));

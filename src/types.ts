@@ -43,6 +43,11 @@ export interface MapLocation {
 export interface MapCharacter {
   name: string;
   location_id: string;
+  /** AV3D-6: Animations-Kategorie der aktuellen Aktivität (autoritativ) */
+  activity_animation?: string;
+  /** Fallback-Kette der Clip-Sets, z.B. ["lady","female"] */
+  animation_sets?: string[];
+  animation_set?: string;
   room_id?: string;   // AV3D-8
   mood?: string;      // AV3D-8
   activity?: string;
