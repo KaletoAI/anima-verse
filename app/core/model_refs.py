@@ -23,16 +23,31 @@ from app.core.log import get_logger
 
 logger = get_logger(__name__)
 
-# Prompt layering: this default is PURE POSE — framing, lighting and
-# background come from the "tpose" use-case style, the face from the
-# expression layer (REF_EXPRESSION_PROMPT below). Keep it that way.
+# Prompt layering: these defaults are PURE POSE — framing, lighting and
+# background come from the use-case style ("tpose" / "tpose_animal"), the
+# face from the expression layer (REF_EXPRESSION_PROMPT below).
+#
 # Redundant arm phrasing on purpose: "T-pose" alone is weakly trained in
-# photo models and drifts into an A-pose (arms angled downward).
+# photo models and drifts into an A-pose (arms angled downward). Palms face
+# the CAMERA (not down, as the Mixamo convention would have it): image-to-3D
+# reconstructs hands from what it can see, and the back of a hand carries far
+# less shape information than an open palm.
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms raised straight out "
     "to the sides at exact shoulder height, fully extended and parallel to "
-    "the floor, body and arms forming the letter T, palms down, fingers "
-    "extended, legs straight and slightly apart"
+    "the floor, body and arms forming the letter T, both palms turned "
+    "forward toward the camera, fingers straight and slightly spread, "
+    "thumbs pointing up, legs straight and slightly apart"
+)
+
+# Non-humanoid characters (animals): a T-pose is meaningless on four legs.
+# Neutral standing rest pose, every limb separated and visible — that is what
+# an image-to-3D pass needs in order to find the joints.
+ANIMAL_POSE_PROMPT_DEFAULT = (
+    "standing still on all fours in a neutral rest pose, seen from a "
+    "three-quarter side angle, the whole body from nose to tail visible, "
+    "all four legs straight, clearly separated and not overlapping, head "
+    "level and facing forward, tail extended away from the body"
 )
 
 # Expression layer of both reference renders: deliberately neutral (the
@@ -57,6 +72,22 @@ def get_tpose_prompt() -> str:
     """T-pose prompt: admin override (image_generation.tpose_prompt) or built-in."""
     override = str(_cfg("tpose_prompt", "") or "").strip()
     return override or TPOSE_PROMPT_DEFAULT
+
+
+def get_animal_pose_prompt() -> str:
+    """Mesh-input pose for NON-humanoid characters: admin override
+    (image_generation.animal_pose_prompt) or built-in."""
+    override = str(_cfg("animal_pose_prompt", "") or "").strip()
+    return override or ANIMAL_POSE_PROMPT_DEFAULT
+
+
+def is_humanoid(character_name: str) -> bool:
+    """Template feature flag; unknown characters count as humanoid."""
+    try:
+        from app.models.character_template import is_feature_enabled
+        return bool(is_feature_enabled(character_name, "humanoid"))
+    except Exception:
+        return True
 
 
 def _enabled() -> bool:
@@ -231,7 +262,15 @@ def generate_model_ref_images(character_name: str,
         return {}
 
     refs_dir = get_model_refs_dir(character_name)
-    prompts = {"tpose": get_tpose_prompt(), "pose": default_pose_prompt()}
+    # Non-humanoid characters get their own mesh-input pose (a T-pose makes no
+    # sense on four legs) and their own framing use case. Their default-pose
+    # ref carries NO human pose template either — the empty override lets the
+    # renderer fall back to the animal's own anatomy.
+    humanoid = is_humanoid(character_name)
+    prompts = {
+        "tpose": get_tpose_prompt() if humanoid else get_animal_pose_prompt(),
+        "pose": default_pose_prompt() if humanoid else "",
+    }
     results: Dict[str, Optional[str]] = {}
 
     task_id = ""
@@ -256,9 +295,10 @@ def generate_model_ref_images(character_name: str,
                 prompt_prefix=prompts[kind] if _tpose else "",
                 pose_prompt_override="" if _tpose else prompts[kind],
                 expression_prompt_override=REF_EXPRESSION_PROMPT,
-                # tpose has its own style (flat shadowless light for
-                # image->3D input); the default-pose ref shares "outfit".
-                image_use_case="tpose" if _tpose else "outfit",
+                # The mesh-input render has its own style (flat shadowless
+                # light, full-body framing) — humanoid vs animal framing
+                # differ; the default-pose ref shares "outfit".
+                image_use_case=("tpose" if humanoid else "tpose_animal") if _tpose else "outfit",
                 # ... and its own aspect: the portrait outfit format cuts the
                 # outstretched hands off at the edges.
                 override_width=_w, override_height=_h,
