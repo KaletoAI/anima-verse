@@ -69,6 +69,8 @@ export async function getAnimationClips(): Promise<ApiClip[]> {
 
 export interface ApiModel {
   url: string;
+  /** Kennung des konkreten Modells (ändert sich z.B. beim Outfit-Wechsel) */
+  signature?: string;
   format: 'glb' | 'fbx';
   /** "mixamo" = Clip-Bibliothek anwendbar; "generic" = eigenes Skelett (Tiere) */
   rig: 'mixamo' | 'generic' | string;
@@ -86,6 +88,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
     if (!m?.url) return null;
     return {
       url: m.url,
+      signature: data.signature ?? m.filename ?? undefined,
       format: (m.format ?? 'glb') as 'glb' | 'fbx',
       rig: m.rig ?? data.rig ?? 'mixamo',
       textureUrl: m.texture_url ?? undefined,

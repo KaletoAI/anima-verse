@@ -186,6 +186,18 @@ async function startApp(username: string) {
   updatePins(firstMap);
   setInterval(pollWorldMap, WORLDMAP_POLL_MS);
 
+  // Outfit-/Modellwechsel: der Server kann pro Charakter ein anderes Modell
+  // ausliefern (ein Modell je Outfit). Bis die Worldmap eine Signatur liefert,
+  // fragen wir sie periodisch für die sichtbaren Charaktere nach.
+  async function pollModelChanges() {
+    const names = (lastMap?.characters ?? []).map((c) => c.name);
+    for (const n of names) {
+      const changed = await figures.refreshIfChanged(n);
+      if (changed) npcs.rebuild(n);
+    }
+  }
+  setInterval(pollModelChanges, 20_000);
+
   // Fenster leuchten nachts
   engine.onDayNight = (night) => {
     for (const tile of tiles.values()) applyNightGlow(tile, night);

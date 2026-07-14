@@ -476,6 +476,8 @@ export class FigureLibrary {
   private assignments: Record<string, string> = {};
   /** Vom Server geladene Charakter-Modelle (null = Server hat keins). */
   private apiModels = new Map<string, LoadedModel | null>();
+  /** Signatur des geladenen Modells je Charakter (Outfit-Wechsel erkennen) */
+  private apiSignature = new Map<string, string>();
   private pending = new Set<string>();
   /** Server-Clips: kind -> (set|'' -> Clip) */
   private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
@@ -618,6 +620,20 @@ export class FigureLibrary {
     if (sets?.length) this.charSets.set(charName, sets);
   }
 
+  /** Modellwechsel prüfen (z.B. neues Outfit): Signatur vom Server holen und
+   *  bei Abweichung das Modell verwerfen -> wird neu geladen. */
+  async refreshIfChanged(charName: string): Promise<boolean> {
+    const known = this.apiSignature.get(charName);
+    if (!known || this.pending.has(charName)) return false;
+    const info = await getCharacterModel(charName);
+    if (!info?.signature || info.signature === known) return false;
+    console.info(`[figures] ${charName}: Modell geändert (${known} -> ${info.signature}) — lade neu`);
+    this.apiModels.delete(charName);
+    this.apiSignature.delete(charName);
+    this.fetchCharacterModel(charName);
+    return true;
+  }
+
   /** Körpergröße eines Charakters merken (cm -> m); wirkt beim nächsten Bau. */
   setCharacterHeight(charName: string, heightCm: number | undefined) {
     if (heightCm && heightCm > 30 && heightCm < 400) this.charHeight.set(charName, heightCm / 100);
@@ -656,6 +672,7 @@ export class FigureLibrary {
         }
         const model = await this.buildModel(charName, info);
         this.apiModels.set(charName, model);
+        if (info.signature) this.apiSignature.set(charName, info.signature);
         console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}, ${model.clips.length} Clips, ${(model.height * 100).toFixed(0)} cm)`);
         this.onModelReady?.(charName);
       } catch (e) {
