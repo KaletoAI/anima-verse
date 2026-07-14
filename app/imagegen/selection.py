@@ -320,11 +320,21 @@ class BackendPool:
                 # ComfyUI anymore.
                 _err_str = str(e)
                 _is_payload_err = bool(_re_4xx.search(_err_str))
+                # Busy is not broken: a timeout / 429 / 503 / gateway queue wait
+                # says the GPU is working, not that the backend is defective.
+                # A cooldown would push the load onto another alias of the SAME
+                # GPU and walk the whole pool to sleep in a busy phase.
+                _is_busy = current.consume_busy()
                 if _is_payload_err:
                     logger.warning(
                         "Fallback-Engine: %s warf Payload-Fehler (%s: %s) — Backend bleibt verfuegbar, "
                         "versuche anderen Backend (Workflow/Prompt vermutlich inkompatibel)",
                         current.name, type(e).__name__, _err_str[:200])
+                elif _is_busy:
+                    logger.warning(
+                        "Fallback-Engine: %s ausgelastet (%s: %s) — KEIN Cooldown, "
+                        "versuche Fallback", current.name, type(e).__name__,
+                        _err_str[:200])
                 else:
                     logger.warning(
                         "Fallback-Engine: %s warf Exception (%s: %s) — Backend in Cooldown, versuche Fallback",
@@ -338,13 +348,20 @@ class BackendPool:
 
             # List of bytes -> success
             if result:
+                current.consume_busy()  # clear a busy note from an inner retry
                 return result, current
 
-            # Empty result = fail, try the next one
-            logger.warning("Fallback-Engine: %s lieferte leeres Ergebnis — Cooldown, versuche Fallback",
-                           current.name)
-            current.mark_unhealthy("generate returned empty result",
-                                   _BACKEND_COOLDOWN_SECONDS)
+            # Empty result = fail, try the next one — unless the backend said
+            # it was merely busy (see above).
+            if current.consume_busy():
+                logger.warning(
+                    "Fallback-Engine: %s ausgelastet (leeres Ergebnis) — KEIN "
+                    "Cooldown, versuche Fallback", current.name)
+            else:
+                logger.warning("Fallback-Engine: %s lieferte leeres Ergebnis — Cooldown, versuche Fallback",
+                               current.name)
+                current.mark_unhealthy("generate returned empty result",
+                                       _BACKEND_COOLDOWN_SECONDS)
             current = self._pick_fallback_backend(
                 current, character_name, tried)
 

@@ -252,6 +252,7 @@ class LocalAIBackend(TogetherBackend):
             return images
         except requests.Timeout:
             logger.error(f"{self.name}: Timeout nach {self.timeout}s")
+            self.note_busy("request timeout")  # load, not a defect -> no cooldown
             return []
         except RuntimeError:
             return []

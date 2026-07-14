@@ -1658,8 +1658,12 @@ class ImageService:
 
         except requests.exceptions.Timeout:
             error_msg = f"Bildgenerierung hat zu lange gedauert ({backend.name})"
-            logger.error("Timeout: %s", error_msg)
-            backend.mark_unhealthy("generate timeout", _BACKEND_COOLDOWN_SECONDS)
+            # A timeout means the GPU is busy (both sides queue) — the backend
+            # is not broken, so it must NOT go into cooldown: that would only
+            # push the load onto another alias of the same GPU.
+            logger.error("Timeout: %s — Backend bleibt verfuegbar (ausgelastet)",
+                         error_msg)
+            backend.note_busy("generate timeout")
             _tq.track_finish(_track_id, error=error_msg)
             _log_image_failure(locals(), error_msg)
             return f"Fehler: {error_msg}"

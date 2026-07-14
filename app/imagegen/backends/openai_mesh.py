@@ -53,7 +53,12 @@ class OpenAIMeshBackend(ImageBackend):
         self.model = (model or os.environ.get(f"{env_prefix}MODEL", "")).strip()
         self.timeout = int(os.environ.get(f"{env_prefix}TIMEOUT", "120") or 120)
         self.poll_interval = float(os.environ.get(f"{env_prefix}POLL_INTERVAL", "5.0") or 5.0)
+        # max_wait budgets the RUNNING time; queue waiting is capped separately
+        # (a queued job means the GPU is busy — being patient is the point of
+        # having a queue on both sides).
         self.max_wait = int(os.environ.get(f"{env_prefix}MAX_WAIT", "900") or 900)
+        self.max_queue_wait = int(
+            os.environ.get(f"{env_prefix}MAX_QUEUE_WAIT", "0") or 0) or (self.max_wait * 4)
         self.mesh_endpoint = (os.environ.get(f"{env_prefix}MESH_ENDPOINT", "")
                               or "/v1/generations").strip().rstrip("/")
         # Which skeleton the alias produces — decides which characters may use
@@ -215,8 +220,24 @@ class OpenAIMeshBackend(ImageBackend):
             logger.error("%s: keine job_id in Response: %s", self.name, str(body)[:200])
             return []
 
+        # max_wait budgets the RUNNING time. Time spent QUEUED at the gateway
+        # does not count: the GPU is busy with someone else, and cancelling a
+        # job that has not even started is how a busy phase turns into a
+        # cascade of cooldowns. Queue waiting is capped separately and
+        # generously (both sides queue on purpose).
         start = time.time()
-        while time.time() - start < self.max_wait:
+        queued_since = start
+        started = False
+        while True:
+            if started:
+                if time.time() - start > self.max_wait:
+                    break
+            elif time.time() - queued_since > self.max_queue_wait:
+                logger.warning("%s: Job %s wartet seit %.0fs in der Gateway-Queue "
+                               "— Abbruch", self.name, job_id,
+                               time.time() - queued_since)
+                self.note_busy("gateway queue")
+                break
             time.sleep(self.poll_interval)
             try:
                 poll = requests.get(f"{self.api_url}/v1/jobs/{job_id}",
@@ -230,6 +251,12 @@ class OpenAIMeshBackend(ImageBackend):
                     logger.error("%s: Mesh-Job failed: %s", self.name,
                                  str(sd.get("error") or sd)[:300])
                     return []
+                if status == "running" and not started:
+                    # The GPU took the job — only now does max_wait start.
+                    started = True
+                    start = time.time()
+                    logger.info("%s: Job %s gestartet (%.0fs in der Queue)",
+                                self.name, job_id, start - queued_since)
                 if status == "running" and sd.get("progress") is not None:
                     logger.info("%s: Job %s laeuft — %.0f%% (ETA %ss)", self.name,
                                 job_id, float(sd.get("progress") or 0) * 100,
@@ -268,8 +295,12 @@ class OpenAIMeshBackend(ImageBackend):
             except Exception as e:
                 logger.warning("%s: Poll-Fehler: %s", self.name, e)
                 continue
-        logger.error("%s: Timeout nach %ds — Job %s wird abgebrochen",
-                     self.name, self.max_wait, job_id)
+        logger.error("%s: Job %s abgebrochen (%s)", self.name, job_id,
+                     f"laeuft laenger als {self.max_wait}s" if started
+                     else "kam nicht aus der Gateway-Queue")
+        # A job that ran too long or waited too long is a LOAD problem, not a
+        # broken backend — no cooldown (the fallback engine reads this).
+        self.note_busy("timeout")
         try:
             requests.post(f"{self.api_url}/v1/jobs/{job_id}/cancel",
                           headers=self._headers(), timeout=10)

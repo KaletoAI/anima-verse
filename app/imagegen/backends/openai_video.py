@@ -53,7 +53,10 @@ class OpenAIVideoBackend(ImageBackend):
         self.seconds = int(os.environ.get(f"{env_prefix}SECONDS", "5") or 5)
         self.timeout = int(os.environ.get(f"{env_prefix}TIMEOUT", "120") or 120)
         self.poll_interval = float(os.environ.get(f"{env_prefix}POLL_INTERVAL", "5.0") or 5.0)
+        # max_wait budgets the RUNNING time; queue waiting is capped separately.
         self.max_wait = int(os.environ.get(f"{env_prefix}MAX_WAIT", "900") or 900)
+        self.max_queue_wait = int(
+            os.environ.get(f"{env_prefix}MAX_QUEUE_WAIT", "0") or 0) or (self.max_wait * 4)
         self.video_endpoint = (os.environ.get(f"{env_prefix}VIDEO_ENDPOINT", "")
                                or "/v1/generations").strip().rstrip("/")
         # LoRA discovery: GET {lora_url}/v1/generations/{alias}/loras (same
@@ -273,8 +276,22 @@ class OpenAIVideoBackend(ImageBackend):
             logger.error("%s: keine job_id in Response: %s", self.name, str(body)[:200])
             return []
 
+        # Queue time does not count against max_wait: a job waiting for the GPU
+        # must not be cancelled (and the backend must not be put to sleep for
+        # it) — see the note on backpressure in base.py.
         start = time.time()
-        while time.time() - start < self.max_wait:
+        queued_since = start
+        started = False
+        while True:
+            if started:
+                if time.time() - start > self.max_wait:
+                    break
+            elif time.time() - queued_since > self.max_queue_wait:
+                logger.warning("%s: Job %s wartet seit %.0fs in der Gateway-Queue "
+                               "— Abbruch", self.name, job_id,
+                               time.time() - queued_since)
+                self.note_busy("gateway queue")
+                break
             time.sleep(self.poll_interval)
             try:
                 poll = requests.get(f"{self.api_url}/v1/jobs/{job_id}",
@@ -288,6 +305,11 @@ class OpenAIVideoBackend(ImageBackend):
                     logger.error("%s: Video-Job failed: %s", self.name,
                                  str(sd.get("error") or sd)[:300])
                     return []
+                if status == "running" and not started:
+                    started = True
+                    start = time.time()
+                    logger.info("%s: Job %s gestartet (%.0fs in der Queue)",
+                                self.name, job_id, start - queued_since)
                 if status == "running" and sd.get("progress") is not None:
                     logger.info("%s: Job %s laeuft — %.0f%% (ETA %ss)", self.name,
                                 job_id, float(sd.get("progress") or 0) * 100,
@@ -314,8 +336,10 @@ class OpenAIVideoBackend(ImageBackend):
             except Exception as e:
                 logger.warning("%s: Poll-Fehler: %s", self.name, e)
                 continue
-        logger.error("%s: Timeout nach %ds — Job %s wird abgebrochen",
-                     self.name, self.max_wait, job_id)
+        logger.error("%s: Job %s abgebrochen (%s)", self.name, job_id,
+                     f"laeuft laenger als {self.max_wait}s" if started
+                     else "kam nicht aus der Gateway-Queue")
+        self.note_busy("timeout")  # load, not a defect -> no cooldown
         try:
             requests.post(f"{self.api_url}/v1/jobs/{job_id}/cancel",
                           headers=self._headers(), timeout=10)

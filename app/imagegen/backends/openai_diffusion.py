@@ -114,6 +114,8 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             body = (resp.text or "")[:300]
             if code == 429:
                 if _429 >= max_429:
+                    # Rate limit = load, not a defect -> no cooldown.
+                    self.note_busy(f"HTTP 429 nach {max_429} Versuchen")
                     raise RuntimeError(f"{self.name}: HTTP 429 (Rate-Limit) nach {max_429} Versuchen")
                 _429 += 1
                 wait = self._rate_limit_wait(resp, _429)
@@ -122,6 +124,8 @@ class OpenAIDiffusionBackend(LocalAIBackend):
                 continue
             if code == 503:  # no healthy backend for the alias — retry with backoff
                 if _503 >= max_503:
+                    # 503 = the gateway has no free GPU for the alias right now.
+                    self.note_busy(f"HTTP 503 nach {max_503} Versuchen")
                     raise RuntimeError(f"{self.name}: HTTP 503 (kein Backend) nach {max_503} Versuchen: {body}")
                 _503 += 1
                 wait = min(2.0 * (2 ** (_503 - 1)), 30.0)
@@ -265,6 +269,7 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             return self._parse_image_response(resp)
         except requests.Timeout:
             logger.error(f"{self.name}: Timeout nach {self.timeout}s")
+            self.note_busy("request timeout")
             return []
         except RuntimeError:
             return []
@@ -355,6 +360,7 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             return self._parse_image_response(resp)
         except requests.Timeout:
             logger.error(f"{self.name}: Timeout nach {self.timeout}s")
+            self.note_busy("request timeout")
             return []
         except RuntimeError:
             return []
