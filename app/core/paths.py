@@ -55,7 +55,15 @@ def get_shared_dir() -> Path:
 def get_animation_clips_dir() -> Path:
     """Shared 3D animation clips (Mixamo FBX, "Without Skin") — world-independent,
     consumed by every 3D client. See the README in that folder for the hard
-    requirements (same rig source, no mesh)."""
+    requirements (same rig source, no mesh).
+
+    ``ANIMATION_CLIPS_DIR`` overrides the location. Tests MUST set it: the real
+    folder holds user-provided binaries that exist nowhere else (they are
+    gitignored), so a test must never write into — or clean up — that path.
+    """
+    override = os.environ.get("ANIMATION_CLIPS_DIR", "").strip()
+    if override:
+        return Path(override)
     return get_shared_dir() / "models" / "clips"
 
 
