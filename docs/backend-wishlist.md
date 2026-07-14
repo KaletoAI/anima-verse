@@ -23,14 +23,20 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   Editierbar im Game-Admin (Location-Editor), Template-fähig wie andere Felder.
 - **Workaround:** Heuristik in `src/scene/tiles.ts` (`detectStyle`).
 
-## AV3D-2: Raum-Layout-Geometrie — offen
+## AV3D-2: Raum-Layout-Geometrie — angefordert (2026-07-14)
 
 - **Motivation:** Räume haben keine Position/Größe; der Client legt sie als
-  Auto-Grid in den Gebäude-Footprint. Für wiedererkennbare Grundrisse
-  (Terrasse südlich, Apartment im 12. Stock) braucht es echte Layoutdaten.
-- **Vorschlag:** optionales `room.layout = {"x":0.0,"y":0.5,"w":0.5,"h":0.5,"floor":0}`
-  (Fraktionen des Footprints; `floor` für mehrgeschossige Gebäude).
-- **Workaround:** Auto-Grid in `buildInterior()`.
+  Auto-Grid in den Gebäude-Footprint — jeder Grundriss sieht gleich aus.
+  Mit echten Layoutdaten wird die Innenansicht wiedererkennbar (Terrasse
+  südlich, Kantine im Erdgeschoss, Apartment im 12. Stock) und Figuren
+  stehen dort, wo sie wirklich sind.
+- **Erwartung:** eine Position/Größe pro Raum, relativ zum Gebäude —
+  Form der Daten entscheidet ihr; der Client braucht x/y/Breite/Höhe
+  (Fraktionen 0..1 des Footprints) und optional eine Etage.
+- **Pflege:** am sinnvollsten ein kleiner Grundriss-Editor im Game-Admin
+  (Räume als Rechtecke ziehen) — analog zum bestehenden Map-Editor für
+  Location-Positionen.
+- **Fallback bleibt:** ohne Layout weiterhin Auto-Grid.
 
 ## AV3D-3: `location_changed`-Event im SSE-Stream — offen
 
@@ -133,3 +139,22 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
 - **Vorschlag:** optionale Felder `room_id`, `mood` im `characters`-Eintrag von
   `/play/worldmap` (billig, Daten liegen im selben Store).
 - **Workaround:** Zweit-Poll nur für die herangezoomte Location.
+
+## AV3D-9: 3D-Modelle für Locations — angefordert (2026-07-14) — ⭐
+
+- **Motivation:** Die Charaktere sind fotorealistisch generiert, die Gebäude
+  sind noch prozedurale Kisten aus der Prototyp-Phase — das beißt sich.
+  Locations sollen dieselbe Pipeline nutzen wie Charaktere.
+- **Erwartung:** analog zu AV3D-5 ein 3D-Modell pro Location
+  (`GET /world/locations/{id}/model3d` o.ä.), erzeugt aus dem bereits
+  vorhandenen `image_prompt_map` (bzw. einem Referenzbild der Location).
+  Kein Rig nötig (`rig: "none"`), Textur eingebettet, dezimiert.
+- **Wichtig für die Zoomstufen:** Das Modell ist die **Außenansicht**. Beim
+  Reinzoomen blendet der Client es aus und zeigt die Räume (AV3D-2) — die
+  Innenansicht kommt also NICHT aus dem Modell. Ein Modell ohne Innenraum
+  ist genau richtig.
+- **Erwartung an die Form:** aufrecht stehendes Gebäude, Grundfläche
+  ungefähr quadratisch (eine Kachel = eine Location); Skalierung egal,
+  normalisiert der Client.
+- **Fallback bleibt:** ohne Modell weiterhin die prozeduralen Formen
+  (Stil aus `map3d.style`/`terrain`).
