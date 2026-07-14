@@ -22,16 +22,27 @@ Drop the `.fbx` files straight into this folder — no registration, no config.
 `lie`, `dance`, `wave`, …). It comes from what the character is *doing*: the
 pose presets carry an `animation` field (Game-Admin → Poses).
 
-**`set`** is the figure the clip was authored for (`lady`, `man`, `dog`, …). It
-comes from *who* the character is: every character has an optional
-`animation_set` attribute. Setting it once to `lady` gives that character
-`walk_lady`, `sit_lady`, `sleep_lady` … automatically — no per-character clip
-assignment anywhere. A character without a set (or without a matching clip)
-falls back to the plain `<kind>.fbx`.
+**`set`** is the figure the clip was authored for. It comes from *who* the
+character is — nobody assigns clips per character:
 
-Both vocabularies are OPEN — **no list exists in the code**; a new kind or set
-is just a new file name. Trailing numbers only distinguish several clips of the
-same kind+set.
+* Every character DERIVES a set from what it already is: a non-humanoid one
+  gets `animal`, a humanoid one its gender — `female` or `male`. So
+  `walk_female.fbx`, `sit_animal.fbx` … are picked up automatically.
+* A character may OVERRIDE that with any set (`animation_set`, e.g. `lady`).
+
+### Fallback chain (per kind)
+
+    <kind>_<explicit set>   →   <kind>_<derived set>   →   <kind>
+
+An override does **not** have to be complete: a character on `lady` that has no
+`sit_lady.fbx` sits like the figure it derives from (`sit_female.fbx`), and only
+if that is missing too does the plain `sit.fbx` apply. So you can add a handful
+of special clips without authoring a whole set.
+
+Both vocabularies are OPEN — **no list exists in the code** (only `female`,
+`male`, `animal` are always offered, because they follow from data every
+character already carries). A new kind or set is just a new file name. Trailing
+numbers only distinguish several clips of the same kind+set.
 
 ## Hard requirements for the files
 

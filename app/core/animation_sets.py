@@ -66,15 +66,37 @@ def derive_set(character_name: str) -> str:
         return ""
 
 
-def resolve_set(character_name: str) -> str:
-    """The character's effective set: its explicit ``animation_set`` if it has
-    one, otherwise the derived one."""
+def explicit_set(character_name: str) -> str:
+    """The set explicitly assigned to the character ("" = none)."""
     try:
         from app.models.character import get_character_profile
-        explicit = str((get_character_profile(character_name) or {}).get(
+        return str((get_character_profile(character_name) or {}).get(
             "animation_set") or "").strip().lower()
-        if explicit:
-            return explicit
     except Exception:
-        pass
-    return derive_set(character_name)
+        return ""
+
+
+def resolve_sets(character_name: str) -> List[str]:
+    """The character's set chain, most specific first.
+
+    An explicit set need NOT be complete: a character on ``lady`` that has no
+    ``sit_lady`` clip should sit like the figure it derives from (``female``),
+    not like the neutral default. So the chain is
+
+        explicit set  ->  derived set (animal / female / male)
+
+    and only when neither has a clip of the wanted kind does the plain
+    ``<kind>.fbx`` apply. Duplicates are collapsed (an explicit set equal to
+    the derived one yields a single entry).
+    """
+    chain: List[str] = []
+    for s in (explicit_set(character_name), derive_set(character_name)):
+        if s and s not in chain:
+            chain.append(s)
+    return chain
+
+
+def resolve_set(character_name: str) -> str:
+    """The character's primary set (first of the chain) — "" if it has none."""
+    chain = resolve_sets(character_name)
+    return chain[0] if chain else ""

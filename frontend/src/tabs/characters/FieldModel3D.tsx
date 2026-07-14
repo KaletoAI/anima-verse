@@ -45,6 +45,7 @@ interface Model3DStatus {
   backends?: MeshBackend[]
   default?: string
   animation_set?: string
+  animation_sets?: string[]
   animation_set_derived?: string
   pending?: boolean
 }
@@ -195,27 +196,43 @@ export function FieldModel3D({ character }: { character: string }) {
   const mixamo = (model?.rig || st.rig) !== 'generic'
   const bust = model?.created_at || st.signature || ''
 
-  // The character's set (explicit or derived: female/male/animal) decides
-  // WHICH clips it uses: its own plus the setless fallbacks.
-  const animSet = st.animation_set || ''
+  // The character's set CHAIN, most specific first: explicit set, then the
+  // derived one (animal / female / male). An explicit set may be incomplete —
+  // a "lady" character without sit_lady sits like a female, and only if that
+  // is missing too does the plain sit.fbx apply.
+  const chain = useMemo(
+    () => st.animation_sets || (st.animation_set ? [st.animation_set] : []),
+    [st.animation_sets, st.animation_set],
+  )
   const myClips = useMemo(
-    () => clips.filter((c) => !c.set || c.set === animSet),
-    [clips, animSet],
+    () => clips.filter((c) => !c.set || chain.includes(c.set)),
+    [clips, chain],
   )
 
-  // Keep the KIND across characters and resolve it to THIS character's set:
-  // the same "idle" pick lands on idle_female for her and idle_animal for the
-  // dog. A set-specific clip wins over the setless one.
+  // Pick the best clip of a kind along the chain: explicit set -> derived set
+  // -> setless.
+  const bestOfKind = useCallback(
+    (kind: string): AnimationClip | undefined => {
+      const ofKind = clips.filter((c) => c.kind === kind)
+      for (const s of chain) {
+        const hit = ofKind.find((c) => c.set === s)
+        if (hit) return hit
+      }
+      return ofKind.find((c) => !c.set)
+    },
+    [clips, chain],
+  )
+
+  // Keep the KIND across characters and resolve it per character: the same
+  // "idle" pick lands on idle_female for her and idle_animal for the dog.
   useEffect(() => {
-    if (!myClips.length) return
+    if (!clips.length) return
     setClipUrl((cur) => {
       if (cur && myClips.some((c) => c.url === cur)) return cur
       const wanted = localStorage.getItem(CLIP_PREF_KEY) || DEFAULT_CLIP_KIND
-      const ofKind = myClips.filter((c) => c.kind === wanted)
-      const pick = ofKind.find((c) => c.set === animSet) || ofKind[0]
-      return pick?.url || ''
+      return (bestOfKind(wanted) || bestOfKind(DEFAULT_CLIP_KIND))?.url || ''
     })
-  }, [myClips, animSet])
+  }, [clips, myClips, bestOfKind])
   // Cache-bust per combination so a re-generated mesh is re-fetched.
   const viewerUrl = model
     ? `/characters/${enc}/model3d/file?v=${encodeURIComponent(bust)}`
@@ -236,7 +253,7 @@ export function FieldModel3D({ character }: { character: string }) {
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>
                 {t('Animation')}
-                {animSet ? ` (${animSet})` : ''}
+                {chain.length ? ` (${chain.join(' → ')})` : ''}
               </span>
               <select
                 className="ga-input"

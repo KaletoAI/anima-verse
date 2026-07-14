@@ -1491,10 +1491,12 @@ def get_character_model3d(character_name: str) -> Dict[str, Any]:
     """Status of the generated mesh for the CURRENT outfit combination
     ({signature, has_input, model, pending}) + the character's animation set
     (explicit or derived), so the preview can offer the matching clips."""
-    from app.core.animation_sets import derive_set, resolve_set
+    from app.core.animation_sets import derive_set, resolve_sets
     from app.core.model3d import get_model3d_info
     info = get_model3d_info(character_name)
-    info["animation_set"] = resolve_set(character_name)
+    chain = resolve_sets(character_name)
+    info["animation_set"] = chain[0] if chain else ""
+    info["animation_sets"] = chain          # explicit first, then derived
     info["animation_set_derived"] = derive_set(character_name)
     return info
 

@@ -1189,7 +1189,7 @@ async def play_worldmap(user=Depends(get_current_user)):
         get_character_current_room, get_character_current_feeling,
     )
     from app.core.expression_pose_maps import resolve_pose_animation
-    from app.core.animation_sets import resolve_set as resolve_animation_set
+    from app.core.animation_sets import resolve_sets as resolve_animation_sets
 
     avatar = (get_active_character() or "").strip()
 
@@ -1227,17 +1227,19 @@ async def play_worldmap(user=Depends(get_current_user)):
         # then the client keeps guessing from the text, exactly as before.
         # Travel is deliberately NOT forced to "walk": the activity is
         # reported honestly, the client has movement_target_id anyway.
-        # The set is RESOLVED: explicit attribute, else derived from the
-        # character (animal / female / male) — so the client always gets a
-        # concrete set instead of having to derive one itself.
-        anim_set = resolve_animation_set(name)
+        # The set chain, most specific first: explicit attribute, then the one
+        # derived from the character (animal / female / male). The client walks
+        # it per kind and only falls back to the plain <kind>.fbx when neither
+        # set has that clip — an explicit set may be incomplete.
+        anim_sets = resolve_animation_sets(name)
         characters.append({
             "name": name,
             "location_id": loc_id,
             "room_id": get_character_current_room(name) or "",
             "activity": activity,
             "activity_animation": resolve_pose_animation(activity),
-            "animation_set": anim_set,
+            "animation_set": (anim_sets[0] if anim_sets else ""),
+            "animation_sets": anim_sets,
             "mood": get_character_current_feeling(name) or "",
             "movement_target_id": mt,
             "movement_target_name": name_by_id.get(mt, "") or mt,
