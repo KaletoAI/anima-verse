@@ -18,6 +18,9 @@ logger = get_logger("config")
 
 _CONFIG: dict = {}
 # Mutable — updated by load() when an explicit path is passed
+# Keys this module generates for the numbered image/video/mesh backend blocks.
+_IMAGEGEN_ENV_RE = re.compile(r"^SKILL_IMAGEGEN_\d+_")
+
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "storage" / "config.json"
 _SECRETS_PATH: Optional[Path] = None  # set in load() — sibling of _CONFIG_PATH
 
@@ -965,6 +968,16 @@ def _flatten_to_env(config: dict) -> None:
     ui = config.get("ui", {})
     _set(env, "DEFAULT_THEME", ui.get("default_theme", "default"))
     _set(env, "AVAILABLE_THEMES", ui.get("available_themes", "default,minimal,dark"))
+
+    # Purge stale image/video/mesh backend blocks BEFORE writing: this bridge
+    # only ever set keys, never removed them. A deleted backend therefore left
+    # its SKILL_IMAGEGEN_{N}_* block behind and would come back as a phantom
+    # instance on the next load — and a field cleared in the admin kept its old
+    # value (_set skips empty values). Both are gone now: every generated key
+    # that the current config does not produce is removed.
+    for key in [k for k in os.environ if _IMAGEGEN_ENV_RE.match(k)]:
+        if key not in env:
+            del os.environ[key]
 
     # Write all to os.environ
     for key, value in env.items():

@@ -144,11 +144,28 @@ class ImageService:
         """
         return {}
 
+    # Upper bound of the SKILL_IMAGEGEN_{N}_* scan. It used to be 19 — which
+    # SILENTLY dropped every backend beyond that (adding the mesh backends
+    # pushed Flux1-Dev and WAN Video out of the list, so they stopped
+    # resolving). A backend the admin configured must never vanish without a
+    # word: the scan is generous, and anything past it is logged as an error.
+    MAX_INSTANCES = 200
+
     def _load_instances(self) -> List[ImageBackend]:
-        """Scannt .env nach SKILL_IMAGEGEN_{N}_* Bloecken und erstellt Backends."""
+        """Scannt die SKILL_IMAGEGEN_{N}_*-Bloecke und erstellt die Backends."""
         instances = []
 
-        for n in range(1, 20):
+        try:
+            from app.core import config as _cfg
+            configured = len(_cfg.get("image_generation.backends") or [])
+            if configured > self.MAX_INSTANCES:
+                logger.error(
+                    "%d Backends konfiguriert, aber nur %d werden geladen — "
+                    "MAX_INSTANCES erhoehen!", configured, self.MAX_INSTANCES)
+        except Exception:
+            configured = 0
+
+        for n in range(1, self.MAX_INSTANCES + 1):
             prefix = f"SKILL_IMAGEGEN_{n}_"
             api_type = os.environ.get(f"{prefix}API_TYPE", "").strip().lower()
             if not api_type:
@@ -188,6 +205,11 @@ class ImageService:
             except Exception as e:
                 logger.error("Fehler beim Laden von Instanz %d (%s): %s", n, name, e)
 
+        if configured and len(instances) < configured:
+            logger.warning(
+                "%d von %d konfigurierten Backends geladen — %d fehlen "
+                "(fehlende API_URL / unbekannter Typ?)",
+                len(instances), configured, configured - len(instances))
         return instances
 
     # ------------------------------------------------------------------
