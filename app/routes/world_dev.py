@@ -1334,7 +1334,7 @@ def _normalize_character_json(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], 
     dict. Sections that do not have a ``source_file`` template field land in
     ``char_data["_extra_soul_md"]`` and are written to the matching ``soul/*.md``.
     """
-    from app.models.character_template import get_template
+    from app.models.character_template import get_template, resolve_template_name
 
     out = dict(payload)  # shallow copy — caller still owns nested lists
     warnings: List[str] = []
@@ -1343,23 +1343,17 @@ def _normalize_character_json(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], 
     if not out.get("character_name") and out.get("name"):
         out["character_name"] = out.pop("name")
 
-    # Validate / map template
+    # Validate / map template. resolve_template_name maps common family names
+    # (…roleplay…, human/default, animal/pet) to an installed template; an
+    # unresolvable name is kept as-is with a corrective warning.
     template = out.get("template", "")
-    if template:
-        if not get_template(template):
-            # Best-effort alias mapping for common LLM mistakes
-            alias = None
-            if "roleplay" in template.lower():
-                alias = "human-roleplay"
-            elif template.lower() in ("human", "default"):
-                alias = "human-default"
-            elif template.lower() in ("animal", "pet"):
-                alias = "animal-default"
-            if alias and get_template(alias):
-                warnings.append(f"Template '{template}' existiert nicht — auf '{alias}' gemappt.")
-                out["template"] = alias
-            else:
-                warnings.append(f"Template '{template}' existiert nicht — bitte korrigieren.")
+    if template and not get_template(template):
+        alias = resolve_template_name(template)
+        if alias and alias != template:
+            warnings.append(f"Template '{template}' existiert nicht — auf '{alias}' gemappt.")
+            out["template"] = alias
+        else:
+            warnings.append(f"Template '{template}' existiert nicht — bitte korrigieren.")
 
     # Flatten nested soul object: {"# Personality": {"## Core nature": "..."}}
     soul = out.pop("soul", None)

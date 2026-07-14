@@ -412,6 +412,15 @@ def import_character_from_zip(
 
     if "characters" in db_tables:
         _restore_named("characters")
+        # The imported row may reference a template that only exists in the
+        # source world (e.g. the private human-roleplay-nsfw). Remap it to an
+        # installed template so the character renders + its features resolve.
+        try:
+            from app.models.character_template import normalize_character_template
+            normalize_character_template(character_name)
+        except Exception as e:
+            logger.warning("import: template normalize failed for %s: %s",
+                           character_name, e)
     for table in db_tables:
         if table == "characters":
             continue

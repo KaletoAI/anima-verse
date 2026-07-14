@@ -606,41 +606,104 @@ def _is_field_visible(field: Dict[str, Any], data: Dict[str, Any]) -> bool:
 
 
 
-def migrate_nsfw_template_once() -> None:
-    """One-time, idempotent template-reference migration: the separate
-    human-roleplay-nsfw template is deleted — its NSFW substance moved into
-    packages (nsfw_anatomy body slots, romantic_interests fragment, rp
-    fragment, intimacy). Characters referencing it switch to
-    human-roleplay; the packages' apply_to already targets that name.
+def resolve_template_name(name: str) -> Optional[str]:
+    """Resolve a template reference to an INSTALLED template name.
 
-    Runs per world at boot, guarded by a world_kv marker. This is the only
-    place that still names the old template (migration-only).
+    Returns the name unchanged if a matching template file exists; otherwise
+    maps by family to an installed template:
+      - anything containing "animal" (or "pet") -> animal-default
+      - anything containing "roleplay"           -> human-roleplay
+      - exactly "human" / "default"              -> human-default
+
+    Returns ``None`` if the name is empty or no family match is installed —
+    the caller decides how to surface that (warn vs. hard fallback).
+
+    This is the single source of truth for "the referenced template is not
+    present in this world". The prime case: a character exported from a world
+    that had the private ``human-roleplay-nsfw`` template (it only ships in
+    the NSFW pack repo) is imported here, where only the SFW templates exist.
+    The "roleplay" heuristic maps it to human-roleplay without this module
+    having to name the deleted template.
     """
-    old_name = "human-roleplay-nsfw"
+    n = (name or "").strip()
+    if not n:
+        return None
+    if get_template(n) is not None:
+        return n
+    low = n.lower()
+    order: List[str] = []
+    if "animal" in low or low == "pet":
+        order.append("animal-default")
+    if "roleplay" in low:
+        order.append("human-roleplay")
+    if low in ("human", "default"):
+        order.append("human-default")
+    for cand in order:
+        if get_template(cand) is not None:
+            return cand
+    return None
+
+
+def normalize_character_template(name: str) -> bool:
+    """Remap a character whose template is not installed here to an installed
+    one (DB column + profile blob). Returns True if the template changed.
+
+    Used at character import (marketplace / content packs) so a character
+    referencing a template absent from this world — e.g. the private
+    ``human-roleplay-nsfw`` — renders instead of dangling on a missing file.
+    Import must always land on a valid template, so an unresolvable name
+    falls back to human-default.
+    """
     try:
-        from app.models.world import get_world_setting, set_world_setting
-        from app.models.character import (list_available_characters,
-                                          get_character_profile,
+        from app.models.character import (get_character_profile,
                                           save_character_profile)
     except Exception:
+        return False
+    profile = get_character_profile(name) or {}
+    cur = (profile.get("template") or "").strip()
+    if not cur or get_template(cur) is not None:
+        return False  # empty or already installed — nothing to do
+    resolved = resolve_template_name(cur)
+    if not resolved and get_template("human-default") is not None:
+        resolved = "human-default"
+    if not resolved or resolved == cur:
+        return False
+    profile["template"] = resolved
+    save_character_profile(name, profile)
+    clear_template_cache()
+    logger.info("template normalize: %s '%s' -> '%s'", name, cur, resolved)
+    return True
+
+
+def migrate_stale_templates_once() -> None:
+    """One-time, idempotent boot migration: normalize every character whose
+    template is not installed in this world to an installed one (via
+    :func:`normalize_character_template`).
+
+    Catches characters imported *after* an earlier per-world migration ran
+    (e.g. a character carrying the deleted ``human-roleplay-nsfw`` template,
+    imported once the marketplace shipped it). Guarded by a world_kv marker.
+    Generalizes the former nsfw-only migration — no template name is hardcoded
+    here; the resolver's family heuristic does the mapping.
+    """
+    try:
+        from app.models.world import get_world_setting, set_world_setting
+        from app.models.character import list_available_characters
+    except Exception:
         return
-    if get_world_setting("migration.nsfw_template_v1", "") == "done":
+    if get_world_setting("migration.stale_templates_v1", "") == "done":
         return
     changed = []
     try:
         for name in list_available_characters():
-            profile = get_character_profile(name) or {}
-            if (profile.get("template") or "").strip() == old_name:
-                profile["template"] = "human-roleplay"
-                save_character_profile(name, profile)
+            if normalize_character_template(name):
                 changed.append(name)
-        set_world_setting("migration.nsfw_template_v1", "done")
+        set_world_setting("migration.stale_templates_v1", "done")
         if changed:
-            logger.info("nsfw-template migration: %d character(s) -> "
-                        "human-roleplay: %s", len(changed), ", ".join(changed))
-        clear_template_cache()
+            logger.info("stale-template migration: %d character(s) remapped: %s",
+                        len(changed), ", ".join(changed))
     except Exception as e:
-        logger.warning("nsfw-template migration failed: %s", e)
+        logger.warning("stale-template migration failed: %s", e)
 
 
 def migrate_prune_stale_stats_once() -> None:

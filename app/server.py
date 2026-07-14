@@ -157,13 +157,15 @@ async def lifespan(app: FastAPI):
     except Exception as _se:
         logger.debug("storyteller-speaker migration failed: %s", _se)
 
-    # Migration: the deleted human-roleplay-nsfw template -> human-roleplay
-    # (its substance lives in packages now; idempotent, world_kv-marked).
+    # Migration: normalize any character whose template is not installed here
+    # (e.g. the deleted human-roleplay-nsfw, whose substance lives in packages
+    # now) to an installed one. Catches post-migration imports; idempotent,
+    # world_kv-marked.
     try:
-        from app.models.character_template import migrate_nsfw_template_once
-        migrate_nsfw_template_once()
+        from app.models.character_template import migrate_stale_templates_once
+        migrate_stale_templates_once()
     except Exception as _te:
-        logger.debug("nsfw-template migration failed: %s", _te)
+        logger.debug("stale-template migration failed: %s", _te)
 
     # Migration: drop stat values a character's template no longer declares
     # (e.g. lust on an animal after lust became package content).
