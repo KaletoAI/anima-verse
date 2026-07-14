@@ -47,7 +47,7 @@ export function createHud(opts: { username: string; avatar: string; onLogout: ()
 
   const hints = document.createElement('div');
   hints.className = 'hud-hints';
-  hints.textContent = '🖱 Ziehen: verschieben · Rad: zoomen (nah = Räume) · Q/E: drehen · Klick: Ort öffnen';
+  hints.textContent = '🖱 Links ziehen: verschieben · Rechts ziehen: drehen/neigen · Rad: zoomen (ganz nah = Figuren) · Q/E: 45°-Drehung · Klick: Ort öffnen';
   document.body.appendChild(hints);
 
   const statusEl = bar.querySelector('.hud-status') as HTMLElement;

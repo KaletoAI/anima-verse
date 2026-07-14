@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { applyNightGlow, applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
 import { grassTexture, seededRandom } from './scene/textures';
 import { createHud, InfoPanel, showLogin } from './ui';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
@@ -28,6 +28,7 @@ async function boot() {
 
 async function startApp(username: string) {
   const engine = new Engine(app);
+  (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
   const figures = new FigureLibrary();
   const [allLocs, firstMap] = await Promise.all([
     api.getLocations(),
@@ -182,6 +183,19 @@ async function startApp(username: string) {
   takeRoomsFrom(firstMap);
   updatePins(firstMap);
   setInterval(pollWorldMap, WORLDMAP_POLL_MS);
+
+  // Fenster leuchten nachts
+  engine.onDayNight = (night) => {
+    for (const tile of tiles.values()) applyNightGlow(tile, night);
+  };
+
+  // Tageszeit der Welt -> Beleuchtung (alle 60 s nachführen)
+  async function pollGameHour() {
+    const h = await api.getGameHour();
+    if (h != null) engine.setGameHour(h);
+  }
+  void pollGameHour();
+  setInterval(pollGameHour, 60_000);
 
   // Fallback für Backends ohne room_id im Worldmap-Payload (Prä-AV3D-8)
   async function pollRooms() {

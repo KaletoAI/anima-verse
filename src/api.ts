@@ -92,3 +92,17 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
     return null;
   }
 }
+
+/** Spielzeit der Welt (Stunde 0..24, fraktional); null wenn nicht verfügbar. */
+export async function getGameHour(): Promise<number | null> {
+  try {
+    const res = await fetch('/world/game-time');
+    if (!res.ok) return null;
+    const data = await res.json();
+    const t = new Date(data.game_now);
+    if (isNaN(t.getTime())) return null;
+    return t.getUTCHours() + t.getUTCMinutes() / 60;
+  } catch {
+    return null;
+  }
+}

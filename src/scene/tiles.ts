@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { WorldLocation } from '../types';
 import { mapIconUrl } from '../api';
 import {
-  asphaltTexture, awningTexture, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
+  asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
 
 export const CELL = 10;
@@ -38,6 +38,8 @@ function styleKind(raw: string | undefined): TileStyle | null {
 
 export interface Tile {
   loc: WorldLocation;
+  /** Fassaden mit Fensterraster — leuchten nachts (emissive) */
+  facadeMats?: THREE.MeshStandardMaterial[];
   group: THREE.Group;
   center: THREE.Vector3;
   isBuilding: boolean;
@@ -132,7 +134,7 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
         build(tile, _rnd) {
           const h = this.h;
           const facade = facadeTexture(loc.map3d?.color || '#8fa3b0', 4, floors, loc.id);
-          const wallMat = std({ map: facade });
+          const wallMat = std({ map: facade, emissiveMap: facadeEmissive(4, floors, loc.id), emissive: new THREE.Color(0xffd98a), emissiveIntensity: 0 });
           const walls = box(this.w, h, this.d, wallMat);
           walls.position.y = h / 2;
           tile.group.add(walls);
@@ -153,7 +155,7 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
       return {
         w: 7, d: 5.2, h: 3.4,
         build(tile, rnd) {
-          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#cdb694', 3, 1, loc.id) });
+          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#cdb694', 3, 1, loc.id), emissiveMap: facadeEmissive(3, 1, loc.id), emissive: new THREE.Color(0xffd98a), emissiveIntensity: 0 });
           const walls = box(this.w, this.h, this.d, wallMat);
           walls.position.set(0, this.h / 2, -1.2);
           tile.group.add(walls);
@@ -196,7 +198,7 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
       return {
         w: 6.6, d: 5.6, h: 3,
         build(tile, _rnd) {
-          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#dbc9a9', 3, 1, loc.id) });
+          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#dbc9a9', 3, 1, loc.id), emissiveMap: facadeEmissive(3, 1, loc.id), emissive: new THREE.Color(0xffd98a), emissiveIntensity: 0 });
           const walls = box(this.w, this.h, this.d, wallMat);
           walls.position.y = this.h / 2;
           tile.group.add(walls);
@@ -225,7 +227,7 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
       return {
         w: 7, d: 6, h: floors * 3,
         build(tile, _rnd) {
-          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#b3a48f', 3, floors + 1, loc.id) });
+          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#b3a48f', 3, floors + 1, loc.id), emissiveMap: facadeEmissive(3, floors + 1, loc.id), emissive: new THREE.Color(0xffd98a), emissiveIntensity: 0 });
           const walls = box(this.w, this.h, this.d, wallMat);
           walls.position.y = this.h / 2;
           tile.group.add(walls);
@@ -393,7 +395,15 @@ export function buildTile(loc: WorldLocation): Tile {
   }
 
   group.add(ring);
+  tile.facadeMats = tile.shellMats.filter((m) => !!m.emissiveMap);
   return tile;
+}
+
+/** Nachtbeleuchtung: Fenster der Fassaden leuchten (0 = Tag, 1 = Nacht). */
+export function applyNightGlow(tile: Tile, night: number) {
+  for (const m of tile.facadeMats ?? []) {
+    m.emissiveIntensity = night * 1.2;
+  }
 }
 
 /** Crossfade Außenansicht <-> Raumansicht (fade 0..1). */

@@ -112,6 +112,27 @@ export function facadeTexture(base: string, cols: number, rows: number, seed: st
   });
 }
 
+/** Emissive-Gegenstück zu facadeTexture: alles schwarz, nur die beleuchteten
+ *  Fenster leuchten (gleicher Seed -> dieselben Fenster wie in der Fassade). */
+export function facadeEmissive(cols: number, rows: number, seed: string): THREE.CanvasTexture {
+  return canvasTexture(256, (ctx) => {
+    const rnd = seededRandom(seed);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, 256, 256);
+    const cw = 256 / cols;
+    const ch = 256 / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const lit = rnd() < 0.28;   // identische Sequenz wie in facadeTexture
+        if (lit) {
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(c * cw + cw * 0.22, r * ch + ch * 0.2, cw * 0.56, ch * 0.55);
+        }
+      }
+    }
+  });
+}
+
 export function awningTexture(colorA: string, colorB: string): THREE.CanvasTexture {
   return canvasTexture(128, (ctx) => {
     for (let i = 0; i < 8; i++) {
