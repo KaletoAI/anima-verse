@@ -50,6 +50,39 @@ GET /assets/animation-clips         → [{ "kind": "walk", "url": "…" }, …]
   gemischte Skelett-Konventionen kippen die Figuren; `kind` ∈
   idle/walk/run/sit/dance/wave/… (erweiterbar, Client mappt Activities darauf)
 
+## Locations: 3D-Modelle und Räume
+
+### Gebäude-Modelle (AV3D-9)
+
+Wie bei den Charakteren: ein 3D-Modell pro Location, erzeugt aus einem
+Referenzbild (die Location hat mit `image_prompt_map` bereits eines).
+Schnittstelle analog zu den Charakter-Modellen.
+
+**Erwartungen:**
+- **Außenansicht**, kein Innenraum. Beim Reinzoomen blendet der Client das
+  Gebäude aus und zeigt die Räume (s.u.) — die Innenansicht kommt NICHT aus
+  dem Modell. Ein Gebäude ohne Interieur ist genau richtig.
+- kein Rig nötig (`rig: "none"`), Textur eingebettet, Mesh dezimiert
+- aufrecht stehend, Grundfläche ungefähr quadratisch (eine Karten-Kachel =
+  eine Location). Skalierung/Orientierung egal — normalisiert der Client.
+- **404 bleibt normal:** Locations ohne Modell rendert der Client weiterhin
+  prozedural (aus `map3d.style` / `terrain`).
+
+### Raum-Layout (AV3D-2)
+
+Räume haben heute keine Position und keine Größe. Der Client legt sie als
+Auto-Grid ins Gebäude — jeder Grundriss sieht gleich aus, und Figuren stehen
+nicht dort, wo sie wirklich sind.
+
+**Erwartung:** Position und Größe pro Raum, relativ zum Gebäude — Fraktionen
+(x, y, Breite, Höhe im Bereich 0..1), optional eine Etage. Datenform frei.
+
+**Pflege:** am sinnvollsten ein kleiner Grundriss-Editor im Game-Admin (Räume
+als Rechtecke ziehen, analog zum Map-Editor für Location-Positionen).
+Ableiten lässt sich das nicht sinnvoll.
+
+**Fallback bleibt:** ohne Layout weiterhin Auto-Grid — kein Alles-oder-nichts.
+
 ## Administration
 
 Game Admin → Character → Reiter „3D": Modell ansehen/hochladen/generieren/
