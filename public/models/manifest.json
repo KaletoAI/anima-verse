@@ -14,6 +14,12 @@
       "name": "Robot",
       "url": "/models/RobotExpressive.glb",
       "height": 1.55
+    },
+    {
+      "name": "T3mia",
+      "url": "/models/Test3_mia.glb",
+      "height": 1.7,
+      "assignOnly": true
     }
   ],
   "assignments": {
