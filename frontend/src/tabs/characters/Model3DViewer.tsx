@@ -82,11 +82,19 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         // An FBX embeds no texture — the basecolor PNG of the same generation
         // run comes separately and has to be bound to the materials by hand
         // (a GLB carries its textures inside and needs none of this).
+        //
+        // flipY stays at the loader default (true): that is the FBX/OBJ
+        // convention. Only glTF wants flipY=false, because its UV origin is
+        // top-left — forcing that here mirrors the texture vertically, which
+        // is exactly what a "the mapping is off" result looks like.
         if (textureUrl) {
           const tex = await new THREE.TextureLoader().loadAsync(textureUrl)
           if (disposed) return
           tex.colorSpace = THREE.SRGBColorSpace
-          tex.flipY = false
+          tex.flipY = ext !== 'glb' && ext !== 'gltf'
+          tex.wrapS = THREE.RepeatWrapping
+          tex.wrapT = THREE.RepeatWrapping
+          tex.needsUpdate = true
           object.traverse((o: Object3D) => {
             const mesh = o as Mesh
             if (!mesh.isMesh) return
@@ -94,6 +102,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             for (const m of mats) {
               const mat = m as MeshStandardMaterial
               mat.map = tex
+              // A grey/tinted base colour would multiply into the texture.
               mat.color?.set(0xffffff)
               mat.needsUpdate = true
             }
