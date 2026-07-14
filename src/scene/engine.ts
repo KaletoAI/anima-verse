@@ -51,9 +51,12 @@ export class Engine {
     this.scene.background = new THREE.Color(0x9fc7e8);
     this.scene.fog = new THREE.Fog(0x9fc7e8, 220, 520);
 
-    const hemi = new THREE.HemisphereLight(0xdfeeff, 0x6b7f5a, 0.9);
+    const hemi = new THREE.HemisphereLight(0xdfeeff, 0x8a9a78, 1.5);
     this.scene.add(hemi);
-    this.sun = new THREE.DirectionalLight(0xfff2d8, 2.2);
+    this.sun = new THREE.DirectionalLight(0xfff2d8, 2.0);
+    const fill = new THREE.DirectionalLight(0xdde8ff, 0.5);   // Gegenlicht, hebt Schattenseiten
+    fill.position.set(-30, 20, -25);
+    this.scene.add(fill);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.bias = -0.0004;

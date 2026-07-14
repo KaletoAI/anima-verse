@@ -223,10 +223,30 @@ export class NpcManager {
     }
   }
 
+  /** Blickrichtung im Stand: zum Schwerpunkt der nahen Nachbarn schauen
+   *  (wirkt wie ein Gesprächskreis); allein stehende schauen zur Kamera-Seite. */
+  private facingTargets(): Map<string, THREE.Vector3> {
+    const NEAR = 4.5;                       // Welteinheiten = "im selben Gespräch"
+    const out = new Map<string, THREE.Vector3>();
+    const list = [...this.npcs.values()];
+    for (const npc of list) {
+      const near = list.filter(
+        (o) => o !== npc && o.root.position.distanceTo(npc.root.position) < NEAR
+      );
+      if (!near.length) continue;
+      const c = new THREE.Vector3();
+      for (const o of near) c.add(o.root.position);
+      c.divideScalar(near.length);
+      out.set(npc.name, c);
+    }
+    return out;
+  }
+
   /** Pro Frame: Richtung Ziel laufen, Animation nach Zustand wählen. */
   tick(dt: number, camDist: number) {
     const labelVisible = camDist < 55;
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
+    const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
       const delta = npc.target.clone().sub(npc.root.position);
       delta.y = 0;
@@ -237,6 +257,13 @@ export class NpcManager {
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
+      } else if (npc.figure) {
+        // Stehend: Nachbarn ansehen, sonst leicht zur Kamera-Grundrichtung
+        const target = faceTo.get(npc.name);
+        const dir = target
+          ? target.clone().sub(npc.root.position).setY(0)
+          : new THREE.Vector3(0, 0, 1);
+        npc.figure.faceTowards(dir);
       }
 
       if (npc.figure) {

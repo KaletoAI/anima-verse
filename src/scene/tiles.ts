@@ -406,6 +406,14 @@ export function applyTileFade(tile: Tile, dt: number) {
   ringMat.opacity = 0.7 * Math.max(0, 1 - f * 2);
   for (const m of tile.roofMats) m.opacity = Math.max(0, 1 - f * 1.4);
   for (const o of tile.roofParts) o.visible = f < 0.95;
+  // Aufgedeckter Innenraum: Hülle wirft keinen Schatten mehr, sonst stehen
+  // die Figuren im Dunkeln
+  const shellShadow = f < 0.4;
+  tile.group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && o.castShadow !== shellShadow && tile.interior && !tile.interior.getObjectById(o.id)) {
+      o.castShadow = shellShadow;
+    }
+  });
   for (const m of tile.shellMats) m.opacity = 1 - f * 0.88;
   tile.interior.visible = f > 0.03;
   for (const l of tile.interiorLabels) l.visible = f > 0.5;
