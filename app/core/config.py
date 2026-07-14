@@ -840,8 +840,8 @@ def _flatten_to_env(config: dict) -> None:
                      # Video backends (localai_video / together_video)
                      "seconds", "video_endpoint",
                      # Mesh backend (openai_mesh, img2mesh)
-                     "mesh_endpoint", "remove_background", "face_num",
-                     "no_fingers"]:
+                     "mesh_endpoint", "mesh_rig", "remove_background",
+                     "face_num", "no_fingers"]:
             val = be.get(key, "")
             # extra_params can be a dict (JSON editor) — bridge as JSON string.
             if key == "extra_params" and isinstance(val, (dict, list)):

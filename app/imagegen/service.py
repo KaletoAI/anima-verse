@@ -312,19 +312,33 @@ class ImageService:
             logger.error("generate_video: Schreiben fehlgeschlagen: %s", e)
             return False
 
+    def list_mesh_backends(self, rig: str = "") -> List[ImageBackend]:
+        """Available mesh backends, optionally narrowed to a rig kind
+        ("mixamo" = humanoid GLB, "generic" = fbx + texture)."""
+        out = self.list_available_backends(media="mesh")
+        if rig:
+            out = [b for b in out
+                   if (getattr(b, "mesh_rig", "mixamo") or "mixamo") == rig]
+        return out
+
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
                       mesh_name: str = "", face_num=None,
-                      no_fingers=None) -> Dict[str, Any]:
-        """Generates a 3D mesh from ONE image via a MEDIA_TYPE=="mesh" backend.
+                      no_fingers=None, rig: str = "") -> Dict[str, Any]:
+        """Generates a 3D model from ONE image via a MEDIA_TYPE=="mesh" backend.
 
-        Picks a mesh backend by glob (empty = cheapest available mesh backend),
-        runs it through the pool's fallback engine and writes the returned model
-        file to ``output_path`` — the SUFFIX of output_path is replaced by the
-        one the gateway produced (e.g. .fbx), because the format is the
-        backend's choice, not ours.
+        ``rig`` ("mixamo" for humanoids, "generic" for everything else) narrows
+        the candidates: a humanoid must not be meshed by a generic alias and
+        vice versa. ``backend_glob`` picks a specific alias (its rig is
+        verified); empty = cheapest available backend of that rig.
 
-        Returns {"ok": bool, "path": str, "filename": str, "backend": str}.
+        A job may return TWO files: the generic aliases deliver an FBX plus a
+        separate basecolor PNG (an FBX embeds no texture). The model file keeps
+        our stem with the gateway's suffix; the texture is stored next to it as
+        ``<stem>.png``.
+
+        Returns {"ok", "path", "texture_path", "format", "rig", "filename",
+        "backend"}.
         """
         from pathlib import Path as _P
         params: Dict[str, Any] = {
@@ -337,15 +351,23 @@ class ImageService:
         # None = keep the backend's configured default (per-character override).
         if no_fingers is not None:
             params["no_fingers"] = bool(no_fingers)
+
+        primary = None
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
-        else:
-            meshes = self.list_available_backends(character_name, media="mesh")
+            if primary and rig and (getattr(primary, "mesh_rig", "mixamo") or "mixamo") != rig:
+                logger.warning(
+                    "generate_mesh: Backend '%s' liefert rig=%s, benoetigt wird "
+                    "rig=%s — waehle passendes Backend", primary.name,
+                    getattr(primary, "mesh_rig", "?"), rig)
+                primary = None
+        if not primary:
+            meshes = self.list_mesh_backends(rig)
             primary = meshes[0] if meshes else None
         if not primary:
-            logger.warning("generate_mesh: kein Mesh-Backend verfuegbar (glob=%r)",
-                           backend_glob)
-            return {"ok": False, "error": "no mesh backend available"}
+            logger.warning("generate_mesh: kein Mesh-Backend verfuegbar "
+                           "(glob=%r, rig=%r)", backend_glob, rig)
+            return {"ok": False, "error": f"no {rig or 'mesh'} backend available"}
 
         def _op(backend: ImageBackend):
             return backend.generate("", "", params,
@@ -361,20 +383,49 @@ class ImageService:
         if not result:
             return {"ok": False, "error": "generation failed"}
 
-        # The gateway decides the format (Trellis2 -> .fbx). Keep our stem,
-        # adopt its suffix so the viewer/client can pick the right loader.
-        gw_name = getattr(used, "last_result_name", "") or ""
-        suffix = _P(gw_name).suffix.lower() if gw_name else ""
+        # Sort the returned blobs: the model file (glb/fbx/…) and — for the
+        # generic aliases — its basecolor texture. Names come from the gateway.
+        names = list(getattr(used, "last_result_names", []) or [])
+        model_blob = None
+        model_name = ""
+        texture_blob = None
+        for idx, blob in enumerate(result):
+            nm = names[idx] if idx < len(names) else ""
+            suf = _P(nm).suffix.lower()
+            if suf in (".png", ".jpg", ".jpeg", ".webp"):
+                texture_blob = blob
+            elif model_blob is None:
+                model_blob = blob
+                model_name = nm
+        if model_blob is None:  # no name info at all — first blob is the model
+            model_blob, model_name = result[0], (names[0] if names else "")
+
         out = _P(output_path)
+        suffix = _P(model_name).suffix.lower() if model_name else ""
         if suffix and suffix != out.suffix.lower():
             out = out.with_suffix(suffix)
+        texture_path = ""
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(result[0])
+            out.write_bytes(model_blob)
+            if texture_blob is not None:
+                tex = out.with_suffix(".png")
+                tex.write_bytes(texture_blob)
+                texture_path = str(tex)
         except Exception as e:
             logger.error("generate_mesh: Schreiben fehlgeschlagen: %s", e)
             return {"ok": False, "error": str(e)}
-        return {"ok": True, "path": str(out), "filename": gw_name or out.name,
+
+        used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
+        fmt = out.suffix.lstrip(".").lower()
+        if fmt == "fbx" and not texture_path:
+            # An FBX embeds no texture — without the companion PNG the model is
+            # untextured (grey). Surface it instead of silently shipping it.
+            logger.warning("%s: FBX ohne Textur-PNG geliefert (%s)",
+                           getattr(used, "name", "?"), out.name)
+        return {"ok": True, "path": str(out), "texture_path": texture_path,
+                "format": fmt, "rig": used_rig,
+                "filename": model_name or out.name,
                 "backend": getattr(used, "name", "")}
 
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:

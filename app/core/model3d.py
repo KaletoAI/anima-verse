@@ -16,6 +16,7 @@ import json
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 from app.core.log import get_logger
 from app.core.model_refs import _current_outfit_state, find_ref_image
@@ -91,46 +92,77 @@ def find_model3d(character_name: str,
     return None
 
 
-def list_mesh_backends() -> Dict[str, Any]:
-    """Available mesh backends (MEDIA_TYPE=="mesh") + the admin default, so the
-    generate dialog can offer a choice (e.g. Trellis2-Low vs -High)."""
+def required_rig(character_name: str) -> str:
+    """Which rig this character needs: humanoids get the Mixamo 52-bone rig
+    (one GLB, animation clips apply), everything else a generic rig (FBX +
+    separate texture, no clips)."""
+    from app.core.model_refs import is_humanoid
+    return "mixamo" if is_humanoid(character_name) else "generic"
+
+
+def list_mesh_backends(rig: str = "") -> Dict[str, Any]:
+    """Available mesh backends (optionally only those producing ``rig``) + the
+    admin default, so the generate dialog can offer a choice (Low vs High)."""
     from app.core import config
     from app.imagegen.service import get_image_service
     out = []
     try:
         svc = get_image_service()
-        for b in svc.list_available_backends(media="mesh"):
+        for b in svc.list_mesh_backends(rig):
             out.append({
                 "name": b.name,
                 "model": getattr(b, "model", ""),
                 "cost": getattr(b, "cost", 0),
                 "face_num": getattr(b, "face_num", None),
+                "rig": getattr(b, "mesh_rig", "mixamo"),
             })
     except Exception as e:
         logger.debug("Mesh-Backends listen fehlgeschlagen: %s", e)
     default = str(config.get("image_generation.mesh_imagegen_default", "") or "").strip()
+    if default and not any(b["name"] == default for b in out):
+        default = ""  # the admin default is for another rig — don't preselect it
     return {"backends": out, "default": default}
+
+
+def find_texture(character_name: str,
+                 signature: Optional[str] = None) -> Optional[Path]:
+    """Basecolor PNG belonging to the cached mesh (generic/FBX case), or None.
+    It is stored next to the model with the same stem — same generation run."""
+    model = find_model3d(character_name, signature)
+    if not model:
+        return None
+    tex = model.with_suffix(".png")
+    return tex if tex.exists() else None
 
 
 def get_model3d_info(character_name: str) -> Dict[str, Any]:
     """Status of the mesh for the CURRENTLY worn outfit: cached file + meta,
-    whether a T-pose input exists, and whether a generation is running."""
+    whether a T-pose input exists, and whether a generation is running.
+
+    The model entry is what a 3D client needs: ``format`` (glb|fbx), ``rig``
+    (mixamo = animation clips apply, generic = they do not), ``url`` and — in
+    the FBX case only — ``texture_url``.
+    """
     try:
         _, _, signature = _current_outfit_state(character_name)
     except Exception:
         signature = ""
+    rig = required_rig(character_name)
     out: Dict[str, Any] = {
         "signature": signature,
+        "rig": rig,
         "has_input": bool(find_ref_image(character_name, "tpose", signature)
                           if signature else None),
         "model": None,
     }
     path = find_model3d(character_name, signature) if signature else None
     if path:
+        enc = quote(character_name)
         info: Dict[str, Any] = {"filename": path.name,
                                 "format": path.suffix.lstrip(".").lower(),
+                                "rig": rig,
                                 "size": path.stat().st_size,
-                                "url": f"/characters/{character_name}/model3d/file"}
+                                "url": f"/characters/{enc}/model3d/file"}
         meta_path = path.with_suffix(".json")
         if meta_path.exists():
             try:
@@ -139,11 +171,17 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 info["backend"] = meta.get("backend", "")
                 info["source_filename"] = meta.get("source_filename", "")
                 info["face_num"] = meta.get("face_num")
+                if meta.get("rig"):
+                    info["rig"] = meta["rig"]  # what it was ACTUALLY made with
             except (OSError, ValueError):
                 pass
+        tex = find_texture(character_name, signature)
+        if tex:
+            info["texture_url"] = f"/characters/{enc}/model3d/texture"
+            info["texture_size"] = tex.stat().st_size
         out["model"] = info
     out["options"] = get_model3d_options(character_name)
-    out.update(list_mesh_backends())
+    out.update(list_mesh_backends(rig))
     with _lock:
         out["pending"] = character_name in _generating
     return out
@@ -195,6 +233,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         pass
 
     error = ""
+    rig = required_rig(character_name)
     try:
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
@@ -202,6 +241,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             backend_glob=backend_glob,
             character_name=character_name,
             mesh_name=character_name,
+            rig=rig,
             # Per-character override; None = the backend's configured default.
             no_fingers=get_model3d_options(character_name).get("no_fingers"))
         if not res.get("ok"):
@@ -210,14 +250,21 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             return {"ok": False, "error": error}
 
         path = Path(res["path"])
-        # Drop a cached mesh of the same combination in another format
-        # (e.g. old .glb replaced by a .fbx).
+        # Drop a cached mesh of the same combination in another format (e.g. an
+        # old .fbx replaced by a .glb) — and its orphaned texture.
         for old in out_dir.glob(f"{signature}.*"):
             if old != path and old.suffix.lower() in MODEL_EXTS:
                 old.unlink()
+        if not res.get("texture_path"):
+            stale_tex = path.with_suffix(".png")
+            if stale_tex.exists():
+                stale_tex.unlink()
         meta = {
             "created_at": utc_now_iso(),
             "backend": res.get("backend", ""),
+            "format": res.get("format", path.suffix.lstrip(".").lower()),
+            "rig": res.get("rig", rig),
+            "has_texture": bool(res.get("texture_path")),
             "source_filename": res.get("filename", ""),
             "source_image": src.name,
             "signature": signature,
@@ -266,12 +313,12 @@ def trigger_generation(character_name: str, *, force: bool = False,
 
 
 def delete_model3d(character_name: str, signature: Optional[str] = None) -> bool:
-    """Deletes the cached mesh (+ sidecar) of a combination; True if removed."""
+    """Deletes the cached mesh (+ sidecar + texture); True if removed."""
     path = find_model3d(character_name, signature)
     if not path:
         return False
-    sidecar = path.with_suffix(".json")
+    for companion in (path.with_suffix(".json"), path.with_suffix(".png")):
+        if companion.exists():
+            companion.unlink()
     path.unlink()
-    if sidecar.exists():
-        sidecar.unlink()
     return True

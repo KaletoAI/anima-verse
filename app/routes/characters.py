@@ -4,6 +4,7 @@ import os
 import time
 import mimetypes
 from pathlib import Path
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from typing import Dict, Any, List, Optional
@@ -1249,38 +1250,106 @@ def get_character_outfit_image(character_name: str, image_filename: str):
 
 # --- 3D model asset (AV3D-5 stage 1) ---
 #
-# One GLB/VRM per character for external 3D map clients. Files are 20-30 MB
-# in the normal case (Mixamo-rigged GLB), so the GET route serves with an
-# ETag + conditional-request handling instead of re-sending the bytes.
+# The character's model for external 3D map clients. Two shapes:
+#   humanoid -> ONE .glb (52-bone Mixamo rig, textures embedded)
+#   generic  -> .fbx + its basecolor .png (an FBX embeds no texture)
+# Files are 5-30 MB, so the GET routes serve with an ETag + conditional
+# requests instead of re-sending the bytes. A character WITHOUT a model is a
+# normal state (404) — the client falls back to the portrait marker.
+#
+# An uploaded model is the manual OVERRIDE; without one the routes serve the
+# generated mesh of the currently worn outfit (app/core/model3d.py), so a
+# client has exactly one place to ask.
 
 _MODEL_MAX_BYTES = 100 * 1024 * 1024
 
 
+def _resolve_character_model(character_name: str):
+    """(path, meta, texture_path) of the character's model: the uploaded one if
+    present, else the generated mesh of the current outfit. (None, None, None)
+    when the character has no model — a normal state, not an error."""
+    from app.core.model3d import find_model3d, find_texture, get_model3d_info
+    from app.models.character import get_character_model_texture
+    meta = get_character_model_info(character_name)
+    if meta:
+        path = get_character_dir(character_name) / "model" / meta["filename"]
+        tex = get_character_model_texture(character_name)
+        meta = {**meta, "source": "upload"}
+        return path, meta, tex
+    path = find_model3d(character_name)
+    if not path:
+        return None, None, None
+    info = get_model3d_info(character_name).get("model") or {}
+    meta = {"format": path.suffix.lstrip(".").lower(),
+            "rig": info.get("rig", "mixamo"),
+            "filename": path.name,
+            "size": path.stat().st_size,
+            "has_texture": bool(info.get("texture_url")),
+            "created_at": info.get("created_at", ""),
+            "backend": info.get("backend", ""),
+            "source": "generated"}
+    return path, meta, find_texture(character_name)
+
+
 @router.post("/{character_name}/model")
 async def upload_character_model(character_name: str, request: Request) -> Dict[str, Any]:
-    """Uploads/replaces the character's 3D model (GLB/VRM, one active model).
+    """Uploads/replaces the character's 3D model (one active model).
 
-    Optional form field `rig`: mixamo|custom|none (default mixamo — the
-    shared animation-clip library of the 3D client applies)."""
+    Two accepted shapes, validated on the way in (app/core/model_validate.py):
+      * ``file``=<name>.glb — humanoid: must carry the 52-joint Mixamo rig AND
+        an embedded texture (a 2x2-pixel texture is the known empty-texture
+        artefact of a failed generation, not a valid result).
+      * ``file``=<name>.fbx + ``texture``=<name>.png — generic: an FBX embeds
+        no texture, so the basecolor PNG of the SAME run must come with it.
+
+    ``rig`` (mixamo|generic) is derived from the file, an explicit form field
+    only overrides the label. ``force=1`` stores despite validation errors.
+    """
     try:
+        from app.core.model_validate import validate_fbx, validate_glb
         form = await request.form()
         file = form.get("file")
         if not file:
             raise HTTPException(status_code=400, detail="No file uploaded")
         filename = (file.filename or "").lower()
-        if not filename.endswith((".glb", ".vrm")):
-            raise HTTPException(status_code=400, detail="Format not supported (GLB/VRM only)")
-        rig = str(form.get("rig") or "mixamo").strip().lower()
-        if rig not in MODEL_RIG_VALUES:
+        if not filename.endswith((".glb", ".fbx")):
             raise HTTPException(status_code=400,
-                                detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
+                                detail="Format not supported (GLB or FBX + PNG)")
         if not get_character_dir(character_name).exists():
             raise HTTPException(status_code=404, detail="Character not found")
+
         contents = await file.read()
         if len(contents) > _MODEL_MAX_BYTES:
             raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
-        meta = save_character_model(character_name, file.filename, contents, rig=rig)
+
+        tex_file = form.get("texture")
+        texture = await tex_file.read() if tex_file else None
+        if texture is not None and len(texture) > _MODEL_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Texture too large")
+
+        if filename.endswith(".glb"):
+            result = validate_glb(contents)
+            texture = None  # a GLB carries its textures inside
+        else:
+            result = validate_fbx(contents, texture)
+        force = str(form.get("force") or "").strip().lower() in ("1", "true", "yes")
+        if not result["ok"] and not force:
+            raise HTTPException(status_code=422, detail={
+                "reason": "invalid_model",
+                "errors": result["errors"],
+                "warnings": result["warnings"],
+                "joint_count": result.get("joint_count", 0),
+            })
+
+        rig = str(form.get("rig") or result["rig"]).strip().lower()
+        if rig not in MODEL_RIG_VALUES:
+            raise HTTPException(status_code=400,
+                                detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
+        meta = save_character_model(character_name, file.filename, contents,
+                                    rig=rig, texture=texture)
         return {"status": "success", **meta,
+                "warnings": result["warnings"],
+                "joint_count": result.get("joint_count", 0),
                 "url": f"/characters/{character_name}/model"}
     except HTTPException:
         raise
@@ -1288,18 +1357,42 @@ async def upload_character_model(character_name: str, request: Request) -> Dict[
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _file_response(path, request: Request, media_type: str):
+    """FileResponse with ETag + If-None-Match — the model files are 5-30 MB and
+    change practically never."""
+    from fastapi.responses import Response
+    stat = path.stat()
+    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304,
+                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+    return FileResponse(path, media_type=media_type, filename=path.name,
+                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+
 @router.get("/{character_name}/model/meta")
 def get_character_model_meta(character_name: str) -> Dict[str, Any]:
-    """Meta of the stored 3D model ({format, rig, size, ...}); 404 if none."""
-    meta = get_character_model_info(character_name)
+    """Meta of the character's 3D model — the uploaded one, else the generated
+    mesh of the current outfit. 404 = the character simply has no model (a
+    normal state; clients fall back to the portrait marker).
+
+    Carries what a 3D client needs: ``format`` (glb|fbx), ``rig`` (mixamo =
+    the shared animation clips apply, generic = they do not), ``url`` and — in
+    the FBX case only — ``texture_url``.
+    """
+    _path, meta, tex = _resolve_character_model(character_name)
     if not meta:
         raise HTTPException(status_code=404, detail="No model")
+    enc = quote(character_name)
+    meta = {**meta, "url": f"/characters/{enc}/model"}
+    if tex:
+        meta["texture_url"] = f"/characters/{enc}/model/texture"
     return meta
 
 
 @router.post("/{character_name}/model/meta")
 async def update_character_model_meta(character_name: str, request: Request) -> Dict[str, Any]:
-    """Updates model meta (currently only `rig`); 404 if no model exists."""
+    """Updates model meta (currently only `rig`); 404 if no UPLOADED model."""
     body = await request.json()
     rig = str(body.get("rig") or "").strip().lower()
     if rig not in MODEL_RIG_VALUES:
@@ -1313,28 +1406,31 @@ async def update_character_model_meta(character_name: str, request: Request) -> 
 
 @router.get("/{character_name}/model")
 def get_character_model_file(character_name: str, request: Request):
-    """Serves the 3D model bytes; 404-fallback lets clients degrade to the
-    portrait marker. ETag/If-None-Match so the 20-30 MB file transfers only
-    when it actually changed."""
+    """Serves the 3D model bytes (uploaded one, else the generated mesh).
+    404 lets clients degrade to the portrait marker."""
     from fastapi.responses import Response
-    meta = get_character_model_info(character_name)
-    if not meta:
+    path, meta, _tex = _resolve_character_model(character_name)
+    if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    model_path = get_character_dir(character_name) / "model" / meta["filename"]
-    stat = model_path.stat()
-    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304,
-                        headers={"ETag": etag, "Cache-Control": "no-cache"})
-    media_type = "model/gltf-binary" if meta.get("format") == "glb" else "application/octet-stream"
-    return FileResponse(model_path, media_type=media_type,
-                        filename=meta["filename"],
-                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+    media_type = ("model/gltf-binary" if (meta or {}).get("format") == "glb"
+                  else "application/octet-stream")
+    return _file_response(path, request, media_type)
+
+
+@router.get("/{character_name}/model/texture")
+def get_character_model_texture_file(character_name: str, request: Request):
+    """Serves the basecolor PNG of a generic/FBX model (a GLB embeds its
+    textures and has none here). 404 when absent."""
+    from fastapi.responses import Response
+    _path, _meta, tex = _resolve_character_model(character_name)
+    if not tex:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return _file_response(tex, request, "image/png")
 
 
 @router.delete("/{character_name}/model")
 def delete_character_model_endpoint(character_name: str) -> Dict[str, Any]:
-    """Removes the character's 3D model + meta; 404 if none exists."""
+    """Removes the UPLOADED 3D model + meta + texture; 404 if none exists."""
     if not delete_character_model(character_name):
         raise HTTPException(status_code=404, detail="No model")
     return {"status": "success"}
@@ -1444,14 +1540,21 @@ def get_character_model3d_file(character_name: str, request: Request):
     path = find_model3d(character_name)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    stat = path.stat()
-    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304,
-                        headers={"ETag": etag, "Cache-Control": "no-cache"})
-    return FileResponse(path, media_type="application/octet-stream",
-                        filename=path.name,
-                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+    media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"
+                  else "application/octet-stream")
+    return _file_response(path, request, media_type)
+
+
+@router.get("/{character_name}/model3d/texture")
+def get_character_model3d_texture(character_name: str, request: Request):
+    """Serves the basecolor PNG of the generated mesh (generic/FBX case only —
+    a GLB embeds its textures). 404 when absent."""
+    from fastapi.responses import Response
+    from app.core.model3d import find_texture
+    tex = find_texture(character_name)
+    if not tex:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return _file_response(tex, request, "image/png")
 
 
 @router.delete("/{character_name}/model3d")

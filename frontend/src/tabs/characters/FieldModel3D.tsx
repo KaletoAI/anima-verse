@@ -20,8 +20,10 @@ import { Model3DViewer } from './Model3DViewer'
 interface Model3DInfo {
   filename?: string
   format?: string
+  rig?: string
   size?: number
   url?: string
+  texture_url?: string
   created_at?: string
   backend?: string
   source_filename?: string
@@ -36,6 +38,7 @@ interface MeshBackend {
 
 interface Model3DStatus {
   signature?: string
+  rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
   options?: { no_fingers?: boolean | null }
@@ -193,17 +196,30 @@ export function FieldModel3D({ character }: { character: string }) {
   const model = st.model
   const pending = !!st.pending || busy
   const sizeMb = model?.size ? (model.size / (1024 * 1024)).toFixed(1) : ''
+  // Only a Mixamo rig can play the shared clips (humanoid characters).
+  const mixamo = (model?.rig || st.rig) !== 'generic'
+  const bust = model?.created_at || st.signature || ''
   // Cache-bust per combination so a re-generated mesh is re-fetched.
   const viewerUrl = model
-    ? `/characters/${enc}/model3d/file?v=${encodeURIComponent(model.created_at || st.signature || '')}`
+    ? `/characters/${enc}/model3d/file?v=${encodeURIComponent(bust)}`
     : ''
 
   return (
     <div className="ga-form">
       {model ? (
         <>
-          <Model3DViewer url={viewerUrl} format={model.format || 'fbx'} clipUrl={clipUrl} />
-          {clips.length ? (
+          <Model3DViewer
+            url={viewerUrl}
+            format={model.format || 'fbx'}
+            clipUrl={mixamo ? clipUrl : ''}
+            textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
+          />
+          {/* Animation clips need the Mixamo skeleton — a generic rig has none. */}
+          {!mixamo ? (
+            <div className="ga-hint">
+              {t('Generic rig (no standard skeleton) — the shared animation clips do not apply.')}
+            </div>
+          ) : clips.length ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Animation')}</span>
               <select
@@ -226,7 +242,9 @@ export function FieldModel3D({ character }: { character: string }) {
           )}
           <div className="ga-hint">
             {(model.format || '').toUpperCase()}
+            {model.rig ? ` · ${t('rig')}: ${model.rig}` : ''}
             {sizeMb ? ` · ${sizeMb} MB` : ''}
+            {model.texture_url ? ` · +${t('texture')}` : ''}
             {model.backend ? ` · ${model.backend}` : ''}
             {model.created_at ? ` · ${new Date(model.created_at).toLocaleString()}` : ''}
             {model.source_filename ? ` · ${model.source_filename}` : ''}
@@ -244,22 +262,27 @@ export function FieldModel3D({ character }: { character: string }) {
       <div className="ga-hint">
         {t('Generated from the T-pose render of the currently worn outfit and cached per outfit combination.')}
       </div>
-      <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('No fingers')}</span>
-        <select
-          className="ga-input"
-          value={st.options?.no_fingers == null ? '' : st.options.no_fingers ? '1' : '0'}
-          disabled={pending}
-          onChange={(e) => setNoFingers(e.target.value)}
-        >
-          <option value="">{t('— backend default —')}</option>
-          <option value="1">{t('On (no separate fingers)')}</option>
-          <option value="0">{t('Off (model the fingers)')}</option>
-        </select>
-      </label>
-      <div className="ga-hint">
-        {t('Overrides the mesh backend setting for this character. Takes effect on the next generation — use Regenerate for the current outfit.')}
-      </div>
+      {/* "no fingers" is a humanoid-alias param — the generic ones don't take it. */}
+      {mixamo ? (
+        <>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('No fingers')}</span>
+            <select
+              className="ga-input"
+              value={st.options?.no_fingers == null ? '' : st.options.no_fingers ? '1' : '0'}
+              disabled={pending}
+              onChange={(e) => setNoFingers(e.target.value)}
+            >
+              <option value="">{t('— backend default —')}</option>
+              <option value="1">{t('On (no separate fingers)')}</option>
+              <option value="0">{t('Off (model the fingers)')}</option>
+            </select>
+          </label>
+          <div className="ga-hint">
+            {t('Overrides the mesh backend setting for this character. Takes effect on the next generation — use Regenerate for the current outfit.')}
+          </div>
+        </>
+      ) : null}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <button
           type="button"

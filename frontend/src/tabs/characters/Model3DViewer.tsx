@@ -9,11 +9,11 @@
  * FBX), so the loader is picked by extension.
  */
 import { useEffect, useRef, useState } from 'react'
-import type { Material, Mesh, Object3D } from 'three'
+import type { Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 
-export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
-  { url: string; format: string; clipUrl?: string; height?: number }) {
+export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320 }:
+  { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number }) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -78,6 +78,27 @@ export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
           throw new Error(`Unsupported format: ${ext}`)
         }
         if (disposed) return
+
+        // An FBX embeds no texture — the basecolor PNG of the same generation
+        // run comes separately and has to be bound to the materials by hand
+        // (a GLB carries its textures inside and needs none of this).
+        if (textureUrl) {
+          const tex = await new THREE.TextureLoader().loadAsync(textureUrl)
+          if (disposed) return
+          tex.colorSpace = THREE.SRGBColorSpace
+          tex.flipY = false
+          object.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            if (!mesh.isMesh) return
+            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+            for (const m of mats) {
+              const mat = m as MeshStandardMaterial
+              mat.map = tex
+              mat.color?.set(0xffffff)
+              mat.needsUpdate = true
+            }
+          })
+        }
 
         // A pivot carries the orientation fix: the clip animates the model's
         // OWN root bone, so rotating the model itself would fight the
@@ -211,7 +232,7 @@ export function Model3DViewer({ url, format, clipUrl = '', height = 320 }:
       disposed = true
       cleanup?.()
     }
-  }, [url, format, clipUrl, height])
+  }, [url, format, clipUrl, textureUrl, height])
 
   return (
     <div style={{ position: 'relative' }}>

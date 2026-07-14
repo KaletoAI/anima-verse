@@ -56,6 +56,12 @@ class OpenAIMeshBackend(ImageBackend):
         self.max_wait = int(os.environ.get(f"{env_prefix}MAX_WAIT", "900") or 900)
         self.mesh_endpoint = (os.environ.get(f"{env_prefix}MESH_ENDPOINT", "")
                               or "/v1/generations").strip().rstrip("/")
+        # Which skeleton the alias produces — decides which characters may use
+        # it and how many files come back:
+        #   mixamo  -> humanoid 52-bone rig, ONE glb (textures embedded)
+        #   generic -> no standard skeleton, fbx + a separate basecolor png
+        self.mesh_rig = (os.environ.get(f"{env_prefix}MESH_RIG", "")
+                         or "mixamo").strip().lower()
         # Alias params (schema: "remove background" / "face num" / "no fingers")
         self.remove_background = str(
             os.environ.get(f"{env_prefix}REMOVE_BACKGROUND", "true")).strip().lower() \
@@ -70,10 +76,11 @@ class OpenAIMeshBackend(ImageBackend):
 
     # -- result naming ------------------------------------------------------
     @property
-    def last_result_name(self) -> str:
-        """File name of the last downloaded result (thread-local, e.g.
-        ``Bianca_mia.fbx``) — carries the FORMAT the gateway produced."""
-        return getattr(self._tls, "result_name", "") or ""
+    def last_result_names(self) -> List[str]:
+        """File names of the last downloaded results (thread-local), in the
+        same order as the returned byte blobs — they carry the FORMATS the
+        gateway produced (e.g. ``["Spoty_mia.fbx", "Spoty_basecolor.png"]``)."""
+        return list(getattr(self._tls, "result_names", []) or [])
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -141,7 +148,7 @@ class OpenAIMeshBackend(ImageBackend):
 
     def _generate(self, prompt: str, negative_prompt: str,
                   params: Dict[str, Any]) -> List[bytes]:
-        self._tls.result_name = ""
+        self._tls.result_names = []
         src = self._input_image(params)
         image_val = ""
         if src.startswith(("http://", "https://")):
@@ -162,8 +169,12 @@ class OpenAIMeshBackend(ImageBackend):
             "remove background": bool(params.get("remove_background",
                                                  self.remove_background)),
             "face num": int(params.get("face_num") or self.face_num),
-            "no fingers": bool(params.get("no_fingers", self.no_fingers)),
         }
+        # "no fingers" exists on the HUMANOID aliases only — the generic ones
+        # do not declare it (there are no fingers to skip on a quadruped).
+        if self.mesh_rig == "mixamo":
+            alias_params["no fingers"] = bool(
+                params.get("no_fingers", self.no_fingers))
         payload: Dict[str, Any] = {
             "model": params.get("model") or self.model,
             "images": {self._image_slot or "input_image": image_val},
@@ -224,25 +235,36 @@ class OpenAIMeshBackend(ImageBackend):
                                 job_id, float(sd.get("progress") or 0) * 100,
                                 sd.get("eta_s", "?"))
                 if status in ("done", "completed"):
-                    _results = sd.get("results") or []
-                    _first = _results[0] if _results and isinstance(_results[0], dict) else {}
-                    _r_url = (_first.get("url") or "")
-                    if _r_url and not _r_url.startswith(("http://", "https://")):
-                        _r_url = f"{self.api_url}{_r_url}"
-                    if not _r_url:
-                        _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/0"
-                    dl = requests.get(_r_url, headers=self._headers(), timeout=300)
-                    if dl.status_code == 200 and len(dl.content) > 1000:
-                        self._tls.result_name = (
-                            str(_first.get("filename") or _first.get("name") or "")
-                            or self._result_name_from(_r_url, dl))
-                        logger.info("%s: Mesh fertig (%.1fs, %d bytes, %s)",
-                                    self.name, time.time() - start, len(dl.content),
-                                    self.last_result_name or "?")
-                        return [dl.content]
-                    logger.error("%s: Result-Download HTTP %d (%d bytes)",
-                                 self.name, dl.status_code, len(dl.content))
-                    return []
+                    # A job may deliver SEVERAL files: the generic aliases
+                    # return the mesh (fbx) AND its basecolor texture (png),
+                    # because an fbx does not embed textures. Download them
+                    # all, in order — the caller sorts them out by name.
+                    _results = [r for r in (sd.get("results") or [])
+                                if isinstance(r, dict)]
+                    if not _results:
+                        _results = [{}]  # legacy: single result at /result/0
+                    blobs: List[bytes] = []
+                    names: List[str] = []
+                    for idx, res in enumerate(_results):
+                        _r_url = res.get("url") or ""
+                        if _r_url and not _r_url.startswith(("http://", "https://")):
+                            _r_url = f"{self.api_url}{_r_url}"
+                        if not _r_url:
+                            _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/{idx}"
+                        dl = requests.get(_r_url, headers=self._headers(), timeout=300)
+                        if dl.status_code != 200 or len(dl.content) < 100:
+                            logger.error("%s: Result-Download %d HTTP %d (%d bytes)",
+                                         self.name, idx, dl.status_code, len(dl.content))
+                            return []
+                        blobs.append(dl.content)
+                        names.append(str(res.get("filename") or res.get("name") or "")
+                                     or self._result_name_from(_r_url, dl))
+                    self._tls.result_names = names
+                    logger.info("%s: Mesh fertig (%.1fs, %d Datei(en): %s)",
+                                self.name, time.time() - start, len(blobs),
+                                ", ".join(f"{n} [{len(b)}B]"
+                                          for n, b in zip(names, blobs)))
+                    return blobs
             except Exception as e:
                 logger.warning("%s: Poll-Fehler: %s", self.name, e)
                 continue
