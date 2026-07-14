@@ -65,13 +65,29 @@ export async function getAnimationClips(): Promise<ApiClip[]> {
   }
 }
 
-/** URL des Charakter-Modells; null wenn der Server keins hat (404). */
-export async function getCharacterModelUrl(name: string): Promise<string | null> {
+export interface ApiModel {
+  url: string;
+  format: 'glb' | 'fbx';
+  /** "mixamo" = Clip-Bibliothek anwendbar; "generic" = eigenes Skelett (Tiere) */
+  rig: 'mixamo' | 'generic' | string;
+  /** nur im FBX-Fall: separat gespeicherte Textur */
+  textureUrl?: string;
+}
+
+/** Modell-Info eines Charakters; null wenn der Server keins hat (404). */
+export async function getCharacterModel(name: string): Promise<ApiModel | null> {
   try {
     const res = await fetch(`/characters/${encodeURIComponent(name)}/model3d`);
     if (!res.ok) return null;
     const data = await res.json();
-    return data?.model?.url ?? null;
+    const m = data?.model;
+    if (!m?.url) return null;
+    return {
+      url: m.url,
+      format: (m.format ?? 'glb') as 'glb' | 'fbx',
+      rig: m.rig ?? data.rig ?? 'mixamo',
+      textureUrl: m.texture_url ?? undefined,
+    };
   } catch {
     return null;
   }

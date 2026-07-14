@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { seededRandom } from './textures';
-import { getAnimationClips, getCharacterModelUrl } from '../api';
+import type { ApiModel } from '../api';
+import { getAnimationClips, getCharacterModel } from '../api';
 
 /**
  * Animierte 3D-Figuren für NPCs (Stufe 1 von AV3D-5): Modelle kommen aus
@@ -400,8 +401,8 @@ export class FigureLibrary {
     const loader = new GLTFLoader();
     const defaultHeight = manifest.defaultHeight ?? 1.75;
 
-    const loadFile = async (url: string): Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }> => {
-      if (/\.fbx(\?|$)/i.test(url)) {
+    const loadFile = async (url: string, forceFbx = false): Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }> => {
+      if (forceFbx || /\.fbx(\?|$)/i.test(url)) {
         const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
         const obj = await new FBXLoader().loadAsync(url);
         return { scene: obj, animations: obj.animations ?? [] };
@@ -511,7 +512,7 @@ export class FigureLibrary {
     return true;   // Server-Modelle kommen ggf. später (fetchCharacterModel)
   }
 
-  private loadFile!: (url: string) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
+  private loadFile!: (url: string, forceFbx?: boolean) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
 
   /** Modell eines Charakters vom Server nachladen (einmal pro Name).
    *  Ergebnis landet im Cache; onModelReady meldet die Fertigstellung. */
@@ -520,14 +521,14 @@ export class FigureLibrary {
     this.pending.add(charName);
     void (async () => {
       try {
-        const url = await getCharacterModelUrl(charName);
-        if (!url) {
+        const info = await getCharacterModel(charName);
+        if (!info) {
           this.apiModels.set(charName, null);   // Server hat keins -> Portrait
           return;
         }
-        const model = await this.buildModel(charName, url);
+        const model = await this.buildModel(charName, info);
         this.apiModels.set(charName, model);
-        console.info(`[figures] ${charName}: Modell vom Server (${model.clips.length} Clips)`);
+        console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}, ${model.clips.length} Clips)`);
         this.onModelReady?.(charName);
       } catch (e) {
         console.warn(`[figures] ${charName}: Modell nicht ladbar`, e);
@@ -538,10 +539,21 @@ export class FigureLibrary {
     })();
   }
 
-  /** GLB laden, aufrichten, normalisieren, Clips anwenden. */
-  private async buildModel(name: string, url: string): Promise<LoadedModel> {
-    const gltf = await this.loadFile(url);
+  /** Modell laden, aufrichten, normalisieren; Clips nur bei Mixamo-Rig.
+   *  FBX-Modelle (generic/Tiere) bekommen ihre Textur separat. */
+  private async buildModel(name: string, info: ApiModel): Promise<LoadedModel> {
+    const gltf = await this.loadFile(info.url, info.format === 'fbx');
     const template = gltf.scene;
+    if (info.textureUrl) {
+      const tex = await new THREE.TextureLoader().loadAsync(info.textureUrl);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.flipY = false;   // FBX-UVs entsprechen der glTF-Konvention
+      template.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          (o as THREE.Mesh).material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0 });
+        }
+      });
+    }
     const b = new THREE.Box3().setFromObject(template);
     const s = b.getSize(new THREE.Vector3());
     if (s.z > s.y * 1.5) {                       // Z-up-Export aufrichten
@@ -556,7 +568,9 @@ export class FigureLibrary {
       clips: gltf.animations.filter((c) => c.tracks.length > 0),
       scale: height / rawHeight, height, assignOnly: true, noClips: false,
     };
-    if (!model.clips.length && boneNames(template).size && this.externalClips.length) {
+    // Clips nur auf Mixamo-Rigs anwenden; "generic" (Tiere) bleibt clip-los
+    // und bekommt im Client ein prozedurales Idle.
+    if (info.rig !== 'generic' && !model.clips.length && boneNames(template).size && this.externalClips.length) {
       model.clips = adaptExternalClips(this.externalClips, template);
     }
     return model;
