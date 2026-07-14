@@ -79,9 +79,15 @@ def list_animation_clips() -> Dict[str, Any]:
             "url": f"/assets/animation-clips/{p.name}",
             "size": p.stat().st_size,
         })
+    from app.core.animation_sets import available_sets
     return {"clips": clips,
             "kinds": sorted({c["kind"] for c in clips}),
-            "sets": sorted({c["set"] for c in clips if c["set"]})}
+            # Sets that HAVE clips …
+            "clip_sets": sorted({c["set"] for c in clips if c["set"]}),
+            # … and everything selectable on a character: the base sets
+            # (female/male/animal, which follow from gender + the humanoid
+            # feature) plus any further set found in the files.
+            "sets": available_sets()}
 
 
 @router.get("/animation-clips/{filename}")

@@ -1187,9 +1187,9 @@ async def play_worldmap(user=Depends(get_current_user)):
         list_available_characters, get_character_current_location,
         get_effective_activity, get_movement_target, get_character_profile_image,
         get_character_current_room, get_character_current_feeling,
-        get_character_profile,
     )
     from app.core.expression_pose_maps import resolve_pose_animation
+    from app.core.animation_sets import resolve_set as resolve_animation_set
 
     avatar = (get_active_character() or "").strip()
 
@@ -1227,12 +1227,10 @@ async def play_worldmap(user=Depends(get_current_user)):
         # then the client keeps guessing from the text, exactly as before.
         # Travel is deliberately NOT forced to "walk": the activity is
         # reported honestly, the client has movement_target_id anyway.
-        anim_set = ""
-        try:
-            anim_set = str((get_character_profile(name) or {}).get(
-                "animation_set") or "").strip().lower()
-        except Exception:
-            anim_set = ""
+        # The set is RESOLVED: explicit attribute, else derived from the
+        # character (animal / female / male) — so the client always gets a
+        # concrete set instead of having to derive one itself.
+        anim_set = resolve_animation_set(name)
         characters.append({
             "name": name,
             "location_id": loc_id,

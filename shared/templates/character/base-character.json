@@ -142,10 +142,10 @@
           "allow_custom": true,
           "label": "Animation set",
           "label_de": "Animations-Set",
-          "hint": "Which figure's clips this character uses (lady, man, dog, …). Set it once and the character gets walk_lady, sit_lady, sleep_lady … automatically. Empty = the default clips.",
-          "hint_de": "Welche Figuren-Clips dieser Character nutzt (lady, man, dog, …). Einmal gesetzt, bekommt er automatisch walk_lady, sit_lady, sleep_lady … Leer = die Standard-Clips.",
-          "placeholder": "default clips",
-          "placeholder_de": "Standard-Clips"
+          "hint": "Which figure's clips this character uses. Set once, it gets walk_<set>, sit_<set>, sleep_<set> … automatically. Empty = derived from the character (animal, or female/male by gender).",
+          "hint_de": "Welche Figuren-Clips dieser Character nutzt. Einmal gesetzt, bekommt er automatisch walk_<set>, sit_<set>, sleep_<set> … Leer = aus dem Character abgeleitet (animal, bzw. female/male nach Geschlecht).",
+          "placeholder": "auto (from gender / species)",
+          "placeholder_de": "automatisch (aus Geschlecht / Art)"
         }
       ]
     },

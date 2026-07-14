@@ -10,7 +10,7 @@
  * Backend: GET /characters/{n}/model3d (status), POST .../model3d/generate,
  * GET .../model3d/file (bytes), DELETE .../model3d.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
@@ -44,11 +44,14 @@ interface Model3DStatus {
   options?: { no_fingers?: boolean | null }
   backends?: MeshBackend[]
   default?: string
+  animation_set?: string
+  animation_set_derived?: string
   pending?: boolean
 }
 
 interface AnimationClip {
   kind: string
+  set: string
   name: string
   filename: string
   url: string
@@ -92,27 +95,19 @@ export function FieldModel3D({ character }: { character: string }) {
   }, [load])
 
   // Shared animation clips (world-independent, same rig as the models).
-  // Initial pick: the last choice (if that clip still exists), else an "idle"
-  // clip, else none.
   useEffect(() => {
     apiGet<{ clips?: AnimationClip[] }>('/assets/animation-clips')
-      .then((d) => {
-        const list = d.clips || []
-        setClips(list)
-        setClipUrl((cur) => {
-          if (cur && list.some((c) => c.url === cur)) return cur
-          const saved = localStorage.getItem(CLIP_PREF_KEY) || ''
-          if (saved && list.some((c) => c.url === saved)) return saved
-          return list.find((c) => c.kind === DEFAULT_CLIP_KIND)?.url || ''
-        })
-      })
+      .then((d) => setClips(d.clips || []))
       .catch(() => setClips([]))
   }, [])
 
   const pickClip = useCallback((url: string) => {
     setClipUrl(url)
-    localStorage.setItem(CLIP_PREF_KEY, url)
-  }, [])
+    // Remember the KIND, not the URL: the same choice then follows across
+    // characters even when they use a different set (idle -> idle_female).
+    const kind = clips.find((c) => c.url === url)?.kind || ''
+    localStorage.setItem(CLIP_PREF_KEY, kind)
+  }, [clips])
 
   // Meshing takes minutes — poll until the backend reports it finished.
   const startPoll = useCallback(() => {
@@ -199,6 +194,28 @@ export function FieldModel3D({ character }: { character: string }) {
   // Only a Mixamo rig can play the shared clips (humanoid characters).
   const mixamo = (model?.rig || st.rig) !== 'generic'
   const bust = model?.created_at || st.signature || ''
+
+  // The character's set (explicit or derived: female/male/animal) decides
+  // WHICH clips it uses: its own plus the setless fallbacks.
+  const animSet = st.animation_set || ''
+  const myClips = useMemo(
+    () => clips.filter((c) => !c.set || c.set === animSet),
+    [clips, animSet],
+  )
+
+  // Keep the KIND across characters and resolve it to THIS character's set:
+  // the same "idle" pick lands on idle_female for her and idle_animal for the
+  // dog. A set-specific clip wins over the setless one.
+  useEffect(() => {
+    if (!myClips.length) return
+    setClipUrl((cur) => {
+      if (cur && myClips.some((c) => c.url === cur)) return cur
+      const wanted = localStorage.getItem(CLIP_PREF_KEY) || DEFAULT_CLIP_KIND
+      const ofKind = myClips.filter((c) => c.kind === wanted)
+      const pick = ofKind.find((c) => c.set === animSet) || ofKind[0]
+      return pick?.url || ''
+    })
+  }, [myClips, animSet])
   // Cache-bust per combination so a re-generated mesh is re-fetched.
   const viewerUrl = model
     ? `/characters/${enc}/model3d/file?v=${encodeURIComponent(bust)}`
@@ -214,32 +231,40 @@ export function FieldModel3D({ character }: { character: string }) {
             clipUrl={mixamo ? clipUrl : ''}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
           />
-          {/* Animation clips need the Mixamo skeleton — a generic rig has none. */}
-          {!mixamo ? (
-            <div className="ga-hint">
-              {t('Generic rig (no standard skeleton) — the shared animation clips do not apply.')}
-            </div>
-          ) : clips.length ? (
+          {/* The clips of THIS character's set (+ the setless fallbacks). */}
+          {myClips.length ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Animation')}</span>
+              <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>
+                {t('Animation')}
+                {animSet ? ` (${animSet})` : ''}
+              </span>
               <select
                 className="ga-input"
                 value={clipUrl}
                 onChange={(e) => pickClip(e.target.value)}
               >
                 <option value="">{t('— none (static) —')}</option>
-                {clips.map((c) => (
+                {myClips.map((c) => (
                   <option key={c.filename} value={c.url}>
-                    {c.kind} · {c.name}
+                    {c.kind}
+                    {c.set ? ` · ${c.set}` : ''}
                   </option>
                 ))}
               </select>
             </label>
           ) : (
             <div className="ga-hint">
-              {t('No animation clips — drop Mixamo FBX files ("Without Skin") into shared/models/clips/.')}
+              {clips.length
+                ? t('No clips for this animation set — add <kind>_<set>.fbx files or plain <kind>.fbx fallbacks.')
+                : t('No animation clips — drop Mixamo FBX files ("Without Skin") into shared/models/clips/.')}
             </div>
           )}
+          {/* Mixamo clips need the Mixamo skeleton — a generic rig has none. */}
+          {!mixamo ? (
+            <div className="ga-hint">
+              {t('Generic rig (no standard skeleton) — Mixamo clips will not drive this model.')}
+            </div>
+          ) : null}
           <div className="ga-hint">
             {(model.format || '').toUpperCase()}
             {model.rig ? ` · ${t('rig')}: ${model.rig}` : ''}

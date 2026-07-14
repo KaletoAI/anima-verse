@@ -451,8 +451,9 @@ export function CharactersTab() {
     }
   }, [subTabs, subTab, fieldTabs])
 
-  // Animation sets that actually have clips (shared/models/clips) — the
-  // vocabulary is open, so the options come from the files, not from a list.
+  // Animation sets: the base sets (female/male/animal — they follow from
+  // gender + the humanoid feature) plus every set found in the clips. The
+  // endpoint returns both merged, so the vocabulary stays open.
   const [animationSets, setAnimationSets] = useState<Array<{ value: string; label: string }>>([])
   useEffect(() => {
     apiGet<{ sets?: string[] }>('/assets/animation-clips')
