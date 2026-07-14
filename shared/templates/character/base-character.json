@@ -129,6 +129,27 @@
       "fields": []
     },
     {
+      "id": "animation_cfg",
+      "label": "Animation",
+      "label_de": "Animation",
+      "column": 25,
+      "row": 1,
+      "fields": [
+        {
+          "key": "animation_set",
+          "type": "select",
+          "source": "animation_sets",
+          "allow_custom": true,
+          "label": "Animation set",
+          "label_de": "Animations-Set",
+          "hint": "Which figure's clips this character uses (lady, man, dog, …). Set it once and the character gets walk_lady, sit_lady, sleep_lady … automatically. Empty = the default clips.",
+          "hint_de": "Welche Figuren-Clips dieser Character nutzt (lady, man, dog, …). Einmal gesetzt, bekommt er automatisch walk_lady, sit_lady, sleep_lady … Leer = die Standard-Clips.",
+          "placeholder": "default clips",
+          "placeholder_de": "Standard-Clips"
+        }
+      ]
+    },
+    {
       "id": "identity",
       "label": "Identity",
       "label_de": "Identität",

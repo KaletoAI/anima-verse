@@ -13,7 +13,7 @@ long max-age.
 import mimetypes
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
@@ -28,12 +28,27 @@ router = APIRouter(prefix="/assets", tags=["assets"])
 CLIP_EXTS = (".fbx", ".glb", ".gltf")
 
 
-def _kind_of(filename: str) -> str:
-    """Kind = file stem up to the first separator or digit, lowercased
-    ('Walk_02.fbx' -> 'walk', 'idle-breathing.fbx' -> 'idle')."""
+def parse_clip_name(filename: str) -> Tuple[str, str]:
+    """(kind, set) from the file name: ``<kind>[_<set>][_<n>].fbx``, lowercased.
+
+    The KIND is the semantic category the activity maps to (walk, sit, …).
+    The SET is the figure it was made for (lady, man, dog, …) — a character
+    picks its set once and thereby gets walk_lady, sit_lady, sleep_lady …
+    without anyone assigning clips per character. Numeric tokens are just
+    variants of the same clip and carry no meaning.
+
+        walk.fbx          -> ("walk", "")
+        walk_lady.fbx     -> ("walk", "lady")
+        Sit_Lady_02.fbx   -> ("sit", "lady")
+        walk_02.fbx       -> ("walk", "")
+    """
     stem = Path(filename).stem.strip().lower()
-    token = re.split(r"[\s_\-.0-9]", stem, maxsplit=1)[0]
-    return token or stem
+    tokens = [t for t in re.split(r"[\s_\-.]+", stem) if t]
+    if not tokens:
+        return (stem, "")
+    kind = tokens[0]
+    rest = [t for t in tokens[1:] if not t.isdigit()]
+    return (kind, rest[0] if rest else "")
 
 
 def _clip_files() -> List[Path]:
@@ -46,17 +61,27 @@ def _clip_files() -> List[Path]:
 
 @router.get("/animation-clips")
 def list_animation_clips() -> Dict[str, Any]:
-    """Lists the shared animation clips ([{kind, name, filename, url, size}])."""
+    """Lists the shared animation clips.
+
+    Per clip: ``kind`` (the activity category), ``set`` (the figure it was made
+    for — empty = the default figure), plus name/url/size. ``kinds`` and
+    ``sets`` list the vocabularies actually present; both are OPEN — a new one
+    is just a new file name, nothing is hardcoded.
+    """
     clips = []
     for p in _clip_files():
+        kind, cset = parse_clip_name(p.name)
         clips.append({
-            "kind": _kind_of(p.name),
+            "kind": kind,
+            "set": cset,
             "name": p.stem,
             "filename": p.name,
             "url": f"/assets/animation-clips/{p.name}",
             "size": p.stat().st_size,
         })
-    return {"clips": clips, "kinds": sorted({c["kind"] for c in clips})}
+    return {"clips": clips,
+            "kinds": sorted({c["kind"] for c in clips}),
+            "sets": sorted({c["set"] for c in clips if c["set"]})}
 
 
 @router.get("/animation-clips/{filename}")

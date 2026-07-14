@@ -451,14 +451,24 @@ export function CharactersTab() {
     }
   }, [subTabs, subTab, fieldTabs])
 
+  // Animation sets that actually have clips (shared/models/clips) — the
+  // vocabulary is open, so the options come from the files, not from a list.
+  const [animationSets, setAnimationSets] = useState<Array<{ value: string; label: string }>>([])
+  useEffect(() => {
+    apiGet<{ sets?: string[] }>('/assets/animation-clips')
+      .then((d) => setAnimationSets((d.sets || []).map((s) => ({ value: s, label: s }))))
+      .catch(() => setAnimationSets([]))
+  }, [])
+
   // Dynamische Optionsquellen für Template-Selects.
   const dynamicData: DynamicData = useMemo(
     () => ({
       tts_voices: ttsVoices,
       tts_speakers: ttsSpeakers,
       characters: sortedCharacters.map((c) => ({ value: c.name, label: c.display_name || c.name })),
+      animation_sets: animationSets,
     }),
-    [ttsVoices, ttsSpeakers, sortedCharacters],
+    [ttsVoices, ttsSpeakers, sortedCharacters, animationSets],
   )
 
   // Editable "current state" placement — rendered as a special slot

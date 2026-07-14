@@ -11,6 +11,7 @@ Presets are loaded from external JSON files:
 """
 
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
@@ -56,6 +57,29 @@ def _load_presets_from_file(filepath: Path) -> Tuple[dict[str, str], str]:
     except Exception as e:
         logger.error("Fehler beim Laden von %s: %s", filepath, e)
     return result, default_prompt
+
+
+def _load_animations_from_file(filepath: Path) -> dict[str, str]:
+    """primary-key -> animation kind (AV3D-6).
+
+    The kind (idle/walk/sit/…) is what a 3D client turns into a clip; the
+    vocabulary is OPEN and comes from the clips actually present
+    (/assets/animation-clips), never from a list in the code. Empty/missing =
+    the client keeps guessing from the activity text (fallback preserved).
+    """
+    result: dict[str, str] = {}
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for primary, entry in data.get("presets", {}).items():
+            anim = str(entry.get("animation") or "").strip().lower()
+            if anim:
+                result[primary.strip().lower()] = anim
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.error("Fehler beim Laden Animations-Map %s: %s", filepath, e)
+    return result
 
 
 def _load_keymap_from_file(filepath: Path) -> dict[str, str]:
@@ -148,6 +172,7 @@ logger.info("Pose-Presets geladen: %d Eintraege", len(POSE_PRESETS))
 
 POSE_KEY_MAP: dict[str, str] = {}
 PARTNER_POSE_KEYS: set[str] = set()
+POSE_ANIMATIONS: dict[str, str] = {}
 for _kind_name, _curated, _generated in [
     ("pose",
      get_pose_presets_dir() / "pose_presets.json",
@@ -157,6 +182,8 @@ for _kind_name, _curated, _generated in [
     POSE_KEY_MAP.update(_load_keymap_from_file(_curated))  # curated wins
     PARTNER_POSE_KEYS |= _load_partner_keys_from_file(_generated)
     PARTNER_POSE_KEYS |= _load_partner_keys_from_file(_curated)
+    POSE_ANIMATIONS.update(_load_animations_from_file(_generated))
+    POSE_ANIMATIONS.update(_load_animations_from_file(_curated))
 if PARTNER_POSE_KEYS:
     logger.info("Partner-Pose-Keys (skip variant gen): %s",
                  sorted(PARTNER_POSE_KEYS))
@@ -292,6 +319,44 @@ def resolve_pose_key(activity: str) -> Optional[str]:
     return best
 
 
+def reload_presets() -> None:
+    """Re-reads the preset files into the in-memory maps (after an edit in the
+    Poses admin tab) — no restart needed."""
+    global EXPRESSION_PRESETS, DEFAULT_EXPRESSION, POSE_PRESETS, DEFAULT_POSE
+    EXPRESSION_PRESETS, _de = _load_presets("expression")
+    if _de:
+        DEFAULT_EXPRESSION = _de
+    POSE_PRESETS, _dp = _load_presets("pose")
+    if _dp:
+        DEFAULT_POSE = _dp
+    curated = get_pose_presets_dir() / "pose_presets.json"
+    generated = get_pose_presets_dir() / "pose_presets_generated.json"
+    POSE_KEY_MAP.clear()
+    POSE_KEY_MAP.update(_load_keymap_from_file(generated))
+    POSE_KEY_MAP.update(_load_keymap_from_file(curated))
+    POSE_ANIMATIONS.clear()
+    POSE_ANIMATIONS.update(_load_animations_from_file(generated))
+    POSE_ANIMATIONS.update(_load_animations_from_file(curated))
+    PARTNER_POSE_KEYS.clear()
+    PARTNER_POSE_KEYS.update(_load_partner_keys_from_file(generated))
+    PARTNER_POSE_KEYS.update(_load_partner_keys_from_file(curated))
+    logger.info("Pose-Presets neu geladen: %d Eintraege, %d mit Animation",
+                len(POSE_PRESETS), len(POSE_ANIMATIONS))
+
+
+def resolve_pose_animation(activity: str) -> str:
+    """Animation kind for a free-text activity ("" = unknown -> the client
+    keeps guessing). Pure lookup: activity -> canonical preset key (synonyms
+    included) -> the preset's ``animation``. No LLM call in this path — new
+    activities get their kind when their preset is generated."""
+    if not activity:
+        return ""
+    key = resolve_pose_key(activity)
+    if not key:
+        return ""
+    return POSE_ANIMATIONS.get(key, "")
+
+
 def mood_bucket(mood: str) -> str:
     """Map a mood string to a coarse body-language bucket.
 
@@ -346,9 +411,35 @@ def resolve_pose_prompt(activity: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def available_animation_kinds() -> list[str]:
+    """The animation kinds that actually exist right now — derived from the
+    shared clips (``/assets/animation-clips``), never a list in the code."""
+    try:
+        from app.core.paths import get_animation_clips_dir
+        d = get_animation_clips_dir()
+        if not d.exists():
+            return []
+        kinds = set()
+        for p in d.iterdir():
+            if p.is_file() and p.suffix.lower() in (".fbx", ".glb", ".gltf"):
+                from app.routes.assets import parse_clip_name
+                kind, _set = parse_clip_name(p.name)
+                if kind:
+                    kinds.add(kind)
+        return sorted(kinds)
+    except Exception as e:
+        logger.debug("Animations-Kinds nicht ermittelbar: %s", e)
+        return []
+
+
 def _llm_generate_and_save(prompt_type: str, value: str) -> Optional[str]:
-    """Generate a prompt via LLM and persist it to the JSON preset file."""
-    text = _llm_generate_prompt(prompt_type, value)
+    """Generate a prompt via LLM and persist it to the JSON preset file.
+
+    For poses the LLM also picks the ANIMATION kind (AV3D-6) from the kinds
+    that currently exist — so a newly seen activity is animatable right away
+    instead of leaving the client guessing forever.
+    """
+    text, animation = _llm_generate_prompt(prompt_type, value)
     if not text:
         return None
 
@@ -359,18 +450,22 @@ def _llm_generate_and_save(prompt_type: str, value: str) -> Optional[str]:
         EXPRESSION_PRESETS[key] = text
     else:
         POSE_PRESETS[key] = text
+        if animation:
+            POSE_ANIMATIONS[key] = animation
+            POSE_KEY_MAP.setdefault(key, key)
 
     # Persist to generated JSON (separate file, not in git)
     if prompt_type == "expression":
         filepath = get_expression_presets_dir() / "expression_presets_generated.json"
     else:
         filepath = get_pose_presets_dir() / "pose_presets_generated.json"
-    _save_preset_to_json(filepath, key, text)
+    _save_preset_to_json(filepath, key, text, animation)
 
     return text
 
 
-def _save_preset_to_json(filepath: Path, key: str, prompt: str):
+def _save_preset_to_json(filepath: Path, key: str, prompt: str,
+                         animation: str = ""):
     """Append a new preset entry to the JSON file (thread-safe)."""
     with _json_lock:
         filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -384,38 +479,64 @@ def _save_preset_to_json(filepath: Path, key: str, prompt: str):
 
         # Don't overwrite existing primary keys
         if key not in presets:
-            presets[key] = {
-                "prompt": prompt,
-                "synonyms": [],
-                "_generated": True
-            }
+            entry = {"prompt": prompt, "synonyms": [], "_generated": True}
+            if animation:
+                entry["animation"] = animation
+            presets[key] = entry
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info("Neues Preset gespeichert in %s: '%s'", filepath.name, key)
+            logger.info("Neues Preset gespeichert in %s: '%s' (animation=%s)",
+                        filepath.name, key, animation or "-")
 
     return True
 
 
-def _llm_generate_prompt(prompt_type: str, value: str) -> Optional[str]:
-    """Generate an expression or pose prompt via LLM call."""
+def _llm_generate_prompt(prompt_type: str, value: str) -> Tuple[Optional[str], str]:
+    """Generate an expression or pose prompt via LLM call.
+
+    Returns (prompt, animation_kind). For poses with clips present, the model
+    answers as JSON {"pose", "animation"}; the kind is validated against the
+    kinds that exist. Everything else yields ("", "")/plain text.
+    """
     try:
         from app.core.llm_router import llm_call
         from app.core.prompt_templates import render_task
 
+        kinds = available_animation_kinds() if prompt_type == "pose" else []
         sys_prompt, user_prompt = render_task(
-            "expression_map", prompt_type=prompt_type, value=value)
+            "expression_map", prompt_type=prompt_type, value=value,
+            animation_kinds=", ".join(kinds))
 
         response = llm_call(
             task="expression_map",
             system_prompt=sys_prompt,
             user_prompt=user_prompt)
-        text = (response.content or "").strip().strip('"').strip("'")
+        raw = (response.content or "").strip()
+
+        animation = ""
+        text = raw
+        if kinds:
+            # JSON answer expected — tolerate code fences and stray prose.
+            m = re.search(r"\{.*\}", raw, re.S)
+            if m:
+                try:
+                    obj = json.loads(m.group(0))
+                    text = str(obj.get("pose") or obj.get("prompt") or "").strip()
+                    cand = str(obj.get("animation") or "").strip().lower()
+                    animation = cand if cand in kinds else ""
+                    if cand and not animation:
+                        logger.info("LLM schlug unbekannte Animation '%s' vor "
+                                    "(verfuegbar: %s) — verworfen", cand, kinds)
+                except json.JSONDecodeError:
+                    text = raw
+        text = text.strip().strip('"').strip("'")
         if text and len(text) < 300:
-            logger.info("LLM %s-Prompt fuer '%s': %s", prompt_type, value, text[:80])
-            return text
-        logger.warning("LLM %s-Prompt ungueltig: %s", prompt_type, text[:100])
+            logger.info("LLM %s-Prompt fuer '%s': %s (animation=%s)",
+                        prompt_type, value, text[:80], animation or "-")
+            return text, animation
+        logger.warning("LLM %s-Prompt ungueltig: %s", prompt_type, raw[:100])
     except RuntimeError:
         logger.debug("Kein LLM fuer %s-Prompt Generierung verfuegbar", prompt_type)
     except Exception as e:
         logger.error("LLM %s-Prompt Generierung fehlgeschlagen: %s", prompt_type, e)
-    return None
+    return None, ""

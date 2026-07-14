@@ -1187,7 +1187,9 @@ async def play_worldmap(user=Depends(get_current_user)):
         list_available_characters, get_character_current_location,
         get_effective_activity, get_movement_target, get_character_profile_image,
         get_character_current_room, get_character_current_feeling,
+        get_character_profile,
     )
+    from app.core.expression_pose_maps import resolve_pose_animation
 
     avatar = (get_active_character() or "").strip()
 
@@ -1218,11 +1220,26 @@ async def play_worldmap(user=Depends(get_current_user)):
             continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
         mt = get_movement_target(name) or ""
         prof = get_character_profile_image(name) or ""
+        activity = get_effective_activity(name) or ""
+        # AV3D-6: which clip a 3D figure plays. The KIND comes from the
+        # activity (via the pose preset's `animation`), the SET from the
+        # character (its clip family: lady/man/dog/…). Both may be empty —
+        # then the client keeps guessing from the text, exactly as before.
+        # Travel is deliberately NOT forced to "walk": the activity is
+        # reported honestly, the client has movement_target_id anyway.
+        anim_set = ""
+        try:
+            anim_set = str((get_character_profile(name) or {}).get(
+                "animation_set") or "").strip().lower()
+        except Exception:
+            anim_set = ""
         characters.append({
             "name": name,
             "location_id": loc_id,
             "room_id": get_character_current_room(name) or "",
-            "activity": get_effective_activity(name) or "",
+            "activity": activity,
+            "activity_animation": resolve_pose_animation(activity),
+            "animation_set": anim_set,
             "mood": get_character_current_feeling(name) or "",
             "movement_target_id": mt,
             "movement_target_name": name_by_id.get(mt, "") or mt,

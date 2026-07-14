@@ -7,22 +7,31 @@ Skeletal animation clips for the 3D character models, shared across ALL worlds
 
 Drop the `.fbx` files straight into this folder — no registration, no config.
 
-## Naming → `kind`
+## Naming → `kind` + `set`
 
-The **kind** is derived from the file name: everything up to the first `_`, `-`,
-space or digit, lowercased.
+    <kind>[_<set>][_<number>].fbx
 
-| file | kind |
-|------|------|
-| `walk.fbx` | `walk` |
-| `Walk_02.fbx` | `walk` |
-| `idle-breathing.fbx` | `idle` |
-| `sit.fbx` | `sit` |
+| file | kind | set |
+|------|------|-----|
+| `walk.fbx` | `walk` | — (default figure) |
+| `walk_lady.fbx` | `walk` | `lady` |
+| `Sit_Lady_02.fbx` | `sit` | `lady` |
+| `walk_02.fbx` | `walk` | — |
 
-`kind` is the category a client maps activities onto (`idle`, `walk`, `run`,
-`sit`, `dance`, `wave`, …). It is an open vocabulary — **no fixed list exists in
-the code**; a new kind is just a new file name. Several clips may share a kind
-(the client picks/varies).
+**`kind`** is the category an activity maps onto (`idle`, `walk`, `run`, `sit`,
+`lie`, `dance`, `wave`, …). It comes from what the character is *doing*: the
+pose presets carry an `animation` field (Game-Admin → Poses).
+
+**`set`** is the figure the clip was authored for (`lady`, `man`, `dog`, …). It
+comes from *who* the character is: every character has an optional
+`animation_set` attribute. Setting it once to `lady` gives that character
+`walk_lady`, `sit_lady`, `sleep_lady` … automatically — no per-character clip
+assignment anywhere. A character without a set (or without a matching clip)
+falls back to the plain `<kind>.fbx`.
+
+Both vocabularies are OPEN — **no list exists in the code**; a new kind or set
+is just a new file name. Trailing numbers only distinguish several clips of the
+same kind+set.
 
 ## Hard requirements for the files
 

@@ -53,6 +53,7 @@ from app.routes import auth, store, characters, chat, group_chat, scheduler, ins
 from app.routes import admin_settings
 from app.routes import user_gallery
 from app.routes import assets
+from app.routes import poses as poses_route
 from app.routes import secrets
 from app.routes import inventory
 from app.routes import account
@@ -409,6 +410,7 @@ app.middleware("http")(user_context_middleware)
 app.include_router(auth.router)
 app.include_router(store.router)
 app.include_router(assets.router)
+app.include_router(poses_route.router)
 app.include_router(characters.router)
 app.include_router(chat.router)
 app.include_router(group_chat.router, tags=["group_chat"])
