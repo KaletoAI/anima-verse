@@ -554,6 +554,13 @@ def build_replacement_map(
             computed = _compute_age(str(raw_value))
             if computed:
                 token_map[token] = computed
+        elif compute == "height_phrase":
+            # Stored in centimetres (for the 3D client), rendered as the
+            # descriptive phrase the prompts have always used.
+            from app.core.height import height_phrase
+            computed = height_phrase(profile)
+            if computed:
+                token_map[token] = computed
         else:
             token_map[token] = str(raw_value)
 

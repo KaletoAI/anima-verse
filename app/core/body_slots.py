@@ -205,6 +205,13 @@ def prompt_fragments(character_name: str,
         merged = dict(vals)
         for ph in placeholders:
             if ph not in merged:
+                if ph == "height":
+                    # Height is a profile field in CENTIMETRES now (it used to
+                    # be a word in this very slot). Prompts want the word, so
+                    # the number is rendered as the phrase it always was.
+                    from app.core.height import height_phrase
+                    merged[ph] = height_phrase(profile, character_name)
+                    continue
                 v = profile.get(ph)
                 merged[ph] = v.strip() if isinstance(v, str) else ""
         try:

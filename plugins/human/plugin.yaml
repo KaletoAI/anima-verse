@@ -84,18 +84,13 @@ body_slots:
         options: [fair, light, medium, olive, tan, brown, dark brown, dark, pale]
     prompt:
       always: "{tone} skin"
+  # NOTE: `height` used to live here as a word (petite…giant). It is a STANDARD
+  # profile field in CENTIMETRES now (Identity, under Age) — one number that
+  # also scales the 3D models against each other. The `{height}` placeholder
+  # below still resolves: app/core/height.py renders the centimetres as the
+  # same descriptive phrase this slot used to store.
   - id: build
     attributes:
-      height:
-        type: select
-        allow_custom: true
-        migrate_from: size
-        options: [petite, short, average height, tall, giant]
-        interest_aliases:
-          tall: ["gross", "groß", "große", "grosse", "großer", "grosser", "tall"]
-          giant: ["gross", "groß", "große", "grosse", "großer", "grosser", "tall"]
-          short: ["klein", "kleine", "kleiner", "short", "petite", "zierlich", "zierliche"]
-          petite: ["klein", "kleine", "kleiner", "short", "petite", "zierlich", "zierliche"]
       type:
         type: select
         allow_custom: true

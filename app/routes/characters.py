@@ -1387,6 +1387,11 @@ def get_character_model_meta(character_name: str) -> Dict[str, Any]:
     meta = {**meta, "url": f"/characters/{enc}/model"}
     if tex:
         meta["texture_url"] = f"/characters/{enc}/model/texture"
+    # Body height in cm — the client scales the figures against each other
+    # with it (models come out of the generator at arbitrary scale). None =
+    # unset, the client keeps its default.
+    from app.core.height import height_cm
+    meta["height_cm"] = height_cm(get_character_profile(character_name) or {})
     return meta
 
 

@@ -1232,9 +1232,19 @@ async def play_worldmap(user=Depends(get_current_user)):
         # it per kind and only falls back to the plain <kind>.fbx when neither
         # set has that clip — an explicit set may be incomplete.
         anim_sets = resolve_animation_sets(name)
+        # Body height in cm — the 3D client scales the figures against each
+        # other with it (a 155 cm character must not tower over a 190 cm one).
+        # None when unset: the client keeps its own default scale.
+        try:
+            from app.models.character import get_character_profile as _gcp
+            from app.core.height import height_cm as _height_cm
+            cm = _height_cm(_gcp(name) or {})
+        except Exception:
+            cm = None
         characters.append({
             "name": name,
             "location_id": loc_id,
+            "height_cm": cm,
             "room_id": get_character_current_room(name) or "",
             "activity": activity,
             "activity_animation": resolve_pose_animation(activity),

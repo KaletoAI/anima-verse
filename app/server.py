@@ -176,6 +176,15 @@ async def lifespan(app: FastAPI):
     except Exception as _pe:
         logger.debug("stale-stats prune failed: %s", _pe)
 
+    # Migration: height moved out of the human package (a word in the build
+    # slot) into a standard profile field in centimetres — the 3D client needs
+    # a number to scale the figures. Idempotent, world_kv-marked.
+    try:
+        from app.core.height import migrate_height_to_profile_once
+        migrate_height_to_profile_once()
+    except Exception as _he:
+        logger.debug("height migration failed: %s", _he)
+
     # Initialisiere Multi-Channel Support
     logger.info("Initialisiere Multi-Channel Support...")
     initialize_channels()

@@ -85,6 +85,21 @@
           "llm_generable": true
         },
         {
+          "key": "height",
+          "label": "Height (cm)",
+          "label_de": "Größe (cm)",
+          "type": "number",
+          "llm_generable": true,
+          "hint": "Body height in centimetres. Renders as the descriptive height in image prompts ({height}) and scales the 3D models against each other.",
+          "hint_de": "Körpergröße in Zentimetern. Erscheint als beschreibende Größe in Bild-Prompts ({height}) und skaliert die 3D-Modelle zueinander.",
+          "placeholder": "e.g. 172",
+          "placeholder_de": "z.B. 172",
+          "replacement": {
+            "target": "character_appearance",
+            "compute": "height_phrase"
+          }
+        },
+        {
           "key": "character_personality",
           "label": "Personality",
           "label_de": "Persönlichkeit",
