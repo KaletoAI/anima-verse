@@ -28,16 +28,19 @@ logger = get_logger(__name__)
 # face from the expression layer (REF_EXPRESSION_PROMPT below).
 #
 # Redundant arm phrasing on purpose: "T-pose" alone is weakly trained in
-# photo models and drifts into an A-pose (arms angled downward). Palms face
-# the CAMERA (not down, as the Mixamo convention would have it): image-to-3D
-# reconstructs hands from what it can see, and the back of a hand carries far
-# less shape information than an open palm.
+# photo models and drifts into an A-pose (arms angled downward).
+#
+# Palms face DOWN — the Mixamo bind pose. Palms toward the camera would show
+# image-to-3D more hand detail, but the rig is bound to THIS pose: a mesh
+# generated with turned palms gets its hand bones bound 90° off, and every
+# animation clip then twists the hands. A correct bind pose beats a slightly
+# better hand reconstruction.
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms raised straight out "
     "to the sides at exact shoulder height, fully extended and parallel to "
-    "the floor, body and arms forming the letter T, both palms turned "
-    "forward toward the camera, fingers straight and slightly spread, "
-    "thumbs pointing up, legs straight and slightly apart"
+    "the floor, body and arms forming the letter T, palms facing down toward "
+    "the floor, fingers straight, extended and slightly spread apart, thumbs "
+    "pointing forward, legs straight and slightly apart"
 )
 
 # Non-humanoid characters (animals): a T-pose is meaningless on four legs.
