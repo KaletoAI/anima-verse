@@ -168,6 +168,7 @@ async function startApp(username: string) {
     for (const c of map.characters) {
       if (c.room_id) roomOf.set(c.name, c.room_id);
       figures.setCharacterSets(c.name, c.animation_sets);
+      figures.setCharacterHeight(c.name, c.height_cm);
     }
   }
 

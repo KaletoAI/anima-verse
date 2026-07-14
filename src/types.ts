@@ -48,6 +48,8 @@ export interface MapCharacter {
   /** Fallback-Kette der Clip-Sets, z.B. ["lady","female"] */
   animation_sets?: string[];
   animation_set?: string;
+  /** Körpergröße in cm — bestimmt die Skalierung der 3D-Figur */
+  height_cm?: number;
   room_id?: string;   // AV3D-8
   mood?: string;      // AV3D-8
   activity?: string;

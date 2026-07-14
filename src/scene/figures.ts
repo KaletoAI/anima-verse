@@ -481,6 +481,8 @@ export class FigureLibrary {
   private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
   /** Set-Fallback-Kette pro Charakter (aus der Worldmap) */
   private charSets = new Map<string, string[]>();
+  /** Körpergröße pro Charakter in Metern (aus height_cm der Worldmap) */
+  private charHeight = new Map<string, number>();
   private defaultHeight = 1.75;
   /** wird gerufen, sobald ein nachgeladenes Charakter-Modell bereit ist */
   onModelReady: ((charName: string) => void) | null = null;
@@ -616,6 +618,11 @@ export class FigureLibrary {
     if (sets?.length) this.charSets.set(charName, sets);
   }
 
+  /** Körpergröße eines Charakters merken (cm -> m); wirkt beim nächsten Bau. */
+  setCharacterHeight(charName: string, heightCm: number | undefined) {
+    if (heightCm && heightCm > 30 && heightCm < 400) this.charHeight.set(charName, heightCm / 100);
+  }
+
   /** Clips für einen Charakter gemäß seiner Set-Kette auswählen:
    *  <kind>_<set1> → <kind>_<set2> → … → <kind> (ohne Set). */
   private clipsFor(charName: string): THREE.AnimationClip[] {
@@ -649,7 +656,7 @@ export class FigureLibrary {
         }
         const model = await this.buildModel(charName, info);
         this.apiModels.set(charName, model);
-        console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}, ${model.clips.length} Clips)`);
+        console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}, ${model.clips.length} Clips, ${(model.height * 100).toFixed(0)} cm)`);
         this.onModelReady?.(charName);
       } catch (e) {
         console.warn(`[figures] ${charName}: Modell nicht ladbar`, e);
@@ -685,7 +692,7 @@ export class FigureLibrary {
     if (repaired) console.info(`[figures] ${name}: ${repaired} fehlgeleitete Vertex-Gewichte repariert (Anti-Zersplittern)`);
     const bbox = new THREE.Box3().setFromObject(template);
     const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
-    const height = this.defaultHeight;
+    const height = this.charHeight.get(name) ?? this.defaultHeight;
     const model: LoadedModel = {
       name, template,
       clips: gltf.animations.filter((c) => c.tracks.length > 0),
