@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
+import { PathGrid } from './pathfind';
 import { seededRandom } from './textures';
 
 const WALK_SPEED = 3.4; // Welteinheiten pro Sekunde (~Gehtempo bei 10er-Zellen)
@@ -79,6 +80,8 @@ interface Npc {
   labelName: HTMLSpanElement;
   labelActivity: HTMLSpanElement;
   target: THREE.Vector3;
+  /** Restliche Wegpunkte bis zum Ziel (Wegfindung um Gebäude) */
+  waypoints: THREE.Vector3[];
   activity: string;
   travelLine: THREE.Line | null;
   travelKey: string;
@@ -95,8 +98,14 @@ export class NpcManager {
   group = new THREE.Group();
   private npcs = new Map<string, Npc>();
   private avatarName = '';
+  private grid: PathGrid | null = null;
 
   constructor(private figures: FigureLibrary | null = null) {}
+
+  /** Karten-Grid für die Wegfindung setzen (Gebäude blockieren). */
+  setPathGrid(grid: PathGrid) {
+    this.grid = grid;
+  }
 
   setAvatar(name: string) {
     this.avatarName = name;
@@ -124,6 +133,10 @@ export class NpcManager {
         this.npcs.set(st.char.name, npc);
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
+      }
+      // Zielwechsel -> Weg um Gebäude herum planen
+      if (!npc.target.equals(st.pos)) {
+        npc.waypoints = this.planPath(npc.root.position, st.pos);
       }
       npc.target.copy(st.pos);
       npc.activity = st.char.activity || '';
@@ -198,7 +211,7 @@ export class NpcManager {
     return {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
-      target: st.pos.clone(), activity: st.char.activity || '',
+      target: st.pos.clone(), waypoints: [], activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
@@ -227,6 +240,17 @@ export class NpcManager {
     }
   }
 
+  /** Weg von A nach B über begehbare Zellen; leer = direkte Linie genügt. */
+  private planPath(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3[] {
+    if (!this.grid) return [];
+    if (from.distanceTo(to) < 12) return [];        // im selben Ort: direkt
+    const a = PathGrid.cellOf(from);
+    const b = PathGrid.cellOf(to);
+    const pts = this.grid.findPath(a.x, a.y, b.x, b.y);
+    if (pts.length > 1) console.info(`[path] ${pts.length - 1} Wegpunkte (${a.x},${a.y}) -> (${b.x},${b.y})`);
+    return pts.slice(0, -1);                        // letzter Punkt = Zielzelle, dort gilt st.pos
+  }
+
   /** Blickrichtung im Stand: zum Schwerpunkt der nahen Nachbarn schauen
    *  (wirkt wie ein Gesprächskreis); allein stehende schauen zur Kamera-Seite. */
   private facingTargets(): Map<string, THREE.Vector3> {
@@ -252,12 +276,18 @@ export class NpcManager {
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
-      const delta = npc.target.clone().sub(npc.root.position);
+      // Nächster Wegpunkt (falls ein Weg geplant ist), sonst direkt zum Ziel
+      while (npc.waypoints.length && npc.root.position.distanceTo(npc.waypoints[0]) < 1.5) {
+        npc.waypoints.shift();
+      }
+      const goal = npc.waypoints[0] ?? npc.target;
+      const delta = goal.clone().sub(npc.root.position);
       delta.y = 0;
-      const dist = delta.length();
-      const moving = dist > 0.05;
+      const distToGoal = delta.length();
+      const dist = npc.waypoints.length ? distToGoal + 10 : distToGoal;  // unterwegs = laufen
+      const moving = distToGoal > 0.05;
       if (moving) {
-        const step = Math.min(dist, WALK_SPEED * dt * (dist > RUN_DISTANCE ? 1.8 : 1));
+        const step = Math.min(distToGoal, WALK_SPEED * dt * (dist > RUN_DISTANCE ? 1.8 : 1));
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);

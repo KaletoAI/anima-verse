@@ -4,6 +4,7 @@ import { Engine } from './scene/engine';
 import { FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
 import { applyNightGlow, applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { createHud, InfoPanel, showLogin } from './ui';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
@@ -94,6 +95,14 @@ async function startApp(username: string) {
     engine.scene.add(tile.group);
   }
   engine.setPickables([...tiles.values()].map((t) => t.group));
+
+  // Wegfindung: Gebäude blockieren, Straßen/Natur sind begehbar
+  npcs.setPathGrid(new PathGrid(
+    placeable.map((l) => ({
+      x: l.grid_x!, y: l.grid_y!,
+      passable: !!(l.passable || l.template_location_id),
+    }))
+  ));
   engine.target.copy(center);
   engine.dist = engine.targetDist = 70;
 
