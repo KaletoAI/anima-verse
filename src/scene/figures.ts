@@ -389,14 +389,13 @@ export class FigureLibrary {
    *  sonst alle Standard-Modelle + zugewiesene (assignOnly ohne Zuweisung
    *  wird übersprungen; Test-Modelle blähen sonst jeden Seitenaufruf auf). */
   async load(opts: { only?: string } = {}): Promise<boolean> {
-    let manifest: Manifest;
+    // Manifest ist optional (Dev-/Offline-Fallback) — fehlt es, arbeiten wir
+    // rein mit den Server-Assets weiter.
+    let manifest: Manifest = { models: [] };
     try {
       const res = await fetch('/models/manifest.json');
-      if (!res.ok) return false;
-      manifest = await res.json();
-    } catch {
-      return false;
-    }
+      if (res.ok) manifest = await res.json();
+    } catch { /* kein Manifest -> nur Server-Assets */ }
     this.assignments = manifest.assignments ?? {};
     const loader = new GLTFLoader();
     const defaultHeight = manifest.defaultHeight ?? 1.75;
@@ -509,7 +508,7 @@ export class FigureLibrary {
       if (!m.clips.length) console.warn(`[figures] ${m.name}: Clip-Retargeting fehlgeschlagen`);
       else console.info(`[figures] ${m.name}: ${m.clips.length} Clips von ${donor.name} retargetet`);
     }
-    return this.models.length > 0;
+    return true;   // Server-Modelle kommen ggf. später (fetchCharacterModel)
   }
 
   private loadFile!: (url: string) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
@@ -592,8 +591,11 @@ export class Figure {
   private currentKind: ClipKind | null = null;
   private targetYaw = Math.PI; // Default: Richtung Süden (Kamera-Grundstellung)
 
+  private baseScale = 1;
+
   constructor(model: LoadedModel) {
     this.height = model.height;
+    this.baseScale = model.scale;
     const inst = SkeletonUtils.clone(model.template);
     inst.scale.setScalar(model.scale);
     inst.traverse((o) => {
@@ -653,7 +655,25 @@ export class Figure {
     this.targetYaw = Math.atan2(dir.x, dir.z);
   }
 
+  /** true, wenn keine Animationsclips vorhanden sind (z.B. Tier-Rig oder
+   *  statisches Mesh) — dann übernimmt ein prozedurales Idle. */
+  get isStatic(): boolean {
+    return this.actions.size === 0;
+  }
+
+  private idlePhase = Math.random() * Math.PI * 2;
+
   update(dt: number) {
+    // Ohne Clips: leichtes Atmen/Wippen, damit die Figur nicht wie eine
+    // Statue wirkt (Tier-Rigs von UniRig haben keine passenden Clips).
+    if (this.isStatic) {
+      this.idlePhase += dt * 1.6;
+      const inst = this.root.children[0];
+      if (inst) {
+        inst.position.y = Math.sin(this.idlePhase) * 0.012;
+        inst.scale.setScalar(this.baseScale * (1 + Math.sin(this.idlePhase * 0.5) * 0.006));
+      }
+    }
     // kürzesten Drehweg nehmen
     let d = this.targetYaw - this.root.rotation.y;
     while (d > Math.PI) d -= Math.PI * 2;
