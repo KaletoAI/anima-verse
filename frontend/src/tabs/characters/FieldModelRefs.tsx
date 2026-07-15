@@ -1,12 +1,14 @@
 /**
- * FieldModelRefs — T-pose + default-pose reference renders of a character
- * in the CURRENT outfit (3D pipeline inputs). Rendered template-driven via
- * the section flag `special: "model_refs"` (slot wired in CharactersTab).
+ * FieldModelRefs — the character's reference renders in the CURRENT outfit.
+ * Two kinds: `pose` (default-pose wardrobe preview) and `tpose` (input for the
+ * image-to-3D pipeline). Which kinds are shown is chosen by the `kinds` prop —
+ * the wardrobe shows only the default pose, the 3D tab only the T-pose.
  *
  * Backend: GET /characters/{name}/model-refs (info),
  * GET .../model-refs/{tpose|pose} (image), POST .../model-refs/generate.
- * The pair is also generated automatically after outfit changes (debounced,
- * see admin settings "Image/Video Generation").
+ * The pair is also generated automatically after outfit changes (debounced).
+ * ``refreshKey`` (e.g. the equipped signature) reloads + cache-busts when the
+ * outfit changes, so the preview follows the current combination.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -26,10 +28,17 @@ interface RefsInfo {
   pending?: boolean
 }
 
-// Display order: default pose first, T-pose second (wardrobe + 3D tab).
-const KINDS = ['pose', 'tpose'] as const
+type RefKind = 'pose' | 'tpose'
 
-export function FieldModelRefs({ character }: { character: string }) {
+export function FieldModelRefs({
+  character,
+  kinds = ['pose', 'tpose'],
+  refreshKey = '',
+}: {
+  character: string
+  kinds?: RefKind[]
+  refreshKey?: string
+}) {
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
@@ -37,22 +46,47 @@ export function FieldModelRefs({ character }: { character: string }) {
   const [bust, setBust] = useState(1)
   const [busy, setBusy] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const settleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const kindsKey = kinds.join(',')
 
   const load = useCallback(async () => {
-    if (!character) return
+    if (!character) return null
     try {
-      setInfo(await apiGet<RefsInfo>(`/characters/${enc}/model-refs`))
+      const d = await apiGet<RefsInfo>(`/characters/${enc}/model-refs`)
+      setInfo(d)
+      return d
     } catch {
       setInfo({})
+      return null
     }
   }, [character, enc])
 
+  // Reload + cache-bust whenever the character OR the outfit (refreshKey)
+  // changes, so a switch to a different combination shows THAT combination's
+  // render instead of the previously loaded image. When a shown render is
+  // still missing (the outfit-change render is debounced ~60s), keep polling
+  // a bounded while so the fresh render appears without reopening the tab.
   useEffect(() => {
-    load()
+    let cancelled = false
+    let tries = 0
+    const tick = async () => {
+      const d = await load()
+      if (cancelled) return
+      setBust((b) => b + 1)
+      const missing = kinds.some((k) => !d?.[k])
+      tries += 1
+      if (missing && tries < 22) {
+        settleRef.current = setTimeout(tick, 6000)
+      }
+    }
+    tick()
     return () => {
+      cancelled = true
+      if (settleRef.current) clearTimeout(settleRef.current)
       if (pollRef.current) clearInterval(pollRef.current)
     }
-  }, [load])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, refreshKey, kindsKey])
 
   // Generation renders two images sequentially — poll a while and refresh
   // both the info (timestamps) and the image URLs via cache-buster.
@@ -86,7 +120,7 @@ export function FieldModelRefs({ character }: { character: string }) {
   // Per-image toggle for the automatic outfit-change render (persisted per
   // character); the Generate button fires exactly the checked ones.
   const setAuto = useCallback(
-    async (kind: (typeof KINDS)[number], value: boolean) => {
+    async (kind: RefKind, value: boolean) => {
       setInfo((prev) => ({ ...prev, auto: { ...(prev.auto || {}), [kind]: value } }))
       try {
         const d = await apiPost<{ auto: RefsInfo['auto'] }>(
@@ -100,27 +134,27 @@ export function FieldModelRefs({ character }: { character: string }) {
     [enc, load, t, toast],
   )
 
-  const autoOn = (kind: (typeof KINDS)[number]) => info.auto?.[kind] !== false
-  const anyAuto = KINDS.some((k) => autoOn(k))
+  const autoOn = (kind: RefKind) => info.auto?.[kind] !== false
+  const anyAuto = kinds.some((k) => autoOn(k))
 
-  const label = (kind: (typeof KINDS)[number]) =>
-    kind === 'tpose' ? t('T-pose') : t('Default pose')
+  const label = (kind: RefKind) => (kind === 'tpose' ? t('T-pose') : t('Default pose'))
 
   return (
     <div className="ga-form">
       <div style={{ display: 'flex', gap: 8 }}>
-        {KINDS.map((kind) => {
+        {kinds.map((kind) => {
           const ri = info[kind]
           return (
             <div key={kind} style={{ flex: 1, minWidth: 0 }}>
-              <div className="ga-hint">{label(kind)}</div>
+              {kinds.length > 1 ? <div className="ga-hint">{label(kind)}</div> : null}
               {ri ? (
                 <img
+                  // Key by bust so an outfit switch mounts a fresh element —
+                  // no stale visibility:hidden from a previous missing render.
+                  key={`${kind}-${bust}`}
                   src={`/characters/${enc}/model-refs/${kind}?v=${bust}`}
                   alt=""
                   style={{
-                    // Fixed shared height so both panes always line up
-                    // (320px = the tpl-field-image preview cap).
                     width: '100%',
                     height: 320,
                     objectFit: 'contain',
@@ -143,7 +177,9 @@ export function FieldModelRefs({ character }: { character: string }) {
         })}
       </div>
       <div className="ga-hint">
-        {t('Checked images are rendered automatically after outfit changes (debounced, cached per outfit combination); Generate re-renders the current combination. The T-pose image feeds the image-to-3D pipeline.')}
+        {kinds.includes('tpose')
+          ? t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination. The T-pose image feeds the image-to-3D pipeline.')
+          : t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination.')}
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <button
@@ -154,7 +190,7 @@ export function FieldModelRefs({ character }: { character: string }) {
         >
           {busy ? t('Generating…') : t('Generate')}
         </button>
-        {KINDS.map((kind) => (
+        {kinds.map((kind) => (
           <label
             key={kind}
             style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
@@ -165,7 +201,10 @@ export function FieldModelRefs({ character }: { character: string }) {
               checked={autoOn(kind)}
               onChange={(e) => setAuto(kind, e.target.checked)}
             />
-            <span>{label(kind)}</span>
+            <span>
+              {t('Auto')}
+              {kinds.length > 1 ? ` · ${label(kind)}` : ''}
+            </span>
           </label>
         ))}
       </div>

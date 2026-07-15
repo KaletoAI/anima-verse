@@ -112,8 +112,8 @@
     },
     {
       "id": "model_refs",
-      "label": "Reference renders (T-pose / default pose)",
-      "label_de": "Referenz-Renders (T-Pose / Standard-Pose)",
+      "label": "T-pose (image-to-3D input)",
+      "label_de": "T-Pose (Bild→3D-Input)",
       "column": 25,
       "row": 0,
       "special": "model_refs",

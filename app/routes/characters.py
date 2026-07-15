@@ -1384,8 +1384,10 @@ async def set_character_model_refs_auto(character_name: str, request: Request) -
 
 
 @router.get("/{character_name}/model-refs/{kind}")
-def get_character_model_ref_image(character_name: str, kind: str):
-    """Serves a reference render (kind: tpose|pose); 404 when absent."""
+def get_character_model_ref_image(character_name: str, kind: str, request: Request):
+    """Serves the reference render (kind: tpose|pose) of the CURRENT outfit
+    combination; 404 when absent. ETag so a re-render of the same combination
+    (or an outfit switch) is picked up instead of a stale cached image."""
     from fastapi.responses import Response
     from app.core.model_refs import REF_KINDS, find_ref_image
     if kind not in REF_KINDS:
@@ -1394,8 +1396,7 @@ def get_character_model_ref_image(character_name: str, kind: str):
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _ = mimetypes.guess_type(str(path))
-    return FileResponse(path, media_type=media_type or "application/octet-stream",
-                        headers={"Cache-Control": "no-cache"})
+    return _file_response(path, request, media_type or "application/octet-stream")
 
 
 # --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---

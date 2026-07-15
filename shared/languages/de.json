@@ -891,6 +891,8 @@
     "Rename or merge into another type": "Umbenennen oder mit anderem Type mergen",
     "Renamed": "Umbenannt",
     "Render this image automatically after outfit changes": "Dieses Bild nach Outfit-Wechseln automatisch rendern",
+    "Rendered automatically after outfit changes (debounced); Generate re-renders the current combination.": "Wird nach Outfit-Wechseln automatisch gerendert (gebündelt); Generieren rendert die aktuelle Kombination neu.",
+    "Rendered automatically after outfit changes (debounced); Generate re-renders the current combination. The T-pose image feeds the image-to-3D pipeline.": "Wird nach Outfit-Wechseln automatisch gerendert (gebündelt); Generieren rendert die aktuelle Kombination neu. Das T-Pose-Bild ist das Input für die Bild→3D-Pipeline.",
     "Replace": "Ersetzen",
     "Replies:": "Antworten:",
     "Request timeout – please try again.": "Zeitüberschreitung – bitte erneut versuchen.",

@@ -603,7 +603,7 @@ export function CharactersTab() {
                     specialSlots={{
                       placement: placementUI,
                       body_editor: <BodyEditor character={selected} />,
-                      model_refs: <FieldModelRefs character={selected} />,
+                      model_refs: <FieldModelRefs character={selected} kinds={['tpose']} />,
                       model3d_gen: <FieldModel3D character={selected} />,
                     }}
                   />

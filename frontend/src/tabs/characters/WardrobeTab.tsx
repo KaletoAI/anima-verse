@@ -252,11 +252,14 @@ export function WardrobeTab({ character }: { character: string }) {
             depends on the worn outfit, so it lives with the wardrobe. */}
       </div>
 
-      {/* ── Right: reference renders (default pose + T-pose, replaces the
-          old single outfit preview) on top, effective prompts below. ── */}
+      {/* ── Right: default-pose preview of the current outfit on top (the
+          T-pose input lives on the 3D tab), effective prompts below. The
+          refreshKey follows the equipped state so the preview tracks the
+          outfit as it is edited here. ── */}
       <div style={{ flex: '1 1 0', minWidth: 220, display: 'flex', flexDirection: 'column',
                     gap: 10, minHeight: 0, overflow: 'auto' }}>
-        <FieldModelRefs character={character} />
+        <FieldModelRefs character={character} kinds={['pose']}
+          refreshKey={JSON.stringify(data.equipped)} />
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 8 }}>
           <PromptPreview character={character}
             refreshKey={JSON.stringify(data.equipped)} />
