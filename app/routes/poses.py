@@ -47,22 +47,27 @@ def _write(filename: str, data: Dict[str, Any]) -> None:
     epm.reload_presets()
 
 
-def _locate(key: str) -> str:
-    """Which file holds this key (curated wins) — "" if it is unknown."""
+def _locate(key: str) -> tuple:
+    """(filename, parsed doc) of the file holding this key (curated wins) —
+    ("", None) if it is unknown. Handing back the doc lets the handler edit
+    the parse it already paid for instead of re-reading the file."""
     for filename in (CURATED, GENERATED):
-        if key in (_read(filename).get("presets") or {}):
-            return filename
-    return ""
+        data = _read(filename)
+        if key in (data.get("presets") or {}):
+            return filename, data
+    return "", None
 
 
 @router.get("")
 def list_poses(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """All presets + the animation kinds that currently have clips."""
     out: List[Dict[str, Any]] = []
+    seen: set = set()
     for filename, source in ((CURATED, "curated"), (GENERATED, "generated")):
         for key, entry in (_read(filename).get("presets") or {}).items():
-            if any(p["key"] == key for p in out):
+            if key in seen:
                 continue  # curated wins over a generated entry of the same key
+            seen.add(key)
             out.append({
                 "key": key,
                 "prompt": entry.get("prompt", ""),
@@ -81,11 +86,10 @@ async def update_pose(key: str, request: Request,
                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Updates prompt / synonyms / animation of a preset (in the file it lives in)."""
     key = key.strip().lower()
-    filename = _locate(key)
+    filename, data = _locate(key)
     if not filename:
         raise HTTPException(status_code=404, detail="Preset not found")
     body = await request.json()
-    data = _read(filename)
     entry = data["presets"][key]
     if "prompt" in body:
         entry["prompt"] = str(body["prompt"] or "").strip()
@@ -115,7 +119,7 @@ async def create_pose(request: Request,
     key = str(body.get("key") or "").strip().lower()
     if not key:
         raise HTTPException(status_code=400, detail="key missing")
-    if _locate(key):
+    if _locate(key)[0]:
         raise HTTPException(status_code=409, detail="Preset already exists")
     prompt = str(body.get("prompt") or "").strip()
     if not prompt:
@@ -138,10 +142,9 @@ def delete_pose(key: str,
                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Deletes a preset from the file it lives in."""
     key = key.strip().lower()
-    filename = _locate(key)
+    filename, data = _locate(key)
     if not filename:
         raise HTTPException(status_code=404, detail="Preset not found")
-    data = _read(filename)
     data["presets"].pop(key, None)
     _write(filename, data)
     return {"status": "success"}

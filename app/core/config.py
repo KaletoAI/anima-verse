@@ -79,6 +79,12 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
               "studio lighting, posed, cartoon, drawing, sketch, watermark, "
               "signature, text, logo, deformed, blurry, low quality")
 
+# Negatives of the mesh-input renders — ONE text per use case, shared by both
+# style families (deliberately NOT _NEG_PHOTO: "posed"/"studio lighting" would
+# fight the T-pose / flat-light goal).
+_NEG_TPOSE = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden")
+_NEG_TPOSE_ANIMAL = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume")
+
 # Eingebaute Defaults pro use_case × Familie. Diese Werte werden NICHT in die
 # config.json geseedet — sie sind Resolver-Default UND grauer Placeholder in der
 # Admin-UI (leeres Feld = dieser Default greift). Ohne Backend-Fallback braucht
@@ -197,12 +203,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     "tpose": {
         "keywords": {
             "prompt_style": "full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
-            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden",
+            "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
             "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
-            "prompt_negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden",
+            "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
     },
@@ -212,12 +218,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     "tpose_animal": {
         "keywords": {
             "prompt_style": "full body view of the animal, nose to tail, all four legs and the tail fully inside the frame, three-quarter side view, margin around the animal, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
-            "prompt_negative": "illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume",
+            "prompt_negative": _NEG_TPOSE_ANIMAL,
             "prompt_instruction": "Write comma-separated tags describing the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
         },
         "natural": {
             "prompt_style": "a full-body photo of the animal from nose to tail against a plain neutral background, seen from a three-quarter side angle with all four legs and the tail entirely inside the frame and margin around it, flat even shadowless lighting, uniform illumination, sharp focus",
-            "prompt_negative": "illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume",
+            "prompt_negative": _NEG_TPOSE_ANIMAL,
             "prompt_instruction": "Describe the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
         },
     },

@@ -364,6 +364,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 
     error = ""
     rig = required_rig(character_name)
+    # Per-character override; None = the backend's configured default. One
+    # load — the meta block below reuses it (each load reads the profile).
+    no_fingers = get_model3d_options(character_name).get("no_fingers")
     try:
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
@@ -372,8 +375,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             character_name=character_name,
             mesh_name=character_name,
             rig=rig,
-            # Per-character override; None = the backend's configured default.
-            no_fingers=get_model3d_options(character_name).get("no_fingers"))
+            no_fingers=no_fingers)
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
             logger.error("Model3D %s fehlgeschlagen: %s", character_name, error)
@@ -400,7 +402,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             "source_image": src.name,
             "signature": signature,
             "character": character_name,
-            "no_fingers": get_model3d_options(character_name).get("no_fingers"),
+            "no_fingers": no_fingers,
         }
         path.with_suffix(".json").write_text(
             json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
