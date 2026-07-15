@@ -351,6 +351,25 @@ def location_model3d_delete(location_id: str) -> Dict[str, Any]:
     return {"status": "success", "removed": delete_building_model(location_id)}
 
 
+@router.post("/locations/{location_id}/model3d/rotation")
+async def location_model3d_rotation(location_id: str, request: Request) -> Dict[str, Any]:
+    """Persist the building model's orientation fix (body: {x,y,z} in degrees,
+    snapped to 90-degree steps). Delivered to every client via /model/meta —
+    generated meshes come out arbitrarily oriented, the admin dials the fix
+    in the viewer."""
+    from app.core.location_model3d import set_rotation
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    try:
+        meta = set_rotation(location_id, data)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="No model")
+    return {"meta": meta}
+
+
 # ── Map Layout Import / Export ──
 
 @router.get("/map/export")

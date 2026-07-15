@@ -93,14 +93,40 @@ def get_building_info(location_id: str) -> Dict[str, Any]:
 
 
 def get_client_meta(location_id: str) -> Optional[Dict[str, Any]]:
-    """Lean meta for the 3D client (``{format, rig}``), or None when there is no
-    model — no backend enumeration (that is the admin status's job)."""
+    """Lean meta for the 3D client (``{format, rig, rotation}``), or None when
+    there is no model — no backend enumeration (that is the admin status's
+    job). ``rotation`` is the admin's persisted 90°-step orientation fix; the
+    client applies it to the model root on load."""
     p = find_building_model(location_id)
     if not p:
         return None
     meta = _read_meta(_owner_id(location_id))
     return {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
-            "rig": meta.get("rig", "none")}
+            "rig": meta.get("rig", "none"),
+            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0}}
+
+
+def set_rotation(location_id: str, rotation: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist the admin's orientation fix ({x,y,z} in degrees, each snapped
+    to 0/90/180/270). Generated meshes come out arbitrarily oriented and
+    nobody can compute which way is up — the admin dials it in the viewer,
+    every client applies it on load. Returns the updated sidecar meta."""
+    owner = _owner_id(location_id)
+    if not owner or not find_building_model(location_id):
+        raise ValueError("no model")
+    meta = _read_meta(owner)
+    cur = meta.get("rotation") or {}
+    rot: Dict[str, int] = {}
+    for axis in ("x", "y", "z"):
+        try:
+            v = int(rotation.get(axis, cur.get(axis, 0)) or 0)
+        except (TypeError, ValueError):
+            v = int(cur.get(axis, 0) or 0)
+        rot[axis] = (v // 90 * 90) % 360
+    meta["rotation"] = rot
+    (_model_dir(owner) / f"{_STEM}.json").write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    return meta
 
 
 def _purge(dir_: Path, keep: Optional[Path] = None) -> None:

@@ -12,12 +12,27 @@ import { useEffect, useRef, useState } from 'react'
 import type { Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 
-export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320 }:
-  { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number }) {
+const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
+
+export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation }:
+  { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
+    /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
+     *  without reloading the model. */
+    rotation?: { x?: number; y?: number; z?: number } }) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const orientRef = useRef<Object3D | null>(null)
+  const rotationRef = useRef(rotation)
+  rotationRef.current = rotation
+
+  // Live-apply a changed rotation to the mounted scene — a reload would
+  // re-download a multi-MB model per 90° click.
+  useEffect(() => {
+    orientRef.current?.rotation.set(
+      _deg(rotation?.x), _deg(rotation?.y), _deg(rotation?.z))
+  }, [rotation?.x, rotation?.y, rotation?.z])
 
   useEffect(() => {
     let disposed = false
@@ -136,7 +151,18 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         // animation. The pivot sits above it, untouched by the mixer.
         const pivot = new THREE.Group()
         pivot.add(object)
-        scene.add(pivot)
+        // The persisted admin rotation sits on its OWN group above the pivot —
+        // the pivot carries the automatic up-axis fix, this one the admin's
+        // 90° choice; they must not overwrite each other.
+        const orient = new THREE.Group()
+        orient.add(pivot)
+        scene.add(orient)
+        const _r = rotationRef.current
+        orient.rotation.set(_deg(_r?.x), _deg(_r?.y), _deg(_r?.z))
+        orientRef.current = orient
+        disposers.push(() => {
+          if (orientRef.current === orient) orientRef.current = null
+        })
         disposers.push(() => {
           scene.traverse((o: Object3D) => {
             const mesh = o as Mesh

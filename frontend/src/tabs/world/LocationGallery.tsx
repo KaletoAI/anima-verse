@@ -12,7 +12,14 @@ import { ImageSetDialog } from './ImageSetDialog'
 interface BuildingModelStatus {
   exists?: boolean
   pending?: boolean
-  meta?: { source_image?: string; backend?: string; created_at?: string; format?: string }
+  meta?: {
+    source_image?: string
+    backend?: string
+    created_at?: string
+    format?: string
+    /** Persisted 90°-step orientation fix — the 3D client applies it too. */
+    rotation?: { x?: number; y?: number; z?: number }
+  }
   backends?: MeshBackend[]
   default?: string
 }
@@ -301,6 +308,28 @@ export function LocationGallery({
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
     },
     [modelSrc, enc, startModelPoll, t, toast],
+  )
+
+  // Persisted 90°-step orientation fix: generated meshes come out arbitrarily
+  // oriented (buildings landed upside down on the map) — each click rotates
+  // one axis by +90°, the viewer applies it live and the 3D client reads it
+  // from /model/meta.
+  const rotateModel = useCallback(
+    async (axis: 'x' | 'y' | 'z') => {
+      const cur = model3d?.meta?.rotation || {}
+      const next = {
+        x: cur.x || 0, y: cur.y || 0, z: cur.z || 0,
+        [axis]: ((cur[axis] || 0) + 90) % 360,
+      }
+      try {
+        const d = await apiPost<{ meta: BuildingModelStatus['meta'] }>(
+          `/world/locations/${enc}/model3d/rotation`, next)
+        setModel3d((prev) => (prev ? { ...prev, meta: d.meta } : prev))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [model3d, enc, t, toast],
   )
 
   // Two-step delete (no window.confirm — in-app confirmation via button pair).
@@ -855,7 +884,23 @@ export function LocationGallery({
                 url={`/play/locations/${enc}/model?v=${encodeURIComponent(model3d?.meta?.created_at || '')}`}
                 format={model3d?.meta?.format || 'glb'}
                 height={420}
+                rotation={model3d?.meta?.rotation}
               />
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                {(['x', 'y', 'z'] as const).map((axis) => (
+                  <button
+                    key={axis}
+                    type="button"
+                    className="ga-btn ga-btn-sm"
+                    onClick={() => { void rotateModel(axis) }}
+                  >
+                    ↻ {axis.toUpperCase()} +90° ({model3d?.meta?.rotation?.[axis] || 0}°)
+                  </button>
+                ))}
+                <span className="ga-hint">
+                  {t('Persisted — the 3D map client applies this orientation too.')}
+                </span>
+              </div>
             </div>
           </div>
         </div>,
