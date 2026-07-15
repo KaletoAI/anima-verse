@@ -14,9 +14,10 @@ import mimetypes
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 
 from app.core.animation_clips import CLIP_EXTS, clip_files, parse_clip_name
+from app.core.http_files import etag_file_response
 from app.core.log import get_logger
 from app.core.paths import get_animation_clips_dir
 
@@ -65,12 +66,7 @@ def get_animation_clip(filename: str, request: Request):
     path = get_animation_clips_dir() / filename
     if not path.exists() or path.suffix.lower() not in CLIP_EXTS:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    stat = path.stat()
-    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers={"ETag": etag})
     media_type, _ = mimetypes.guess_type(str(path))
-    return FileResponse(
-        path, media_type=media_type or "application/octet-stream",
-        filename=path.name,
-        headers={"ETag": etag, "Cache-Control": "public, max-age=86400"})
+    return etag_file_response(path, request,
+                              media_type or "application/octet-stream",
+                              cache_control="public, max-age=86400")

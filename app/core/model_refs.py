@@ -171,11 +171,12 @@ def get_model_refs_dir(character_name: str) -> Path:
     return refs_dir
 
 
-def _current_outfit_state(character_name: str) -> tuple:
+def current_outfit_state(character_name: str) -> tuple:
     """(equipped_pieces, equipped_items, signature) of the CURRENT worn
     state. The signature reuses the expression cache's equipped-signature
     (pieces + items, stably sorted) so both caches agree on what counts as
-    "the same outfit combination"."""
+    "the same outfit combination". Public: the per-outfit mesh store
+    (app/core/model3d.py) keys on the same signature."""
     import hashlib
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     from app.core.expression_regen import _equipped_signature
@@ -193,7 +194,7 @@ def find_ref_image(character_name: str, kind: str,
         return None
     if signature is None:
         try:
-            _, _, signature = _current_outfit_state(character_name)
+            _, _, signature = current_outfit_state(character_name)
         except Exception:
             return None
     from app.models.character import get_character_dir
@@ -220,7 +221,7 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     combination (filename + sidecar meta, or None if not rendered yet)."""
     import json
     try:
-        _, _, signature = _current_outfit_state(character_name)
+        _, _, signature = current_outfit_state(character_name)
     except Exception:
         signature = ""
     out: Dict[str, Any] = {"signature": signature}
@@ -277,7 +278,7 @@ def generate_model_ref_images(character_name: str,
     if not kinds:
         return {}
 
-    pieces, items, signature = _current_outfit_state(character_name)
+    pieces, items, signature = current_outfit_state(character_name)
     if not force:
         cached = tuple(k for k in kinds
                        if find_ref_image(character_name, k, signature))

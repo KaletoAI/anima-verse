@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
 from typing import Dict, Any, List, Optional
 from app.core.auth_dependency import require_admin
+from app.core.http_files import etag_file_response
 from app.core.log import get_logger
 
 logger = get_logger("characters")
@@ -1267,7 +1268,11 @@ def _resolve_character_model(character_name: str):
     """(path, meta, texture_path) of the character's current-outfit model —
     uploaded or generated, whichever is stored. (None, None, None) when there is
     none: a normal state, not an error. (The pre-per-outfit global upload store
-    was migrated into the per-outfit store at boot — no serving fallback.)"""
+    was migrated into the per-outfit store at boot — no serving fallback.)
+
+    Only the META route needs this: get_model3d_info re-reads the profile and
+    enumerates the mesh backends. The byte routes below resolve the file path
+    directly."""
     from app.core.model3d import find_model3d, find_texture, get_model3d_info
     path = find_model3d(character_name)
     if path:
@@ -1284,17 +1289,7 @@ def _resolve_character_model(character_name: str):
     return None, None, None
 
 
-def _file_response(path, request: Request, media_type: str):
-    """FileResponse with ETag + If-None-Match — the model files are 5-30 MB and
-    change practically never."""
-    from fastapi.responses import Response
-    stat = path.stat()
-    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304,
-                        headers={"ETag": etag, "Cache-Control": "no-cache"})
-    return FileResponse(path, media_type=media_type, filename=path.name,
-                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+# ETag/If-None-Match serving is shared: app.core.http_files.etag_file_response.
 
 
 @router.get("/{character_name}/model/meta")
@@ -1327,12 +1322,13 @@ def get_character_model_file(character_name: str, request: Request):
     """Serves the 3D model bytes (uploaded one, else the generated mesh).
     404 lets clients degrade to the portrait marker."""
     from fastapi.responses import Response
-    path, meta, _tex = _resolve_character_model(character_name)
+    from app.core.model3d import find_model3d
+    path = find_model3d(character_name)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    media_type = ("model/gltf-binary" if (meta or {}).get("format") == "glb"
+    media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"
                   else "application/octet-stream")
-    return _file_response(path, request, media_type)
+    return etag_file_response(path, request, media_type)
 
 
 @router.get("/{character_name}/model/texture")
@@ -1340,10 +1336,11 @@ def get_character_model_texture_file(character_name: str, request: Request):
     """Serves the basecolor PNG of a generic/FBX model (a GLB embeds its
     textures and has none here). 404 when absent."""
     from fastapi.responses import Response
-    _path, _meta, tex = _resolve_character_model(character_name)
+    from app.core.model3d import find_texture
+    tex = find_texture(character_name)
     if not tex:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    return _file_response(tex, request, "image/png")
+    return etag_file_response(tex, request, "image/png")
 
 
 # --- 3D reference renders (T-pose / default pose, app/core/model_refs.py) ---
@@ -1407,7 +1404,7 @@ def get_character_model_ref_image(character_name: str, kind: str, request: Reque
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _ = mimetypes.guess_type(str(path))
-    return _file_response(path, request, media_type or "application/octet-stream")
+    return etag_file_response(path, request, media_type or "application/octet-stream")
 
 
 # --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---
@@ -1549,7 +1546,7 @@ def get_character_model3d_file(character_name: str, request: Request):
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"
                   else "application/octet-stream")
-    return _file_response(path, request, media_type)
+    return etag_file_response(path, request, media_type)
 
 
 @router.get("/{character_name}/model3d/texture")
@@ -1561,7 +1558,7 @@ def get_character_model3d_texture(character_name: str, request: Request):
     tex = find_texture(character_name)
     if not tex:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    return _file_response(tex, request, "image/png")
+    return etag_file_response(tex, request, "image/png")
 
 
 @router.delete("/{character_name}/model3d")

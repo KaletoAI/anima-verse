@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import quote
 
 from app.core.log import get_logger
-from app.core.model_refs import _current_outfit_state, find_ref_image
+from app.core.model_refs import current_outfit_state, find_ref_image
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
@@ -82,7 +82,7 @@ def find_model3d(character_name: str,
     currently worn one), or None."""
     if signature is None:
         try:
-            _, _, signature = _current_outfit_state(character_name)
+            _, _, signature = current_outfit_state(character_name)
         except Exception:
             return None
     from app.models.character import get_character_dir
@@ -146,7 +146,7 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
     the FBX case only — ``texture_url``.
     """
     try:
-        _, _, signature = _current_outfit_state(character_name)
+        _, _, signature = current_outfit_state(character_name)
     except Exception:
         signature = ""
     rig = required_rig(character_name)
@@ -207,7 +207,7 @@ def save_uploaded_model(character_name: str, original_filename: str,
     that belongs to an FBX; a GLB embeds its textures. Validation is the
     caller's job (app/core/model_validate.py)."""
     ext = Path(original_filename.lower()).suffix
-    _, _, signature = _current_outfit_state(character_name)
+    _, _, signature = current_outfit_state(character_name)
     out_dir = get_model3d_dir(character_name)
     _purge_combination(out_dir, signature)
     target = out_dir / f"{signature}{ext}"
@@ -282,7 +282,7 @@ def migrate_legacy_model_store_once() -> None:
             # Never overwrite a per-outfit model the character already has for
             # the currently worn outfit — the old global upload is the fallback.
             try:
-                _, _, signature = _current_outfit_state(name)
+                _, _, signature = current_outfit_state(name)
             except Exception:
                 signature = ""
             if signature and find_model3d(name, signature):
@@ -339,7 +339,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         backend_glob = str(
             config.get("image_generation.mesh_imagegen_default", "") or "").strip()
 
-    _, _, signature = _current_outfit_state(character_name)
+    _, _, signature = current_outfit_state(character_name)
     if not force:
         cached = find_model3d(character_name, signature)
         if cached:
