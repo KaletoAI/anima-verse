@@ -269,6 +269,14 @@ class BackendPool:
         # failed backend itself was inpaint, the chain stays on inpaint.
         if not self._is_inpaint_backend(failed):
             candidates = [b for b in candidates if not self._is_inpaint_backend(b)]
+        # A mesh fallback must keep the failed backend's rig: a humanoid job
+        # meshed by a generic alias (or the reverse) binds unusably — the same
+        # media kind is not enough. (Mesh runs max_attempts=1 today, so this is
+        # also the guard that keeps it right if the chain is ever lengthened.)
+        if self._media_of(failed) == "mesh":
+            failed_rig = getattr(failed, "mesh_rig", "mixamo") or "mixamo"
+            candidates = [b for b in candidates
+                          if (getattr(b, "mesh_rig", "mixamo") or "mixamo") == failed_rig]
         return candidates[0] if candidates else None
 
     def run_with_fallback(

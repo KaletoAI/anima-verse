@@ -16,6 +16,7 @@ import requests
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
 from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
 
+from app.core.config import MAX_IMAGE_BACKENDS
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
 from app.models.character import (
@@ -167,12 +168,10 @@ class ImageService:
         """
         return {}
 
-    # Upper bound of the SKILL_IMAGEGEN_{N}_* scan. It used to be 19 — which
-    # SILENTLY dropped every backend beyond that (adding the mesh backends
-    # pushed Flux1-Dev and WAN Video out of the list, so they stopped
-    # resolving). A backend the admin configured must never vanish without a
-    # word: the scan is generous, and anything past it is logged as an error.
-    MAX_INSTANCES = 200
+    # Upper bound of the SKILL_IMAGEGEN_{N}_* scan — shared with the provider
+    # manager's channel loader (app/core/config.py::MAX_IMAGE_BACKENDS) so the
+    # two never drift and drop backends silently.
+    MAX_INSTANCES = MAX_IMAGE_BACKENDS
 
     def _load_instances(self) -> List[ImageBackend]:
         """Scannt die SKILL_IMAGEGEN_{N}_*-Bloecke und erstellt die Backends."""
@@ -415,10 +414,24 @@ class ImageService:
             return {"ok": False, "error": f"no {rig or 'mesh'} backend available"}
 
         def _op(backend: ImageBackend):
-            return backend.generate("", "", params,
-                                    log_meta={"agent_name": character_name,
-                                              "original_prompt": "",
-                                              "media": "mesh"})
+            # Route through the backend's per-backend GPU queue channel like the
+            # image path — never two generations in parallel on one backend (a
+            # mesh job used to run straight off a daemon thread, past the
+            # channel). Busy/defect exceptions propagate typed through the queue
+            # for the fallback engine.
+            def _gen():
+                return backend.generate("", "", params,
+                                        log_meta={"agent_name": character_name,
+                                                  "original_prompt": "",
+                                                  "media": "mesh"})
+            from app.core.llm_queue import get_llm_queue, Priority
+            return get_llm_queue().submit_gpu_task(
+                provider_name=backend.name,
+                task_type="mesh_generation",
+                priority=Priority.IMAGE_GEN,
+                callable_fn=_gen,
+                agent_name=character_name, label=backend.name,
+                gpu_type=backend.api_type)
         try:
             # NO fallback for mesh (max_attempts=1): a different alias means a
             # different rig or quality tier — a wrong-rig mesh binds unusably.

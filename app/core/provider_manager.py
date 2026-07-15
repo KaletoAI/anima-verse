@@ -123,7 +123,10 @@ class ProviderManager:
         Each enabled backend gets a synthetic Provider + ProviderQueue, keyed
         as ``backend:<name>`` in self.channels.
         """
-        for i in range(1, 30):
+        # Same upper bound the image service loads backends up to — otherwise a
+        # backend past the bound loads but never gets a queue channel.
+        from app.core.config import MAX_IMAGE_BACKENDS
+        for i in range(1, MAX_IMAGE_BACKENDS + 1):
             prefix = f"SKILL_IMAGEGEN_{i}_"
             name = os.environ.get(f"{prefix}NAME", "").strip()
             if not name:
@@ -215,7 +218,8 @@ class ProviderManager:
                 "image_backends": [be_name],
             }
         # Enabled backends without a channel (not covered above)
-        for i in range(1, 20):
+        from app.core.config import MAX_IMAGE_BACKENDS
+        for i in range(1, MAX_IMAGE_BACKENDS + 1):
             be_name = os.environ.get(f"SKILL_IMAGEGEN_{i}_NAME", "").strip()
             if not be_name:
                 continue

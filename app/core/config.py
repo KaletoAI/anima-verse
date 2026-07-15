@@ -21,6 +21,15 @@ _CONFIG: dict = {}
 # Keys this module generates for the numbered image/video/mesh backend blocks.
 _IMAGEGEN_ENV_RE = re.compile(r"^SKILL_IMAGEGEN_\d+_")
 
+# Upper bound of the SKILL_IMAGEGEN_{N}_* scan — the single source of truth for
+# everyone who walks the numbered backend blocks (the image service that loads
+# the backends AND the provider manager that gives each one a queue channel).
+# It used to be scattered (19 / 20 / 30) and drifted: raising it in one place
+# SILENTLY dropped backends past the lower bounds — a configured backend either
+# vanished from the pool or ran without a serialized channel. Generous on
+# purpose; anything past it is logged as an error at load.
+MAX_IMAGE_BACKENDS = 200
+
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "storage" / "config.json"
 _SECRETS_PATH: Optional[Path] = None  # set in load() — sibling of _CONFIG_PATH
 
