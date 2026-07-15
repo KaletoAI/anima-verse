@@ -2578,120 +2578,14 @@ def get_character_outfits_dir(character_name: str) -> Path:
     return outfits_dir
 
 
-# --- Character 3D model asset (AV3D-5 stage 1) ---
-#
-# One active model per character under characters/<name>/model/: the file is
-# stored as model.<ext> plus a meta.json sidecar. Two shapes exist:
-#   mixamo  -> ONE model.glb: 52-bone rig, mesh AND textures embedded.
-#   generic -> model.fbx PLUS texture.png (an FBX embeds no texture; the PNG
-#              belongs to exactly that mesh — same run).
-# Consumers are external 3D map clients; orientation/scale/ground offset are
-# deliberately NOT normalized here — the client does that itself. `rig` tells
-# the client whether the shared animation clips apply (mixamo) or not
-# (generic).
-
+# The character's 3D model lives in the per-outfit v2 store
+# (app/core/model3d.py). MODEL_RIG_VALUES stays here because it is the shared
+# rig vocabulary: `rig` (mixamo = the shared animation clips apply, generic =
+# they do not) is validated on upload and reused by the legacy-store migration.
+# The pre-per-outfit global store (characters/<name>/model/) was retired — its
+# management functions had no callers and its serving fallback was migrated away
+# (see migrate_legacy_model_store_once).
 MODEL_RIG_VALUES = ("mixamo", "generic")
-MODEL_EXTS = (".glb", ".fbx")
-
-
-def get_character_model_dir(character_name: str) -> Path:
-    """Returns the 3D-model directory for a character (see
-    get_character_images_dir for the base-dir existence gate)."""
-    base = get_character_dir(character_name)
-    model_dir = base / "model"
-    if base.exists():
-        model_dir.mkdir(parents=True, exist_ok=True)
-    return model_dir
-
-
-def get_character_model_info(character_name: str) -> Optional[Dict[str, Any]]:
-    """Meta of the stored 3D model (meta.json, file verified) or None."""
-    model_dir = get_character_dir(character_name) / "model"
-    meta_path = model_dir / "meta.json"
-    if not meta_path.exists():
-        return None
-    try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    filename = meta.get("filename") or ""
-    file_path = model_dir / filename
-    if not filename or "/" in filename or ".." in filename or not file_path.exists():
-        return None
-    meta["size"] = file_path.stat().st_size
-    tex = get_character_model_texture(character_name)
-    meta["has_texture"] = bool(tex)
-    if tex:
-        meta["texture_size"] = tex.stat().st_size
-    return meta
-
-
-def get_character_model_texture(character_name: str) -> Optional[Path]:
-    """The basecolor PNG of a generic/FBX model (None for embedded-texture GLBs)."""
-    tex = get_character_dir(character_name) / "model" / "texture.png"
-    return tex if tex.exists() else None
-
-
-def save_character_model(character_name: str, original_filename: str,
-                         contents: bytes, rig: str = "mixamo",
-                         texture: Optional[bytes] = None) -> Dict[str, Any]:
-    """Stores/replaces the character's 3D model + meta.json sidecar.
-
-    The previous model (and its texture) is removed first, also across a
-    glb<->fbx switch. ``texture`` is the basecolor PNG that belongs to an FBX;
-    a GLB carries its textures inside and needs none. Extension and content
-    must be pre-validated by the caller (see app/core/model_validate.py).
-    """
-    ext = Path(original_filename.lower()).suffix
-    model_dir = get_character_model_dir(character_name)
-    for old in list(model_dir.glob("model.*")) + [model_dir / "texture.png"]:
-        if old.exists():
-            old.unlink()
-    target = model_dir / f"model{ext}"
-    target.write_bytes(contents)
-    if texture is not None:
-        (model_dir / "texture.png").write_bytes(texture)
-    meta = {
-        "format": ext.lstrip("."),
-        "rig": rig if rig in MODEL_RIG_VALUES else "generic",
-        "filename": target.name,
-        "original_filename": original_filename,
-        "size": len(contents),
-        "has_texture": texture is not None,
-        "uploaded_at": utc_now_iso(),
-    }
-    (model_dir / "meta.json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
-    return meta
-
-
-def set_character_model_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
-    """Updates the rig type in the model sidecar; None if no model exists."""
-    if rig not in MODEL_RIG_VALUES:
-        return None
-    meta = get_character_model_info(character_name)
-    if not meta:
-        return None
-    meta["rig"] = rig
-    model_dir = get_character_dir(character_name) / "model"
-    persisted = {k: v for k, v in meta.items() if k != "size"}
-    (model_dir / "meta.json").write_text(
-        json.dumps(persisted, indent=2, ensure_ascii=False), encoding="utf-8")
-    return meta
-
-
-def delete_character_model(character_name: str) -> bool:
-    """Removes the character's 3D model + sidecar + texture; True if it existed."""
-    model_dir = get_character_dir(character_name) / "model"
-    if not model_dir.exists():
-        return False
-    removed = False
-    for f in (list(model_dir.glob("model.*"))
-              + [model_dir / "meta.json", model_dir / "texture.png"]):
-        if f.exists():
-            f.unlink()
-            removed = True
-    return removed
 
 
 def get_character_images(character_name: str) -> List[str]:

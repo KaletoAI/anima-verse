@@ -14,6 +14,7 @@ model". Switching back to a known outfit reuses whatever is stored.
 """
 
 import json
+import shutil
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -243,6 +244,77 @@ def set_model3d_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
     meta["rig"] = rig
     meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     return meta
+
+
+# Formats the per-outfit v2 store can actually serve/animate (the upload route
+# accepts exactly these). VRM and other exotic formats are not v2-uploadable.
+_MIGRATABLE_EXTS = (".glb", ".fbx")
+
+
+def migrate_legacy_model_store_once() -> None:
+    """One-time import of the pre-per-outfit global model store into v2.
+
+    The old ``characters/<name>/model/`` folder (a single global upload) lost
+    all its management routes long ago; the only thing still reading it was a
+    serving fallback in the model route — the kind of backward-compat reader the
+    project bans (a stale model was unremovable and reappeared on every outfit
+    switch). Import the legacy GLB/FBX to the CURRENT outfit's v2 slot (same path
+    an upload takes) and delete the legacy folder. VRM (and any other non-v2
+    format) is left in place with a warning for the admin to convert or remove.
+
+    Idempotent without a marker: a migrated character has no legacy folder, so a
+    re-scan is a no-op (this also catches a legacy folder arriving via import)."""
+    from app.models.character import (MODEL_RIG_VALUES, get_character_dir,
+                                      list_available_characters)
+    migrated = 0
+    left_behind: list = []
+    for name in list_available_characters():
+        try:
+            legacy_dir = get_character_dir(name) / "model"
+            if not legacy_dir.is_dir():
+                continue
+            model_file = next(iter(sorted(legacy_dir.glob("model.*"))), None)
+            if model_file is None:
+                continue  # empty folder (e.g. an auto-created dir) — leave it
+            if model_file.suffix.lower() not in _MIGRATABLE_EXTS:
+                left_behind.append(f"{name} ({model_file.name})")
+                continue
+            # Never overwrite a per-outfit model the character already has for
+            # the currently worn outfit — the old global upload is the fallback.
+            try:
+                _, _, signature = _current_outfit_state(name)
+            except Exception:
+                signature = ""
+            if signature and find_model3d(name, signature):
+                continue  # v2 already covers this outfit — leave the legacy folder
+            rig = required_rig(name)
+            orig_name = model_file.name
+            meta_path = legacy_dir / "meta.json"
+            if meta_path.exists():
+                try:
+                    lm = json.loads(meta_path.read_text(encoding="utf-8"))
+                    rig = str(lm.get("rig") or rig).strip().lower()
+                    orig_name = str(lm.get("original_filename") or orig_name)
+                except (OSError, ValueError):
+                    pass
+            if rig not in MODEL_RIG_VALUES:
+                rig = required_rig(name)
+            tex_path = legacy_dir / "texture.png"
+            texture = tex_path.read_bytes() if tex_path.exists() else None
+            save_uploaded_model(name, orig_name, model_file.read_bytes(),
+                                rig=rig, texture=texture)
+            shutil.rmtree(legacy_dir, ignore_errors=True)
+            migrated += 1
+        except Exception as e:
+            logger.warning("Legacy 3D-model migration for %s failed: %s", name, e)
+    if migrated:
+        logger.info("Legacy 3D-model migration: %d character(s) imported into "
+                    "the per-outfit store", migrated)
+    if left_behind:
+        logger.warning(
+            "Legacy 3D-model migration: %d model(s) not imported (the per-outfit "
+            "store serves only GLB/FBX) — left in characters/<name>/model/ for "
+            "you to convert or remove: %s", len(left_behind), ", ".join(left_behind))
 
 
 def _char_lock(character_name: str) -> threading.Lock:

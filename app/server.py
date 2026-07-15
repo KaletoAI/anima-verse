@@ -185,6 +185,15 @@ async def lifespan(app: FastAPI):
     except Exception as _he:
         logger.debug("height migration failed: %s", _he)
 
+    # Migration: the pre-per-outfit global 3D-model store (characters/<name>/
+    # model/) lost its routes; import its GLB/FBX into the current outfit's v2
+    # slot and drop the legacy folder, so the banned serving fallback can go.
+    try:
+        from app.core.model3d import migrate_legacy_model_store_once
+        migrate_legacy_model_store_once()
+    except Exception as _me:
+        logger.debug("legacy-model migration failed: %s", _me)
+
     # Initialisiere Multi-Channel Support
     logger.info("Initialisiere Multi-Channel Support...")
     initialize_channels()

@@ -51,7 +51,6 @@ from app.models.character import (
     add_character_image_prompt,
     add_character_image_metadata,
     get_character_outfits_dir,
-    get_character_model_info,
     MODEL_RIG_VALUES)
 from app.core import character_ops
 from app.core.dependencies import reload_skill_manager, get_skill_manager
@@ -1263,11 +1262,10 @@ _MODEL_MAX_BYTES = 100 * 1024 * 1024
 
 def _resolve_character_model(character_name: str):
     """(path, meta, texture_path) of the character's current-outfit model —
-    upload or generated, whichever is stored. Falls back to a legacy global
-    upload (pre per-outfit). (None, None, None) when there is none: a normal
-    state, not an error."""
+    uploaded or generated, whichever is stored. (None, None, None) when there is
+    none: a normal state, not an error. (The pre-per-outfit global upload store
+    was migrated into the per-outfit store at boot — no serving fallback.)"""
     from app.core.model3d import find_model3d, find_texture, get_model3d_info
-    from app.models.character import get_character_model_texture
     path = find_model3d(character_name)
     if path:
         info = get_model3d_info(character_name).get("model") or {}
@@ -1280,11 +1278,6 @@ def _resolve_character_model(character_name: str):
                 "backend": info.get("backend", ""),
                 "source": info.get("source", "generated")}
         return path, meta, find_texture(character_name)
-    # Legacy: a globally uploaded model from before the per-outfit store.
-    meta = get_character_model_info(character_name)
-    if meta:
-        p = get_character_dir(character_name) / "model" / meta["filename"]
-        return p, {**meta, "source": "upload"}, get_character_model_texture(character_name)
     return None, None, None
 
 
