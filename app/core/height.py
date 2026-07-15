@@ -101,6 +101,12 @@ _WORD_TO_CM = {
     "male": {"petite": 162, "short": 168, "average height": 178,
              "average": 178, "tall": 188, "giant": 198},
 }
+# Mirror of _BUCKETS_NEUTRAL: anything that is not clearly female/male gets
+# the midpoint of the two tables, so word -> cm -> describe() round-trips to
+# the SAME word (176 from the female table would render "average height"
+# through the neutral buckets).
+_WORD_TO_CM_NEUTRAL = {"petite": 157, "short": 163, "average height": 172,
+                       "average": 172, "tall": 182, "giant": 193}
 
 
 def migrate_height_to_profile_once() -> None:
@@ -115,34 +121,48 @@ def migrate_height_to_profile_once() -> None:
         if get_world_setting("migrated_height_cm"):
             return
         moved = 0
+        unconverted = []
         for name in list_available_characters():
             profile = get_character_profile(name) or {}
             slots = profile.get("body_slots") or {}
             word = str(((slots.get("build") or {}).get("height") or "")).strip().lower()
-            changed = False
-            if word and height_cm(profile) is None:
+            if not word:
+                continue
+            redundant = height_cm(profile) is not None
+            if not redundant:
+                # Same table selection as describe(): unknown gender -> neutral.
                 gender = str(profile.get("gender") or "").strip().lower()
-                table = _WORD_TO_CM.get(gender, _WORD_TO_CM["female"])
+                table = _WORD_TO_CM.get(gender, _WORD_TO_CM_NEUTRAL)
                 cm = table.get(word)
                 if cm:
                     profile["height"] = cm
-                    changed = True
                     moved += 1
-            # The word itself is gone from the package — drop the stale value.
-            if word:
-                build = dict(slots.get("build") or {})
-                build.pop("height", None)
-                slots = dict(slots)
-                if build:
-                    slots["build"] = build
                 else:
-                    slots.pop("build", None)
-                profile["body_slots"] = slots
-                changed = True
-            if changed:
-                save_character_profile(name, profile)
+                    # The legacy slot allowed custom values (allow_custom) — a
+                    # word we cannot map to centimetres must NOT be destroyed.
+                    # It stays in place (the attribute left the package, so it
+                    # no longer renders); the admin re-enters it as cm in the
+                    # Identity tab.
+                    unconverted.append(f"{name} ({word!r})")
+                    continue
+            # Converted (or redundant next to an existing height) — the word
+            # itself is gone from the package, drop the stale value.
+            build = dict(slots.get("build") or {})
+            build.pop("height", None)
+            slots = dict(slots)
+            if build:
+                slots["build"] = build
+            else:
+                slots.pop("build", None)
+            profile["body_slots"] = slots
+            save_character_profile(name, profile)
         set_world_setting("migrated_height_cm", "1")
         if moved:
-            logger.info("Height-Migration: %d Character(e) auf cm umgestellt", moved)
+            logger.info("Height migration: %d character(s) converted to cm", moved)
+        if unconverted:
+            logger.warning(
+                "Height migration: %d height word(s) had no cm mapping and were "
+                "left in body_slots.build.height — set Height (cm) manually in "
+                "the Identity tab: %s", len(unconverted), ", ".join(unconverted))
     except Exception as e:
-        logger.debug("Height-Migration fehlgeschlagen: %s", e)
+        logger.warning("Height migration failed: %s", e)
