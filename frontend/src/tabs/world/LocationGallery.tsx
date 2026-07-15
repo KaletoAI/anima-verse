@@ -36,6 +36,8 @@ interface GalleryCardProps {
   onRegen: (target: { filename: string; type: string }) => void
   onMove: (image: string) => void
   onRemove: (image: string) => void
+  /** Two-step delete: the first click arms THIS tile, the second deletes. */
+  removeArmed?: boolean
   /** Turn a building image into the location's 3D model (building tiles only). */
   onGenerateModel?: (image: string) => void
 }
@@ -56,6 +58,7 @@ const GalleryCard = memo(function GalleryCard({
   onRegen,
   onMove,
   onRemove,
+  removeArmed,
   onGenerateModel,
 }: GalleryCardProps) {
   const { t } = useI18n()
@@ -160,8 +163,9 @@ const GalleryCard = memo(function GalleryCard({
             className="ga-btn ga-btn-sm ga-btn-danger"
             disabled={isBusy}
             onClick={() => onRemove(filename)}
+            title={removeArmed ? t('Click again to delete this image') : t('Delete image')}
           >
-            ×
+            {removeArmed ? t('Sure?') : '×'}
           </button>
         </div>
       </div>
@@ -249,24 +253,35 @@ export function LocationGallery({
 
   // Poll while the backend reports a running generation — the pending state is
   // derived from the polled status, never a local never-reset flag (the
-  // stuck-busy lesson from FieldModel3D). n>=100 (~5min) is only the give-up bound.
+  // stuck-busy lesson from FieldModel3D). Meshing takes minutes and may queue
+  // behind other jobs, so there is NO give-up (giving up would freeze the last
+  // pending=true state) — after ~2 min the poll merely slows down; the
+  // interval dies with the component / on location switch.
   const startModelPoll = useCallback(() => {
     if (modelPollRef.current) clearInterval(modelPollRef.current)
     let n = 0
-    modelPollRef.current = setInterval(async () => {
+    const tick = async () => {
       n += 1
       const d = await loadModel3d()
-      if (!d?.pending || n >= 100) {
+      if (!d?.pending) {
         if (modelPollRef.current) clearInterval(modelPollRef.current)
+        modelPollRef.current = null
+        return
       }
-    }, 3000)
+      if (n === 40) {
+        if (modelPollRef.current) clearInterval(modelPollRef.current)
+        modelPollRef.current = setInterval(tick, 15000)
+      }
+    }
+    modelPollRef.current = setInterval(tick, 3000)
   }, [loadModel3d])
 
   useEffect(() => {
-    // A location switch must not carry an open viewer/picker across (the picked
-    // source image belongs to the previous location).
+    // A location switch must not carry an open viewer/picker/armed delete
+    // across (the picked source image belongs to the previous location).
     setViewerOpen(false)
     setModelSrc(null)
+    setConfirmDelModel(false)
     loadModel3d().then((d) => {
       if (d?.pending) startModelPoll()
     })
@@ -288,8 +303,10 @@ export function LocationGallery({
     [modelSrc, enc, startModelPoll, t, toast],
   )
 
+  // Two-step delete (no window.confirm — in-app confirmation via button pair).
+  const [confirmDelModel, setConfirmDelModel] = useState(false)
   const deleteModel3d = useCallback(async () => {
-    if (!window.confirm(t('Delete the 3D building model?'))) return
+    setConfirmDelModel(false)
     try {
       await apiDelete(`/world/locations/${enc}/model3d`)
       await loadModel3d()
@@ -529,9 +546,17 @@ export function LocationGallery({
     await reload()
   }, [selected, locationId, exitSelect, reload, t, toast])
 
+  // Two-step delete (no window.confirm — in-app confirmation): the first
+  // click arms the tile ("Sure?"), the second deletes; arming a different
+  // tile moves the armed state there.
+  const [armedRemove, setArmedRemove] = useState<string | null>(null)
   const remove = useCallback(
     async (image: string) => {
-      if (!window.confirm(t('Delete image "{name}"?').replace('{name}', image))) return
+      if (armedRemove !== image) {
+        setArmedRemove(image)
+        return
+      }
+      setArmedRemove(null)
       setBusy(image)
       try {
         await apiDelete(
@@ -544,7 +569,7 @@ export function LocationGallery({
         setBusy(null)
       }
     },
-    [locationId, reload, t, toast],
+    [armedRemove, locationId, reload, t, toast],
   )
 
   // Upload a background image for this location (optionally a room, when roomFilter
@@ -771,13 +796,27 @@ export function LocationGallery({
               {model3d.meta.backend ? ` · ${model3d.meta.backend}` : ''}
             </span>
           ) : null}
-          <button
-            className="ga-btn ga-btn-sm ga-btn-danger"
-            onClick={() => { void deleteModel3d() }}
-            title={t('Delete the 3D building model')}
-          >
-            🗑 {t('Delete model')}
-          </button>
+          {confirmDelModel ? (
+            <span style={{ display: 'inline-flex', gap: 6 }}>
+              <button
+                className="ga-btn ga-btn-sm ga-btn-danger"
+                onClick={() => { void deleteModel3d() }}
+              >
+                {t('Delete the model?')}
+              </button>
+              <button className="ga-btn ga-btn-sm" onClick={() => setConfirmDelModel(false)}>
+                {t('Cancel')}
+              </button>
+            </span>
+          ) : (
+            <button
+              className="ga-btn ga-btn-sm ga-btn-danger"
+              onClick={() => setConfirmDelModel(true)}
+              title={t('Delete the 3D building model')}
+            >
+              🗑 {t('Delete model')}
+            </button>
+          )}
         </>
       ) : null}
     </div>
@@ -878,6 +917,7 @@ export function LocationGallery({
               onRegen={setRegenTarget}
               onMove={startMove}
               onRemove={remove}
+              removeArmed={armedRemove === filename}
               onGenerateModel={!roomFilter ? setModelSrc : undefined}
             />
           )
