@@ -14,7 +14,7 @@ A character with no explicit set is NOT setless: its set is DERIVED, so the
 figures animate correctly out of the box. An empty derivation (e.g. a
 non-binary humanoid) falls back to the plain ``<kind>.fbx`` clips.
 """
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 
@@ -28,18 +28,8 @@ BASE_SETS = ("female", "male", "animal")
 def discovered_sets() -> List[str]:
     """Sets that actually have clips in shared/models/clips."""
     try:
-        from app.core.paths import get_animation_clips_dir
-        from app.routes.assets import CLIP_EXTS, parse_clip_name
-        d = get_animation_clips_dir()
-        if not d.exists():
-            return []
-        sets = set()
-        for p in d.iterdir():
-            if p.is_file() and p.suffix.lower() in CLIP_EXTS:
-                _kind, cset = parse_clip_name(p.name)
-                if cset:
-                    sets.add(cset)
-        return sorted(sets)
+        from app.core.animation_clips import clip_sets
+        return clip_sets()
     except Exception as e:
         logger.debug("Animations-Sets nicht ermittelbar: %s", e)
         return []
@@ -50,33 +40,45 @@ def available_sets() -> List[str]:
     return sorted(set(BASE_SETS) | set(discovered_sets()))
 
 
-def derive_set(character_name: str) -> str:
+def _profile(character_name: str,
+             profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The given profile, or a fresh load. Callers iterating many characters
+    (the worldmap builds this per character per request) load once and pass
+    it through instead of paying several DB/file reads per character."""
+    if profile is not None:
+        return profile
+    from app.models.character import get_character_profile
+    return get_character_profile(character_name) or {}
+
+
+def derive_set(character_name: str,
+               profile: Optional[Dict[str, Any]] = None) -> str:
     """The set that follows from the character itself: animals -> "animal",
     humanoids -> their gender when it is one we have clips for. "" when nothing
     fits (the plain clips apply)."""
     try:
-        from app.models.character import get_character_profile
         from app.core.model_refs import is_humanoid
         if not is_humanoid(character_name):
             return "animal"
-        gender = str((get_character_profile(character_name) or {}).get(
+        gender = str(_profile(character_name, profile).get(
             "gender") or "").strip().lower()
         return gender if gender in ("female", "male") else ""
     except Exception:
         return ""
 
 
-def explicit_set(character_name: str) -> str:
+def explicit_set(character_name: str,
+                 profile: Optional[Dict[str, Any]] = None) -> str:
     """The set explicitly assigned to the character ("" = none)."""
     try:
-        from app.models.character import get_character_profile
-        return str((get_character_profile(character_name) or {}).get(
+        return str(_profile(character_name, profile).get(
             "animation_set") or "").strip().lower()
     except Exception:
         return ""
 
 
-def resolve_sets(character_name: str) -> List[str]:
+def resolve_sets(character_name: str,
+                 profile: Optional[Dict[str, Any]] = None) -> List[str]:
     """The character's set chain, most specific first.
 
     An explicit set need NOT be complete: a character on ``lady`` that has no
@@ -89,14 +91,18 @@ def resolve_sets(character_name: str) -> List[str]:
     ``<kind>.fbx`` apply. Duplicates are collapsed (an explicit set equal to
     the derived one yields a single entry).
     """
+    if profile is None:
+        profile = _profile(character_name, None)
     chain: List[str] = []
-    for s in (explicit_set(character_name), derive_set(character_name)):
+    for s in (explicit_set(character_name, profile),
+              derive_set(character_name, profile)):
         if s and s not in chain:
             chain.append(s)
     return chain
 
 
-def resolve_set(character_name: str) -> str:
+def resolve_set(character_name: str,
+                profile: Optional[Dict[str, Any]] = None) -> str:
     """The character's primary set (first of the chain) — "" if it has none."""
-    chain = resolve_sets(character_name)
+    chain = resolve_sets(character_name, profile)
     return chain[0] if chain else ""

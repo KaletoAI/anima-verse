@@ -421,20 +421,10 @@ def resolve_pose_prompt(activity: str) -> str:
 
 def available_animation_kinds() -> list[str]:
     """The animation kinds that actually exist right now — derived from the
-    shared clips (``/assets/animation-clips``), never a list in the code."""
+    shared clips (``app.core.animation_clips``), never a list in the code."""
     try:
-        from app.core.paths import get_animation_clips_dir
-        d = get_animation_clips_dir()
-        if not d.exists():
-            return []
-        kinds = set()
-        for p in d.iterdir():
-            if p.is_file() and p.suffix.lower() in (".fbx", ".glb", ".gltf"):
-                from app.routes.assets import parse_clip_name
-                kind, _set = parse_clip_name(p.name)
-                if kind:
-                    kinds.add(kind)
-        return sorted(kinds)
+        from app.core.animation_clips import clip_kinds
+        return clip_kinds()
     except Exception as e:
         logger.debug("Animations-Kinds nicht ermittelbar: %s", e)
         return []

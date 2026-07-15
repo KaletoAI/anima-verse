@@ -1233,14 +1233,20 @@ async def play_worldmap(user=Depends(get_current_user)):
         # derived from the character (animal / female / male). The client walks
         # it per kind and only falls back to the plain <kind>.fbx when neither
         # set has that clip — an explicit set may be incomplete.
-        anim_sets = resolve_animation_sets(name)
+        # ONE profile load per character, shared by the set chain and the
+        # height — this loop runs per character on every worldmap request.
+        try:
+            from app.models.character import get_character_profile as _gcp
+            _prof = _gcp(name) or {}
+        except Exception:
+            _prof = {}
+        anim_sets = resolve_animation_sets(name, profile=_prof)
         # Body height in cm — the 3D client scales the figures against each
         # other with it (a 155 cm character must not tower over a 190 cm one).
         # None when unset: the client keeps its own default scale.
         try:
-            from app.models.character import get_character_profile as _gcp
             from app.core.height import height_cm as _height_cm
-            cm = _height_cm(_gcp(name) or {})
+            cm = _height_cm(_prof)
         except Exception:
             cm = None
         characters.append({
