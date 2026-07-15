@@ -1,10 +1,12 @@
-"""Validation of uploaded 3D character models (dependency-free).
+"""Validation of uploaded 3D models (dependency-free).
 
 The contract a 3D client relies on:
 
 * humanoid  -> ONE .glb: 52-bone Mixamo rig, mesh AND textures embedded.
 * generic   -> a rigged .fbx PLUS its basecolor .png (an FBX embeds no
   texture, and the PNG belongs to exactly that mesh — same run).
+* none      -> ONE unrigged .glb with mesh and texture embedded (static
+  props: the AV3D-9 building models — no skeleton is the point).
 
 Both failure modes below have been seen in the wild and are silent:
 a GLB whose only texture is a 2x2 placeholder (a known generation glitch —
@@ -106,6 +108,30 @@ def parse_glb(data: bytes) -> Dict[str, Any]:
             "joint_count": len(joints)}
 
 
+def _check_embedded_textures(info: Dict[str, Any], subject: str,
+                             errors: List[str], warnings: List[str]) -> None:
+    """Shared texture gate: at least one REAL embedded image (external URIs
+    do not ship with the file; a tiny image is the known empty-texture
+    artefact of a failed bake). Appends findings in place."""
+    embedded = [i for i in info["images"] if i.get("embedded")]
+    if not info["images"]:
+        errors.append(f"no texture in the GLB — a {subject} must embed it")
+    elif not embedded:
+        errors.append("textures are referenced externally, not embedded")
+    else:
+        real = []
+        for img in embedded:
+            size = img.get("size")
+            if size and max(size) < MIN_TEXTURE_DIM:
+                errors.append(
+                    f"texture is {size[0]}x{size[1]} px — that is the known "
+                    "empty-texture artefact of a failed generation, not a result")
+            elif size:
+                real.append(size)
+        if embedded and not real and not errors:
+            warnings.append("embedded texture size could not be read")
+
+
 def validate_glb(data: bytes) -> Dict[str, Any]:
     """Validates a humanoid GLB: 52-joint Mixamo rig + a real embedded texture.
 
@@ -131,27 +157,36 @@ def validate_glb(data: bytes) -> Dict[str, Any]:
         warnings.append("no 'mixamorig' joint names — a foreign rig with the "
                         "same joint count will not match the animation clips")
 
-    embedded = [i for i in info["images"] if i.get("embedded")]
-    if not info["images"]:
-        errors.append("no texture in the GLB — a humanoid model must embed it")
-    elif not embedded:
-        errors.append("textures are referenced externally, not embedded")
-    else:
-        real = []
-        for img in embedded:
-            size = img.get("size")
-            if size and max(size) < MIN_TEXTURE_DIM:
-                errors.append(
-                    f"texture is {size[0]}x{size[1]} px — that is the known "
-                    "empty-texture artefact of a failed generation, not a result")
-            elif size:
-                real.append(size)
-        if embedded and not real and not errors:
-            warnings.append("embedded texture size could not be read")
+    _check_embedded_textures(info, "humanoid model", errors, warnings)
 
     rig = "mixamo" if (count == MIXAMO_JOINT_COUNT and mixamo) else "generic"
     return {"ok": not errors, "errors": errors, "warnings": warnings,
             "joint_count": count, "rig": rig}
+
+
+def validate_static_glb(data: bytes) -> Dict[str, Any]:
+    """Validates an UNRIGGED GLB (rig "none" — the AV3D-9 building models):
+    readable container, at least one mesh, a real embedded texture. No
+    skeleton requirement, and a present skin is not an error either — the
+    client simply never animates these.
+
+    Returns the same shape as validate_glb, with rig fixed to "none".
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+    try:
+        info = parse_glb(data)
+    except (ValueError, KeyError, struct.error, json.JSONDecodeError) as e:
+        return {"ok": False, "errors": [f"GLB unreadable: {e}"],
+                "warnings": [], "joint_count": 0, "rig": "none"}
+
+    if not (info["gltf"].get("meshes") or []):
+        errors.append("no mesh in the GLB — an empty scene is not a model")
+
+    _check_embedded_textures(info, "building model", errors, warnings)
+
+    return {"ok": not errors, "errors": errors, "warnings": warnings,
+            "joint_count": info["joint_count"], "rig": "none"}
 
 
 def validate_fbx(data: bytes, texture: Optional[bytes]) -> Dict[str, Any]:
