@@ -1146,5 +1146,8 @@
     "← World adopted": "← Welt übernommen",
     "→ Moved to shared": "→ Shared verschoben",
     "🔍 Search content…": "🔍 Inhalt durchsuchen…"
-  }
+  },
+  "Other backends (switch required)": "Andere Backends (Wechsel nötig)",
+  "\"{lora}\" is not on {backend} — switch to: {list}": "„{lora}“ gibt es nicht auf {backend} — wechsle zu: {list}",
+  "\"{lora}\" is not on any configured backend": "„{lora}“ gibt es auf keinem konfigurierten Backend"
 }

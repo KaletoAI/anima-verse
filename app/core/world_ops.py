@@ -649,16 +649,27 @@ def build_imagegen_options() -> Dict[str, Any]:
         if backend_models:
             opt["models"] = backend_models
             opt["default_model"] = getattr(b, 'model', backend_models[0])
-        # LoRA selection in the image-gen dialog. Single source: the per-world
-        # LoRA library (filled by the discovery sync job + manual entries,
-        # endpoint-filtered, missing entries excluded, narrowed by the
-        # backend's lora_filter glob). Transfer: localai as <lora:> prompt
-        # tag, openai_diffusion as lora_NN/strength_NN params.
+        # LoRA selection in the image-gen dialog. The endpoint's LIVE listing
+        # is authoritative for what THIS backend can run (a LoRA missing on
+        # one endpoint is the NORMAL case — the dialog offers the union across
+        # backends and constrains the backend choice to one that has the
+        # pick). The library only fills in for backends without a listing
+        # (its trigger words still apply at generation time). Transfer:
+        # localai as <lora:> prompt tag, openai_diffusion as
+        # lora_NN/strength_NN params.
         if b.api_type in ("localai", "openai_diffusion"):
             opt["has_loras"] = True
-            from app.core.config import get_lora_library_names
-            opt["lora_options"] = get_lora_library_names(
-                b.name, lora_filter=getattr(b, "lora_filter", "") or "")
+            import fnmatch as _fn
+            _flt = (getattr(b, "lora_filter", "") or "").strip().lower()
+            live = [str(n) for n in (getattr(b, "available_loras", []) or [])]
+            if _flt:
+                live = [n for n in live if _fn.fnmatch(n.lower(), _flt)]
+            if live:
+                opt["lora_options"] = sorted(live)
+            else:
+                from app.core.config import get_lora_library_names
+                opt["lora_options"] = get_lora_library_names(
+                    b.name, lora_filter=getattr(b, "lora_filter", "") or "")
         options.append(opt)
     # mapfit default prompts per family — the Fit/Edge dialog prefills the
     # prompt field with these (instead of the former terrain/edge hint).
@@ -1676,9 +1687,23 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # Model override from the dialog — backends read params["model"].
         if model_override:
             params["model"] = model_override
-        # LoRA selection from the dialog.
+        # LoRA selection from the dialog. A LoRA constrains the BACKEND choice
+        # — endpoints missing a LoRA are the normal case, so a render with a
+        # picked LoRA must only run on a backend that actually has it (the
+        # dialog enforces this too; this is the server-side gate).
         if loras_override is not None:
             params["lora_inputs"] = loras_override
+            _listing = [str(n) for n in (getattr(backend, "available_loras", []) or [])]
+            if _listing:
+                _wanted = [str(l.get("name") or "").strip() for l in loras_override
+                           if isinstance(l, dict)]
+                _absent = [n for n in _wanted if n and n != "None" and n not in _listing]
+                if _absent:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Backend '{backend.name}' does not have the "
+                               f"LoRA(s): {', '.join(_absent)} — pick a backend "
+                               f"that lists them")
 
         # Fresh seed per call so a regenerate produces a new image.
         import random as _rnd
