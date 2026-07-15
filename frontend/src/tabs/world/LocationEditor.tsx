@@ -75,6 +75,7 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
         image_prompt_day: draft.image_prompt_day,
         image_prompt_night: draft.image_prompt_night,
         image_prompt_map_2d: draft.image_prompt_map_2d,
+        image_prompt_building: draft.image_prompt_building,
         event_settings: draft.event_settings,
       })
       toast(t('Saved'))
@@ -366,6 +367,14 @@ export function LocationEditor({ location, items, onChanged, onDeleted }: Locati
                   rows={2}
                   value={draft.image_prompt_map_2d || ''}
                   onChange={(e) => upd('image_prompt_map_2d', e.target.value)}
+                />
+              </Field>
+              <Field label={t('Building prompt')} help="image_prompt">
+                <textarea
+                  className="ga-textarea"
+                  rows={2}
+                  value={draft.image_prompt_building || ''}
+                  onChange={(e) => upd('image_prompt_building', e.target.value)}
                 />
               </Field>
             </div>

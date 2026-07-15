@@ -283,6 +283,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     image_prompt_night = data.get("image_prompt_night")
     image_prompt_map = data.get("image_prompt_map")
     image_prompt_map_2d = data.get("image_prompt_map_2d")
+    image_prompt_building = data.get("image_prompt_building")
     danger_level = data.get("danger_level")
     event_settings = data.get("event_settings")
     outfit_type = data.get("outfit_type")
@@ -305,7 +306,8 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                             image_prompt_day=image_prompt_day,
                             image_prompt_night=image_prompt_night,
                             image_prompt_map=image_prompt_map,
-                            image_prompt_map_2d=image_prompt_map_2d)
+                            image_prompt_map_2d=image_prompt_map_2d,
+                            image_prompt_building=image_prompt_building)
 
     # Set extra fields directly in the location
     _has_extra = (danger_level is not None or event_settings is not None
@@ -373,6 +375,7 @@ def update_location_with_extras(location_id: str,
     image_prompt_night = data.get("image_prompt_night")
     image_prompt_map = data.get("image_prompt_map")
     image_prompt_map_2d = data.get("image_prompt_map_2d")
+    image_prompt_building = data.get("image_prompt_building")
     danger_level = data.get("danger_level")
     event_settings = data.get("event_settings")
     outfit_type = data.get("outfit_type")
@@ -395,7 +398,7 @@ def update_location_with_extras(location_id: str,
         rename_location(location_id, new_name)
 
     # Update description, rooms and image prompts if provided
-    has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map, image_prompt_map_2d])
+    has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map, image_prompt_map_2d, image_prompt_building])
     if has_updates:
         loc = get_location_by_id(location_id)
         if loc:
@@ -406,6 +409,7 @@ def update_location_with_extras(location_id: str,
                 image_prompt_night=image_prompt_night if image_prompt_night is not None else loc.get("image_prompt_night", ""),
                 image_prompt_map=image_prompt_map if image_prompt_map is not None else loc.get("image_prompt_map", ""),
                 image_prompt_map_2d=image_prompt_map_2d if image_prompt_map_2d is not None else loc.get("image_prompt_map_2d", ""),
+                image_prompt_building=image_prompt_building if image_prompt_building is not None else loc.get("image_prompt_building", ""),
                 location_id=location_id)  # update by id — unambiguous with duplicate names
 
     # Set extra fields (incl. knowledge_item_id) directly in the location
@@ -735,9 +739,9 @@ def assign_gallery_image_room(location_name: str, image_name: str,
 
 def assign_gallery_image_type(location_name: str, image_name: str,
                               image_type: str) -> Dict[str, Any]:
-    """Set the type of a gallery image (day/night/map or empty)."""
-    if image_type and image_type not in ("day", "night", "map_2d"):
-        raise HTTPException(status_code=400, detail="Typ muss 'day', 'night', 'map_2d' oder leer sein")
+    """Set the type of a gallery image (day/night/map_2d/building or empty)."""
+    if image_type and image_type not in ("day", "night", "map_2d", "building"):
+        raise HTTPException(status_code=400, detail="Type must be 'day', 'night', 'map_2d', 'building' or empty")
 
     loc = resolve_location(location_name)
     loc_id = loc["id"] if loc and loc.get("id") else location_name
@@ -1513,6 +1517,8 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 description = location.get("image_prompt_night", "").strip()
             elif not description and prompt_type == "map_2d":
                 description = location.get("image_prompt_map_2d", "").strip()
+            elif not description and prompt_type == "building":
+                description = location.get("image_prompt_building", "").strip()
             if not description:
                 description = location.get("description", location.get("name", location_name))
 
@@ -1630,7 +1636,10 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # areas seamlessly, no "new tile" style), normal tile -> "map",
         # otherwise location background.
         from app.core import config as _cfg
-        _uc_name = "mapfit" if _map_blend else ("map" if prompt_type == "map_2d" else "location")
+        _uc_name = ("mapfit" if _map_blend
+                    else "map" if prompt_type == "map_2d"
+                    else "building" if prompt_type == "building"
+                    else "location")
         _ucp = _cfg.resolve_use_case_style(
             _uc_name, getattr(backend, "image_family", "") or "",
             backend_model=getattr(backend, "model", "") or "")
@@ -1655,6 +1664,13 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             params["image_use_case"] = "map"
             # Generate 2D map tiles square (1:1, Flux-native 1024) instead of
             # the 16:9 location format — fills the tile. Otherwise landscape.
+            params["width"] = 1024
+            params["height"] = 1024
+        elif prompt_type == "building":
+            # Square so the whole building fits with a margin — this image also
+            # feeds the image-to-3D pass (like the T-pose reference), which needs
+            # the full silhouette in frame, not a 16:9 crop.
+            params["image_use_case"] = "building"
             params["width"] = 1024
             params["height"] = 1024
         # Model override from the dialog — backends read params["model"].
@@ -1917,10 +1933,10 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
 
             # Mark the new image as background by default — do NOT toggle on an
             # in-place replace (otherwise an already-set flag flips over), and
-            # NOT for map tiles (map_2d): a tile is map art, never a room
-            # background — flagged tiles used to leak into the room-reference
-            # slot of chat images.
-            if not _is_replace and prompt_type != "map_2d":
+            # NOT for map tiles (map_2d) or building renders: those are map/mesh
+            # art, never a room background — flagged tiles used to leak into the
+            # room-reference slot of chat images.
+            if not _is_replace and prompt_type not in ("map_2d", "building"):
                 toggle_background_image(loc_id, image_name)
 
             # Set the room assignment when room_id is given
@@ -1949,8 +1965,8 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 "loras": _loras_used,
             })
 
-            # Set the image type when prompt_type is given (day/night/map_2d)
-            if prompt_type in ("day", "night", "map_2d"):
+            # Set the image type when prompt_type is given (day/night/map_2d/building)
+            if prompt_type in ("day", "night", "map_2d", "building"):
                 set_gallery_image_type(loc_id, image_name, prompt_type)
             # Set the newly created map tile as the displayed map item right away
             # (fit/neighbor + normal map_2d gen) — otherwise the old tile would stay active.

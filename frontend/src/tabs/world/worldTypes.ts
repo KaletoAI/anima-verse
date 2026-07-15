@@ -49,6 +49,7 @@ export interface Location {
   image_prompt_day?: string
   image_prompt_night?: string
   image_prompt_map_2d?: string
+  image_prompt_building?: string
   image_count?: number
   is_template?: boolean
   template_location_id?: string
@@ -85,7 +86,7 @@ export interface GalleryResponse {
   image_metas?: Record<string, { backend?: string; model?: string; loras?: string[] }>
 }
 
-export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d'] as const
+export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d', 'building'] as const
 
 export type Selection =
   | { kind: 'location'; locationId: string }

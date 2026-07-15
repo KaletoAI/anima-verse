@@ -870,6 +870,7 @@ def add_location(name: str, description: str,
                   image_prompt_night: str = None,
                   image_prompt_map: str = None,
                   image_prompt_map_2d: str = None,
+                  image_prompt_building: str = None,
                   decency: str = None,
                   style_hint: str = None,
                   swim_allowed: bool = None,
@@ -885,6 +886,8 @@ def add_location(name: str, description: str,
         image_prompt_night: Prompt fuer Hintergrundbild bei Nacht (18-6 Uhr)
         image_prompt_map: Prompt fuer isometrisches Kartenbild (Legacy)
         image_prompt_map_2d: Prompt fuer flaches 2D-Kartenicon
+        image_prompt_building: Prompt fuer die Gebaeude-Aussenansicht
+            (Quellbild fuer das 3D-Gebaeudemodell der Location)
         decency/style_hint/swim_allowed/indoor/activity_hint: Location-Level
             Semantik-Felder (nur gesetzt wenn nicht None) — analog zu den
             Feldern die der LocationEditor per PUT schreibt.
@@ -955,6 +958,8 @@ def add_location(name: str, description: str,
                 location["image_prompt_map"] = image_prompt_map
             if image_prompt_map_2d is not None:
                 location["image_prompt_map_2d"] = image_prompt_map_2d
+            if image_prompt_building is not None:
+                location["image_prompt_building"] = image_prompt_building
             # Location-Level Semantik-Felder — nur wenn mitgegeben.
             if decency is not None:
                 location["decency"] = decency
@@ -986,6 +991,7 @@ def add_location(name: str, description: str,
         "image_prompt_night": image_prompt_night or "",
         "image_prompt_map": image_prompt_map or "",
         "image_prompt_map_2d": image_prompt_map_2d or "",
+        "image_prompt_building": image_prompt_building or "",
         "decency": decency or "",
         "style_hint": style_hint or "",
         "swim_allowed": bool(swim_allowed),

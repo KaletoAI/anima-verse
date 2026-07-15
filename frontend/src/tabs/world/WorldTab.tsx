@@ -80,6 +80,7 @@ export function WorldTab() {
         image_prompt_day: src.image_prompt_day || '',
         image_prompt_night: src.image_prompt_night || '',
         image_prompt_map_2d: src.image_prompt_map_2d || '',
+        image_prompt_building: src.image_prompt_building || '',
         danger_level: src.danger_level,
         indoor: src.indoor || '',
         decency: src.decency,

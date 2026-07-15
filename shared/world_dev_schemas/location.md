@@ -23,6 +23,7 @@ A location has the following fields:
   "image_prompt_day": "English prompt for a daytime background image. Describe the scene in detail for AI image generation. No text, no people.",
   "image_prompt_night": "English prompt for a nighttime background image. Same scene as daytime but nighttime atmosphere.",
   "image_prompt_map_2d": "English prompt for a flat 2D map icon of the location — top-down, simplified, clean. No text, no people.",
+  "image_prompt_building": "English prompt for a three-quarter exterior view of the whole building (source for the location's 3D building model) — full structure in frame, neutral background, no people, no interior. Optional.",
   "rooms": [
     {
       "name": "Room name",
@@ -47,7 +48,7 @@ A location has the following fields:
 ### CRITICAL: image prompts ALWAYS in English
 
 **EVERY field with the `image_prompt_*` suffix** (`image_prompt_day`, `image_prompt_night`,
-`image_prompt_map_2d`) MUST be written in **English** — even if the user is communicating
+`image_prompt_map_2d`, `image_prompt_building`) MUST be written in **English** — even if the user is communicating
 with you in another language. These prompts feed directly into AI image generation;
 non-English words are not understood by the image model and produce poor images.
 
@@ -58,7 +59,8 @@ non-English words are not understood by the image model and produce poor images.
   prompt** describes the scene in English.
 - Image prompts contain **no people, no text and no writing** in the image.
 - Both day AND night variants (`image_prompt_day` + `image_prompt_night`) MUST be set.
-  Map prompt (`image_prompt_map_2d`) is optional, but if set must also be English.
+  Map prompt (`image_prompt_map_2d`) and building prompt (`image_prompt_building`) are
+  optional, but if set must also be English.
 
 
 - `activity_hint` (per room, optional): free-text direction of what one typically does in that room. Activities are NOT a fixed library — characters act freely; this hint only inspires the LLM. Keep it short and in the user's language. Leave empty when nothing specific applies.

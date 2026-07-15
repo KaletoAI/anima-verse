@@ -85,6 +85,11 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 _NEG_TPOSE = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume")
 
+# Negative of the building-exterior render (source of the location 3D model —
+# shared by both families). Like _NEG_TPOSE it is NOT _NEG_PHOTO (no skin
+# terms); it keeps the WHOLE building in frame and free of people/interior.
+_NEG_BUILDING = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye")
+
 # Eingebaute Defaults pro use_case × Familie. Diese Werte werden NICHT in die
 # config.json geseedet — sie sind Resolver-Default UND grauer Placeholder in der
 # Admin-UI (leeres Feld = dieser Default greift). Ohne Backend-Fallback braucht
@@ -142,6 +147,21 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_style": "a wide establishing shot of the place, atmospheric, detailed environment, no people",
             "prompt_negative": _NEG_PHOTO,
             "prompt_instruction": "Describe an establishing shot of the place — environment, architecture, lighting, mood. No people.",
+        },
+    },
+    # Building exterior — source image for the location's 3D building model. A
+    # three-quarter view of the WHOLE structure with a margin (the image-to-3D
+    # pass needs the full silhouette), neutral background, no people, no interior.
+    "building": {
+        "keywords": {
+            "prompt_style": "architectural exterior photo, three-quarter view of the whole building, slightly elevated eye level, the entire structure in frame with a margin around it, neutral bright background, even soft daylight, no people, no interior, sharp focus, highly detailed",
+            "prompt_negative": _NEG_BUILDING,
+            "prompt_instruction": "Write comma-separated tags for a three-quarter exterior view of the WHOLE building — architecture, materials, roof, storeys, style. The entire structure is in frame with a margin, neutral background, no people, no interior.",
+        },
+        "natural": {
+            "prompt_style": "an architectural exterior photograph of the whole building seen from a three-quarter angle at a slightly elevated eye level, the entire structure framed with a margin around it against a neutral bright background, even soft daylight, no people, no interior, sharp and highly detailed",
+            "prompt_negative": _NEG_BUILDING,
+            "prompt_instruction": "Describe a three-quarter exterior view of the WHOLE building — architecture, materials, roof, storeys, style. The entire structure is in frame with a margin, neutral background, no people, no interior.",
         },
     },
     "item": {
