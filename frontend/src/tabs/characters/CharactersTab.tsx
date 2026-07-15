@@ -18,7 +18,6 @@ import { ExpressionsTab } from './ExpressionsTab'
 import { type TmplSection } from './TemplateSectionForm'
 import { TemplateTab } from './TemplateTab'
 import { BodyEditor } from './BodyEditor'
-import { FieldModel } from './FieldModel'
 import { FieldModel3D } from './FieldModel3D'
 import { FieldModelRefs } from './FieldModelRefs'
 import { TemplateSelector } from './TemplateSelector'
@@ -109,7 +108,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'model3d', 'model_refs', 'model3d_gen',
+  'placement', 'body_editor', 'model_refs', 'model3d_gen',
 ])
 
 function sectionIsRenderable(s: TmplSectionRaw): boolean {
@@ -604,7 +603,6 @@ export function CharactersTab() {
                     specialSlots={{
                       placement: placementUI,
                       body_editor: <BodyEditor character={selected} />,
-                      model3d: <FieldModel character={selected} />,
                       model_refs: <FieldModelRefs character={selected} />,
                       model3d_gen: <FieldModel3D character={selected} />,
                     }}

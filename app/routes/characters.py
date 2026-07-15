@@ -52,9 +52,6 @@ from app.models.character import (
     add_character_image_metadata,
     get_character_outfits_dir,
     get_character_model_info,
-    save_character_model,
-    set_character_model_rig,
-    delete_character_model,
     MODEL_RIG_VALUES)
 from app.core import character_ops
 from app.core.dependencies import reload_skill_manager, get_skill_manager
@@ -1265,96 +1262,30 @@ _MODEL_MAX_BYTES = 100 * 1024 * 1024
 
 
 def _resolve_character_model(character_name: str):
-    """(path, meta, texture_path) of the character's model: the uploaded one if
-    present, else the generated mesh of the current outfit. (None, None, None)
-    when the character has no model — a normal state, not an error."""
+    """(path, meta, texture_path) of the character's current-outfit model —
+    upload or generated, whichever is stored. Falls back to a legacy global
+    upload (pre per-outfit). (None, None, None) when there is none: a normal
+    state, not an error."""
     from app.core.model3d import find_model3d, find_texture, get_model3d_info
     from app.models.character import get_character_model_texture
+    path = find_model3d(character_name)
+    if path:
+        info = get_model3d_info(character_name).get("model") or {}
+        meta = {"format": path.suffix.lstrip(".").lower(),
+                "rig": info.get("rig", "mixamo"),
+                "filename": path.name,
+                "size": path.stat().st_size,
+                "has_texture": bool(info.get("texture_url")),
+                "created_at": info.get("created_at", ""),
+                "backend": info.get("backend", ""),
+                "source": info.get("source", "generated")}
+        return path, meta, find_texture(character_name)
+    # Legacy: a globally uploaded model from before the per-outfit store.
     meta = get_character_model_info(character_name)
     if meta:
-        path = get_character_dir(character_name) / "model" / meta["filename"]
-        tex = get_character_model_texture(character_name)
-        meta = {**meta, "source": "upload"}
-        return path, meta, tex
-    path = find_model3d(character_name)
-    if not path:
-        return None, None, None
-    info = get_model3d_info(character_name).get("model") or {}
-    meta = {"format": path.suffix.lstrip(".").lower(),
-            "rig": info.get("rig", "mixamo"),
-            "filename": path.name,
-            "size": path.stat().st_size,
-            "has_texture": bool(info.get("texture_url")),
-            "created_at": info.get("created_at", ""),
-            "backend": info.get("backend", ""),
-            "source": "generated"}
-    return path, meta, find_texture(character_name)
-
-
-@router.post("/{character_name}/model")
-async def upload_character_model(character_name: str, request: Request) -> Dict[str, Any]:
-    """Uploads/replaces the character's 3D model (one active model).
-
-    Two accepted shapes, validated on the way in (app/core/model_validate.py):
-      * ``file``=<name>.glb — humanoid: must carry the 52-joint Mixamo rig AND
-        an embedded texture (a 2x2-pixel texture is the known empty-texture
-        artefact of a failed generation, not a valid result).
-      * ``file``=<name>.fbx + ``texture``=<name>.png — generic: an FBX embeds
-        no texture, so the basecolor PNG of the SAME run must come with it.
-
-    ``rig`` (mixamo|generic) is derived from the file, an explicit form field
-    only overrides the label. ``force=1`` stores despite validation errors.
-    """
-    try:
-        from app.core.model_validate import validate_fbx, validate_glb
-        form = await request.form()
-        file = form.get("file")
-        if not file:
-            raise HTTPException(status_code=400, detail="No file uploaded")
-        filename = (file.filename or "").lower()
-        if not filename.endswith((".glb", ".fbx")):
-            raise HTTPException(status_code=400,
-                                detail="Format not supported (GLB or FBX + PNG)")
-        if not get_character_dir(character_name).exists():
-            raise HTTPException(status_code=404, detail="Character not found")
-
-        contents = await file.read()
-        if len(contents) > _MODEL_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
-
-        tex_file = form.get("texture")
-        texture = await tex_file.read() if tex_file else None
-        if texture is not None and len(texture) > _MODEL_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="Texture too large")
-
-        if filename.endswith(".glb"):
-            result = validate_glb(contents)
-            texture = None  # a GLB carries its textures inside
-        else:
-            result = validate_fbx(contents, texture)
-        force = str(form.get("force") or "").strip().lower() in ("1", "true", "yes")
-        if not result["ok"] and not force:
-            raise HTTPException(status_code=422, detail={
-                "reason": "invalid_model",
-                "errors": result["errors"],
-                "warnings": result["warnings"],
-                "joint_count": result.get("joint_count", 0),
-            })
-
-        rig = str(form.get("rig") or result["rig"]).strip().lower()
-        if rig not in MODEL_RIG_VALUES:
-            raise HTTPException(status_code=400,
-                                detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
-        meta = save_character_model(character_name, file.filename, contents,
-                                    rig=rig, texture=texture)
-        return {"status": "success", **meta,
-                "warnings": result["warnings"],
-                "joint_count": result.get("joint_count", 0),
-                "url": f"/characters/{character_name}/model"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        p = get_character_dir(character_name) / "model" / meta["filename"]
+        return p, {**meta, "source": "upload"}, get_character_model_texture(character_name)
+    return None, None, None
 
 
 def _file_response(path, request: Request, media_type: str):
@@ -1395,20 +1326,6 @@ def get_character_model_meta(character_name: str) -> Dict[str, Any]:
     return meta
 
 
-@router.post("/{character_name}/model/meta")
-async def update_character_model_meta(character_name: str, request: Request) -> Dict[str, Any]:
-    """Updates model meta (currently only `rig`); 404 if no UPLOADED model."""
-    body = await request.json()
-    rig = str(body.get("rig") or "").strip().lower()
-    if rig not in MODEL_RIG_VALUES:
-        raise HTTPException(status_code=400,
-                            detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
-    meta = set_character_model_rig(character_name, rig)
-    if not meta:
-        raise HTTPException(status_code=404, detail="No model")
-    return meta
-
-
 @router.get("/{character_name}/model")
 def get_character_model_file(character_name: str, request: Request):
     """Serves the 3D model bytes (uploaded one, else the generated mesh).
@@ -1431,14 +1348,6 @@ def get_character_model_texture_file(character_name: str, request: Request):
     if not tex:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return _file_response(tex, request, "image/png")
-
-
-@router.delete("/{character_name}/model")
-def delete_character_model_endpoint(character_name: str) -> Dict[str, Any]:
-    """Removes the UPLOADED 3D model + meta + texture; 404 if none exists."""
-    if not delete_character_model(character_name):
-        raise HTTPException(status_code=404, detail="No model")
-    return {"status": "success"}
 
 
 # --- 3D reference renders (T-pose / default pose, app/core/model_refs.py) ---
@@ -1504,6 +1413,80 @@ def get_character_model3d(character_name: str) -> Dict[str, Any]:
     info["animation_sets"] = chain          # explicit first, then derived
     info["animation_set_derived"] = derive_set(character_name)
     return info
+
+
+@router.post("/{character_name}/model3d/upload")
+async def upload_character_model3d(character_name: str, request: Request) -> Dict[str, Any]:
+    """Uploads a model AS the current outfit's model — replacing whatever is
+    there (generated or a previous upload). Same two shapes as before,
+    validated on the way in (app/core/model_validate.py):
+      * ``file``=<name>.glb — humanoid: 52-joint Mixamo rig + embedded texture.
+      * ``file``=<name>.fbx + ``texture``=<name>.png — generic FBX + basecolor.
+    ``force=1`` stores despite validation errors; ``rig`` overrides the label.
+    """
+    try:
+        from app.core.model_validate import validate_fbx, validate_glb
+        from app.core.model3d import save_uploaded_model
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(status_code=400, detail="No file uploaded")
+        filename = (file.filename or "").lower()
+        if not filename.endswith((".glb", ".fbx")):
+            raise HTTPException(status_code=400,
+                                detail="Format not supported (GLB or FBX + PNG)")
+        if not get_character_dir(character_name).exists():
+            raise HTTPException(status_code=404, detail="Character not found")
+
+        contents = await file.read()
+        if len(contents) > _MODEL_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+        tex_file = form.get("texture")
+        texture = await tex_file.read() if tex_file else None
+        if texture is not None and len(texture) > _MODEL_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Texture too large")
+
+        if filename.endswith(".glb"):
+            result = validate_glb(contents)
+            texture = None  # a GLB carries its textures inside
+        else:
+            result = validate_fbx(contents, texture)
+        force = str(form.get("force") or "").strip().lower() in ("1", "true", "yes")
+        if not result["ok"] and not force:
+            raise HTTPException(status_code=422, detail={
+                "reason": "invalid_model",
+                "errors": result["errors"],
+                "warnings": result["warnings"],
+                "joint_count": result.get("joint_count", 0),
+            })
+        rig = str(form.get("rig") or result["rig"]).strip().lower()
+        if rig not in MODEL_RIG_VALUES:
+            raise HTTPException(status_code=400,
+                                detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
+        meta = save_uploaded_model(character_name, file.filename, contents,
+                                   rig=rig, texture=texture)
+        return {"status": "success", **meta,
+                "warnings": result["warnings"],
+                "joint_count": result.get("joint_count", 0)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{character_name}/model3d/rig")
+async def set_character_model3d_rig(character_name: str, request: Request) -> Dict[str, Any]:
+    """Updates the rig of the current outfit's model (mixamo|generic)."""
+    from app.core.model3d import set_model3d_rig
+    body = await request.json()
+    rig = str(body.get("rig") or "").strip().lower()
+    if rig not in MODEL_RIG_VALUES:
+        raise HTTPException(status_code=400,
+                            detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
+    meta = set_model3d_rig(character_name, rig)
+    if not meta:
+        raise HTTPException(status_code=404, detail="No model")
+    return meta
 
 
 @router.post("/{character_name}/model3d/generate")

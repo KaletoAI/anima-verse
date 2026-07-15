@@ -102,12 +102,12 @@
       "fields": []
     },
     {
-      "id": "model3d",
-      "label": "3D model",
-      "label_de": "3D-Modell",
+      "id": "model3d_gen",
+      "label": "3D model (current outfit)",
+      "label_de": "3D-Modell (aktuelles Outfit)",
       "column": 24,
       "row": 0,
-      "special": "model3d",
+      "special": "model3d_gen",
       "fields": []
     },
     {
@@ -117,15 +117,6 @@
       "column": 25,
       "row": 0,
       "special": "model_refs",
-      "fields": []
-    },
-    {
-      "id": "model3d_gen",
-      "label": "Generated 3D model (from T-pose)",
-      "label_de": "Generiertes 3D-Modell (aus T-Pose)",
-      "column": 24,
-      "row": 1,
-      "special": "model3d_gen",
       "fields": []
     },
     {

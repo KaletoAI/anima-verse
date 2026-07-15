@@ -1,15 +1,16 @@
-"""Generated 3D character models (img2mesh), cached per outfit combination.
+"""The character's 3D model for the current outfit — cached per combination.
 
-The T-pose reference render (``app/core/model_refs.py``) is the INPUT: it is
-sent to a MEDIA_TYPE=="mesh" backend (gateway alias, e.g. Trellis2-Low) which
-returns a rigged model file (e.g. ``<name>_mia.fbx``). Storage mirrors the
-reference renders exactly — ``characters/<name>/model3d/<signature>.<ext>``
-plus a sidecar — so switching back to a known outfit reuses the cached mesh
-instead of burning GPU time.
+There is ONE model per outfit combination, produced in one of two ways:
 
-Today the generation is triggered manually from the Game-Admin 3D tab; the
-outfit-change trigger is the same call (see ``generate_for_current_outfit``)
-and can be wired to the debounce in model_refs later.
+* GENERATED: the T-pose reference render (``app/core/model_refs.py``) is sent
+  to a MEDIA_TYPE=="mesh" backend (gateway alias, e.g. Trellis2-Low), which
+  returns a rigged model file.
+* UPLOADED: the user drops a GLB (or FBX+PNG) in the Game-Admin 3D tab.
+
+Both write ``characters/<name>/model3d/<signature>.<ext>`` (+ a ``.png``
+texture for FBX, + a ``.json`` sidecar recording ``source``/``rig``/…), so an
+upload and a generation are interchangeable and either one is "the current
+model". Switching back to a known outfit reuses whatever is stored.
 """
 
 import json
@@ -163,10 +164,12 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                                 "rig": rig,
                                 "size": path.stat().st_size,
                                 "url": f"/characters/{enc}/model3d/file"}
+        info["source"] = "generated"  # default for legacy sidecars
         meta_path = path.with_suffix(".json")
         if meta_path.exists():
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                info["source"] = meta.get("source", "generated")
                 info["created_at"] = meta.get("created_at", "")
                 info["backend"] = meta.get("backend", "")
                 info["source_filename"] = meta.get("source_filename", "")
@@ -185,6 +188,61 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
     with _lock:
         out["pending"] = character_name in _generating
     return out
+
+
+def _purge_combination(out_dir: Path, signature: str) -> None:
+    """Remove any stored model of this outfit combination (model + texture +
+    sidecar), whatever its format/source — the caller writes a fresh one."""
+    for old in out_dir.glob(f"{signature}.*"):
+        if old.suffix.lower() in MODEL_EXTS + (".png", ".json"):
+            old.unlink()
+
+
+def save_uploaded_model(character_name: str, original_filename: str,
+                        contents: bytes, *, rig: str,
+                        texture: Optional[bytes] = None) -> Dict[str, Any]:
+    """Stores an uploaded model as the current outfit's model (replacing any
+    generated or previously uploaded one). ``texture`` is the basecolor PNG
+    that belongs to an FBX; a GLB embeds its textures. Validation is the
+    caller's job (app/core/model_validate.py)."""
+    ext = Path(original_filename.lower()).suffix
+    _, _, signature = _current_outfit_state(character_name)
+    out_dir = get_model3d_dir(character_name)
+    _purge_combination(out_dir, signature)
+    target = out_dir / f"{signature}{ext}"
+    target.write_bytes(contents)
+    if texture is not None:
+        target.with_suffix(".png").write_bytes(texture)
+    meta = {
+        "created_at": utc_now_iso(),
+        "source": "upload",
+        "format": ext.lstrip("."),
+        "rig": rig,
+        "has_texture": texture is not None,
+        "source_filename": original_filename,
+        "signature": signature,
+        "character": character_name,
+    }
+    target.with_suffix(".json").write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Model3D %s: Upload %s (%d bytes, Kombination %s)",
+                character_name, target.name, len(contents), signature)
+    return meta
+
+
+def set_model3d_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
+    """Updates the rig in the current outfit's model sidecar; None if none."""
+    path = find_model3d(character_name)
+    if not path:
+        return None
+    meta_path = path.with_suffix(".json")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    except (OSError, ValueError):
+        meta = {}
+    meta["rig"] = rig
+    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    return meta
 
 
 def _char_lock(character_name: str) -> threading.Lock:
@@ -261,6 +319,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                 stale_tex.unlink()
         meta = {
             "created_at": utc_now_iso(),
+            "source": "generated",
             "backend": res.get("backend", ""),
             "format": res.get("format", path.suffix.lstrip(".").lower()),
             "rig": res.get("rig", rig),

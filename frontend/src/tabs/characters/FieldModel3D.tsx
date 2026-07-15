@@ -1,14 +1,13 @@
 /**
- * FieldModel3D — generated 3D model of a character (img2mesh), cached per
- * outfit combination. Rendered template-driven via the section flag
- * `special: "model3d_gen"` on the 3D tab.
- *
- * The T-pose reference render is the INPUT; a mesh backend (gateway alias,
- * e.g. Trellis2-Low) turns it into a model file (FBX). Manual trigger today —
- * the outfit-change trigger reuses the same endpoint.
+ * FieldModel3D — the character's 3D model for the current outfit. ONE model,
+ * produced either way: GENERATE it from the T-pose render (mesh backend) or
+ * UPLOAD a GLB/FBX. Both write the same per-outfit slot, so the animated
+ * preview always shows the current model regardless of where it came from.
+ * Rendered template-driven via the section flag `special: "model3d_gen"`.
  *
  * Backend: GET /characters/{n}/model3d (status), POST .../model3d/generate,
- * GET .../model3d/file (bytes), DELETE .../model3d.
+ * POST .../model3d/upload, POST .../model3d/rig, GET .../model3d/file (bytes),
+ * DELETE .../model3d.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -26,6 +25,7 @@ interface Model3DInfo {
   texture_url?: string
   created_at?: string
   backend?: string
+  source?: string
   source_filename?: string
 }
 
@@ -74,7 +74,10 @@ export function FieldModel3D({ character }: { character: string }) {
   const [clipUrl, setClipUrl] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [pickedBackend, setPickedBackend] = useState('')
+  const [pendingFbx, setPendingFbx] = useState<File | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const texRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
     if (!character) return
@@ -169,6 +172,65 @@ export function FieldModel3D({ character }: { character: string }) {
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
         load()
+      }
+    },
+    [enc, load, t, toast],
+  )
+
+  // Upload a model AS the current-outfit model. GLB = one file; FBX = two
+  // (the basecolor PNG is asked for right after). Validation errors come back
+  // as 422 with concrete reasons — surface them, not a bare "failed".
+  const uploadFiles = useCallback(
+    async (file: File, texture: File | null) => {
+      if (!file || busy) return
+      setBusy(true)
+      try {
+        const fd = new FormData()
+        fd.append('file', file)
+        if (texture) fd.append('texture', texture)
+        const res = await fetch(`/characters/${enc}/model3d/upload`, {
+          method: 'POST',
+          body: fd,
+          credentials: 'same-origin',
+        })
+        const body = await res.json().catch(() => null)
+        if (!res.ok) {
+          const errs: string[] = Array.isArray(body?.detail?.errors) ? body.detail.errors : []
+          throw new Error(errs.length ? errs.join(' · ') : (body?.detail?.toString?.() || `HTTP ${res.status}`))
+        }
+        const warn: string[] = Array.isArray(body?.warnings) ? body.warnings : []
+        await load()
+        toast(warn.length ? `${t('Saved')} — ${warn.join(' · ')}` : t('Saved'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setBusy(false)
+        setPendingFbx(null)
+      }
+    },
+    [busy, enc, load, t, toast],
+  )
+
+  const pickFile = useCallback(
+    (file: File) => {
+      if (file.name.toLowerCase().endsWith('.fbx')) {
+        setPendingFbx(file)
+        texRef.current?.click()
+        return
+      }
+      uploadFiles(file, null)
+    },
+    [uploadFiles],
+  )
+
+  const setRig = useCallback(
+    async (rig: string) => {
+      try {
+        await apiPost(`/characters/${enc}/model3d/rig`, { rig })
+        await load()
+        toast(t('Saved'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
     [enc, load, t, toast],
@@ -283,6 +345,8 @@ export function FieldModel3D({ character }: { character: string }) {
             </div>
           ) : null}
           <div className="ga-hint">
+            {model.source === 'upload' ? t('uploaded') : t('generated')}
+            {' · '}
             {(model.format || '').toUpperCase()}
             {model.rig ? ` · ${t('rig')}: ${model.rig}` : ''}
             {sizeMb ? ` · ${sizeMb} MB` : ''}
@@ -291,18 +355,33 @@ export function FieldModel3D({ character }: { character: string }) {
             {model.created_at ? ` · ${new Date(model.created_at).toLocaleString()}` : ''}
             {model.source_filename ? ` · ${model.source_filename}` : ''}
           </div>
+          {/* Rig only means something for an UPLOAD — a generated model's
+              skeleton is fixed by the backend alias. It decides whether the
+              shared clips apply. */}
+          {model.source === 'upload' ? (
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Rig')}</span>
+              <select
+                className="ga-input"
+                value={model.rig || 'mixamo'}
+                disabled={pending}
+                onChange={(e) => setRig(e.target.value)}
+              >
+                <option value="mixamo">mixamo</option>
+                <option value="generic">generic</option>
+              </select>
+            </label>
+          ) : null}
         </>
       ) : (
         <div className="ga-hint">
           {pending
             ? t('Generating the 3D model — this takes a few minutes.')
-            : st.has_input
-              ? t('No 3D model for this outfit yet.')
-              : t('No T-pose render for the current outfit — generate it first')}
+            : t('No 3D model for this outfit yet — upload one or generate it from the T-pose render.')}
         </div>
       )}
       <div className="ga-hint">
-        {t('Generated from the T-pose render of the currently worn outfit and cached per outfit combination.')}
+        {t('One model per outfit combination — upload a GLB/FBX or generate it from the T-pose render.')}
       </div>
       {/* "no fingers" is a humanoid-alias param — the generic ones don't take it. */}
       {mixamo ? (
@@ -331,8 +410,17 @@ export function FieldModel3D({ character }: { character: string }) {
           className="ga-btn ga-btn-sm"
           disabled={pending || !st.has_input}
           onClick={openDialog}
+          title={!st.has_input ? t('No T-pose render for the current outfit — generate it first') : undefined}
         >
-          {pending ? t('Generating…') : model ? t('Regenerate') : t('Generate 3D model')}
+          {pending ? t('Generating…') : model ? t('Regenerate') : t('Generate')}
+        </button>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={pending}
+          onClick={() => fileRef.current?.click()}
+        >
+          {model ? t('Upload (replace)') : t('Upload GLB/FBX')}
         </button>
         {model ? (
           <>
@@ -351,6 +439,29 @@ export function FieldModel3D({ character }: { character: string }) {
           </>
         ) : null}
       </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".glb,.fbx"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) pickFile(f)
+          e.target.value = ''
+        }}
+      />
+      {/* Second step of the FBX case: its basecolor PNG. */}
+      <input
+        ref={texRef}
+        type="file"
+        accept="image/png,image/jpeg"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const tex = e.target.files?.[0] || null
+          if (pendingFbx) uploadFiles(pendingFbx, tex)
+          e.target.value = ''
+        }}
+      />
 
       {dialogOpen
         ? createPortal(
