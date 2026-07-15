@@ -156,33 +156,60 @@ def _generate(location_id: str, source_image: str, backend_glob: str) -> Dict[st
         logger.warning("Location model %s: source image missing (%s)", owner, source_image)
         return {"ok": False, "error": "source_image_missing"}
 
-    d = _model_dir(owner, create=True)
-    res = get_image_service().generate_mesh(
-        source_image_path=str(src),
-        output_path=str(d / f"{_STEM}.glb"),
-        backend_glob=backend_glob,
-        mesh_name=owner,
-        rig="none")
-    if not res.get("ok"):
-        logger.error("Location model %s failed: %s", owner, res.get("error"))
-        return {"ok": False, "error": str(res.get("error") or "generation failed")}
+    # Header visibility, like the character mesh ("model3d_generation"): this
+    # wrapper is the ONE tracked header task — the queue-channel entry of the
+    # actual GPU job lives in the queue panel, not the header task list.
+    from app.core.task_queue import get_task_queue
+    label = owner
+    try:
+        from app.models.world import get_location_by_id
+        label = (get_location_by_id(location_id) or {}).get("name") or owner
+    except Exception:
+        pass
+    task_id = ""
+    try:
+        task_id = get_task_queue().track_start(
+            "model3d_generation", f"Building model: {label}",
+            start_running=True)
+    except Exception:
+        task_id = ""
 
-    path = Path(res["path"])
-    _purge(d, keep=path)  # drop a previous model of another format
-    meta = {
-        "created_at": utc_now_iso(),
-        "source": "generated",
-        "format": res.get("format", path.suffix.lstrip(".").lower() or "glb"),
-        "rig": res.get("rig", "none"),
-        "source_image": source_image,
-        "backend": res.get("backend", ""),
-        "location": owner,
-    }
-    (d / f"{_STEM}.json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Location model %s: %s (%d bytes, from %s)", owner, path.name,
-                path.stat().st_size, source_image)
-    return {"ok": True, "path": str(path), "meta": meta}
+    error = ""
+    try:
+        d = _model_dir(owner, create=True)
+        res = get_image_service().generate_mesh(
+            source_image_path=str(src),
+            output_path=str(d / f"{_STEM}.glb"),
+            backend_glob=backend_glob,
+            mesh_name=owner,
+            rig="none")
+        if not res.get("ok"):
+            error = str(res.get("error") or "generation failed")
+            logger.error("Location model %s failed: %s", owner, error)
+            return {"ok": False, "error": error}
+
+        path = Path(res["path"])
+        _purge(d, keep=path)  # drop a previous model of another format
+        meta = {
+            "created_at": utc_now_iso(),
+            "source": "generated",
+            "format": res.get("format", path.suffix.lstrip(".").lower() or "glb"),
+            "rig": res.get("rig", "none"),
+            "source_image": source_image,
+            "backend": res.get("backend", ""),
+            "location": owner,
+        }
+        (d / f"{_STEM}.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.info("Location model %s: %s (%d bytes, from %s)", owner, path.name,
+                    path.stat().st_size, source_image)
+        return {"ok": True, "path": str(path), "meta": meta}
+    finally:
+        if task_id:
+            try:
+                get_task_queue().track_finish(task_id, error=error)
+            except Exception:
+                pass
 
 
 def _run(location_id: str, source_image: str, backend_glob: str) -> None:
