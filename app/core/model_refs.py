@@ -50,13 +50,18 @@ TPOSE_PROMPT_DEFAULT = (
 )
 
 # Non-humanoid characters (animals): a T-pose is meaningless on four legs.
-# Neutral standing rest pose, every limb separated and visible — that is what
-# an image-to-3D pass needs in order to find the joints.
+# What the image-to-3D pass needs: a SYMMETRIC stance (the symmetry comes
+# from the pose, not the camera — the 3/4 view is there so body length and
+# leg spacing stay visible), the head straight ahead in the body's direction
+# (a head turned to the camera bakes a twisted neck into the mesh), legs
+# clearly apart, the tail set off from the body, and the mouth closed
+# (open jaws produce broken head geometry). Framing/background come from the
+# "tpose_animal" use-case style, the species description from the identity.
 ANIMAL_POSE_PROMPT_DEFAULT = (
-    "standing still on all fours in a neutral rest pose, seen from a "
-    "three-quarter side angle, the whole body from nose to tail visible, "
-    "all four legs straight, clearly separated and not overlapping, head "
-    "level and facing forward, tail extended away from the body"
+    "standing still in a neutral pose on all four legs, three-quarter view, "
+    "head facing straight forward in the direction of the body, not looking "
+    "at the camera, all four legs straight and clearly apart, tail extended "
+    "away from the body, mouth closed"
 )
 
 # Expression layer of both reference renders: deliberately neutral (the

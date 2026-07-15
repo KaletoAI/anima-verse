@@ -83,7 +83,7 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 # style families (deliberately NOT _NEG_PHOTO: "posed"/"studio lighting" would
 # fight the T-pose / flat-light goal).
 _NEG_TPOSE = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden")
-_NEG_TPOSE_ANIMAL = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume")
+_NEG_TPOSE_ANIMAL = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
 
 # Negative of the building-exterior render (source of the location 3D model —
 # shared by both families). Like _NEG_TPOSE it is NOT _NEG_PHOTO (no skin
