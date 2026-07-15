@@ -209,6 +209,14 @@ class ProviderQueue:
         if task.status == "cancelled":
             raise Exception(f"GPU task cancelled: {task.task_id}")
         if task.status == "failed":
+            # Re-raise the worker's original exception when we have it — the
+            # type matters to callers (imagegen's fallback engine distinguishes
+            # BackendBusyError = load from real defects). Queue-level failures
+            # (watchdog timeout) have no original exception and stay generic:
+            # a task that blows past the watchdog is treated as broken.
+            _orig = getattr(task, "_exception", None)
+            if _orig is not None:
+                raise _orig
             raise Exception(f"GPU task failed: {task.error}")
 
         return task.result
@@ -587,6 +595,10 @@ class ProviderQueue:
                         else:
                             task.status = "failed"
                             task.error = err_str
+                            # Keep the original exception object: submit_gpu_task
+                            # re-raises it in the caller thread so typed errors
+                            # (e.g. imagegen's BackendBusyError) survive the queue.
+                            task._exception = e
                             task.duration_s = round(time.monotonic() - t0, 2)
                             if is_retriable:
                                 logger.error("[%s] GPU-Task OOM nach %d Retries: %s: %s",

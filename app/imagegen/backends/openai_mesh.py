@@ -34,7 +34,7 @@ from urllib.parse import unquote, urlparse
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import ImageBackend
+from app.imagegen.base import BackendBusyError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -209,6 +209,12 @@ class OpenAIMeshBackend(ImageBackend):
                 time.sleep(wait_s)
                 continue
             break
+        if resp is not None and resp.status_code in (429, 503):
+            # Retries exhausted while the gateway kept answering busy — that is
+            # load, not a defect (no cooldown; typically the ONLY mesh backend).
+            raise BackendBusyError(
+                f"{self.name}: HTTP {resp.status_code} (Gateway ausgelastet) "
+                f"nach 3 Versuchen")
         if resp is None or resp.status_code not in (200, 201, 202):
             logger.error("%s: Mesh-Request HTTP %s - %s", self.name,
                          getattr(resp, "status_code", "?"),
@@ -236,7 +242,6 @@ class OpenAIMeshBackend(ImageBackend):
                 logger.warning("%s: Job %s wartet seit %.0fs in der Gateway-Queue "
                                "— Abbruch", self.name, job_id,
                                time.time() - queued_since)
-                self.note_busy("gateway queue")
                 break
             time.sleep(self.poll_interval)
             try:
@@ -298,12 +303,11 @@ class OpenAIMeshBackend(ImageBackend):
         logger.error("%s: Job %s abgebrochen (%s)", self.name, job_id,
                      f"laeuft laenger als {self.max_wait}s" if started
                      else "kam nicht aus der Gateway-Queue")
-        # A job that ran too long or waited too long is a LOAD problem, not a
-        # broken backend — no cooldown (the fallback engine reads this).
-        self.note_busy("timeout")
         try:
             requests.post(f"{self.api_url}/v1/jobs/{job_id}/cancel",
                           headers=self._headers(), timeout=10)
         except Exception:
             pass
-        return []
+        # A job that ran too long or waited too long is a LOAD problem, not a
+        # broken backend — no cooldown (the fallback engine reads this).
+        raise BackendBusyError("timeout" if started else "gateway queue")

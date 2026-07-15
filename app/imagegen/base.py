@@ -15,6 +15,27 @@ from app.core.log import get_logger
 logger = get_logger("image_backends")
 
 
+class BackendBusyError(Exception):
+    """The generation failed because of LOAD, not a defect.
+
+    BUSY IS NOT BROKEN. Both sides of this pipeline queue: anima-verse
+    serializes per backend channel, the gateway queues per GPU. So a
+    generation that times out, gets a 429/503, or waits in the gateway's
+    queue says nothing about the backend's health — it says the GPU is
+    working. Taking it offline for 5 minutes for that is exactly wrong: it
+    pushes the load onto another alias of the SAME GPU and, in a busy phase,
+    walks the whole pool into cooldown.
+
+    Backends raise this instead of returning an empty result; the fallback
+    engine catches it and retries elsewhere WITHOUT a cooldown. Only real
+    defects (connection refused, auth, malformed request, empty result) still
+    put a backend to sleep. The signal travels WITH the failure — deliberately
+    an exception, not backend state: the provider queue re-raises the worker
+    thread's original exception in the caller (see ProviderQueue
+    submit_gpu_task), so no flag has to cross the thread boundary.
+    """
+
+
 class ImageBackend(ABC):
     """
     Base class for image generation backends.
@@ -58,8 +79,6 @@ class ImageBackend(ABC):
         self._cooldown_reason: str = ""
         self._active_jobs = 0
         self._jobs_lock = __import__("threading").Lock()
-        # "The last failure was load, not a defect" — thread-local, see note_busy
-        self._busy_tls = __import__("threading").local()
         # Last time we logged "unreachable" as a WARNING
         self._last_unreachable_warn_ts: float = 0.0
         # Previous availability status — transition False->True triggers "back again"
@@ -187,30 +206,9 @@ class ImageBackend(ABC):
 
     # -- backpressure ------------------------------------------------------
     #
-    # BUSY IS NOT BROKEN. Both sides of this pipeline queue: anima-verse
-    # serializes per backend channel, the gateway queues per GPU. So a
-    # generation that times out, gets a 429/503, or waits in the gateway's
-    # queue says nothing about the backend's health — it says the GPU is
-    # working. Taking it offline for 5 minutes for that is exactly wrong: it
-    # pushes the load onto another alias of the SAME GPU and, in a busy phase,
-    # walks the whole pool into cooldown.
-    #
-    # A backend therefore marks such failures as "busy"; the fallback engine
-    # then retries elsewhere WITHOUT a cooldown. Only real defects (connection
-    # refused, auth, malformed request) still put a backend to sleep.
-
-    def note_busy(self, reason: str = "") -> None:
-        """Signals: the last failure was load/queueing, not a defect."""
-        self._busy_tls.flag = True
-        if reason:
-            logger.info("%s: ausgelastet (%s) — kein Cooldown", self.name, reason)
-
-    def consume_busy(self) -> bool:
-        """True when the last generate() call failed because of load. Reading
-        clears the flag (thread-local: parallel generations don't interfere)."""
-        flag = bool(getattr(self._busy_tls, "flag", False))
-        self._busy_tls.flag = False
-        return flag
+    # BUSY IS NOT BROKEN — see BackendBusyError at module level. Backends
+    # raise it for timeouts / 429 / 503 / gateway-queue waits; the fallback
+    # engine catches it and skips the cooldown.
 
     def mark_unhealthy(self, reason: str = "", cooldown_seconds: float = 300.0) -> None:
         """Puts the backend into cooldown after an error.
@@ -274,7 +272,6 @@ class ImageBackend(ABC):
         resolution (outfit, avatar) do not set the key.
         """
         import time as _time
-        self._busy_tls.flag = False  # fresh attempt, fresh backpressure state
         # Include the LoRA activation words (per-world repository) centrally in
         # the prompt — applies to ALL backends/paths as soon as a LoRA is active.
         final_prompt = self._inject_lora_triggers(prompt, params)

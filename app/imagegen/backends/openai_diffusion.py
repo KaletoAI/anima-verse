@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
+from app.imagegen.base import BackendBusyError
 from app.imagegen.backends.localai import LocalAIBackend
 
 logger = get_logger("image_backends")
@@ -115,8 +116,7 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             if code == 429:
                 if _429 >= max_429:
                     # Rate limit = load, not a defect -> no cooldown.
-                    self.note_busy(f"HTTP 429 nach {max_429} Versuchen")
-                    raise RuntimeError(f"{self.name}: HTTP 429 (Rate-Limit) nach {max_429} Versuchen")
+                    raise BackendBusyError(f"{self.name}: HTTP 429 (Rate-Limit) nach {max_429} Versuchen")
                 _429 += 1
                 wait = self._rate_limit_wait(resp, _429)
                 logger.warning(f"{self.name}: 429, warte {wait:.1f}s ({_429}/{max_429})")
@@ -125,8 +125,7 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             if code == 503:  # no healthy backend for the alias — retry with backoff
                 if _503 >= max_503:
                     # 503 = the gateway has no free GPU for the alias right now.
-                    self.note_busy(f"HTTP 503 nach {max_503} Versuchen")
-                    raise RuntimeError(f"{self.name}: HTTP 503 (kein Backend) nach {max_503} Versuchen: {body}")
+                    raise BackendBusyError(f"{self.name}: HTTP 503 (kein Backend) nach {max_503} Versuchen: {body}")
                 _503 += 1
                 wait = min(2.0 * (2 ** (_503 - 1)), 30.0)
                 logger.warning(f"{self.name}: 503 (kein gesundes Backend), warte {wait:.1f}s ({_503}/{max_503})")
@@ -267,10 +266,11 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         try:
             resp = self._post_gateway("generations", json=payload)
             return self._parse_image_response(resp)
+        except BackendBusyError:
+            raise  # load, not a defect — the fallback engine skips the cooldown
         except requests.Timeout:
             logger.error(f"{self.name}: Timeout nach {self.timeout}s")
-            self.note_busy("request timeout")
-            return []
+            raise BackendBusyError("request timeout")
         except RuntimeError:
             return []
         except Exception as e:
@@ -358,10 +358,11 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         try:
             resp = self._post_gateway("edits", files=files, data=data)
             return self._parse_image_response(resp)
+        except BackendBusyError:
+            raise  # load, not a defect — the fallback engine skips the cooldown
         except requests.Timeout:
             logger.error(f"{self.name}: Timeout nach {self.timeout}s")
-            self.note_busy("request timeout")
-            return []
+            raise BackendBusyError("request timeout")
         except RuntimeError:
             return []
         except Exception as e:

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
+from app.imagegen.base import BackendBusyError
 from app.imagegen.backends.together import TogetherBackend
 
 logger = get_logger("image_backends")
@@ -252,8 +253,7 @@ class LocalAIBackend(TogetherBackend):
             return images
         except requests.Timeout:
             logger.error(f"{self.name}: Timeout nach {self.timeout}s")
-            self.note_busy("request timeout")  # load, not a defect -> no cooldown
-            return []
+            raise BackendBusyError("request timeout")  # load, not a defect -> no cooldown
         except RuntimeError:
             return []
         except Exception as e:

@@ -31,7 +31,7 @@ from typing import Any, Dict, List
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import ImageBackend
+from app.imagegen.base import BackendBusyError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -265,6 +265,12 @@ class OpenAIVideoBackend(ImageBackend):
                 time.sleep(wait_s)
                 continue
             break
+        if resp is not None and resp.status_code in (429, 503):
+            # Retries exhausted while the gateway kept answering busy — that is
+            # load, not a defect (no cooldown).
+            raise BackendBusyError(
+                f"{self.name}: HTTP {resp.status_code} (Gateway ausgelastet) "
+                f"nach 3 Versuchen")
         if resp is None or resp.status_code not in (200, 201, 202):
             logger.error("%s: Video-Request HTTP %s - %s", self.name,
                          getattr(resp, "status_code", "?"),
@@ -290,7 +296,6 @@ class OpenAIVideoBackend(ImageBackend):
                 logger.warning("%s: Job %s wartet seit %.0fs in der Gateway-Queue "
                                "— Abbruch", self.name, job_id,
                                time.time() - queued_since)
-                self.note_busy("gateway queue")
                 break
             time.sleep(self.poll_interval)
             try:
@@ -339,10 +344,10 @@ class OpenAIVideoBackend(ImageBackend):
         logger.error("%s: Job %s abgebrochen (%s)", self.name, job_id,
                      f"laeuft laenger als {self.max_wait}s" if started
                      else "kam nicht aus der Gateway-Queue")
-        self.note_busy("timeout")  # load, not a defect -> no cooldown
         try:
             requests.post(f"{self.api_url}/v1/jobs/{job_id}/cancel",
                           headers=self._headers(), timeout=10)
         except Exception:
             pass
-        return []
+        # Load, not a defect -> no cooldown (the fallback engine reads this).
+        raise BackendBusyError("timeout" if started else "gateway queue")
