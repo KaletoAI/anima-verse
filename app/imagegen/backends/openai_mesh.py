@@ -61,10 +61,12 @@ class OpenAIMeshBackend(ImageBackend):
             os.environ.get(f"{env_prefix}MAX_QUEUE_WAIT", "0") or 0) or (self.max_wait * 4)
         self.mesh_endpoint = (os.environ.get(f"{env_prefix}MESH_ENDPOINT", "")
                               or "/v1/generations").strip().rstrip("/")
-        # Which skeleton the alias produces — decides which characters may use
-        # it and how many files come back:
+        # Which skeleton the alias produces — decides what may use it and how
+        # many files come back:
         #   mixamo  -> humanoid 52-bone rig, ONE glb (textures embedded)
         #   generic -> no standard skeleton, fbx + a separate basecolor png
+        #   none    -> unrigged, ONE glb (textures embedded); static props /
+        #              building models — never matched to a character
         self.mesh_rig = (os.environ.get(f"{env_prefix}MESH_RIG", "")
                          or "mixamo").strip().lower()
         # Alias params (schema: "remove background" / "face num" / "no fingers")
