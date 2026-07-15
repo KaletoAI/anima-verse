@@ -312,6 +312,15 @@ def interest_alias_tables(character_name: str) -> List[Any]:
                 if phrases:
                     out.append((phrases, f"{spec.id}.{attr}",
                                 {str(canonical).lower()}))
+    # Height left the human package for a core profile field (app/core/height.py)
+    # — core carries its attraction aliases now, injected under the SAME
+    # build.height key the slot used before the move (the value comes from
+    # slot_attr_values below, derived from the cm field via describe()).
+    from app.core.height import HEIGHT_INTEREST_ALIASES
+    for canonical, phrase_list in HEIGHT_INTEREST_ALIASES.items():
+        phrases = tuple(str(p).lower() for p in phrase_list if str(p).strip())
+        if phrases:
+            out.append((phrases, "build.height", {str(canonical).lower()}))
     return out
 
 
@@ -327,6 +336,14 @@ def slot_attr_values(character_name: str) -> Dict[str, str]:
             v = str((vals.get(spec.id) or {}).get(attr, "") or "").strip().lower()
             if v:
                 out[f"{spec.id}.{attr}"] = v
+    # Height is a core profile field now; derive its bucket word (the value the
+    # build.height aliases match against) from the cm field. "" for a
+    # non-humanoid or an unset height — no build.height entry, no match.
+    from app.core.height import height_word
+    from app.models.character import get_character_profile
+    word = height_word(get_character_profile(character_name) or {}, character_name)
+    if word:
+        out["build.height"] = word
     return out
 
 
@@ -350,6 +367,14 @@ def all_interest_alias_phrases() -> List[str]:
                         if first and first.lower() not in seen:
                             seen.add(first.lower())
                             out.append(first)
+    # Height moved to a core field — add its example phrases too, so the help
+    # panel still shows that size preferences work.
+    from app.core.height import HEIGHT_INTEREST_ALIASES
+    for phrases in HEIGHT_INTEREST_ALIASES.values():
+        first = str(phrases[0]).strip() if phrases else ""
+        if first and first.lower() not in seen:
+            seen.add(first.lower())
+            out.append(first)
     return out
 
 

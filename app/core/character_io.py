@@ -421,6 +421,21 @@ def import_character_from_zip(
         except Exception as e:
             logger.warning("import: template normalize failed for %s: %s",
                            character_name, e)
+        # A character exported before height became a cm profile field still
+        # carries the legacy body_slots.build.height word, which renders nowhere
+        # now — normalize it to centimetres (same rule as the one-time boot
+        # migration; an unmappable custom word is left untouched).
+        try:
+            from app.core.height import migrate_profile_height
+            from app.models.character import (get_character_profile,
+                                              save_character_profile)
+            _prof = get_character_profile(character_name) or {}
+            _changed, _ = migrate_profile_height(_prof)
+            if _changed:
+                save_character_profile(character_name, _prof)
+        except Exception as e:
+            logger.warning("import: height normalize failed for %s: %s",
+                           character_name, e)
     for table in db_tables:
         if table == "characters":
             continue
