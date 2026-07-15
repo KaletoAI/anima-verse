@@ -959,11 +959,15 @@ def generate_expression_image(character_name: str,
             outfit_prompt = f"{actor_label} {items_desc}"
 
     # Core image service (wave-6 split)
-    from app.imagegen.service import get_image_service
+    from app.imagegen.service import get_image_service, render_has_reference_image
     image_skill = get_image_service()
     if not image_skill.enabled:
         logger.warning("image service not available")
         return None
+    # A variant render pins the character's profile image as identity reference,
+    # so it prefers img2img — the SAME preference get_outfit_lora_options uses, so
+    # the LoRA list and this render resolve to the same backend.
+    _has_ref = render_has_reference_image(character_name)
 
     # Read the per-character override early — allows render/model/LoRA
     # overrides per character (configurable in the character editor).
@@ -990,7 +994,8 @@ def generate_expression_image(character_name: str,
     # char override (backend glob) -> env default spec -> agent default.
     backend = None
     if char_render_override:
-        backend = image_skill.match_backend(char_render_override)
+        backend = image_skill.match_backend(char_render_override,
+                                            has_input_image=_has_ref)
         if not backend:
             logger.warning(
                 "Character-Render-Override '%s' matcht kein verfuegbares Backend",
@@ -1002,7 +1007,8 @@ def generate_expression_image(character_name: str,
         if _expr_default:
             backend = image_skill.resolve_imagegen_target(_expr_default)
     if not backend:
-        backend = image_skill._wait_for_backend(character_name)
+        backend = image_skill._wait_for_backend(character_name,
+                                                has_input_image=_has_ref)
     if not backend:
         logger.warning("Kein Backend fuer Expression-Regen verfuegbar")
         return None

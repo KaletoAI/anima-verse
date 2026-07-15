@@ -63,6 +63,29 @@ def _log_image_failure(lv: dict, error_msg: str) -> None:
         logger.debug("Fehler-Logging (Image) fehlgeschlagen: %s", _le)
 
 
+def render_has_reference_image(character_name: str, *,
+                               set_profile: bool = False) -> bool:
+    """Whether this render will slot an identity reference image — the signal
+    that steers backend matching toward an img2img backend (see
+    ``BackendPool._prefer_img2img``).
+
+    A ``set_profile`` render CREATES the profile picture and slots no reference
+    (conditioning on a self-reference would loop), so it belongs on the cheaper
+    txt2img backend. Every other render of a character that HAS a profile image
+    pins it as the identity reference (directly, or via an expression variant
+    derived from it) and therefore prefers img2img. Deliberately backend-
+    independent: it is resolved BEFORE the backend (and thus its slot budget) is
+    chosen, and the outfit-LoRA list and the variant render reuse it so all
+    three agree on which backend a character render lands on."""
+    if set_profile or not character_name:
+        return False
+    try:
+        from app.models.character import get_character_profile_image
+        return bool(get_character_profile_image(character_name))
+    except Exception:
+        return False
+
+
 class ImageService:
     """Multi-instance image generation SERVICE (core engine, R5).
 
@@ -999,18 +1022,12 @@ class ImageService:
 
         # Will this render carry an input/reference image? Reference slots are
         # only resolved AFTER the backend is known (the slot budget is the
-        # backend's), so decide it here from the request: an explicit reference,
-        # a profile-pinned render (variants/outfits), or a character that has a
-        # profile image to slot as its identity reference. With an image in
-        # play, matching prefers img2img backends (see _prefer_img2img).
-        _has_input_image = bool(input_data.get("profile_only")) or bool(
-            input_data.get("reference_images"))
-        if not _has_input_image and character_name:
-            try:
-                from app.models.character import get_character_profile_image
-                _has_input_image = bool(get_character_profile_image(character_name))
-            except Exception:
-                _has_input_image = False
+        # backend's), so decide it here from the request. A set_profile render
+        # slots no reference; every other render of a character with a profile
+        # image pins it as the identity reference. With an image in play,
+        # matching prefers img2img backends (see _prefer_img2img).
+        _has_input_image = render_has_reference_image(
+            character_name, set_profile=set_profile)
 
         if explicit_backend:
             # Explicit backend — no fallback

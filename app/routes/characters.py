@@ -392,6 +392,12 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
     try:
         import os as _os
         from app.core.config import get_lora_library_names
+        from app.imagegen.service import render_has_reference_image
+        # These are outfit/variant renders: they pin the profile image as
+        # identity reference. Resolve the SAME img2img preference the render
+        # applies (from the profile image), so this LoRA list matches the
+        # backend that will actually run.
+        _has_ref = render_has_reference_image(character_name)
         eff = None
         if character_name:
             try:
@@ -399,10 +405,7 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
                 _ovr = (get_character_profile(character_name) or {}).get("outfit_imagegen") or {}
                 _glob = (_ovr.get("workflow") or "").strip() if isinstance(_ovr, dict) else ""
                 if _glob:
-                    # Character renders pin the profile image as identity
-                    # reference -> same img2img preference the render applies,
-                    # so this LoRA list matches the backend that will run.
-                    eff = imagegen.match_backend(_glob, has_input_image=True)
+                    eff = imagegen.match_backend(_glob, has_input_image=_has_ref)
             except Exception:
                 eff = None
         if not eff:
@@ -412,7 +415,7 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
                 eff = imagegen.resolve_imagegen_target(_default)
         if not eff and character_name:
             eff = imagegen._select_backend_for_agent(character_name,
-                                                     has_input_image=True)
+                                                     has_input_image=_has_ref)
         lib_names = get_lora_library_names(
             eff.name if eff else None,
             lora_filter=(getattr(eff, "lora_filter", "") or "") if eff else "")
