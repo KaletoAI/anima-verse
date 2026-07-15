@@ -1,10 +1,21 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { MeshBackendDialog, type MeshBackend } from '../../components/MeshBackendDialog'
+import { Model3DViewer } from '../characters/Model3DViewer'
 import { IMAGE_TYPES, type GalleryResponse, type Location, type Room } from './worldTypes'
 import { ImageSetDialog } from './ImageSetDialog'
+
+interface BuildingModelStatus {
+  exists?: boolean
+  pending?: boolean
+  meta?: { source_image?: string; backend?: string; created_at?: string; format?: string }
+  backends?: MeshBackend[]
+  default?: string
+}
 
 // ── Gallery — list, type-change, night-variant, delete, enlarge. ───────────
 
@@ -25,6 +36,8 @@ interface GalleryCardProps {
   onRegen: (target: { filename: string; type: string }) => void
   onMove: (image: string) => void
   onRemove: (image: string) => void
+  /** Turn a building image into the location's 3D model (building tiles only). */
+  onGenerateModel?: (image: string) => void
 }
 
 const GalleryCard = memo(function GalleryCard({
@@ -43,6 +56,7 @@ const GalleryCard = memo(function GalleryCard({
   onRegen,
   onMove,
   onRemove,
+  onGenerateModel,
 }: GalleryCardProps) {
   const { t } = useI18n()
   return (
@@ -132,6 +146,16 @@ const GalleryCard = memo(function GalleryCard({
           >
             ⇄
           </button>
+          {type === 'building' && onGenerateModel ? (
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={isBusy}
+              onClick={() => onGenerateModel(filename)}
+              title={t('Generate the 3D building model from this image')}
+            >
+              🧊
+            </button>
+          ) : null}
           <button
             className="ga-btn ga-btn-sm ga-btn-danger"
             disabled={isBusy}
@@ -168,7 +192,7 @@ export function LocationGallery({
   const [data, setData] = useState<GalleryResponse | null>(null)
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | null>(null)
+  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | 'building' | null>(null)
   const [imageSetOpen, setImageSetOpen] = useState(false)
   // "Regenerate" target: recreate an existing map image using it as a reference.
   const [regenTarget, setRegenTarget] = useState<{ filename: string; type: string } | null>(null)
@@ -203,6 +227,99 @@ export function LocationGallery({
   useEffect(() => {
     reload()
   }, [reload])
+
+  // ── 3D building model (AV3D-9) — location-level only (not per room). ──
+  const enc = encodeURIComponent(locationId)
+  const [model3d, setModel3d] = useState<BuildingModelStatus | null>(null)
+  const [modelSrc, setModelSrc] = useState<string | null>(null)  // image → picker
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const modelPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const loadModel3d = useCallback(async () => {
+    if (roomFilter) return null
+    try {
+      const d = await apiGet<BuildingModelStatus>(`/world/locations/${enc}/model3d/status`)
+      setModel3d(d)
+      return d
+    } catch {
+      setModel3d(null)
+      return null
+    }
+  }, [enc, roomFilter])
+
+  // Poll while the backend reports a running generation — the pending state is
+  // derived from the polled status, never a local never-reset flag (the
+  // stuck-busy lesson from FieldModel3D). n>=100 (~5min) is only the give-up bound.
+  const startModelPoll = useCallback(() => {
+    if (modelPollRef.current) clearInterval(modelPollRef.current)
+    let n = 0
+    modelPollRef.current = setInterval(async () => {
+      n += 1
+      const d = await loadModel3d()
+      if (!d?.pending || n >= 100) {
+        if (modelPollRef.current) clearInterval(modelPollRef.current)
+      }
+    }, 3000)
+  }, [loadModel3d])
+
+  useEffect(() => {
+    // A location switch must not carry an open viewer/picker across (the picked
+    // source image belongs to the previous location).
+    setViewerOpen(false)
+    setModelSrc(null)
+    loadModel3d().then((d) => {
+      if (d?.pending) startModelPoll()
+    })
+    return () => {
+      if (modelPollRef.current) clearInterval(modelPollRef.current)
+    }
+  }, [loadModel3d, startModelPoll])
+
+  // Fire the 3D-model generation from the chosen backend + the picked source image.
+  const generateModel3d = useCallback(
+    (backend: string) => {
+      const src = modelSrc
+      setModelSrc(null)
+      if (!src) return
+      void apiPost(`/world/locations/${enc}/model3d/generate`, { source_image: src, backend })
+        .then(() => { toast(t('Generating the 3D model…')); startModelPoll() })
+        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+    },
+    [modelSrc, enc, startModelPoll, t, toast],
+  )
+
+  const deleteModel3d = useCallback(async () => {
+    if (!window.confirm(t('Delete the 3D building model?'))) return
+    try {
+      await apiDelete(`/world/locations/${enc}/model3d`)
+      await loadModel3d()
+      toast(t('Deleted'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [enc, loadModel3d, t, toast])
+
+  // Upload a GLB as the building model (validated; surface 422 reasons).
+  const modelUploadRef = useRef<HTMLInputElement>(null)
+  const uploadModelGlb = useCallback(async (file: File) => {
+    if (!file) return
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`/world/locations/${enc}/model3d/upload`, {
+        method: 'POST', body: fd, credentials: 'same-origin',
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+        const errs: string[] = Array.isArray(body?.detail?.errors) ? body.detail.errors : []
+        throw new Error(errs.length ? errs.join(' · ') : (body?.detail?.toString?.() || `HTTP ${res.status}`))
+      }
+      await loadModel3d()
+      toast(t('Saved'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [enc, loadModel3d, t, toast])
 
   // Move an image to another location (file + prompt/type/meta).
   const submitMove = useCallback(async () => {
@@ -306,10 +423,11 @@ export function LocationGallery({
       if (!desc && promptType === 'day') desc = (location.image_prompt_day || '').trim()
       if (!desc && promptType === 'night') desc = (location.image_prompt_night || '').trim()
       if (!desc && promptType === 'map_2d') desc = (location.image_prompt_map_2d || '').trim()
+      if (!desc && promptType === 'building') desc = (location.image_prompt_building || '').trim()
       if (!desc) desc = location.description || location.name || ''
-      // 2D map icon: subject only. The style suffix is admin-managed (Server Admin →
-      // Image Generation) and appended server-side, so it isn't duplicated here.
-      if (isMap) {
+      // 2D map icon and building: subject only. The framing/style come from the
+      // use case (server-side), so they aren't duplicated into the prompt here.
+      if (isMap || promptType === 'building') {
         return desc
       }
       return `${desc}, wide angle establishing shot, no people, atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio`
@@ -328,7 +446,7 @@ export function LocationGallery({
         prompt_type: dialogType,
         prompt: payload.prompt,
       }
-      if (roomFilter && dialogType !== 'map_2d') body.room_id = roomFilter
+      if (roomFilter && dialogType !== 'map_2d' && dialogType !== 'building') body.room_id = roomFilter
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
       // The dialog already has the map-icon suffix in the prompt → don't duplicate it server-side.
@@ -492,6 +610,35 @@ export function LocationGallery({
         <button
           className="ga-btn ga-btn-sm"
           disabled={!!busy}
+          onClick={() => setDialogType('building')}
+          title={t('Open the image generation dialog for the building exterior (source of the 3D building model).')}
+        >
+          🏛 {t('Generate building')}
+        </button>
+      ) : null}
+      {!roomFilter ? (
+        <>
+          <button
+            className="ga-btn ga-btn-sm"
+            disabled={!!busy}
+            onClick={() => modelUploadRef.current?.click()}
+            title={t('Upload a GLB as the location’s 3D building model.')}
+          >
+            🧊 {t('Upload model')}
+          </button>
+          <input
+            ref={modelUploadRef}
+            type="file"
+            accept=".glb"
+            style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadModelGlb(f); e.target.value = '' }}
+          />
+        </>
+      ) : null}
+      {!roomFilter ? (
+        <button
+          className="ga-btn ga-btn-sm"
+          disabled={!!busy}
           onClick={() => setImageSetOpen(true)}
           title={t('Generate a full image set (location and/or all rooms, day + night) with one chosen backend/model — runs as sequential background jobs.')}
         >
@@ -565,7 +712,9 @@ export function LocationGallery({
           ? t('Generate day image — {name}').replace('{name}', room?.name || location.name)
           : dialogType === 'night'
             ? t('Generate night image — {name}').replace('{name}', room?.name || location.name)
-            : t('Generate 2D map icon — {name}').replace('{name}', location.name)
+            : dialogType === 'building'
+              ? t('Generate building image — {name}').replace('{name}', location.name)
+              : t('Generate 2D map icon — {name}').replace('{name}', location.name)
       }
       defaultPrompt={buildDefaultPrompt(dialogType)}
       hideNegative
@@ -600,6 +749,81 @@ export function LocationGallery({
     />
   ) : null
 
+  // 3D building model: its own row above the gallery when present or generating.
+  const buildingModel = !roomFilter && (model3d?.exists || model3d?.pending) ? (
+    <div className="ga-gallery-generate" style={{ alignItems: 'center' }}>
+      <span className="ga-form-section-label" style={{ margin: 0 }}>{t('3D building model')}</span>
+      {model3d?.pending ? (
+        <span className="ga-hint">{t('Generating the 3D model — this takes a few minutes.')}</span>
+      ) : null}
+      {model3d?.exists ? (
+        <>
+          <button
+            className="ga-btn ga-btn-sm"
+            onClick={() => setViewerOpen(true)}
+            title={t('Open the 3D model viewer')}
+          >
+            🧊 {t('View model')}
+          </button>
+          {model3d?.meta?.source_image ? (
+            <span className="ga-hint">
+              {t('from')} {model3d.meta.source_image}
+              {model3d.meta.backend ? ` · ${model3d.meta.backend}` : ''}
+            </span>
+          ) : null}
+          <button
+            className="ga-btn ga-btn-sm ga-btn-danger"
+            onClick={() => { void deleteModel3d() }}
+            title={t('Delete the 3D building model')}
+          >
+            🗑 {t('Delete model')}
+          </button>
+        </>
+      ) : null}
+    </div>
+  ) : null
+
+  const modelPicker = (
+    <MeshBackendDialog
+      open={modelSrc !== null}
+      title={t('Generate 3D building model')}
+      backends={model3d?.backends || []}
+      defaultBackend={
+        model3d?.default
+          || ((model3d?.backends || []).length === 1 ? (model3d?.backends || [])[0].name : '')
+      }
+      onGenerate={generateModel3d}
+      onClose={() => setModelSrc(null)}
+    />
+  )
+
+  const modelViewer = viewerOpen && model3d?.exists
+    ? createPortal(
+        <div className="ga-modal-backdrop" onClick={() => setViewerOpen(false)}>
+          <div
+            className="ga-modal"
+            role="dialog"
+            aria-label={t('3D building model')}
+            style={{ maxWidth: 640, width: '90vw' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="ga-modal-header">
+              <span>{t('3D building model')}</span>
+              <button type="button" className="ga-modal-close" onClick={() => setViewerOpen(false)}>×</button>
+            </div>
+            <div className="ga-modal-body">
+              <Model3DViewer
+                url={`/play/locations/${enc}/model?v=${encodeURIComponent(model3d?.meta?.created_at || '')}`}
+                format={model3d?.meta?.format || 'glb'}
+                height={420}
+              />
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )
+    : null
+
   if (!data) return <div className="ga-loading">{t('Loading…')}</div>
   if (!images.length) {
     return (
@@ -607,6 +831,9 @@ export function LocationGallery({
         {generatePanel}
         {dialog}
         {regenDialog}
+        {modelPicker}
+        {modelViewer}
+        {buildingModel}
         <div className="ga-form-hint" style={{ padding: 8 }}>
           {roomFilter
             ? t('No gallery images for this room yet.')
@@ -621,6 +848,9 @@ export function LocationGallery({
       {generatePanel}
       {dialog}
       {regenDialog}
+      {modelPicker}
+      {modelViewer}
+      {buildingModel}
       <div className="ga-form-section-label">
         {t('Gallery')} ({images.length})
       </div>
@@ -648,6 +878,7 @@ export function LocationGallery({
               onRegen={setRegenTarget}
               onMove={startMove}
               onRemove={remove}
+              onGenerateModel={!roomFilter ? setModelSrc : undefined}
             />
           )
         })}
