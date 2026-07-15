@@ -83,15 +83,17 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         // run comes separately and has to be bound to the materials by hand
         // (a GLB carries its textures inside and needs none of this).
         //
-        // flipY stays at the loader default (true): that is the FBX/OBJ
-        // convention. Only glTF wants flipY=false, because its UV origin is
-        // top-left — forcing that here mirrors the texture vertically, which
-        // is exactly what a "the mapping is off" result looks like.
+        // flipY=false: the gateway delivers the PNG display-ready, already
+        // V-flipped to match the FBX UVs sampled natively (gateway
+        // normalize_delivery, 2026-07-15) — every consumer (this preview, the
+        // 3D client, DCC imports) binds it as stored, no compensation.
+        // Textures generated BEFORE that gateway fix render mirrored here:
+        // regenerate the model.
         if (textureUrl) {
           const tex = await new THREE.TextureLoader().loadAsync(textureUrl)
           if (disposed) return
           tex.colorSpace = THREE.SRGBColorSpace
-          tex.flipY = ext !== 'glb' && ext !== 'gltf'
+          tex.flipY = false
           tex.wrapS = THREE.RepeatWrapping
           tex.wrapT = THREE.RepeatWrapping
           tex.needsUpdate = true
