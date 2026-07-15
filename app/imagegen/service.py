@@ -397,8 +397,11 @@ class ImageService:
                                               "original_prompt": "",
                                               "media": "mesh"})
         try:
+            # NO fallback for mesh (max_attempts=1): a different alias means a
+            # different rig or quality tier — a wrong-rig mesh binds unusably.
+            # The engine still handles busy (no cooldown) vs. defect (cooldown).
             result, used = self.run_with_fallback(
-                primary, _op, character_name=character_name)
+                primary, _op, character_name=character_name, max_attempts=1)
         except Exception as e:
             logger.error("generate_mesh fehlgeschlagen: %s", e)
             return {"ok": False, "error": str(e)}
