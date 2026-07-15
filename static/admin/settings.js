@@ -4,12 +4,15 @@ let SCHEMA = {};
 let USE_CASE_DEFAULTS = { use_cases: [], families: [], defaults: {} };
 let PROVIDERS_CACHE = {};
 let PROVIDERS_VISION = {};  // provName -> Set(vision model names)
+// Runtime state of the media backends (name -> {available, cooldown_seconds,
+// cooldown_reason, ...}) — merged into the backends table's Status column.
+let MEDIA_STATUS = {};
 let ACTIVE_SECTION = null;
-// Wenn ein Array-Item per User-Klick aufgeklappt wurde, halten wir den
-// Pfad hier fest. So bleibt der Zustand ueber renderSection()-Rerenders
-// (z.B. nach api_type-Wechsel via triggers_rerender) erhalten.
+// When the user expands an array item we keep its path here, so the state
+// survives renderSection() rerenders (e.g. after an api_type change via
+// triggers_rerender).
 const OPEN_ITEMS = new Set();
-// Master-Detail: pro Sub-Array-Pfad der aktuell ausgewaehlte Item-Pfad.
+// Master-detail: the currently selected item path per sub-array path.
 const SELECTED_ITEM = {};
 function toggleArrayItem(el, path) {
     const isOpen = el.parentElement.classList.toggle('open');
@@ -34,7 +37,8 @@ async function init() {
         try {
             const ucResp = await fetch('/admin/settings/use-case-defaults', { credentials: 'same-origin' });
             if (ucResp.ok) USE_CASE_DEFAULTS = await ucResp.json();
-        } catch (e) { /* defaults bleiben leer */ }
+        } catch (e) { /* defaults stay empty */ }
+        await loadMediaStatus();
         buildNav();
         // Activate first section
         const first = Object.keys(SCHEMA)[0];
@@ -1357,10 +1361,53 @@ function renderMdCell(col, item) {
     const v = item ? item[col.field] : undefined;
     if (col.kind === 'status') {
         const on = v !== false;
-        return '<span class="md-status ' + (on ? 'on' : 'off') + '">' + (on ? '● on' : '○ off') + '</span>';
+        if (!on) return '<span class="md-status off">○ off</span>';
+        // Merge the RUNTIME state (media-backend-status, keyed by name): a
+        // backend flagged offline (error cooldown) or failing its probe shows
+        // as offline here, with an action to lift the flag and probe again.
+        // No entry (e.g. just added, pending restart) -> plain config state.
+        const rt = item && item.name ? MEDIA_STATUS[item.name] : null;
+        if (rt && (rt.cooldown_seconds > 0 || rt.available === false)) {
+            const why = rt.cooldown_seconds > 0
+                ? 'Flagged offline: ' + (rt.cooldown_reason || 'error') + ' — ' +
+                  Math.ceil(rt.cooldown_seconds / 60) + ' min cooldown left'
+                : 'Availability probe failed — backend unreachable';
+            return '<span class="md-status offline" title="' + esc(why) + '">⏻ offline</span>' +
+                   '<button class="md-online-btn" data-backend="' + esc(item.name) + '" ' +
+                   'title="' + esc(why) + ' — clear the flag and probe again" ' +
+                   'onclick="event.stopPropagation(); mediaBackendOnline(this.dataset.backend, this)">online</button>';
+        }
+        return '<span class="md-status on">● on</span>';
     }
     if (v === undefined || v === null || v === '') return '<span class="md-empty">—</span>';
     return esc(String(v));
+}
+
+// ── Media-backend runtime status (Status column + online action) ──
+async function loadMediaStatus() {
+    try {
+        const resp = await fetch('/admin/settings/media-backend-status', { credentials: 'same-origin' });
+        if (resp.ok) MEDIA_STATUS = (await resp.json()).backends || {};
+    } catch (e) { /* no runtime info — the column falls back to the config state */ }
+}
+
+async function mediaBackendOnline(name, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    try {
+        const resp = await fetch('/admin/settings/media-backend-online', {
+            method: 'POST', headers: authHeaders(), credentials: 'same-origin',
+            body: JSON.stringify({ name: name })
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error((data && data.detail) || ('HTTP ' + resp.status));
+        toast(data.available
+            ? name + ' is back online'
+            : name + ' stays offline — the availability probe failed', data.available ? 'success' : 'error');
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+    await loadMediaStatus();
+    if (ACTIVE_SECTION) renderSection(ACTIVE_SECTION);
 }
 
 function renderMasterDetail(def, items, path) {

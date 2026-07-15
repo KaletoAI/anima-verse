@@ -204,6 +204,32 @@ class ImageBackend(ABC):
         self._cooldown_reason = ""
         return False
 
+    def runtime_status(self) -> Dict[str, Any]:
+        """Runtime state for admin surfaces (independent of the config data
+        the settings page edits): current availability, an active cooldown
+        with its reason and remaining seconds, and the media kind."""
+        remaining = 0
+        if self._cooldown_until:
+            remaining = max(0, int(self._cooldown_until - time.monotonic()))
+        return {
+            "available": self.available,
+            "enabled": self.instance_enabled,
+            "cooldown_seconds": remaining,
+            "cooldown_reason": self._cooldown_reason if remaining else "",
+            "media": self.MEDIA_TYPE,
+        }
+
+    def clear_cooldown(self) -> bool:
+        """Admin action: lift an active cooldown and probe the backend again
+        immediately. Returns the fresh availability — a backend that is truly
+        unreachable stays offline until it answers a probe."""
+        if self._cooldown_until:
+            logger.info("%s: Cooldown per Admin-Aktion aufgehoben (%s)",
+                        self.name, self._cooldown_reason or "?")
+        self._cooldown_until = 0.0
+        self._cooldown_reason = ""
+        return bool(self.check_availability())
+
     # -- backpressure ------------------------------------------------------
     #
     # BUSY IS NOT BROKEN — see BackendBusyError at module level. Backends

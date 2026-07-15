@@ -132,6 +132,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .md-row.active td:first-child { box-shadow: inset 2px 0 0 #58a6ff; font-weight: 600; }
 .md-status.on { color: #3fb950; }
 .md-status.off { color: #8b949e; }
+.md-status.offline { color: #f85149; font-weight: 600; }
+.md-online-btn { margin-left: 8px; padding: 1px 8px; font-size: 11px; cursor: pointer;
+    color: #58a6ff; background: transparent; border: 1px solid #30363d; border-radius: 6px; }
+.md-online-btn:hover { border-color: #58a6ff; background: rgba(88,166,255,0.1); }
+.md-online-btn:disabled { color: #8b949e; cursor: default; }
 .md-empty { color: #484f58; }
 .md-detail { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
 .md-detail-head { display: flex; align-items: center; margin-bottom: 12px; padding-bottom: 8px;

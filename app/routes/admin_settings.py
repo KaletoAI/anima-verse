@@ -953,6 +953,44 @@ async def settings_use_case_defaults(user=Depends(require_admin)):
     }
 
 
+@router.get("/settings/media-backend-status")
+async def media_backend_status(user=Depends(require_admin)):
+    """Runtime state of every instantiated media backend, keyed by name.
+
+    The backends table on the settings page merges this into its Status
+    column: a backend that was flagged offline (mark_unhealthy cooldown) or
+    failed its availability probe shows as offline there, with an action to
+    bring it back. Backends added to the config but not instantiated yet
+    (pending restart) simply have no entry."""
+    try:
+        from app.imagegen.service import get_image_service
+        img = get_image_service()
+    except Exception as e:
+        return {"backends": {}, "error": str(e)}
+    return {"backends": {b.name: b.runtime_status() for b in img.backends}}
+
+
+@router.post("/settings/media-backend-online")
+async def media_backend_online(request: Request, user=Depends(require_admin)):
+    """Admin action: lift a backend's offline flag (cooldown) and probe it
+    again right away. Returns the fresh runtime state — a backend that is
+    truly unreachable stays offline."""
+    body = await request.json()
+    name = str((body or {}).get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="'name' fehlt")
+    from app.imagegen.service import get_image_service
+    img = get_image_service()
+    backend = next((b for b in img.backends if b.name == name), None)
+    if backend is None:
+        raise HTTPException(status_code=404,
+                            detail=f"Backend '{name}' ist nicht instanziiert "
+                                   f"(neu angelegte brauchen einen Neustart)")
+    # The probe is a blocking HTTP call (up to ~10s) — keep the loop free.
+    available = await asyncio.to_thread(backend.clear_cooldown)
+    return {"name": name, "available": available, **backend.runtime_status()}
+
+
 @router.get("/settings/imagegen-targets")
 async def imagegen_targets(user=Depends(require_admin)):
     """Returns the list of image-gen targets for admin selects (backends only).
