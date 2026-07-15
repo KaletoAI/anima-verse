@@ -35,12 +35,16 @@ logger = get_logger(__name__)
 # generated with turned palms gets its hand bones bound 90° off, and every
 # animation clip then twists the hands. A correct bind pose beats a slightly
 # better hand reconstruction.
+#
+# Hair goes BEHIND the shoulders: hair falling over shoulders or chest bakes
+# into the torso geometry and confuses the mesher's silhouette segmentation.
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms raised straight out "
     "to the sides at exact shoulder height, fully extended and parallel to "
     "the floor, body and arms forming the letter T, palms facing down toward "
     "the floor, fingers straight, extended and slightly spread apart, thumbs "
-    "pointing forward, legs straight and slightly apart"
+    "pointing forward, legs straight and slightly apart, hair swept back "
+    "behind the shoulders and hanging down the back"
 )
 
 # Non-humanoid characters (animals): a T-pose is meaningless on four legs.
