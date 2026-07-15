@@ -271,6 +271,86 @@ def delete_location_route(
     raise HTTPException(status_code=404, detail="Ort nicht gefunden")
 
 
+# ── Location 3D building model (AV3D-9) ──
+# ONE unrigged GLB per location, keyed by the gallery owner (clones share it).
+# Source is a gallery image of type "building"; generation goes through the
+# mesh backend (rig "none") on the queue channel. Auth matches the other
+# location-content routes (create/update/delete) — no separate admin gate.
+
+_LOCATION_MODEL_MAX_BYTES = 100 * 1024 * 1024
+
+
+@router.get("/locations/{location_id}/model3d/status")
+def location_model3d_status(location_id: str) -> Dict[str, Any]:
+    """Building-model status: {exists, pending, meta, backends, default}.
+    ``backends`` = the available rig-'none' mesh backends; ``default`` = the
+    admin default only when its rig is 'none'."""
+    from app.core.location_model3d import get_building_info
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    return get_building_info(location_id)
+
+
+@router.post("/locations/{location_id}/model3d/generate")
+async def location_model3d_generate(location_id: str, request: Request) -> Dict[str, Any]:
+    """Generate the location's 3D building model from a gallery image
+    (body: {source_image, backend?}). Background job — poll status for pending."""
+    from app.core.location_model3d import trigger_generation
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    source_image = str(data.get("source_image") or "").strip()
+    if not source_image:
+        raise HTTPException(status_code=400,
+                            detail="source_image required (a building gallery image of the location)")
+    backend = str(data.get("backend") or "").strip()
+    if not trigger_generation(location_id, source_image=source_image, backend_glob=backend):
+        return {"status": "already_running"}
+    return {"status": "generating"}
+
+
+@router.post("/locations/{location_id}/model3d/upload")
+async def location_model3d_upload(location_id: str, request: Request) -> Dict[str, Any]:
+    """Upload a GLB as the location's building model (validated as an unrigged
+    GLB with an embedded texture; force=1 stores despite validation errors)."""
+    from app.core.location_model3d import save_uploaded_building
+    from app.core.model_validate import validate_static_glb
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    if not (file.filename or "").lower().endswith(".glb"):
+        raise HTTPException(status_code=400,
+                            detail="Building models must be a GLB (embedded texture, no rig)")
+    contents = await file.read()
+    if len(contents) > _LOCATION_MODEL_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+    result = validate_static_glb(contents)
+    force = str(form.get("force") or "").strip().lower() in ("1", "true", "yes")
+    if not result["ok"] and not force:
+        raise HTTPException(status_code=422, detail={
+            "reason": "invalid_model",
+            "errors": result["errors"],
+            "warnings": result["warnings"],
+        })
+    meta = save_uploaded_building(location_id, contents,
+                                  source_image=str(form.get("source_image") or ""))
+    return {"status": "success", **meta, "warnings": result["warnings"]}
+
+
+@router.delete("/locations/{location_id}/model3d")
+def location_model3d_delete(location_id: str) -> Dict[str, Any]:
+    """Remove the location's building model + sidecar."""
+    from app.core.location_model3d import delete_building_model
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    return {"status": "success", "removed": delete_building_model(location_id)}
+
+
 # ── Map Layout Import / Export ──
 
 @router.get("/map/export")

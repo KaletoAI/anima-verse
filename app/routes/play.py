@@ -397,6 +397,36 @@ async def play_scene_render_image(sig: str, user=Depends(get_current_user)):
                         headers={"Cache-Control": "no-cache"})
 
 
+# --- Location 3D building model (AV3D-9) — consumed by the 3D map client ---
+# Open like the character /model route so the external client can fetch them;
+# 404 stays normal (the client keeps rendering the location procedurally).
+
+@router.get("/play/locations/{location_id}/model")
+def play_location_model(location_id: str, request: Request):
+    """Serves the location's 3D building model (GLB bytes). 404 = no model.
+    ETag/If-None-Match — the file changes rarely."""
+    from fastapi.responses import Response
+    from app.core.location_model3d import find_building_model
+    from app.core.http_files import etag_file_response
+    p = find_building_model(location_id)
+    if not p:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
+             else "application/octet-stream")
+    return etag_file_response(p, request, media)
+
+
+@router.get("/play/locations/{location_id}/model/meta")
+def play_location_model_meta(location_id: str):
+    """Meta of the location's building model ({format, rig, url}). 404 = none."""
+    from urllib.parse import quote
+    from app.core.location_model3d import get_client_meta
+    meta = get_client_meta(location_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="No model")
+    return {**meta, "url": f"/play/locations/{quote(location_id)}/model"}
+
+
 def _party_block(avatar: str):
     """Party-Status des Avatars fuer die UI (None = in keiner Party)."""
     try:
