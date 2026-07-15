@@ -308,6 +308,24 @@ class ImageService:
         return self._pool._wait_for_explicit_backend(
             backend_name, media=media, has_input_image=has_input_image)
 
+    @staticmethod
+    def _run_on_backend_channel(backend: ImageBackend, gen_fn, *,
+                                task_type: str, agent_name: str):
+        """Run ``gen_fn()`` on the backend's per-backend GPU queue channel — the
+        same serialization every image render uses, so two generations never run
+        in parallel on one backend (video and mesh used to run straight off a
+        daemon thread, past the channel). Blocks until the channel worker returns
+        the result; busy/defect exceptions propagate typed for the fallback
+        engine."""
+        from app.core.llm_queue import get_llm_queue, Priority
+        return get_llm_queue().submit_gpu_task(
+            provider_name=backend.name,
+            task_type=task_type,
+            priority=Priority.IMAGE_GEN,
+            callable_fn=gen_fn,
+            agent_name=agent_name, label=backend.name,
+            gpu_type=backend.api_type)
+
     def generate_video(self, source_image_path: str, action_prompt: str,
                        output_path: str, backend_glob: str = "",
                        character_name: str = "", loras=None,
@@ -335,10 +353,14 @@ class ImageService:
             return False
 
         def _op(backend: ImageBackend):
-            return backend.generate(action_prompt, "", params,
-                                    log_meta={"agent_name": character_name,
-                                              "original_prompt": action_prompt,
-                                              "media": "video"})
+            def _gen():
+                return backend.generate(action_prompt, "", params,
+                                        log_meta={"agent_name": character_name,
+                                                  "original_prompt": action_prompt,
+                                                  "media": "video"})
+            return self._run_on_backend_channel(
+                backend, _gen, task_type="video_generation",
+                agent_name=character_name)
         try:
             result, _used = self.run_with_fallback(
                 primary, _op, character_name=character_name)
@@ -414,24 +436,14 @@ class ImageService:
             return {"ok": False, "error": f"no {rig or 'mesh'} backend available"}
 
         def _op(backend: ImageBackend):
-            # Route through the backend's per-backend GPU queue channel like the
-            # image path — never two generations in parallel on one backend (a
-            # mesh job used to run straight off a daemon thread, past the
-            # channel). Busy/defect exceptions propagate typed through the queue
-            # for the fallback engine.
             def _gen():
                 return backend.generate("", "", params,
                                         log_meta={"agent_name": character_name,
                                                   "original_prompt": "",
                                                   "media": "mesh"})
-            from app.core.llm_queue import get_llm_queue, Priority
-            return get_llm_queue().submit_gpu_task(
-                provider_name=backend.name,
-                task_type="mesh_generation",
-                priority=Priority.IMAGE_GEN,
-                callable_fn=_gen,
-                agent_name=character_name, label=backend.name,
-                gpu_type=backend.api_type)
+            return self._run_on_backend_channel(
+                backend, _gen, task_type="mesh_generation",
+                agent_name=character_name)
         try:
             # NO fallback for mesh (max_attempts=1): a different alias means a
             # different rig or quality tier — a wrong-rig mesh binds unusably.
