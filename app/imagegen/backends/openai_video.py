@@ -24,14 +24,14 @@ alias' LoRA endpoint (``fetch_loras``).
 """
 import base64
 import os
-import time
 from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import BackendBusyError, ImageBackend
+from app.imagegen.backends._gateway_job import poll_job, submit_job
+from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -246,108 +246,29 @@ class OpenAIVideoBackend(ImageBackend):
         url = f"{self.api_url}{self.video_endpoint}"
         logger.info("%s: starte Video-Job (Alias=%s, %ds)",
                     self.name, payload["model"], seconds)
-        resp = None
-        for _attempt in range(3):
-            try:
-                resp = requests.post(url, json=payload, headers=self._headers(),
-                                     timeout=self.timeout)
-            except Exception as e:
-                logger.error("%s: Verbindungsfehler: %s", self.name, e)
-                return []
-            # 429/503 carry Retry-After (gateway busy) — wait and retry.
-            if resp.status_code in (429, 503) and _attempt < 2:
-                try:
-                    wait_s = min(120.0, float(resp.headers.get("Retry-After", "10")))
-                except (TypeError, ValueError):
-                    wait_s = 10.0
-                logger.info("%s: Gateway busy (HTTP %d) — retry in %.0fs",
-                            self.name, resp.status_code, wait_s)
-                time.sleep(wait_s)
-                continue
-            break
-        if resp is not None and resp.status_code in (429, 503):
-            # Retries exhausted while the gateway kept answering busy — that is
-            # load, not a defect (no cooldown).
-            raise BackendBusyError(
-                f"{self.name}: HTTP {resp.status_code} (Gateway ausgelastet) "
-                f"nach 3 Versuchen")
-        if resp is None or resp.status_code not in (200, 201, 202):
-            logger.error("%s: Video-Request HTTP %s - %s", self.name,
-                         getattr(resp, "status_code", "?"),
-                         (resp.text[:300] if resp is not None else ""))
-            return []
-        body = resp.json() if resp.content else {}
-        job_id = str(body.get("job_id") or body.get("id") or "") if isinstance(body, dict) else ""
+        job_id = submit_job(self, url, payload, "Video")
         if not job_id:
-            logger.error("%s: keine job_id in Response: %s", self.name, str(body)[:200])
             return []
 
-        # Queue time does not count against max_wait: a job waiting for the GPU
-        # must not be cancelled (and the backend must not be put to sleep for
-        # it) — see the note on backpressure in base.py.
-        start = time.time()
-        queued_since = start
-        started = False
-        while True:
-            if started:
-                if time.time() - start > self.max_wait:
-                    break
-            elif time.time() - queued_since > self.max_queue_wait:
-                logger.warning("%s: Job %s wartet seit %.0fs in der Gateway-Queue "
-                               "— Abbruch", self.name, job_id,
-                               time.time() - queued_since)
-                break
-            time.sleep(self.poll_interval)
-            try:
-                poll = requests.get(f"{self.api_url}/v1/jobs/{job_id}",
-                                    headers=self._headers(), timeout=30)
-                if poll.status_code != 200:
-                    logger.debug("%s: Job-Poll HTTP %d", self.name, poll.status_code)
-                    continue
-                sd = poll.json() if poll.content else {}
-                status = (sd.get("status") or "").lower() if isinstance(sd, dict) else ""
-                if status in ("failed", "error"):
-                    logger.error("%s: Video-Job failed: %s", self.name,
-                                 str(sd.get("error") or sd)[:300])
-                    return []
-                if status == "running" and not started:
-                    started = True
-                    start = time.time()
-                    logger.info("%s: Job %s gestartet (%.0fs in der Queue)",
-                                self.name, job_id, start - queued_since)
-                if status == "running" and sd.get("progress") is not None:
-                    logger.info("%s: Job %s laeuft — %.0f%% (ETA %ss)", self.name,
-                                job_id, float(sd.get("progress") or 0) * 100,
-                                sd.get("eta_s", "?"))
-                if status in ("done", "completed"):
-                    # Spec v2: results[].url (owner-gated, same key);
-                    # fallback: the older /result/0 path.
-                    _results = sd.get("results") or []
-                    _r_url = (_results[0].get("url") if _results
-                              and isinstance(_results[0], dict) else "") or ""
-                    if _r_url and not _r_url.startswith(("http://", "https://")):
-                        _r_url = f"{self.api_url}{_r_url}"
-                    if not _r_url:
-                        _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/0"
-                    dl = requests.get(_r_url, headers=self._headers(), timeout=180)
-                    if dl.status_code == 200 and len(dl.content) > 1000:
-                        logger.info("%s: Video fertig (%.1fs, %d bytes)", self.name,
-                                    time.time() - start, len(dl.content))
-                        return [dl.content]
-                    logger.error("%s: Result-Download HTTP %d (%d bytes)",
-                                 self.name, dl.status_code, len(dl.content))
-                    return []
-                # queued / running → weiter warten
-            except Exception as e:
-                logger.warning("%s: Poll-Fehler: %s", self.name, e)
-                continue
-        logger.error("%s: Job %s abgebrochen (%s)", self.name, job_id,
-                     f"laeuft laenger als {self.max_wait}s" if started
-                     else "kam nicht aus der Gateway-Queue")
-        try:
-            requests.post(f"{self.api_url}/v1/jobs/{job_id}/cancel",
-                          headers=self._headers(), timeout=10)
-        except Exception:
-            pass
-        # Load, not a defect -> no cooldown (the fallback engine reads this).
-        raise BackendBusyError("timeout" if started else "gateway queue")
+        def _download(sd: Dict[str, Any], running_s: float) -> List[bytes]:
+            # Spec v2: results[].url (owner-gated); fallback: the older
+            # /result/0 path.
+            _results = sd.get("results") or []
+            _r_url = (_results[0].get("url") if _results
+                      and isinstance(_results[0], dict) else "") or ""
+            if _r_url and not _r_url.startswith(("http://", "https://")):
+                _r_url = f"{self.api_url}{_r_url}"
+            if not _r_url:
+                _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/0"
+            dl = requests.get(_r_url, headers=self._headers(), timeout=180)
+            if dl.status_code == 200 and len(dl.content) > 1000:
+                logger.info("%s: Video fertig (%.1fs, %d bytes)", self.name,
+                            running_s, len(dl.content))
+                return [dl.content]
+            logger.error("%s: Result-Download HTTP %d (%d bytes)",
+                         self.name, dl.status_code, len(dl.content))
+            return []
+
+        return poll_job(self, job_id, max_wait=self.max_wait,
+                        max_queue_wait=self.max_queue_wait,
+                        poll_interval=self.poll_interval, on_done=_download)
