@@ -69,10 +69,16 @@ _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 _lock = threading.Lock()
 _pending_timers: Dict[str, threading.Timer] = {}
-_char_locks: Dict[str, threading.Lock] = {}
-# Characters with a render thread currently running. Together with a scheduled
-# debounce timer this makes ``pending`` a true "generation in progress" signal —
-# the UI polls until it clears instead of holding the button for a fixed timeout.
+# Serialization and progress tracking are PER (character, kind): the wardrobe
+# tab (default pose) and the 3D tab (T-pose) generate independently — with
+# several backends the two renders genuinely run in parallel (the same backend
+# still serializes in the provider queue). A second trigger for the SAME image
+# queues on its lock; the equipped state is read at run time, latest wins.
+_char_locks: Dict[tuple, threading.Lock] = {}
+# (character, kind) pairs with a render thread currently running. Together with
+# a scheduled debounce timer this makes ``pending`` a true per-image
+# "generation in progress" signal — the UI polls until it clears instead of
+# holding the button for a fixed timeout.
 _running: set = set()
 
 
@@ -234,10 +240,18 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
             except (OSError, ValueError):
                 pass
         out[kind] = info
-    out["auto"] = get_auto_kinds(character_name)
+    auto = get_auto_kinds(character_name)
+    out["auto"] = auto
+    # Pending PER KIND: a running render of one image must not lock the other
+    # tab's button. A scheduled debounce timer counts for exactly the kinds it
+    # will render (the auto-checked ones).
     with _lock:
-        out["pending"] = (character_name in _pending_timers
-                          or character_name in _running)
+        timer_scheduled = character_name in _pending_timers
+        out["pending"] = {
+            kind: ((character_name, kind) in _running
+                   or (timer_scheduled and auto.get(kind, True)))
+            for kind in REF_KINDS
+        }
     return out
 
 
@@ -333,32 +347,44 @@ def generate_model_ref_images(character_name: str,
     return results
 
 
-def _char_lock(character_name: str) -> threading.Lock:
+def _kind_lock(key: tuple) -> threading.Lock:
     with _lock:
-        return _char_locks.setdefault(character_name, threading.Lock())
+        return _char_locks.setdefault(key, threading.Lock())
 
 
-def _run_generation(character_name: str, force: bool = False) -> None:
-    # Serial per character; the equipped state is read at run time, so the
-    # latest outfit always wins.
+def _run_generation(character_name: str, kind: str, force: bool = False) -> None:
+    # Serial per (character, kind); the equipped state is read at run time,
+    # so the latest outfit always wins.
+    key = (character_name, kind)
     with _lock:
-        _running.add(character_name)
+        _running.add(key)
     try:
-        with _char_lock(character_name):
-            generate_model_ref_images(character_name, force=force)
+        with _kind_lock(key):
+            generate_model_ref_images(character_name, kinds=(kind,), force=force)
     except Exception as e:
-        logger.error("Model-Ref-Render fuer %s fehlgeschlagen: %s",
-                     character_name, e)
+        logger.error("Model-Ref-Render fuer %s (%s) fehlgeschlagen: %s",
+                     character_name, kind, e)
     finally:
         with _lock:
-            _running.discard(character_name)
+            _running.discard(key)
+
+
+def _fire_kinds(character_name: str, kinds: tuple, force: bool = False) -> None:
+    """One worker thread per kind: the images generate independently — with
+    several backends they run in parallel; the same backend serializes in the
+    provider queue."""
+    for kind in kinds:
+        threading.Thread(target=_run_generation,
+                         args=[character_name, kind, force],
+                         daemon=True).start()
 
 
 def _fire(character_name: str) -> None:
     with _lock:
         _pending_timers.pop(character_name, None)
-    threading.Thread(target=_run_generation, args=[character_name],
-                     daemon=True).start()
+    auto = get_auto_kinds(character_name)
+    _fire_kinds(character_name,
+                tuple(k for k in REF_KINDS if auto.get(k)))
 
 
 def schedule_outfit_render(character_name: str) -> None:
@@ -380,13 +406,25 @@ def schedule_outfit_render(character_name: str) -> None:
         timer.start()
 
 
-def trigger_now(character_name: str) -> None:
-    """Manual trigger (UI button): fires the automatic outfit-change render
-    immediately — same per-image toggles, no debounce, and force=True so a
-    fresh render replaces the cached one of the current combination."""
-    with _lock:
-        old = _pending_timers.pop(character_name, None)
-        if old:
-            old.cancel()
-    threading.Thread(target=_run_generation, args=[character_name, True],
-                     daemon=True).start()
+def trigger_now(character_name: str, kinds: Optional[tuple] = None) -> None:
+    """Manual trigger (UI button): fires the render immediately — no debounce,
+    force=True so a fresh render replaces the cached one of the current
+    combination. ``kinds`` narrows to specific images (each tab passes its
+    own, so wardrobe and 3D generate independently); None = the per-image
+    auto toggles decide, like the automatic trigger."""
+    auto = get_auto_kinds(character_name)
+    auto_kinds = tuple(k for k in REF_KINDS if auto.get(k))
+    if kinds is None:
+        kinds = auto_kinds
+    else:
+        kinds = tuple(k for k in kinds if k in REF_KINDS)
+    if not kinds:
+        return
+    # A pending debounce timer would re-render the auto kinds right after the
+    # manual run — only cancel it when this trigger covers those kinds anyway.
+    if set(auto_kinds).issubset(set(kinds)):
+        with _lock:
+            old = _pending_timers.pop(character_name, None)
+            if old:
+                old.cancel()
+    _fire_kinds(character_name, kinds, force=True)

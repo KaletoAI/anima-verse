@@ -25,7 +25,9 @@ interface RefsInfo {
   tpose?: RefInfo | null
   pose?: RefInfo | null
   auto?: { tpose?: boolean; pose?: boolean }
-  pending?: boolean
+  // Per image — a running default-pose render must not lock the 3D tab's
+  // T-pose button (and vice versa): with several backends they run in parallel.
+  pending?: { tpose?: boolean; pose?: boolean }
 }
 
 type RefKind = 'pose' | 'tpose'
@@ -61,10 +63,17 @@ export function FieldModelRefs({
     }
   }, [character, enc])
 
-  // Generation renders the images sequentially — poll until the backend reports
-  // it finished (pending clears), refreshing both the info (timestamps) and the
-  // image URLs via cache-buster. n>=60 (~180s) is only the give-up bound; the
-  // button must not stay locked for the full timeout once the renders are done.
+  // Only THIS tab's kinds matter — the other tab's render must not lock us.
+  const myPending = useCallback(
+    (d?: RefsInfo | null) => kinds.some((k) => !!d?.pending?.[k]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [kindsKey],
+  )
+
+  // Poll until the backend reports OUR kinds finished (pending clears),
+  // refreshing both the info (timestamps) and the image URLs via cache-buster.
+  // n>=60 (~180s) is only the give-up bound; the button must not stay locked
+  // for the full timeout once the render is done.
   const startPoll = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current)
     let n = 0
@@ -72,12 +81,12 @@ export function FieldModelRefs({
       n += 1
       const d = await load()
       setBust((b) => b + 1)
-      if (!d?.pending || n >= 60) {
+      if (!myPending(d) || n >= 60) {
         if (pollRef.current) clearInterval(pollRef.current)
         setBusy(false)
       }
     }, 3000)
-  }, [load])
+  }, [load, myPending])
 
   // Reload + cache-bust whenever the character OR the outfit (refreshKey)
   // changes, so a switch to a different combination shows THAT combination's
@@ -94,7 +103,7 @@ export function FieldModelRefs({
       const d = await load()
       if (cancelled) return
       setBust((b) => b + 1)
-      if (d?.pending) startPoll()
+      if (myPending(d)) startPoll()
       const missing = kinds.some((k) => !d?.[k])
       tries += 1
       if (missing && tries < 22) {
@@ -114,14 +123,18 @@ export function FieldModelRefs({
     if (busy) return
     setBusy(true)
     try {
-      await apiPost(`/characters/${enc}/model-refs/generate`, {})
+      // Only this tab's checked kinds — wardrobe (pose) and 3D tab (tpose)
+      // fire independent renders.
+      const wanted = kinds.filter((k) => info.auto?.[k] !== false)
+      await apiPost(`/characters/${enc}/model-refs/generate`, { kinds: wanted })
       toast(t('Generating…'))
       startPoll()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       setBusy(false)
     }
-  }, [busy, enc, startPoll, t, toast])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, enc, kindsKey, info.auto, startPoll, t, toast])
 
   // Per-image toggle for the automatic outfit-change render (persisted per
   // character); the Generate button fires exactly the checked ones.
@@ -142,9 +155,9 @@ export function FieldModelRefs({
 
   const autoOn = (kind: RefKind) => info.auto?.[kind] !== false
   const anyAuto = kinds.some((k) => autoOn(k))
-  // A render is in flight if the backend says so (manual, auto, or switched in)
-  // or a local click just fired — either way the button waits.
-  const pending = !!info.pending || busy
+  // A render of OUR kinds is in flight if the backend says so (manual, auto,
+  // or switched in) or a local click just fired — either way the button waits.
+  const pending = myPending(info) || busy
 
   const label = (kind: RefKind) => (kind === 'tpose' ? t('T-pose') : t('Default pose'))
 

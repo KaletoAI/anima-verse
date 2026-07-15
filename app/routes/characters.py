@@ -1356,13 +1356,28 @@ def get_character_model_refs(character_name: str) -> Dict[str, Any]:
 
 
 @router.post("/{character_name}/model-refs/generate")
-def generate_character_model_refs(character_name: str) -> Dict[str, Any]:
-    """Manually fires the automatic outfit-change render (per-image toggles
-    apply, debounce is skipped)."""
-    from app.core.model_refs import trigger_now
+async def generate_character_model_refs(character_name: str,
+                                        request: Request) -> Dict[str, Any]:
+    """Manually fires the reference render (debounce skipped). Body
+    ``{"kinds": ["pose"]}`` narrows to specific images — each tab sends its
+    own kind, so wardrobe (pose) and 3D (tpose) generate independently.
+    Without kinds the per-image auto toggles decide."""
+    from app.core.model_refs import REF_KINDS, trigger_now
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
-    trigger_now(character_name)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    kinds = body.get("kinds") if isinstance(body, dict) else None
+    if kinds is not None:
+        if not isinstance(kinds, list):
+            raise HTTPException(status_code=422, detail="kinds must be a list")
+        kinds = tuple(k for k in kinds if k in REF_KINDS)
+        if not kinds:
+            raise HTTPException(status_code=422,
+                                detail=f"kinds must contain one of {list(REF_KINDS)}")
+    trigger_now(character_name, kinds=kinds)
     return {"status": "generating"}
 
 
