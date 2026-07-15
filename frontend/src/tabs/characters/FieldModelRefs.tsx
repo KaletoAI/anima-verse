@@ -61,18 +61,40 @@ export function FieldModelRefs({
     }
   }, [character, enc])
 
+  // Generation renders the images sequentially — poll until the backend reports
+  // it finished (pending clears), refreshing both the info (timestamps) and the
+  // image URLs via cache-buster. n>=60 (~180s) is only the give-up bound; the
+  // button must not stay locked for the full timeout once the renders are done.
+  const startPoll = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    let n = 0
+    pollRef.current = setInterval(async () => {
+      n += 1
+      const d = await load()
+      setBust((b) => b + 1)
+      if (!d?.pending || n >= 60) {
+        if (pollRef.current) clearInterval(pollRef.current)
+        setBusy(false)
+      }
+    }, 3000)
+  }, [load])
+
   // Reload + cache-bust whenever the character OR the outfit (refreshKey)
   // changes, so a switch to a different combination shows THAT combination's
-  // render instead of the previously loaded image. When a shown render is
-  // still missing (the outfit-change render is debounced ~60s), keep polling
-  // a bounded while so the fresh render appears without reopening the tab.
+  // render instead of the previously loaded image. A local busy flag from the
+  // previous character must not bleed across the switch. When a render is
+  // already running (switched in / debounced) track it to completion; and when
+  // a shown render is still missing (the outfit-change render is debounced
+  // ~60s), keep polling a bounded while so it appears without reopening the tab.
   useEffect(() => {
     let cancelled = false
     let tries = 0
+    setBusy(false)
     const tick = async () => {
       const d = await load()
       if (cancelled) return
       setBust((b) => b + 1)
+      if (d?.pending) startPoll()
       const missing = kinds.some((k) => !d?.[k])
       tries += 1
       if (missing && tries < 22) {
@@ -87,22 +109,6 @@ export function FieldModelRefs({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load, refreshKey, kindsKey])
-
-  // Generation renders two images sequentially — poll a while and refresh
-  // both the info (timestamps) and the image URLs via cache-buster.
-  const startPoll = useCallback(() => {
-    if (pollRef.current) clearInterval(pollRef.current)
-    let n = 0
-    pollRef.current = setInterval(async () => {
-      n += 1
-      await load()
-      setBust((b) => b + 1)
-      if (n >= 60) {
-        if (pollRef.current) clearInterval(pollRef.current)
-        setBusy(false)
-      }
-    }, 3000)
-  }, [load])
 
   const generate = useCallback(async () => {
     if (busy) return
@@ -136,6 +142,9 @@ export function FieldModelRefs({
 
   const autoOn = (kind: RefKind) => info.auto?.[kind] !== false
   const anyAuto = kinds.some((k) => autoOn(k))
+  // A render is in flight if the backend says so (manual, auto, or switched in)
+  // or a local click just fired — either way the button waits.
+  const pending = !!info.pending || busy
 
   const label = (kind: RefKind) => (kind === 'tpose' ? t('T-pose') : t('Default pose'))
 
@@ -185,10 +194,10 @@ export function FieldModelRefs({
         <button
           type="button"
           className="ga-btn ga-btn-sm"
-          disabled={busy || !anyAuto}
+          disabled={pending || !anyAuto}
           onClick={generate}
         >
-          {busy ? t('Generating…') : t('Generate')}
+          {pending ? t('Generating…') : t('Generate')}
         </button>
         {kinds.map((kind) => (
           <label

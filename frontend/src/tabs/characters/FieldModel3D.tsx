@@ -62,6 +62,10 @@ interface AnimationClip {
 // character switch (and a reload) instead of snapping back on every change.
 const CLIP_PREF_KEY = 'model3d.clip'
 const DEFAULT_CLIP_KIND = 'idle'
+// Sentinel for an explicit "static / no animation" choice — told apart from
+// "unset" (which auto-picks the default) so it survives a status reload instead
+// of snapping back to idle.
+const CLIP_NONE = 'none'
 
 export function FieldModel3D({ character }: { character: string }) {
   const { t } = useI18n()
@@ -90,29 +94,6 @@ export function FieldModel3D({ character }: { character: string }) {
     }
   }, [character, enc])
 
-  useEffect(() => {
-    setConfirmDelete(false)
-    load()
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [load])
-
-  // Shared animation clips (world-independent, same rig as the models).
-  useEffect(() => {
-    apiGet<{ clips?: AnimationClip[] }>('/assets/animation-clips')
-      .then((d) => setClips(d.clips || []))
-      .catch(() => setClips([]))
-  }, [])
-
-  const pickClip = useCallback((url: string) => {
-    setClipUrl(url)
-    // Remember the KIND, not the URL: the same choice then follows across
-    // characters even when they use a different set (idle -> idle_female).
-    const kind = clips.find((c) => c.url === url)?.kind || ''
-    localStorage.setItem(CLIP_PREF_KEY, kind)
-  }, [clips])
-
   // Meshing takes minutes — poll until the backend reports it finished.
   const startPoll = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current)
@@ -126,6 +107,39 @@ export function FieldModel3D({ character }: { character: string }) {
       }
     }, 5000)
   }, [load])
+
+  useEffect(() => {
+    setConfirmDelete(false)
+    // A fresh character carries no in-flight click from the previous one — the
+    // local busy flag must not bleed across the switch (it would otherwise pin
+    // "Generating…" on every character). The authoritative state is st.pending.
+    setBusy(false)
+    load().then((d) => {
+      // Backend still meshing (switched in / reloaded mid-run)? Track it to
+      // completion so the display clears on its own.
+      if (d?.pending) startPoll()
+    })
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [load, startPoll])
+
+  // Shared animation clips (world-independent, same rig as the models).
+  useEffect(() => {
+    apiGet<{ clips?: AnimationClip[] }>('/assets/animation-clips')
+      .then((d) => setClips(d.clips || []))
+      .catch(() => setClips([]))
+  }, [])
+
+  const pickClip = useCallback((url: string) => {
+    setClipUrl(url)
+    // Remember the KIND, not the URL, so the same choice follows across
+    // characters even on a different set (idle -> idle_female). An empty select
+    // is an explicit "static" choice (sentinel CLIP_NONE), NOT "unset" — it must
+    // survive a status reload instead of snapping back to the default.
+    const kind = url ? (clips.find((c) => c.url === url)?.kind || '') : CLIP_NONE
+    localStorage.setItem(CLIP_PREF_KEY, kind)
+  }, [clips])
 
   // Open the picker; preselect the admin default (or the only backend).
   const openDialog = useCallback(() => {
@@ -291,7 +305,11 @@ export function FieldModel3D({ character }: { character: string }) {
     if (!clips.length) return
     setClipUrl((cur) => {
       if (cur && myClips.some((c) => c.url === cur)) return cur
-      const wanted = localStorage.getItem(CLIP_PREF_KEY) || DEFAULT_CLIP_KIND
+      const pref = localStorage.getItem(CLIP_PREF_KEY)
+      // An explicit "static" choice is honoured — do NOT auto-pick a default
+      // on top of it (this reruns on every 5 s generation poll).
+      if (pref === CLIP_NONE) return ''
+      const wanted = pref || DEFAULT_CLIP_KIND
       return (bestOfKind(wanted) || bestOfKind(DEFAULT_CLIP_KIND))?.url || ''
     })
   }, [clips, myClips, bestOfKind])

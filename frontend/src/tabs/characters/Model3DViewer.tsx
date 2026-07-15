@@ -43,6 +43,25 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         renderer.setSize(width, height)
         mount.appendChild(renderer.domElement)
 
+        // Teardown is wired up the moment the WebGL context exists — BEFORE the
+        // first await — so every early return (the `disposed` checks after each
+        // loadAsync) and the catch below dispose the renderer instead of
+        // leaking its context (the browser caps live contexts at ~16). Disposers
+        // run LIFO; `splice` makes cleanup idempotent — the catch may run it,
+        // then the effect cleanup runs it again on unmount.
+        const disposers: Array<() => void> = []
+        cleanup = () => {
+          for (const d of disposers.splice(0).reverse()) {
+            try { d() } catch { /* teardown is best-effort */ }
+          }
+        }
+        disposers.push(() => {
+          renderer.dispose()
+          if (renderer.domElement.parentNode === mount) {
+            mount.removeChild(renderer.domElement)
+          }
+        })
+
         // Bright, flat, even lighting — the mesh is inspected, not staged.
         // three.js uses physical light units, so a single dim key light leaves
         // the model near-black: ambient + hemisphere + a 3-point rig.
@@ -61,6 +80,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
 
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.enableDamping = true
+        disposers.push(() => controls.dispose())
 
         const ext = (format || url.split('.').pop() || '').toLowerCase()
         let object: Object3D
@@ -117,6 +137,15 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         const pivot = new THREE.Group()
         pivot.add(object)
         scene.add(pivot)
+        disposers.push(() => {
+          scene.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            mesh.geometry?.dispose?.()
+            const m = mesh.material as Material | Material[] | undefined
+            if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
+            else m?.dispose?.()
+          })
+        })
 
         // Animation clip (shared Mixamo FBX, "Without Skin" = keyframes only).
         // It drives the model's own skeleton by bone name, so model and clip
@@ -178,6 +207,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           mixer = new THREE.AnimationMixer(object)
           mixer.clipAction(clip).play()
           mixer.update(0)  // apply frame 0 so the framing below fits the pose
+          disposers.push(() => mixer?.stopAllAction())
         }
         const clock = new THREE.Clock()
         pivot.updateMatrixWorld(true)
@@ -207,6 +237,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           renderer.render(scene, camera)
         }
         animate()
+        disposers.push(() => cancelAnimationFrame(raf))
 
         const onResize = () => {
           const w = mount.clientWidth || width
@@ -215,23 +246,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           renderer.setSize(w, height)
         }
         window.addEventListener('resize', onResize)
-
-        cleanup = () => {
-          cancelAnimationFrame(raf)
-          window.removeEventListener('resize', onResize)
-          mixer?.stopAllAction()
-          controls.dispose()
-          renderer.dispose()
-          scene.traverse((o: Object3D) => {
-            const mesh = o as Mesh
-            mesh.geometry?.dispose?.()
-            const m = mesh.material as Material | Material[] | undefined
-            if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
-            else m?.dispose?.()
-          })
-          if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
-        }
+        disposers.push(() => window.removeEventListener('resize', onResize))
       } catch (e) {
+        cleanup?.()  // dispose the context if the renderer was already created
         if (!disposed) {
           setError((e as Error).message)
           setLoading(false)

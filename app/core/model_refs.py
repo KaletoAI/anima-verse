@@ -68,6 +68,10 @@ _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 _lock = threading.Lock()
 _pending_timers: Dict[str, threading.Timer] = {}
 _char_locks: Dict[str, threading.Lock] = {}
+# Characters with a render thread currently running. Together with a scheduled
+# debounce timer this makes ``pending`` a true "generation in progress" signal —
+# the UI polls until it clears instead of holding the button for a fixed timeout.
+_running: set = set()
 
 
 def _cfg(key: str, default: Any = None) -> Any:
@@ -230,7 +234,8 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
         out[kind] = info
     out["auto"] = get_auto_kinds(character_name)
     with _lock:
-        out["pending"] = character_name in _pending_timers
+        out["pending"] = (character_name in _pending_timers
+                          or character_name in _running)
     return out
 
 
@@ -334,12 +339,17 @@ def _char_lock(character_name: str) -> threading.Lock:
 def _run_generation(character_name: str, force: bool = False) -> None:
     # Serial per character; the equipped state is read at run time, so the
     # latest outfit always wins.
-    with _char_lock(character_name):
-        try:
+    with _lock:
+        _running.add(character_name)
+    try:
+        with _char_lock(character_name):
             generate_model_ref_images(character_name, force=force)
-        except Exception as e:
-            logger.error("Model-Ref-Render fuer %s fehlgeschlagen: %s",
-                         character_name, e)
+    except Exception as e:
+        logger.error("Model-Ref-Render fuer %s fehlgeschlagen: %s",
+                     character_name, e)
+    finally:
+        with _lock:
+            _running.discard(character_name)
 
 
 def _fire(character_name: str) -> None:
