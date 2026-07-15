@@ -37,15 +37,21 @@ server proxies API calls to this FastAPI server on :8000.</p>
 </body></html>"""
 
 
+# The shell must revalidate on every load (ETag/304 keeps it cheap): a cached
+# index.html keeps loading the OLD hashed bundle after a deploy — with changed
+# API shapes that shows as inexplicably broken UI until a hard reload.
+_NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 @router.get("/game-admin", include_in_schema=False)
 async def game_admin_page():
     if not _SHELL_PATH.is_file():
         return HTMLResponse(content=_DEV_HINT, status_code=503)
-    return FileResponse(_SHELL_PATH)
+    return FileResponse(_SHELL_PATH, headers=_NO_CACHE)
 
 
 @router.get("/game-admin/", include_in_schema=False)
 async def game_admin_page_slash():
     if not _SHELL_PATH.is_file():
         return HTMLResponse(content=_DEV_HINT, status_code=503)
-    return FileResponse(_SHELL_PATH)
+    return FileResponse(_SHELL_PATH, headers=_NO_CACHE)

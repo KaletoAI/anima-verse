@@ -268,7 +268,6 @@ def generate_model_ref_images(character_name: str,
     toggles)."""
     from app.core.expression_regen import generate_expression_image
     from app.core.expression_pose_maps import default_pose_prompt
-    from app.core.task_queue import get_task_queue
 
     if kinds is None:
         auto = get_auto_kinds(character_name)
@@ -301,14 +300,9 @@ def generate_model_ref_images(character_name: str,
     }
     results: Dict[str, Optional[str]] = {}
 
-    task_id = ""
-    try:
-        task_id = get_task_queue().track_start(
-            "model_ref_render", f"3D refs: {character_name}",
-            agent_name=character_name, start_running=True)
-    except Exception:
-        pass
-    error = ""
+    # No own task tracking here: the image service tracks every render as its
+    # own queue task already — a wrapper would show a SECOND header task for
+    # one image. Progress for the UI comes from the per-kind pending signal.
     try:
         for kind in kinds:
             # T-pose: the pose leads the prompt (prompt_prefix) instead of
@@ -333,17 +327,13 @@ def generate_model_ref_images(character_name: str,
                 output_stem=refs_dir / f"{kind}_{signature}")
             results[kind] = str(path) if path else None
             if path is None:
-                error = f"{kind} render failed"
+                logger.warning("Model-Ref %s fuer %s (%s): Render fehlgeschlagen",
+                               kind, character_name, signature)
             else:
                 _cleanup_legacy(refs_dir, kind)
+    finally:
         logger.info("Model-Refs fuer %s (%s): %s", character_name, signature,
                     {k: bool(v) for k, v in results.items()})
-    finally:
-        if task_id:
-            try:
-                get_task_queue().track_finish(task_id, error=error)
-            except Exception:
-                pass
     return results
 
 

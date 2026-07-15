@@ -72,20 +72,29 @@ export function FieldModelRefs({
 
   // Poll until the backend reports OUR kinds finished (pending clears),
   // refreshing both the info (timestamps) and the image URLs via cache-buster.
-  // n>=60 (~180s) is only the give-up bound; the button must not stay locked
-  // for the full timeout once the render is done.
+  // A render can legitimately wait minutes in the backend queue, so there is
+  // NO give-up (giving up used to freeze the button on the last pending=true
+  // state) — after ~2 min the poll merely slows down; the interval dies with
+  // the component / on character switch.
   const startPoll = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current)
     let n = 0
-    pollRef.current = setInterval(async () => {
+    const tick = async () => {
       n += 1
       const d = await load()
       setBust((b) => b + 1)
-      if (!myPending(d) || n >= 60) {
+      if (!myPending(d)) {
         if (pollRef.current) clearInterval(pollRef.current)
+        pollRef.current = null
         setBusy(false)
+        return
       }
-    }, 3000)
+      if (n === 40) {
+        if (pollRef.current) clearInterval(pollRef.current)
+        pollRef.current = setInterval(tick, 15000)
+      }
+    }
+    pollRef.current = setInterval(tick, 3000)
   }, [load, myPending])
 
   // Reload + cache-bust whenever the character OR the outfit (refreshKey)

@@ -116,7 +116,9 @@ async def play_page():
             "<h1>Player UI build missing</h1>"
             "<p>From the repo root: <code>cd frontend &amp;&amp; npm run build</code></p>",
             status_code=503)
-    return FileResponse(_SHELL)
+    # no-cache: a cached shell keeps loading the OLD hashed bundle after a
+    # deploy (ETag revalidation makes this cheap).
+    return FileResponse(_SHELL, headers={"Cache-Control": "no-cache"})
 
 
 def _player_capabilities(avatar: str) -> list:
