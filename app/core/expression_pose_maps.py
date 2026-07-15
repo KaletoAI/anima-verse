@@ -254,6 +254,14 @@ def default_pose_prompt() -> str:
     return DEFAULT_POSE
 
 
+def default_expression_prompt() -> str:
+    """Default expression prompt: the ``_default`` entry of the expression
+    presets (DEFAULT_EXPRESSION). Read fresh on every call so a Poses-tab edit
+    (reload_presets) applies without restart — a module-level
+    ``from ... import DEFAULT_EXPRESSION`` would keep the load-time value."""
+    return DEFAULT_EXPRESSION
+
+
 def get_expression_prompt(mood: str) -> Optional[str]:
     """Look up expression prompt from presets. Returns None if not found."""
     if not mood:

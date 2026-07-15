@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional, Set
 
 from app.core.log import get_logger
 from app.core.expression_pose_maps import (
-    DEFAULT_EXPRESSION,
+    default_expression_prompt,
     default_pose_prompt,
     is_partner_activity,
     mood_bucket,
@@ -903,7 +903,7 @@ def generate_expression_image(character_name: str,
     if expression_prompt_override is not None:
         expression_prompt = expression_prompt_override.strip()
     else:
-        expression_prompt = resolve_expression_prompt(mood) if mood else DEFAULT_EXPRESSION
+        expression_prompt = resolve_expression_prompt(mood) if mood else default_expression_prompt()
     # Pose presets ("The person is seated…") are human-centric. Apply them
     # only for humanoid characters; animals get the raw activity text as the
     # pose ("sleeping", "lying down") — the image model maps that onto their
