@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { Model3DViewer } from './Model3DViewer'
 
 interface ModelMeta {
   format?: string
@@ -21,6 +22,8 @@ interface ModelMeta {
   uploaded_at?: string
   original_filename?: string
   source?: string
+  url?: string
+  texture_url?: string
 }
 
 const RIG_VALUES = ['mixamo', 'generic'] as const
@@ -33,6 +36,9 @@ export function FieldModel({ character }: { character: string }) {
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [pendingFbx, setPendingFbx] = useState<File | null>(null)
+  // Re-fetch the model bytes after a replace: the URL is stable, so without a
+  // changing query the browser (and the ETag) would serve the old file.
+  const [bust, setBust] = useState(1)
   const fileRef = useRef<HTMLInputElement>(null)
   const texRef = useRef<HTMLInputElement>(null)
 
@@ -40,6 +46,7 @@ export function FieldModel({ character }: { character: string }) {
     if (!character) return
     try {
       setMeta(await apiGet<ModelMeta>(`/characters/${enc}/model/meta`))
+      setBust((b) => b + 1)
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) setMeta(null)
     }
@@ -132,6 +139,16 @@ export function FieldModel({ character }: { character: string }) {
     <div className="ga-form">
       {meta ? (
         <>
+          {/* Show the UPLOADED model here. When meta is the generated-mesh
+              fallback, the "Generated 3D model" section already has the
+              viewer — no second canvas of the same thing. */}
+          {meta.source !== 'generated' ? (
+            <Model3DViewer
+              url={`/characters/${enc}/model?v=${bust}`}
+              format={meta.format || 'glb'}
+              textureUrl={meta.texture_url ? `${meta.texture_url}?v=${bust}` : ''}
+            />
+          ) : null}
           <div className="ga-hint">
             {(meta.format || '').toUpperCase()}
             {sizeMb ? ` · ${sizeMb} MB` : ''}
