@@ -437,10 +437,17 @@ class ImageService:
 
         def _op(backend: ImageBackend):
             def _gen():
-                return backend.generate("", "", params,
-                                        log_meta={"agent_name": character_name,
-                                                  "original_prompt": "",
-                                                  "media": "mesh"})
+                blobs = backend.generate("", "", params,
+                                         log_meta={"agent_name": character_name,
+                                                   "original_prompt": "",
+                                                   "media": "mesh"})
+                # Capture the delivered file names ON THIS THREAD: the channel
+                # runs _gen on a queue worker and last_result_names is
+                # thread-local — read later from the caller thread it is
+                # empty (that once mislabeled a delivered GLB as .fbx and the
+                # viewer's FBXLoader died on "cannot find the version number").
+                names = list(getattr(backend, "last_result_names", []) or [])
+                return {"blobs": blobs, "names": names} if blobs else []
             return self._run_on_backend_channel(
                 backend, _gen, task_type="mesh_generation",
                 agent_name=character_name)
@@ -455,26 +462,42 @@ class ImageService:
             return {"ok": False, "error": str(e)}
         if not result:
             return {"ok": False, "error": "generation failed"}
+        blobs: List[bytes] = result["blobs"]
+        names: List[str] = result["names"]
+
+        def _sniff_suffix(blob: bytes) -> str:
+            """File format by magic bytes — authoritative over delivered names
+            (a name can be missing or wrong; the content cannot)."""
+            if blob[:4] == b"glTF":
+                return ".glb"
+            if blob.startswith(b"Kaydara FBX Binary"):
+                return ".fbx"
+            if blob[:8] == b"\x89PNG\r\n\x1a\n":
+                return ".png"
+            if blob[:3] == b"\xff\xd8\xff":
+                return ".jpg"
+            return ""
 
         # Sort the returned blobs: the model file (glb/fbx/…) and — for the
-        # generic aliases — its basecolor texture. Names come from the gateway.
-        names = list(getattr(used, "last_result_names", []) or [])
+        # generic aliases — its basecolor texture. Content sniffing first,
+        # gateway names as the fallback for formats without a magic check.
         model_blob = None
         model_name = ""
         texture_blob = None
-        for idx, blob in enumerate(result):
+        for idx, blob in enumerate(blobs):
             nm = names[idx] if idx < len(names) else ""
-            suf = _P(nm).suffix.lower()
+            suf = _sniff_suffix(blob) or _P(nm).suffix.lower()
             if suf in (".png", ".jpg", ".jpeg", ".webp"):
                 texture_blob = blob
             elif model_blob is None:
                 model_blob = blob
                 model_name = nm
-        if model_blob is None:  # no name info at all — first blob is the model
-            model_blob, model_name = result[0], (names[0] if names else "")
+        if model_blob is None:  # nothing classifiable — first blob is the model
+            model_blob, model_name = blobs[0], (names[0] if names else "")
 
         out = _P(output_path)
-        suffix = _P(model_name).suffix.lower() if model_name else ""
+        suffix = (_sniff_suffix(model_blob)
+                  or (_P(model_name).suffix.lower() if model_name else ""))
         if suffix and suffix != out.suffix.lower():
             out = out.with_suffix(suffix)
         texture_path = ""
