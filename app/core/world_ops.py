@@ -726,6 +726,20 @@ def build_imagegen_options() -> Dict[str, Any]:
             # Terrain-hint parameter — the dialog only appends the hint if True.
             "terrain_hint": bool(getattr(b, "terrain_hint", False)),
         }
+        # Use-case styles resolved for THIS backend (family + model): the
+        # dialogs show the style as an editable prompt part, so the FINAL
+        # prompt is fully visible before generating (house rule) — submit
+        # sets settings_applied and the server prepends nothing.
+        from app.core.config import resolve_use_case_style as _rucs
+        _styles = {}
+        for _uc in ("location", "map", "building", "room_model"):
+            try:
+                _styles[_uc] = _rucs(
+                    _uc, opt["image_family"],
+                    backend_model=getattr(b, "model", "") or "").get("prompt_style", "")
+            except Exception:
+                _styles[_uc] = ""
+        opt["prompt_styles"] = _styles
         # Backend with a model list (e.g. Together.ai) — offer as a selection.
         backend_models = getattr(b, 'available_models', [])
         if backend_models:
@@ -1749,9 +1763,12 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # areas seamlessly, no "new tile" style), normal tile -> "map",
         # otherwise location background.
         from app.core import config as _cfg
+        # A building-type render FOR A ROOM is the room-model source — its own
+        # use case (open cutaway, "room or area"), the building exterior style
+        # would demand a "single building" even for a park room.
         _uc_name = ("mapfit" if _map_blend
                     else "map" if prompt_type in ("map_2d", "map_3x3")
-                    else "building" if prompt_type == "building"
+                    else ("room_model" if room_id else "building") if prompt_type == "building"
                     else "location")
         _ucp = _cfg.resolve_use_case_style(
             _uc_name, getattr(backend, "image_family", "") or "",
@@ -1764,6 +1781,13 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             # — take it literally, do NOT double the style prefix. The negative
             # still comes from the mapfit use case. Without a dialog prompt (batch)
             # it falls back to style+auto-hint below.
+            full_prompt = prompt
+            negative = _ucp.get("prompt_negative", "")
+        elif bool(data.get("settings_applied")):
+            # The dialog already composed the FULL prompt (use-case style shown
+            # as an editable part — the rule: the dialog always shows the final
+            # prompt). Prepending the style again would double it. The negative
+            # still comes from the use case.
             full_prompt = prompt
             negative = _ucp.get("prompt_negative", "")
         else:

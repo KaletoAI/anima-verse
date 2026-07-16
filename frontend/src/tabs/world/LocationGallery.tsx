@@ -339,14 +339,12 @@ export function LocationGallery({
     (promptType: string): string => {
       const fromRoom = (key: 'image_prompt_day' | 'image_prompt_night') =>
         (room && (room as Record<string, unknown>)[key]) as string | undefined
-      // Room model-source image: subject only (style comes from the building
-      // use case). No ceiling + two open walls so the mesh works in top-down
-      // and cutaway views — the full default is visible and editable in the
-      // dialog's prompt field.
+      // Room model-source image: subject only — the cutaway framing (no
+      // ceiling, two open walls) comes from the room_model use-case STYLE,
+      // which the dialog shows as its own editable field.
       if (promptType === 'building' && room) {
-        const subj = (room.description || room.name || '').trim()
+        return (room.description || room.name || '').trim()
           || (location.description || location.name || '')
-        return `${subj}, room interior, no ceiling, two walls removed, open cutaway corner view, dollhouse style`
       }
       // The 3x3 patch shares the map prompt — same top-down look, larger area.
       const isMap = promptType === 'map_2d' || promptType === 'map_3x3'
@@ -361,12 +359,11 @@ export function LocationGallery({
       if (!desc && isMap) desc = (location.image_prompt_map_2d || '').trim()
       if (!desc && promptType === 'building') desc = (location.image_prompt_building || '').trim()
       if (!desc) desc = location.description || location.name || ''
-      // 2D map icon/patch and building: subject only. The framing/style come from
-      // the use case (server-side), so they aren't duplicated into the prompt here.
-      if (isMap || promptType === 'building') {
-        return desc
-      }
-      return `${desc}, wide angle establishing shot, no people, atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio`
+      // Subject only for ALL types — the framing/style is the use case's and
+      // shows as its own editable field in the dialog (final prompt = what
+      // the dialog displays; the old hardcoded day/night framing tail
+      // duplicated the location style).
+      return desc
     },
     [location, room],
   )
@@ -674,6 +671,13 @@ export function LocationGallery({
       }
       defaultPrompt={buildDefaultPrompt(dialogType)}
       hideNegative
+      styleUseCase={
+        dialogType === 'day' || dialogType === 'night'
+          ? 'location'
+          : dialogType === 'building'
+            ? (roomFilter ? 'room_model' : 'building')
+            : 'map'
+      }
       settingsSuffix={
         (dialogType === 'map_2d' || dialogType === 'map_3x3') && mapSuffix.map_2d
           ? { label: t('2D map icon'), text: mapSuffix.map_2d }

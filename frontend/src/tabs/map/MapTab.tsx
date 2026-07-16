@@ -856,6 +856,7 @@ export function MapTab() {
             ? t('Generate 3×3 map tile — {name}')
             : t('Generate 2D icon — {name}')).replace('{name}', gen.loc.name)}
           defaultPrompt={buildDefaultPrompt(gen.loc)}
+          styleUseCase="map"
           hideNegative
           onSubmit={(payload) => submitGen(payload, gen)}
           onClose={() => setGen(null)}
