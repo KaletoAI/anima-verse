@@ -1243,6 +1243,14 @@ async def play_worldmap(user=Depends(get_current_user)):
         map3d = loc.get("map3d")
         if isinstance(map3d, dict) and map3d:
             entry["map3d"] = map3d
+        # Multi-tile patch (drawn UNDER the per-cell tiles, centred on this
+        # cell) + the per-cell "own tile hidden" switch. Clients load the
+        # patch via /world/locations/{id}/map-patch-2d.
+        if loc.get("map_image_off"):
+            entry["map_image_off"] = True
+        if (loc.get("map_patch_2d") or "").strip():
+            entry["map_patch_2d"] = True
+            entry["map_patch_span"] = int(loc.get("map_patch_span") or 3)
         locations.append(entry)
 
     characters = []

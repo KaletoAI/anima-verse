@@ -42,6 +42,10 @@ export function saveLabelMode(m: LabelMode): void {
 interface WLoc {
   id: string; name: string; grid_x?: number | null; grid_y?: number | null
   passable: boolean; template_location_id: string; map_rotation_2d?: number
+  /** Anchor (centre) of a multi-tile ground patch — image via /map-patch-2d. */
+  map_patch_2d?: boolean; map_patch_span?: number
+  /** The cell's own tile is switched off (patch or nothing shows instead). */
+  map_image_off?: boolean
 }
 interface WChar {
   name: string; location_id: string; activity: string
@@ -82,7 +86,7 @@ function Avatar({ c }: { c: WChar }) {
 // display-only transform.
 function MapIcon({ loc }: { loc: WLoc }) {
   const [hidden, setHidden] = useState(false)
-  if (hidden) return null
+  if (hidden || loc.map_image_off) return null
   const rot = loc.map_rotation_2d || 0
   return (
     <img src={`/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d`}
@@ -94,16 +98,33 @@ function MapIcon({ loc }: { loc: WLoc }) {
   )
 }
 
-function Cell({ loc, isActive, chars, events, travellingTo, showLabel }: {
+// Multi-tile ground patch (gallery type map_3x3), drawn UNDER the cells.
+// Hidden on 404 (patch file deleted); never intercepts pan/zoom pointers.
+function MapPatch({ loc, left, top, size }: { loc: WLoc; left: number; top: number; size: number }) {
+  const [hidden, setHidden] = useState(false)
+  if (hidden) return null
+  return (
+    <img src={`/world/locations/${encodeURIComponent(loc.id)}/map-patch-2d`}
+      alt="" onError={() => setHidden(true)}
+      style={{ position: 'absolute', left, top, width: size, height: size,
+        objectFit: 'cover', pointerEvents: 'none' }} />
+  )
+}
+
+function Cell({ loc, isActive, chars, events, travellingTo, showLabel, covered }: {
   loc: WLoc; isActive: boolean; chars: WChar[]; events: WEvent[]; travellingTo: string; showLabel: boolean
+  /** Cell lies inside a 3x3 patch: transparent + borderless so the patch
+   *  shows seamlessly; the cell's own tile (when active) still paints above. */
+  covered?: boolean
 }) {
   const hasDanger = events.some((e) => e.category === 'danger')
   const tooltip = events.map((e) => `${(e.category || '').toUpperCase()}: ${e.text || ''}`).join('\n')
   return (
     <div style={{
       width: CELL, height: CELL, boxSizing: 'border-box', position: 'relative', overflow: 'visible',
-      border: isActive ? '2px solid var(--accent, #6aa9ff)' : '1px solid var(--border, #30363d)',
-      background: 'var(--bg, #0d1117)', opacity: loc.passable ? 0.85 : 1,
+      border: isActive ? '2px solid var(--accent, #6aa9ff)'
+        : covered ? 'none' : '1px solid var(--border, #30363d)',
+      background: covered ? 'transparent' : 'var(--bg, #0d1117)', opacity: loc.passable ? 0.85 : 1,
     }} title={loc.name}>
       <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
         <MapIcon loc={loc} />
@@ -283,6 +304,31 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       return !l.passable
     }
 
+    // Multi-tile patches: drawn UNDER the cell grid (DOM order — the cells
+    // are positioned and paint above), covered cells render transparent so a
+    // 3x3 forest reads as one seamless image. A cell with an ACTIVE own tile
+    // still covers its part of the patch. Stable draw order (y, then x) makes
+    // overlapping patches deterministic: the later anchor wins.
+    const patches: React.ReactNode[] = []
+    const covered = new Set<string>()
+    const anchors = placed.filter((l) => l.map_patch_2d)
+      .sort((a, b) => ((a.grid_y as number) - (b.grid_y as number))
+        || ((a.grid_x as number) - (b.grid_x as number)))
+    for (const l of anchors) {
+      const span = Math.max(1, l.map_patch_span || 3)
+      const r = Math.floor(span / 2)
+      const ax = l.grid_x as number
+      const ay = l.grid_y as number
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) covered.add(`${ax + dx},${ay + dy}`)
+      }
+      patches.push(
+        <MapPatch key={`patch-${l.id}`} loc={l}
+          left={PAD + (ax - r - minX) * CELL} top={PAD + (ay - r - minY) * CELL}
+          size={span * CELL} />,
+      )
+    }
+
     const els: React.ReactNode[] = []
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
@@ -294,15 +340,18 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
         els.push(
           <Cell key={`${x},${y}`} loc={l} isActive={l.id === current}
             chars={charsAt(l.id)} events={data.events_by_location[l.id] || []} travellingTo={travellingTo}
-            showLabel={showLabelFor(l)} />,
+            showLabel={showLabelFor(l)} covered={covered.has(`${x},${y}`)} />,
         )
       }
     }
     const grid = (
-      <div style={{
-        display: 'grid', gridTemplateColumns: `repeat(${cols}, ${CELL}px)`,
-        gap: GAP, padding: PAD,
-      }}>{els}</div>
+      <div style={{ position: 'relative' }}>
+        {patches}
+        <div style={{
+          display: 'grid', gridTemplateColumns: `repeat(${cols}, ${CELL}px)`,
+          gap: GAP, padding: PAD,
+        }}>{els}</div>
+      </div>
     )
     const gW = cols * CELL + (cols - 1) * GAP + PAD * 2
     const gH = rows * CELL + (rows - 1) * GAP + PAD * 2

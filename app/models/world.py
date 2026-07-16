@@ -1212,17 +1212,20 @@ def migrate_fixed_map_images() -> int:
 
 
 def clear_map_image_references(image_name: str) -> int:
-    """Entfernt haengende ``map_image``/``map_image_2d``-Pointer auf ein
-    (geloeschtes) Galerie-Bild aus ALLEN Locations/Klonen — sonst zeigt die Zelle
-    danach das erste statt des gewollten Tiles. Rueckgabe: Anzahl bereinigter Pointer."""
+    """Remove dangling ``map_image``/``map_image_2d``/``map_patch_2d`` pointers
+    to a (deleted) gallery image from ALL locations/clones — otherwise the cell
+    shows the first tile instead of the chosen one. Returns the number of
+    cleaned pointers."""
     if not image_name:
         return 0
     data = _load_world_data()
     n = 0
     for loc in data.get("locations", []):
-        for field in ("map_image", "map_image_2d"):
+        for field in ("map_image", "map_image_2d", "map_patch_2d"):
             if loc.get(field) == image_name:
                 loc.pop(field, None)
+                if field == "map_patch_2d":
+                    loc.pop("map_patch_span", None)
                 n += 1
     if n:
         _save_world_data(data)
@@ -1245,6 +1248,85 @@ def set_location_map_rotation(location_id: str, rotation: int) -> Optional[Dict[
                 loc["map_rotation_2d"] = rot
             else:
                 loc.pop("map_rotation_2d", None)
+            _save_world_data(data)
+            return loc
+    return None
+
+
+def set_location_map_patch(location_id: str, filename: str,
+                           span: int = 3) -> Optional[Dict[str, Any]]:
+    """Set/clear the multi-tile map patch anchored at a placed cell.
+
+    The patch image (gallery type ``map_3x3``) is drawn UNDER the per-cell
+    tiles and spans ``span``×``span`` cells CENTRED on this cell (span odd,
+    default 3). Setting a patch switches the own tile image of every covered
+    same-owner cell OFF (``map_image_off``) — their auto-assigned tiles would
+    fully hide the patch; clearing switches them back on. Cells of other
+    templates are never touched, and each cell can be re-toggled individually
+    (an active own image then covers its part of the patch again).
+
+    Returns ``{"location": loc, "affected": [ids]}`` or None (unknown id).
+    """
+    span = int(span or 3)
+    if span < 1 or span % 2 == 0:
+        span = 3
+    data = _load_world_data()
+    target = None
+    for loc in data.get("locations", []):
+        if loc.get("id") == location_id:
+            target = loc
+            break
+    if target is None:
+        return None
+    owner = (target.get("template_location_id") or "").strip() or target.get("id")
+    gx, gy = target.get("grid_x"), target.get("grid_y")
+
+    def _covered(radius: int) -> list:
+        if gx is None or gy is None or gx < 0 or gy < 0:
+            return []
+        out = []
+        for loc in data.get("locations", []):
+            lx, ly = loc.get("grid_x"), loc.get("grid_y")
+            if lx is None or ly is None or lx < 0 or ly < 0:
+                continue
+            if abs(lx - gx) > radius or abs(ly - gy) > radius:
+                continue
+            l_owner = (loc.get("template_location_id") or "").strip() or loc.get("id")
+            if l_owner == owner:
+                out.append(loc)
+        return out
+
+    affected = []
+    if filename:
+        target["map_patch_2d"] = filename
+        target["map_patch_span"] = span
+        for loc in _covered(span // 2):
+            if not loc.get("map_image_off"):
+                loc["map_image_off"] = True
+                affected.append(loc.get("id") or "")
+    else:
+        old_span = int(target.get("map_patch_span") or 3)
+        target.pop("map_patch_2d", None)
+        target.pop("map_patch_span", None)
+        for loc in _covered(old_span // 2):
+            if loc.get("map_image_off"):
+                loc.pop("map_image_off", None)
+                affected.append(loc.get("id") or "")
+    _save_world_data(data)
+    return {"location": target, "affected": affected}
+
+
+def set_location_map_image_off(location_id: str, off: bool) -> Optional[Dict[str, Any]]:
+    """Per-cell switch: True hides the cell's own 2D tile entirely — no
+    first-image fallback either — so an underlying multi-tile patch (or
+    nothing) shows; False restores normal tile behaviour."""
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") == location_id:
+            if off:
+                loc["map_image_off"] = True
+            else:
+                loc.pop("map_image_off", None)
             _save_world_data(data)
             return loc
     return None
@@ -1295,12 +1377,15 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
                 loc["background_images"] = valid
                 pruned_bgs += len(bgs) - len(valid)
                 touched_locs += 1
-        # Haengende Tile-Wahl (zeigt auf geloeschte Datei) entfernen -> sonst
-        # zeigt die Zelle / Edge-Match das erste statt des gewollten Tiles.
-        for field in ("map_image", "map_image_2d"):
+        # Remove a dangling tile/patch choice (pointing at a deleted file) —
+        # otherwise the cell / edge match shows the first instead of the
+        # chosen tile.
+        for field in ("map_image", "map_image_2d", "map_patch_2d"):
             choice = (loc.get(field) or "").strip()
             if choice and not (gallery_dir / choice).exists():
                 loc.pop(field, None)
+                if field == "map_patch_2d":
+                    loc.pop("map_patch_span", None)
                 pruned_mapchoice += 1
                 touched_locs += 1
 

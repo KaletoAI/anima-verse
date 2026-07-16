@@ -759,9 +759,9 @@ def assign_gallery_image_room(location_name: str, image_name: str,
 
 def assign_gallery_image_type(location_name: str, image_name: str,
                               image_type: str) -> Dict[str, Any]:
-    """Set the type of a gallery image (day/night/map_2d/building or empty)."""
-    if image_type and image_type not in ("day", "night", "map_2d", "building"):
-        raise HTTPException(status_code=400, detail="Type must be 'day', 'night', 'map_2d', 'building' or empty")
+    """Set the type of a gallery image (day/night/map_2d/map_3x3/building or empty)."""
+    if image_type and image_type not in ("day", "night", "map_2d", "map_3x3", "building"):
+        raise HTTPException(status_code=400, detail="Type must be 'day', 'night', 'map_2d', 'map_3x3', 'building' or empty")
 
     loc = resolve_location(location_name)
     loc_id = loc["id"] if loc and loc.get("id") else location_name
@@ -980,6 +980,11 @@ def _serve_map_icon(location_name: str, image_type: str, override_field: str):
     if not loc_id:
         raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
 
+    # Per-cell off switch: the admin explicitly hid this cell's own tile
+    # (usually because a multi-tile patch covers it) — no fallback either.
+    if override_field == "map_image_2d" and loc.get("map_image_off"):
+        raise HTTPException(status_code=404, detail="Kartenbild deaktiviert")
+
     # Clones share the gallery of their template (owner_id = template id).
     from app.models.world import _gallery_owner_id
     owner_id = _gallery_owner_id(location_name) or loc_id
@@ -1006,6 +1011,26 @@ def _serve_map_icon(location_name: str, image_type: str, override_field: str):
                                 media_type=_MAP_MEDIA_TYPES.get(img_path.suffix.lower(), 'image/png'),
                                 headers={"Cache-Control": "max-age=300"})
     raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
+
+
+def _serve_map_patch(location_name: str):
+    """Serves the multi-tile map patch anchored at this cell (``map_patch_2d``,
+    gallery type ``map_3x3``). No fallback — a cell either anchors a patch or
+    this is a plain 404 (the frontends hide the layer then)."""
+    loc = resolve_location(location_name)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    chosen = (loc.get("map_patch_2d") or "").strip()
+    if not chosen:
+        raise HTTPException(status_code=404, detail="Kein Patch gesetzt")
+    from app.models.world import _gallery_owner_id
+    owner_id = _gallery_owner_id(loc.get("id") or location_name) or (loc.get("id") or "")
+    p = get_gallery_dir(owner_id) / chosen
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Patch-Datei fehlt")
+    return FileResponse(str(p),
+                        media_type=_MAP_MEDIA_TYPES.get(p.suffix.lower(), 'image/png'),
+                        headers={"Cache-Control": "no-cache"})
 
 
 # Map fit (neighbor inpaint): generation canvas size (16-GB-friendly) + target
@@ -1054,6 +1079,10 @@ def _resolve_map_icon_path(loc: Dict[str, Any], field: str = "map_image_2d",
     from app.models.world import _gallery_owner_id, get_gallery_image_types
     loc_id = loc.get("id", "")
     if not loc_id:
+        return None
+    # A hidden cell (map_image_off, e.g. covered by a 3x3 patch) contributes
+    # no tile — neither to serving nor to the blend/fit neighbor context.
+    if field == "map_image_2d" and loc.get("map_image_off"):
         return None
     owner_id = _gallery_owner_id(loc_id) or loc_id
     gallery_dir = get_gallery_dir(owner_id)
@@ -1535,7 +1564,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 description = location.get("image_prompt_day", "").strip()
             elif not description and prompt_type == "night":
                 description = location.get("image_prompt_night", "").strip()
-            elif not description and prompt_type == "map_2d":
+            elif not description and prompt_type in ("map_2d", "map_3x3"):
                 description = location.get("image_prompt_map_2d", "").strip()
             elif not description and prompt_type == "building":
                 description = location.get("image_prompt_building", "").strip()
@@ -1657,7 +1686,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # otherwise location background.
         from app.core import config as _cfg
         _uc_name = ("mapfit" if _map_blend
-                    else "map" if prompt_type == "map_2d"
+                    else "map" if prompt_type in ("map_2d", "map_3x3")
                     else "building" if prompt_type == "building"
                     else "location")
         _ucp = _cfg.resolve_use_case_style(
@@ -1686,6 +1715,14 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             # the 16:9 location format — fills the tile. Otherwise landscape.
             params["width"] = 1024
             params["height"] = 1024
+        elif prompt_type == "map_3x3":
+            # Multi-tile ground patch: same top-down map style (use case
+            # "map"), but generated and stored larger — it spans 3x3 cells, so
+            # it gets its OWN downscale cap (map_3x3, 1200 default = 400/cell)
+            # instead of the 400px single-tile thumbnail.
+            params["image_use_case"] = "map_3x3"
+            params["width"] = 1536
+            params["height"] = 1536
         elif prompt_type == "building":
             # Square so the whole building fits with a margin — this image also
             # feeds the image-to-3D pass (like the T-pose reference), which needs
@@ -1972,7 +2009,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             # NOT for map tiles (map_2d) or building renders: those are map/mesh
             # art, never a room background — flagged tiles used to leak into the
             # room-reference slot of chat images.
-            if not _is_replace and prompt_type not in ("map_2d", "building"):
+            if not _is_replace and prompt_type not in ("map_2d", "map_3x3", "building"):
                 toggle_background_image(loc_id, image_name)
 
             # Set the room assignment when room_id is given
@@ -2001,8 +2038,8 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 "loras": _loras_used,
             })
 
-            # Set the image type when prompt_type is given (day/night/map_2d/building)
-            if prompt_type in ("day", "night", "map_2d", "building"):
+            # Set the image type when prompt_type is given (day/night/map_2d/map_3x3/building)
+            if prompt_type in ("day", "night", "map_2d", "map_3x3", "building"):
                 set_gallery_image_type(loc_id, image_name, prompt_type)
             # Set the newly created map tile as the displayed map item right away
             # (fit/neighbor + normal map_2d gen) — otherwise the old tile would stay active.

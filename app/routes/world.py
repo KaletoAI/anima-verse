@@ -483,8 +483,15 @@ def get_location_background(
 @router.head("/locations/{location_name}/map-icon-2d")
 @router.get("/locations/{location_name}/map-icon-2d")
 def get_location_map_icon_2d(location_name: str):
-    """Flaches 2D-Karten-Icon — per-Zelle waehlbar via map_image_2d, sonst erstes 'map_2d'."""
+    """Flat 2D map icon — per-cell choice via map_image_2d, else first 'map_2d'."""
     return world_ops._serve_map_icon(location_name, "map_2d", "map_image_2d")
+
+
+@router.head("/locations/{location_name}/map-patch-2d")
+@router.get("/locations/{location_name}/map-patch-2d")
+def get_location_map_patch_2d(location_name: str):
+    """Multi-tile map patch anchored at this cell (map_patch_2d) — no fallback."""
+    return world_ops._serve_map_patch(location_name)
 
 
 @router.patch("/locations/{location_id}/map-image")
@@ -502,6 +509,48 @@ async def set_location_map_image_route(location_id: str, request: Request) -> Di
     if image_type != "map_2d":
         raise HTTPException(status_code=400, detail="type muss 'map_2d' sein")
     loc = set_location_map_image(location_id, "map_image_2d", filename)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    return {"status": "success", "location": loc}
+
+
+@router.patch("/locations/{location_id}/map-patch")
+async def set_location_map_patch_route(location_id: str, request: Request) -> Dict[str, Any]:
+    """Set/clear the 3x3 map patch anchored at this cell.
+
+    Body: ``{"file": "<gallery-filename>"|"", "span": 3}``. The image must be
+    in the owner gallery (the template's for clones). Setting the patch turns
+    the own tile image of every covered same-template cell off
+    (``map_image_off``), clearing turns them back on — ``affected`` lists the
+    toggled cell ids so the UI can report/refresh them.
+    """
+    from app.models.world import set_location_map_patch, _gallery_owner_id, get_gallery_dir
+    data = await request.json()
+    filename = (data.get("file") or "").strip()
+    try:
+        span = int(data.get("span") or 3)
+    except (TypeError, ValueError):
+        span = 3
+    if filename:
+        if "/" in filename or ".." in filename:
+            raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
+        owner = _gallery_owner_id(location_id) or location_id
+        if not (get_gallery_dir(owner) / filename).exists():
+            raise HTTPException(status_code=404, detail="Bild nicht gefunden")
+    res = set_location_map_patch(location_id, filename, span)
+    if not res:
+        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+    return {"status": "success", **res}
+
+
+@router.patch("/locations/{location_id}/map-image-off")
+async def set_location_map_image_off_route(location_id: str, request: Request) -> Dict[str, Any]:
+    """Per-cell toggle: ``{"off": true}`` hides the cell's own 2D tile (no
+    first-image fallback either) so an underlying multi-tile patch shows;
+    ``false`` restores it."""
+    from app.models.world import set_location_map_image_off
+    data = await request.json()
+    loc = set_location_map_image_off(location_id, bool(data.get("off")))
     if not loc:
         raise HTTPException(status_code=404, detail="Ort nicht gefunden")
     return {"status": "success", "location": loc}

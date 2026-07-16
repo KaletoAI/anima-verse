@@ -29,6 +29,12 @@ interface Location {
   grid_y?: number | null
   map_image_2d?: string
   map_rotation_2d?: number
+  /** Multi-tile ground patch anchored (centred) on this cell — a gallery
+   *  file of type map_3x3, drawn UNDER the per-cell tiles. */
+  map_patch_2d?: string
+  map_patch_span?: number
+  /** The cell's own tile is switched off (no first-image fallback either). */
+  map_image_off?: boolean
   description?: string
   image_prompt_map_2d?: string
 }
@@ -55,6 +61,23 @@ function MapIcon({ locId, className, cacheKey, rotation }: { locId: string; clas
   return <img className={className} src={src} alt="" style={style} onError={() => setHidden(true)} />
 }
 
+// Multi-tile ground patch (gallery type map_3x3), drawn UNDER the cell grid.
+// Hidden on 404; never intercepts the drag&drop pointers.
+function MapPatchImg({ locId, left, top, size, cacheKey }: {
+  locId: string; left: number; top: number; size: number; cacheKey?: string
+}) {
+  const [hidden, setHidden] = useState(false)
+  useEffect(() => { setHidden(false) }, [cacheKey, locId])
+  if (hidden) return null
+  const base = `/world/locations/${encodeURIComponent(locId)}/map-patch-2d`
+  const src = cacheKey ? `${base}?v=${encodeURIComponent(cacheKey)}` : base
+  return (
+    <img src={src} alt="" onError={() => setHidden(true)}
+      style={{ position: 'absolute', left, top, width: size, height: size,
+        objectFit: 'cover', borderRadius: 4, pointerEvents: 'none' }} />
+  )
+}
+
 export function MapTab() {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -78,7 +101,7 @@ export function MapTab() {
 
   // Image generation from the cell-image dialog: ✨ = normal ImageGenDialog,
   // ⊞ = hardwired FitDialog (backend comes from the config).
-  const [gen, setGen] = useState<{ loc: Location; type: 'map_2d' } | null>(null)
+  const [gen, setGen] = useState<{ loc: Location; type: 'map_2d' | 'map_3x3' } | null>(null)
   const [fit, setFit] = useState<{ loc: Location } | null>(null)
   const [edge, setEdge] = useState<{ loc: Location; available: Record<string, string> } | null>(null)
   // Inpaint backends (category=="inpaint") for the Fit/Edge selection + the
@@ -165,6 +188,43 @@ export function MapTab() {
     [reload, t, toast],
   )
 
+  // Set/clear the 3x3 patch anchored at this cell. The backend toggles the
+  // own tile of every covered same-template cell (off on set, back on when
+  // cleared) — refresh everything, several tiles change at once.
+  const choosePatch = useCallback(
+    async (loc: Location, file: string) => {
+      try {
+        const r = await apiPatch<{ affected?: string[] }>(
+          `/world/locations/${encodeURIComponent(loc.id)}/map-patch`, { file, span: 3 })
+        const n = (r.affected || []).length
+        toast(file
+          ? t('Patch set — {n} covered tiles hidden').replace('{n}', String(n))
+          : t('Patch removed — {n} tiles restored').replace('{n}', String(n)))
+        setRefreshTick((k) => k + 1)
+        await reload()
+        setPicker(null)
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [reload, t, toast],
+  )
+
+  // Per-cell switch: hide/show the cell's own tile (map_image_off).
+  const toggleImageOff = useCallback(
+    async (loc: Location, off: boolean) => {
+      try {
+        await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image-off`, { off })
+        setIconVer((v) => ({ ...v, [loc.id]: (v[loc.id] || 0) + 1 }))
+        await reload()
+        setPicker((p) => (p && p.id === loc.id ? { ...p, map_image_off: off } : p))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [reload, t, toast],
+  )
+
   // Galerie-Bild loeschen (Backend raeumt haengende map_image_2d-Referenzen selbst
   // auf). Danach Galerie + Locations neu laden und den offenen Picker auffrischen,
   // damit die Auswahl-Markierung stimmt, falls das geloeschte Bild gewaehlt war.
@@ -231,7 +291,7 @@ export function MapTab() {
   // ✨ Normale Generierung aus dem Cell-image-Dialog. POST an die ZELLE (loc.id),
   // Klone speichern ins geteilte Template, die Auswahl bleibt pro Zelle.
   const submitGen = useCallback(
-    async (payload: ImageGenSubmit, target: { loc: Location; type: 'map_2d' }) => {
+    async (payload: ImageGenSubmit, target: { loc: Location; type: 'map_2d' | 'map_3x3' }) => {
       const body: Record<string, unknown> = { prompt_type: target.type, prompt: payload.prompt }
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
@@ -296,7 +356,7 @@ export function MapTab() {
     [reload, t, toast],
   )
 
-  const { placedByCell, unplaced, passableTemplates } = useMemo(() => {
+  const { placedByCell, unplaced, passableTemplates, patchAnchors, coveredCells } = useMemo(() => {
     const byCell = new Map<string, Location>()
     const unp: Location[] = []
     const tmpls: Location[] = []
@@ -318,7 +378,24 @@ export function MapTab() {
         unp.push(loc)
       }
     }
-    return { placedByCell: byCell, unplaced: unp, passableTemplates: tmpls }
+    // 3x3 patches: anchors sorted stably (y, then x) so overlapping patches
+    // paint deterministically; covered cells render transparent so the patch
+    // below shows through.
+    const anchors = Array.from(byCell.values())
+      .filter((l) => (l.map_patch_2d || '').trim())
+      .sort((a, b) => ((a.grid_y as number) - (b.grid_y as number))
+        || ((a.grid_x as number) - (b.grid_x as number)))
+    const covered = new Set<string>()
+    for (const l of anchors) {
+      const r = Math.floor(Math.max(1, l.map_patch_span || 3) / 2)
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          covered.add(`${(l.grid_x as number) + dx},${(l.grid_y as number) + dy}`)
+        }
+      }
+    }
+    return { placedByCell: byCell, unplaced: unp, passableTemplates: tmpls,
+      patchAnchors: anchors, coveredCells: covered }
   }, [locations])
 
   const onDropOnCell = useCallback(
@@ -505,6 +582,24 @@ export function MapTab() {
       </aside>
 
       <div className="ga-map-grid-wrap" ref={gridRef}>
+        {/* Relative wrapper: the 3x3 patches sit absolutely BELOW the grid
+            (DOM order) and span cell+gap strides; covered cells go
+            transparent so the patch shows through. */}
+        <div style={{ position: 'relative', width: 'max-content' }}>
+          {patchAnchors.map((l) => {
+            const span = Math.max(1, l.map_patch_span || 3)
+            const r = Math.floor(span / 2)
+            return (
+              <MapPatchImg
+                key={`patch-${l.id}`}
+                locId={l.id}
+                left={((l.grid_x as number) - r) * (CELL + 2)}
+                top={((l.grid_y as number) - r) * (CELL + 2)}
+                size={span * CELL + (span - 1) * 2}
+                cacheKey={`${iconVer[l.id] || 0}.${refreshTick}`}
+              />
+            )
+          })}
         <div
           className="ga-map-grid"
           style={{
@@ -518,6 +613,7 @@ export function MapTab() {
               const loc = placedByCell.get(cellKey)
               const isClone = !!(loc && (loc.template_location_id || '').trim())
               const dragOver = dragOverCell === cellKey
+              const covered = coveredCells.has(cellKey)
               const cls = [
                 'ga-map-cell',
                 loc ? 'occupied' : '',
@@ -531,6 +627,7 @@ export function MapTab() {
                 <div
                   key={cellKey}
                   className={cls}
+                  style={covered ? { background: 'transparent' } : undefined}
                   onDragOver={(e) => onCellDragOver(e, x, y)}
                   onDragLeave={() => {
                     if (dragOverCell === cellKey) setDragOverCell(null)
@@ -548,7 +645,9 @@ export function MapTab() {
                       onDragEnd={() => setDragPayload(null)}
                       title={loc.name + (isClone ? ' (' + t('copy') + ')' : '')}
                     >
-                      <MapIcon locId={loc.id} className="ga-map-tile-bg" cacheKey={`${iconVer[loc.id] || 0}.${refreshTick}`} rotation={loc.map_rotation_2d || 0} />
+                      {loc.map_image_off ? null : (
+                        <MapIcon locId={loc.id} className="ga-map-tile-bg" cacheKey={`${iconVer[loc.id] || 0}.${refreshTick}`} rotation={loc.map_rotation_2d || 0} />
+                      )}
                       <span className="ga-map-tile-name">{loc.name}</span>
                       <button
                         type="button"
@@ -587,6 +686,7 @@ export function MapTab() {
             }),
           )}
         </div>
+        </div>
       </div>
 
       {picker ? (
@@ -602,15 +702,41 @@ export function MapTab() {
               ) : (
                 ([
                   { type: 'map_2d' as const, label: t('2D icon'), chosen: picker.map_image_2d || '' },
+                  { type: 'map_3x3' as const, label: t('3×3 patch'), chosen: picker.map_patch_2d || '' },
                 ]).map(({ type, label, chosen }) => {
                   const imgs = (pickerGallery.images || []).filter(
                     (f) => (pickerGallery.image_types || {})[f] === type,
                   )
+                  // Own tile picks the cell image; the 3x3 group anchors/clears
+                  // the patch centred on this cell.
+                  const pick = (f: string) =>
+                    type === 'map_3x3' ? choosePatch(picker, f) : chooseImage(picker, type, f)
                   return (
                     <div key={type} className="ga-map-imgpicker-group">
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
                         <div className="ga-map-imgpicker-label" style={{ marginBottom: 0 }}>{label}</div>
-                        <div style={{ display: 'flex', gap: 6 }}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          {type === 'map_2d' ? (
+                            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.8em' }}
+                              title={t('Off: the cell shows no own tile (an underlying 3×3 patch shows instead).')}>
+                              <input
+                                type="checkbox"
+                                checked={!picker.map_image_off}
+                                onChange={(e) => { void toggleImageOff(picker, !e.target.checked) }}
+                              />
+                              {t('Own tile')}
+                            </label>
+                          ) : null}
+                          {type === 'map_3x3' && chosen ? (
+                            <button
+                              type="button"
+                              className="ga-btn ga-btn-sm"
+                              onClick={() => { void choosePatch(picker, '') }}
+                              title={t('Remove the patch — covered tiles of this template are shown again.')}
+                            >
+                              ✕ {t('Remove patch')}
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className="ga-btn ga-btn-sm"
@@ -671,7 +797,7 @@ export function MapTab() {
                                 <button
                                   type="button"
                                   className={'ga-map-imgpicker-item' + (chosen === f ? ' selected' : '')}
-                                  onClick={() => chooseImage(picker, type, f)}
+                                  onClick={() => { void pick(f) }}
                                   title={f}
                                 >
                                   <img
@@ -726,7 +852,9 @@ export function MapTab() {
       {gen ? (
         <ImageGenDialog
           open
-          title={t('Generate 2D icon — {name}').replace('{name}', gen.loc.name)}
+          title={(gen.type === 'map_3x3'
+            ? t('Generate 3×3 map tile — {name}')
+            : t('Generate 2D icon — {name}')).replace('{name}', gen.loc.name)}
           defaultPrompt={buildDefaultPrompt(gen.loc)}
           hideNegative
           onSubmit={(payload) => submitGen(payload, gen)}

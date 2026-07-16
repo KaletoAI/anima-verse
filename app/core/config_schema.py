@@ -673,6 +673,14 @@ SECTIONS = {
                 "max": 2048,
                 "description": "Longest side for map-icon thumbnails (gallery images tagged image_type=map). Used for the world overview map. 400 px is plenty for the in-game tile view.",
             },
+            "downscale_map_3x3_max_dim": {
+                "type": "int",
+                "label": "3x3 map patch max dimension (px)",
+                "default": 1200,
+                "min": 384,
+                "max": 4096,
+                "description": "Longest side for multi-tile map patches (image_type=map_3x3). The image spans 3x3 cells, so it keeps 3x the single-tile resolution (1200 = 400 per cell).",
+            },
             "_grp_migrate": {"type": "group_header", "label": "Migrate existing images"},
             "_action_dryrun_items_current": {
                 "type": "button",

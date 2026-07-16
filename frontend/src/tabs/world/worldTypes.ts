@@ -63,6 +63,13 @@ export interface Location {
   grid_y?: number | null
   map_image_2d?: string
   map_rotation_2d?: number
+  /** Multi-tile patch anchored (centred) on this placed cell — gallery file
+   *  of type map_3x3, drawn UNDER the per-cell tiles. */
+  map_patch_2d?: string
+  map_patch_span?: number
+  /** True hides the cell's own 2D tile entirely (no first-image fallback) so
+   *  an underlying patch shows through. */
+  map_image_off?: boolean
   event_settings?: EventSettings
   terrain?: string
   map3d?: Map3D
@@ -93,7 +100,7 @@ export interface GalleryResponse {
   image_metas?: Record<string, { backend?: string; model?: string; loras?: string[] }>
 }
 
-export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d', 'building'] as const
+export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d', 'map_3x3', 'building'] as const
 
 export type Selection =
   | { kind: 'location'; locationId: string }

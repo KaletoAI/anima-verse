@@ -47,7 +47,7 @@ def _config():
     return _cfg
 
 
-_DEFAULT_MAX_DIMS = {"item": 512, "map": 400}
+_DEFAULT_MAX_DIMS = {"item": 512, "map": 400, "map_3x3": 1200}
 
 
 def _max_dim_for(use_case: str) -> Optional[int]:

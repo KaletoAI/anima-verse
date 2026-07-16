@@ -72,7 +72,7 @@ const GalleryCard = memo(function GalleryCard({
           }}>{isSelected ? '✓' : ''}</span>
         ) : null}
         <img src={url} alt={filename} />
-        {type === 'map_2d' ? (
+        {type === 'map_2d' || type === 'map_3x3' ? (
           <span
             className="ga-gallery-usage"
             title={t('How many map cells currently use this image')}
@@ -114,7 +114,7 @@ const GalleryCard = memo(function GalleryCard({
               </option>
             ))}
           </select>
-          {type !== 'building' ? (
+          {type !== 'building' && type !== 'map_3x3' ? (
             <button
               className="ga-btn ga-btn-sm"
               disabled={isBusy}
@@ -196,7 +196,7 @@ export function LocationGallery({
   const [data, setData] = useState<GalleryResponse | null>(null)
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | 'building' | null>(null)
+  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | 'map_3x3' | 'building' | null>(null)
   const [imageSetOpen, setImageSetOpen] = useState(false)
   // "Regenerate" target: recreate an existing map image using it as a reference.
   const [regenTarget, setRegenTarget] = useState<{ filename: string; type: string } | null>(null)
@@ -258,7 +258,8 @@ export function LocationGallery({
 
   // How often each map image is currently used on the map: placed cells
   // whose gallery owner is this location (clones share the template gallery) and
-  // that picked exactly this file as the 2D tile. File -> count.
+  // that picked exactly this file as the 2D tile — or as the 3x3 patch
+  // anchored there. File -> count.
   const mapUsage = useMemo(() => {
     const m: Record<string, number> = {}
     for (const l of placements) {
@@ -266,6 +267,8 @@ export function LocationGallery({
       if (((l.template_location_id || '').trim() || l.id) !== locationId) continue
       const f = (l.map_image_2d || '').trim()
       if (f) m[f] = (m[f] || 0) + 1
+      const p = (l.map_patch_2d || '').trim()
+      if (p) m[p] = (m[p] || 0) + 1
     }
     return m
   }, [placements, locationId])
@@ -331,7 +334,8 @@ export function LocationGallery({
     (promptType: string): string => {
       const fromRoom = (key: 'image_prompt_day' | 'image_prompt_night') =>
         (room && (room as Record<string, unknown>)[key]) as string | undefined
-      const isMap = promptType === 'map_2d'
+      // The 3x3 patch shares the map prompt — same top-down look, larger area.
+      const isMap = promptType === 'map_2d' || promptType === 'map_3x3'
       let desc = ''
       if (room && !isMap) {
         if (promptType === 'day') desc = (fromRoom('image_prompt_day') || '').trim()
@@ -340,11 +344,11 @@ export function LocationGallery({
       }
       if (!desc && promptType === 'day') desc = (location.image_prompt_day || '').trim()
       if (!desc && promptType === 'night') desc = (location.image_prompt_night || '').trim()
-      if (!desc && promptType === 'map_2d') desc = (location.image_prompt_map_2d || '').trim()
+      if (!desc && isMap) desc = (location.image_prompt_map_2d || '').trim()
       if (!desc && promptType === 'building') desc = (location.image_prompt_building || '').trim()
       if (!desc) desc = location.description || location.name || ''
-      // 2D map icon and building: subject only. The framing/style come from the
-      // use case (server-side), so they aren't duplicated into the prompt here.
+      // 2D map icon/patch and building: subject only. The framing/style come from
+      // the use case (server-side), so they aren't duplicated into the prompt here.
       if (isMap || promptType === 'building') {
         return desc
       }
@@ -364,7 +368,7 @@ export function LocationGallery({
         prompt_type: dialogType,
         prompt: payload.prompt,
       }
-      if (roomFilter && dialogType !== 'map_2d' && dialogType !== 'building') body.room_id = roomFilter
+      if (roomFilter && dialogType !== 'map_2d' && dialogType !== 'map_3x3' && dialogType !== 'building') body.room_id = roomFilter
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
       // The dialog already has the map-icon suffix in the prompt → don't duplicate it server-side.
@@ -538,6 +542,16 @@ export function LocationGallery({
             <button
               className="ga-btn ga-btn-sm"
               disabled={!!busy}
+              onClick={() => setDialogType('map_3x3')}
+              title={t('Generate a seamless ground image spanning 3×3 map cells — placed per cell in the map editor.')}
+            >
+              🟩 {t('Generate 3×3 tile')}
+            </button>
+          ) : null}
+          {!roomFilter ? (
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={!!busy}
               onClick={() => setImageSetOpen(true)}
               title={t('Generate a full image set (location and/or all rooms, day + night) with one chosen backend/model — runs as sequential background jobs.')}
             >
@@ -628,12 +642,14 @@ export function LocationGallery({
             ? t('Generate night image — {name}').replace('{name}', room?.name || location.name)
             : dialogType === 'building'
               ? t('Generate building image — {name}').replace('{name}', location.name)
-              : t('Generate 2D map icon — {name}').replace('{name}', location.name)
+              : dialogType === 'map_3x3'
+                ? t('Generate 3×3 map tile — {name}').replace('{name}', location.name)
+                : t('Generate 2D map icon — {name}').replace('{name}', location.name)
       }
       defaultPrompt={buildDefaultPrompt(dialogType)}
       hideNegative
       settingsSuffix={
-        dialogType === 'map_2d' && mapSuffix.map_2d
+        (dialogType === 'map_2d' || dialogType === 'map_3x3') && mapSuffix.map_2d
           ? { label: t('2D map icon'), text: mapSuffix.map_2d }
           : undefined
       }
@@ -654,7 +670,7 @@ export function LocationGallery({
       requireSourceReference
       defaultCreateNew
       settingsSuffix={
-        regenTarget.type === 'map_2d' && mapSuffix.map_2d
+        (regenTarget.type === 'map_2d' || regenTarget.type === 'map_3x3') && mapSuffix.map_2d
           ? { label: t('2D map icon'), text: mapSuffix.map_2d }
           : undefined
       }
