@@ -4,51 +4,109 @@
  * and every laid-out room as a translucent box on its level (stacked floors,
  * basements below ground), with name labels and the exit point as an orange
  * dot — the same data the external 3D client reads, so what you see here is
- * what the client will place. Rebuilds the boxes live while dragging in the
- * editor (the three.js scene itself is created once).
+ * what the client will place.
+ *
+ * Two compare switches: "Real room models" swaps the boxes for the rooms'
+ * ACTIVE 3D models (contain-fit into each room rectangle, per-model
+ * orientation fix applied; rooms without a model keep their box), and
+ * "Building model overlay" ghosts the location's building model over the
+ * plan (contain-fit to the footprint) — so plan, room models and building
+ * shell can be checked against each other. Models are fetched once and
+ * cached; the boxes rebuild live while dragging in the editor (the three.js
+ * scene itself is created once).
  *
  * three.js is imported dynamically, same as Model3DViewer — it stays in the
  * shared chunk that only loads when a 3D view is opened.
  */
 import { useEffect, useRef, useState } from 'react'
-import type { Object3D, Group, Material, Mesh } from 'three'
+import type { Object3D, Group, Material, Mesh, MeshBasicMaterial } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
+import { apiGet } from '../../lib/api'
 import type { Room } from './worldTypes'
 
 const LEVEL_H = 0.3
 const PALETTE = [0x58a6ff, 0x3fb950, 0xd29922, 0xf778ba,
                  0xa371f7, 0xf85149, 0x79c0ff, 0x56d364]
 
+interface CachedModel {
+  obj: Object3D
+  rotation: { x?: number; y?: number; z?: number }
+}
+type CacheEntry = CachedModel | 'loading' | 'missing'
+
 interface FloorPlanPreviewProps {
+  locationId: string
   rooms: Room[]
   /** Building footprint in grid cells (map3d.footprint) — plate aspect. */
   footprint?: number[]
   height?: number
 }
 
-export function FloorPlanPreview({ rooms, footprint, height = 360 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  // Scene handle for the incremental room-box rebuild (drag updates arrive
-  // per pointermove — recreating the whole renderer would thrash).
+  const [showModels, setShowModels] = useState(false)
+  const [showBuilding, setShowBuilding] = useState(false)
+  // Model-load completion re-triggers the rebuild (loads are async, the
+  // rebuild itself is synchronous against the cache).
+  const [bump, setBump] = useState(0)
+  // Scene handle for the incremental rebuild (drag updates arrive per
+  // pointermove — recreating the whole renderer would thrash).
   const handleRef = useRef<{
     THREE: typeof import('three')
     boxes: Group
   } | null>(null)
   const roomsRef = useRef(rooms)
   roomsRef.current = rooms
+  const showModelsRef = useRef(showModels)
+  showModelsRef.current = showModels
+  const showBuildingRef = useRef(showBuilding)
+  showBuildingRef.current = showBuilding
+  // Loaded models by key ("room:<id>" / "building") — originals live here,
+  // the scene gets clones (shared geometry, nothing to dispose per rebuild).
+  const cacheRef = useRef<Map<string, CacheEntry>>(new Map())
+  const ghostMatRef = useRef<MeshBasicMaterial | null>(null)
 
   const fw = Math.max(1, footprint?.[0] || 1)
   const fd = Math.max(1, footprint?.[1] || 1)
 
-  // Rebuild the room boxes from the current layout (called on every rooms
-  // change and once after scene init).
+  // Fetch a model (meta + GLB) into the cache; returns it when ready. A miss
+  // is cached too — no retry storm per drag frame.
+  const ensureModel = (key: string, roomId?: string): CachedModel | null => {
+    const cache = cacheRef.current
+    const cur = cache.get(key)
+    if (cur === 'loading' || cur === 'missing') return null
+    if (cur) return cur
+    cache.set(key, 'loading')
+    ;(async () => {
+      try {
+        const base = roomId
+          ? `/play/rooms/${encodeURIComponent(roomId)}/model`
+          : `/play/locations/${encodeURIComponent(locationId)}/model`
+        const meta = await apiGet<{ format?: string; url?: string
+          rotation?: { x?: number; y?: number; z?: number } }>(`${base}/meta`)
+        const fmt = (meta.format || 'glb').toLowerCase()
+        if (fmt !== 'glb' && fmt !== 'gltf') throw new Error(`format ${fmt}`)
+        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
+        const gltf = await new GLTFLoader().loadAsync(meta.url || base)
+        cache.set(key, { obj: gltf.scene, rotation: meta.rotation || {} })
+      } catch {
+        cache.set(key, 'missing')  // 404 = no model — the box stays
+      }
+      setBump((b) => b + 1)
+    })()
+    return null
+  }
+
+  // Rebuild the plan content from the current layout (called on every rooms/
+  // toggle change and once after scene init).
   const rebuild = (h: NonNullable<typeof handleRef.current>, current: Room[]) => {
     const { THREE, boxes } = h
     for (const child of [...boxes.children]) {
       boxes.remove(child)
+      if (child.userData.__noDispose) continue  // cached-model clone
       child.traverse((o: Object3D) => {
         const mesh = o as Mesh
         mesh.geometry?.dispose?.()
@@ -57,6 +115,46 @@ export function FloorPlanPreview({ rooms, footprint, height = 360 }: FloorPlanPr
         else m?.dispose?.()
       })
     }
+
+    const deg = (v?: number) => ((v || 0) * Math.PI) / 180
+
+    // Contain-fit a cached model into a target rectangle: per-model
+    // orientation fix on an inner pivot, uniform scale so the horizontal
+    // extents fit, bottom on the given floor height, centred on cx/cz.
+    const placeModel = (entry: CachedModel, targetW: number, targetD: number,
+                        cx: number, bottomY: number, cz: number,
+                        yawDeg: number, ghost: boolean) => {
+      const inner = new THREE.Group()
+      const clone = entry.obj.clone(true)
+      if (ghost) {
+        if (!ghostMatRef.current) {
+          ghostMatRef.current = new THREE.MeshBasicMaterial({
+            color: 0x8b949e, transparent: true, opacity: 0.35, depthWrite: false,
+          })
+        }
+        const mat = ghostMatRef.current
+        clone.traverse((o: Object3D) => {
+          const mesh = o as Mesh
+          if (mesh.isMesh) mesh.material = mat
+        })
+      }
+      inner.add(clone)
+      inner.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y), deg(entry.rotation.z))
+      const holder = new THREE.Group()
+      holder.add(inner)
+      holder.updateMatrixWorld(true)
+      const b = new THREE.Box3().setFromObject(holder)
+      const s = b.getSize(new THREE.Vector3())
+      holder.scale.setScalar(Math.min(targetW / (s.x || 1), targetD / (s.z || 1)))
+      holder.rotation.y = -deg(yawDeg)
+      holder.updateMatrixWorld(true)
+      const b2 = new THREE.Box3().setFromObject(holder)
+      const c2 = b2.getCenter(new THREE.Vector3())
+      holder.position.set(cx - c2.x, bottomY - b2.min.y, cz - c2.z)
+      holder.userData.__noDispose = true
+      boxes.add(holder)
+    }
+
     current.forEach((room, idx) => {
       const lay = room.layout
       if (!lay) return
@@ -64,21 +162,32 @@ export function FloorPlanPreview({ rooms, footprint, height = 360 }: FloorPlanPr
       const w = lay.w * fw
       const d = lay.d * fd
       const level = lay.level || 0
-      const cy = level * LEVEL_H + LEVEL_H / 2
+      const bottomY = level * LEVEL_H
+      const cy = bottomY + LEVEL_H / 2
       const cx = (lay.x + lay.w / 2 - 0.5) * fw
       const cz = (lay.y + lay.d / 2 - 0.5) * fd
 
-      const box = new THREE.Mesh(
-        new THREE.BoxGeometry(w, LEVEL_H * 0.94, d),
-        new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.5 }),
-      )
-      const edges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(box.geometry),
-        new THREE.LineBasicMaterial({ color }),
-      )
+      const model = showModelsRef.current && room.id
+        ? ensureModel(`room:${room.id}`, room.id)
+        : null
+      if (model) {
+        placeModel(model, w, d, cx, bottomY, cz, lay.rotation || 0, false)
+      }
+
+      // Label + exit dot always; the box only when no real model stands in.
       const roomGroup = new THREE.Group()
-      roomGroup.add(box)
-      roomGroup.add(edges)
+      if (!model) {
+        const box = new THREE.Mesh(
+          new THREE.BoxGeometry(w, LEVEL_H * 0.94, d),
+          new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.5 }),
+        )
+        const edges = new THREE.LineSegments(
+          new THREE.EdgesGeometry(box.geometry),
+          new THREE.LineBasicMaterial({ color }),
+        )
+        roomGroup.add(box)
+        roomGroup.add(edges)
+      }
 
       if (lay.exit) {
         const dot = new THREE.Mesh(
@@ -112,9 +221,15 @@ export function FloorPlanPreview({ rooms, footprint, height = 360 }: FloorPlanPr
       roomGroup.add(sprite)
 
       roomGroup.position.set(cx, cy, cz)
-      if (lay.rotation) roomGroup.rotation.y = (-(lay.rotation) * Math.PI) / 180
+      if (lay.rotation) roomGroup.rotation.y = -deg(lay.rotation)
       boxes.add(roomGroup)
     })
+
+    // Building shell over everything — ghosted so the rooms stay visible.
+    if (showBuildingRef.current) {
+      const building = ensureModel('building')
+      if (building) placeModel(building, fw, fd, 0, 0, 0, 0, true)
+    }
   }
 
   useEffect(() => {
@@ -182,6 +297,7 @@ export function FloorPlanPreview({ rooms, footprint, height = 360 }: FloorPlanPr
         scene.add(boxes)
         disposers.push(() => {
           scene.traverse((o: Object3D) => {
+            if (o.userData.__noDispose) return
             const mesh = o as Mesh
             mesh.geometry?.dispose?.()
             const m = mesh.material as Material | Material[] | undefined
@@ -236,16 +352,49 @@ export function FloorPlanPreview({ rooms, footprint, height = 360 }: FloorPlanPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fw, fd, height])
 
-  // Live-apply layout edits (drag/resize/rotate in the editor) — box rebuild
-  // only, the scene/renderer stay.
+  // Dispose the cached model ORIGINALS only on unmount — the init effect may
+  // re-run on a footprint change while clones of these are still wanted.
+  useEffect(() => {
+    const cache = cacheRef.current
+    return () => {
+      for (const entry of cache.values()) {
+        if (entry === 'loading' || entry === 'missing') continue
+        entry.obj.traverse((o: Object3D) => {
+          const mesh = o as Mesh
+          mesh.geometry?.dispose?.()
+          const m = mesh.material as Material | Material[] | undefined
+          if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
+          else m?.dispose?.()
+        })
+      }
+      cache.clear()
+      ghostMatRef.current?.dispose()
+      ghostMatRef.current = null
+    }
+  }, [])
+
+  // Live-apply layout edits (drag/resize/rotate in the editor) and toggle/
+  // load-completion changes — content rebuild only, the scene/renderer stay.
   useEffect(() => {
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms])
+  }, [rooms, showModels, showBuilding, bump])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
       <div className="ga-form-section-label">{t('3D preview')}</div>
+      <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label className="ga-check-row">
+          <input type="checkbox" checked={showModels}
+            onChange={(e) => setShowModels(e.target.checked)} />
+          <span>{t('Real room models')}</span>
+        </label>
+        <label className="ga-check-row">
+          <input type="checkbox" checked={showBuilding}
+            onChange={(e) => setShowBuilding(e.target.checked)} />
+          <span>{t('Building model overlay')}</span>
+        </label>
+      </div>
       <div style={{ position: 'relative' }}>
         <div
           ref={mountRef}
@@ -266,7 +415,7 @@ export function FloorPlanPreview({ rooms, footprint, height = 360 }: FloorPlanPr
         ) : null}
       </div>
       <span className="ga-hint">
-        {t('Rooms as boxes per level — live while editing the plan; exit points in orange.')}
+        {t('Rooms as boxes per level — live while editing the plan; exit points in orange. Rooms without a model keep their box; the building shell renders ghosted.')}
       </span>
     </div>
   )

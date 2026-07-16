@@ -450,6 +450,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           onChange={(rooms) => upd('rooms', rooms)}
         />
         <FloorPlanPreview
+          locationId={location.id}
           rooms={draft.rooms || []}
           footprint={draft.map3d?.footprint}
         />
