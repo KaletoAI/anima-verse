@@ -62,6 +62,10 @@ export interface Tile {
   roomSlots: Map<string, { holder: THREE.Group; w: number; d: number; plate: THREE.Mesh }>;
   /** freie Stellflächen im Raum-Modell (Welt-Koordinaten auf Bodenhöhe) */
   roomSpots: Map<string, THREE.Vector3[]>;
+  /** erkannte Sitzflächen (Möbelhöhe, kleine Flächen) */
+  roomSitSpots: Map<string, THREE.Vector3[]>;
+  /** erkannte Liegeflächen (Möbelhöhe, große zusammenhängende Flächen) */
+  roomLieSpots: Map<string, THREE.Vector3[]>;
   /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
   roomGroups: Map<string, THREE.Group>;
   /** Raum-Rechtecke in Welt-Koordinaten (Fokus-Erkennung) */
@@ -410,6 +414,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     loc, group, center, isBuilding, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
+    roomSitSpots: new Map(), roomLieSpots: new Map(),
     roomGroups: new Map(), roomRects: new Map(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
@@ -556,34 +561,69 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   const ray = new THREE.Raycaster();
   const down = new THREE.Vector3(0, -1, 0);
   const base = slot.holder.getWorldPosition(new THREE.Vector3());
-  const samples: THREE.Vector3[] = [];
   const N = 6;
+  const samples: { p: THREE.Vector3; ix: number; iz: number }[] = [];
   for (let ix = 0; ix < N; ix++) {
     for (let iz = 0; iz < N; iz++) {
       const ox = (ix / (N - 1) - 0.5) * slot.w * 0.78;
       const oz = (iz / (N - 1) - 0.5) * slot.d * 0.78;
       ray.set(new THREE.Vector3(base.x + ox, base.y + 20, base.z + oz), down);
       const hit = ray.intersectObject(model, true)[0];
-      if (hit) samples.push(hit.point.clone());
+      if (hit) samples.push({ p: hit.point.clone(), ix, iz });
     }
   }
-  if (samples.length >= 5) {
-    const heights = samples.map((p) => p.y).sort((a, b) => a - b);
-    const floor = heights[Math.floor(heights.length * 0.2)];
-    const spots = samples
-      .filter((p) => p.y < floor + 0.12)                         // eben genug = begehbar
-      .sort((a, b) => a.distanceToSquared(base) - b.distanceToSquared(base))
-      .map((p) => p.clone().setY(p.y + 0.01));
-    if (spots.length) {
-      // unter denselben Schlüsseln ablegen wie roomCenters (ID und Name)
-      const center = tile.roomCenters.get(roomId);
-      for (const [key, v] of tile.roomCenters) {
-        if (v === center) tile.roomSpots.set(key, spots);
+  if (samples.length < 5) return;
+  const heights = samples.map((s) => s.p.y).sort((a, b) => a - b);
+  const floor = heights[Math.floor(heights.length * 0.2)];
+  const spots = samples
+    .filter((s) => s.p.y < floor + 0.12)                         // eben genug = begehbar
+    .sort((a, b) => a.p.distanceToSquared(base) - b.p.distanceToSquared(base))
+    .map((s) => s.p.clone().setY(s.p.y + 0.01));
+
+  // Sitz-/Liegeflächen (Heuristik): flache Treffer in Möbelhöhe — über dem
+  // Boden, unter Tischhöhe (Figuren im Raum sind ~0,6 m groß). Große
+  // zusammenhängende Flächen = liegen (Bett/Sofa), kleine = sitzen.
+  const isFurniture = (s: { p: THREE.Vector3 }) => s.p.y > floor + 0.08 && s.p.y < floor + 0.32;
+  const cand = samples.filter(isFurniture);
+  const byCell = new Map(cand.map((s) => [`${s.ix},${s.iz}`, s]));
+  const visited = new Set<string>();
+  const sit: THREE.Vector3[] = [];
+  const lie: THREE.Vector3[] = [];
+  for (const s of cand) {
+    const key = `${s.ix},${s.iz}`;
+    if (visited.has(key)) continue;
+    const group: typeof cand = [];
+    const queue = [s];
+    visited.add(key);
+    while (queue.length) {
+      const cur = queue.pop()!;
+      group.push(cur);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nk = `${cur.ix + dx},${cur.iz + dz}`;
+        const nb = byCell.get(nk);
+        if (nb && !visited.has(nk) && Math.abs(nb.p.y - cur.p.y) < 0.07) {
+          visited.add(nk);
+          queue.push(nb);
+        }
       }
-      // Mitte/Ausgang auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
-      center?.setY(floor + 0.01);
-      tile.roomExits.get(roomId)?.setY(floor + 0.01);
     }
+    const pts = group.map((g2) => g2.p.clone().setY(g2.p.y + 0.01));
+    if (group.length >= 3) lie.push(...pts);   // große Fläche: Bett/Sofa
+    else sit.push(...pts);                     // klein: Stuhl/Hocker/Bank
+  }
+
+  // unter denselben Schlüsseln ablegen wie roomCenters (ID und Name)
+  const center = tile.roomCenters.get(roomId);
+  for (const [key, v] of tile.roomCenters) {
+    if (v !== center) continue;
+    if (spots.length) tile.roomSpots.set(key, spots);
+    if (sit.length) tile.roomSitSpots.set(key, sit);
+    if (lie.length) tile.roomLieSpots.set(key, lie);
+  }
+  if (spots.length) {
+    // Mitte/Ausgang auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
+    center?.setY(floor + 0.01);
+    tile.roomExits.get(roomId)?.setY(floor + 0.01);
   }
 }
 

@@ -225,3 +225,22 @@ Ursprüngliche Anforderung:
   nutzt dessen Session); sonst zeigt sie einen entsprechenden Hinweis.
 - **3D-Reiter:** die Bilder rücken hoch an die Stelle, wo bisher der
   Grundriss-Editor war.
+
+## AV3D-11: Generische Animations-Marker pro Raum — angefordert (2026-07-17)
+
+- **Motivation:** Sitzende/liegende Figuren sollen auf Stühlen/Betten
+  landen. Der Client rät Möbel heuristisch aus der Modell-Geometrie —
+  funktioniert oft, aber nicht immer; kuratierte Marker sind verlässlich.
+- **Erwartung:** optionale Marker in den Raum-Layout-Daten, generisch über
+  das Animations-Vokabular (nicht nur sit/sleep — jedes Clip-Kind):
+  `markers: [{ "at": [x, y], "animation": "sit" }, ...]`
+  (`at` als Fraktion der Raum-Grundfläche).
+- **Pflege:** im Grundriss-Editor (Klick + Animations-Kind aus
+  `/assets/animation-clips`, dynamisch). Die 3D-Vorschau daneben
+  (`floorplan.html`) zeigt an jedem Marker eine Testfigur mit der
+  Animation — der Client baut das ein, sobald Marker im Layout ankommen.
+- **Client-Verhalten:** Marker schlagen die Heuristik; Höhe ermittelt der
+  Client selbst (Abtastung). Ohne Marker: Heuristik (Sitz-/Liegeflächen
+  aus der Modell-Geometrie) — bereits eingebaut.
+- **Fallback bleibt:** ohne Marker und ohne Modell stehen Figuren auf der
+  Bodenplatte wie bisher.

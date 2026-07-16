@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as api from './api';
 import { Engine } from './scene/engine';
-import { FigureLibrary } from './scene/figures';
+import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
 import { applyBuildingModel, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary } from './scene/buildings';
@@ -203,16 +203,14 @@ async function startApp(username: string) {
   // --- Polling: Worldmap + Raumbelegung -------------------------------------
   let lastMap: WorldMap | null = firstMap;
   const roomOf = new Map<string, string>(); // Charaktername -> Raum (ID oder Name)
-  const cameFrom = new Map<string, string>(); // voriger Raum (für Exit-Routing)
+  /** aktuell DARGESTELLTER Raum je Figur (null = Außenansicht) — erkennt
+   *  Betreten/Verlassen/Wechsel für das Exit-Routing */
+  const shownRoom = new Map<string, string | null>();
 
   // AV3D-8: room_id kommt direkt mit der Worldmap; dazu die Clip-Set-Kette
   function takeRoomsFrom(map: WorldMap) {
     for (const c of map.characters) {
-      if (c.room_id) {
-        const prev = roomOf.get(c.name);
-        if (prev && prev !== c.room_id) cameFrom.set(c.name, prev);
-        roomOf.set(c.name, c.room_id);
-      }
+      if (c.room_id) roomOf.set(c.name, c.room_id);
       figures.setCharacterSets(c.name, c.animation_sets);
       figures.setCharacterHeight(c.name, c.height_cm);
     }
@@ -314,26 +312,42 @@ async function startApp(username: string) {
         let scale = 1;
         const room = roomOf.get(c.name);
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
-        if (tile.fade > 0.5 && roomCenter && room) {
-          const mates = roomMates.get(room)!;
-          const spots = tile.roomSpots.get(room);
-          if (spots?.length) {
+        const inRoom = tile.fade > 0.5 && roomCenter && room ? room : null;
+        if (inRoom && roomCenter) {
+          const mates = roomMates.get(inRoom)!;
+          const idx = mates.indexOf(c.name);
+          const spots = tile.roomSpots.get(inRoom);
+          // Aktivitäts-Animation entscheidet: Sitzende auf Sitzflächen,
+          // Liegende auf Liegeflächen (Heuristik aus der Modell-Abtastung)
+          const kind = c.activity_animation || activityToClipKind(c.activity || '');
+          const sit = tile.roomSitSpots.get(inRoom);
+          const lieDown = tile.roomLieSpots.get(inRoom);
+          const pool = kind === 'lie' ? (lieDown?.length ? lieDown : sit)
+            : kind === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
+          if (pool?.length) {
+            pos = pool[idx % pool.length].clone();
+          } else if (spots?.length) {
             // abgetastete freie Stellfläche im Raum-Modell (nicht in Möbeln)
-            pos = spots[mates.indexOf(c.name) % spots.length].clone();
+            pos = spots[idx % spots.length].clone();
           } else {
             pos = roomCenter.clone().add(
-              roomSlot(mates.indexOf(c.name), mates.length, c.name).multiplyScalar(ROOM_FIGURE_SCALE)
+              roomSlot(idx, mates.length, c.name).multiplyScalar(ROOM_FIGURE_SCALE)
             );
           }
           scale = ROOM_FIGURE_SCALE;
-          // Raumwechsel: über die Ausgänge laufen (AV3D-2 exit), nicht durch Wände
-          const from = cameFrom.get(c.name);
-          if (from && from !== room) {
-            via = [tile.roomExits.get(from), tile.roomExits.get(room)]
-              .filter((v): v is THREE.Vector3 => !!v);
-          }
         } else {
           pos = tile.center.clone().add(slotOffset(tile, i, chars.length));
+        }
+        // Exit-Routing: bei Betreten/Verlassen/Wechsel des dargestellten
+        // Raums über die Ausgänge laufen statt durch Wände
+        const prevShown = shownRoom.get(c.name) ?? null;
+        if (inRoom !== prevShown) {
+          const exits = [
+            prevShown ? tile.roomExits.get(prevShown) : undefined,   // alten Raum verlassen
+            inRoom ? tile.roomExits.get(inRoom) : undefined,         // neuen Raum betreten
+          ].filter((v): v is THREE.Vector3 => !!v).map((v) => v.clone());
+          if (exits.length) via = exits;
+          shownRoom.set(c.name, inRoom);
         }
         const targetTile = c.movement_target_id ? tiles.get(c.movement_target_id) : undefined;
         states.push({

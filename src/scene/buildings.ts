@@ -40,6 +40,12 @@ export class ModelLibrary {
     return template ? template.clone() : null;
   }
 
+  /** Cache verwerfen (z.B. wenn sich rotation/offset_y im Meta geändert hat). */
+  invalidate(id: string) {
+    this.models.delete(id);
+    this.retryAt.delete(id);
+  }
+
   /** Modell nachladen, falls nicht vorhanden (drosselt sich selbst). */
   request(id: string) {
     if (this.models.has(id) || this.pending.has(id)) return;

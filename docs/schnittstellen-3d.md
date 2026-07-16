@@ -124,6 +124,24 @@ GET /play/rooms/{room_id}/model       → GLB-Bytes (ETag)
   als einfache Bodenplatte (heutige Slabs).
 - Während einer Generierung: 404, keine Zwischenstände (wie AV3D-9).
 
+**Animations-Marker (generisch, geplant):**
+- Optionale Marker pro Raum in den Layout-Daten — **generisch über das
+  Animations-Vokabular**, nicht auf sit/sleep festgenagelt:
+  `markers: [{ "at": [x, y], "animation": "sit" }, …]`
+  (`at` = Fraktion der Raum-Grundfläche; `animation` = Clip-Kind aus dem
+  offenen Vokabular von `/assets/animation-clips` — später also auch
+  `dance`, `cook`, … ohne Vertragsänderung).
+- **Client-Verhalten:** Eine Figur, deren aktive Animation zu einem Marker
+  passt, nutzt den nächsten freien Marker (die exakte Höhe holt sich der
+  Client per Abtastung an der Marker-Stelle). Marker **schlagen** die
+  Client-Heuristik (Sitz-/Liegeflächen-Erkennung); ohne Marker bleibt die
+  Heuristik der Fallback.
+- **Pflege im Grundriss-Editor:** Marker per Klick setzen, Animations-Kind
+  aus dem Clip-Vokabular wählen (dynamisch, keine feste Liste). Die
+  3D-Vorschau (`floorplan.html`) zeigt an jedem Marker eine Testfigur mit
+  der jeweiligen Animation, sobald Marker geliefert werden — so lässt sich
+  die Platzierung direkt beurteilen.
+
 **Ausgang statt Treppen/Aufzüge:**
 - Treppen und Aufzüge werden vorerst ignoriert — keine begehbare
   Vertikal-Verbindung nötig.
