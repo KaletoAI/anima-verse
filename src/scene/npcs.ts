@@ -80,6 +80,8 @@ interface Npc {
   labelName: HTMLSpanElement;
   labelActivity: HTMLSpanElement;
   target: THREE.Vector3;
+  /** Ziel-Skalierung (1 = Kartengröße; kleiner in Innenräumen) */
+  targetScale: number;
   /** Restliche Wegpunkte bis zum Ziel (Wegfindung um Gebäude) */
   waypoints: THREE.Vector3[];
   activity: string;
@@ -91,6 +93,8 @@ interface Npc {
 export interface NpcState {
   char: MapCharacter;
   pos: THREE.Vector3;               // Zielposition auf der Karte
+  /** Skalierung der Figur (1 = Kartengröße; kleiner in Innenräumen) */
+  scale?: number;
   /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
   via?: THREE.Vector3[];
   travelTo: THREE.Vector3 | null;   // Reiseziel (Linien-Endpunkt) oder null
@@ -144,6 +148,7 @@ export class NpcManager {
           : this.planPath(npc.root.position, st.pos);
       }
       npc.target.copy(st.pos);
+      npc.targetScale = st.scale ?? 1;
       npc.activity = st.char.activity || '';
       npc.animation = st.char.activity_animation || undefined;
       npc.labelActivity.textContent = npc.activity;
@@ -216,7 +221,7 @@ export class NpcManager {
     return {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
-      target: st.pos.clone(), waypoints: [], activity: st.char.activity || '',
+      target: st.pos.clone(), targetScale: st.scale ?? 1, waypoints: [], activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
@@ -299,6 +304,11 @@ export class NpcManager {
       }
       // Höhe dem Ziel angleichen (Etagen-Räume, AV3D-2) — sanft, ohne Treppe
       npc.root.position.y += (npc.target.y - npc.root.position.y) * Math.min(1, dt * 4);
+      // Skalierung weich überblenden (Innenraum-Maßstab vs. Kartengröße)
+      const s = npc.root.scale.x;
+      if (Math.abs(s - npc.targetScale) > 1e-3) {
+        npc.root.scale.setScalar(s + (npc.targetScale - s) * Math.min(1, dt * 5));
+      }
       if (!moving && npc.figure) {
         // Stehend: Nachbarn ansehen, sonst leicht zur Kamera-Grundrichtung
         const target = faceTo.get(npc.name);

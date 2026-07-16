@@ -11,6 +11,9 @@ import { createHud, InfoPanel, showLogin } from './ui';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
+/** Innenraum-Maßstab: Figuren sind in Räumen um diesen Faktor kleiner als
+ *  auf der Karte (Kartenmaßstab vs. Raummaßstab) — Stellschraube. */
+const ROOM_FIGURE_SCALE = 1 / 3;
 const ROOMS_POLL_MS = 4000;
 const INTERIOR_CAM_DIST = 26; // näher als das -> Räume auflösen
 
@@ -308,11 +311,15 @@ async function startApp(username: string) {
       chars.forEach((c, i) => {
         let pos: THREE.Vector3;
         let via: THREE.Vector3[] | undefined;
+        let scale = 1;
         const room = roomOf.get(c.name);
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
         if (tile.fade > 0.5 && roomCenter && room) {
           const mates = roomMates.get(room)!;
-          pos = roomCenter.clone().add(roomSlot(mates.indexOf(c.name), mates.length, c.name));
+          pos = roomCenter.clone().add(
+            roomSlot(mates.indexOf(c.name), mates.length, c.name).multiplyScalar(ROOM_FIGURE_SCALE)
+          );
+          scale = ROOM_FIGURE_SCALE;
           // Raumwechsel: über die Ausgänge laufen (AV3D-2 exit), nicht durch Wände
           const from = cameFrom.get(c.name);
           if (from && from !== room) {
@@ -326,6 +333,7 @@ async function startApp(username: string) {
         states.push({
           char: c,
           pos,
+          scale,
           via,
           travelTo: targetTile && c.movement_target_id !== locId ? targetTile.center.clone() : null,
         });
