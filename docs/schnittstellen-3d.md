@@ -115,8 +115,9 @@ GET /play/rooms/{room_id}/model       → GLB-Bytes (ETag)
 - Pfadform frei (auch verschachtelt unter der Location möglich) — wichtig
   sind Meta-Endpoint mit 404-Normalfall und ETag auf der Modelldatei.
 - Meta-Felder zur Feinjustierung am Modell (Admin-Regler, Client liest beide):
-  `rotation {x,y,z}` (Grad) und **`offset_y`** (Meter, ± — hebt/senkt das
-  Modell, z.B. Park leicht ins Gelände).
+  `rotation {x,y,z}` (Grad) und **`offset_y`** (**Meter** = Welt-Einheiten,
+  ± — hebt/senkt das Modell, z.B. Park ins Gelände; sinnvoller Bereich
+  ca. ±0,5, sichtbar wird es ab ~0,1).
 - Texturen in Raum-/Gebäude-GLBs gern als **JPEG einbetten** (statt PNG) —
   der Client liest beides; JPEG drittelt die Dateigröße. Humanoide GLBs
   bleiben wie sie sind (wenige, gecacht — kein Umpacken nötig).
