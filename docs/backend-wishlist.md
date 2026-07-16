@@ -90,8 +90,12 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   Make-It-Animatable/UniRig, beide MIT).
   **Präzisierung Zielbild (2026-07-11):**
   - Quelle = EIN kanonisches Ganzkörper-Referenzbild pro Charakter/Outfit
-    (neutrale A-/T-Pose; ggf. eigener Prompt-Slot analog `image_prompt_map`,
-    damit die Bildpipeline es gezielt erzeugen kann).
+    (humanoid: neutrale A-Pose; **Tiere: eigenes Prompt-Template** —
+    symmetrische Standpose auf allen Vieren, Kopf geradeaus in
+    Körperrichtung statt zur Kamera, 3/4-Ansicht; das humanoide
+    A-/T-Pose-Template passt für Quadrupeden nicht. Ggf. eigener
+    Prompt-Slot analog `image_prompt_map`, damit die Bildpipeline es
+    gezielt erzeugen kann).
   - Outfits: pro Outfit(-Variante) ein GLB (`model/<outfit>.glb`), Server
     liefert das zum aktuellen Outfit passende; Client-Cache via ETag.
   - Expressions/Mood: NICHT pro Stimmung neu generieren (Blendshapes liefern
@@ -140,7 +144,31 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   `/play/worldmap` (billig, Daten liegen im selben Store).
 - **Workaround:** Zweit-Poll nur für die herangezoomte Location.
 
-## AV3D-9: 3D-Modelle für Locations — angefordert (2026-07-14) — ⭐
+## AV3D-9: 3D-Modelle für Locations — GELIEFERT (2026-07-15), Client angebunden (2026-07-16)
+
+- **Umsetzung Backend:** `GET /play/locations/{id}/model/meta` →
+  `{format:"glb", rig:"none", url}` | 404; GLB-Bytes unter
+  `GET /play/locations/{id}/model` (mit ETag). Generierung/Status im
+  Admin unter `/world/locations/{id}/model3d/*` (Backend Trellis2-Object-Low).
+- **Client:** `src/scene/buildings.ts` lädt lazy, normalisiert und ersetzt
+  die prozedurale Hülle; 404-Retry alle 60 s (frisch generierte Gebäude
+  erscheinen ohne Reload).
+- **Backend-Wunsch (klein):** Während eine Generierung läuft, lieferte
+  `/model` kurz das Referenz-PNG mit 200 statt 404 — der Client fängt das
+  ab (GLB-Parse schlägt fehl → Retry), sauberer wäre 404 bis zum fertigen GLB.
+- **Backend-Wunsch (Nachtrag 2026-07-16):** Ausrichtung/Größe pro Location
+  einstellbar machen — zwei neue `map3d`-Felder, die der Client bereits
+  liest: `rotation` (Grad um die Hochachse; Fallback: `map_rotation_2d`)
+  und `size` (Kachel-Anteil 0..1, Default 0.92). Pflege idealerweise im
+  Map-Editor des Game-Admin. **UMGESETZT (2026-07-16), verifiziert.**
+- **Qualitäts-Hinweis Referenzbilder:** Aus Top-down-Kartenbildern
+  (`image_prompt_map`) macht Trellis2 flache Reliefs statt Gebäude mit
+  Volumen (beobachtet: Academy, Rohhöhe 0,18 bei Grundfläche ~1×1).
+  Für plastische Gebäude braucht die Generierung eine **Außenansicht als
+  Referenz** (3/4-Perspektive, Gebäude freigestellt) — analog zum eigenen
+  Prompt-Slot der Charaktere.
+
+Ursprüngliche Anforderung:
 
 - **Motivation:** Die Charaktere sind fotorealistisch generiert, die Gebäude
   sind noch prozedurale Kisten aus der Prototyp-Phase — das beißt sich.

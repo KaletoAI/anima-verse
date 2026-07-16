@@ -53,6 +53,16 @@ Job `character_model`: Referenzbild → fertiges GLB.
    eng anliegende Kleidung, Hose oder Rock mit Schlitz, flache Schuhe,
    Haare hinter den Schultern. (Berührungen/Verschmelzungen im Bild werden
    zu verschmolzener Geometrie — Gliedmaßen brauchen sichtbaren Abstand.)
+
+   **Tiere/Quadrupeden — eigene Prompt-Variante, A-/T-Pose gilt hier nicht:**
+   Ganzkörper, freigestellt, 3/4-Ansicht (Seite + leicht von vorn, damit
+   Körperlänge UND Beinabstand sichtbar sind), neutrale Standpose auf allen
+   Vieren, **Kopf geradeaus in Körperrichtung — nicht zur Kamera gedreht**
+   (gedrehter Hals = asymmetrisches Mesh; Auto-Rigger und Dienste wie
+   Anything World setzen Spiegelsymmetrie voraus). Beine gerade und sichtbar
+   getrennt, Schwanz vom Körper abgesetzt, Maul geschlossen. Merkregel:
+   die **Pose** muss spiegelsymmetrisch zur Körperachse sein — die
+   Kameraansicht darf schräg sein, die Haltung nicht.
 2. **ComfyUI HTTP-API:** `POST /prompt` mit dem Workflow-JSON (API-Format),
    `GET /history/<id>` pollen, `<name>_mia.glb` aus `output/` einsammeln.
 3. **Validierung:** GLB-Magic, `skins` vorhanden (52 Joints), Größe < 30 MB.

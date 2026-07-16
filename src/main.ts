@@ -3,7 +3,8 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyNightGlow, applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyNightGlow, applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { BuildingLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { createHud, InfoPanel, showLogin } from './ui';
@@ -95,6 +96,22 @@ async function startApp(username: string) {
     engine.scene.add(tile.group);
   }
   engine.setPickables([...tiles.values()].map((t) => t.group));
+
+  // Gebäude-Modelle vom Server (AV3D-9): lazy laden, prozedurale Hülle
+  // ersetzen; solange 404/Generierung läuft, regelmäßig erneut fragen.
+  const buildings = new BuildingLibrary();
+  buildings.onModelReady = (locId) => {
+    const tile = tiles.get(locId);
+    const model = buildings.get(locId);
+    if (tile && model) applyBuildingModel(tile, model);
+  };
+  const requestBuildingModels = () => {
+    for (const tile of tiles.values()) {
+      if (tile.isBuilding && tile.shell) buildings.request(tile.loc.id);
+    }
+  };
+  requestBuildingModels();
+  setInterval(requestBuildingModels, 60_000);
 
   // Wegfindung: Gebäude blockieren, Straßen/Natur sind begehbar
   npcs.setPathGrid(new PathGrid(
@@ -201,8 +218,9 @@ async function startApp(username: string) {
   async function pollModelChanges() {
     const names = (lastMap?.characters ?? []).map((c) => c.name);
     for (const n of names) {
-      const changed = await figures.refreshIfChanged(n);
-      if (changed) npcs.rebuild(n);
+      // Kein Rebuild hier: die Figur behält ihr altes Modell, bis onModelReady
+      // das neue meldet — sonst flackert sie während des Downloads.
+      await figures.refreshIfChanged(n);
     }
   }
   setInterval(pollModelChanges, 20_000);

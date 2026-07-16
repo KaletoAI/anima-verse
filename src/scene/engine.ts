@@ -104,7 +104,8 @@ export class Engine {
     const sky = day > 0.15
       ? skyDay.clone()
       : skyNight.clone().lerp(skyDusk, THREE.MathUtils.clamp(day / 0.15, 0, 1) * (dusk > 0.05 ? 1 : 0.3));
-    if (day > 0.15 && day < 0.35) sky.lerp(skyDusk, (0.35 - day) / 0.2 * 0.5);
+    // Blendfaktor erreicht 1 bei day=0.15 — stetiger Übergang zum Nacht-Zweig
+    if (day > 0.15 && day < 0.35) sky.lerp(skyDusk, (0.35 - day) / 0.2);
     (this.scene.background as THREE.Color).copy(sky);
     (this.scene.fog as THREE.Fog).color.copy(sky);
 
@@ -186,13 +187,19 @@ export class Engine {
     }, { passive: false });
 
     el.addEventListener('pointerdown', (e) => {
-      if (e.button === 2) {                       // rechte Taste: frei drehen
+      // Frei drehen/neigen: mittlere Taste oder Shift/Strg/Alt+links.
+      // Rechte Taste bleibt, kollidiert aber je nach Browser mit Maus-Gesten.
+      const orbit = e.button === 1 || e.button === 2
+        || (e.button === 0 && (e.shiftKey || e.ctrlKey || e.altKey));
+      if (orbit) {
+        e.preventDefault();
         this.orbiting = true;
+        this.moved = false;
         this.orbitLast = { x: e.clientX, y: e.clientY };
         el.setPointerCapture(e.pointerId);
         return;
       }
-      if (e.button !== 0 && e.button !== 1) return;
+      if (e.button !== 0) return;
       const p = this.groundPoint(e.clientX, e.clientY);
       if (!p) return;
       this.dragging = true;
@@ -200,10 +207,15 @@ export class Engine {
       this.dragStart.copy(p);
       el.setPointerCapture(e.pointerId);
     });
+    // Middle-Click-Autoscroll des Browsers unterbinden
+    el.addEventListener('mousedown', (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
     el.addEventListener('pointermove', (e) => {
       if (this.orbiting) {
         const dx = e.clientX - this.orbitLast.x;
         const dy = e.clientY - this.orbitLast.y;
+        if (dx || dy) this.moved = true;
         this.orbitLast = { x: e.clientX, y: e.clientY };
         this.targetYaw -= dx * 0.005;
         this.pitchOffset = THREE.MathUtils.clamp(this.pitchOffset + dy * 0.25, -35, 35);
@@ -222,7 +234,7 @@ export class Engine {
       }
     });
     el.addEventListener('pointerup', (e) => {
-      const wasDrag = this.dragging && this.moved;
+      const wasDrag = (this.dragging || this.orbiting) && this.moved;
       this.dragging = false;
       this.orbiting = false;
       if (!wasDrag && e.button === 0) this.onPick?.(this.pickLocation(e.clientX, e.clientY));

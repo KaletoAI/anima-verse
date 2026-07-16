@@ -78,24 +78,40 @@ export interface ApiModel {
   textureUrl?: string;
 }
 
-/** Modell-Info eines Charakters; null wenn der Server keins hat (404). */
+/** Modell-Info eines Charakters; null wenn der Server keins hat (404).
+ *  Andere Fehler (Netzwerk, 5xx) werfen — der Aufrufer darf sie nicht als
+ *  "hat keins" cachen, sondern soll später erneut versuchen. */
 export async function getCharacterModel(name: string): Promise<ApiModel | null> {
-  try {
-    const res = await fetch(`/characters/${encodeURIComponent(name)}/model3d`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const m = data?.model;
-    if (!m?.url) return null;
-    return {
-      url: m.url,
-      signature: data.signature ?? m.filename ?? undefined,
-      format: (m.format ?? 'glb') as 'glb' | 'fbx',
-      rig: m.rig ?? data.rig ?? 'mixamo',
-      textureUrl: m.texture_url ?? undefined,
-    };
-  } catch {
-    return null;
-  }
+  const res = await fetch(`/characters/${encodeURIComponent(name)}/model3d`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`model3d ${name}: HTTP ${res.status}`);
+  const data = await res.json();
+  const m = data?.model;
+  if (!m?.url) return null;
+  return {
+    url: m.url,
+    signature: data.signature ?? m.filename ?? undefined,
+    format: (m.format ?? 'glb') as 'glb' | 'fbx',
+    rig: m.rig ?? data.rig ?? 'mixamo',
+    textureUrl: m.texture_url ?? undefined,
+  };
+}
+
+export interface ApiLocationModel {
+  url: string;
+  format: string;
+}
+
+/** Gebäude-Modell einer Location (AV3D-9); null wenn der Server keins hat
+ *  (404 ist der Normalfall — prozedurales Gebäude bleibt). Andere Fehler
+ *  werfen, der Aufrufer versucht es später erneut. */
+export async function getLocationModel(locationId: string): Promise<ApiLocationModel | null> {
+  const res = await fetch(`/play/locations/${encodeURIComponent(locationId)}/model/meta`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`location model ${locationId}: HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data?.url) return null;
+  return { url: data.url, format: data.format ?? 'glb' };
 }
 
 /** Spielzeit der Welt (Stunde 0..24, fraktional); null wenn nicht verfügbar. */

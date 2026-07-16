@@ -52,13 +52,29 @@ GET /assets/animation-clips         → [{ "kind": "walk", "url": "…" }, …]
 
 ## Locations: 3D-Modelle und Räume
 
-### Gebäude-Modelle (AV3D-9)
+### Gebäude-Modelle (AV3D-9) — geliefert & angebunden
 
 Wie bei den Charakteren: ein 3D-Modell pro Location, erzeugt aus einem
 Referenzbild (die Location hat mit `image_prompt_map` bereits eines).
-Schnittstelle analog zu den Charakter-Modellen.
+
+```
+GET /play/locations/{location_id}/model/meta  → { format, rig: "none", url } | 404
+GET /play/locations/{location_id}/model       → GLB-Bytes (ETag)
+```
 
 **Erwartungen:**
+- **Während eine Generierung läuft: 404**, keine Zwischenstände (beobachtet
+  wurde kurz das Referenz-PNG mit 200 — der Client validiert und versucht
+  später erneut, aber 404 wäre der saubere Vertrag).
+- **Ausrichtung & Größe bestimmt der Server pro Location** über `map3d`
+  in der Worldmap (der Client liest die Felder bereits):
+  - `map3d.rotation` — Drehung um die Hochachse in Grad; fehlt sie, gilt
+    `map_rotation_2d` (Modell dreht synchron zum 2D-Icon), sonst 0.
+  - `map3d.size` — Grundflächen-Anteil an der Kachel (0..1, Default 0.92).
+  - Pflege am sinnvollsten im Map-Editor des Game-Admin (Drehen/Skalieren
+    am platzierten Gebäude, analog zur Location-Position).
+  - Ohne diese Felder bleibt die Client-Heuristik: Z-up-Erkennung über
+    Proportionen, keine Drehung, 92 % der Kachel.
 - **Außenansicht**, kein Innenraum. Beim Reinzoomen blendet der Client das
   Gebäude aus und zeigt die Räume (s.u.) — die Innenansicht kommt NICHT aus
   dem Modell. Ein Gebäude ohne Interieur ist genau richtig.
@@ -92,5 +108,7 @@ Workflow-Auswahl kommt dynamisch vom Gateway (keine hartkodierten Listen).
 ## Referenzwissen (kein Vertrag)
 
 - Funktionierende ComfyUI-Kette + Einstellungen: `implementierung-3d-pipeline.md`
-- Referenzbild-Anforderungen (A-Pose, Abstand zwischen Gliedmaßen usw.): ebd.
+- Referenzbild-Anforderungen (humanoid: A-Pose; Tiere: symmetrische
+  Standpose, Kopf in Körperrichtung statt zur Kamera; Abstand zwischen
+  Gliedmaßen usw.): ebd.
 - Recherche/Lizenzen: `research-bild-zu-3d.md`

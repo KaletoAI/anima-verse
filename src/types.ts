@@ -9,6 +9,10 @@ export interface Map3dMeta {
   style?: string;   // house | tower | shop | hall | generic | ...
   floors?: number;
   color?: string;   // Grundfarbe der Fassade, z.B. "#8fa3b0"
+  /** Drehung des Gebäude-Modells um die Hochachse in Grad (Fallback: map_rotation_2d) */
+  rotation?: number;
+  /** Grundflächen-Anteil an der Kachel (0..1, Default 0.92) */
+  size?: number;
 }
 
 export interface WorldLocation {

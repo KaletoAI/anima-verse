@@ -45,116 +45,6 @@ interface LoadedModel {
   noClips: boolean;
 }
 
-/**
- * Fehlgeleitete Skinning-Gewichte reparieren.
- *
- * Auto-Rigger binden Vertices gelegentlich an den falschen Knochen (ein
- * Ärmel-Vertex an die Wirbelsäule, ein Fuß-Vertex an den Kopf). In Bind-Pose
- * fällt das nicht auf; sobald animiert wird, werden diese Vertices quer durch
- * die Figur gezogen — die Figur "zersplittert".
- *
- * Kriterium: Ein Vertex sollte an dem Knochen-SEGMENT hängen, dem er am
- * nächsten liegt. Ist sein dominantes Segment deutlich weiter weg als das
- * nächstgelegene, wird er neu gewichtet (invers-distanzgewichtet über die
- * drei nächsten Segmente).
- */
-function repairSkinWeights(root: THREE.Object3D): number {
-  let repaired = 0;
-  root.traverse((o) => {
-    const mesh = o as THREE.SkinnedMesh;
-    if (!mesh.isSkinnedMesh || !mesh.skeleton) return;
-    const geo = mesh.geometry;
-    const pos = geo.getAttribute('position');
-    const si = geo.getAttribute('skinIndex');
-    const sw = geo.getAttribute('skinWeight');
-    if (!pos || !si || !sw) return;
-
-    const bones = mesh.skeleton.bones;
-    const head = bones.map((_, i) =>
-      new THREE.Vector3().setFromMatrixPosition(
-        new THREE.Matrix4().copy(mesh.skeleton.boneInverses[i]).invert()
-      )
-    );
-    // Segment-Ende = Position des ersten Kind-Knochens (sonst der Knochen selbst)
-    const idxOf = new Map(bones.map((b, i) => [b, i]));
-    const tail = head.map((h, i) => {
-      const child = bones[i].children.find((c) => idxOf.has(c as THREE.Bone));
-      const ci = child ? idxOf.get(child as THREE.Bone)! : -1;
-      return ci >= 0 ? head[ci] : h;
-    });
-
-    const distToSegment = (p: THREE.Vector3, i: number) => {
-      const a = head[i], b = tail[i];
-      const ab = new THREE.Vector3().subVectors(b, a);
-      const len2 = ab.lengthSq();
-      if (len2 < 1e-8) return p.distanceTo(a);
-      const t = THREE.MathUtils.clamp(new THREE.Vector3().subVectors(p, a).dot(ab) / len2, 0, 1);
-      return p.distanceTo(a.clone().addScaledVector(ab, t));
-    };
-
-    const v = new THREE.Vector3();
-    const d: number[] = new Array(bones.length);
-    for (let i = 0; i < pos.count; i++) {
-      v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
-      for (let b = 0; b < bones.length; b++) d[b] = distToSegment(v, b);
-
-      let dom = 0, bw = -1;
-      for (let c = 0; c < 4; c++) {
-        const w = sw.getComponent(i, c);
-        if (w > bw) { bw = w; dom = si.getComponent(i, c); }
-      }
-      let bestIdx = 0;
-      for (let b = 1; b < bones.length; b++) if (d[b] < d[bestIdx]) bestIdx = b;
-
-      // dominantes Segment plausibel? (max. 2,5x weiter als das nächste)
-      if (d[dom] <= d[bestIdx] * 2.5 + 1e-4) continue;
-
-      const order = d.map((dist, b) => ({ b, dist })).sort((x, y) => x.dist - y.dist).slice(0, 3);
-      const inv = order.map((t) => 1 / Math.max(t.dist, 1e-4));
-      const sum = inv.reduce((s, x) => s + x, 0);
-      for (let c = 0; c < 4; c++) {
-        si.setComponent(i, c, order[c]?.b ?? 0);
-        sw.setComponent(i, c, order[c] ? inv[c] / sum : 0);
-      }
-      repaired++;
-    }
-    // Schritt 2: Naht-Duplikate vereinheitlichen. Positionsgleiche Vertices
-    // (UV-/Normalen-Nähte) müssen identische Gewichte haben — sonst reißen sie
-    // beim Animieren auf (die verbleibenden "Fetzen").
-    const groups = new Map<string, number[]>();
-    for (let i = 0; i < pos.count; i++) {
-      const key = `${Math.round(pos.getX(i) * 1e4)},${Math.round(pos.getY(i) * 1e4)},${Math.round(pos.getZ(i) * 1e4)}`;
-      const g = groups.get(key);
-      if (g) g.push(i); else groups.set(key, [i]);
-    }
-    for (const idx of groups.values()) {
-      if (idx.length < 2) continue;
-      const acc = new Map<number, number>();
-      for (const i of idx) {
-        for (let c = 0; c < 4; c++) {
-          const w = sw.getComponent(i, c);
-          if (w > 0) {
-            const j = si.getComponent(i, c);
-            acc.set(j, (acc.get(j) ?? 0) + w);
-          }
-        }
-      }
-      const top = [...acc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
-      const total = top.reduce((s, [, w]) => s + w, 0) || 1;
-      for (const i of idx) {
-        for (let c = 0; c < 4; c++) {
-          si.setComponent(i, c, top[c]?.[0] ?? 0);
-          sw.setComponent(i, c, top[c] ? top[c][1] / total : 0);
-        }
-      }
-    }
-
-    (si as THREE.BufferAttribute).needsUpdate = true;
-    (sw as THREE.BufferAttribute).needsUpdate = true;
-  });
-  return repaired;
-}
-
 /** Alle Knochennamen (Node-Namen unterhalb von Skinnen) eines Modells. */
 function boneNames(root: THREE.Object3D): Set<string> {
   const names = new Set<string>();
@@ -460,6 +350,13 @@ const CLIP_SYNONYMS: Record<string, string[]> = {
   wave: ['wave', 'greet'],
 };
 
+/** Ersatz-Clip, wenn der gewünschte fehlt (bevor auf idle zurückgefallen wird):
+ *  ein Liegender soll wenigstens sitzen, ein Rennender schnell gehen. */
+const CLIP_FALLBACK: Record<string, ClipKind> = {
+  lie: 'sit',
+  run: 'walk',
+};
+
 
 /** Freitext-Activity -> Animations-Kategorie (Client-Workaround für AV3D-6). */
 export function activityToClipKind(activity: string): ClipKind {
@@ -625,7 +522,12 @@ export class FigureLibrary {
   async refreshIfChanged(charName: string): Promise<boolean> {
     const known = this.apiSignature.get(charName);
     if (!known || this.pending.has(charName)) return false;
-    const info = await getCharacterModel(charName);
+    let info: ApiModel | null;
+    try {
+      info = await getCharacterModel(charName);
+    } catch {
+      return false;   // Server gerade nicht erreichbar -> nächster Poll
+    }
     if (!info?.signature || info.signature === known) return false;
     console.info(`[figures] ${charName}: Modell geändert (${known} -> ${info.signature}) — lade neu`);
     this.apiModels.delete(charName);
@@ -676,8 +578,10 @@ export class FigureLibrary {
         console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}, ${model.clips.length} Clips, ${(model.height * 100).toFixed(0)} cm)`);
         this.onModelReady?.(charName);
       } catch (e) {
-        console.warn(`[figures] ${charName}: Modell nicht ladbar`, e);
-        this.apiModels.set(charName, null);
+        // Transienter Fehler (Netzwerk, 5xx, Textur): nicht als "hat keins"
+        // cachen, sondern später erneut versuchen.
+        console.warn(`[figures] ${charName}: Modell nicht ladbar — neuer Versuch in 30 s`, e);
+        window.setTimeout(() => this.fetchCharacterModel(charName), 30_000);
       } finally {
         this.pending.delete(charName);
       }
@@ -705,8 +609,6 @@ export class FigureLibrary {
       template.rotation.x = -Math.PI / 2;
       template.updateMatrixWorld(true);
     }
-    const repaired = repairSkinWeights(template);
-    if (repaired) console.info(`[figures] ${name}: ${repaired} fehlgeleitete Vertex-Gewichte repariert (Anti-Zersplittern)`);
     const bbox = new THREE.Box3().setFromObject(template);
     const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
     const height = this.charHeight.get(name) ?? this.defaultHeight;
@@ -729,8 +631,8 @@ export class FigureLibrary {
     const api = this.apiModels.get(charName);
     if (api) return new Figure(api);
     if (api === undefined) this.fetchCharacterModel(charName);   // nachladen anstoßen
-    if (api === null) return null;                               // Server hat keins
-
+    // api === null (Server hat keins) oder noch nicht geladen:
+    // weiter zu Manifest-Assignment/Pool — sonst Portrait-Fallback.
     if (!this.models.length) return null;
     const assigned = this.assignments[charName] ?? charName;
     let model = this.models.find((m) => m.name === assigned);
@@ -744,6 +646,96 @@ export class FigureLibrary {
   }
 }
 
+/** Eine erkannte Beinkette eines clip-losen Rigs (prozeduraler Gang). */
+interface LegChain {
+  /** oberstes Gelenk der Kette (Hüfte/Schulter) */
+  bone: THREE.Bone;
+  /** Bind-Rotation des Gelenks (lokal) — Ruhelage */
+  bindQuat: THREE.Quaternion;
+  /** Schwungachse im Eltern-Raum des Gelenks */
+  axis: THREE.Vector3;
+  /** Gangphase beim Gehen: 4-Takt-Schritt, jedes Bein 90° versetzt */
+  phaseWalk: number;
+  /** Gangphase beim Rennen: Trab, diagonale Paare gemeinsam */
+  phaseRun: number;
+}
+
+/**
+ * Beinketten an einem beliebigen Skelett heuristisch erkennen (UniRig-Tiere):
+ * Blatt-Knochen, die nahe dem Boden enden, und von dort aufwärts die
+ * unverzweigte Kette bis unter die Wirbelsäule — das oberste Glied ist das
+ * Hüft-/Schultergelenk, das beim Laufen schwingt.
+ * Erwartet, dass die matrixWorld-Werte zum übergebenen Bounding-Box-Raum
+ * passen (kein updateMatrixWorld dazwischen).
+ */
+function findLegChains(inst: THREE.Object3D, box: THREE.Box3): LegChain[] {
+  const bones: THREE.Bone[] = [];
+  inst.traverse((o) => { if ((o as THREE.Bone).isBone) bones.push(o as THREE.Bone); });
+  if (!bones.length) return [];
+
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const height = Math.max(size.y, 1e-3);
+  const boneKids = (b: THREE.Object3D) => b.children.filter((c) => (c as THREE.Bone).isBone);
+
+  const found: { bone: THREE.Bone; foot: THREE.Vector3 }[] = [];
+  for (const leaf of bones) {
+    if (boneKids(leaf).length) continue;                       // nur Ketten-Enden
+    const foot = new THREE.Vector3().setFromMatrixPosition(leaf.matrixWorld);
+    if (foot.y > box.min.y + height * 0.25) continue;          // endet nicht am Boden
+    // aufwärts bis zur ersten Verzweigung (dort beginnt Wirbelsäule/Becken)
+    let top: THREE.Bone = leaf;
+    while ((top.parent as THREE.Bone)?.isBone && boneKids(top.parent!).length === 1) {
+      top = top.parent as THREE.Bone;
+    }
+    if (top === leaf) continue;                                // Einzelknochen ist kein Bein
+    const hip = new THREE.Vector3().setFromMatrixPosition(top.matrixWorld);
+    if (hip.y - foot.y < height * 0.12) continue;              // Kette führt nicht aufwärts (z.B. Schwanz)
+    if (!found.some((f) => f.bone === top)) found.push({ bone: top, foot });
+  }
+  // mehr als 4 Kandidaten: die bodennächsten sind die Beine
+  found.sort((a, b) => a.foot.y - b.foot.y);
+  const legs = found.slice(0, 4);
+
+  // Körper-Längsachse = längere Grundflächen-Seite; Schwungachse quer dazu
+  const long: 'x' | 'z' = size.x > size.z ? 'x' : 'z';
+  const cross: 'x' | 'z' = long === 'x' ? 'z' : 'x';
+  const axisWorld = long === 'x' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
+  const q = new THREE.Quaternion();
+  const chains = legs.map(({ bone, foot }) => {
+    bone.parent!.getWorldQuaternion(q);
+    return {
+      bone, foot,
+      bindQuat: bone.quaternion.clone(),
+      axis: axisWorld.clone().applyQuaternion(q.invert()).normalize(),
+      phaseWalk: 0,
+      phaseRun: 0,
+    };
+  });
+
+  // Gangphasen: Beinpaare über Sortierung zuordnen (vorn/hinten x links/rechts) —
+  // Vorzeichen relativ zum Box-Zentrum sind unzuverlässig (Schwanz verschiebt es).
+  if (chains.length === 4) {
+    const byLong = [...chains].sort((a, b) => a.foot[long] - b.foot[long]);
+    const [aL, aR] = byLong.slice(0, 2).sort((a, b) => a.foot[cross] - b.foot[cross]);
+    const [bL, bR] = byLong.slice(2).sort((a, b) => a.foot[cross] - b.foot[cross]);
+    // Gehen: 4-Takt-Schritt in seitlicher Folge (wie Katze/Hund:
+    // hinten-links -> vorn-links -> hinten-rechts -> vorn-rechts)
+    aL.phaseWalk = 0; bL.phaseWalk = Math.PI / 2;
+    aR.phaseWalk = Math.PI; bR.phaseWalk = Math.PI * 1.5;
+    // Rennen: Trab — diagonale Paare gemeinsam
+    aL.phaseRun = 0; bR.phaseRun = 0;
+    aR.phaseRun = Math.PI; bL.phaseRun = Math.PI;
+  } else {
+    // 1-3 Beine erkannt: links/rechts gegenphasig als bester Rest-Fall
+    for (const c of chains) {
+      const p = c.foot[cross] >= center[cross] ? 0 : Math.PI;
+      c.phaseWalk = p; c.phaseRun = p;
+    }
+  }
+  return chains;
+}
+
 export class Figure {
   root = new THREE.Group();
   height: number;
@@ -754,6 +746,8 @@ export class Figure {
   private targetYaw = Math.PI; // Default: Richtung Süden (Kamera-Grundstellung)
 
   private baseScale = 1;
+  /** Y-Offset, der die Füße auf y=0 bringt (Mesh-Origin liegt nicht immer dort) */
+  private groundY = 0;
 
   constructor(model: LoadedModel) {
     this.height = model.height;
@@ -776,6 +770,7 @@ export class Figure {
       inst.position.z -= center.z;
       inst.position.y -= box.min.y;
     }
+    this.groundY = inst.position.y;
     this.root.add(inst);
 
     this.mixer = new THREE.AnimationMixer(inst);
@@ -789,13 +784,22 @@ export class Figure {
         }
       }
     }
+    // Clip-lose Rigs (UniRig-Tiere): Beinketten für den prozeduralen Gang
+    if (this.actions.size === 0 && !box.isEmpty()) {
+      this.legs = findLegChains(inst, box);
+      if (this.legs.length) console.info(`[figures] prozeduraler Gang: ${this.legs.length} Beinketten erkannt`);
+    }
     this.play('idle');
   }
 
-  /** Clip mit Crossfade wechseln; fehlt der Clip, auf idle zurückfallen. */
+  /** Clip mit Crossfade wechseln; fehlt der Clip: Ersatz-Clip, dann idle. */
   play(kind: ClipKind) {
     if (this.currentKind === kind) return;
-    const resolved = this.actions.get(kind) ?? this.actions.get('idle') ?? [...this.actions.values()][0];
+    const fallback = CLIP_FALLBACK[kind];
+    const resolved = this.actions.get(kind)
+      ?? (fallback ? this.actions.get(fallback) : undefined)
+      ?? this.actions.get('idle')
+      ?? [...this.actions.values()][0];
     if (!resolved || resolved === this.current) {
       this.currentKind = kind;
       // Fallback-Fall: gleicher Clip, aber ggf. Tempo anpassen (siehe unten)
@@ -824,16 +828,34 @@ export class Figure {
   }
 
   private idlePhase = Math.random() * Math.PI * 2;
+  private legs: LegChain[] = [];
+  private walkPhase = Math.random() * Math.PI * 2;
 
   update(dt: number) {
-    // Ohne Clips: leichtes Atmen/Wippen, damit die Figur nicht wie eine
-    // Statue wirkt (Tier-Rigs von UniRig haben keine passenden Clips).
+    // Ohne Clips: prozedurale Animation — beim Laufen schwingen die erkannten
+    // Beinketten (Trab), im Stand leichtes Atmen/Wippen, damit die Figur
+    // nicht wie eine Statue wirkt (Tier-Rigs von UniRig haben keine Clips).
     if (this.isStatic) {
-      this.idlePhase += dt * 1.6;
       const inst = this.root.children[0];
-      if (inst) {
-        inst.position.y = Math.sin(this.idlePhase) * 0.012;
-        inst.scale.setScalar(this.baseScale * (1 + Math.sin(this.idlePhase * 0.5) * 0.006));
+      const walking = this.currentKind === 'walk' || this.currentKind === 'run';
+      if (walking && this.legs.length) {
+        const running = this.currentKind === 'run';
+        this.walkPhase += dt * (running ? 11 : 7);
+        for (const leg of this.legs) {
+          const swing = Math.sin(this.walkPhase + (running ? leg.phaseRun : leg.phaseWalk)) * 0.45;
+          leg.bone.quaternion.setFromAxisAngle(leg.axis, swing).multiply(leg.bindQuat);
+        }
+        if (inst) {
+          inst.position.y = this.groundY + Math.abs(Math.sin(this.walkPhase)) * this.height * 0.02;
+          inst.scale.setScalar(this.baseScale);
+        }
+      } else {
+        for (const leg of this.legs) leg.bone.quaternion.copy(leg.bindQuat);   // Ruhelage
+        this.idlePhase += dt * 1.6;
+        if (inst) {
+          inst.position.y = this.groundY + Math.sin(this.idlePhase) * 0.012;
+          inst.scale.setScalar(this.baseScale * (1 + Math.sin(this.idlePhase * 0.5) * 0.006));
+        }
       }
     }
     // kürzesten Drehweg nehmen

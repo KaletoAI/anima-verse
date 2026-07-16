@@ -60,6 +60,14 @@ Backend-Registry-Philosophie von anima-verse.
 
 Meshy-Rigging setzt Humanoid, <300k Faces, +Z-Ausrichtung voraus.
 
+**Anything World / „Everything Universe" (everythinguniver.se, umfirmiert) —
+geprüft und verworfen (2026-07-15):** Einziger Dienst, der auch Tiere/
+Quadrupeden automatisch riggt UND animiert. Praxis-Test mit Spoty:
+Mesh-Anforderungen nicht erfüllt (verlangt strikte Spiegelsymmetrie und
+feste Ausrichtung; unser UniRig-Mesh war durch das Referenzbild mit
+Kamera-Blick asymmetrisch), und die Preise sind unverhältnismäßig.
+Für Tier-Animation stattdessen: prozeduraler Walk im Client.
+
 ### 4. Animation / Retargeting → three.js
 
 - **vrm-mixamo-retargeter** (MIT, TypeScript): Mixamo-FBX-Clips zur Laufzeit

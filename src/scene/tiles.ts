@@ -46,6 +46,10 @@ export interface Tile {
   height: number;
   interior: THREE.Group | null;
   interiorLabels: CSS2DObject[];
+  /** prozedurale Außenhülle — wird durch ein Server-Modell (AV3D-9) ersetzt */
+  shell?: THREE.Group;
+  /** Namens-Label — Höhe wird beim Modell-Tausch nachgeführt */
+  labelObj?: CSS2DObject;
   shellMats: THREE.MeshStandardMaterial[];
   roofParts: THREE.Object3D[];
   roofMats: THREE.MeshStandardMaterial[];
@@ -352,6 +356,7 @@ export function buildTile(loc: WorldLocation): Tile {
     const label = new CSS2DObject(el);
     label.position.set(0, tile.height + 2.2, 0);
     group.add(label);
+    tile.labelObj = label;
   };
 
   if (!isBuilding) {
@@ -388,7 +393,19 @@ export function buildTile(loc: WorldLocation): Tile {
     group.add(plinth);
 
     const spec = buildingSpec(style, loc);
+    // Hülle in eigene Gruppe kapseln, damit ein Server-Modell (AV3D-9) sie
+    // später ersetzen kann — build() fügt direkt in tile.group ein.
+    const before = new Set(group.children);
     spec.build(tile, rnd);
+    const shell = new THREE.Group();
+    for (const child of [...group.children]) {
+      if (!before.has(child)) {
+        group.remove(child);
+        shell.add(child);
+      }
+    }
+    group.add(shell);
+    tile.shell = shell;
     tile.height = spec.h;
     buildInterior(tile, spec);
     addLabel();
@@ -397,6 +414,53 @@ export function buildTile(loc: WorldLocation): Tile {
   group.add(ring);
   tile.facadeMats = tile.shellMats.filter((m) => !!m.emissiveMap);
   return tile;
+}
+
+/** Server-Gebäudemodell (AV3D-9) einwechseln: ersetzt die prozedurale Hülle.
+ *  Fürs Reinzoomen verhält sich das ganze Modell wie ein Dach — es blendet
+ *  aus und gibt den Blick auf die Räume frei. */
+export function applyBuildingModel(tile: Tile, model: THREE.Group) {
+  if (!tile.shell) return;
+  tile.group.remove(tile.shell);
+  tile.shell = undefined;
+
+  // Ausrichtung & Größe bestimmt der Server pro Location (map3d.rotation in
+  // Grad, map3d.size als Kachel-Anteil); map_rotation_2d dreht als Fallback
+  // synchron zum 2D-Icon. Ohne Angaben: wie generiert, 92 % der Kachel.
+  const yawDeg = tile.loc.map3d?.rotation ?? tile.loc.map_rotation_2d ?? 0;
+  model.rotation.y = -THREE.MathUtils.degToRad(yawDeg);
+  const frac = tile.loc.map3d?.size;
+  const k = frac && frac > 0.05 && frac <= 1.5 ? frac / 0.92 : 1;
+  model.scale.setScalar(k);
+
+  // Fade-Verwaltung auf das Modell umziehen: Materialien pro Tile klonen
+  // (Vorlage wird geteilt) und als "Dach" registrieren.
+  tile.shellMats = [];
+  tile.roofMats = [];
+  tile.roofParts = [model];
+  tile.facadeMats = [];
+  model.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    if (Array.isArray(mesh.material)) {
+      mesh.material = mesh.material.map((m) => {
+        const c = m.clone();
+        c.transparent = true;
+        tile.roofMats.push(c as THREE.MeshStandardMaterial);
+        return c;
+      });
+    } else {
+      const c = mesh.material.clone();
+      c.transparent = true;
+      mesh.material = c;
+      tile.roofMats.push(c as THREE.MeshStandardMaterial);
+    }
+  });
+  tile.group.add(model);
+
+  const h = ((model.userData.height as number) || tile.height) * k;
+  tile.height = h;
+  tile.labelObj?.position.set(0, h + 2.2, 0);
 }
 
 /** Nachtbeleuchtung: Fenster der Fassaden leuchten (0 = Tag, 1 = Nacht). */
