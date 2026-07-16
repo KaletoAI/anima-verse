@@ -675,7 +675,15 @@ export function LocationGallery({
         dialogType === 'day' || dialogType === 'night'
           ? 'location'
           : dialogType === 'building'
-            ? (roomFilter ? 'room_model' : 'building')
+            ? (() => {
+                // Indoor/outdoor picks the style: an outdoor location's
+                // "building" is a scene diorama, an outdoor room (park
+                // section) an open-air area. Room flag overrides location.
+                const outdoor = ((roomFilter ? room?.indoor : '') || location.indoor) === 'outdoor'
+                return roomFilter
+                  ? (outdoor ? 'room_model_outdoor' : 'room_model')
+                  : (outdoor ? 'building_outdoor' : 'building')
+              })()
             : 'map'
       }
       settingsSuffix={

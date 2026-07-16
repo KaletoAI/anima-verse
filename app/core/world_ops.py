@@ -732,7 +732,8 @@ def build_imagegen_options() -> Dict[str, Any]:
         # sets settings_applied and the server prepends nothing.
         from app.core.config import resolve_use_case_style as _rucs
         _styles = {}
-        for _uc in ("location", "map", "building", "room_model"):
+        for _uc in ("location", "map", "building", "building_outdoor",
+                    "room_model", "room_model_outdoor"):
             try:
                 _styles[_uc] = _rucs(
                     _uc, opt["image_family"],
@@ -1764,11 +1765,21 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # otherwise location background.
         from app.core import config as _cfg
         # A building-type render FOR A ROOM is the room-model source — its own
-        # use case (open cutaway, "room or area"), the building exterior style
-        # would demand a "single building" even for a park room.
+        # use case (open cutaway), the building exterior style would demand a
+        # "single building" even for a park room. Both split further on the
+        # indoor/outdoor flag (room overrides location): an outdoor location's
+        # "building" is a scene diorama, an outdoor room an open-air area.
+        if prompt_type == "building":
+            from app.models.world import resolve_indoor_flag
+            _room = get_room_by_id(location, room_id) if room_id else None
+            _outdoor = resolve_indoor_flag(location, _room) == "outdoor"
+            _model_uc = (("room_model_outdoor" if _outdoor else "room_model") if room_id
+                         else ("building_outdoor" if _outdoor else "building"))
+        else:
+            _model_uc = ""
         _uc_name = ("mapfit" if _map_blend
                     else "map" if prompt_type in ("map_2d", "map_3x3")
-                    else ("room_model" if room_id else "building") if prompt_type == "building"
+                    else _model_uc if _model_uc
                     else "location")
         _ucp = _cfg.resolve_use_case_style(
             _uc_name, getattr(backend, "image_family", "") or "",
