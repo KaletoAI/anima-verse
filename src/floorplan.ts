@@ -68,7 +68,7 @@ function rebuild(loc: WorldLocation) {
   document.querySelectorAll('.room-label, .loc-label').forEach((el) => el.remove());
 
   const shown: WorldLocation = { ...loc, grid_x: 0, grid_y: 0, rooms: loc.rooms ?? [] };
-  tile = buildTile(shown);
+  tile = buildTile(shown, { markers: true });   // Editor-Kontext: Exit-Punkte zeigen
   tile.fade = 1;
   tile.fadeTarget = 1;   // Innenansicht dauerhaft aufgedeckt
   engine.scene.add(tile.group);

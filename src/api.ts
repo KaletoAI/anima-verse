@@ -119,6 +119,8 @@ export interface ApiRoomModel {
   format: string;
   /** Orientierungs-Korrektur in Grad (im Admin am Modell eingestellt) */
   rotation?: { x?: number; y?: number; z?: number };
+  /** Höhen-Feinjustierung in Metern (± — z.B. Park leicht ins Gelände) */
+  offset_y?: number;
 }
 
 /** 3D-Modell eines Raums (AV3D-2); null wenn keins da ist (404 = Normalfall). */
@@ -128,7 +130,7 @@ export async function getRoomModel(roomId: string): Promise<ApiRoomModel | null>
   if (!res.ok) throw new Error(`room model ${roomId}: HTTP ${res.status}`);
   const data = await res.json();
   if (!data?.url) return null;
-  return { url: data.url, format: data.format ?? 'glb', rotation: data.rotation };
+  return { url: data.url, format: data.format ?? 'glb', rotation: data.rotation, offset_y: data.offset_y };
 }
 
 /** Spielzeit der Welt (Stunde 0..24, fraktional); null wenn nicht verfügbar. */

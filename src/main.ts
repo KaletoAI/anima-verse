@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyNightGlow, applyRoomModel, applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -316,9 +316,15 @@ async function startApp(username: string) {
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
         if (tile.fade > 0.5 && roomCenter && room) {
           const mates = roomMates.get(room)!;
-          pos = roomCenter.clone().add(
-            roomSlot(mates.indexOf(c.name), mates.length, c.name).multiplyScalar(ROOM_FIGURE_SCALE)
-          );
+          const spots = tile.roomSpots.get(room);
+          if (spots?.length) {
+            // abgetastete freie Stellfläche im Raum-Modell (nicht in Möbeln)
+            pos = spots[mates.indexOf(c.name) % spots.length].clone();
+          } else {
+            pos = roomCenter.clone().add(
+              roomSlot(mates.indexOf(c.name), mates.length, c.name).multiplyScalar(ROOM_FIGURE_SCALE)
+            );
+          }
           scale = ROOM_FIGURE_SCALE;
           // Raumwechsel: über die Ausgänge laufen (AV3D-2 exit), nicht durch Wände
           const from = cameFrom.get(c.name);
@@ -350,12 +356,48 @@ async function startApp(username: string) {
   // --- Frame-Hook: LOD (Raumauflösung), NPC-Animation, Pin-Bobbing ----------
   let bob = 0;
   engine.addFrameHook((dt) => {
+    let open: Tile | null = null;
     for (const tile of tiles.values()) {
       if (tile.isBuilding && tile.interior) {
         const d = Math.hypot(engine.target.x - tile.center.x, engine.target.z - tile.center.z);
         tile.fadeTarget = engine.dist < INTERIOR_CAM_DIST && d < CELL * 0.75 ? 1 : 0;
         applyTileFade(tile, dt);
+        if (tile.fadeTarget === 1 && tile.fade > 0.4) open = tile;
       }
+    }
+
+    // Verdecker Richtung Kamera: bei offener Innenansicht Nachbar-Kacheln
+    // ausblenden, die zwischen Kamera und der Kachel liegen (XZ-Korridor)
+    const cam = engine.camera.position;
+    for (const tile of tiles.values()) {
+      let hide = false;
+      if (open && tile !== open && tile.height > 1.5) {
+        const tx = open.center.x - cam.x, tz = open.center.z - cam.z;
+        const nx = tile.center.x - cam.x, nz = tile.center.z - cam.z;
+        const len2 = tx * tx + tz * tz;
+        const t = len2 > 1e-6 ? (nx * tx + nz * tz) / len2 : 0;
+        if (t > 0.05 && t < 0.92) {
+          const px = cam.x + tx * t, pz = cam.z + tz * t;
+          hide = Math.hypot(tile.center.x - px, tile.center.z - pz) < CELL * 1.05;
+        }
+      }
+      applyTileOcclusion(tile, hide, dt);
+    }
+
+    // Raum-Fokus: füllt ein Raum ~80 % des Bildes (Kameradistanz < 1,5x
+    // Raumgröße bei 45°-FOV), Nachbar-Räume der Kachel ausblenden
+    for (const tile of tiles.values()) {
+      if (!tile.roomGroups.size) continue;
+      let focus: string | null = null;
+      if (tile === open) {
+        for (const [id, r] of tile.roomRects) {
+          if (Math.abs(engine.target.x - r.x) < r.w / 2 && Math.abs(engine.target.z - r.z) < r.d / 2) {
+            if (engine.dist < Math.max(r.w, r.d) * 1.5) focus = id;
+            break;
+          }
+        }
+      }
+      applyRoomFocus(tile, focus);
     }
     npcs.tick(dt, engine.dist);
     bob += dt * 2.2;

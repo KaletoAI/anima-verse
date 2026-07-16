@@ -114,6 +114,9 @@ GET /play/rooms/{room_id}/model       → GLB-Bytes (ETag)
 
 - Pfadform frei (auch verschachtelt unter der Location möglich) — wichtig
   sind Meta-Endpoint mit 404-Normalfall und ETag auf der Modelldatei.
+- Meta-Felder zur Feinjustierung am Modell (Admin-Regler, Client liest beide):
+  `rotation {x,y,z}` (Grad) und **`offset_y`** (Meter, ± — hebt/senkt das
+  Modell, z.B. Park leicht ins Gelände).
 - **404 bleibt normal:** ohne Modell rendert der Client den Raum weiter
   als einfache Bodenplatte (heutige Slabs).
 - Während einer Generierung: 404, keine Zwischenstände (wie AV3D-9).

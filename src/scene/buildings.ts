@@ -9,6 +9,8 @@ const RETRY_MS = 60_000;
 interface ModelMeta {
   url: string;
   rotation?: { x?: number; y?: number; z?: number };
+  /** Höhen-Feinjustierung in Metern (Raum-Modelle) */
+  offset_y?: number;
 }
 
 /**
@@ -173,6 +175,7 @@ export function roomModelLibrary(): ModelLibrary {
     root.add(scene);
     root.userData.footprint = { x: size.x * s, z: size.z * s };
     root.userData.height = size.y * s;
+    root.userData.offsetY = meta.offset_y ?? 0;
     return root;
   });
 }

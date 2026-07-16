@@ -58,8 +58,16 @@ export interface Tile {
   roomCenters: Map<string, THREE.Vector3>;
   /** Ausgangspunkt pro Raum (Welt-Koordinaten; Schlüssel: ID und Name) */
   roomExits: Map<string, THREE.Vector3>;
-  /** Andockpunkte für Raum-Modelle (AV3D-2): Raum-ID -> Halter + Maße */
-  roomSlots: Map<string, { holder: THREE.Group; w: number; d: number }>;
+  /** Andockpunkte für Raum-Modelle (AV3D-2): Raum-ID -> Halter + Maße + Platte */
+  roomSlots: Map<string, { holder: THREE.Group; w: number; d: number; plate: THREE.Mesh }>;
+  /** freie Stellflächen im Raum-Modell (Welt-Koordinaten auf Bodenhöhe) */
+  roomSpots: Map<string, THREE.Vector3[]>;
+  /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
+  roomGroups: Map<string, THREE.Group>;
+  /** Raum-Rechtecke in Welt-Koordinaten (Fokus-Erkennung) */
+  roomRects: Map<string, { x: number; z: number; w: number; d: number }>;
+  /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
+  occl: number;
   highlightRing: THREE.Mesh;
   fade: number;
   fadeTarget: number;
@@ -258,7 +266,7 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
 }
 
 /** Innenansicht: Raum-Slabs im Auto-Grid, Labels, Eingangs-Marker. */
-function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean } = {}) {
+function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; markers?: boolean } = {}) {
   const loc = tile.loc;
   if (!loc.rooms.length) return;
   const g = new THREE.Group();
@@ -285,25 +293,26 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean }
   }
 
   const open = opts.walls === false; // Naturfläche: flacher + durchscheinend
-  const addRoomCommon = (room: Room, x: number, z: number, floorY: number, hue: number, rw: number, rd: number) => {
+  const addRoomCommon = (room: Room, x: number, z: number, floorY: number, hue: number, rw: number, rd: number, parent: THREE.Group = g): THREE.Mesh => {
     const plate = box(rw, open ? 0.08 : 0.18, rd, std({
       color: new THREE.Color(`hsl(${hue}, 42%, 72%)`),
       opacity: open ? 0.55 : 1,
     }));
     plate.position.set(x, floorY + (open ? 0.18 : 0.35), z);
-    g.add(plate);
+    parent.add(plate);
 
     const el = document.createElement('div');
     el.className = 'room-label';
     el.textContent = room.name;
     const label = new CSS2DObject(el);
     label.position.set(x, floorY + 1.5, z);
-    g.add(label);
+    parent.add(label);
     tile.interiorLabels.push(label);
 
     const worldPos = tile.center.clone().add(new THREE.Vector3(x, floorY + 0.45, z));
     tile.roomCenters.set(room.id, worldPos);
     tile.roomCenters.set(room.name, worldPos);
+    return plate;
   };
 
   // Räume ohne Layout: Auto-Grid im Erdgeschoss (bisheriges Verhalten)
@@ -319,7 +328,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean }
     const z = -D / 2 + 0.3 + Math.floor(i / cols) * (rd + gap) + rd / 2;
     addRoomCommon(room, x, z, 0, (i * 67) % 360, rw, rd);
 
-    if (loc.entry_room && room.id === loc.entry_room) {
+    if (opts.markers && loc.entry_room && room.id === loc.entry_room) {
       const mark = new THREE.Mesh(new THREE.CircleGeometry(0.45, 20), std({ color: 0xe0b64a }));
       mark.rotation.x = -Math.PI / 2;
       mark.position.set(x, 0.46, z + rd / 2 - 0.5);
@@ -336,13 +345,19 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean }
     const x = -W / 2 + (lay.x + lay.w / 2) * W;
     const z = -D / 2 + (lay.y + lay.d / 2) * D;
     const floorY = (lay.level ?? 0) * STOREY;
-    addRoomCommon(room, x, z, floorY, (i * 67) % 360, roomW, roomD);
+    // eigene Gruppe pro Raum — für den Fokus-Modus komplett ausblendbar
+    const rg = new THREE.Group();
+    g.add(rg);
+    tile.roomGroups.set(room.id, rg);
+    tile.roomRects.set(room.id, { x: tile.center.x + x, z: tile.center.z + z, w: roomW, d: roomD });
+    const plate = addRoomCommon(room, x, z, floorY, (i * 67) % 360, roomW, roomD, rg);
 
-    // Andockpunkt für das Raum-Modell (liegt auf der Bodenplatte)
+    // Andockpunkt für das Raum-Modell: auf Bodenniveau der Etage — die
+    // Platzhalter-Platte wird beim Modell-Einwechseln ohnehin ausgeblendet
     const holder = new THREE.Group();
-    holder.position.set(x, floorY + 0.44, z);
-    g.add(holder);
-    tile.roomSlots.set(room.id, { holder, w: roomW, d: roomD });
+    holder.position.set(x, floorY + 0.12, z);
+    rg.add(holder);
+    tile.roomSlots.set(room.id, { holder, w: roomW, d: roomD, plate });
 
     // Ausgangspunkt: vom Server (exit) oder Mitte der dem Zentrum
     // zugewandten Raumkante als Fallback
@@ -355,17 +370,25 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean }
     const exitWorld = tile.center.clone().add(new THREE.Vector3(ex, floorY + 0.45, ez));
     tile.roomExits.set(room.id, exitWorld);
     tile.roomExits.set(room.name, exitWorld);
-    const mark = new THREE.Mesh(new THREE.CircleGeometry(0.3, 18), std({ color: 0xe0b64a }));
-    mark.rotation.x = -Math.PI / 2;
-    mark.position.set(ex, floorY + 0.46, ez);
-    g.add(mark);
+    if (opts.markers) {
+      const mark = new THREE.Mesh(new THREE.CircleGeometry(0.3, 18), std({ color: 0xe0b64a }));
+      mark.rotation.x = -Math.PI / 2;
+      mark.position.set(ex, floorY + 0.46, ez);
+      rg.add(mark);
+    }
   });
 
   tile.interior = g;
   tile.group.add(g);
 }
 
-export function buildTile(loc: WorldLocation): Tile {
+export interface BuildTileOpts {
+  /** Eingangs-/Exit-Marker (gelbe Punkte) zeigen — nur für die
+   *  Grundriss-Vorschau; im Spiel-Client bleiben sie aus. */
+  markers?: boolean;
+}
+
+export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
   grassTex = grassTex ?? grassTexture();
   asphaltTex = asphaltTex ?? asphaltTexture();
   waterTex = waterTex ?? waterTexture();
@@ -386,8 +409,9 @@ export function buildTile(loc: WorldLocation): Tile {
   const tile: Tile = {
     loc, group, center, isBuilding, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
-    roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(),
-    highlightRing: ring, fade: 0, fadeTarget: 0,
+    roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
+    roomGroups: new Map(), roomRects: new Map(),
+    highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 
   const rnd = seededRandom(loc.id);
@@ -428,7 +452,7 @@ export function buildTile(loc: WorldLocation): Tile {
     }
     tile.height = style === 'forest' ? 3 : 0.6;
     const spec: BuildingSpec = { w: 8, d: 8, h: 0, build() { /* Naturfläche */ } };
-    buildInterior(tile, spec, { walls: false });
+    buildInterior(tile, spec, { walls: false, markers: opts.markers });
     addLabel();
   } else {
     // Sockel-Platte unter Gebäuden (Pflaster)
@@ -453,7 +477,7 @@ export function buildTile(loc: WorldLocation): Tile {
     group.add(shell);
     tile.shell = shell;
     tile.height = spec.h;
-    buildInterior(tile, spec);
+    buildInterior(tile, spec, { markers: opts.markers });
     addLabel();
   }
 
@@ -515,13 +539,88 @@ export function applyBuildingModel(tile: Tile, model: THREE.Group) {
 }
 
 /** Server-Raummodell (AV3D-2) auf seine Bodenplatte setzen. Das Modell ist
- *  auf Einheits-Grundfläche normalisiert und wird in den Raum eingepasst. */
+ *  auf Einheits-Grundfläche normalisiert und wird in den Raum eingepasst.
+ *  Danach wird die begehbare Fläche abgetastet: Fußhöhe + freie Stellen. */
 export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   const slot = tile.roomSlots.get(roomId);
   if (!slot || slot.holder.children.length) return;
   const fp = (model.userData.footprint as { x: number; z: number }) ?? { x: 1, z: 1 };
   model.scale.setScalar(Math.min(slot.w / fp.x, slot.d / fp.z) * 0.96);
+  model.position.y = (model.userData.offsetY as number) || 0;   // Server-Feinjustierung (Meter)
   slot.holder.add(model);
+  slot.plate.visible = false;   // Platte nur als Platzhalter ohne Modell
+
+  // Begehbarkeit abtasten: Raster von oben, 20. Perzentil = Bodenhöhe,
+  // deutlich höhere Treffer sind Möbel/Wände (dort keine Figuren).
+  tile.group.updateMatrixWorld(true);
+  const ray = new THREE.Raycaster();
+  const down = new THREE.Vector3(0, -1, 0);
+  const base = slot.holder.getWorldPosition(new THREE.Vector3());
+  const samples: THREE.Vector3[] = [];
+  const N = 6;
+  for (let ix = 0; ix < N; ix++) {
+    for (let iz = 0; iz < N; iz++) {
+      const ox = (ix / (N - 1) - 0.5) * slot.w * 0.78;
+      const oz = (iz / (N - 1) - 0.5) * slot.d * 0.78;
+      ray.set(new THREE.Vector3(base.x + ox, base.y + 20, base.z + oz), down);
+      const hit = ray.intersectObject(model, true)[0];
+      if (hit) samples.push(hit.point.clone());
+    }
+  }
+  if (samples.length >= 5) {
+    const heights = samples.map((p) => p.y).sort((a, b) => a - b);
+    const floor = heights[Math.floor(heights.length * 0.2)];
+    const spots = samples
+      .filter((p) => p.y < floor + 0.12)                         // eben genug = begehbar
+      .sort((a, b) => a.distanceToSquared(base) - b.distanceToSquared(base))
+      .map((p) => p.clone().setY(p.y + 0.01));
+    if (spots.length) {
+      // unter denselben Schlüsseln ablegen wie roomCenters (ID und Name)
+      const center = tile.roomCenters.get(roomId);
+      for (const [key, v] of tile.roomCenters) {
+        if (v === center) tile.roomSpots.set(key, spots);
+      }
+      // Mitte/Ausgang auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
+      center?.setY(floor + 0.01);
+      tile.roomExits.get(roomId)?.setY(floor + 0.01);
+    }
+  }
+}
+
+/** Kachel als Kamera-Verdecker aus-/einblenden (weich). Nachbarn zwischen
+ *  Kamera und einer geöffneten Innenansicht verdecken sonst den Blick. */
+export function applyTileOcclusion(tile: Tile, hide: boolean, dt: number) {
+  if (tile.occl === 0 && !hide) return;            // Normalzustand — nichts zu tun
+  tile.occl = THREE.MathUtils.lerp(tile.occl, hide ? 1 : 0, 1 - Math.exp(-8 * dt));
+  if (tile.occl < 0.02 && !hide) tile.occl = 0;
+  tile.group.visible = tile.occl < 0.95;           // blendet auch die Labels aus
+
+  tile.group.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      const mat = m as THREE.MeshStandardMaterial;
+      if (mat.userData.baseOpacity === undefined) {
+        mat.userData.baseOpacity = mat.opacity;
+        mat.userData.baseTransparent = mat.transparent;
+      }
+      if (tile.occl === 0) {
+        mat.opacity = mat.userData.baseOpacity;
+        mat.transparent = mat.userData.baseTransparent;
+      } else {
+        mat.transparent = true;
+        mat.opacity = mat.userData.baseOpacity * (1 - tile.occl);
+      }
+    }
+  });
+}
+
+/** Fokus-Modus: füllt EIN Raum das Bild, werden die Nachbar-Räume der
+ *  Kachel ausgeblendet (null = alle zeigen). */
+export function applyRoomFocus(tile: Tile, focusRoomId: string | null) {
+  for (const [id, rg] of tile.roomGroups) {
+    rg.visible = !focusRoomId || id === focusRoomId;
+  }
 }
 
 /** Nachtbeleuchtung: Fenster der Fassaden leuchten (0 = Tag, 1 = Nacht). */
