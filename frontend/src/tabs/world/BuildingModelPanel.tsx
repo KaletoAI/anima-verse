@@ -1,11 +1,13 @@
 /**
- * BuildingModelPanel — the location's 3D building model (AV3D-9), embedded in
- * the location editor's "3D world" tab (no modal). Owns status/poll, generate
- * (backend picker), upload, delete and the persisted orientation fix — moved
- * here from LocationGallery — and adds the map placement: the viewer shows
- * the world tile (2D map icon as ground texture) with the model on it, and
- * yaw + size are edited live and stored in map3d.rotation / map3d.size
- * (the fields the 3D client reads from the worldmap, schnittstellen-3d.md).
+ * BuildingModelPanel — the 3D models of a location (building, AV3D-9) or of a
+ * room (roomId set, AV3D-2), embedded in the respective editor tab (no modal).
+ * Owns status/poll, generate (backend picker), upload and the persisted
+ * per-model orientation fix. Like the image gallery, SEVERAL models can be
+ * stored — the list below the viewer previews any of them, "Select" makes one
+ * the ACTIVE model the 3D clients get; generation/upload auto-select their
+ * new model. For buildings the viewer shows the world tile (2D map icon as
+ * ground texture) with map3d.rotation / map3d.size placement (the fields the
+ * 3D client reads from the worldmap, schnittstellen-3d.md).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -15,17 +17,23 @@ import { MeshBackendDialog, type MeshBackend } from '../../components/MeshBacken
 import { Model3DViewer } from '../characters/Model3DViewer'
 import type { Map3D } from './worldTypes'
 
+export interface ModelEntry {
+  filename: string
+  format?: string
+  created_at?: string
+  backend?: string
+  source?: string
+  source_image?: string
+  /** Persisted 90°-step orientation fix — the 3D client applies it too. */
+  rotation?: { x?: number; y?: number; z?: number }
+  /** The model the clients get (/play/... routes serve only this one). */
+  active?: boolean
+}
+
 export interface BuildingModelStatus {
   exists?: boolean
   pending?: boolean
-  meta?: {
-    source_image?: string
-    backend?: string
-    created_at?: string
-    format?: string
-    /** Persisted 90°-step orientation fix — the 3D client applies it too. */
-    rotation?: { x?: number; y?: number; z?: number }
-  }
+  models?: ModelEntry[]
   backends?: MeshBackend[]
   default?: string
 }
@@ -35,9 +43,9 @@ const DEFAULT_TILE_SIZE = 0.92
 
 interface BuildingModelPanelProps {
   locationId: string
-  /** When set, the panel manages the ROOM model (AV3D-2) instead of the
-   *  building: room routes + /play/rooms model URL, no map placement (a
-   *  room's position comes from its floor-plan layout). */
+  /** When set, the panel manages the ROOM models (AV3D-2) instead of the
+   *  building: room routes, no map placement (a room's position comes from
+   *  its floor-plan layout). */
   roomId?: string
   /** Ground texture for the tile — the location's current 2D map icon, if any. */
   mapIconUrl?: string
@@ -65,15 +73,16 @@ export function BuildingModelPanel({
   const { t } = useI18n()
   const { toast } = useToast()
   const encLoc = encodeURIComponent(locationId)
-  // Admin API base + client model URL switch between building and room.
+  // Admin API base switches between building and room routes.
   const enc = roomId
     ? `${encLoc}/rooms/${encodeURIComponent(roomId)}`
     : encLoc
-  const modelUrl = roomId
-    ? `/play/rooms/${encodeURIComponent(roomId)}/model`
-    : `/play/locations/${encLoc}/model`
   const label = roomId ? t('3D room model') : t('3D building model')
   const [model3d, setModel3d] = useState<BuildingModelStatus | null>(null)
+  // Which stored model the viewer shows ('' = follow the active one).
+  const [preview, setPreview] = useState('')
+  // Two-step delete per list entry (no window.confirm).
+  const [armedDel, setArmedDel] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
@@ -112,7 +121,8 @@ export function BuildingModelPanel({
   }, [load])
 
   useEffect(() => {
-    setConfirmDel(false)
+    setArmedDel(null)
+    setPreview('')
     load().then((d) => {
       if (d?.pending) startPoll()
     })
@@ -128,47 +138,69 @@ export function BuildingModelPanel({
       onGenerateSourceConsumed()
       if (!src) return
       void apiPost(`/world/locations/${enc}/model3d/generate`, { source_image: src, backend })
-        .then(() => { toast(t('Generating the 3D model…')); startPoll() })
+        .then(() => { toast(t('Generating the 3D model…')); setPreview(''); startPoll() })
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
     },
     [generateSource, onGenerateSourceConsumed, enc, startPoll, t, toast],
   )
 
-  // Persisted 90°-step orientation fix: generated meshes come out arbitrarily
-  // oriented — each click rotates one axis by +90°, the viewer applies it live
-  // and the 3D client reads it from /model/meta.
+  const models = model3d?.models || []
+  const current = models.find((m) => m.filename === preview)
+    || models.find((m) => m.active)
+    || models[0]
+
+  // Persisted 90°-step orientation fix of the PREVIEWED model: generated
+  // meshes come out arbitrarily oriented — each click rotates one axis by
+  // +90°, the viewer applies it live and the 3D client reads it from
+  // /model/meta (of the active model).
   const rotate = useCallback(
     async (axis: 'x' | 'y' | 'z') => {
-      const cur = model3d?.meta?.rotation || {}
+      if (!current) return
+      const cur = current.rotation || {}
       const next = {
         x: cur.x || 0, y: cur.y || 0, z: cur.z || 0,
         [axis]: ((cur[axis] || 0) + 90) % 360,
+        file: current.filename,
       }
       try {
-        const d = await apiPost<{ meta: BuildingModelStatus['meta'] }>(
+        const d = await apiPost<{ meta: { rotation?: ModelEntry['rotation'] } }>(
           `/world/locations/${enc}/model3d/rotation`, next)
-        setModel3d((prev) => (prev ? { ...prev, meta: d.meta } : prev))
+        setModel3d((prev) => (prev ? {
+          ...prev,
+          models: (prev.models || []).map((m) =>
+            m.filename === current.filename ? { ...m, rotation: d.meta?.rotation } : m),
+        } : prev))
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [model3d, enc, t, toast],
+    [current, enc, t, toast],
   )
 
-  // Two-step delete (no window.confirm — in-app confirmation via button pair).
-  const [confirmDel, setConfirmDel] = useState(false)
-  const deleteModel = useCallback(async () => {
-    setConfirmDel(false)
+  // Make a stored model the active one (what the 3D clients get).
+  const select = useCallback(async (filename: string) => {
     try {
-      await apiDelete(`/world/locations/${enc}/model3d`)
+      await apiPost(`/world/locations/${enc}/model3d/select`, { file: filename })
       await load()
-      toast(t('Deleted'))
+      toast(t('Active model set'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [enc, load, t, toast])
 
-  // Upload a GLB as the building model (validated; surface 422 reasons).
+  const deleteModel = useCallback(async (filename: string) => {
+    setArmedDel(null)
+    try {
+      await apiDelete(`/world/locations/${enc}/model3d?file=${encodeURIComponent(filename)}`)
+      if (preview === filename) setPreview('')
+      await load()
+      toast(t('Deleted'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [enc, preview, load, t, toast])
+
+  // Upload a GLB as a NEW model (validated; surface 422 reasons).
   const uploadRef = useRef<HTMLInputElement>(null)
   const upload = useCallback(async (file: File) => {
     if (!file) return
@@ -183,6 +215,7 @@ export function BuildingModelPanel({
         const errs: string[] = Array.isArray(body?.detail?.errors) ? body.detail.errors : []
         throw new Error(errs.length ? errs.join(' · ') : (body?.detail?.toString?.() || `HTTP ${res.status}`))
       }
+      setPreview('')
       await load()
       toast(t('Saved'))
     } catch (e) {
@@ -230,7 +263,7 @@ export function BuildingModelPanel({
     />
   )
 
-  if (!model3d?.exists) {
+  if (!current) {
     return (
       <div className="ga-form" style={{ gap: 6 }}>
         {picker}
@@ -255,14 +288,14 @@ export function BuildingModelPanel({
     <div className="ga-form" style={{ gap: 6 }}>
       {picker}
       <div className="ga-form-section-label">{label}</div>
-      {model3d.pending ? (
+      {model3d?.pending ? (
         <span className="ga-hint">{t('Generating a new model — the current one stays until it is done.')}</span>
       ) : null}
       <Model3DViewer
-        url={`${modelUrl}?v=${encodeURIComponent(model3d.meta?.created_at || '')}`}
-        format={model3d.meta?.format || 'glb'}
+        url={`/world/locations/${enc}/model3d/files/${encodeURIComponent(current.filename)}?v=${encodeURIComponent(current.created_at || '')}`}
+        format={current.format || 'glb'}
         height={380}
-        rotation={model3d.meta?.rotation}
+        rotation={current.rotation}
         groundTextureUrl={roomId ? undefined : mapIconUrl}
         placement={roomId ? undefined : { yawDeg: effectiveYaw, size: effectiveSize }}
       />
@@ -275,11 +308,11 @@ export function BuildingModelPanel({
             className="ga-btn ga-btn-sm"
             onClick={() => { void rotate(axis) }}
           >
-            ↻ {axis.toUpperCase()} +90° ({model3d.meta?.rotation?.[axis] || 0}°)
+            ↻ {axis.toUpperCase()} +90° ({current.rotation?.[axis] || 0}°)
           </button>
         ))}
         <span className="ga-hint">
-          {t('Orientation fix — persisted; the 3D map client applies it too.')}
+          {t('Orientation fix of the shown model — persisted; the 3D map client applies it too.')}
         </span>
       </div>
 
@@ -371,32 +404,82 @@ export function BuildingModelPanel({
       </div>
       ) : null}
 
+      {/* Stored models — like the image gallery: click previews, "Select"
+          makes it the model the 3D clients get. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {models.map((m) => {
+          const shown = m.filename === current.filename
+          return (
+            <div
+              key={m.filename}
+              onClick={() => setPreview(m.filename)}
+              style={{
+                display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+                padding: '3px 6px', borderRadius: 6, cursor: 'pointer',
+                border: `1px solid ${shown ? 'var(--accent, #58a6ff)' : 'var(--border, #30363d)'}`,
+                background: shown ? 'rgba(88,166,255,0.08)' : 'transparent',
+              }}
+            >
+              <span title={m.active ? t('Active model — the 3D clients get this one.') : undefined}
+                style={{ width: '1.2em', textAlign: 'center' }}>
+                {m.active ? '⭐' : ''}
+              </span>
+              <span style={{ fontSize: '0.82em' }}>
+                {(m.created_at || '').replace('T', ' ').slice(0, 16) || m.filename}
+              </span>
+              <span className="ga-hint">
+                {m.source === 'upload' ? t('upload') : m.backend || ''}
+                {m.source_image ? ` · ${t('from')} ${m.source_image}` : ''}
+              </span>
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+                {!m.active ? (
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm"
+                    onClick={(e) => { e.stopPropagation(); void select(m.filename) }}
+                    title={t('Make this the active model (delivered to the 3D clients).')}
+                  >
+                    {t('Select')}
+                  </button>
+                ) : null}
+                {armedDel === m.filename ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm ga-btn-danger"
+                      onClick={(e) => { e.stopPropagation(); void deleteModel(m.filename) }}
+                    >
+                      {t('Sure?')}
+                    </button>
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm"
+                      onClick={(e) => { e.stopPropagation(); setArmedDel(null) }}
+                    >
+                      {t('Cancel')}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm ga-btn-danger"
+                    onClick={(e) => { e.stopPropagation(); setArmedDel(m.filename) }}
+                    title={t('Delete this model')}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        {model3d.meta?.source_image ? (
-          <span className="ga-hint">
-            {t('from')} {model3d.meta.source_image}
-            {model3d.meta.backend ? ` · ${model3d.meta.backend}` : ''}
-          </span>
-        ) : null}
         {uploadButton}
-        {confirmDel ? (
-          <span style={{ display: 'inline-flex', gap: 6 }}>
-            <button className="ga-btn ga-btn-sm ga-btn-danger" onClick={() => { void deleteModel() }}>
-              {t('Delete the model?')}
-            </button>
-            <button className="ga-btn ga-btn-sm" onClick={() => setConfirmDel(false)}>
-              {t('Cancel')}
-            </button>
-          </span>
-        ) : (
-          <button
-            className="ga-btn ga-btn-sm ga-btn-danger"
-            onClick={() => setConfirmDel(true)}
-            title={t('Delete the 3D building model')}
-          >
-            🗑 {t('Delete model')}
-          </button>
-        )}
+        <span className="ga-hint">
+          {t('Generate more models via 🧊 on a gallery tile — new ones become active automatically.')}
+        </span>
       </div>
     </div>
   )

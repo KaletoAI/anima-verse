@@ -343,20 +343,51 @@ async def location_model3d_upload(location_id: str, request: Request) -> Dict[st
 
 
 @router.delete("/locations/{location_id}/model3d")
-def location_model3d_delete(location_id: str) -> Dict[str, Any]:
-    """Remove the location's building model + sidecar."""
+def location_model3d_delete(location_id: str, file: str = "") -> Dict[str, Any]:
+    """Remove ONE stored building model (?file=<name>) or all of them (no
+    param). Deleting the active one re-points the selection."""
     from app.core.location_model3d import delete_building_model
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
-    return {"status": "success", "removed": delete_building_model(location_id)}
+    return {"status": "success",
+            "removed": delete_building_model(location_id, filename=file)}
+
+
+@router.post("/locations/{location_id}/model3d/select")
+async def location_model3d_select(location_id: str, request: Request) -> Dict[str, Any]:
+    """Make a stored model the ACTIVE building model (body: {file}) — the one
+    the clients get via /play/locations/{id}/model."""
+    from app.core.location_model3d import select_model
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    data = await request.json()
+    filename = str((data or {}).get("file") or "").strip()
+    if not select_model(location_id, filename):
+        raise HTTPException(status_code=404, detail="Model not found")
+    return {"status": "success", "active": filename}
+
+
+@router.get("/locations/{location_id}/model3d/files/{filename}")
+def location_model3d_file(location_id: str, filename: str, request: Request):
+    """Serve ONE stored building model by filename — the admin viewer previews
+    non-active models with it (clients only ever see the active one)."""
+    from app.core.location_model3d import model_file_path
+    from app.core.http_files import etag_file_response
+    p = model_file_path(location_id, filename)
+    if not p:
+        raise HTTPException(status_code=404, detail="Model not found")
+    media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
+             else "application/octet-stream")
+    return etag_file_response(p, request, media)
 
 
 @router.post("/locations/{location_id}/model3d/rotation")
 async def location_model3d_rotation(location_id: str, request: Request) -> Dict[str, Any]:
-    """Persist the building model's orientation fix (body: {x,y,z} in degrees,
-    snapped to 90-degree steps). Delivered to every client via /model/meta —
-    generated meshes come out arbitrarily oriented, the admin dials the fix
-    in the viewer."""
+    """Persist a building model's orientation fix (body: {x,y,z} in degrees,
+    snapped to 90-degree steps; optional {file} targets a stored model, default
+    the active one). Delivered to every client via /model/meta — generated
+    meshes come out arbitrarily oriented, the admin dials the fix in the
+    viewer."""
     from app.core.location_model3d import set_rotation
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
@@ -364,7 +395,8 @@ async def location_model3d_rotation(location_id: str, request: Request) -> Dict[
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
-        meta = set_rotation(location_id, data)
+        meta = set_rotation(location_id, data,
+                            filename=str(data.get("file") or "").strip())
     except ValueError:
         raise HTTPException(status_code=404, detail="No model")
     return {"meta": meta}
@@ -444,26 +476,55 @@ async def room_model3d_upload(location_id: str, room_id: str,
 
 
 @router.delete("/locations/{location_id}/rooms/{room_id}/model3d")
-def room_model3d_delete(location_id: str, room_id: str) -> Dict[str, Any]:
-    """Remove the room's 3D model + sidecar."""
+def room_model3d_delete(location_id: str, room_id: str, file: str = "") -> Dict[str, Any]:
+    """Remove ONE stored room model (?file=<name>) or all of them (no param)."""
     from app.core.location_model3d import delete_building_model
     _require_room(location_id, room_id)
     return {"status": "success",
-            "removed": delete_building_model(location_id, room_id=room_id)}
+            "removed": delete_building_model(location_id, room_id=room_id,
+                                             filename=file)}
+
+
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/select")
+async def room_model3d_select(location_id: str, room_id: str,
+                              request: Request) -> Dict[str, Any]:
+    """Make a stored model the ACTIVE room model (body: {file})."""
+    from app.core.location_model3d import select_model
+    _require_room(location_id, room_id)
+    data = await request.json()
+    filename = str((data or {}).get("file") or "").strip()
+    if not select_model(location_id, filename, room_id=room_id):
+        raise HTTPException(status_code=404, detail="Model not found")
+    return {"status": "success", "active": filename}
+
+
+@router.get("/locations/{location_id}/rooms/{room_id}/model3d/files/{filename}")
+def room_model3d_file(location_id: str, room_id: str, filename: str, request: Request):
+    """Serve ONE stored room model by filename (admin preview)."""
+    from app.core.location_model3d import model_file_path
+    from app.core.http_files import etag_file_response
+    p = model_file_path(location_id, filename, room_id=room_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Model not found")
+    media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
+             else "application/octet-stream")
+    return etag_file_response(p, request, media)
 
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/rotation")
 async def room_model3d_rotation(location_id: str, room_id: str,
                                 request: Request) -> Dict[str, Any]:
-    """Persist the room model's orientation fix ({x,y,z} in 90-degree steps) —
-    same contract as the building model."""
+    """Persist a room model's orientation fix ({x,y,z} in 90-degree steps;
+    optional {file} targets a stored model, default the active one) — same
+    contract as the building model."""
     from app.core.location_model3d import set_rotation
     _require_room(location_id, room_id)
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
-        meta = set_rotation(location_id, data, room_id=room_id)
+        meta = set_rotation(location_id, data, room_id=room_id,
+                            filename=str(data.get("file") or "").strip())
     except ValueError:
         raise HTTPException(status_code=404, detail="No model")
     return {"meta": meta}
