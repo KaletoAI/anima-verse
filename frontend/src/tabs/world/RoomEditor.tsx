@@ -26,10 +26,19 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
   const { t } = useI18n()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Room>(() => ({ ...room }))
+  // Two tabs, mirroring the location editor: General (fields + items) and
+  // 3D world (the room model). One draft spans both — Save persists it all.
+  const [tab, setTab] = useState<'general' | '3d'>('general')
 
   useEffect(() => {
     setDraft({ ...room })
   }, [room])
+
+  // 🧊 in the room gallery picks a source image — the backend picker lives in
+  // the model panel on the 3D tab, so switch there or the dialog stays unseen.
+  useEffect(() => {
+    if (modelGenSource) setTab('3d')
+  }, [modelGenSource])
 
   const upd = useCallback(<K extends keyof Room>(k: K, v: Room[K]) => {
     setDraft((prev) => ({ ...prev, [k]: v }))
@@ -66,6 +75,31 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
         onDelete={remove}
         deleteLabel={t('Remove room')}
       />
+      <nav className="ga-subtabs">
+        {([
+          { id: 'general', label: 'General' },
+          { id: '3d', label: '3D world' },
+        ] as Array<{ id: 'general' | '3d'; label: string }>).map((tb) => (
+          <button
+            key={tb.id}
+            type="button"
+            className={`ga-btn ga-btn-sm${tab === tb.id ? ' ga-btn-primary' : ''}`}
+            onClick={() => setTab(tb.id)}
+          >
+            {t(tb.label)}
+          </button>
+        ))}
+      </nav>
+      {tab === '3d' ? (
+        <div className="ga-form">
+          <BuildingModelPanel
+            locationId={location.id}
+            roomId={room.id || ''}
+            generateSource={modelGenSource}
+            onGenerateSourceConsumed={onModelGenConsumed}
+          />
+        </div>
+      ) : (
       <div className="ga-form">
         <div className="ga-form-row">
           <Field label={t('Room ID (read-only)')} hint={t('Permanent identifier — set when the room was created.')}>
@@ -174,15 +208,9 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
           </div>
         </div>
 
-        <BuildingModelPanel
-          locationId={location.id}
-          roomId={room.id || ''}
-          generateSource={modelGenSource}
-          onGenerateSourceConsumed={onModelGenConsumed}
-        />
-
         <RoomItems locationId={location.id} roomId={room.id || ''} items={items} />
       </div>
+      )}
     </>
   )
 }

@@ -413,21 +413,22 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         </Field>
       </div>
 
-      <RoomLayoutEditor
-        rooms={draft.rooms || []}
-        footprint={draft.map3d?.footprint}
-        onChange={(rooms) => upd('rooms', rooms)}
-      />
-
-      <BuildingModelPanel
-        locationId={location.id}
-        mapIconUrl={mapIconUrl}
-        map3d={draft.map3d}
-        fallbackYawDeg={location.map_rotation_2d || 0}
-        onMap3dField={(key, v) => updMap3d(key, v)}
-        generateSource={modelGenSrc}
-        onGenerateSourceConsumed={() => setModelGenSrc(null)}
-      />
+      <div className="ga-loc-twocol">
+        <RoomLayoutEditor
+          rooms={draft.rooms || []}
+          footprint={draft.map3d?.footprint}
+          onChange={(rooms) => upd('rooms', rooms)}
+        />
+        <BuildingModelPanel
+          locationId={location.id}
+          mapIconUrl={mapIconUrl}
+          map3d={draft.map3d}
+          fallbackYawDeg={location.map_rotation_2d || 0}
+          onMap3dField={(key, v) => updMap3d(key, v)}
+          generateSource={modelGenSrc}
+          onGenerateSourceConsumed={() => setModelGenSrc(null)}
+        />
+      </div>
 
       <div className="ga-form-section-label">{t('Building images')}</div>
       <LocationGallery
