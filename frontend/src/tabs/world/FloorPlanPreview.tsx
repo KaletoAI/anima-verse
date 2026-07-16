@@ -162,11 +162,14 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
       inner.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y), deg(entry.rotation.z))
       const holder = new THREE.Group()
       holder.add(inner)
+      // Yaw BEFORE measuring: the contain-fit must use the rotated extents,
+      // or a 90°-turned model gets fitted against the wrong rectangle sides
+      // (uniform scale commutes with the rotation).
+      holder.rotation.y = -deg(yawDeg)
       holder.updateMatrixWorld(true)
       const b = new THREE.Box3().setFromObject(holder)
       const s = b.getSize(new THREE.Vector3())
       holder.scale.setScalar(Math.min(targetW / (s.x || 1), targetD / (s.z || 1)))
-      holder.rotation.y = -deg(yawDeg)
       holder.updateMatrixWorld(true)
       const b2 = new THREE.Box3().setFromObject(holder)
       const c2 = b2.getCenter(new THREE.Vector3())
@@ -243,8 +246,11 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
       sprite.position.y = lh * 0.62
       roomGroup.add(sprite)
 
+      // The group does NOT yaw: x/y/w/d are the rectangle AS PLACED and the
+      // exit is a fraction of that placed rectangle (matches the 2D editor
+      // exactly) — layout.rotation only orients the room MODEL, applied in
+      // placeModel above.
       roomGroup.position.set(cx, cy, cz)
-      if (lay.rotation) roomGroup.rotation.y = -deg(lay.rotation)
       boxes.add(roomGroup)
     })
 

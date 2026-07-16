@@ -252,10 +252,29 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
             <button
               type="button"
               className="ga-btn ga-btn-sm"
-              onClick={() => updateLayout(selectedRoom.id || '', {
-                rotation: (((selectedRoom.layout?.rotation || 0) + 90) % 360) || undefined,
-              })}
-              title={t('Rotate the room 90° around the vertical axis (the 3D client applies it).')}
+              onClick={() => {
+                // Rotate the room AS A UNIT (clockwise on the plan): the
+                // rectangle swaps w/d around its centre, the exit point
+                // turns with the content ((x,y) -> (1-y, x)) and rotation
+                // yaws the room MODEL inside the rectangle — plan, exit and
+                // 3D model stay in sync (x/y/w/d are always the rectangle AS
+                // PLACED, rotation only orients the content).
+                const lay = selectedRoom.layout
+                if (!lay) return
+                const w = lay.d
+                const d = lay.w
+                updateLayout(selectedRoom.id || '', {
+                  rotation: (((lay.rotation || 0) + 90) % 360) || undefined,
+                  w,
+                  d,
+                  x: r4(clamp(lay.x + (lay.w - w) / 2, 0, 1 - w)),
+                  y: r4(clamp(lay.y + (lay.d - d) / 2, 0, 1 - d)),
+                  ...(lay.exit
+                    ? { exit: [r4(1 - lay.exit[1]), r4(lay.exit[0])] as [number, number] }
+                    : {}),
+                })
+              }}
+              title={t('Rotate the room 90° clockwise — rectangle, exit point and 3D model turn together.')}
             >
               ↻ +90° ({selectedRoom.layout?.rotation || 0}°)
             </button>

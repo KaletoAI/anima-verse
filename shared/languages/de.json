@@ -975,7 +975,7 @@
     "Rooms": "Räume",
     "Rooms as boxes per level — live while editing the plan; exit points in orange. Rooms without a model keep their box; the building shell renders ghosted.": "Räume als Boxen pro Etage — live beim Bearbeiten des Plans; Ausgangspunkte in Orange. Räume ohne Modell behalten ihre Box; die Gebäudehülle wird transparent gezeichnet.",
     "Rooms on this level: {n}": "Räume auf dieser Etage: {n}",
-    "Rotate the room 90° around the vertical axis (the 3D client applies it).": "Raum um 90° um die Hochachse drehen (der 3D-Client wendet es an).",
+    "Rotate the room 90° clockwise — rectangle, exit point and 3D model turn together.": "Raum um 90° im Uhrzeigersinn drehen — Rechteck, Ausgangspunkt und 3D-Modell drehen sich gemeinsam.",
     "Rotation on tile (°)": "Drehung auf der Kachel (°)",
     "Rough direction per hour — the character gets place &amp; role as a hint to the agent loop, but decides on their own. Empty hours = AI picks freely. Sleeping is also only a hint; actual sleeping depends on the energy level.": "Grobe Richtung pro Stunde — der Charakter bekommt Ort &amp; Rolle als Hint zum Agent-Loop, entscheidet aber selbst. Leere Stunden = KI wählt frei. Schlafen ist ebenfalls nur ein Hint; das tatsächliche Schlafen hängt am Energie-Level.",
     "Rule created": "Regel angelegt",
