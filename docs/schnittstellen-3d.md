@@ -90,7 +90,9 @@ Räume haben heute keine Position und keine Größe. Der Client legt sie als
 Auto-Grid ins Gebäude — jeder Grundriss sieht gleich aus, und Figuren stehen
 nicht dort, wo sie wirklich sind.
 
-**Platzierung pro Raum (relativ zum Gebäude):**
+**Platzierung pro Raum (relativ zum Gebäude):** Die Felder hängen am
+Raum-Objekt, das der Client heute schon liest (`/world/locations` →
+`rooms`); die genaue Datenform entscheidet das Backend.
 - **`level`** — Etage (ganzzahlig; 0 = Erdgeschoss, negativ = Keller).
   Eine Location kann Räume auf beliebigen Etagen haben (Tower: ein Raum
   im 4., einer im 10. Stock), und **mehrere Räume pro Etage** sind der
