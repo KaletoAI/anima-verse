@@ -14,11 +14,26 @@ import { useI18n } from '../../i18n/I18nProvider'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
 
-export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation }:
+/** Placement of a building model on its map tile — mirrors the worldmap
+ *  contract (map3d.rotation / map3d.size in schnittstellen-3d.md). */
+export interface TilePlacement {
+  /** Yaw around the vertical axis in degrees. */
+  yawDeg: number
+  /** Base size as a fraction of the tile edge (0..1). */
+  size: number
+}
+
+export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
+  groundTextureUrl, placement }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
-    rotation?: { x?: number; y?: number; z?: number } }) {
+    rotation?: { x?: number; y?: number; z?: number }
+    /** When `placement` is set, the viewer shows the world tile (a 1×1 ground
+     *  square, textured with this image when given) and places the model on
+     *  it — centred, yawed and scaled per `placement`, feet on the ground. */
+    groundTextureUrl?: string
+    placement?: TilePlacement }) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -26,13 +41,24 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const orientRef = useRef<Object3D | null>(null)
   const rotationRef = useRef(rotation)
   rotationRef.current = rotation
+  const placeFnRef = useRef<((p: TilePlacement) => void) | null>(null)
+  const placementRef = useRef(placement)
+  placementRef.current = placement
 
   // Live-apply a changed rotation to the mounted scene — a reload would
-  // re-download a multi-MB model per 90° click.
+  // re-download a multi-MB model per 90° click. In tile mode the orientation
+  // fix changes the model's bounding box, so the placement (scale + ground
+  // offset) is re-derived right after.
   useEffect(() => {
     orientRef.current?.rotation.set(
       _deg(rotation?.x), _deg(rotation?.y), _deg(rotation?.z))
+    if (placementRef.current) placeFnRef.current?.(placementRef.current)
   }, [rotation?.x, rotation?.y, rotation?.z])
+
+  // Live-apply placement changes (yaw slider / size slider) without reload.
+  useEffect(() => {
+    if (placement) placeFnRef.current?.(placement)
+  }, [placement, placement?.yawDeg, placement?.size])
 
   useEffect(() => {
     let disposed = false
@@ -156,7 +182,12 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         // 90° choice; they must not overwrite each other.
         const orient = new THREE.Group()
         orient.add(pivot)
-        scene.add(orient)
+        // Placement group (tile mode): carries yaw + tile scale + ground
+        // offset ABOVE the orientation fix, so re-orienting the model never
+        // fights the placement. Identity transform in normal mode.
+        const place = new THREE.Group()
+        place.add(orient)
+        scene.add(place)
         const _r = rotationRef.current
         orient.rotation.set(_deg(_r?.x), _deg(_r?.y), _deg(_r?.z))
         orientRef.current = orient
@@ -238,20 +269,86 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         const clock = new THREE.Clock()
         pivot.updateMatrixWorld(true)
 
-        // Frame the model: centre it and pull the camera back to fit.
-        const box = new THREE.Box3().setFromObject(pivot)
-        const size = box.getSize(new THREE.Vector3())
-        const center = box.getCenter(new THREE.Vector3())
-        pivot.position.sub(center)
+        if (placementRef.current) {
+          // ── Tile mode: the world square with the model placed on it. ──
+          // Ground: a 1×1 tile in the XZ plane, textured with the location's
+          // 2D map icon when available, plus an outline so the tile edge
+          // stays visible over dark textures.
+          const groundMat = new THREE.MeshBasicMaterial({ color: 0x2e3742 })
+          if (groundTextureUrl) {
+            try {
+              const gtex = await new THREE.TextureLoader().loadAsync(groundTextureUrl)
+              gtex.colorSpace = THREE.SRGBColorSpace
+              groundMat.map = gtex
+              groundMat.color.set(0xffffff)
+              groundMat.needsUpdate = true
+            } catch { /* an untextured tile is fine */ }
+            if (disposed) return
+          }
+          const groundGeo = new THREE.PlaneGeometry(1, 1)
+          const ground = new THREE.Mesh(groundGeo, groundMat)
+          ground.rotation.x = -Math.PI / 2
+          scene.add(ground)
+          const edges = new THREE.LineSegments(
+            new THREE.EdgesGeometry(groundGeo),
+            new THREE.LineBasicMaterial({ color: 0x58a6ff }),
+          )
+          edges.rotation.x = -Math.PI / 2
+          edges.position.y = 0.002
+          scene.add(edges)
 
-        const maxDim = Math.max(size.x, size.y, size.z) || 1
-        const dist = (maxDim / 2) / Math.tan((Math.PI * camera.fov) / 360)
-        camera.position.set(0, 0, dist * 1.6)
-        camera.near = dist / 100
-        camera.far = dist * 100
-        camera.updateProjectionMatrix()
-        controls.target.set(0, 0, 0)
-        controls.update()
+          // Derive scale + yaw + ground offset fresh from the model's current
+          // bounding box — the orientation fix changes the box, so this runs
+          // again after every ↻ click (see the rotation effect above).
+          const applyPlacement = (p: TilePlacement) => {
+            place.rotation.set(0, 0, 0)
+            place.scale.setScalar(1)
+            place.position.set(0, 0, 0)
+            place.updateMatrixWorld(true)
+            const b = new THREE.Box3().setFromObject(place)
+            const s = b.getSize(new THREE.Vector3())
+            const horiz = Math.max(s.x, s.z) || 1
+            place.scale.setScalar(Math.max(0.02, Math.min(1.5, p.size)) / horiz)
+            place.rotation.y = _deg(p.yawDeg)
+            place.updateMatrixWorld(true)
+            const b2 = new THREE.Box3().setFromObject(place)
+            const c2 = b2.getCenter(new THREE.Vector3())
+            place.position.set(-c2.x, -b2.min.y, -c2.z)
+          }
+          placeFnRef.current = applyPlacement
+          disposers.push(() => {
+            if (placeFnRef.current === applyPlacement) placeFnRef.current = null
+          })
+          applyPlacement(placementRef.current)
+
+          // Frame tile + model together from a raised angle — the tile is the
+          // reference, so it must always be fully in view.
+          place.updateMatrixWorld(true)
+          const mb = new THREE.Box3().setFromObject(place)
+          const extent = Math.max(1.2, mb.max.y * 1.5)
+          const dist = (extent / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.7
+          camera.position.set(dist * 0.75, dist * 0.7, dist * 0.9)
+          camera.near = dist / 100
+          camera.far = dist * 100
+          camera.updateProjectionMatrix()
+          controls.target.set(0, Math.min(0.4, Math.max(0.1, mb.max.y / 2)), 0)
+          controls.update()
+        } else {
+          // Frame the model: centre it and pull the camera back to fit.
+          const box = new THREE.Box3().setFromObject(pivot)
+          const size = box.getSize(new THREE.Vector3())
+          const center = box.getCenter(new THREE.Vector3())
+          pivot.position.sub(center)
+
+          const maxDim = Math.max(size.x, size.y, size.z) || 1
+          const dist = (maxDim / 2) / Math.tan((Math.PI * camera.fov) / 360)
+          camera.position.set(0, 0, dist * 1.6)
+          camera.near = dist / 100
+          camera.far = dist * 100
+          camera.updateProjectionMatrix()
+          controls.target.set(0, 0, 0)
+          controls.update()
+        }
 
         setLoading(false)
 
@@ -286,7 +383,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
       disposed = true
       cleanup?.()
     }
-  }, [url, format, clipUrl, textureUrl, height])
+  }, [url, format, clipUrl, textureUrl, height, groundTextureUrl])
 
   return (
     <div style={{ position: 'relative' }}>

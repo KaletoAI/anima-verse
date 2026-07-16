@@ -22,6 +22,12 @@ export interface Map3D {
   footprint?: number[]
   style?: string
   color?: string
+  /** Building yaw on the map tile in degrees (0..359). Absent = the 3D client
+   *  falls back to map_rotation_2d (the model turns with the 2D icon). */
+  rotation?: number
+  /** Building base size as a fraction of the tile edge (0..1).
+   *  Absent = client default 0.92. */
+  size?: number
 }
 
 export interface EventSettings {
@@ -56,6 +62,7 @@ export interface Location {
   grid_x?: number | null
   grid_y?: number | null
   map_image_2d?: string
+  map_rotation_2d?: number
   event_settings?: EventSettings
   terrain?: string
   map3d?: Map3D

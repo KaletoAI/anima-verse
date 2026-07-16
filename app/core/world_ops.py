@@ -270,6 +270,24 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
         val = raw.get(key)
         if isinstance(val, str) and val.strip():
             out[key] = val.strip()
+    # Building placement on the map tile (schnittstellen-3d.md): rotation =
+    # yaw in degrees (explicit 0 is meaningful — absent falls back to
+    # map_rotation_2d on the client), size = footprint fraction of the tile
+    # (0..1; absent = client default 0.92).
+    rot = raw.get("rotation")
+    if rot is not None and f"{rot}".strip() != "":
+        try:
+            out["rotation"] = int(round(float(rot))) % 360
+        except (TypeError, ValueError):
+            pass
+    size = raw.get("size")
+    if size is not None and f"{size}".strip() != "":
+        try:
+            s = float(size)
+            if 0 < s <= 1:
+                out["size"] = round(s, 3)
+        except (TypeError, ValueError):
+            pass
     return out
 
 
@@ -649,27 +667,18 @@ def build_imagegen_options() -> Dict[str, Any]:
         if backend_models:
             opt["models"] = backend_models
             opt["default_model"] = getattr(b, 'model', backend_models[0])
-        # LoRA selection in the image-gen dialog. The endpoint's LIVE listing
-        # is authoritative for what THIS backend can run (a LoRA missing on
-        # one endpoint is the NORMAL case — the dialog offers the union across
-        # backends and constrains the backend choice to one that has the
-        # pick). The library only fills in for backends without a listing
-        # (its trigger words still apply at generation time). Transfer:
+        # LoRA selection in the image-gen dialog — fed from the consolidated
+        # LoRA library, the single source (the endpoint's live listing only
+        # feeds the discovery sync). Backend-scoped (user decision 2026-07-16):
+        # only THIS backend's LoRAs are offered, as [{name, missing}] — manual
+        # entries whose LoRA vanished stay offered, marked missing. Transfer:
         # localai as <lora:> prompt tag, openai_diffusion as
         # lora_NN/strength_NN params.
         if b.api_type in ("localai", "openai_diffusion"):
             opt["has_loras"] = True
-            import fnmatch as _fn
-            _flt = (getattr(b, "lora_filter", "") or "").strip().lower()
-            live = [str(n) for n in (getattr(b, "available_loras", []) or [])]
-            if _flt:
-                live = [n for n in live if _fn.fnmatch(n.lower(), _flt)]
-            if live:
-                opt["lora_options"] = sorted(live)
-            else:
-                from app.core.config import get_lora_library_names
-                opt["lora_options"] = get_lora_library_names(
-                    b.name, lora_filter=getattr(b, "lora_filter", "") or "")
+            from app.core.config import get_lora_options
+            opt["lora_options"] = get_lora_options(
+                b.name, lora_filter=getattr(b, "lora_filter", "") or "")
         options.append(opt)
     # mapfit default prompts per family — the Fit/Edge dialog prefills the
     # prompt field with these (instead of the former terrain/edge hint).
@@ -1687,23 +1696,25 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # Model override from the dialog — backends read params["model"].
         if model_override:
             params["model"] = model_override
-        # LoRA selection from the dialog. A LoRA constrains the BACKEND choice
-        # — endpoints missing a LoRA are the normal case, so a render with a
-        # picked LoRA must only run on a backend that actually has it (the
-        # dialog enforces this too; this is the server-side gate).
+        # LoRA selection from the dialog. The dialog is backend-scoped (LoRA
+        # library entries of the chosen backend only); this is the server-side
+        # safety net for direct API calls. Library entries flagged missing
+        # pass — the flag can be stale, a wrong pick fails visibly in the
+        # render result.
         if loras_override is not None:
             params["lora_inputs"] = loras_override
-            _listing = [str(n) for n in (getattr(backend, "available_loras", []) or [])]
-            if _listing:
-                _wanted = [str(l.get("name") or "").strip() for l in loras_override
-                           if isinstance(l, dict)]
-                _absent = [n for n in _wanted if n and n != "None" and n not in _listing]
-                if _absent:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Backend '{backend.name}' does not have the "
-                               f"LoRA(s): {', '.join(_absent)} — pick a backend "
-                               f"that lists them")
+            from app.core.config import get_lora_options
+            _allowed = {o["name"] for o in get_lora_options(
+                backend.name,
+                lora_filter=getattr(backend, "lora_filter", "") or "")}
+            _wanted = [str(l.get("name") or "").strip() for l in loras_override
+                       if isinstance(l, dict)]
+            _absent = [n for n in _wanted if n and n != "None" and n not in _allowed]
+            if _absent:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The LoRA library does not associate backend "
+                           f"'{backend.name}' with: {', '.join(_absent)}")
 
         # Fresh seed per call so a regenerate produces a new image.
         import random as _rnd

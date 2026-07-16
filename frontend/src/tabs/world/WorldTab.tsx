@@ -155,46 +155,57 @@ export function WorldTab() {
           })()}
         </ul>
       </aside>
-      <section className="ga-world-form-col">
-        {selection?.kind === 'location' && selectedLocation ? (
+      {selection?.kind === 'location' && selectedLocation ? (
+        /* Location view: the tabbed editor (General / 2D / 3D) owns the
+           gallery inside its tabs, so it spans the form + gallery columns. */
+        <section className="ga-world-form-col ga-world-form-col--wide">
           <LocationEditor
             location={selectedLocation}
             items={items}
+            allLocations={locations}
+            placements={placements}
             onChanged={reload}
             onDeleted={() => {
               setSelection(null)
               reload()
             }}
           />
-        ) : selection?.kind === 'room' && selectedLocation && selectedRoom ? (
-          <RoomEditor
-            location={selectedLocation}
-            room={selectedRoom}
-            items={items}
-            onChanged={reload}
-            onDeleted={() => {
-              setSelection({ kind: 'location', locationId: selectedLocation.id })
-              reload()
-            }}
-          />
-        ) : (
-          <div className="ga-placeholder">{t('Select a place or room.')}</div>
-        )}
-      </section>
-      <aside className="ga-world-gallery-col">
-        {selectedLocation ? (
-          <LocationGallery
-            locationId={selectedLocation.id}
-            location={selectedLocation}
-            room={selectedRoom || null}
-            roomFilter={selectedRoom?.id || undefined}
-            allLocations={locations}
-            placements={placements}
-          />
-        ) : (
-          <div className="ga-placeholder">{t('Select a place to view its gallery.')}</div>
-        )}
-      </aside>
+        </section>
+      ) : (
+        <>
+          <section className="ga-world-form-col">
+            {selection?.kind === 'room' && selectedLocation && selectedRoom ? (
+              <RoomEditor
+                location={selectedLocation}
+                room={selectedRoom}
+                items={items}
+                onChanged={reload}
+                onDeleted={() => {
+                  setSelection({ kind: 'location', locationId: selectedLocation.id })
+                  reload()
+                }}
+              />
+            ) : (
+              <div className="ga-placeholder">{t('Select a place or room.')}</div>
+            )}
+          </section>
+          <aside className="ga-world-gallery-col">
+            {selectedLocation && selectedRoom ? (
+              <LocationGallery
+                mode="2d"
+                locationId={selectedLocation.id}
+                location={selectedLocation}
+                room={selectedRoom}
+                roomFilter={selectedRoom.id || undefined}
+                allLocations={locations}
+                placements={placements}
+              />
+            ) : (
+              <div className="ga-placeholder">{t('Select a place to view its gallery.')}</div>
+            )}
+          </aside>
+        </>
+      )}
     </div>
   )
 }

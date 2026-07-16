@@ -96,7 +96,9 @@ def get_client_meta(location_id: str) -> Optional[Dict[str, Any]]:
     """Lean meta for the 3D client (``{format, rig, rotation}``), or None when
     there is no model — no backend enumeration (that is the admin status's
     job). ``rotation`` is the admin's persisted 90°-step orientation fix; the
-    client applies it to the model root on load."""
+    client applies it to the model root on load. Map placement (yaw + tile
+    size) is NOT here — that is ``map3d.rotation``/``map3d.size`` on the
+    location, delivered via the worldmap (see schnittstellen-3d.md)."""
     p = find_building_model(location_id)
     if not p:
         return None

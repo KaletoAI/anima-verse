@@ -1,28 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
-import { MeshBackendDialog, type MeshBackend } from '../../components/MeshBackendDialog'
-import { Model3DViewer } from '../characters/Model3DViewer'
 import { IMAGE_TYPES, type GalleryResponse, type Location, type Room } from './worldTypes'
 import { ImageSetDialog } from './ImageSetDialog'
-
-interface BuildingModelStatus {
-  exists?: boolean
-  pending?: boolean
-  meta?: {
-    source_image?: string
-    backend?: string
-    created_at?: string
-    format?: string
-    /** Persisted 90°-step orientation fix — the 3D client applies it too. */
-    rotation?: { x?: number; y?: number; z?: number }
-  }
-  backends?: MeshBackend[]
-  default?: string
-}
 
 // ── Gallery — list, type-change, night-variant, delete, enlarge. ───────────
 
@@ -132,14 +114,16 @@ const GalleryCard = memo(function GalleryCard({
               </option>
             ))}
           </select>
-          <button
-            className="ga-btn ga-btn-sm"
-            disabled={isBusy}
-            onClick={() => onGenerateNight(filename)}
-            title={t('Generate a night variant from this image')}
-          >
-            🌙
-          </button>
+          {type !== 'building' ? (
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={isBusy}
+              onClick={() => onGenerateNight(filename)}
+              title={t('Generate a night variant from this image')}
+            >
+              🌙
+            </button>
+          ) : null}
           <button
             className="ga-btn ga-btn-sm"
             disabled={isBusy}
@@ -187,6 +171,8 @@ export function LocationGallery({
   roomFilter,
   allLocations,
   placements,
+  mode,
+  onGenerateModel,
 }: {
   locationId: string
   location: Location
@@ -197,6 +183,13 @@ export function LocationGallery({
   allLocations: Location[]
   /** Unfiltered list incl. clone placements (for the map-usage counter). */
   placements: Location[]
+  /** Which world the gallery serves: '2d' shows everything except building
+   *  images (day/night/map icons), '3d' shows only the building images that
+   *  feed the 3D model. Follows the location editor's tab split. */
+  mode: '2d' | '3d'
+  /** 3D mode: turn a building image into the location's model (🧊 per tile).
+   *  Provided by the 3D tab, which owns the model panel + backend picker. */
+  onGenerateModel?: (image: string) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -239,133 +232,9 @@ export function LocationGallery({
     reload()
   }, [reload])
 
-  // ── 3D building model (AV3D-9) — location-level only (not per room). ──
-  const enc = encodeURIComponent(locationId)
-  const [model3d, setModel3d] = useState<BuildingModelStatus | null>(null)
-  const [modelSrc, setModelSrc] = useState<string | null>(null)  // image → picker
-  const [viewerOpen, setViewerOpen] = useState(false)
-  const modelPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const loadModel3d = useCallback(async () => {
-    if (roomFilter) return null
-    try {
-      const d = await apiGet<BuildingModelStatus>(`/world/locations/${enc}/model3d/status`)
-      setModel3d(d)
-      return d
-    } catch {
-      setModel3d(null)
-      return null
-    }
-  }, [enc, roomFilter])
-
-  // Poll while the backend reports a running generation — the pending state is
-  // derived from the polled status, never a local never-reset flag (the
-  // stuck-busy lesson from FieldModel3D). Meshing takes minutes and may queue
-  // behind other jobs, so there is NO give-up (giving up would freeze the last
-  // pending=true state) — after ~2 min the poll merely slows down; the
-  // interval dies with the component / on location switch.
-  const startModelPoll = useCallback(() => {
-    if (modelPollRef.current) clearInterval(modelPollRef.current)
-    let n = 0
-    const tick = async () => {
-      n += 1
-      const d = await loadModel3d()
-      if (!d?.pending) {
-        if (modelPollRef.current) clearInterval(modelPollRef.current)
-        modelPollRef.current = null
-        return
-      }
-      if (n === 40) {
-        if (modelPollRef.current) clearInterval(modelPollRef.current)
-        modelPollRef.current = setInterval(tick, 15000)
-      }
-    }
-    modelPollRef.current = setInterval(tick, 3000)
-  }, [loadModel3d])
-
-  useEffect(() => {
-    // A location switch must not carry an open viewer/picker/armed delete
-    // across (the picked source image belongs to the previous location).
-    setViewerOpen(false)
-    setModelSrc(null)
-    setConfirmDelModel(false)
-    loadModel3d().then((d) => {
-      if (d?.pending) startModelPoll()
-    })
-    return () => {
-      if (modelPollRef.current) clearInterval(modelPollRef.current)
-    }
-  }, [loadModel3d, startModelPoll])
-
-  // Fire the 3D-model generation from the chosen backend + the picked source image.
-  const generateModel3d = useCallback(
-    (backend: string) => {
-      const src = modelSrc
-      setModelSrc(null)
-      if (!src) return
-      void apiPost(`/world/locations/${enc}/model3d/generate`, { source_image: src, backend })
-        .then(() => { toast(t('Generating the 3D model…')); startModelPoll() })
-        .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
-    },
-    [modelSrc, enc, startModelPoll, t, toast],
-  )
-
-  // Persisted 90°-step orientation fix: generated meshes come out arbitrarily
-  // oriented (buildings landed upside down on the map) — each click rotates
-  // one axis by +90°, the viewer applies it live and the 3D client reads it
-  // from /model/meta.
-  const rotateModel = useCallback(
-    async (axis: 'x' | 'y' | 'z') => {
-      const cur = model3d?.meta?.rotation || {}
-      const next = {
-        x: cur.x || 0, y: cur.y || 0, z: cur.z || 0,
-        [axis]: ((cur[axis] || 0) + 90) % 360,
-      }
-      try {
-        const d = await apiPost<{ meta: BuildingModelStatus['meta'] }>(
-          `/world/locations/${enc}/model3d/rotation`, next)
-        setModel3d((prev) => (prev ? { ...prev, meta: d.meta } : prev))
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [model3d, enc, t, toast],
-  )
-
-  // Two-step delete (no window.confirm — in-app confirmation via button pair).
-  const [confirmDelModel, setConfirmDelModel] = useState(false)
-  const deleteModel3d = useCallback(async () => {
-    setConfirmDelModel(false)
-    try {
-      await apiDelete(`/world/locations/${enc}/model3d`)
-      await loadModel3d()
-      toast(t('Deleted'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [enc, loadModel3d, t, toast])
-
-  // Upload a GLB as the building model (validated; surface 422 reasons).
-  const modelUploadRef = useRef<HTMLInputElement>(null)
-  const uploadModelGlb = useCallback(async (file: File) => {
-    if (!file) return
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await fetch(`/world/locations/${enc}/model3d/upload`, {
-        method: 'POST', body: fd, credentials: 'same-origin',
-      })
-      const body = await res.json().catch(() => null)
-      if (!res.ok) {
-        const errs: string[] = Array.isArray(body?.detail?.errors) ? body.detail.errors : []
-        throw new Error(errs.length ? errs.join(' · ') : (body?.detail?.toString?.() || `HTTP ${res.status}`))
-      }
-      await loadModel3d()
-      toast(t('Saved'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [enc, loadModel3d, t, toast])
+  // The 3D building model itself (status/viewer/placement) lives in
+  // BuildingModelPanel — this gallery only surfaces the 🧊 per building tile
+  // via onGenerateModel (3D mode).
 
   // Move an image to another location (file + prompt/type/meta).
   const submitMove = useCallback(async () => {
@@ -384,8 +253,6 @@ export function LocationGallery({
     }
   }, [moveImage, moveTarget, locationId, reload, t, toast])
 
-  const allImages = data?.images || []
-  const rooms = data?.image_rooms || {}
   const types = data?.image_types || {}
   const metas = data?.image_metas || {}
 
@@ -405,14 +272,19 @@ export function LocationGallery({
 
   // Filter to the selected room (if provided): keep images explicitly
   // assigned to it; images without a room assignment fall back to the
-  // location level and stay visible at the location detail.
-  const images = useMemo(
-    () =>
-      roomFilter
-        ? allImages.filter((f) => (rooms[f] || '') === roomFilter)
-        : allImages.filter((f) => !rooms[f] || rooms[f] === ''),
-    [allImages, rooms, roomFilter],
-  )
+  // location level and stay visible at the location detail. On top of that
+  // the mode splits the 2D world (everything except building images) from
+  // the 3D world (only the building images that feed the model).
+  const images = useMemo(() => {
+    const all = data?.images || []
+    const rms = data?.image_rooms || {}
+    const tps = data?.image_types || {}
+    const byRoom = roomFilter
+      ? all.filter((f) => (rms[f] || '') === roomFilter)
+      : all.filter((f) => !rms[f] || rms[f] === '')
+    return byRoom.filter((f) =>
+      mode === '3d' ? (tps[f] || '') === 'building' : (tps[f] || '') !== 'building')
+  }, [data, roomFilter, mode])
 
   const setType = useCallback(
     async (image: string, type: string) => {
@@ -634,33 +506,46 @@ export function LocationGallery({
       {imageSetOpen ? (
         <ImageSetDialog location={location} onClose={() => setImageSetOpen(false)} />
       ) : null}
-      <button
-        className="ga-btn ga-btn-sm"
-        disabled={!!busy}
-        onClick={() => setDialogType('day')}
-        title={t('Open the image generation dialog with the day prompt.')}
-      >
-        ☀️ {t('Generate day')}
-      </button>
-      <button
-        className="ga-btn ga-btn-sm"
-        disabled={!!busy}
-        onClick={() => setDialogType('night')}
-        title={t('Open the image generation dialog with the night prompt.')}
-      >
-        🌙 {t('Generate night')}
-      </button>
-      {!roomFilter ? (
-        <button
-          className="ga-btn ga-btn-sm"
-          disabled={!!busy}
-          onClick={() => setDialogType('map_2d')}
-          title={t('Open the image generation dialog for the flat 2D map icon.')}
-        >
-          🟦 {t('Generate 2D icon')}
-        </button>
-      ) : null}
-      {!roomFilter ? (
+      {mode === '2d' ? (
+        <>
+          <button
+            className="ga-btn ga-btn-sm"
+            disabled={!!busy}
+            onClick={() => setDialogType('day')}
+            title={t('Open the image generation dialog with the day prompt.')}
+          >
+            ☀️ {t('Generate day')}
+          </button>
+          <button
+            className="ga-btn ga-btn-sm"
+            disabled={!!busy}
+            onClick={() => setDialogType('night')}
+            title={t('Open the image generation dialog with the night prompt.')}
+          >
+            🌙 {t('Generate night')}
+          </button>
+          {!roomFilter ? (
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={!!busy}
+              onClick={() => setDialogType('map_2d')}
+              title={t('Open the image generation dialog for the flat 2D map icon.')}
+            >
+              🟦 {t('Generate 2D icon')}
+            </button>
+          ) : null}
+          {!roomFilter ? (
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={!!busy}
+              onClick={() => setImageSetOpen(true)}
+              title={t('Generate a full image set (location and/or all rooms, day + night) with one chosen backend/model — runs as sequential background jobs.')}
+            >
+              🖼 {t('Image set…')}
+            </button>
+          ) : null}
+        </>
+      ) : (
         <button
           className="ga-btn ga-btn-sm"
           disabled={!!busy}
@@ -669,36 +554,7 @@ export function LocationGallery({
         >
           🏛 {t('Generate building')}
         </button>
-      ) : null}
-      {!roomFilter ? (
-        <>
-          <button
-            className="ga-btn ga-btn-sm"
-            disabled={!!busy}
-            onClick={() => modelUploadRef.current?.click()}
-            title={t('Upload a GLB as the location’s 3D building model.')}
-          >
-            🧊 {t('Upload model')}
-          </button>
-          <input
-            ref={modelUploadRef}
-            type="file"
-            accept=".glb"
-            style={{ display: 'none' }}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadModelGlb(f); e.target.value = '' }}
-          />
-        </>
-      ) : null}
-      {!roomFilter ? (
-        <button
-          className="ga-btn ga-btn-sm"
-          disabled={!!busy}
-          onClick={() => setImageSetOpen(true)}
-          title={t('Generate a full image set (location and/or all rooms, day + night) with one chosen backend/model — runs as sequential background jobs.')}
-        >
-          🖼 {t('Image set…')}
-        </button>
-      ) : null}
+      )}
       {!selectMode ? (
         <button
           className="ga-btn ga-btn-sm"
@@ -732,21 +588,25 @@ export function LocationGallery({
           </button>
         </span>
       )}
-      <button
-        className="ga-btn ga-btn-sm"
-        disabled={!!busy}
-        onClick={() => uploadRef.current?.click()}
-        title={roomFilter ? t('Upload a background image for this room.') : t('Upload a background image for this place.')}
-      >
-        ⬆ {t('Upload')}
-      </button>
-      <input
-        ref={uploadRef}
-        type="file"
-        accept="image/*"
-        style={{ display: 'none' }}
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadBg(f); e.target.value = '' }}
-      />
+      {mode === '2d' ? (
+        <>
+          <button
+            className="ga-btn ga-btn-sm"
+            disabled={!!busy}
+            onClick={() => uploadRef.current?.click()}
+            title={roomFilter ? t('Upload a background image for this room.') : t('Upload a background image for this place.')}
+          >
+            ⬆ {t('Upload')}
+          </button>
+          <input
+            ref={uploadRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadBg(f); e.target.value = '' }}
+          />
+        </>
+      ) : null}
       <button
         className="ga-btn ga-btn-sm"
         disabled={!!busy}
@@ -803,111 +663,6 @@ export function LocationGallery({
     />
   ) : null
 
-  // 3D building model: its own row above the gallery when present or generating.
-  const buildingModel = !roomFilter && (model3d?.exists || model3d?.pending) ? (
-    <div className="ga-gallery-generate" style={{ alignItems: 'center' }}>
-      <span className="ga-form-section-label" style={{ margin: 0 }}>{t('3D building model')}</span>
-      {model3d?.pending ? (
-        <span className="ga-hint">{t('Generating the 3D model — this takes a few minutes.')}</span>
-      ) : null}
-      {model3d?.exists ? (
-        <>
-          <button
-            className="ga-btn ga-btn-sm"
-            onClick={() => setViewerOpen(true)}
-            title={t('Open the 3D model viewer')}
-          >
-            🧊 {t('View model')}
-          </button>
-          {model3d?.meta?.source_image ? (
-            <span className="ga-hint">
-              {t('from')} {model3d.meta.source_image}
-              {model3d.meta.backend ? ` · ${model3d.meta.backend}` : ''}
-            </span>
-          ) : null}
-          {confirmDelModel ? (
-            <span style={{ display: 'inline-flex', gap: 6 }}>
-              <button
-                className="ga-btn ga-btn-sm ga-btn-danger"
-                onClick={() => { void deleteModel3d() }}
-              >
-                {t('Delete the model?')}
-              </button>
-              <button className="ga-btn ga-btn-sm" onClick={() => setConfirmDelModel(false)}>
-                {t('Cancel')}
-              </button>
-            </span>
-          ) : (
-            <button
-              className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => setConfirmDelModel(true)}
-              title={t('Delete the 3D building model')}
-            >
-              🗑 {t('Delete model')}
-            </button>
-          )}
-        </>
-      ) : null}
-    </div>
-  ) : null
-
-  const modelPicker = (
-    <MeshBackendDialog
-      open={modelSrc !== null}
-      title={t('Generate 3D building model')}
-      backends={model3d?.backends || []}
-      defaultBackend={
-        model3d?.default
-          || ((model3d?.backends || []).length === 1 ? (model3d?.backends || [])[0].name : '')
-      }
-      onGenerate={generateModel3d}
-      onClose={() => setModelSrc(null)}
-    />
-  )
-
-  const modelViewer = viewerOpen && model3d?.exists
-    ? createPortal(
-        <div className="ga-modal-backdrop" onClick={() => setViewerOpen(false)}>
-          <div
-            className="ga-modal"
-            role="dialog"
-            aria-label={t('3D building model')}
-            style={{ maxWidth: 640, width: '90vw' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="ga-modal-header">
-              <span>{t('3D building model')}</span>
-              <button type="button" className="ga-modal-close" onClick={() => setViewerOpen(false)}>×</button>
-            </div>
-            <div className="ga-modal-body">
-              <Model3DViewer
-                url={`/play/locations/${enc}/model?v=${encodeURIComponent(model3d?.meta?.created_at || '')}`}
-                format={model3d?.meta?.format || 'glb'}
-                height={420}
-                rotation={model3d?.meta?.rotation}
-              />
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-                {(['x', 'y', 'z'] as const).map((axis) => (
-                  <button
-                    key={axis}
-                    type="button"
-                    className="ga-btn ga-btn-sm"
-                    onClick={() => { void rotateModel(axis) }}
-                  >
-                    ↻ {axis.toUpperCase()} +90° ({model3d?.meta?.rotation?.[axis] || 0}°)
-                  </button>
-                ))}
-                <span className="ga-hint">
-                  {t('Persisted — the 3D map client applies this orientation too.')}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )
-    : null
-
   if (!data) return <div className="ga-loading">{t('Loading…')}</div>
   if (!images.length) {
     return (
@@ -915,13 +670,12 @@ export function LocationGallery({
         {generatePanel}
         {dialog}
         {regenDialog}
-        {modelPicker}
-        {modelViewer}
-        {buildingModel}
         <div className="ga-form-hint" style={{ padding: 8 }}>
-          {roomFilter
-            ? t('No gallery images for this room yet.')
-            : t('No gallery images yet.')}
+          {mode === '3d'
+            ? t('No building images yet.')
+            : roomFilter
+              ? t('No gallery images for this room yet.')
+              : t('No gallery images yet.')}
         </div>
       </>
     )
@@ -932,9 +686,6 @@ export function LocationGallery({
       {generatePanel}
       {dialog}
       {regenDialog}
-      {modelPicker}
-      {modelViewer}
-      {buildingModel}
       <div className="ga-form-section-label">
         {t('Gallery')} ({images.length})
       </div>
@@ -963,7 +714,7 @@ export function LocationGallery({
               onMove={startMove}
               onRemove={remove}
               removeArmed={armedRemove === filename}
-              onGenerateModel={!roomFilter ? setModelSrc : undefined}
+              onGenerateModel={mode === '3d' && !roomFilter ? onGenerateModel : undefined}
             />
           )
         })}

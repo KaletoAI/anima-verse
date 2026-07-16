@@ -1470,6 +1470,10 @@ html, * {
 .ga-world-form-col,
 .ga-world-gallery-col { overflow-y: auto; }
 
+/* Location view: the tabbed editor carries the gallery inside its tabs and
+   takes the form + gallery columns (rooms keep the classic two-column split). */
+.ga-world-form-col--wide { grid-column: 2 / 4; }
+
 /* World tab — nested rooms under expanded location row. */
 .ga-list-nested {
   list-style: none;
@@ -1518,9 +1522,11 @@ html, * {
   border-bottom: 1px dashed var(--border, #30363d);
 }
 
+/* Responsive: one card per row in the narrow room-gallery column, two to
+   three in the full-width location tabs. */
 .ga-gallery-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 8px;
   margin-top: 4px;
 }
