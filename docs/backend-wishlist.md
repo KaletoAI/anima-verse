@@ -23,20 +23,34 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   Editierbar im Game-Admin (Location-Editor), Template-fähig wie andere Felder.
 - **Workaround:** Heuristik in `src/scene/tiles.ts` (`detectStyle`).
 
-## AV3D-2: Raum-Layout-Geometrie — angefordert (2026-07-14)
+## AV3D-2: Raum-Layout + Raum-Modelle — angefordert (2026-07-14), erweitert (2026-07-16)
 
 - **Motivation:** Räume haben keine Position/Größe; der Client legt sie als
   Auto-Grid in den Gebäude-Footprint — jeder Grundriss sieht gleich aus.
   Mit echten Layoutdaten wird die Innenansicht wiedererkennbar (Terrasse
   südlich, Kantine im Erdgeschoss, Apartment im 12. Stock) und Figuren
   stehen dort, wo sie wirklich sind.
-- **Erwartung:** eine Position/Größe pro Raum, relativ zum Gebäude —
-  Form der Daten entscheidet ihr; der Client braucht x/y/Breite/Höhe
-  (Fraktionen 0..1 des Footprints) und optional eine Etage.
+- **Erwartung Layout:** pro Raum Position/Größe relativ zum Gebäude
+  (x/y/Breite/Tiefe als Fraktionen 0..1), **`level`** (Etage, ganzzahlig,
+  mehrere Räume pro Etage und mehrere Etagen pro Location — Tower: Raum
+  im 4. und im 10. Stock) und `rotation` (Grad). Form der Daten
+  entscheidet ihr.
+- **Erwartung Modelle (analog AV3D-9):** jeder Raum = generiertes Bild +
+  daraus generiertes 3D-Modell (Innenansicht, offen von oben), Endpoints
+  analog zu den Gebäude-Modellen (`meta` mit 404-Normalfall + GLB mit
+  ETag, z.B. `/play/rooms/{room_id}/model[/meta]`); Platzierung wie bei
+  Gebäuden über die Layout-Felder.
+- **Ausgangspunkt statt Treppen/Aufzüge:** Vertikal-Verbindungen werden
+  vorerst ignoriert; pro Raum ein `exit: [x, y]` (Fraktion der
+  Raum-Grundfläche), damit der Client Figuren beim Betreten/Verlassen
+  plausibel bewegt.
 - **Pflege:** am sinnvollsten ein kleiner Grundriss-Editor im Game-Admin
-  (Räume als Rechtecke ziehen) — analog zum bestehenden Map-Editor für
-  Location-Positionen.
-- **Fallback bleibt:** ohne Layout weiterhin Auto-Grid.
+  (Rechtecke ziehen + Etagen-Wahl + Ausgangspunkt) — analog zum
+  bestehenden Map-Editor für Location-Positionen.
+- **Fallback bleibt:** ohne Layout weiterhin Auto-Grid; ohne Raum-Modell
+  weiterhin die einfache Bodenplatte.
+- Vollständiger Vertrag: `docs/schnittstellen-3d.md` → „Raum-Layout &
+  Raum-Modelle".
 
 ## AV3D-3: `location_changed`-Event im SSE-Stream — offen
 

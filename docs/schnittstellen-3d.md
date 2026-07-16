@@ -84,18 +84,53 @@ GET /play/locations/{location_id}/model       → GLB-Bytes (ETag)
 - **404 bleibt normal:** Locations ohne Modell rendert der Client weiterhin
   prozedural (aus `map3d.style` / `terrain`).
 
-### Raum-Layout (AV3D-2)
+### Raum-Layout & Raum-Modelle (AV3D-2, erweitert 2026-07-16)
 
 Räume haben heute keine Position und keine Größe. Der Client legt sie als
 Auto-Grid ins Gebäude — jeder Grundriss sieht gleich aus, und Figuren stehen
 nicht dort, wo sie wirklich sind.
 
-**Erwartung:** Position und Größe pro Raum, relativ zum Gebäude — Fraktionen
-(x, y, Breite, Höhe im Bereich 0..1), optional eine Etage. Datenform frei.
+**Platzierung pro Raum (relativ zum Gebäude):**
+- **`level`** — Etage (ganzzahlig; 0 = Erdgeschoss, negativ = Keller).
+  Eine Location kann Räume auf beliebigen Etagen haben (Tower: ein Raum
+  im 4., einer im 10. Stock), und **mehrere Räume pro Etage** sind der
+  Normalfall — beides muss die Datenform abbilden.
+- Position und Größe als Fraktionen der Gebäude-Grundfläche
+  (x, y, Breite, Tiefe im Bereich 0..1).
+- `rotation` (Grad um die Hochachse) — Räume sind damit **genauso
+  platzierbar wie die Gebäude selbst** (analog `map3d.rotation`/`size`).
 
-**Pflege:** am sinnvollsten ein kleiner Grundriss-Editor im Game-Admin (Räume
-als Rechtecke ziehen, analog zum Map-Editor für Location-Positionen).
-Ableiten lässt sich das nicht sinnvoll.
+**Raum-Modelle (analog zu den Gebäude-Modellen, AV3D-9):**
+Jeder Raum besteht wie eine Location aus einem generierten Bild und dem
+daraus generierten 3D-Modell (Innenansicht ohne Decke bzw. offen von oben,
+damit die Draufsicht funktioniert).
+
+```
+GET /play/rooms/{room_id}/model/meta  → { format, rig: "none", url } | 404
+GET /play/rooms/{room_id}/model       → GLB-Bytes (ETag)
+```
+
+- Pfadform frei (auch verschachtelt unter der Location möglich) — wichtig
+  sind Meta-Endpoint mit 404-Normalfall und ETag auf der Modelldatei.
+- **404 bleibt normal:** ohne Modell rendert der Client den Raum weiter
+  als einfache Bodenplatte (heutige Slabs).
+- Während einer Generierung: 404, keine Zwischenstände (wie AV3D-9).
+
+**Ausgang statt Treppen/Aufzüge:**
+- Treppen und Aufzüge werden vorerst ignoriert — keine begehbare
+  Vertikal-Verbindung nötig.
+- Pro Raum **ein Ausgangspunkt**, damit der Client Figuren beim Betreten/
+  Verlassen plausibel bewegen kann: `exit: [x, y]` als Fraktion der
+  Raum-Grundfläche (0..1), Teil der Layout-Daten. Alternativ ein Node
+  namens `exit` im GLB, falls die Pipeline das setzen kann — das
+  Datenfeld hat Vorrang.
+- Ohne Angabe nimmt der Client die Mitte der dem Gebäudezentrum
+  zugewandten Raumkante als Fallback.
+
+**Pflege:** am sinnvollsten ein kleiner Grundriss-Editor im Game-Admin
+(Räume als Rechtecke ziehen + Etagen-Wahl + Ausgangspunkt setzen, analog
+zum Map-Editor für Location-Positionen). Ableiten lässt sich das nicht
+sinnvoll.
 
 **Fallback bleibt:** ohne Layout weiterhin Auto-Grid — kein Alles-oder-nichts.
 
