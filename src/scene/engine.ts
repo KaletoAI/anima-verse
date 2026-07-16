@@ -32,7 +32,7 @@ export class Engine {
   private dragging = false;
   private orbiting = false;              // rechte Maustaste: frei drehen
   private orbitLast = { x: 0, y: 0 };
-  private pitchOffset = 0;               // freier Pitch-Anteil (Grad)
+  pitchOffset = 0;                       // freier Pitch-Anteil (Grad); public für Vorschau-Seiten
   private dragStart = new THREE.Vector3();
   private raycaster = new THREE.Raycaster();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);

@@ -211,3 +211,17 @@ Ursprüngliche Anforderung:
   normalisiert der Client.
 - **Fallback bleibt:** ohne Modell weiterhin die prozeduralen Formen
   (Stil aus `map3d.style`/`terrain`).
+
+## AV3D-10: Game-Admin — Location-Reiter „Floorplan" — angefordert (2026-07-16)
+
+- **Neuer 3. Reiter „Floorplan"** pro Location: **links der Grundriss-Editor**
+  (zieht aus dem 3D-Reiter um), **rechts eine 3D-Vorschau**.
+- **Die 3D-Vorschau liefert der 3D-Client fertig** — als iframe einbetten:
+  `http://<3d-client>/floorplan.html?location=<id>`
+  Sie zeigt die Location isoliert mit aufgedeckter Innenansicht
+  (Raum-Platten, Etagen, Exit-Marker, geladene Raum-Modelle) und pollt das
+  Layout alle 4 s — Änderungen im Editor erscheinen ohne Reload rechts.
+  Voraussetzung: der Browser ist im 3D-Client angemeldet (die Vorschau
+  nutzt dessen Session); sonst zeigt sie einen entsprechenden Hinweis.
+- **3D-Reiter:** die Bilder rücken hoch an die Stelle, wo bisher der
+  Grundriss-Editor war.

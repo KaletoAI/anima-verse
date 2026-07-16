@@ -1,0 +1,107 @@
+// Grundriss-Vorschau (AV3D-2) für den Game-Admin:
+//   /floorplan.html?location=<id-oder-name>
+// Zeigt EINE Location isoliert mit aufgedeckter Innenansicht (Raum-Platten,
+// Etagen, Exit-Marker, Raum-Modelle) und pollt das Layout — Änderungen im
+// Grundriss-Editor erscheinen ohne Reload. Gedacht als iframe rechts neben
+// dem Editor; Voraussetzung ist eine bestehende Anmeldung im 3D-Client.
+import * as THREE from 'three';
+import { Engine } from './scene/engine';
+import { applyRoomModel, applyTileFade, buildTile, type Tile } from './scene/tiles';
+import { roomModelLibrary } from './scene/buildings';
+import { grassTexture } from './scene/textures';
+import type { WorldLocation } from './types';
+
+const POLL_MS = 4000;
+const wanted = new URLSearchParams(location.search).get('location') ?? '';
+
+const msg = document.createElement('div');
+msg.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);'
+  + 'background:rgba(20,24,32,.85);color:#eee;padding:8px 14px;border-radius:8px;'
+  + 'font:14px system-ui;z-index:10;display:none';
+document.body.appendChild(msg);
+const say = (t: string) => {
+  msg.textContent = t;
+  msg.style.display = t ? 'block' : 'none';
+};
+
+const engine = new Engine(document.body);
+engine.setGameHour(11);
+engine.target.set(0, 0, 0);
+engine.dist = engine.targetDist = 22;
+engine.pitchOffset = 28;
+
+// dezenter Wiesen-Untergrund, damit die Kachel nicht im Himmel schwebt
+const groundTex = grassTexture();
+groundTex.repeat.set(8, 8);
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(80, 80),
+  new THREE.MeshStandardMaterial({ map: groundTex, roughness: 1 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+engine.scene.add(ground);
+
+const roomModels = roomModelLibrary();
+let tile: Tile | null = null;
+let lastSig = '';
+
+async function fetchLocation(): Promise<WorldLocation | null> {
+  const res = await fetch('/world/locations');
+  if (res.status === 401 || res.status === 403) {
+    say('Nicht angemeldet — bitte zuerst im 3D-Client einloggen.');
+    return null;
+  }
+  if (!res.ok) {
+    say(`Location-Daten nicht ladbar (HTTP ${res.status})`);
+    return null;
+  }
+  const data = await res.json();
+  const locs: WorldLocation[] = Array.isArray(data) ? data : data.locations ?? [];
+  const loc = locs.find((l) => l.id === wanted || l.name === wanted);
+  if (!loc) say(wanted ? `Location "${wanted}" nicht gefunden` : 'Aufruf: floorplan.html?location=<id>');
+  return loc ?? null;
+}
+
+function rebuild(loc: WorldLocation) {
+  if (tile) engine.scene.remove(tile.group);
+  // CSS2D-Label-Reste des alten Baus entfernen (der Renderer räumt sie nicht ab)
+  document.querySelectorAll('.room-label, .loc-label').forEach((el) => el.remove());
+
+  const shown: WorldLocation = { ...loc, grid_x: 0, grid_y: 0, rooms: loc.rooms ?? [] };
+  tile = buildTile(shown);
+  tile.fade = 1;
+  tile.fadeTarget = 1;   // Innenansicht dauerhaft aufgedeckt
+  engine.scene.add(tile.group);
+  for (const room of shown.rooms) {
+    if (!room.layout) continue;
+    const model = roomModels.get(room.id);
+    if (model) applyRoomModel(tile, room.id, model);
+    else roomModels.request(room.id);
+  }
+}
+
+roomModels.onModelReady = (roomId) => {
+  if (!tile) return;
+  const model = roomModels.get(roomId);
+  if (model) applyRoomModel(tile, roomId, model);
+};
+
+async function poll() {
+  const loc = await fetchLocation();
+  if (!loc) return;
+  const sig = JSON.stringify([
+    loc.entry_room,
+    (loc.rooms ?? []).map((r) => [r.id, r.name, r.layout]),
+  ]);
+  if (sig !== lastSig) {
+    lastSig = sig;
+    rebuild(loc);
+    say('');
+  }
+}
+
+void poll();
+setInterval(poll, POLL_MS);
+engine.addFrameHook((dt) => {
+  if (tile) applyTileFade(tile, dt);
+});
