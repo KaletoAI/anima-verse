@@ -17,7 +17,7 @@ Dateien — geliefert wird nur, was der Client wirklich braucht:
 | Rig-Typ | zu liefern | verwerfen |
 |---|---|---|
 | **humanoid** (MIA-Rigger) | **1 Datei:** `*_mia.glb` — Rig, Mesh und Texturen sind darin eingebettet | `*_mia.fbx`, `*.fbm/`, texturiertes/refined Zwischen-Mesh, lose PNGs |
-| **generic** (UniRig, z.B. Tiere) | **2 Dateien:** das geriggte `*.fbx` **+** die basecolor-PNG (die FBX bettet die Textur nicht ein) | dieselben Zwischenstufen; metallic-PNG optional/verzichtbar |
+| **generic** (UniRig, z.B. Tiere) | **2 Dateien:** das geriggte `*.fbx` **+** das basecolor-Bild (PNG oder JPEG — JPEG bevorzugt, außer die Textur braucht Alpha; die FBX bettet die Textur nicht ein) | dieselben Zwischenstufen; metallic-Bild optional/verzichtbar |
 
 **Der Rig-Typ muss mitgeliefert werden** (`rig: "mixamo" | "generic"`) — er
 entscheidet, ob die geteilte Animations-Bibliothek anwendbar ist:
@@ -117,6 +117,9 @@ GET /play/rooms/{room_id}/model       → GLB-Bytes (ETag)
 - Meta-Felder zur Feinjustierung am Modell (Admin-Regler, Client liest beide):
   `rotation {x,y,z}` (Grad) und **`offset_y`** (Meter, ± — hebt/senkt das
   Modell, z.B. Park leicht ins Gelände).
+- Texturen in Raum-/Gebäude-GLBs gern als **JPEG einbetten** (statt PNG) —
+  der Client liest beides; JPEG drittelt die Dateigröße. Humanoide GLBs
+  bleiben wie sie sind (wenige, gecacht — kein Umpacken nötig).
 - **404 bleibt normal:** ohne Modell rendert der Client den Raum weiter
   als einfache Bodenplatte (heutige Slabs).
 - Während einer Generierung: 404, keine Zwischenstände (wie AV3D-9).
