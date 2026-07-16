@@ -328,7 +328,13 @@ export function BuildingModelPanel({
         rotation={current.rotation}
         offsetY={current.offset_y || 0}
         groundTextureUrl={roomId ? undefined : mapIconUrl}
-        placement={roomId ? undefined : { yawDeg: effectiveYaw, size: effectiveSize }}
+        placement={roomId
+          // Rooms get a neutral ground plate as the zero level — without it
+          // the height offset has no visible reference (the model just
+          // floats centred). Yaw/size are fixed; the real placement comes
+          // from the floor plan.
+          ? { yawDeg: 0, size: 0.9 }
+          : { yawDeg: effectiveYaw, size: effectiveSize }}
       />
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
