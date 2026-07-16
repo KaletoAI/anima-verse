@@ -1,73 +1,114 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { getLocationModel } from '../api';
+import { getLocationModel, getRoomModel } from '../api';
 import { CELL } from './tiles';
 
 /** frühestens nach dieser Zeit erneut fragen (Generierung dauert Minuten) */
 const RETRY_MS = 60_000;
 
+interface ModelMeta {
+  url: string;
+  rotation?: { x?: number; y?: number; z?: number };
+}
+
 /**
- * Gebäude-Modelle vom Server (AV3D-9), lazy pro Location.
+ * Server-Modelle (Gebäude AV3D-9, Räume AV3D-2), lazy pro ID.
  *
- * 404 ist der Normalfall — das prozedurale Gebäude bleibt stehen. Während im
+ * 404 ist der Normalfall — die prozedurale Darstellung bleibt. Während im
  * Admin-Panel generiert wird, kann der Endpoint kurzzeitig auch Nicht-GLB-
  * Zwischenstände liefern (beobachtet: das Referenz-PNG mit 200) — der
  * GLTF-Parser lehnt das ab und wir versuchen es beim nächsten Poll erneut.
  */
-export class BuildingLibrary {
+export class ModelLibrary {
   private models = new Map<string, THREE.Group>();
   private pending = new Set<string>();
   private retryAt = new Map<string, number>();
-  /** wird gerufen, sobald ein Gebäude-Modell bereit ist */
-  onModelReady: ((locationId: string) => void) | null = null;
+  /** wird gerufen, sobald ein Modell bereit ist */
+  onModelReady: ((id: string) => void) | null = null;
+
+  constructor(
+    private tag: string,
+    private fetchMeta: (id: string) => Promise<ModelMeta | null>,
+    private normalize: (scene: THREE.Group, meta: ModelMeta) => THREE.Group,
+  ) {}
 
   /** Instanz des geladenen Modells (Klon; Geometrie/Material geteilt). */
-  get(locationId: string): THREE.Group | null {
-    const template = this.models.get(locationId);
+  get(id: string): THREE.Group | null {
+    const template = this.models.get(id);
     return template ? template.clone() : null;
   }
 
   /** Modell nachladen, falls nicht vorhanden (drosselt sich selbst). */
-  request(locationId: string) {
-    if (this.models.has(locationId) || this.pending.has(locationId)) return;
-    const at = this.retryAt.get(locationId);
+  request(id: string) {
+    if (this.models.has(id) || this.pending.has(id)) return;
+    const at = this.retryAt.get(id);
     if (at !== undefined && performance.now() < at) return;
-    this.pending.add(locationId);
+    this.pending.add(id);
     void (async () => {
       try {
-        const meta = await getLocationModel(locationId);
+        const meta = await this.fetchMeta(id);
         if (!meta) {
-          this.retryAt.set(locationId, performance.now() + RETRY_MS);
+          this.retryAt.set(id, performance.now() + RETRY_MS);
           return;
         }
         const gltf = await new GLTFLoader().loadAsync(meta.url);
-        const model = this.normalize(gltf.scene);
-        this.models.set(locationId, model);
-        console.info(`[buildings] ${locationId}: Gebäude-Modell vom Server (${(model.userData.height as number).toFixed(1)} m hoch)`);
-        this.onModelReady?.(locationId);
+        const model = this.normalize(gltf.scene, meta);
+        this.models.set(id, model);
+        console.info(`[${this.tag}] ${id}: Modell vom Server`);
+        this.onModelReady?.(id);
       } catch (e) {
-        console.warn(`[buildings] ${locationId}: Modell (noch) nicht ladbar — neuer Versuch folgt`, e);
-        this.retryAt.set(locationId, performance.now() + RETRY_MS);
+        console.warn(`[${this.tag}] ${id}: Modell (noch) nicht ladbar — neuer Versuch folgt`, e);
+        this.retryAt.set(id, performance.now() + RETRY_MS);
       } finally {
-        this.pending.delete(locationId);
+        this.pending.delete(id);
       }
     })();
   }
+}
 
-  /** Aufrichten, auf die Kachel skalieren, XZ zentrieren, Unterkante auf y=0. */
-  private normalize(scene: THREE.Group): THREE.Group {
+/** Flache Relief-Modelle: Bildseite nach oben drehen. Die Normalen der
+ *  detaillierten Seite dominieren — zeigt die Mehrheit nach unten, ist das
+ *  Relief verkehrt herum gelandet. */
+function flipReliefFaceUp(scene: THREE.Group, size: THREE.Vector3) {
+  if (size.y > Math.max(size.x, size.z) * 0.45) return;   // kein flaches Relief
+  let sum = 0;
+  const m = new THREE.Matrix3();
+  const v = new THREE.Vector3();
+  scene.updateMatrixWorld(true);
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const normals = mesh.geometry.getAttribute('normal');
+    if (!normals) return;
+    m.getNormalMatrix(mesh.matrixWorld);
+    const step = Math.max(1, Math.floor(normals.count / 1000));   // Stichprobe
+    for (let i = 0; i < normals.count; i += step) {
+      v.set(normals.getX(i), normals.getY(i), normals.getZ(i)).applyMatrix3(m);
+      sum += v.y;
+    }
+  });
+  if (sum < 0) {
+    scene.rotateX(Math.PI);
+    scene.updateMatrixWorld(true);
+  }
+}
+
+/** Gebäude: aufrichten, auf die Kachel skalieren, Unterkante auf den Sockel. */
+export function buildingLibrary(): ModelLibrary {
+  return new ModelLibrary('buildings', getLocationModel, (scene) => {
     scene.updateMatrixWorld(true);
     let box = new THREE.Box3().setFromObject(scene);
     let size = box.getSize(new THREE.Vector3());
-    // Z-up-Export aufrichten — aber nur, wenn dabei keine "Papierwand"
-    // entsteht: flache Relief-Modelle (dünn in Y) sind flach gemeint und
-    // würden aufgerichtet als dünne schiefe Wand auf der Kachel stehen.
-    if (size.z > size.y * 1.8 && size.y > Math.max(size.x, size.z) * 0.2) {
+    // Z-up-Export aufrichten — aber nur, wenn das Modell auch aufgerichtet
+    // noch substanzielle Tiefe hätte: flache Relief-Modelle (Bild-Generierung)
+    // sind flach gemeint und würden als dünne Wand auf der Kachel stehen.
+    if (size.z > size.y * 1.8 && size.y > Math.max(size.x, size.z) * 0.45) {
       scene.rotation.x = -Math.PI / 2;
       scene.updateMatrixWorld(true);
       box = new THREE.Box3().setFromObject(scene);
       size = box.getSize(new THREE.Vector3());
     }
+    flipReliefFaceUp(scene, size);
     const s = (CELL * 0.92) / Math.max(size.x, size.z, 1e-3);
     scene.scale.setScalar(s);
     scene.updateMatrixWorld(true);
@@ -86,5 +127,52 @@ export class BuildingLibrary {
     root.add(scene);
     root.userData.height = box.max.y - box.min.y;
     return root;
-  }
+  });
+}
+
+/** Räume: Orientierung aus dem Meta (Grad), auf Einheits-Grundfläche
+ *  normalisieren — die Skalierung auf die Raumgröße passiert am Tile. */
+export function roomModelLibrary(): ModelLibrary {
+  return new ModelLibrary('rooms', getRoomModel, (scene, meta) => {
+    const r = meta.rotation;
+    const explicit = !!r && ((r.x ?? 0) !== 0 || (r.y ?? 0) !== 0 || (r.z ?? 0) !== 0);
+    if (explicit) {
+      scene.rotation.set(
+        THREE.MathUtils.degToRad(r!.x ?? 0),
+        THREE.MathUtils.degToRad(r!.y ?? 0),
+        THREE.MathUtils.degToRad(r!.z ?? 0)
+      );
+    }
+    scene.updateMatrixWorld(true);
+    let box = new THREE.Box3().setFromObject(scene);
+    let size = box.getSize(new THREE.Vector3());
+    // Ohne explizite Rotation: hochkant stehende Reliefs (Bild-Generierung)
+    // flach auf den Boden legen, Bildseite nach oben
+    if (!explicit && size.y > size.z * 1.8) {
+      scene.rotation.x = -Math.PI / 2;
+      scene.updateMatrixWorld(true);
+      box = new THREE.Box3().setFromObject(scene);
+      size = box.getSize(new THREE.Vector3());
+    }
+    if (!explicit) flipReliefFaceUp(scene, size);
+    const s = 1 / Math.max(size.x, size.z, 1e-3);
+    scene.scale.setScalar(s);
+    scene.updateMatrixWorld(true);
+    box = new THREE.Box3().setFromObject(scene);
+    const c = box.getCenter(new THREE.Vector3());
+    scene.position.x -= c.x;
+    scene.position.z -= c.z;
+    scene.position.y -= box.min.y;
+    scene.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) {
+        o.castShadow = false;                    // Innenraum wirft keine Karten-Schatten
+        o.receiveShadow = false;
+      }
+    });
+    const root = new THREE.Group();
+    root.add(scene);
+    root.userData.footprint = { x: size.x * s, z: size.z * s };
+    root.userData.height = size.y * s;
+    return root;
+  });
 }

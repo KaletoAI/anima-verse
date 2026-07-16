@@ -3,8 +3,8 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyNightGlow, applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
-import { BuildingLibrary } from './scene/buildings';
+import { applyBuildingModel, applyNightGlow, applyRoomModel, applyTileFade, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { buildingLibrary, roomModelLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { createHud, InfoPanel, showLogin } from './ui';
@@ -99,19 +99,31 @@ async function startApp(username: string) {
 
   // Gebäude-Modelle vom Server (AV3D-9): lazy laden, prozedurale Hülle
   // ersetzen; solange 404/Generierung läuft, regelmäßig erneut fragen.
-  const buildings = new BuildingLibrary();
+  const buildings = buildingLibrary();
   buildings.onModelReady = (locId) => {
     const tile = tiles.get(locId);
     const model = buildings.get(locId);
     if (tile && model) applyBuildingModel(tile, model);
   };
-  const requestBuildingModels = () => {
-    for (const tile of tiles.values()) {
-      if (tile.isBuilding && tile.shell) buildings.request(tile.loc.id);
-    }
+  // Raum-Modelle (AV3D-2): nur Räume mit Layout haben einen Andockpunkt
+  const roomModels = roomModelLibrary();
+  const tileByRoom = new Map<string, Tile>();
+  for (const tile of tiles.values()) {
+    for (const r of tile.loc.rooms) if (r.layout) tileByRoom.set(r.id, tile);
+  }
+  roomModels.onModelReady = (roomId) => {
+    const tile = tileByRoom.get(roomId);
+    const model = roomModels.get(roomId);
+    if (tile && model) applyRoomModel(tile, roomId, model);
   };
-  requestBuildingModels();
-  setInterval(requestBuildingModels, 60_000);
+  const requestServerModels = () => {
+    for (const tile of tiles.values()) {
+      if (tile.isBuilding && !tile.serverModel) buildings.request(tile.loc.id);
+    }
+    for (const roomId of tileByRoom.keys()) roomModels.request(roomId);
+  };
+  requestServerModels();
+  setInterval(requestServerModels, 60_000);
 
   // Wegfindung: Gebäude blockieren, Straßen/Natur sind begehbar
   npcs.setPathGrid(new PathGrid(
@@ -188,11 +200,16 @@ async function startApp(username: string) {
   // --- Polling: Worldmap + Raumbelegung -------------------------------------
   let lastMap: WorldMap | null = firstMap;
   const roomOf = new Map<string, string>(); // Charaktername -> Raum (ID oder Name)
+  const cameFrom = new Map<string, string>(); // voriger Raum (für Exit-Routing)
 
   // AV3D-8: room_id kommt direkt mit der Worldmap; dazu die Clip-Set-Kette
   function takeRoomsFrom(map: WorldMap) {
     for (const c of map.characters) {
-      if (c.room_id) roomOf.set(c.name, c.room_id);
+      if (c.room_id) {
+        const prev = roomOf.get(c.name);
+        if (prev && prev !== c.room_id) cameFrom.set(c.name, prev);
+        roomOf.set(c.name, c.room_id);
+      }
       figures.setCharacterSets(c.name, c.animation_sets);
       figures.setCharacterHeight(c.name, c.height_cm);
     }
@@ -290,11 +307,18 @@ async function startApp(username: string) {
       }
       chars.forEach((c, i) => {
         let pos: THREE.Vector3;
+        let via: THREE.Vector3[] | undefined;
         const room = roomOf.get(c.name);
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
         if (tile.fade > 0.5 && roomCenter && room) {
           const mates = roomMates.get(room)!;
           pos = roomCenter.clone().add(roomSlot(mates.indexOf(c.name), mates.length, c.name));
+          // Raumwechsel: über die Ausgänge laufen (AV3D-2 exit), nicht durch Wände
+          const from = cameFrom.get(c.name);
+          if (from && from !== room) {
+            via = [tile.roomExits.get(from), tile.roomExits.get(room)]
+              .filter((v): v is THREE.Vector3 => !!v);
+          }
         } else {
           pos = tile.center.clone().add(slotOffset(tile, i, chars.length));
         }
@@ -302,6 +326,7 @@ async function startApp(username: string) {
         states.push({
           char: c,
           pos,
+          via,
           travelTo: targetTile && c.movement_target_id !== locId ? targetTile.center.clone() : null,
         });
       });

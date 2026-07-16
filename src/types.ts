@@ -1,7 +1,18 @@
+/** AV3D-2: Platzierung eines Raums relativ zur Gebäude-Grundfläche. */
+export interface RoomLayout {
+  x: number;               // linke obere Ecke (Fraktion 0..1)
+  y: number;
+  w: number;               // Breite/Tiefe (Fraktion 0..1)
+  d: number;
+  level?: number;          // Etage: 0 = EG, negativ = Keller
+  exit?: [number, number]; // Ausgangspunkt (Fraktion der Raum-Grundfläche)
+}
+
 export interface Room {
   id: string;
   name: string;
   description?: string;
+  layout?: RoomLayout;
 }
 
 /** AV3D-1: optionale 3D-Metadaten einer Location. */

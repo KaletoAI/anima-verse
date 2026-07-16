@@ -23,7 +23,18 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   Editierbar im Game-Admin (Location-Editor), Template-fähig wie andere Felder.
 - **Workaround:** Heuristik in `src/scene/tiles.ts` (`detectStyle`).
 
-## AV3D-2: Raum-Layout + Raum-Modelle — angefordert (2026-07-14), erweitert (2026-07-16)
+## AV3D-2: Raum-Layout + Raum-Modelle — GELIEFERT, Client angebunden (2026-07-16)
+
+- **Umsetzung Backend:** `layout` am Raum-Objekt (`{x, y, w, d, level, exit}`),
+  Modelle unter `GET /play/rooms/{room_id}/model[/meta]`; das Meta enthält
+  `rotation {x,y,z}` (Grad, im Admin einstellbar) zur Orientierungs-Korrektur.
+- **Client:** Layout-Räume ersetzen das Auto-Grid (Etagen via level × 3 m),
+  Raum-Modelle werden auf die Bodenplatten gesetzt (hochkant gelieferte
+  Reliefs legt der Client flach, solange keine explizite rotation gesetzt
+  ist); Figuren folgen der Etagenhöhe und laufen bei Raumwechseln über die
+  exit-Punkte. Räume ohne Layout/Modell bleiben Auto-Grid/Platte.
+
+Ursprüngliche Anforderung:
 
 - **Motivation:** Räume haben keine Position/Größe; der Client legt sie als
   Auto-Grid in den Gebäude-Footprint — jeder Grundriss sieht gleich aus.

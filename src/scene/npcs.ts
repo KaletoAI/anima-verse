@@ -91,6 +91,8 @@ interface Npc {
 export interface NpcState {
   char: MapCharacter;
   pos: THREE.Vector3;               // Zielposition auf der Karte
+  /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
+  via?: THREE.Vector3[];
   travelTo: THREE.Vector3 | null;   // Reiseziel (Linien-Endpunkt) oder null
 }
 
@@ -134,9 +136,12 @@ export class NpcManager {
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
       }
-      // Zielwechsel -> Weg um Gebäude herum planen
+      // Zielwechsel -> Weg planen: vorgegebene Zwischenstationen (Raum-
+      // Ausgänge) haben Vorrang, sonst um Gebäude herum (A*)
       if (!npc.target.equals(st.pos)) {
-        npc.waypoints = this.planPath(npc.root.position, st.pos);
+        npc.waypoints = st.via?.length
+          ? st.via.map((v) => v.clone())
+          : this.planPath(npc.root.position, st.pos);
       }
       npc.target.copy(st.pos);
       npc.activity = st.char.activity || '';
@@ -291,7 +296,10 @@ export class NpcManager {
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
-      } else if (npc.figure) {
+      }
+      // Höhe dem Ziel angleichen (Etagen-Räume, AV3D-2) — sanft, ohne Treppe
+      npc.root.position.y += (npc.target.y - npc.root.position.y) * Math.min(1, dt * 4);
+      if (!moving && npc.figure) {
         // Stehend: Nachbarn ansehen, sonst leicht zur Kamera-Grundrichtung
         const target = faceTo.get(npc.name);
         const dir = target

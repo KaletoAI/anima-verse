@@ -114,6 +114,23 @@ export async function getLocationModel(locationId: string): Promise<ApiLocationM
   return { url: data.url, format: data.format ?? 'glb' };
 }
 
+export interface ApiRoomModel {
+  url: string;
+  format: string;
+  /** Orientierungs-Korrektur in Grad (im Admin am Modell eingestellt) */
+  rotation?: { x?: number; y?: number; z?: number };
+}
+
+/** 3D-Modell eines Raums (AV3D-2); null wenn keins da ist (404 = Normalfall). */
+export async function getRoomModel(roomId: string): Promise<ApiRoomModel | null> {
+  const res = await fetch(`/play/rooms/${encodeURIComponent(roomId)}/model/meta`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`room model ${roomId}: HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data?.url) return null;
+  return { url: data.url, format: data.format ?? 'glb', rotation: data.rotation };
+}
+
 /** Spielzeit der Welt (Stunde 0..24, fraktional); null wenn nicht verfügbar. */
 export async function getGameHour(): Promise<number | null> {
   try {

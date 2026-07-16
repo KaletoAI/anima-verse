@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import type { WorldLocation } from '../types';
+import type { Room, WorldLocation } from '../types';
 import { mapIconUrl } from '../api';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
@@ -48,16 +48,25 @@ export interface Tile {
   interiorLabels: CSS2DObject[];
   /** prozedurale Außenhülle — wird durch ein Server-Modell (AV3D-9) ersetzt */
   shell?: THREE.Group;
+  /** bereits eingewechseltes Server-Gebäudemodell */
+  serverModel?: THREE.Group;
   /** Namens-Label — Höhe wird beim Modell-Tausch nachgeführt */
   labelObj?: CSS2DObject;
   shellMats: THREE.MeshStandardMaterial[];
   roofParts: THREE.Object3D[];
   roofMats: THREE.MeshStandardMaterial[];
   roomCenters: Map<string, THREE.Vector3>;
+  /** Ausgangspunkt pro Raum (Welt-Koordinaten; Schlüssel: ID und Name) */
+  roomExits: Map<string, THREE.Vector3>;
+  /** Andockpunkte für Raum-Modelle (AV3D-2): Raum-ID -> Halter + Maße */
+  roomSlots: Map<string, { holder: THREE.Group; w: number; d: number }>;
   highlightRing: THREE.Mesh;
   fade: number;
   fadeTarget: number;
 }
+
+/** Etagenhöhe der Innenansicht (level * STOREY über dem Boden) */
+const STOREY = 3;
 
 function detectStyle(loc: WorldLocation): TileStyle {
   // Priorität: map3d.style (AV3D-1) > terrain (AV3D-7) > Namens-Heuristik
@@ -275,38 +284,40 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean }
     }
   }
 
-  const n = loc.rooms.length;
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
-  const gap = 0.35;
-  const rw = (W - 0.6 - gap * (cols - 1)) / cols;
-  const rd = (D - 0.6 - gap * (rows - 1)) / rows;
-
-  loc.rooms.forEach((room, i) => {
-    const cx = i % cols;
-    const cz = Math.floor(i / cols);
-    const x = -W / 2 + 0.3 + cx * (rw + gap) + rw / 2;
-    const z = -D / 2 + 0.3 + cz * (rd + gap) + rd / 2;
-    const hue = (i * 67) % 360;
-    const open = opts.walls === false; // Naturfläche: flacher + durchscheinend
+  const open = opts.walls === false; // Naturfläche: flacher + durchscheinend
+  const addRoomCommon = (room: Room, x: number, z: number, floorY: number, hue: number, rw: number, rd: number) => {
     const plate = box(rw, open ? 0.08 : 0.18, rd, std({
       color: new THREE.Color(`hsl(${hue}, 42%, 72%)`),
       opacity: open ? 0.55 : 1,
     }));
-    plate.position.set(x, open ? 0.18 : 0.35, z);
+    plate.position.set(x, floorY + (open ? 0.18 : 0.35), z);
     g.add(plate);
 
     const el = document.createElement('div');
     el.className = 'room-label';
     el.textContent = room.name;
     const label = new CSS2DObject(el);
-    label.position.set(x, 1.5, z);
+    label.position.set(x, floorY + 1.5, z);
     g.add(label);
     tile.interiorLabels.push(label);
 
-    const worldPos = tile.center.clone().add(new THREE.Vector3(x, 0.45, z));
+    const worldPos = tile.center.clone().add(new THREE.Vector3(x, floorY + 0.45, z));
     tile.roomCenters.set(room.id, worldPos);
     tile.roomCenters.set(room.name, worldPos);
+  };
+
+  // Räume ohne Layout: Auto-Grid im Erdgeschoss (bisheriges Verhalten)
+  const autoRooms = loc.rooms.filter((r) => !r.layout);
+  const n = autoRooms.length;
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const gap = 0.35;
+  const rw = n ? (W - 0.6 - gap * (cols - 1)) / cols : 0;
+  const rd = n ? (D - 0.6 - gap * (rows - 1)) / rows : 0;
+  autoRooms.forEach((room, i) => {
+    const x = -W / 2 + 0.3 + (i % cols) * (rw + gap) + rw / 2;
+    const z = -D / 2 + 0.3 + Math.floor(i / cols) * (rd + gap) + rd / 2;
+    addRoomCommon(room, x, z, 0, (i * 67) % 360, rw, rd);
 
     if (loc.entry_room && room.id === loc.entry_room) {
       const mark = new THREE.Mesh(new THREE.CircleGeometry(0.45, 20), std({ color: 0xe0b64a }));
@@ -314,6 +325,40 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean }
       mark.position.set(x, 0.46, z + rd / 2 - 0.5);
       g.add(mark);
     }
+  });
+
+  // Räume mit Layout (AV3D-2): Position/Größe/Etage vom Server
+  loc.rooms.forEach((room, i) => {
+    const lay = room.layout;
+    if (!lay) return;
+    const roomW = Math.max(lay.w * W, 0.5);
+    const roomD = Math.max(lay.d * D, 0.5);
+    const x = -W / 2 + (lay.x + lay.w / 2) * W;
+    const z = -D / 2 + (lay.y + lay.d / 2) * D;
+    const floorY = (lay.level ?? 0) * STOREY;
+    addRoomCommon(room, x, z, floorY, (i * 67) % 360, roomW, roomD);
+
+    // Andockpunkt für das Raum-Modell (liegt auf der Bodenplatte)
+    const holder = new THREE.Group();
+    holder.position.set(x, floorY + 0.44, z);
+    g.add(holder);
+    tile.roomSlots.set(room.id, { holder, w: roomW, d: roomD });
+
+    // Ausgangspunkt: vom Server (exit) oder Mitte der dem Zentrum
+    // zugewandten Raumkante als Fallback
+    const ex = lay.exit
+      ? -W / 2 + (lay.x + lay.exit[0] * lay.w) * W
+      : x - Math.sign(x) * roomW / 2 * (Math.abs(x) > Math.abs(z) ? 1 : 0);
+    const ez = lay.exit
+      ? -D / 2 + (lay.y + lay.exit[1] * lay.d) * D
+      : z - Math.sign(z) * roomD / 2 * (Math.abs(z) >= Math.abs(x) ? 1 : 0);
+    const exitWorld = tile.center.clone().add(new THREE.Vector3(ex, floorY + 0.45, ez));
+    tile.roomExits.set(room.id, exitWorld);
+    tile.roomExits.set(room.name, exitWorld);
+    const mark = new THREE.Mesh(new THREE.CircleGeometry(0.3, 18), std({ color: 0xe0b64a }));
+    mark.rotation.x = -Math.PI / 2;
+    mark.position.set(ex, floorY + 0.46, ez);
+    g.add(mark);
   });
 
   tile.interior = g;
@@ -341,7 +386,8 @@ export function buildTile(loc: WorldLocation): Tile {
   const tile: Tile = {
     loc, group, center, isBuilding, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
-    roomCenters: new Map(), highlightRing: ring, fade: 0, fadeTarget: 0,
+    roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(),
+    highlightRing: ring, fade: 0, fadeTarget: 0,
   };
 
   const rnd = seededRandom(loc.id);
@@ -420,9 +466,14 @@ export function buildTile(loc: WorldLocation): Tile {
  *  Fürs Reinzoomen verhält sich das ganze Modell wie ein Dach — es blendet
  *  aus und gibt den Blick auf die Räume frei. */
 export function applyBuildingModel(tile: Tile, model: THREE.Group) {
-  if (!tile.shell) return;
-  tile.group.remove(tile.shell);
-  tile.shell = undefined;
+  if (!tile.isBuilding || tile.serverModel) return;
+  tile.serverModel = model;
+  // prozedurale Hülle ersetzen; Natur-Flächen (z.B. terrain "road"/"forest")
+  // haben keine — dort kommt das Modell auf die Bodenplatte dazu
+  if (tile.shell) {
+    tile.group.remove(tile.shell);
+    tile.shell = undefined;
+  }
 
   // Ausrichtung & Größe bestimmt der Server pro Location (map3d.rotation in
   // Grad, map3d.size als Kachel-Anteil); map_rotation_2d dreht als Fallback
@@ -461,6 +512,16 @@ export function applyBuildingModel(tile: Tile, model: THREE.Group) {
   const h = ((model.userData.height as number) || tile.height) * k;
   tile.height = h;
   tile.labelObj?.position.set(0, h + 2.2, 0);
+}
+
+/** Server-Raummodell (AV3D-2) auf seine Bodenplatte setzen. Das Modell ist
+ *  auf Einheits-Grundfläche normalisiert und wird in den Raum eingepasst. */
+export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
+  const slot = tile.roomSlots.get(roomId);
+  if (!slot || slot.holder.children.length) return;
+  const fp = (model.userData.footprint as { x: number; z: number }) ?? { x: 1, z: 1 };
+  model.scale.setScalar(Math.min(slot.w / fp.x, slot.d / fp.z) * 0.96);
+  slot.holder.add(model);
 }
 
 /** Nachtbeleuchtung: Fenster der Fassaden leuchten (0 = Tag, 1 = Nacht). */
