@@ -24,11 +24,14 @@ export interface TilePlacement {
 }
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
-  groundTextureUrl, placement }:
+  offsetY = 0, groundTextureUrl, placement }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
+    /** Vertical placement offset in model units/metres (tile mode only) —
+     *  negative sinks the model below the tile, like the 3D client does. */
+    offsetY?: number
     /** When `placement` is set, the viewer shows the world tile (a 1×1 ground
      *  square, textured with this image when given) and places the model on
      *  it — centred, yawed and scaled per `placement`, feet on the ground. */
@@ -44,6 +47,13 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const placeFnRef = useRef<((p: TilePlacement) => void) | null>(null)
   const placementRef = useRef(placement)
   placementRef.current = placement
+  const offsetYRef = useRef(offsetY)
+  offsetYRef.current = offsetY
+
+  // Live-apply an offset change (the placement fn reads the ref).
+  useEffect(() => {
+    if (placementRef.current) placeFnRef.current?.(placementRef.current)
+  }, [offsetY])
 
   // Live-apply a changed rotation to the mounted scene — a reload would
   // re-download a multi-MB model per 90° click. In tile mode the orientation
@@ -308,12 +318,15 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             const b = new THREE.Box3().setFromObject(place)
             const s = b.getSize(new THREE.Vector3())
             const horiz = Math.max(s.x, s.z) || 1
-            place.scale.setScalar(Math.max(0.02, Math.min(1.5, p.size)) / horiz)
+            const k = Math.max(0.02, Math.min(1.5, p.size)) / horiz
+            place.scale.setScalar(k)
             place.rotation.y = _deg(p.yawDeg)
             place.updateMatrixWorld(true)
             const b2 = new THREE.Box3().setFromObject(place)
             const c2 = b2.getCenter(new THREE.Vector3())
-            place.position.set(-c2.x, -b2.min.y, -c2.z)
+            // offset_y is in model units/metres — scale it with the model so
+            // the sink-in proportion matches what the 3D client renders.
+            place.position.set(-c2.x, -b2.min.y + (offsetYRef.current || 0) * k, -c2.z)
           }
           placeFnRef.current = applyPlacement
           disposers.push(() => {

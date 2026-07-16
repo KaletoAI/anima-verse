@@ -31,6 +31,8 @@ const PALETTE = [0x58a6ff, 0x3fb950, 0xd29922, 0xf778ba,
 interface CachedModel {
   obj: Object3D
   rotation: { x?: number; y?: number; z?: number }
+  /** Vertical placement offset in model units/metres (negative sinks it). */
+  offsetY: number
   /** Prepared once on first overlay use: the model with its own textures on
    *  unlit, semi-transparent materials — visibly the building, still
    *  see-through. Scene inserts clones of this (shared materials). */
@@ -89,12 +91,14 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
           ? `/play/rooms/${encodeURIComponent(roomId)}/model`
           : `/play/locations/${encodeURIComponent(locationId)}/model`
         const meta = await apiGet<{ format?: string; url?: string
-          rotation?: { x?: number; y?: number; z?: number } }>(`${base}/meta`)
+          rotation?: { x?: number; y?: number; z?: number }
+          offset_y?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') throw new Error(`format ${fmt}`)
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
         const gltf = await new GLTFLoader().loadAsync(meta.url || base)
-        cache.set(key, { obj: gltf.scene, rotation: meta.rotation || {} })
+        cache.set(key, { obj: gltf.scene, rotation: meta.rotation || {},
+                         offsetY: meta.offset_y || 0 })
       } catch {
         cache.set(key, 'missing')  // 404 = no model — the box stays
       }
@@ -158,7 +162,10 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
       holder.updateMatrixWorld(true)
       const b2 = new THREE.Box3().setFromObject(holder)
       const c2 = b2.getCenter(new THREE.Vector3())
-      holder.position.set(cx - c2.x, bottomY - b2.min.y, cz - c2.z)
+      // offset_y is in model units/metres — scale with the model (same
+      // proportion the 3D client renders).
+      holder.position.set(cx - c2.x,
+        bottomY - b2.min.y + entry.offsetY * holder.scale.x, cz - c2.z)
       holder.userData.__noDispose = true
       boxes.add(holder)
     }

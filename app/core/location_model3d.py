@@ -187,6 +187,7 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "source": meta.get("source", ""),
             "source_image": meta.get("source_image", ""),
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
+            "offset_y": float(meta.get("offset_y") or 0.0),
             "active": bool(active and p.name == active.name),
         })
     return out
@@ -234,7 +235,11 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
     meta = _read_sidecar(p)
     return {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
             "rig": meta.get("rig", "none"),
-            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0}}
+            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
+            # Vertical placement offset in metres (model property — reliefs
+            # have different socket thicknesses; negative sinks the model
+            # into the terrain, e.g. a park). Client applies it on load.
+            "offset_y": float(meta.get("offset_y") or 0.0)}
 
 
 def model_file_path(location_id: str, filename: str,
@@ -272,6 +277,30 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
             v = int(cur.get(axis, 0) or 0)
         rot[axis] = (v // 90 * 90) % 360
     meta["rotation"] = rot
+    _write_sidecar(p, meta)
+    return meta
+
+
+def set_offset_y(location_id: str, offset_y: Any,
+                 room_id: str = "", filename: str = "") -> Dict[str, Any]:
+    """Persist the vertical placement offset (metres, ±, clamped to ±25) on
+    ONE model's sidecar (default: the active model). A MODEL property like
+    the orientation fix — generated reliefs come with different socket
+    thicknesses, and a negative value sinks e.g. a park into the terrain.
+    Every client applies it on load. Returns the updated sidecar meta."""
+    owner = _owner_id(location_id)
+    if not owner:
+        raise ValueError("no model")
+    p = (model_file_path(location_id, filename, room_id) if filename
+         else find_building_model(location_id, room_id))
+    if not p:
+        raise ValueError("no model")
+    meta = _read_sidecar(p)
+    try:
+        v = float(offset_y)
+    except (TypeError, ValueError):
+        v = float(meta.get("offset_y") or 0.0)
+    meta["offset_y"] = round(max(-25.0, min(25.0, v)), 3)
     _write_sidecar(p, meta)
     return meta
 

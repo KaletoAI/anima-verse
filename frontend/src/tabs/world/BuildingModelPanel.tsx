@@ -26,6 +26,8 @@ export interface ModelEntry {
   source_image?: string
   /** Persisted 90°-step orientation fix — the 3D client applies it too. */
   rotation?: { x?: number; y?: number; z?: number }
+  /** Vertical placement offset in metres (± — negative sinks the model). */
+  offset_y?: number
   /** The model the clients get (/play/... routes serve only this one). */
   active?: boolean
 }
@@ -177,6 +179,34 @@ export function BuildingModelPanel({
     [current, enc, t, toast],
   )
 
+  // Vertical placement offset of the PREVIEWED model — a model property like
+  // the orientation fix (socket thicknesses differ; negative sinks e.g. a
+  // park into the terrain). Draft in a local field, committed on blur/Enter.
+  const [offsetDraft, setOffsetDraft] = useState('0')
+  useEffect(() => {
+    setOffsetDraft(String(current?.offset_y ?? 0))
+  }, [current?.filename, current?.offset_y])
+  const commitOffset = useCallback(async () => {
+    if (!current) return
+    const v = parseFloat(offsetDraft)
+    if (!Number.isFinite(v) || v === (current.offset_y ?? 0)) {
+      setOffsetDraft(String(current.offset_y ?? 0))
+      return
+    }
+    try {
+      const d = await apiPost<{ meta: { offset_y?: number } }>(
+        `/world/locations/${enc}/model3d/offset`,
+        { offset_y: v, file: current.filename })
+      setModel3d((prev) => (prev ? {
+        ...prev,
+        models: (prev.models || []).map((m) =>
+          m.filename === current.filename ? { ...m, offset_y: d.meta?.offset_y || 0 } : m),
+      } : prev))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [current, offsetDraft, enc, t, toast])
+
   // Make a stored model the active one (what the 3D clients get).
   const select = useCallback(async (filename: string) => {
     try {
@@ -296,6 +326,7 @@ export function BuildingModelPanel({
         format={current.format || 'glb'}
         height={380}
         rotation={current.rotation}
+        offsetY={current.offset_y || 0}
         groundTextureUrl={roomId ? undefined : mapIconUrl}
         placement={roomId ? undefined : { yawDeg: effectiveYaw, size: effectiveSize }}
       />
@@ -311,8 +342,21 @@ export function BuildingModelPanel({
             ↻ {axis.toUpperCase()} +90° ({current.rotation?.[axis] || 0}°)
           </button>
         ))}
+        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
+          {t('Height offset (m)')}
+          <input
+            className="ga-input"
+            type="number"
+            step={0.05}
+            style={{ width: 90 }}
+            value={offsetDraft}
+            onChange={(e) => setOffsetDraft(e.target.value)}
+            onBlur={() => { void commitOffset() }}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          />
+        </label>
         <span className="ga-hint">
-          {t('Orientation fix of the shown model — persisted; the 3D map client applies it too.')}
+          {t('Orientation fix + height offset of the shown model — persisted; negative sinks it into the terrain, the 3D client applies both.')}
         </span>
       </div>
 
