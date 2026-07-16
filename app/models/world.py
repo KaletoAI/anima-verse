@@ -475,6 +475,23 @@ def get_room_by_id(location: Dict[str, Any], room_id: str) -> Optional[Dict[str,
     return None
 
 
+def find_location_by_room(room_id: str) -> Optional[Dict[str, Any]]:
+    """The location OWNING a room id (templates/originals only — clone records
+    store ``rooms: []`` and inherit the template's rooms on merge, so their
+    room ids are template-identical). Used by the per-room model routes
+    (AV3D-2), where only the owner's store matters. None when unknown."""
+    if not room_id:
+        return None
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if (loc.get("template_location_id") or "").strip():
+            continue
+        for room in loc.get("rooms", []) or []:
+            if room.get("id") == room_id:
+                return loc
+    return None
+
+
 def get_room_by_name(location: Dict[str, Any], room_name: str) -> Optional[Dict[str, Any]]:
     """Findet einen Raum per Name (exakt oder fuzzy) in einem Ort."""
     if not room_name:

@@ -370,6 +370,105 @@ async def location_model3d_rotation(location_id: str, request: Request) -> Dict[
     return {"meta": meta}
 
 
+# --- Room models (AV3D-2) — same store/contract as the building model, one
+# per room (stem room_<room_id>, shared with clones via the template rooms).
+
+def _require_room(location_id: str, room_id: str) -> None:
+    loc = get_location_by_id(location_id)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    from app.models.world import get_room_by_id
+    if not get_room_by_id(loc, room_id):
+        raise HTTPException(status_code=404, detail="Room not found")
+
+
+@router.get("/locations/{location_id}/rooms/{room_id}/model3d/status")
+def room_model3d_status(location_id: str, room_id: str) -> Dict[str, Any]:
+    """Room-model status: {exists, pending, meta, backends, default}."""
+    from app.core.location_model3d import get_building_info
+    _require_room(location_id, room_id)
+    return get_building_info(location_id, room_id=room_id)
+
+
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/generate")
+async def room_model3d_generate(location_id: str, room_id: str,
+                                request: Request) -> Dict[str, Any]:
+    """Generate the room's 3D model from a gallery image assigned to the room
+    (body: {source_image, backend?}). Background job — poll status for pending."""
+    from app.core.location_model3d import trigger_generation
+    _require_room(location_id, room_id)
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    source_image = str(data.get("source_image") or "").strip()
+    if not source_image:
+        raise HTTPException(status_code=400,
+                            detail="source_image required (a gallery image assigned to the room)")
+    backend = str(data.get("backend") or "").strip()
+    if not trigger_generation(location_id, source_image=source_image,
+                              backend_glob=backend, room_id=room_id):
+        return {"status": "already_running"}
+    return {"status": "generating"}
+
+
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/upload")
+async def room_model3d_upload(location_id: str, room_id: str,
+                              request: Request) -> Dict[str, Any]:
+    """Upload a GLB as the room's 3D model (validated as an unrigged GLB with
+    an embedded texture; force=1 stores despite validation errors)."""
+    from app.core.location_model3d import save_uploaded_building
+    from app.core.model_validate import validate_static_glb
+    _require_room(location_id, room_id)
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    if not (file.filename or "").lower().endswith(".glb"):
+        raise HTTPException(status_code=400,
+                            detail="Room models must be a GLB (embedded texture, no rig)")
+    contents = await file.read()
+    if len(contents) > _LOCATION_MODEL_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+    result = validate_static_glb(contents)
+    force = str(form.get("force") or "").strip().lower() in ("1", "true", "yes")
+    if not result["ok"] and not force:
+        raise HTTPException(status_code=422, detail={
+            "reason": "invalid_model",
+            "errors": result["errors"],
+            "warnings": result["warnings"],
+        })
+    meta = save_uploaded_building(location_id, contents,
+                                  source_image=str(form.get("source_image") or ""),
+                                  room_id=room_id)
+    return {"status": "success", **meta, "warnings": result["warnings"]}
+
+
+@router.delete("/locations/{location_id}/rooms/{room_id}/model3d")
+def room_model3d_delete(location_id: str, room_id: str) -> Dict[str, Any]:
+    """Remove the room's 3D model + sidecar."""
+    from app.core.location_model3d import delete_building_model
+    _require_room(location_id, room_id)
+    return {"status": "success",
+            "removed": delete_building_model(location_id, room_id=room_id)}
+
+
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/rotation")
+async def room_model3d_rotation(location_id: str, room_id: str,
+                                request: Request) -> Dict[str, Any]:
+    """Persist the room model's orientation fix ({x,y,z} in 90-degree steps) —
+    same contract as the building model."""
+    from app.core.location_model3d import set_rotation
+    _require_room(location_id, room_id)
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    try:
+        meta = set_rotation(location_id, data, room_id=room_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="No model")
+    return {"meta": meta}
+
+
 # ── Map Layout Import / Export ──
 
 @router.get("/map/export")

@@ -291,6 +291,67 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     return out
 
 
+def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
+    """Whitelist + coerce a room's floor-plan placement (AV3D-2).
+
+    Consumed by external 3D clients; the 2D UI stores/edits but never renders
+    it. A layout counts as set when x/y/w/d are all valid (fractions of the
+    building footprint, top-left corner + size); ``level`` defaults to 0,
+    ``rotation`` (degrees yaw) and ``exit`` ([x, y] as fractions of the ROOM
+    rectangle) are optional. Empty result means "unset" → client auto-grid.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    try:
+        x = float(raw.get("x"))
+        y = float(raw.get("y"))
+        w = float(raw.get("w"))
+        d = float(raw.get("d"))
+    except (TypeError, ValueError):
+        return {}
+    if not (0 < w <= 1 and 0 < d <= 1):
+        return {}
+    out["x"] = round(min(max(x, 0.0), 1.0), 4)
+    out["y"] = round(min(max(y, 0.0), 1.0), 4)
+    out["w"] = round(w, 4)
+    out["d"] = round(d, 4)
+    try:
+        out["level"] = int(raw.get("level") or 0)
+    except (TypeError, ValueError):
+        out["level"] = 0
+    rot = raw.get("rotation")
+    if rot is not None and f"{rot}".strip() != "":
+        try:
+            out["rotation"] = int(round(float(rot))) % 360
+        except (TypeError, ValueError):
+            pass
+    ex = raw.get("exit")
+    if isinstance(ex, (list, tuple)) and len(ex) == 2:
+        try:
+            out["exit"] = [round(min(max(float(ex[0]), 0.0), 1.0), 4),
+                           round(min(max(float(ex[1]), 0.0), 1.0), 4)]
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _sanitize_rooms_layout(rooms: Any) -> Any:
+    """Apply the layout sanitizer to every room dict in place (rooms pass
+    through add_location verbatim otherwise). Invalid layouts are dropped."""
+    if not isinstance(rooms, list):
+        return rooms
+    for room in rooms:
+        if not isinstance(room, dict) or "layout" not in room:
+            continue
+        lay = _sanitize_room_layout(room.get("layout"))
+        if lay:
+            room["layout"] = lay
+        else:
+            room.pop("layout", None)
+    return rooms
+
+
 def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     """Create or update a location from a parsed request body (incl. extra fields)."""
     user_id = data.get("user_id", "").strip()
@@ -319,6 +380,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="Name missing")
     if not isinstance(rooms, list):
         raise HTTPException(status_code=400, detail="rooms must be a list")
+    _sanitize_rooms_layout(rooms)
 
     location = add_location(location_name, description, rooms=rooms,
                             image_prompt_day=image_prompt_day,
@@ -416,6 +478,8 @@ def update_location_with_extras(location_id: str,
         rename_location(location_id, new_name)
 
     # Update description, rooms and image prompts if provided
+    if rooms is not None:
+        _sanitize_rooms_layout(rooms)
     has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map, image_prompt_map_2d, image_prompt_building])
     if has_updates:
         loc = get_location_by_id(location_id)

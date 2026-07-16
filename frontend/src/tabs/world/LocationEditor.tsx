@@ -10,6 +10,7 @@ import { DANGER_LEVELS, MAP3D_STYLES, TERRAIN_TYPES, type Location, type Map3D }
 import { RandomEventsEditor } from './RandomEventsEditor'
 import { LocationGallery } from './LocationGallery'
 import { BuildingModelPanel } from './BuildingModelPanel'
+import { RoomLayoutEditor } from './RoomLayoutEditor'
 
 // ── Location editor ────────────────────────────────────────────────────────
 // Split into three tabs: General (gameplay data), 2D world (day/night/map
@@ -411,6 +412,12 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           />
         </Field>
       </div>
+
+      <RoomLayoutEditor
+        rooms={draft.rooms || []}
+        footprint={draft.map3d?.footprint}
+        onChange={(rooms) => upd('rooms', rooms)}
+      />
 
       <BuildingModelPanel
         locationId={location.id}

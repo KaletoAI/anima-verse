@@ -35,31 +35,44 @@ const DEFAULT_TILE_SIZE = 0.92
 
 interface BuildingModelPanelProps {
   locationId: string
+  /** When set, the panel manages the ROOM model (AV3D-2) instead of the
+   *  building: room routes + /play/rooms model URL, no map placement (a
+   *  room's position comes from its floor-plan layout). */
+  roomId?: string
   /** Ground texture for the tile — the location's current 2D map icon, if any. */
   mapIconUrl?: string
-  /** Draft map3d — rotation/size are read from and written into it. */
+  /** Draft map3d — rotation/size are read from and written into it (building only). */
   map3d?: Map3D
   /** The 2D icon rotation: the client's yaw fallback when map3d.rotation is unset. */
-  fallbackYawDeg: number
+  fallbackYawDeg?: number
   /** Write a placement field into the draft (undefined removes = back to default). */
-  onMap3dField: (key: 'rotation' | 'size', value: number | undefined) => void
-  /** Building image picked via 🧊 in the gallery — opens the backend picker. */
+  onMap3dField?: (key: 'rotation' | 'size', value: number | undefined) => void
+  /** Source image picked via 🧊 in the gallery — opens the backend picker. */
   generateSource: string | null
   onGenerateSourceConsumed: () => void
 }
 
 export function BuildingModelPanel({
   locationId,
+  roomId = '',
   mapIconUrl,
   map3d,
-  fallbackYawDeg,
+  fallbackYawDeg = 0,
   onMap3dField,
   generateSource,
   onGenerateSourceConsumed,
 }: BuildingModelPanelProps) {
   const { t } = useI18n()
   const { toast } = useToast()
-  const enc = encodeURIComponent(locationId)
+  const encLoc = encodeURIComponent(locationId)
+  // Admin API base + client model URL switch between building and room.
+  const enc = roomId
+    ? `${encLoc}/rooms/${encodeURIComponent(roomId)}`
+    : encLoc
+  const modelUrl = roomId
+    ? `/play/rooms/${encodeURIComponent(roomId)}/model`
+    : `/play/locations/${encLoc}/model`
+  const label = roomId ? t('3D room model') : t('3D building model')
   const [model3d, setModel3d] = useState<BuildingModelStatus | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -187,7 +200,9 @@ export function BuildingModelPanel({
       <button
         className="ga-btn ga-btn-sm"
         onClick={() => uploadRef.current?.click()}
-        title={t('Upload a GLB as the location’s 3D building model.')}
+        title={roomId
+          ? t('Upload a GLB as this room’s 3D model.')
+          : t('Upload a GLB as the location’s 3D building model.')}
       >
         ⬆ {t('Upload model')}
       </button>
@@ -204,7 +219,7 @@ export function BuildingModelPanel({
   const picker = (
     <MeshBackendDialog
       open={generateSource !== null}
-      title={t('Generate 3D building model')}
+      title={roomId ? t('Generate 3D room model') : t('Generate 3D building model')}
       backends={model3d?.backends || []}
       defaultBackend={
         model3d?.default
@@ -219,13 +234,15 @@ export function BuildingModelPanel({
     return (
       <div className="ga-form" style={{ gap: 6 }}>
         {picker}
-        <div className="ga-form-section-label">{t('3D building model')}</div>
+        <div className="ga-form-section-label">{label}</div>
         {model3d?.pending ? (
           <span className="ga-hint">{t('Generating the 3D model — this takes a few minutes.')}</span>
         ) : (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="ga-hint">
-              {t('No model yet — generate it from a building image (🧊 on a gallery tile below) or upload a GLB.')}
+              {roomId
+                ? t('No model yet — generate it from a gallery image assigned to this room (🧊 on a tile) or upload a GLB.')
+                : t('No model yet — generate it from a building image (🧊 on a gallery tile below) or upload a GLB.')}
             </span>
             {uploadButton}
           </div>
@@ -237,17 +254,17 @@ export function BuildingModelPanel({
   return (
     <div className="ga-form" style={{ gap: 6 }}>
       {picker}
-      <div className="ga-form-section-label">{t('3D building model')}</div>
+      <div className="ga-form-section-label">{label}</div>
       {model3d.pending ? (
         <span className="ga-hint">{t('Generating a new model — the current one stays until it is done.')}</span>
       ) : null}
       <Model3DViewer
-        url={`/play/locations/${enc}/model?v=${encodeURIComponent(model3d.meta?.created_at || '')}`}
+        url={`${modelUrl}?v=${encodeURIComponent(model3d.meta?.created_at || '')}`}
         format={model3d.meta?.format || 'glb'}
         height={380}
         rotation={model3d.meta?.rotation}
-        groundTextureUrl={mapIconUrl}
-        placement={{ yawDeg: effectiveYaw, size: effectiveSize }}
+        groundTextureUrl={roomId ? undefined : mapIconUrl}
+        placement={roomId ? undefined : { yawDeg: effectiveYaw, size: effectiveSize }}
       />
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -266,9 +283,12 @@ export function BuildingModelPanel({
         </span>
       </div>
 
-      {/* Map placement (map3d.rotation / map3d.size) — edits the LOCATION
-          draft, so it is applied live in the viewer above but persisted via
-          the location's Save button, like every other map3d field. */}
+      {/* Map placement (map3d.rotation / map3d.size) — building only: a room
+          gets its position from the floor-plan layout instead. Edits the
+          LOCATION draft, so it is applied live in the viewer above but
+          persisted via the location's Save button, like every other map3d
+          field. */}
+      {!roomId && onMap3dField ? (
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.82em' }}>
           {t('Rotation on tile (°)')}
@@ -349,6 +369,7 @@ export function BuildingModelPanel({
           {t('Placement on the world tile — saved with the location.')}
         </span>
       </div>
+      ) : null}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {model3d.meta?.source_image ? (

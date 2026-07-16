@@ -20,6 +20,10 @@ export function WorldTab() {
   const [placements, setPlacements] = useState<Location[]>([])
   const [selection, setSelection] = useState<Selection>(null)
   const [items, setItems] = useState<ItemRef[]>([])
+  // Room-model source image (🧊 in the room gallery) — wired into the
+  // RoomEditor's model panel; reset whenever the selection changes.
+  const [roomModelSrc, setRoomModelSrc] = useState<string | null>(null)
+  useEffect(() => { setRoomModelSrc(null) }, [selection])
 
   const reload = useCallback(async () => {
     try {
@@ -179,6 +183,8 @@ export function WorldTab() {
                 location={selectedLocation}
                 room={selectedRoom}
                 items={items}
+                modelGenSource={roomModelSrc}
+                onModelGenConsumed={() => setRoomModelSrc(null)}
                 onChanged={reload}
                 onDeleted={() => {
                   setSelection({ kind: 'location', locationId: selectedLocation.id })
@@ -199,6 +205,7 @@ export function WorldTab() {
                 roomFilter={selectedRoom.id || undefined}
                 allLocations={locations}
                 placements={placements}
+                onGenerateModel={setRoomModelSrc}
               />
             ) : (
               <div className="ga-placeholder">{t('Select a place to view its gallery.')}</div>

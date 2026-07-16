@@ -7,6 +7,7 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { type ItemRef } from '../../lib/refs'
 import { type Location, type Room } from './worldTypes'
 import { RoomItems } from './RoomItems'
+import { BuildingModelPanel } from './BuildingModelPanel'
 
 // ── Room editor ────────────────────────────────────────────────────────────
 
@@ -14,11 +15,14 @@ interface RoomEditorProps {
   location: Location
   room: Room
   items: ItemRef[]
+  /** Gallery image picked via 🧊 for the room model — wired through WorldTab. */
+  modelGenSource: string | null
+  onModelGenConsumed: () => void
   onChanged: () => void
   onDeleted: () => void
 }
 
-export function RoomEditor({ location, room, items, onChanged, onDeleted }: RoomEditorProps) {
+export function RoomEditor({ location, room, items, modelGenSource, onModelGenConsumed, onChanged, onDeleted }: RoomEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Room>(() => ({ ...room }))
@@ -169,6 +173,13 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
             </Field>
           </div>
         </div>
+
+        <BuildingModelPanel
+          locationId={location.id}
+          roomId={room.id || ''}
+          generateSource={modelGenSource}
+          onGenerateSourceConsumed={onModelGenConsumed}
+        />
 
         <RoomItems locationId={location.id} roomId={room.id || ''} items={items} />
       </div>

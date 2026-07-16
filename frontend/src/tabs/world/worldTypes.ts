@@ -1,3 +1,17 @@
+// Floor-plan placement of a room inside its building (AV3D-2). x/y = top-left
+// corner, w/d = width/depth — all fractions of the building footprint; level
+// is the floor (0 = ground, negative = basement); exit is the walk-in/out
+// point as fractions of the ROOM rectangle. Absent = client auto-grid.
+export interface RoomLayout {
+  level?: number
+  x: number
+  y: number
+  w: number
+  d: number
+  rotation?: number
+  exit?: [number, number]
+}
+
 export interface Room {
   id?: string
   name?: string
@@ -12,6 +26,7 @@ export interface Room {
   activity_hint?: string
   image_prompt_day?: string
   image_prompt_night?: string
+  layout?: RoomLayout
 }
 
 // Optional 3D metadata for external 3D map clients (AV3D-1). The 2D UI

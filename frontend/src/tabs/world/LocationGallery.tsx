@@ -187,8 +187,9 @@ export function LocationGallery({
    *  images (day/night/map icons), '3d' shows only the building images that
    *  feed the 3D model. Follows the location editor's tab split. */
   mode: '2d' | '3d'
-  /** 3D mode: turn a building image into the location's model (🧊 per tile).
-   *  Provided by the 3D tab, which owns the model panel + backend picker. */
+  /** Turn a building-type image into a 3D model (🧊 per tile): the location's
+   *  building model (3D tab) or — with roomFilter — the room's model. The
+   *  caller owns the model panel + backend picker. */
   onGenerateModel?: (image: string) => void
 }) {
   const { t } = useI18n()
@@ -285,8 +286,12 @@ export function LocationGallery({
     const byRoom = roomFilter
       ? all.filter((f) => (rms[f] || '') === roomFilter)
       : all.filter((f) => !rms[f] || rms[f] === '')
-    return byRoom.filter((f) =>
-      mode === '3d' ? (tps[f] || '') === 'building' : (tps[f] || '') !== 'building')
+    if (mode === '3d') return byRoom.filter((f) => (tps[f] || '') === 'building')
+    // A room view shows ALL its images incl. its building-type model source
+    // (the 🧊 lives there); the location-level 2D tab excludes building
+    // images — those belong to the 3D tab.
+    if (roomFilter) return byRoom
+    return byRoom.filter((f) => (tps[f] || '') !== 'building')
   }, [data, roomFilter, mode])
 
   const setType = useCallback(
@@ -334,6 +339,13 @@ export function LocationGallery({
     (promptType: string): string => {
       const fromRoom = (key: 'image_prompt_day' | 'image_prompt_night') =>
         (room && (room as Record<string, unknown>)[key]) as string | undefined
+      // Room model-source image: subject only (style comes from the building
+      // use case) — open-top interior so the mesh works in top-down views.
+      if (promptType === 'building' && room) {
+        const subj = (room.description || room.name || '').trim()
+          || (location.description || location.name || '')
+        return `${subj}, room interior without ceiling, open-top dollhouse view`
+      }
       // The 3x3 patch shares the map prompt — same top-down look, larger area.
       const isMap = promptType === 'map_2d' || promptType === 'map_3x3'
       let desc = ''
@@ -368,7 +380,9 @@ export function LocationGallery({
         prompt_type: dialogType,
         prompt: payload.prompt,
       }
-      if (roomFilter && dialogType !== 'map_2d' && dialogType !== 'map_3x3' && dialogType !== 'building') body.room_id = roomFilter
+      // Room context: assign the image to the room — including 'building'
+      // (the room's model-source image). Map types have no room dimension.
+      if (roomFilter && dialogType !== 'map_2d' && dialogType !== 'map_3x3') body.room_id = roomFilter
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
       // The dialog already has the map-icon suffix in the prompt → don't duplicate it server-side.
@@ -548,6 +562,16 @@ export function LocationGallery({
               🟩 {t('Generate 3×3 tile')}
             </button>
           ) : null}
+          {roomFilter ? (
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={!!busy}
+              onClick={() => setDialogType('building')}
+              title={t('Generate the room’s model source image (open-top interior — feeds the 3D room model via 🧊).')}
+            >
+              🏛 {t('Generate model image')}
+            </button>
+          ) : null}
           {!roomFilter ? (
             <button
               className="ga-btn ga-btn-sm"
@@ -641,7 +665,7 @@ export function LocationGallery({
           : dialogType === 'night'
             ? t('Generate night image — {name}').replace('{name}', room?.name || location.name)
             : dialogType === 'building'
-              ? t('Generate building image — {name}').replace('{name}', location.name)
+              ? t('Generate building image — {name}').replace('{name}', room?.name || location.name)
               : dialogType === 'map_3x3'
                 ? t('Generate 3×3 map tile — {name}').replace('{name}', location.name)
                 : t('Generate 2D map icon — {name}').replace('{name}', location.name)
@@ -730,7 +754,7 @@ export function LocationGallery({
               onMove={startMove}
               onRemove={remove}
               removeArmed={armedRemove === filename}
-              onGenerateModel={mode === '3d' && !roomFilter ? onGenerateModel : undefined}
+              onGenerateModel={onGenerateModel}
             />
           )
         })}

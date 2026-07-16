@@ -427,6 +427,39 @@ def play_location_model_meta(location_id: str):
     return {**meta, "url": f"/play/locations/{quote(location_id)}/model"}
 
 
+# --- Room models (AV3D-2) — same contract as the building model, addressed
+# by room id alone (room ids are template-identical across clones).
+
+@router.get("/play/rooms/{room_id}/model")
+def play_room_model(room_id: str, request: Request):
+    """Serves the room's 3D model (GLB bytes). 404 = no model (the client
+    keeps rendering the room as a plain slab). ETag/If-None-Match."""
+    from fastapi.responses import Response
+    from app.models.world import find_location_by_room
+    from app.core.location_model3d import find_building_model
+    from app.core.http_files import etag_file_response
+    loc = find_location_by_room(room_id)
+    p = find_building_model(loc.get("id", ""), room_id=room_id) if loc else None
+    if not p:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
+             else "application/octet-stream")
+    return etag_file_response(p, request, media)
+
+
+@router.get("/play/rooms/{room_id}/model/meta")
+def play_room_model_meta(room_id: str):
+    """Meta of the room's 3D model ({format, rig, rotation, url}). 404 = none."""
+    from urllib.parse import quote
+    from app.models.world import find_location_by_room
+    from app.core.location_model3d import get_client_meta
+    loc = find_location_by_room(room_id)
+    meta = get_client_meta(loc.get("id", ""), room_id=room_id) if loc else None
+    if not meta:
+        raise HTTPException(status_code=404, detail="No model")
+    return {**meta, "url": f"/play/rooms/{quote(room_id)}/model"}
+
+
 def _party_block(avatar: str):
     """Party-Status des Avatars fuer die UI (None = in keiner Party)."""
     try:
