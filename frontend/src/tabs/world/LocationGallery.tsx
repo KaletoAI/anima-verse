@@ -340,11 +340,13 @@ export function LocationGallery({
       const fromRoom = (key: 'image_prompt_day' | 'image_prompt_night') =>
         (room && (room as Record<string, unknown>)[key]) as string | undefined
       // Room model-source image: subject only (style comes from the building
-      // use case) — open-top interior so the mesh works in top-down views.
+      // use case). No ceiling + two open walls so the mesh works in top-down
+      // and cutaway views — the full default is visible and editable in the
+      // dialog's prompt field.
       if (promptType === 'building' && room) {
         const subj = (room.description || room.name || '').trim()
           || (location.description || location.name || '')
-        return `${subj}, room interior without ceiling, open-top dollhouse view`
+        return `${subj}, room interior, no ceiling, two walls removed, open cutaway corner view, dollhouse style`
       }
       // The 3x3 patch shares the map prompt — same top-down look, larger area.
       const isMap = promptType === 'map_2d' || promptType === 'map_3x3'
