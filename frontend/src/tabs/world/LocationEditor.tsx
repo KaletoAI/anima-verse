@@ -11,13 +11,15 @@ import { RandomEventsEditor } from './RandomEventsEditor'
 import { LocationGallery } from './LocationGallery'
 import { BuildingModelPanel } from './BuildingModelPanel'
 import { RoomLayoutEditor } from './RoomLayoutEditor'
+import { FloorPlanPreview } from './FloorPlanPreview'
 
 // ── Location editor ────────────────────────────────────────────────────────
-// Split into three tabs: General (gameplay data), 2D world (day/night/map
-// images) and 3D world (map metadata + building images + the building model
-// with its tile placement). One draft spans all tabs — Save persists it all.
+// Split into four tabs: General (gameplay data), 2D world (day/night/map
+// images), 3D world (map metadata + building images + the building model
+// with its tile placement) and Floor plan (room layout editor + live 3D
+// preview). One draft spans all tabs — Save persists it all.
 
-type LocTab = 'general' | '2d' | '3d'
+type LocTab = 'general' | '2d' | '3d' | 'floor'
 
 interface LocationEditorProps {
   location: Location
@@ -414,11 +416,18 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
       </div>
 
       <div className="ga-loc-twocol">
-        <RoomLayoutEditor
-          rooms={draft.rooms || []}
-          footprint={draft.map3d?.footprint}
-          onChange={(rooms) => upd('rooms', rooms)}
-        />
+        <div className="ga-form" style={{ gap: 6 }}>
+          <div className="ga-form-section-label">{t('Building images')}</div>
+          <LocationGallery
+            mode="3d"
+            locationId={location.id}
+            location={location}
+            room={null}
+            allLocations={allLocations}
+            placements={placements}
+            onGenerateModel={setModelGenSrc}
+          />
+        </div>
         <BuildingModelPanel
           locationId={location.id}
           mapIconUrl={mapIconUrl}
@@ -429,17 +438,22 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           onGenerateSourceConsumed={() => setModelGenSrc(null)}
         />
       </div>
+    </div>
+  )
 
-      <div className="ga-form-section-label">{t('Building images')}</div>
-      <LocationGallery
-        mode="3d"
-        locationId={location.id}
-        location={location}
-        room={null}
-        allLocations={allLocations}
-        placements={placements}
-        onGenerateModel={setModelGenSrc}
-      />
+  const tabFloor = (
+    <div className="ga-form">
+      <div className="ga-loc-twocol">
+        <RoomLayoutEditor
+          rooms={draft.rooms || []}
+          footprint={draft.map3d?.footprint}
+          onChange={(rooms) => upd('rooms', rooms)}
+        />
+        <FloorPlanPreview
+          rooms={draft.rooms || []}
+          footprint={draft.map3d?.footprint}
+        />
+      </div>
     </div>
   )
 
@@ -468,6 +482,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           { id: 'general', label: 'General' },
           { id: '2d', label: '2D world' },
           { id: '3d', label: '3D world' },
+          { id: 'floor', label: 'Floor plan' },
         ] as Array<{ id: LocTab; label: string }>).map((tb) => (
           <button
             key={tb.id}
@@ -479,7 +494,10 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           </button>
         ))}
       </nav>
-      {tab === 'general' ? generalTab : tab === '2d' ? tab2d : tab3d}
+      {tab === 'general' ? generalTab
+        : tab === '2d' ? tab2d
+        : tab === '3d' ? tab3d
+        : tabFloor}
     </>
   )
 }
