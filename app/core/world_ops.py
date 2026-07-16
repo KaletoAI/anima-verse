@@ -288,6 +288,16 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["size"] = round(s, 3)
         except (TypeError, ValueError):
             pass
+    # Storey height in metres for stacking the room-layout levels (floor-plan
+    # preview + 3D client). Absent = default 3.
+    lh = raw.get("level_height")
+    if lh is not None and f"{lh}".strip() != "":
+        try:
+            v = float(lh)
+            if 0.5 <= v <= 50:
+                out["level_height"] = round(v, 2)
+        except (TypeError, ValueError):
+            pass
     return out
 
 

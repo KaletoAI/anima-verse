@@ -43,6 +43,9 @@ export interface Map3D {
   /** Building base size as a fraction of the tile edge (0..1).
    *  Absent = client default 0.92. */
   size?: number
+  /** Storey height in metres — stacks the floor-plan levels (preview +
+   *  3D client). Absent = default 3. */
+  level_height?: number
 }
 
 export interface EventSettings {

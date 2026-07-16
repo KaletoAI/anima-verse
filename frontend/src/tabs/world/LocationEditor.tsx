@@ -287,7 +287,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         <Field label={t('Day prompt')} help="image_prompt">
           <textarea
             className="ga-textarea"
-            rows={2}
+            rows={4}
             value={draft.image_prompt_day || ''}
             onChange={(e) => upd('image_prompt_day', e.target.value)}
           />
@@ -295,7 +295,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         <Field label={t('Night prompt')} help="image_prompt">
           <textarea
             className="ga-textarea"
-            rows={2}
+            rows={4}
             value={draft.image_prompt_night || ''}
             onChange={(e) => upd('image_prompt_night', e.target.value)}
           />
@@ -303,7 +303,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         <Field label={t('2D map icon prompt')} help="image_prompt">
           <textarea
             className="ga-textarea"
-            rows={2}
+            rows={4}
             value={draft.image_prompt_map_2d || ''}
             onChange={(e) => upd('image_prompt_map_2d', e.target.value)}
           />
@@ -323,7 +323,10 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const tab3d = (
     <div className="ga-form">
       <div className="ga-form-section-label">{t('Map metadata (3D clients)')}</div>
-      <div className="ga-form-row">
+      {/* 4-column grid: the building prompt spans both rows in the last
+          column (row 1: terrain/footprint/floors, row 2: style/color/level
+          height). */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1.4fr', gap: 12, alignItems: 'start' }}>
         <Field label={t('Terrain')} hint={t('Ground type of this map cell. Free text; without it, clients guess from the name.')}>
           <input
             className="ga-input"
@@ -338,19 +341,28 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             ))}
           </datalist>
         </Field>
-        <Field label={t('Building style')} hint={t('Procedural fallback only — used by 3D clients when the location has NO building model. Free text; suggestions provided.')}>
-          <input
-            className="ga-input"
-            list="map3d-style-options"
-            value={draft.map3d?.style || ''}
-            placeholder={t('auto')}
-            onChange={(e) => updMap3d('style', e.target.value.trim() ? e.target.value : undefined)}
-          />
-          <datalist id="map3d-style-options">
-            {MAP3D_STYLES.map((v) => (
-              <option key={v} value={v} />
-            ))}
-          </datalist>
+        <Field label={t('Footprint (W × D)')} hint={t('Building base size in map grid cells.')}>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <input
+              className="ga-input"
+              type="number"
+              min={1}
+              style={{ width: 70 }}
+              value={footprint[0] || ''}
+              placeholder="1"
+              onChange={(e) => setFootprint(0, e.target.value)}
+            />
+            <span>×</span>
+            <input
+              className="ga-input"
+              type="number"
+              min={1}
+              style={{ width: 70 }}
+              value={footprint[1] || ''}
+              placeholder="1"
+              onChange={(e) => setFootprint(1, e.target.value)}
+            />
+          </div>
         </Field>
         <Field label={t('Floors')} hint={t('Procedural fallback only (no building model). Empty = derived from the floor plan (highest level + 1).')}>
           <input
@@ -375,30 +387,29 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             }}
           />
         </Field>
-      </div>
-      <div className="ga-form-row">
-        <Field label={t('Footprint (W × D)')} hint={t('Building base size in map grid cells.')}>
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-            <input
-              className="ga-input"
-              type="number"
-              min={1}
-              style={{ width: 70 }}
-              value={footprint[0] || ''}
-              placeholder="1"
-              onChange={(e) => setFootprint(0, e.target.value)}
+        <div style={{ gridRow: 'span 2' }}>
+          <Field label={t('Building prompt')} help="image_prompt">
+            <textarea
+              className="ga-textarea"
+              rows={6}
+              value={draft.image_prompt_building || ''}
+              onChange={(e) => upd('image_prompt_building', e.target.value)}
             />
-            <span>×</span>
-            <input
-              className="ga-input"
-              type="number"
-              min={1}
-              style={{ width: 70 }}
-              value={footprint[1] || ''}
-              placeholder="1"
-              onChange={(e) => setFootprint(1, e.target.value)}
-            />
-          </div>
+          </Field>
+        </div>
+        <Field label={t('Building style')} hint={t('Procedural fallback only — used by 3D clients when the location has NO building model. Free text; suggestions provided.')}>
+          <input
+            className="ga-input"
+            list="map3d-style-options"
+            value={draft.map3d?.style || ''}
+            placeholder={t('auto')}
+            onChange={(e) => updMap3d('style', e.target.value.trim() ? e.target.value : undefined)}
+          />
+          <datalist id="map3d-style-options">
+            {MAP3D_STYLES.map((v) => (
+              <option key={v} value={v} />
+            ))}
+          </datalist>
         </Field>
         <Field label={t('Building color')} hint={t('Base color for procedural buildings (hex).')}>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -415,12 +426,19 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             />
           </div>
         </Field>
-        <Field label={t('Building prompt')} help="image_prompt">
-          <textarea
-            className="ga-textarea"
-            rows={2}
-            value={draft.image_prompt_building || ''}
-            onChange={(e) => upd('image_prompt_building', e.target.value)}
+        <Field label={t('Level height (m)')} hint={t('Storey height in metres — stacks the floor-plan levels (preview + 3D client).')}>
+          <input
+            className="ga-input"
+            type="number"
+            min={0.5}
+            max={50}
+            step={0.1}
+            value={draft.map3d?.level_height ?? ''}
+            placeholder="3"
+            onChange={(e) => {
+              const n = parseFloat(e.target.value)
+              updMap3d('level_height', Number.isFinite(n) && n > 0 ? n : undefined)
+            }}
           />
         </Field>
       </div>
@@ -463,6 +481,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           locationId={location.id}
           rooms={draft.rooms || []}
           footprint={draft.map3d?.footprint}
+          levelHeightM={draft.map3d?.level_height}
         />
       </div>
     </div>

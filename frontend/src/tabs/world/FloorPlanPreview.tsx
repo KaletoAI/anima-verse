@@ -24,9 +24,10 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { Room } from './worldTypes'
 
-// Storey height in plate units — tuned against real building models
-// (0.3 read ~50% too tall next to the ghost overlay).
-const LEVEL_H = 0.2
+// Metres per map tile assumed by the preview — 3 m storeys render as 0.2
+// plate units, which lined up with real building models.
+const TILE_METERS = 15
+const DEFAULT_LEVEL_M = 3
 const PALETTE = [0x58a6ff, 0x3fb950, 0xd29922, 0xf778ba,
                  0xa371f7, 0xf85149, 0x79c0ff, 0x56d364]
 
@@ -47,10 +48,12 @@ interface FloorPlanPreviewProps {
   rooms: Room[]
   /** Building footprint in grid cells (map3d.footprint) — plate aspect. */
   footprint?: number[]
+  /** Storey height in metres (map3d.level_height) — empty = 3. */
+  levelHeightM?: number
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, height = 360 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -78,6 +81,9 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
 
   const fw = Math.max(1, footprint?.[0] || 1)
   const fd = Math.max(1, footprint?.[1] || 1)
+  // Storey height in plate units: configured metres over the assumed
+  // metres-per-tile (default 3 m ≙ 0.2 units).
+  const lh = (levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M) / TILE_METERS
 
   // Fetch a model (meta + GLB) into the cache; returns it when ready. A miss
   // is cached too — no retry storm per drag frame.
@@ -179,8 +185,8 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
       const w = lay.w * fw
       const d = lay.d * fd
       const level = lay.level || 0
-      const bottomY = level * LEVEL_H
-      const cy = bottomY + LEVEL_H / 2
+      const bottomY = level * lh
+      const cy = bottomY + lh / 2
       const cx = (lay.x + lay.w / 2 - 0.5) * fw
       const cz = (lay.y + lay.d / 2 - 0.5) * fd
 
@@ -195,7 +201,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
       const roomGroup = new THREE.Group()
       if (!model) {
         const box = new THREE.Mesh(
-          new THREE.BoxGeometry(w, LEVEL_H * 0.94, d),
+          new THREE.BoxGeometry(w, lh * 0.94, d),
           new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.5 }),
         )
         const edges = new THREE.LineSegments(
@@ -211,7 +217,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
           new THREE.SphereGeometry(Math.min(fw, fd) * 0.02, 12, 12),
           new THREE.MeshBasicMaterial({ color: 0xe0a356 }),
         )
-        dot.position.set((lay.exit[0] - 0.5) * w, -LEVEL_H * 0.4, (lay.exit[1] - 0.5) * d)
+        dot.position.set((lay.exit[0] - 0.5) * w, -lh * 0.4, (lay.exit[1] - 0.5) * d)
         roomGroup.add(dot)
       }
 
@@ -234,7 +240,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
         map: tex, transparent: true, depthTest: false,
       }))
       sprite.scale.set(Math.min(fw, fd) * 0.45, Math.min(fw, fd) * 0.11, 1)
-      sprite.position.y = LEVEL_H * 0.62
+      sprite.position.y = lh * 0.62
       roomGroup.add(sprite)
 
       roomGroup.position.set(cx, cy, cz)
@@ -328,10 +334,10 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
         rebuild(handleRef.current, roomsRef.current)
 
         // Frame plate + a couple of levels from a raised angle.
-        const extent = Math.max(fw, fd, LEVEL_H * 4)
+        const extent = Math.max(fw, fd, lh * 4)
         const dist = (extent / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.5
         camera.position.set(dist * 0.7, dist * 0.75, dist * 0.85)
-        controls.target.set(0, LEVEL_H, 0)
+        controls.target.set(0, lh, 0)
         controls.update()
 
         setLoading(false)
@@ -395,7 +401,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, height = 360 }:
   useEffect(() => {
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms, showModels, showBuilding, bump])
+  }, [rooms, showModels, showBuilding, bump, lh])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
