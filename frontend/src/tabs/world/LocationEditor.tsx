@@ -338,7 +338,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             ))}
           </datalist>
         </Field>
-        <Field label={t('Building style')} hint={t('Style class for procedural 3D buildings. Free text; suggestions provided.')}>
+        <Field label={t('Building style')} hint={t('Procedural fallback only — used by 3D clients when the location has NO building model. Free text; suggestions provided.')}>
           <input
             className="ga-input"
             list="map3d-style-options"
@@ -352,13 +352,23 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             ))}
           </datalist>
         </Field>
-        <Field label={t('Floors')} hint={t('Number of floors of the building.')}>
+        <Field label={t('Floors')} hint={t('Procedural fallback only (no building model). Empty = derived from the floor plan (highest level + 1).')}>
           <input
             className="ga-input"
             type="number"
             min={1}
             value={draft.map3d?.floors ?? ''}
-            placeholder={t('auto')}
+            placeholder={(() => {
+              // Derived from the room layouts: highest above-ground level + 1
+              // (matches the worldmap fallback the 3D client receives).
+              const levels = (draft.rooms || [])
+                .filter((r) => r.layout)
+                .map((r) => r.layout?.level || 0)
+                .filter((l) => l >= 0)
+              return levels.length
+                ? `${t('auto')} (${Math.max(...levels) + 1})`
+                : t('auto')
+            })()}
             onChange={(e) => {
               const n = parseInt(e.target.value, 10)
               updMap3d('floors', Number.isFinite(n) && n > 0 ? n : undefined)

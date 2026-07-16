@@ -24,7 +24,9 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { Room } from './worldTypes'
 
-const LEVEL_H = 0.3
+// Storey height in plate units — tuned against real building models
+// (0.3 read ~50% too tall next to the ghost overlay).
+const LEVEL_H = 0.2
 const PALETTE = [0x58a6ff, 0x3fb950, 0xd29922, 0xf778ba,
                  0xa371f7, 0xf85149, 0x79c0ff, 0x56d364]
 

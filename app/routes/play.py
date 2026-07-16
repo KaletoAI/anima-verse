@@ -1276,6 +1276,17 @@ async def play_worldmap(user=Depends(get_current_user)):
         map3d = loc.get("map3d")
         if isinstance(map3d, dict) and map3d:
             entry["map3d"] = map3d
+        # Derived floors fallback: map3d.style/floors only matter for the
+        # client's PROCEDURAL rendering (no building model). Without an
+        # explicit floors value the storey count comes from the room layouts
+        # (highest above-ground level + 1) — one field less to maintain.
+        if "floors" not in (entry.get("map3d") or {}):
+            _levels = [int((r.get("layout") or {}).get("level") or 0)
+                       for r in (loc.get("rooms") or [])
+                       if isinstance(r, dict) and r.get("layout")]
+            _top = max([l for l in _levels if l >= 0], default=None)
+            if _top is not None:
+                entry["map3d"] = {**(entry.get("map3d") or {}), "floors": _top + 1}
         # Multi-tile patch (drawn UNDER the per-cell tiles, centred on this
         # cell) + the per-cell "own tile hidden" switch. Clients load the
         # patch via /world/locations/{id}/map-patch-2d.
