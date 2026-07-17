@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
+import { renderTopDownSnapshot } from './topDownSnapshot'
 import type { Room, RoomLayout } from './worldTypes'
 
 const CANVAS_W = 420
@@ -59,6 +60,10 @@ export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: R
       })
       .catch(() => setClipKinds([]))
   }, [])
+  // Top-down underlay: the placed room models rendered straight from above,
+  // laid behind the rectangles — markers can be dropped on real furniture.
+  const [underlay, setUnderlay] = useState(false)
+  const [underlayUrl, setUnderlayUrl] = useState('')
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState>(null)
   const roomsRef = useRef(rooms)
@@ -73,6 +78,27 @@ export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: R
   const levels = Array.from(
     new Set(rooms.filter((r) => r.layout).map((r) => r.layout!.level || 0)),
   ).sort((a, b) => a - b)
+
+  // Re-render the underlay (debounced — drags update per pointermove) when
+  // the level or any placed geometry changes. Alignment comes for free: the
+  // snapshot places models with the same layout fractions as the rectangles.
+  const geomKey = JSON.stringify(rooms.filter((r) => r.layout).map((r) => [
+    r.id, r.layout!.level || 0, r.layout!.x, r.layout!.y, r.layout!.w,
+    r.layout!.d, r.layout!.rotation || 0,
+  ]))
+  useEffect(() => {
+    if (!underlay) {
+      setUnderlayUrl('')
+      return
+    }
+    const tid = setTimeout(() => {
+      renderTopDownSnapshot({ rooms: roomsRef.current, level, fw, fd })
+        .then((url) => setUnderlayUrl(url || ''))
+        .catch(() => setUnderlayUrl(''))
+    }, 350)
+    return () => clearTimeout(tid)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [underlay, level, fw, fd, geomKey])
 
   const updateLayout = useCallback((roomId: string, patch: Partial<RoomLayout> | null) => {
     const next = roomsRef.current.map((r) => {
@@ -192,6 +218,11 @@ export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: R
             ))}
           </span>
         ) : null}
+        <label className="ga-check-row" style={{ fontSize: '0.82em' }}>
+          <input type="checkbox" checked={underlay}
+            onChange={(e) => setUnderlay(e.target.checked)} />
+          <span>{t('Models behind the plan')}</span>
+        </label>
         <span className="ga-hint">
           {t('0 = ground floor, negative = basement. Saved with the location.')}
         </span>
@@ -207,6 +238,12 @@ export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: R
         }}
         onClick={() => { if (!clickMode) setSelected('') }}
       >
+        {underlay && underlayUrl ? (
+          <img src={underlayUrl} alt="" style={{
+            position: 'absolute', inset: 0, width: '100%', height: '100%',
+            opacity: 0.9, pointerEvents: 'none',
+          }} />
+        ) : null}
         {placed.map((room) => {
           const lay = room.layout!
           const isSel = room.id === selected
@@ -254,14 +291,22 @@ export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: R
               {(lay.markers || []).map((m, i) => (
                 <span
                   key={`${m.animation}-${i}`}
-                  title={m.animation}
+                  title={`${m.animation} — ${t('click to remove')}`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (clickMode) return
+                    updateLayout(room.id || '', {
+                      markers: (lay.markers || []).filter((_, idx) => idx !== i),
+                    })
+                  }}
                   style={{
                     position: 'absolute',
-                    left: `calc(${m.at[0] * 100}% - 4px)`,
-                    top: `calc(${m.at[1] * 100}% - 4px)`,
-                    width: 8, height: 8, borderRadius: '50%',
+                    left: `calc(${m.at[0] * 100}% - 5px)`,
+                    top: `calc(${m.at[1] * 100}% - 5px)`,
+                    width: 10, height: 10, borderRadius: '50%',
                     background: '#3fb950', border: '1px solid #0d1117',
-                    pointerEvents: 'none',
+                    cursor: 'pointer',
                   }}
                 />
               ))}
