@@ -486,7 +486,7 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
             onClick={() => updateLayout(selectedRoom.id || '', { exit: undefined })}
             title={t('Remove the exit point — the client falls back to the edge facing the building centre.')}
           >
-            ⌫ {t('Exit')}
+            🗑 {t('Exit')}
           </button>
         ) : null}
         {clipKinds.length ? (
@@ -567,7 +567,7 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
                 onClick={() => onMap3d('outline', undefined)}
                 title={t('Remove the outline — the client falls back to the rectangle.')}
               >
-                ⌫ {t('Outline')}
+                🗑 {t('Outline')}
               </button>
             ) : null}
             <button
@@ -585,7 +585,7 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
                 onClick={() => onMap3d('elevator', undefined)}
                 title={t('Remove the elevator')}
               >
-                ⌫ {t('Elevator')}
+                🗑 {t('Elevator')}
               </button>
             ) : null}
           </>
