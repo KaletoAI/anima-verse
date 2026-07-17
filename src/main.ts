@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -127,6 +127,55 @@ async function startApp(username: string) {
   };
   requestServerModels();
   setInterval(requestServerModels, 60_000);
+
+  // Layout-Live-Refresh: Grundrisse/Marker/Meta-Justierungen aus dem Admin
+  // erscheinen ohne Browser-Reload — Kachel wird bei Änderung neu gebaut
+  const sigOf = (l: Partial<WorldLocation>) => JSON.stringify([
+    l.map3d, l.entry_room,
+    (l.rooms ?? []).map((r) => [r.id, r.name, r.layout]),
+  ]);
+  const locSig = new Map(placeable.map((l) => [l.id, sigOf(l)]));
+  function rebuildTile(old: Tile, loc: WorldLocation) {
+    engine.scene.remove(old.group);
+    old.group.traverse((o) => {   // CSS2D-Label-Elemente aufräumen
+      const el = (o as { isCSS2DObject?: boolean; element?: HTMLElement });
+      if (el.isCSS2DObject && el.element) el.element.remove();
+    });
+    const tile = buildTile(loc);
+    tile.fade = old.fade;
+    tile.fadeTarget = old.fadeTarget;
+    tiles.set(loc.id, tile);
+    engine.scene.add(tile.group);
+    const bm = buildings.get(loc.id);
+    if (bm) applyBuildingModel(tile, bm);
+    for (const r of loc.rooms) {
+      if (!r.layout) continue;
+      tileByRoom.set(r.id, tile);
+      roomModels.invalidate(r.id);   // rotation/offset_y evtl. geändert
+      roomModels.request(r.id);
+    }
+    engine.setPickables([...tiles.values()].map((t) => t.group));
+  }
+  async function pollLocations() {
+    try {
+      const fresh = await api.getLocations();
+      const freshById = new Map(fresh.map((l) => [l.id, l]));
+      for (const [id, tile] of tiles) {
+        const detail = freshById.get(id) ?? freshById.get(tile.loc.template_location_id || '');
+        if (!detail) continue;
+        const sig = sigOf(detail);
+        if (locSig.get(id) === sig) continue;
+        locSig.set(id, sig);
+        rebuildTile(tile, {
+          ...tile.loc,
+          rooms: detail.rooms ?? [],
+          map3d: detail.map3d ?? tile.loc.map3d,
+          entry_room: detail.entry_room ?? tile.loc.entry_room,
+        });
+      }
+    } catch { /* Server kurz weg -> nächster Poll */ }
+  }
+  setInterval(pollLocations, 10_000);
 
   // Wegfindung: Gebäude blockieren, Straßen/Natur sind begehbar
   npcs.setPathGrid(new PathGrid(
@@ -401,6 +450,9 @@ async function startApp(username: string) {
         const d = Math.hypot(engine.target.x - tile.center.x, engine.target.z - tile.center.z);
         tile.fadeTarget = engine.dist < INTERIOR_CAM_DIST && d < CELL * 0.75 ? 1 : 0;
         applyTileFade(tile, dt);
+        if (tile.outlineWalls.length && tile.fade > 0.03) {
+          applyWallCulling(tile, engine.camera.position.x, engine.camera.position.z);
+        }
         if (tile.fadeTarget === 1 && tile.fade > 0.4) open = tile;
       }
     }

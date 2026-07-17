@@ -80,6 +80,8 @@ export interface Tile {
   alwaysVisibleRooms: Set<string>;
   /** Fahrstuhl-Haltepunkte je Etage (Welt-Koordinaten), AV3D-12 */
   elevatorStops?: Map<number, THREE.Vector3>;
+  /** Grundriss-Wandstücke mit Außennormale (Welt-XZ) — fürs Blickrichtungs-Culling */
+  outlineWalls: { mesh: THREE.Mesh; mid: THREE.Vector2; normal: THREE.Vector2 }[];
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
   highlightRing: THREE.Mesh;
@@ -356,6 +358,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
   // Geometrie sehen (Vertrag: schnittstellen-3d.md, Platzierungs-Semantik).
   const LW = 8, LD = 8;
   const usedLevels = new Set<number>();
+  const exitPtsL0: THREE.Vector2[] = [];   // EG-Ausgänge (lokal) -> Türen im Grundriss
   loc.rooms.forEach((room, i) => {
     const lay = room.layout;
     if (!lay) return;
@@ -425,6 +428,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     const exitWorld = tile.center.clone().add(new THREE.Vector3(ex, floorY + 0.45, ez));
     tile.roomExits.set(room.id, exitWorld);
     tile.roomExits.set(room.name, exitWorld);
+    if ((lay.level ?? 0) === 0) exitPtsL0.push(new THREE.Vector2(ex, ez));
     if (opts.markers) {
       const mark = new THREE.Mesh(new THREE.CircleGeometry(0.3, 18), std({ color: 0xe0b64a }));
       mark.rotation.x = -Math.PI / 2;
@@ -441,12 +445,13 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     const pts = outline.map(([fx, fz]) => new THREE.Vector2(-LW / 2 + fx * LW, -LD / 2 + fz * LD));
     const floorShape = new THREE.Shape(pts);
     const WALL_H = 0.8, DOOR_HALF = 0.4;
-    // Tür im EG: Wandstück, dessen Mitte am weitesten südlich (+z) liegt
-    let doorIdx = 0, doorZ = -Infinity;
+    // Polygon-Umlaufrichtung -> Außennormale der Wandstücke (fürs Culling)
+    let area = 0;
     for (let k = 0; k < pts.length; k++) {
-      const mid = (pts[k].y + pts[(k + 1) % pts.length].y) / 2;
-      if (mid > doorZ) { doorZ = mid; doorIdx = k; }
+      const a = pts[k], b = pts[(k + 1) % pts.length];
+      area += a.x * b.y - b.x * a.y;
     }
+    const ccw = area > 0;
     const wallSeg = (a: THREE.Vector2, b: THREE.Vector2, floorY: number, mat: THREE.Material) => {
       const len = a.distanceTo(b);
       if (len < 0.06) return;
@@ -455,7 +460,20 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
       seg.rotation.y = -Math.atan2(b.y - a.y, b.x - a.x);
       seg.receiveShadow = false;
       g.add(seg);
+      const dx = (b.x - a.x) / len, dz = (b.y - a.y) / len;
+      tile.outlineWalls.push({
+        mesh: seg,
+        mid: new THREE.Vector2(tile.center.x + (a.x + b.x) / 2, tile.center.z + (a.y + b.y) / 2),
+        normal: ccw ? new THREE.Vector2(dz, -dx) : new THREE.Vector2(-dz, dx),
+      });
     };
+    // Türen im EG: überall dort, wo ein Erdgeschoss-Exit auf der Kontur
+    // liegt; findet sich keiner, ersatzweise das südlichste Wandstück
+    let southIdx = 0, southZ = -Infinity;
+    for (let k = 0; k < pts.length; k++) {
+      const mid = (pts[k].y + pts[(k + 1) % pts.length].y) / 2;
+      if (mid > southZ) { southZ = mid; southIdx = k; }
+    }
     for (const level of usedLevels) {
       const floorY = level * STOREY;
       // Obergeschosse halbtransparent — sonst verdecken sie in der
@@ -471,15 +489,49 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
       slab.position.y = floorY + 0.24;               // unter den Raum-Platten
       slab.castShadow = level > 0;
       g.add(slab);
+      let doorsCut = 0;
       for (let k = 0; k < pts.length; k++) {
         const a = pts[k], b = pts[(k + 1) % pts.length];
-        if (level === 0 && k === doorIdx) {
-          const len = a.distanceTo(b);
-          const dir = b.clone().sub(a).divideScalar(len);
-          wallSeg(a, a.clone().addScaledVector(dir, Math.max(0, len / 2 - DOOR_HALF)), floorY, wallMat);
-          wallSeg(a.clone().addScaledVector(dir, Math.min(len, len / 2 + DOOR_HALF)), b, floorY, wallMat);
+        const len = a.distanceTo(b);
+        const dir = b.clone().sub(a).divideScalar(Math.max(len, 1e-6));
+        // Tür-Positionen auf diesem Wandstück sammeln (nur EG)
+        const cuts: number[] = [];
+        if (level === 0) {
+          for (const e of exitPtsL0) {
+            const t = THREE.MathUtils.clamp(e.clone().sub(a).dot(dir), 0, len);
+            const closest = a.clone().addScaledVector(dir, t);
+            if (closest.distanceTo(e) < 0.45) cuts.push(t);
+          }
+          if (!cuts.length && k === southIdx && !exitPtsL0.length) cuts.push(len / 2);
+        }
+        if (cuts.length) {
+          doorsCut += cuts.length;
+          cuts.sort((p, q2) => p - q2);
+          let start = 0;
+          for (const t of cuts) {
+            wallSeg(a.clone().addScaledVector(dir, start), a.clone().addScaledVector(dir, Math.max(start, t - DOOR_HALF)), floorY, wallMat);
+            start = Math.min(len, t + DOOR_HALF);
+          }
+          wallSeg(a.clone().addScaledVector(dir, start), b, floorY, wallMat);
         } else {
           wallSeg(a, b, floorY, wallMat);
+        }
+      }
+      // EG ganz ohne Tür (Exits liegen alle im Inneren): Süd-Fallback
+      if (level === 0 && doorsCut === 0) {
+        const a = pts[southIdx], b = pts[(southIdx + 1) % pts.length];
+        // vorhandenes Wandstück des Fallback-Randes entfernen und neu mit Tür bauen
+        const idx = tile.outlineWalls.findIndex((w) =>
+          Math.abs(w.mid.x - (tile.center.x + (a.x + b.x) / 2)) < 1e-4 &&
+          Math.abs(w.mid.y - (tile.center.z + (a.y + b.y) / 2)) < 1e-4);
+        if (idx >= 0) {
+          const [w] = tile.outlineWalls.splice(idx, 1);
+          g.remove(w.mesh);
+          const len = a.distanceTo(b);
+          const dir = b.clone().sub(a).divideScalar(len);
+          const wm = w.mesh.material as THREE.Material;
+          wallSeg(a, a.clone().addScaledVector(dir, Math.max(0, len / 2 - DOOR_HALF)), 0, wm);
+          wallSeg(a.clone().addScaledVector(dir, Math.min(len, len / 2 + DOOR_HALF)), b, 0, wm);
         }
       }
     }
@@ -545,6 +597,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
+    outlineWalls: [],
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 
@@ -755,18 +808,20 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
     tile.roomExits.get(roomId)?.setY(floor + 0.01);
   }
 
-  // Marker-Höhen verfeinern, plus Server-Feinjustierung. Sitz-Marker
-  // verankern die FÜSSE auf dem Boden (der Sitz-Clip senkt die Hüfte auf
-  // die Sitzfläche dahinter); Liege- und sonstige Marker liegen auf der
-  // Möbel-Oberfläche an der Marker-Stelle (Bett-Matratze).
+  // Marker-Höhen verfeinern, plus Server-Feinjustierung. Sitz-Marker:
+  // Wurzel so verankern, dass die vom Clip abgesenkte Hüfte auf der
+  // Möbel-Oberkante landet (Oberfläche minus Clip-Sitzhöhe, nie unter dem
+  // Boden). Liege-/sonstige Marker liegen auf der Oberfläche (Matratze).
   const markers = tile.roomMarkers.get(roomId);
   if (markers) {
+    const seatDrop = 0.44 * (tile.loc.map3d?.figure_scale || 1 / 3);   // Mixamo-Sitzhöhe x Raum-Maßstab
     for (const [kind, entries] of markers) {
       for (const e of entries) {
         ray.set(new THREE.Vector3(e.p.x, base.y + 20, e.p.z), down);
         const hit = ray.intersectObject(model, true)[0];
         const surface = hit && hit.point.y < floor + 0.5 ? hit.point.y : floor;
-        e.p.setY((kind === 'sit' ? floor : surface) + 0.01 + e.offsetY);
+        const anchor = kind === 'sit' ? Math.max(floor, surface - seatDrop) : surface;
+        e.p.setY(anchor + 0.01 + e.offsetY);
       }
     }
   }
@@ -798,6 +853,14 @@ export function applyTileOcclusion(tile: Tile, hide: boolean, dt: number) {
       }
     }
   });
+}
+
+/** Grundriss-Wände in Blickrichtung ausblenden: Wandstücke, deren
+ *  Außenseite zur Kamera zeigt, stehen zwischen Kamera und Innenraum. */
+export function applyWallCulling(tile: Tile, camX: number, camZ: number) {
+  for (const w of tile.outlineWalls) {
+    w.mesh.visible = (camX - w.mid.x) * w.normal.x + (camZ - w.mid.y) * w.normal.y <= 0;
+  }
 }
 
 /** Fokus-Modus: füllt EIN Raum das Bild, werden die Nachbar-Räume der
