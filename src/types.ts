@@ -19,6 +19,10 @@ export interface RoomLayout {
   rotation?: number;
   exit?: [number, number]; // Ausgangspunkt (Fraktion der Raum-Grundfläche)
   markers?: RoomMarker[];  // AV3D-11
+  /** Raum dauerhaft zeigen (unabhängig von der Innenansicht) — für
+   *  Outdoor-Räume, die NICHT schon im Gebäude-Modell abgebildet sind.
+   *  Default: false */
+  always_visible?: boolean;
 }
 
 export interface Room {

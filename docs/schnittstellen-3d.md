@@ -198,6 +198,11 @@ Spiel-Client — eine Admin-Vorschau, die dem folgt, zeigt exakt dasselbe:
   Unterkante auf `Etagenboden + 0,12 m`. Danach wirken `rotation {x,y,z}`
   (Grad) und `offset_y` (Meter) aus dem Modell-Meta.
 - **exit** = Fraktion der Raum-Grundfläche (gleiche Orientierung).
+- **`always_visible`** (bool, Default `false`): Raum wird dauerhaft
+  gezeigt, unabhängig von der aufgedeckten Innenansicht — gedacht für
+  Outdoor-Räume, die **nicht** schon im Gebäude-3D-Modell abgebildet
+  sind (sonst doppelt). Figuren stehen dann in jeder Zoomstufe an ihrer
+  Raum-Position. Pflege: Checkbox im Raum-Editor.
 - Figuren stehen in Räumen im **Maßstab 1/3** ihrer Kartengröße (für
   Testfiguren in einer Vorschau).
 
