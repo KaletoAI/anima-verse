@@ -826,10 +826,15 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   // im Texturatlas auf; der Ausschnitt wird im Welt-Maßstab gekachelt
   // (Extrude-UVs der Platte sind Welt-Koordinaten in Metern).
   const sourceRoom = tile.loc.rooms.find((r) => r.id === roomId);
-  const anySourceFlag = tile.loc.rooms.some((r) => r.layout?.floor_source === true);
+  const level = tile.roomLevels.get(roomId) ?? 0;
+  // pro ETAGE gilt: der dort markierte Raum liefert den Boden seiner Platte;
+  // nur wenn auf der Etage keiner markiert ist, greift der Bibliothek-Test
+  const anySourceOnLevel = tile.loc.rooms.some(
+    (r) => r.layout?.floor_source === true && (r.layout?.level ?? 0) === level
+  );
   const isFloorSource = sourceRoom?.layout?.floor_source === true
-    || (!anySourceFlag && sourceRoom?.name === 'Bibliothek');
-  const slab = tile.levelSlabs.get(tile.roomLevels.get(roomId) ?? 0);
+    || (!anySourceOnLevel && sourceRoom?.name === 'Bibliothek');
+  const slab = tile.levelSlabs.get(level);
   if (slab && isFloorSource) {
     const floorSamples = samples.filter((s) => s.p.y < floor + 0.12 && s.uv && s.mesh);
     const m0 = floorSamples[0]?.mesh;

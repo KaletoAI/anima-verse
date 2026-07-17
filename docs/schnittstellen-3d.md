@@ -204,11 +204,13 @@ Spiel-Client — eine Admin-Vorschau, die dem folgt, zeigt exakt dasselbe:
   sind (sonst doppelt). Figuren stehen dann in jeder Zoomstufe an ihrer
   Raum-Position. Pflege: Checkbox im Raum-Editor.
 - **`floor_source`** (bool, Default `false`): Die Boden-Textur dieses
-  Raum-Modells wird auf die Etagen-Platte des Gebäude-Grundrisses
-  übernommen (der Client tastet den begehbaren Boden ab, schneidet den
-  Textur-Ausschnitt aus und kachelt ihn im Welt-Maßstab). Pflege:
-  Checkbox im Raum-Editor; sinnvoll ein Raum pro Etage. Solange kein
-  Raum markiert ist, greift testweise der Raum „Bibliothek".
+  Raum-Modells wird auf die Etagen-Platte **seiner Etage** übernommen
+  (der Client tastet den begehbaren Boden ab, schneidet den
+  Textur-Ausschnitt aus und kachelt ihn im Welt-Maßstab). **Gilt pro
+  Etage:** auf jeder Etage ist genau ein Raum wählbar, jede Platte
+  bekommt ihren eigenen Boden. Pflege: Checkbox im Raum-Editor (Editor
+  sollte pro Etage nur eine zulassen). Ist auf einer Etage kein Raum
+  markiert, greift dort testweise der Raum „Bibliothek".
 - Figuren stehen in Räumen im **Maßstab 1/3** ihrer Kartengröße —
   **pro Location übersteuerbar** via `map3d.figure_scale` (0..1;
   Regler/Feld im Editor, der Client liest es bereits).

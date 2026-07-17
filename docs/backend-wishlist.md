@@ -295,9 +295,11 @@ Ursprüngliche Anforderung:
     Feld/Regler im Editor. Client liest das Feld bereits.
   - **Checkbox „Boden für die Etage übernehmen" pro Raum** →
     `layout.floor_source` (bool, Default false): Der Client kachelt die
-    Boden-Textur dieses Raum-Modells über die Etagen-Platte des
-    Grundrisses (bereits eingebaut; ohne markierten Raum greift testweise
-    die Bibliothek). Sinnvoll ein Raum pro Etage.
+    Boden-Textur dieses Raum-Modells über die Etagen-Platte **der Etage
+    des Raums** — **pro Etage genau ein Raum wählbar** (Editor sollte je
+    Etage nur einen Haken zulassen), jede Etagen-Platte bekommt ihren
+    eigenen Boden. Bereits eingebaut; ist auf einer Etage kein Raum
+    markiert, greift dort testweise die Bibliothek.
 - **Client (bereits eingebaut, mit Testdaten verifiziert):** pro genutzter
   Etage Bodenplatte in Konturform + Wände (Tür im EG am südlichsten
   Wandstück; Obergeschosse halbtransparent); Fahrstuhl als Schacht mit
