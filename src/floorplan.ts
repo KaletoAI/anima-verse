@@ -8,7 +8,9 @@ import * as THREE from 'three';
 import { Engine } from './scene/engine';
 import { applyRoomModel, applyTileFade, buildTile, type Tile } from './scene/tiles';
 import { roomModelLibrary } from './scene/buildings';
-import { getRoomModel } from './api';
+import { getRoomModel, getSurfaceTextures } from './api';
+import { setSurfaceTextures } from './scene/tiles';
+void getSurfaceTextures().then(setSurfaceTextures);
 import { grassTexture } from './scene/textures';
 import type { WorldLocation } from './types';
 

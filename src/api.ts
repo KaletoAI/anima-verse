@@ -133,6 +133,27 @@ export async function getRoomModel(roomId: string): Promise<ApiRoomModel | null>
   return { url: data.url, format: data.format ?? 'glb', rotation: data.rotation, offset_y: data.offset_y };
 }
 
+export interface ApiSurfaceTexture {
+  kind: string;      // road | grass | water | gravel | ... (offen, wie terrain)
+  url: string;
+  /** physische Kantenlänge der Textur in Metern (Kachel-Maßstab; Default 3) */
+  size_m?: number;
+}
+
+/** Globale Oberflächen-Texturen für Terrain-Kacheln; leer/404 = Client
+ *  nutzt seine eingebauten prozeduralen Texturen. */
+export async function getSurfaceTextures(): Promise<ApiSurfaceTexture[]> {
+  try {
+    const res = await fetch('/assets/surface-textures');
+    if (!res.ok) return [];
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : data.textures ?? [];
+    return list.filter((t: ApiSurfaceTexture) => t?.kind && t?.url);
+  } catch {
+    return [];
+  }
+}
+
 /** Spielzeit der Welt (Stunde 0..24, fraktional); null wenn nicht verfügbar. */
 export async function getGameHour(): Promise<number | null> {
   try {

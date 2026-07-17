@@ -122,6 +122,30 @@ let grassTex: THREE.Texture | null = null;
 let asphaltTex: THREE.Texture | null = null;
 let waterTex: THREE.Texture | null = null;
 
+/** Globale Oberflächen-Texturen vom Server (kind -> url/size); Fallback
+ *  sind die eingebauten prozeduralen Texturen. */
+const serverSurfaces = new Map<string, { url: string; sizeM: number }>();
+const serverSurfaceCache = new Map<string, THREE.Texture>();
+export function setSurfaceTextures(list: { kind: string; url: string; size_m?: number }[]) {
+  for (const t of list) serverSurfaces.set(t.kind, { url: t.url, sizeM: t.size_m || 3 });
+}
+
+/** Kachelbare Oberflächen-Textur für einen Terrain-Typ: Server-Bibliothek
+ *  vor eingebautem Fallback; Wiederholung im Welt-Maßstab (CELL/size_m). */
+function surfaceTexture(kind: string, fallback: THREE.Texture): THREE.Texture {
+  const entry = serverSurfaces.get(kind);
+  if (!entry) return fallback;
+  let tex = serverSurfaceCache.get(kind);
+  if (!tex) {
+    tex = loader.load(entry.url);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(CELL / entry.sizeM, CELL / entry.sizeM);
+    serverSurfaceCache.set(kind, tex);
+  }
+  return tex;
+}
+
 function std(opts: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02, transparent: true, ...opts });
 }
@@ -133,20 +157,25 @@ function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Materi
   return m;
 }
 
-/** Bodenplatte der Zelle; versucht das 2D-Kartensymbol des Backends als Textur. */
-function groundPlate(loc: WorldLocation, fallback: THREE.Texture): THREE.Mesh {
+/** Bodenplatte der Zelle; optional mit dem 2D-Kartensymbol des Backends.
+ *  Terrain-Kacheln (explizites terrain road/grass/water) nutzen stattdessen
+ *  die kachelbare Oberflächen-Textur — Illustrations-Icons mit eingebackenen
+ *  Schatten/Objekten wirken dort als Boden fehl am Platz. */
+function groundPlate(loc: WorldLocation, fallback: THREE.Texture, useIcon = true): THREE.Mesh {
   const mat = std({ map: fallback });
   const plate = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), mat);
   plate.rotation.x = -Math.PI / 2;
   plate.position.y = 0.04;
   plate.receiveShadow = true;
-  loader.load(mapIconUrl(loc.id), (tex) => {
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.center.set(0.5, 0.5);
-    tex.rotation = -THREE.MathUtils.degToRad(loc.map_rotation_2d || 0);
-    mat.map = tex;
-    mat.needsUpdate = true;
-  }, undefined, () => { /* kein Icon vorhanden -> Fallback-Textur bleibt */ });
+  if (useIcon) {
+    loader.load(mapIconUrl(loc.id), (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.center.set(0.5, 0.5);
+      tex.rotation = -THREE.MathUtils.degToRad(loc.map_rotation_2d || 0);
+      mat.map = tex;
+      mat.needsUpdate = true;
+    }, undefined, () => { /* kein Icon vorhanden -> Fallback-Textur bleibt */ });
+  }
   return plate;
 }
 
@@ -642,6 +671,12 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
 
   const rnd = seededRandom(loc.id);
   const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
+  // Straßen und Wasser -> kachelbare Oberflächen-Textur statt Illustrations-
+  // Icon (Server-Bibliothek vor eingebautem prozeduralem Material). Gras-,
+  // Wald- und benannte Kacheln behalten ihre Icons (Stadtteil-Luftbilder!).
+  const isSurfaceTile = style === 'road' || style === 'water';
+  const groundTexFor = (s: string) =>
+    isSurfaceTile ? surfaceTexture(style, fallbackFor(s)) : fallbackFor(s);
   // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
   const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
 
@@ -656,7 +691,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
   };
 
   if (!isBuilding) {
-    group.add(groundPlate(loc, fallbackFor(style)));
+    group.add(groundPlate(loc, groundTexFor(style), !isSurfaceTile));
     if (style === 'forest') {
       for (let i = 0; i < 8; i++) {
         const tree = makeTree(rnd);

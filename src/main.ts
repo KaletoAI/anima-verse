@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, setSurfaceTextures, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -35,11 +35,13 @@ async function startApp(username: string) {
   const engine = new Engine(app);
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
   const figures = new FigureLibrary();
-  const [allLocs, firstMap] = await Promise.all([
+  const [allLocs, firstMap, surfaces] = await Promise.all([
     api.getLocations(),
     api.getWorldMap(),
+    api.getSurfaceTextures(),
     figures.load(),
   ]);
+  setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
   const npcs = new NpcManager(figures);
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen

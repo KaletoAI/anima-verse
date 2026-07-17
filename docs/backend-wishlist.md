@@ -307,3 +307,24 @@ Ursprüngliche Anforderung:
   → Fahrstuhl → vertikale Fahrt → weiter; im EG durch die Tür hinaus).
 - **Details/Vertrag:** `docs/schnittstellen-3d.md` → „Gebäude-Grundriss &
   Fahrstuhl".
+
+## AV3D-13: Globale Oberflächen-Texturen für Terrain-Kacheln — angefordert (2026-07-17)
+
+- **Motivation:** Die 2D-Map-Icons als Boden-Textur funktionieren für
+  Terrain-Kacheln nicht (Illustrationen mit eingebackenen Schatten,
+  Perspektive und Objekten — Straße sah als Boden schlecht aus). Der
+  Client nutzt dort jetzt kachelbare Oberflächen-Texturen; eingebaute
+  prozedurale Materialien sind der Fallback.
+- **Erwartung:** eine kleine globale Textur-Bibliothek, analog zu den
+  Animations-Clips: `GET /assets/surface-textures` →
+  `[{"kind": "road", "url": "...", "size_m": 3}, ...]` — kind = offenes
+  Vokabular passend zu `terrain`; Bilder nahtlos kachelbar, orthografisch,
+  objekt- und schattenfrei, JPEG, ≤ 1024²; size_m = physische Kantenlänge
+  (Default 3 m). Erzeugung z.B. über die Bildpipeline mit eigenem
+  Prompt-Template („seamless tileable top-down texture of asphalt, flat
+  even lighting, no objects, no shadows").
+- **Client (bereits eingebaut):** Terrain-Kacheln (explizites terrain
+  road/grass/water) verwenden die Server-Textur ihres Kinds, kacheln im
+  Welt-Maßstab; ohne Lieferung greifen die eingebauten prozeduralen
+  Texturen. 2D-Icons bleiben für benannte Orte/Wald/Stadtteile.
+- **Vertrag:** `docs/schnittstellen-3d.md` → „Oberflächen-Texturen".

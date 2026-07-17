@@ -231,6 +231,33 @@ Game Admin → Character → Reiter „3D": Modell ansehen/hochladen/generieren/
 entfernen. Gestaltung und Abläufe frei; einzige Erwartung: die
 Workflow-Auswahl kommt dynamisch vom Gateway (keine hartkodierten Listen).
 
+## Oberflächen-Texturen (AV3D-13, global)
+
+Kacheln mit Stil **road oder water** (aus `terrain` oder Namens-Heuristik)
+nutzen **keine** 2D-Icons mehr als Boden (Illustrationen mit eingebackenen
+Schatten/Objekten passen dort nicht), sondern kachelbare
+Oberflächen-Texturen; Gras-, Wald- und benannte Kacheln behalten ihre
+Icons. Analog zur Animations-Bibliothek kann der Server die Texturen
+global liefern:
+
+```
+GET /assets/surface-textures
+  → [{ "kind": "road", "url": "…", "size_m": 3 }, …]
+```
+
+- **`kind`**: offenes Vokabular, passend zum `terrain`-Feld (road, grass,
+  water, gravel, sand, …) — der Client normalisiert wie beim Terrain.
+- **`url`**: das Textur-Bild. Anforderungen: **nahtlos kachelbar
+  (seamless)**, orthografisch von oben, **ohne Objekte, ohne
+  Schatten/Beleuchtung** (flach ausgeleuchtet), JPEG bevorzugt, ≤ 1024².
+- **`size_m`** (optional, Default 3): physische Kantenlänge in Metern —
+  der Client kachelt damit im Welt-Maßstab (10-m-Zelle = 10/size_m
+  Wiederholungen).
+- **404/leer = Normalfall:** Der Client nutzt dann seine eingebauten
+  prozeduralen Texturen (Asphalt, Gras, Wasser). Kein Blocker.
+- Die 2D-Icons bleiben überall sonst in Gebrauch (benannte Orte,
+  Stadtteil-Kacheln, Wald, Minimap).
+
 ## Kamera & Maussteuerung (Referenz für die Admin-Vorschau)
 
 So steuert der Spiel-Client die Kamera — eine Vorschau, die dem folgt,
