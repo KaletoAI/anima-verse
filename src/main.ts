@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -423,12 +423,17 @@ async function startApp(username: string) {
           shownRoom.set(c.name, inRoom);
         }
         const targetTile = c.movement_target_id ? tiles.get(c.movement_target_id) : undefined;
+        // Etagen-Umschalter: Figuren auf nicht gewählten Etagen ausblenden
+        const hidden = !!inRoom && tile.fade > 0.5
+          && !tile.alwaysVisibleRooms.has(inRoom)
+          && (tile.roomLevels.get(inRoom) ?? 0) !== tile.levelFilter;
         states.push({
           char: c,
           pos,
           scale,
           via,
           face,
+          hidden,
           travelTo: targetTile && c.movement_target_id !== locId ? targetTile.center.clone() : null,
         });
       });
@@ -450,8 +455,11 @@ async function startApp(username: string) {
         const d = Math.hypot(engine.target.x - tile.center.x, engine.target.z - tile.center.z);
         tile.fadeTarget = engine.dist < INTERIOR_CAM_DIST && d < CELL * 0.75 ? 1 : 0;
         applyTileFade(tile, dt);
-        if (tile.outlineWalls.length && tile.fade > 0.03) {
-          applyWallCulling(tile, engine.camera.position.x, engine.camera.position.z);
+        if (tile.fade > 0.03) {
+          applyLevelDisplay(tile);
+          if (tile.outlineWalls.length) {
+            applyWallCulling(tile, engine.camera.position.x, engine.camera.position.z);
+          }
         }
         if (tile.fadeTarget === 1 && tile.fade > 0.4) open = tile;
       }

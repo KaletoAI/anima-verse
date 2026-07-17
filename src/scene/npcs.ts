@@ -99,6 +99,8 @@ export interface NpcState {
   scale?: number;
   /** feste Blickrichtung im Stand (z.B. vom Animations-Marker) */
   face?: THREE.Vector3;
+  /** Figur ausblenden (z.B. andere Etage als die gewählte) */
+  hidden?: boolean;
   /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
   via?: THREE.Vector3[];
   travelTo: THREE.Vector3 | null;   // Reiseziel (Linien-Endpunkt) oder null
@@ -154,6 +156,7 @@ export class NpcManager {
       npc.target.copy(st.pos);
       npc.targetScale = st.scale ?? 1;
       npc.face = st.face ?? null;
+      npc.root.visible = !st.hidden;
       npc.activity = st.char.activity || '';
       npc.animation = st.char.activity_animation || undefined;
       npc.labelActivity.textContent = npc.activity;

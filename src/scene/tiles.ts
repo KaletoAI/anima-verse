@@ -81,9 +81,13 @@ export interface Tile {
   /** Fahrstuhl-Haltepunkte je Etage (Welt-Koordinaten), AV3D-12 */
   elevatorStops?: Map<number, THREE.Vector3>;
   /** Grundriss-Wandstücke mit Außennormale (Welt-XZ) — fürs Blickrichtungs-Culling */
-  outlineWalls: { mesh: THREE.Mesh; mid: THREE.Vector2; normal: THREE.Vector2 }[];
+  outlineWalls: { mesh: THREE.Mesh; level: number; mid: THREE.Vector2; normal: THREE.Vector2 }[];
   /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
   levelSlabs: Map<number, THREE.Mesh>;
+  /** Wand-Material je Etage (fürs Etagen-Umschalten) */
+  levelWallMats: Map<number, THREE.MeshStandardMaterial>;
+  /** aktuell gewählte Etage der Innenansicht (Umschalter; Default EG) */
+  levelFilter: number;
   /** als outdoor markierte Räume (liefern keine Boden-Farbe fürs Gebäude) */
   roomOutdoor: Set<string>;
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
@@ -472,6 +476,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
       const dx = (b.x - a.x) / len, dz = (b.y - a.y) / len;
       tile.outlineWalls.push({
         mesh: seg,
+        level: Math.round(floorY / STOREY),
         mid: new THREE.Vector2(tile.center.x + (a.x + b.x) / 2, tile.center.z + (a.y + b.y) / 2),
         normal: ccw ? new THREE.Vector2(dz, -dx) : new THREE.Vector2(-dz, dx),
       });
@@ -490,6 +495,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
       const upper = level > 0;
       const wallMat = std({ color: 0xcfc4b2, opacity: upper ? 0.45 : 1 });
       const slabMat = std({ color: 0xd8d0c2, opacity: upper ? 0.4 : 1 });
+      tile.levelWallMats.set(level, wallMat);
       const slab = new THREE.Mesh(
         new THREE.ExtrudeGeometry(floorShape, { depth: 0.14, bevelEnabled: false }),
         slabMat
@@ -575,6 +581,27 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     }
   }
 
+  // Etagen-Umschalter neben dem Label (nur bei mehreren Etagen; hängt an
+  // der Innenansicht und erscheint damit erst beim Reinzoomen)
+  if (usedLevels.size > 1) {
+    const el = document.createElement('div');
+    el.className = 'level-switch';
+    for (const lv of [...usedLevels].sort((a, b) => a - b)) {
+      const btn = document.createElement('button');
+      btn.textContent = lv === 0 ? 'EG' : `${lv}.`;
+      if (lv === tile.levelFilter) btn.classList.add('active');
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        tile.levelFilter = lv;
+        el.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+      });
+      el.appendChild(btn);
+    }
+    const sw = new CSS2DObject(el);
+    sw.position.set(2.2, tile.height + 2.2, 0);
+    g.add(sw);
+  }
+
   tile.interior = g;
   tile.group.add(g);
 }
@@ -609,7 +636,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
-    outlineWalls: [], levelSlabs: new Map(), roomOutdoor: new Set(),
+    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), levelFilter: 0, roomOutdoor: new Set(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 
@@ -924,18 +951,36 @@ export function applyTileOcclusion(tile: Tile, hide: boolean, dt: number) {
 }
 
 /** Grundriss-Wände in Blickrichtung ausblenden: Wandstücke, deren
- *  Außenseite zur Kamera zeigt, stehen zwischen Kamera und Innenraum. */
+ *  Außenseite zur Kamera zeigt, stehen zwischen Kamera und Innenraum.
+ *  Wände oberhalb der gewählten Etage bleiben aus. */
 export function applyWallCulling(tile: Tile, camX: number, camZ: number) {
   for (const w of tile.outlineWalls) {
-    w.mesh.visible = (camX - w.mid.x) * w.normal.x + (camZ - w.mid.y) * w.normal.y <= 0;
+    const cullOk = (camX - w.mid.x) * w.normal.x + (camZ - w.mid.y) * w.normal.y <= 0;
+    w.mesh.visible = cullOk && w.level <= tile.levelFilter;
+  }
+}
+
+/** Etagen-Auswahl anwenden: gewählte Etage voll, darunter gedimmter
+ *  Kontext, darüber ausgeblendet. */
+export function applyLevelDisplay(tile: Tile) {
+  for (const [lv, slab] of tile.levelSlabs) {
+    slab.visible = lv <= tile.levelFilter;
+    const m = slab.material as THREE.MeshStandardMaterial;
+    m.opacity = lv === tile.levelFilter ? 1 : 0.85;
+  }
+  for (const [lv, mat] of tile.levelWallMats) {
+    mat.opacity = lv === tile.levelFilter ? 1 : 0.45;
   }
 }
 
 /** Fokus-Modus: füllt EIN Raum das Bild, werden die Nachbar-Räume der
- *  Kachel ausgeblendet (null = alle zeigen). */
+ *  Kachel ausgeblendet (null = alle zeigen). Räume anderer Etagen als der
+ *  gewählten bleiben aus (Ausnahme: dauerhaft sichtbare Outdoor-Räume). */
 export function applyRoomFocus(tile: Tile, focusRoomId: string | null) {
   for (const [id, rg] of tile.roomGroups) {
-    rg.visible = !focusRoomId || id === focusRoomId;
+    const levelOk = tile.alwaysVisibleRooms.has(id)
+      || (tile.roomLevels.get(id) ?? 0) === tile.levelFilter;
+    rg.visible = levelOk && (!focusRoomId || id === focusRoomId);
   }
 }
 

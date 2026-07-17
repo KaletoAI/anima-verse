@@ -247,3 +247,26 @@ html, body, #app {
   margin-bottom: 8px;
   text-align: center;
 }
+
+/* Etagen-Umschalter (AV3D-2/12): kleine Knopfleiste neben dem Location-Label */
+.level-switch {
+  pointer-events: auto;
+  display: flex;
+  gap: 4px;
+  background: rgba(20, 24, 32, 0.82);
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+.level-switch button {
+  background: #2c3442;
+  color: #dde3ea;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 8px;
+  font: 12px system-ui;
+  cursor: pointer;
+}
+.level-switch button.active {
+  background: #e0b64a;
+  color: #22201a;
+}
