@@ -84,6 +84,8 @@ export interface Tile {
   outlineWalls: { mesh: THREE.Mesh; mid: THREE.Vector2; normal: THREE.Vector2 }[];
   /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
   levelSlabs: Map<number, THREE.Mesh>;
+  /** als outdoor markierte Räume (liefern keine Boden-Farbe fürs Gebäude) */
+  roomOutdoor: Set<string>;
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
   highlightRing: THREE.Mesh;
@@ -372,6 +374,10 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     usedLevels.add(lay.level ?? 0);
     tile.roomLevels.set(room.id, lay.level ?? 0);
     tile.roomLevels.set(room.name, lay.level ?? 0);
+    if ((room.indoor ?? '').toLowerCase() === 'outdoor') {
+      tile.roomOutdoor.add(room.id);
+      tile.roomOutdoor.add(room.name);
+    }
     // eigene Gruppe pro Raum — für den Fokus-Modus komplett ausblendbar.
     // always_visible (Server-Entscheidung, Default aus): Raum hängt direkt
     // an der Kachel und ist damit dauerhaft sichtbar — für Outdoor-Räume,
@@ -458,7 +464,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
       const len = a.distanceTo(b);
       if (len < 0.06) return;
       const seg = box(len, WALL_H, 0.07, mat);
-      seg.position.set((a.x + b.x) / 2, floorY + 0.24 + WALL_H / 2, (a.y + b.y) / 2);
+      seg.position.set((a.x + b.x) / 2, floorY + 0.08 + WALL_H / 2, (a.y + b.y) / 2);
       seg.rotation.y = -Math.atan2(b.y - a.y, b.x - a.x);
       seg.receiveShadow = false;
       g.add(seg);
@@ -602,7 +608,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
-    outlineWalls: [], levelSlabs: new Map(),
+    outlineWalls: [], levelSlabs: new Map(), roomOutdoor: new Set(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 
@@ -839,15 +845,22 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
     tile.roomExits.get(roomId)?.setY(floor + 0.01);
   }
 
-  // Boden-Farbe des Raum-Modells auf die Etagen-Platte übernehmen: an den
-  // begehbaren Treffern die Textur auslesen (Testlauf für einheitliche Böden)
+  // Boden-Farbe der INNEN-Räume auf die Etagen-Platte übernehmen: an den
+  // begehbaren Treffern die Textur auslesen, über alle Räume der Etage
+  // mitteln (Outdoor-Räume wie der Park liefern sonst Rasen-Grün)
   const slab = tile.levelSlabs.get(tile.roomLevels.get(roomId) ?? 0);
-  if (slab) {
+  if (slab && !tile.roomOutdoor.has(roomId)) {
     const floorSamples = samples.filter((s) => s.p.y < floor + 0.12 && s.uv && s.mesh);
     const m0 = floorSamples[0]?.mesh;
-    if (m0) {
-      const col = textureColorAt(m0, floorSamples.filter((s) => s.mesh === m0).map((s) => s.uv!));
-      if (col) (slab.material as THREE.MeshStandardMaterial).color.copy(col);
+    const col = m0 ? textureColorAt(m0, floorSamples.filter((s) => s.mesh === m0).map((s) => s.uv!)) : null;
+    if (col) {
+      const colors = (slab.userData.floorColors as THREE.Color[] | undefined) ?? [];
+      colors.push(col);
+      slab.userData.floorColors = colors;
+      const avg = new THREE.Color(0, 0, 0);
+      for (const c of colors) avg.add(c);
+      avg.multiplyScalar(1 / colors.length);
+      (slab.material as THREE.MeshStandardMaterial).color.copy(avg);
     }
   }
 
