@@ -394,11 +394,12 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     tile.roomRects.set(room.id, { x: tile.center.x + x, z: tile.center.z + z, w: roomW, d: roomD });
     const plate = addRoomCommon(room, x, z, floorY, (i * 67) % 360, roomW, roomD, rg);
 
-    // Andockpunkt für das Raum-Modell: auf Bodenniveau der Etage — die
+    // Andockpunkt für das Raum-Modell: knapp über der Etagen-Platte (+0.08),
+    // damit der Modell-Boden fast mit dem Etagen-Boden verschmilzt — die
     // Platzhalter-Platte wird beim Modell-Einwechseln ohnehin ausgeblendet.
     // layout.rotation dreht den Raum-INHALT (analog map3d.rotation).
     const holder = new THREE.Group();
-    holder.position.set(x, floorY + 0.12, z);
+    holder.position.set(x, floorY + 0.09, z);
     holder.rotation.y = -THREE.MathUtils.degToRad(lay.rotation ?? 0);
     rg.add(holder);
     tile.roomSlots.set(room.id, { holder, w: roomW, d: roomD, plate });
