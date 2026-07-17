@@ -15,6 +15,9 @@ interface ActiveModel {
   filename: string
   rotation?: { x?: number; y?: number; z?: number }
   offset_y?: number
+  /** Real-world width estimate of the room's largest side (metres) —
+   *  figures in the room derive their scale from it. */
+  width_m?: number
   active?: boolean
 }
 
@@ -29,6 +32,7 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
   const [model, setModel] = useState<ActiveModel | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [offsetDraft, setOffsetDraft] = useState('0')
+  const [widthDraft, setWidthDraft] = useState('')
 
   useEffect(() => {
     let stale = false
@@ -40,6 +44,7 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
         const active = (d.models || []).find((m) => m.active) || (d.models || [])[0] || null
         setModel(active)
         setOffsetDraft(String(active?.offset_y ?? 0))
+        setWidthDraft(active?.width_m ? String(active.width_m) : '')
         setLoaded(true)
       })
       .catch(() => { if (!stale) setLoaded(true) })
@@ -62,6 +67,29 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [model, enc, t, toast])
+
+  const commitWidth = useCallback(async () => {
+    if (!model) return
+    const n = parseFloat(widthDraft)
+    const v = Number.isFinite(n) && n > 0 ? n : 0
+    if (v === (model.width_m || 0)) {
+      setWidthDraft(model.width_m ? String(model.width_m) : '')
+      return
+    }
+    try {
+      const d = await apiPost<{ meta: { width_m?: number } }>(
+        `/world/locations/${enc}/model3d/width`,
+        { width_m: v, file: model.filename })
+      setModel((prev) => (prev ? { ...prev, width_m: d.meta?.width_m || 0 } : prev))
+      // Live-update the floor-plan preview's cached meta (figures rescale
+      // immediately while dialing the width).
+      window.dispatchEvent(new CustomEvent('anima-room-model-width', {
+        detail: { roomId, widthM: d.meta?.width_m || 0 },
+      }))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [model, widthDraft, enc, roomId, t, toast])
 
   const commitOffset = useCallback(async () => {
     if (!model) return
@@ -113,6 +141,23 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
           value={offsetDraft}
           onChange={(e) => setOffsetDraft(e.target.value)}
           onBlur={() => { void commitOffset() }}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        />
+      </label>
+      <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+        title={t('Estimated real-world width of the room (largest side, from the source image, e.g. 6). Placement is unchanged — the value sets the room’s content scale, and figures in the room size themselves from it automatically.')}>
+        {t('Room width (m)')}
+        <input
+          className="ga-input"
+          type="number"
+          min={0}
+          max={500}
+          step={0.5}
+          style={{ width: 72 }}
+          value={widthDraft}
+          placeholder="—"
+          onChange={(e) => setWidthDraft(e.target.value)}
+          onBlur={() => { void commitWidth() }}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
         />
       </label>

@@ -37,10 +37,14 @@ interface CachedModel {
   rotation: { x?: number; y?: number; z?: number }
   /** Vertical placement offset in metres (negative sinks it). */
   offsetY: number
-  /** Storeys the mesh depicts (building models; 0 = undeclared) — the
-   *  shell is stretched to floors × level_height, so its storeys track
-   *  the room levels through any level_height change. */
+  /** Detail-view scale anchors (0 = undeclared): buildings carry
+   *  floors (storeys the mesh depicts) + heightM (world metres, uniform
+   *  scale target; storey height derives as heightM / floors), rooms
+   *  carry widthM (real-world width of the largest side; content scale =
+   *  rect extent / widthM, figures in the room derive from it). */
   floors: number
+  heightM: number
+  widthM: number
   /** Prepared once on first overlay use: the model with its own textures on
    *  unlit, semi-transparent materials — visibly the building, still
    *  see-through. Scene inserts clones of this (shared materials). */
@@ -101,6 +105,22 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
 
   const lh = levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M
 
+  // The adjust strip edits room-model metas the preview has cached —
+  // its width event patches the cache so marker figures rescale live.
+  useEffect(() => {
+    const onWidth = (e: Event) => {
+      const det = (e as CustomEvent).detail as { roomId?: string; widthM?: number }
+      if (!det?.roomId) return
+      const entry = cacheRef.current.get(`room:${det.roomId}`)
+      if (entry && entry !== 'loading' && entry !== 'missing') {
+        entry.widthM = det.widthM || 0
+        setBump((b) => b + 1)
+      }
+    }
+    window.addEventListener('anima-room-model-width', onWidth)
+    return () => window.removeEventListener('anima-room-model-width', onWidth)
+  }, [])
+
   // Active building model in the cache (re-read on every bump-triggered
   // render) — feeds the "Model storeys" field in the toolbar.
   const bEntryRaw = cacheRef.current.get('building')
@@ -121,6 +141,24 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }
+  const commitBuildingHeight = (raw: string) => {
+    const n = parseFloat(raw)
+    const heightM = Number.isFinite(n) && n > 0 ? n : 0
+    if (!buildingEntry || heightM === buildingEntry.heightM) return
+    void apiPost<{ meta?: { height_m?: number } }>(
+      `/world/locations/${encodeURIComponent(locationId)}/model3d/height`,
+      { height_m: heightM })
+      .then((d) => {
+        buildingEntry.heightM = d.meta?.height_m || 0
+        setBump((b) => b + 1)
+      })
+      .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+  }
+  // Storey height derived from the building anchors — shown as the
+  // level-height placeholder (the manual value is only the fallback).
+  const lhDerived = buildingEntry && buildingEntry.heightM > 0 && buildingEntry.floors > 0
+    ? buildingEntry.heightM / buildingEntry.floors
+    : 0
 
   // Fetch a model (meta + GLB) into the cache; returns it when ready. A miss
   // is cached too — no retry storm per drag frame.
@@ -137,14 +175,17 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           : `/play/locations/${encodeURIComponent(locationId)}/model`
         const meta = await apiGet<{ format?: string; url?: string
           rotation?: { x?: number; y?: number; z?: number }
-          offset_y?: number; floors?: number }>(`${base}/meta`)
+          offset_y?: number; floors?: number
+          height_m?: number; width_m?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') throw new Error(`format ${fmt}`)
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
         const gltf = await new GLTFLoader().loadAsync(meta.url || base)
         cache.set(key, { obj: gltf.scene, rotation: meta.rotation || {},
                          offsetY: meta.offset_y || 0,
-                         floors: meta.floors || 0 })
+                         floors: meta.floors || 0,
+                         heightM: meta.height_m || 0,
+                         widthM: meta.width_m || 0 })
       } catch {
         cache.set(key, 'missing')  // 404 = no model — the box stays
       }
@@ -218,6 +259,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // toggle change and once after scene init).
   const rebuild = (h: NonNullable<typeof handleRef.current>, current: Room[]) => {
     const { THREE, boxes } = h
+    // Effective storey height: derived from the building's scale anchors
+    // (height_m / floors) when declared — the shell then defines the level
+    // stacking; map3d.level_height stays the fallback. Fetched regardless
+    // of the overlay toggle so the derivation is always live.
+    const bAnchor = ensureModel('building')
+    const lhEff = bAnchor && bAnchor.heightM > 0 && bAnchor.floors > 0
+      ? bAnchor.heightM / bAnchor.floors
+      : lh
     for (const mixer of mixersRef.current) mixer.stopAllAction()
     mixersRef.current = []
     // Recursive disposal that BAILS on __noDispose subtrees — cached-model
@@ -264,7 +313,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
 
       const fit = new THREE.Group()
       fit.add(norm)
-      fit.scale.setScalar(Math.min(targetW / (fpX || 1), targetD / (fpZ || 1)) * 0.96)
+      const fitScale = Math.min(targetW / (fpX || 1), targetD / (fpZ || 1)) * 0.96
+      fit.scale.setScalar(fitScale)
 
       const holder = new THREE.Group()
       holder.add(fit)
@@ -279,6 +329,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
                           cz - c2.z)
       holder.userData.__noDispose = true
       boxes.add(holder)
+      // World extent of the model's largest side — with the model's
+      // declared real width this yields the room's content scale.
+      return fitScale
     }
 
     current.forEach((room, idx) => {
@@ -288,23 +341,31 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       const w = lay.w * PLATE_M
       const d = lay.d * PLATE_M
       const level = lay.level || 0
-      const floorY = level * lh
-      const cy = floorY + lh / 2
+      const floorY = level * lhEff
+      const cy = floorY + lhEff / 2
       const cx = (lay.x + lay.w / 2 - 0.5) * PLATE_M
       const cz = (lay.y + lay.d / 2 - 0.5) * PLATE_M
 
       const model = showModelsRef.current && room.id
         ? ensureModel(`room:${room.id}`, room.id)
         : null
+      let fitScale = 0
       if (model) {
-        placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0)
+        fitScale = placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0)
       }
+      // Figure scale in THIS room: explicit via the model's declared real
+      // width (rect extent / width_m) — figures always match the room's
+      // furniture; storey-height fallback (lhEff / 3) without a declared
+      // width or without a shown model.
+      const roomFigScale = model && model.widthM > 0 && fitScale > 0
+        ? fitScale / model.widthM
+        : lhEff / 3
 
       // Label + exit/marker dots always; the box only when no model stands in.
       const roomGroup = new THREE.Group()
       if (!model) {
         const box = new THREE.Mesh(
-          new THREE.BoxGeometry(w, lh * 0.94, d),
+          new THREE.BoxGeometry(w, lhEff * 0.94, d),
           new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.5 }),
         )
         const edges = new THREE.LineSegments(
@@ -320,7 +381,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           new THREE.SphereGeometry(0.16, 12, 12),
           new THREE.MeshBasicMaterial({ color: 0xe0a356 }),
         )
-        dot.position.set((lay.exit[0] - 0.5) * w, -lh * 0.4, (lay.exit[1] - 0.5) * d)
+        dot.position.set((lay.exit[0] - 0.5) * w, -lhEff * 0.4, (lay.exit[1] - 0.5) * d)
         roomGroup.add(dot)
       }
       // Animation markers (green — exit stays orange): a dot on the room
@@ -334,7 +395,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         const mz = (m.at[1] - 0.5) * d
         // offset_y is additive to the sampled seat height in the client —
         // the preview has no sampling, so it applies from the room floor.
-        const floor = -lh * 0.44 + (m.offset_y || 0)
+        const floor = -lhEff * 0.44 + (m.offset_y || 0)
         const fig = new THREE.Group()
         // No marker dot in 3D — it sat exactly where the figure is judged
         // and got in the way; the figure + numbered label mark the spot,
@@ -378,14 +439,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           mixer.clipAction(anim.clip).play()
           mixer.update(0)
           mixersRef.current.push(mixer)
-          // Contract figure scale in rooms: derived from the storey height
-          // (level_height / 3, real storey ≈ 3 m) — one value, always
-          // consistent with the metre scale. Default 3 → 1/3.
           pivot.updateMatrixWorld(true)
           const fb = new THREE.Box3().setFromObject(pivot)
           const fs = fb.getSize(new THREE.Vector3())
-          const figScale = (map3dRef.current?.level_height || 3) / 3
-          const k = (1.7 * figScale) / (fs.y || 1)
+          const k = (1.7 * roomFigScale) / (fs.y || 1)
           pivot.scale.setScalar(k)
           pivot.updateMatrixWorld(true)
           const fb2 = new THREE.Box3().setFromObject(pivot)
@@ -460,7 +517,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         map: tex, transparent: true, depthTest: false,
       }))
       sprite.scale.set(3.2, 0.8, 1)
-      sprite.position.y = lh * 0.62
+      sprite.position.y = lhEff * 0.62
       roomGroup.add(sprite)
 
       // The group does NOT yaw: x/y/w/d are the rectangle AS PLACED and the
@@ -483,7 +540,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       base.push(base[0])
       for (const lv of (usedLevels.length ? usedLevels : [0])) {
         const geo = new THREE.BufferGeometry().setFromPoints(
-          base.map(([x, z]) => new THREE.Vector3(x, lv * lh + 0.02, z)))
+          base.map(([x, z]) => new THREE.Vector3(x, lv * lhEff + 0.02, z)))
         boxes.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
           color: 0x58a6ff, transparent: true, opacity: lv === 0 ? 0.9 : 0.45,
         })))
@@ -492,12 +549,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     if (m3?.elevator) {
       const lo = Math.min(0, ...usedLevels)
       const hi = Math.max(0, ...usedLevels)
-      const hgt = (hi - lo + 1) * lh
+      const hgt = (hi - lo + 1) * lhEff
       const shaft = new THREE.Mesh(
         new THREE.BoxGeometry(0.5, hgt, 0.5),
         new THREE.MeshStandardMaterial({ color: 0x8b949e, transparent: true, opacity: 0.35 }),
       )
-      shaft.position.set((m3.elevator[0] - 0.5) * PLATE_M, lo * lh + hgt / 2,
+      shaft.position.set((m3.elevator[0] - 0.5) * PLATE_M, lo * lhEff + hgt / 2,
                          (m3.elevator[1] - 0.5) * PLATE_M)
       boxes.add(shaft)
       const edges = new THREE.LineSegments(
@@ -536,36 +593,24 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           building.ghost = g
         }
         const clone = building.ghost.clone(true)
-        const norm = new THREE.Group()
-        norm.add(clone)
-        norm.updateMatrixWorld(true)
-        const b0 = new THREE.Box3().setFromObject(norm)
-        const s0 = b0.getSize(new THREE.Vector3())
-        const target = 10 * 0.92 * (m3?.size || 0.92)
-        norm.scale.setScalar(target / (Math.max(s0.x, s0.z) || 1))
         const holder = new THREE.Group()
-        holder.add(norm)
+        holder.add(clone)
         holder.rotation.set(deg(building.rotation.x),
                             deg(building.rotation.y) - deg(m3?.rotation || 0),
                             deg(building.rotation.z))
-        // Declared storey count: stretch the shell vertically (WORLD y,
-        // after the rotation fix) to floors × level_height — mesh heights
-        // are random, and this keeps the model's storeys on the level
-        // lines through any later level_height change. 0 = natural.
-        const stretch = new THREE.Group()
-        stretch.add(holder)
-        if (building.floors > 0) {
-          holder.updateMatrixWorld(true)
-          const bn = new THREE.Box3().setFromObject(holder)
-          const natH = bn.max.y - bn.min.y
-          if (natH > 0.001) stretch.scale.y = (building.floors * lh) / natH
-        }
-        stretch.updateMatrixWorld(true)
-        const b2 = new THREE.Box3().setFromObject(stretch)
+        holder.updateMatrixWorld(true)
+        const br = new THREE.Box3().setFromObject(holder)
+        const sr = br.getSize(new THREE.Vector3())
+        const k = building.heightM > 0
+          ? building.heightM / (sr.y || 1)
+          : (10 * 0.92 * (m3?.size || 0.92)) / (Math.max(sr.x, sr.z) || 1)
+        holder.scale.setScalar(k)
+        holder.updateMatrixWorld(true)
+        const b2 = new THREE.Box3().setFromObject(holder)
         const c2 = b2.getCenter(new THREE.Vector3())
-        stretch.position.set(-c2.x, 0.06 - b2.min.y + building.offsetY, -c2.z)
-        stretch.userData.__noDispose = true
-        boxes.add(stretch)
+        holder.position.set(-c2.x, 0.06 - b2.min.y + building.offsetY, -c2.z)
+        holder.userData.__noDispose = true
+        boxes.add(holder)
         buildingTopY = 0.06 + building.offsetY + (b2.max.y - b2.min.y)
       }
     }
@@ -577,8 +622,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     {
       const lo = Math.min(0, ...usedLevels)
       const hi = Math.max(0, ...usedLevels)
-      const bottomY = Math.min(0, Math.floor(lo * lh))
-      const topY = Math.ceil(Math.max((hi + 1) * lh, buildingTopY, lh))
+      const bottomY = Math.min(0, Math.floor(lo * lhEff))
+      const topY = Math.ceil(Math.max((hi + 1) * lhEff, buildingTopY, lhEff))
       const rx = -PLATE_M / 2 - 0.7
       const rz = PLATE_M / 2 + 0.7
       const rulerMat = new THREE.LineBasicMaterial({ color: 0xc9d1d9 })
@@ -620,7 +665,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       })
       const hp = PLATE_M / 2
       for (let lv = lo; lv <= hi + 1; lv++) {
-        const y = lv * lh
+        const y = lv * lhEff
         if (Math.abs(y) < 1e-6) continue
         boxes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(-hp, y, -hp), new THREE.Vector3(hp, y, -hp),
@@ -633,7 +678,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       // (1.7 m × level_height/3) standing on the ground next to the metre
       // scale — storey height vs. figure height is judgeable at a glance.
       {
-        const target = 1.7 * (lh / 3)
+        const target = 1.7 * (lhEff / 3)
         const fig = new THREE.Group()
         const figSrc = ensureTestFigure()
         const kinds = clipListRef.current.clips.map((c) => c.kind)
@@ -990,7 +1035,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
               step={0.1}
               style={{ width: 70 }}
               value={levelHeightM ?? ''}
-              placeholder="3"
+              placeholder={lhDerived ? `${t('auto')} (${lhDerived.toFixed(2)})` : '3'}
+              title={lhDerived
+                ? t('Derived from the building model (height ÷ storeys) — this field is only the fallback without those anchors.')
+                : undefined}
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
                 onLevelHeight(Number.isFinite(n) && n > 0 ? n : undefined)
@@ -998,9 +1046,28 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             />
           </label>
         ) : null}
-        {showBuilding && buildingEntry ? (
+        {buildingEntry ? (
           <label className="ga-check-row"
-            title={t('Storeys the building MODEL depicts — the shell is stretched to storeys × level height, so its floors stay on the level lines whenever the level height changes. Empty = natural mesh proportions.')}>
+            title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The shell is scaled uniformly (no distortion) to this height; storey height derives as height ÷ storeys. Empty = tile-fit proportions as before.')}>
+            <span>{t('Model height (m)')}</span>
+            <input
+              key={`bh-${buildingEntry.heightM}`}
+              className="ga-input"
+              type="number"
+              min={0}
+              max={500}
+              step={0.1}
+              style={{ width: 70 }}
+              defaultValue={buildingEntry.heightM || ''}
+              placeholder={t('natural')}
+              onBlur={(e) => commitBuildingHeight(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          </label>
+        ) : null}
+        {buildingEntry ? (
+          <label className="ga-check-row"
+            title={t('Storeys the building MODEL depicts — together with the model height this derives the storey height (height ÷ storeys) for stacking the levels.')}>
             <span>{t('Model storeys')}</span>
             <input
               key={`bf-${buildingEntry.floors}`}
@@ -1011,7 +1078,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
               step={1}
               style={{ width: 62 }}
               defaultValue={buildingEntry.floors || ''}
-              placeholder={t('natural')}
+              placeholder="—"
               onBlur={(e) => commitBuildingFloors(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             />

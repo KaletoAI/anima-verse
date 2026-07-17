@@ -189,6 +189,8 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
             "offset_y": float(meta.get("offset_y") or 0.0),
             "floors": int(meta.get("floors") or 0),
+            "height_m": float(meta.get("height_m") or 0.0),
+            "width_m": float(meta.get("width_m") or 0.0),
             "active": bool(active and p.name == active.name),
         })
     return out
@@ -251,11 +253,16 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
             # have different socket thicknesses; negative sinks the model
             # into the terrain, e.g. a park). Client applies it on load.
             "offset_y": float(meta.get("offset_y") or 0.0),
-            # Storeys the mesh depicts (0 = undeclared): the client
-            # stretches the model to floors × map3d.level_height after the
-            # footprint normalization — building storeys track the room
-            # levels through any later level_height change.
+            # Detail-view scale anchors (0 = undeclared, see the shared
+            # backend note): buildings — height_m (uniform scale so the
+            # shell is exactly this tall) + floors (storeys the mesh
+            # depicts; storey height = height_m / floors, fallback
+            # map3d.level_height). Rooms — width_m (real-world width of
+            # the model's largest side; content scale = rect extent /
+            # width_m, figures in the room derive from it).
             "floors": int(meta.get("floors") or 0),
+            "height_m": float(meta.get("height_m") or 0.0),
+            "width_m": float(meta.get("width_m") or 0.0),
             # Changes whenever ANOTHER model file becomes active (new
             # generation, upload, selection) — a running client polls the
             # meta and re-downloads on a signature change (AV3D-2 addendum);
@@ -327,14 +334,12 @@ def set_offset_y(location_id: str, offset_y: Any,
     return meta
 
 
-def set_floors(location_id: str, floors: Any,
-               room_id: str = "", filename: str = "") -> Dict[str, Any]:
-    """Persist how many storeys ONE building model depicts (sidecar,
-    default: the active model). Mesh heights are random — with the storey
-    count declared, clients stretch the model vertically to
-    ``floors × level_height`` AFTER the footprint normalization, so the
-    model's storeys stay aligned with the room levels no matter how
-    level_height changes later. 0/empty = natural proportions."""
+def _set_sidecar_number(location_id: str, field: str, value: Any, *,
+                        room_id: str = "", filename: str = "",
+                        cast=float, lo: float = 0.0,
+                        hi: float = 500.0) -> Dict[str, Any]:
+    """Shared setter for numeric sidecar fields on ONE model (default: the
+    active one). value ≤ 0 / unparseable-and-absent removes the field."""
     owner = _owner_id(location_id)
     if not owner:
         raise ValueError("no model")
@@ -344,15 +349,55 @@ def set_floors(location_id: str, floors: Any,
         raise ValueError("no model")
     meta = _read_sidecar(p)
     try:
-        v = int(floors)
+        v = cast(value)
     except (TypeError, ValueError):
-        v = int(meta.get("floors") or 0)
+        v = cast(meta.get(field) or 0)
     if v > 0:
-        meta["floors"] = min(v, 200)
+        meta[field] = min(max(v, lo), hi)
+        if cast is float:
+            meta[field] = round(meta[field], 2)
     else:
-        meta.pop("floors", None)
+        meta.pop(field, None)
     _write_sidecar(p, meta)
     return meta
+
+
+def set_floors(location_id: str, floors: Any,
+               room_id: str = "", filename: str = "") -> Dict[str, Any]:
+    """Persist how many storeys ONE building model depicts (sidecar). With
+    ``height_m`` declared, the storey height derives as
+    ``height_m / floors`` — level stacking and level lines follow it
+    (fallback: map3d.level_height). 0/empty = undeclared."""
+    return _set_sidecar_number(location_id, "floors", floors,
+                               room_id=room_id, filename=filename,
+                               cast=int, lo=1, hi=200)
+
+
+def set_height_m(location_id: str, height_m: Any,
+                 room_id: str = "", filename: str = "") -> Dict[str, Any]:
+    """Persist a building model's height in world metres (sidecar — the
+    admin estimates/dials it at the preview's metre ruler). Scale anchor
+    of the DETAIL view: the shell is scaled UNIFORMLY (no distortion)
+    so its total height equals this value — its storeys then sit at
+    ``height_m / floors`` spacing, which is also the derived storey
+    height for level stacking. The tile view keeps the independent
+    footprint fit (map3d.size); clients switch representation on zoom.
+    0/empty = undeclared (detail view falls back to the tile fit)."""
+    return _set_sidecar_number(location_id, "height_m", height_m,
+                               room_id=room_id, filename=filename)
+
+
+def set_width_m(location_id: str, width_m: Any,
+                room_id: str = "", filename: str = "") -> Dict[str, Any]:
+    """Persist a ROOM model's real-world width in metres (sidecar — the
+    admin estimates the largest side of the room from the source image,
+    e.g. "this living room is about 6 m wide"). Placement is unchanged
+    (the model keeps filling its floor-plan rectangle); the value makes
+    the room's CONTENT scale explicit — rect world extent / width_m — and
+    figures in the room derive from it automatically (1.7 m × scale).
+    0/empty = undeclared (figures fall back to storey_height / 3)."""
+    return _set_sidecar_number(location_id, "width_m", width_m,
+                               room_id=room_id, filename=filename)
 
 
 def _new_model_path(d: Path, stem: str, suffix: str = ".glb") -> Path:

@@ -28,10 +28,14 @@ export interface ModelEntry {
   rotation?: { x?: number; y?: number; z?: number }
   /** Vertical placement offset in metres (± — negative sinks the model). */
   offset_y?: number
-  /** Storeys the mesh depicts (building models; 0 = undeclared) — clients
-   *  stretch the shell to floors × level_height, so the model's storeys
-   *  track the room levels through any level_height change. */
+  /** Detail-view scale anchors (0 = undeclared): buildings — floors
+   *  (storeys the mesh depicts) + height_m (world metres; uniform scale
+   *  target, storey height derives as height_m / floors). Rooms —
+   *  width_m (real-world width of the largest side; figures in the room
+   *  derive from rect extent / width_m). */
   floors?: number
+  height_m?: number
+  width_m?: number
   /** The model the clients get (/play/... routes serve only this one). */
   active?: boolean
 }
@@ -248,6 +252,61 @@ export function BuildingModelPanel({
     }
   }, [current, roomId, floorsDraft, enc, t, toast])
 
+  // Metre anchors of the detail view: building height (uniform scale
+  // target; storey height = height / storeys) and room width (real-world
+  // estimate of the largest side; figures derive from it).
+  const [heightDraft, setHeightDraft] = useState('')
+  useEffect(() => {
+    setHeightDraft(current?.height_m ? String(current.height_m) : '')
+  }, [current?.filename, current?.height_m])
+  const commitHeight = useCallback(async () => {
+    if (!current || roomId) return
+    const n = parseFloat(heightDraft)
+    const heightM = Number.isFinite(n) && n > 0 ? n : 0
+    if (heightM === (current.height_m || 0)) {
+      setHeightDraft(current.height_m ? String(current.height_m) : '')
+      return
+    }
+    try {
+      const d = await apiPost<{ meta: { height_m?: number } }>(
+        `/world/locations/${enc}/model3d/height`,
+        { height_m: heightM, file: current.filename })
+      setModel3d((prev) => (prev ? {
+        ...prev,
+        models: (prev.models || []).map((m) =>
+          m.filename === current.filename ? { ...m, height_m: d.meta?.height_m || 0 } : m),
+      } : prev))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [current, roomId, heightDraft, enc, t, toast])
+
+  const [widthDraft, setWidthDraft] = useState('')
+  useEffect(() => {
+    setWidthDraft(current?.width_m ? String(current.width_m) : '')
+  }, [current?.filename, current?.width_m])
+  const commitWidth = useCallback(async () => {
+    if (!current || !roomId) return
+    const n = parseFloat(widthDraft)
+    const widthM = Number.isFinite(n) && n > 0 ? n : 0
+    if (widthM === (current.width_m || 0)) {
+      setWidthDraft(current.width_m ? String(current.width_m) : '')
+      return
+    }
+    try {
+      const d = await apiPost<{ meta: { width_m?: number } }>(
+        `/world/locations/${enc}/model3d/width`,
+        { width_m: widthM, file: current.filename })
+      setModel3d((prev) => (prev ? {
+        ...prev,
+        models: (prev.models || []).map((m) =>
+          m.filename === current.filename ? { ...m, width_m: d.meta?.width_m || 0 } : m),
+      } : prev))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [current, roomId, widthDraft, enc, t, toast])
+
   // Make a stored model the active one (what the 3D clients get).
   const select = useCallback(async (filename: string) => {
     try {
@@ -404,7 +463,26 @@ export function BuildingModelPanel({
         </label>
         {!roomId ? (
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Storeys the building MODEL depicts — the shell is stretched to storeys × level height, so its floors stay on the level lines whenever the level height changes. Empty = natural mesh proportions.')}>
+            title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The shell is scaled uniformly (no distortion) to this height; storey height derives as height ÷ storeys. Empty = tile-fit proportions as before.')}>
+            {t('Model height (m)')}
+            <input
+              className="ga-input"
+              type="number"
+              min={0}
+              max={500}
+              step={0.1}
+              style={{ width: 72 }}
+              value={heightDraft}
+              placeholder={t('natural')}
+              onChange={(e) => setHeightDraft(e.target.value)}
+              onBlur={() => { void commitHeight() }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          </label>
+        ) : null}
+        {!roomId ? (
+          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Storeys the building MODEL depicts — together with the model height this derives the storey height (height ÷ storeys) for stacking the levels.')}>
             {t('Model storeys')}
             <input
               className="ga-input"
@@ -414,9 +492,28 @@ export function BuildingModelPanel({
               step={1}
               style={{ width: 66 }}
               value={floorsDraft}
-              placeholder={t('natural')}
+              placeholder="—"
               onChange={(e) => setFloorsDraft(e.target.value)}
               onBlur={() => { void commitFloors() }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          </label>
+        ) : null}
+        {roomId ? (
+          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Estimated real-world width of the room (largest side, from the source image, e.g. 6). Placement is unchanged — the value sets the room’s content scale, and figures in the room size themselves from it automatically.')}>
+            {t('Room width (m)')}
+            <input
+              className="ga-input"
+              type="number"
+              min={0}
+              max={500}
+              step={0.5}
+              style={{ width: 72 }}
+              value={widthDraft}
+              placeholder="—"
+              onChange={(e) => setWidthDraft(e.target.value)}
+              onBlur={() => { void commitWidth() }}
               onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             />
           </label>
