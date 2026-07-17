@@ -225,6 +225,11 @@ Ursprüngliche Anforderung:
   nutzt dessen Session); sonst zeigt sie einen entsprechenden Hinweis.
 - **3D-Reiter:** die Bilder rücken hoch an die Stelle, wo bisher der
   Grundriss-Editor war.
+- **Nachtrag (2026-07-17):** Die Modell-Justierung der Räume (`offset_y`,
+  `rotation`) am besten ebenfalls auf den Floorplan-Reiter neben die
+  Vorschau legen — kein Fensterwechsel beim Einstellen. Die eingebettete
+  Vorschau pollt die Meta-Werte und zeigt Änderungen automatisch nach
+  wenigen Sekunden; UI/Regler sind Server-Sache, der Client stellt nur dar.
 
 ## AV3D-11: Generische Animations-Marker pro Raum — angefordert (2026-07-17)
 
