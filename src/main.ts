@@ -317,12 +317,14 @@ async function startApp(username: string) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);
           const spots = tile.roomSpots.get(inRoom);
-          // Aktivitäts-Animation entscheidet: Sitzende auf Sitzflächen,
-          // Liegende auf Liegeflächen (Heuristik aus der Modell-Abtastung)
+          // Aktivitäts-Animation entscheidet die Stellfläche. Kuratierte
+          // Marker (AV3D-11) schlagen die Heuristik aus der Modell-Abtastung.
           const kind = c.activity_animation || activityToClipKind(c.activity || '');
+          const marked = tile.roomMarkers.get(inRoom)?.get(kind);
           const sit = tile.roomSitSpots.get(inRoom);
           const lieDown = tile.roomLieSpots.get(inRoom);
-          const pool = kind === 'lie' ? (lieDown?.length ? lieDown : sit)
+          const pool = marked?.length ? marked
+            : kind === 'lie' ? (lieDown?.length ? lieDown : sit)
             : kind === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
           if (pool?.length) {
             pos = pool[idx % pool.length].clone();

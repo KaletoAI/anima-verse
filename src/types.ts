@@ -1,3 +1,9 @@
+/** AV3D-11: Animations-Marker im Raum (generisches Clip-Vokabular). */
+export interface RoomMarker {
+  at: [number, number];    // Fraktion der Raum-Grundfläche
+  animation: string;       // Clip-Kind (sit, lie, dance, ...)
+}
+
 /** AV3D-2: Platzierung eines Raums relativ zur Gebäude-Grundfläche. */
 export interface RoomLayout {
   x: number;               // linke obere Ecke (Fraktion 0..1)
@@ -5,7 +11,10 @@ export interface RoomLayout {
   w: number;               // Breite/Tiefe (Fraktion 0..1)
   d: number;
   level?: number;          // Etage: 0 = EG, negativ = Keller
+  /** Drehung des Raum-Inhalts um die Hochachse in Grad */
+  rotation?: number;
   exit?: [number, number]; // Ausgangspunkt (Fraktion der Raum-Grundfläche)
+  markers?: RoomMarker[];  // AV3D-11
 }
 
 export interface Room {

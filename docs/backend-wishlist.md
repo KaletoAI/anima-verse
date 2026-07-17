@@ -33,6 +33,15 @@ Status: `offen` · `drüben in Arbeit` · `umgesetzt (API-Version/Datum)` · `ve
   Reliefs legt der Client flach, solange keine explizite rotation gesetzt
   ist); Figuren folgen der Etagenhöhe und laufen bei Raumwechseln über die
   exit-Punkte. Räume ohne Layout/Modell bleiben Auto-Grid/Platte.
+- **Nachtrag-Wunsch (2026-07-17): `signature` im Modell-Meta** (Räume UND
+  Gebäude; z.B. Hash oder created_at) — wie bei den Charakter-Modellen.
+  Ohne sie merkt der laufende Client nicht, dass ein Modell neu generiert
+  wurde (Layout-/Meta-Änderungen erkennt er, neue Modell-DATEIEN nicht);
+  heute hilft nur ein Reload. Mit signature frischt der Client automatisch
+  auf. Ebenso nützlich: Layout-Änderungen erreichen den Haupt-Client erst
+  beim Reload (/world/locations wird einmalig geladen) — mit signature am
+  Location-Objekt (oder einem Bump-Feld in der Worldmap) könnte er gezielt
+  nachladen.
 
 Ursprüngliche Anforderung:
 

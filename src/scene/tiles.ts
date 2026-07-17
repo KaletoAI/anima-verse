@@ -66,6 +66,8 @@ export interface Tile {
   roomSitSpots: Map<string, THREE.Vector3[]>;
   /** erkannte Liegeflächen (Möbelhöhe, große zusammenhängende Flächen) */
   roomLieSpots: Map<string, THREE.Vector3[]>;
+  /** kuratierte Animations-Marker (AV3D-11): Raum -> Clip-Kind -> Punkte */
+  roomMarkers: Map<string, Map<string, THREE.Vector3[]>>;
   /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
   roomGroups: Map<string, THREE.Group>;
   /** Raum-Rechtecke in Welt-Koordinaten (Fokus-Erkennung) */
@@ -361,11 +363,34 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     const plate = addRoomCommon(room, x, z, floorY, (i * 67) % 360, roomW, roomD, rg);
 
     // Andockpunkt für das Raum-Modell: auf Bodenniveau der Etage — die
-    // Platzhalter-Platte wird beim Modell-Einwechseln ohnehin ausgeblendet
+    // Platzhalter-Platte wird beim Modell-Einwechseln ohnehin ausgeblendet.
+    // layout.rotation dreht den Raum-INHALT (analog map3d.rotation).
     const holder = new THREE.Group();
     holder.position.set(x, floorY + 0.12, z);
+    holder.rotation.y = -THREE.MathUtils.degToRad(lay.rotation ?? 0);
     rg.add(holder);
     tile.roomSlots.set(room.id, { holder, w: roomW, d: roomD, plate });
+
+    // Animations-Marker (AV3D-11): Welt-Positionen auf Platten-Höhe;
+    // applyRoomModel verfeinert die Höhe später per Abtastung
+    if (lay.markers?.length) {
+      const byKind = new Map<string, THREE.Vector3[]>();
+      for (const m of lay.markers) {
+        if (!m?.at || !m.animation) continue;
+        const mx = -LW / 2 + (lay.x + m.at[0] * lay.w) * LW;
+        const mz = -LD / 2 + (lay.y + m.at[1] * lay.d) * LD;
+        const p = tile.center.clone().add(new THREE.Vector3(mx, floorY + 0.45, mz));
+        (byKind.get(m.animation) ?? byKind.set(m.animation, []).get(m.animation)!).push(p);
+        if (opts.markers) {   // Debug-/Editor-Ansicht: Marker als türkise Punkte
+          const dot = new THREE.Mesh(new THREE.CircleGeometry(0.22, 16), std({ color: 0x4ac3e0 }));
+          dot.rotation.x = -Math.PI / 2;
+          dot.position.set(mx, floorY + 0.47, mz);
+          rg.add(dot);
+        }
+      }
+      tile.roomMarkers.set(room.id, byKind);
+      tile.roomMarkers.set(room.name, byKind);
+    }
 
     // Ausgangspunkt: vom Server (exit) oder Mitte der dem Zentrum
     // zugewandten Raumkante als Fallback
@@ -418,7 +443,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     loc, group, center, isBuilding, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
-    roomSitSpots: new Map(), roomLieSpots: new Map(),
+    roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
@@ -628,6 +653,19 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
     // Mitte/Ausgang auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
     center?.setY(floor + 0.01);
     tile.roomExits.get(roomId)?.setY(floor + 0.01);
+  }
+
+  // Marker-Höhen verfeinern: an der Marker-Stelle abtasten (Sofa-Sitzhöhe
+  // statt Platten-Höhe); ohne Treffer auf Bodenhöhe
+  const markers = tile.roomMarkers.get(roomId);
+  if (markers) {
+    for (const pts of markers.values()) {
+      for (const p of pts) {
+        ray.set(new THREE.Vector3(p.x, base.y + 20, p.z), down);
+        const hit = ray.intersectObject(model, true)[0];
+        p.setY(hit && hit.point.y < floor + 0.5 ? hit.point.y + 0.01 : floor + 0.01);
+      }
+    }
   }
 }
 
