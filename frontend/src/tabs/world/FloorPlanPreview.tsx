@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { getBuildingDims } from './topDownSnapshot'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room } from './worldTypes'
 
@@ -110,6 +111,23 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   const clockRef = useRef<Clock | null>(null)
 
   const lh = levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M
+
+  // Mesh width-per-height ratio via the SHARED helper (same value the
+  // layout editor uses) — auto plan width = declared height × this ratio
+  // when no explicit plan_width_m is set.
+  const wphRef = useRef(0)
+  useEffect(() => {
+    let stale = false
+    getBuildingDims(locationId)
+      .then((d) => {
+        if (!stale && d) {
+          wphRef.current = d.widthPerHeight
+          setBump((b) => b + 1)
+        }
+      })
+      .catch(() => undefined)
+    return () => { stale = true }
+  }, [locationId])
 
   // The adjust strip edits room-model metas the preview has cached —
   // its width event patches the cache so marker figures rescale live.
@@ -272,7 +290,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // building entry is fetched regardless of the overlay toggle so the
     // storey derivation is always live.
     const bAnchor = ensureModel('building')
-    const planW = map3dRef.current?.plan_width_m || 0
+    const planW = map3dRef.current?.plan_width_m
+      || (bAnchor && bAnchor.heightM > 0 && wphRef.current > 0
+          ? bAnchor.heightM * wphRef.current : 0)
     const kFac = planW > 0 ? PLATE_M / planW : 1
     const lhEff = bAnchor && bAnchor.heightM > 0 && bAnchor.floors > 0
       ? (bAnchor.heightM / bAnchor.floors) * kFac
@@ -1057,7 +1077,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         </label>
         {onPlanWidth ? (
           <label className="ga-check-row"
-            title={t('Real-world width the floor-plan square represents (estimate the building footprint, e.g. 12). THE scale anchor: room sizes derive from their declared widths, figures and storeys from real size × 8/plan width. Empty = legacy free sizing.')}>
+            title={t('Real-world width the floor-plan square represents. Empty = auto-derived from the building model (height × mesh proportions) — set a value only to correct it. THE scale anchor: room sizes derive from their declared widths, figures and storeys from real size × 8/plan width.')}>
             <span>{t('Plan width (m)')}</span>
             <input
               className="ga-input"
@@ -1067,7 +1087,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
               step={0.5}
               style={{ width: 70 }}
               value={map3d?.plan_width_m ?? ''}
-              placeholder="—"
+              placeholder={buildingEntry && buildingEntry.heightM > 0 && wphRef.current > 0
+                ? `${t('auto')} (${(buildingEntry.heightM * wphRef.current).toFixed(1)})`
+                : '—'}
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
                 onPlanWidth(Number.isFinite(n) && n > 0 ? n : undefined)

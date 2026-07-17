@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
-import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
+import { getBuildingDims, getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { Map3D, Room, RoomLayout } from './worldTypes'
 
 const CANVAS_W = 420
@@ -23,6 +23,10 @@ const MIN_FRAC = 0.05
 interface RoomLayoutEditorProps {
   rooms: Room[]
   onChange: (rooms: Room[]) => void
+  /** Location id — the building-underlay + auto plan width need its model. */
+  locationId?: string
+  /** 2D icon rotation: yaw fallback for the building underlay. */
+  fallbackYawDeg?: number
   /** Location map3d draft — the editor draws/edits the building outline and
    *  the elevator position (AV3D-12) in it. */
   map3d?: Map3D
@@ -43,7 +47,7 @@ type DragState =
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
 const r4 = (v: number) => Math.round(v * 10000) / 10000
 
-export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const [level, setLevel] = useState(0)
   const [selected, setSelectedRaw] = useState<string>('')
@@ -77,6 +81,9 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
   // Top-down underlay: the placed room models rendered straight from above,
   // laid behind the rectangles — markers can be dropped on real furniture.
   const [underlay, setUnderlay] = useState(false)
+  // Building layer behind the plan — the roof view is the real footprint,
+  // for tracing the outline polygon.
+  const [bUnderlay, setBUnderlay] = useState(false)
   const [underlayUrl, setUnderlayUrl] = useState('')
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState>(null)
@@ -101,23 +108,43 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
     r.layout!.d, r.layout!.rotation || 0,
   ]))
   useEffect(() => {
-    if (!underlay) {
+    if (!underlay && !bUnderlay) {
       setUnderlayUrl('')
       return
     }
     const tid = setTimeout(() => {
-      renderTopDownSnapshot({ rooms: roomsRef.current, level })
+      renderTopDownSnapshot({
+        rooms: roomsRef.current, level, includeRooms: underlay,
+        building: bUnderlay && locationId
+          ? { locationId, map3d, fallbackYawDeg }
+          : undefined,
+      })
         .then((url) => setUnderlayUrl(url || ''))
         .catch(() => setUnderlayUrl(''))
     }, 350)
     return () => clearTimeout(tid)
-  }, [underlay, level, geomKey])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [underlay, bUnderlay, level, geomKey, locationId, fallbackYawDeg,
+      map3d?.rotation, map3d?.size])
 
   // Anchored mode (map3d.plan_width_m set): room-rectangle sizes DERIVE
   // from the models' declared real width — long side = width_m /
   // plan_width_m, short side via the model's footprint aspect. Dims are
   // loaded per room once; rooms without model/width keep free resize.
-  const planW = map3d?.plan_width_m || 0
+  const [bDims, setBDims] = useState<{ heightM: number
+    widthPerHeight: number } | null>(null)
+  useEffect(() => {
+    if (!locationId) return
+    let stale = false
+    getBuildingDims(locationId)
+      .then((d) => { if (!stale && d) setBDims({ heightM: d.heightM, widthPerHeight: d.widthPerHeight }) })
+      .catch(() => undefined)
+    return () => { stale = true }
+  }, [locationId])
+  // Explicit anchor wins; otherwise auto-derived from the building model
+  // (declared height × the mesh's width-per-height ratio).
+  const planW = map3d?.plan_width_m
+    || (bDims && bDims.heightM > 0 ? bDims.heightM * bDims.widthPerHeight : 0)
   const [modelDims, setModelDims] = useState<Record<string,
     { widthM: number; fpX: number; fpZ: number } | null>>({})
   useEffect(() => {
@@ -327,6 +354,12 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
           <input type="checkbox" checked={underlay}
             onChange={(e) => setUnderlay(e.target.checked)} />
           <span>{t('Models behind the plan')}</span>
+        </label>
+        <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+          title={t('Lay the building model (roof view = real footprint) behind the plan — for tracing the outline polygon.')}>
+          <input type="checkbox" checked={bUnderlay}
+            onChange={(e) => setBUnderlay(e.target.checked)} />
+          <span>{t('Building behind the plan')}</span>
         </label>
         <span className="ga-hint">
           {t('0 = ground floor, negative = basement. Saved with the location.')}

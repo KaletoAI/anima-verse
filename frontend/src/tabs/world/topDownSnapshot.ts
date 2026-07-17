@@ -11,8 +11,8 @@
  * immediately (browsers cap live contexts).
  */
 import { apiGet } from '../../lib/api'
-import type { Object3D } from 'three'
-import type { Room } from './worldTypes'
+import type { Mesh, Object3D } from 'three'
+import type { Map3D, Room } from './worldTypes'
 
 const PLATE_M = 8
 
@@ -50,6 +50,60 @@ function loadRoomModel(roomId: string): Promise<CachedModel | null> {
   return p
 }
 
+interface BuildingModel {
+  obj: Object3D
+  rotation: { x?: number; y?: number; z?: number }
+  heightM: number
+  floors: number
+}
+
+const buildingCache = new Map<string, Promise<BuildingModel | null>>()
+
+function loadBuildingModel(locationId: string): Promise<BuildingModel | null> {
+  let p = buildingCache.get(locationId)
+  if (!p) {
+    p = (async () => {
+      try {
+        const base = `/play/locations/${encodeURIComponent(locationId)}/model`
+        const meta = await apiGet<{ format?: string; url?: string
+          rotation?: { x?: number; y?: number; z?: number }
+          height_m?: number; floors?: number }>(`${base}/meta`)
+        const fmt = (meta.format || 'glb').toLowerCase()
+        if (fmt !== 'glb' && fmt !== 'gltf') return null
+        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
+        const gltf = await new GLTFLoader().loadAsync(meta.url || base)
+        return { obj: gltf.scene, rotation: meta.rotation || {},
+                 heightM: meta.height_m || 0, floors: meta.floors || 0 }
+      } catch {
+        return null
+      }
+    })()
+    buildingCache.set(locationId, p)
+  }
+  return p
+}
+
+/** Scale-anchor inputs of the building model: declared height/storeys plus
+ *  the mesh's width-per-height ratio (largest XZ side / Y, measured AFTER
+ *  the meta rotation fix). The auto plan width derives as
+ *  heightM × widthPerHeight — editor and preview share this helper so
+ *  both compute the identical value. null = no model. */
+export async function getBuildingDims(locationId: string):
+    Promise<{ heightM: number; floors: number; widthPerHeight: number } | null> {
+  const entry = await loadBuildingModel(locationId)
+  if (!entry) return null
+  const THREE = await import('three')
+  const deg = (v?: number) => ((v || 0) * Math.PI) / 180
+  const holder = new THREE.Group()
+  holder.add(entry.obj.clone(true))
+  holder.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y),
+                      deg(entry.rotation.z))
+  holder.updateMatrixWorld(true)
+  const size = new THREE.Box3().setFromObject(holder).getSize(new THREE.Vector3())
+  return { heightM: entry.heightM, floors: entry.floors,
+           widthPerHeight: (Math.max(size.x, size.z) || 1) / (size.y || 1) }
+}
+
 /** Declared width + normalized footprint of a room's ACTIVE model — the
  *  floor-plan editor derives the room-rectangle size from it in anchored
  *  mode (plan_width_m set): long side = width_m / plan_width_m, short side
@@ -69,12 +123,20 @@ export async function renderTopDownSnapshot(opts: {
   rooms: Room[]
   level: number
   width?: number
+  /** Render the room models (the "Models behind the plan" layer). */
+  includeRooms?: boolean
+  /** Also render the location's BUILDING model (ghosted, plan-fit + yaw
+   *  chain) — for tracing the outline polygon over the real footprint. */
+  building?: { locationId: string; map3d?: Map3D; fallbackYawDeg?: number }
 }): Promise<string | null> {
-  const { rooms, level, width = 840 } = opts
-  const placed = rooms.filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
-  if (!placed.length) return null
+  const { rooms, level, width = 840, includeRooms = true, building } = opts
+  const placed = includeRooms
+    ? rooms.filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
+    : []
+  const bModel = building ? await loadBuildingModel(building.locationId) : null
+  if (!placed.length && !bModel) return null
   const entries = await Promise.all(placed.map((r) => loadRoomModel(r.id!)))
-  if (!entries.some(Boolean)) return null
+  if (!entries.some(Boolean) && !bModel) return null
 
   const THREE = await import('three')
   const deg = (v?: number) => ((v || 0) * Math.PI) / 180
@@ -83,6 +145,40 @@ export async function renderTopDownSnapshot(opts: {
   // Bright, even light — the underlay is a reference image, not a staging.
   scene.add(new THREE.AmbientLight(0xffffff, 2.4))
   scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2.4))
+
+  // Building layer first, half-transparent — the roof view IS the real
+  // footprint to trace the outline over; rooms stay readable through it.
+  if (bModel && building) {
+    const m3 = building.map3d
+    const holder = new THREE.Group()
+    const clone = bModel.obj.clone(true)
+    clone.traverse((o: Object3D) => {
+      const mesh = o as Mesh
+      if (!mesh.isMesh) return
+      const src = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+      const map = (src as { map?: unknown })?.map || null
+      mesh.material = new THREE.MeshBasicMaterial({
+        map: map as never, color: 0xffffff,
+        transparent: true, opacity: 0.55, depthWrite: false,
+      })
+    })
+    holder.add(clone)
+    const mapYaw = m3?.rotation !== undefined
+      ? m3.rotation : (building.fallbackYawDeg || 0)
+    holder.rotation.set(deg(bModel.rotation.x),
+                        deg(bModel.rotation.y) - deg(mapYaw),
+                        deg(bModel.rotation.z))
+    holder.updateMatrixWorld(true)
+    const br = new THREE.Box3().setFromObject(holder)
+    const sr = br.getSize(new THREE.Vector3())
+    const kxz = (10 * 0.92 * (m3?.size || 0.92)) / (Math.max(sr.x, sr.z) || 1)
+    holder.scale.setScalar(kxz)
+    holder.updateMatrixWorld(true)
+    const b2 = new THREE.Box3().setFromObject(holder)
+    const c2 = b2.getCenter(new THREE.Vector3())
+    holder.position.set(-c2.x, -b2.min.y - (b2.max.y - b2.min.y) - 0.5, -c2.z)
+    scene.add(holder)
+  }
 
   placed.forEach((room, idx) => {
     const entry = entries[idx]
