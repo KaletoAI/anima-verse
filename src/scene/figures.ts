@@ -286,17 +286,23 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
 
   const q = new THREE.Quaternion();
   const v = new THREE.Vector3();
+  // Steh-Referenz der Quelle: MAXIMALE Hüfthöhe über ALLE Clips des Sets.
+  // Ein einzelner In-Pose-Clip (Sitzen/Liegen startet abgesenkt) hat keine
+  // eigene Referenz — mit dem ersten Frame als Bezug blieb die Hüfte beim
+  // Sitzen auf Stehhöhe hängen. Walk/Idle im Set liefern die echte Stehhöhe.
+  let sourceRest = 0;
+  for (const clip of clips) {
+    for (const track of clip.tracks) {
+      if (track.name.endsWith('.position') && /hips\./i.test(track.name.replace(/^mixamorig:?/i, ''))) {
+        for (let i = 1; i < track.values.length; i += 3) {
+          sourceRest = Math.max(sourceRest, Math.abs(track.values[i]));
+        }
+      }
+    }
+  }
   const out: THREE.AnimationClip[] = [];
   for (const clip of clips) {
     const tracks: THREE.KeyframeTrack[] = [];
-    let clipHipsY = 0;
-    // Referenz: Hüfthöhe des Clips im ersten Frame (für die Skalierung)
-    for (const track of clip.tracks) {
-      if (track.name.endsWith('.position') && /hips\./i.test(track.name.replace(/^mixamorig:?/i, ''))) {
-        clipHipsY = Math.abs(track.values[1]) || Math.abs(track.values[0]) || 1;
-        break;
-      }
-    }
     for (const track of clip.tracks) {
       const dot = track.name.lastIndexOf('.');
       const node = track.name.slice(0, dot);
@@ -316,15 +322,15 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
           t.name = `${bone.name}.quaternion`;
           tracks.push(t);
         }
-      } else if (prop === 'position' && bone === hips && hips && hipsPosMatrix && clipHipsY > 1e-6) {
-        // Nur das vertikale Wippen übernehmen (relativ zum ersten Frame),
+      } else if (prop === 'position' && bone === hips && hips && hipsPosMatrix && sourceRest > 1e-6) {
+        // Nur die vertikale Hüftbewegung übernehmen (relativ zur STEH-
+        // Referenz der Quelle — so senken Sitz-/Liege-Clips die Hüfte ab),
         // Lokomotion/Drift verwerfen — die Wurzel bewegt der Client selbst.
-        const k = hipsPosScale / clipHipsY;
-        const y0 = track.values[1];
+        const k = hipsPosScale / sourceRest;
         const rest = hips.position;
         const vals = new Float32Array(track.values.length);
         for (let i = 0; i < track.values.length; i += 3) {
-          const bounce = (track.values[i + 1] - y0) * k; // Welt-Delta in m
+          const bounce = (Math.abs(track.values[i + 1]) - sourceRest) * k; // Welt-Delta in m
           v.set(0, bounce, 0).applyMatrix4(hipsPosMatrix); // in Eltern-Raum (Richtung+Skala)
           v.sub(new THREE.Vector3().setFromMatrixPosition(hipsPosMatrix!)); // nur Richtungsanteil
           v.add(rest);

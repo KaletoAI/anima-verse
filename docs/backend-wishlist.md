@@ -290,6 +290,9 @@ Ursprüngliche Anforderung:
     (bool, Default false): Raum wird unabhängig von der Innenansicht
     dauerhaft gezeigt — für Outdoor-Räume, die nicht schon im
     Gebäude-3D-Modell abgebildet sind. Client liest das Feld bereits.
+  - **Figuren-Maßstab pro Location** → `map3d.figure_scale` (0..1,
+    Default 1/3): Skalierung der Figuren in den Räumen dieser Location;
+    Feld/Regler im Editor. Client liest das Feld bereits.
 - **Client (bereits eingebaut, mit Testdaten verifiziert):** pro genutzter
   Etage Bodenplatte in Konturform + Wände (Tür im EG am südlichsten
   Wandstück; Obergeschosse halbtransparent); Fahrstuhl als Schacht mit

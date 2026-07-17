@@ -316,6 +316,8 @@ async function startApp(username: string) {
         // dauerhaft sichtbare Räume gelten in jeder Zoomstufe
         const inRoom = roomCenter && room && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(room))
           ? room : null;
+        // Innenraum-Maßstab: pro Location einstellbar (map3d.figure_scale)
+        const roomScale = tile.loc.map3d?.figure_scale || ROOM_FIGURE_SCALE;
         if (inRoom && roomCenter) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);
@@ -343,10 +345,10 @@ async function startApp(username: string) {
             pos = spots[idx % spots.length].clone();
           } else {
             pos = roomCenter.clone().add(
-              roomSlot(idx, mates.length, c.name).multiplyScalar(ROOM_FIGURE_SCALE)
+              roomSlot(idx, mates.length, c.name).multiplyScalar(roomScale)
             );
           }
-          scale = ROOM_FIGURE_SCALE;
+          scale = roomScale;
         } else {
           pos = tile.center.clone().add(slotOffset(tile, i, chars.length));
         }

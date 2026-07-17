@@ -52,6 +52,9 @@ export interface Map3dMeta {
    *  automatisch auf allen Etagen platziert; Figuren nutzen ihn beim
    *  Etagenwechsel */
   elevator?: [number, number];
+  /** Skalierungsfaktor der Figuren in den Räumen dieser Location
+   *  (0..1 der Kartengröße; Default 1/3) */
+  figure_scale?: number;
 }
 
 export interface WorldLocation {

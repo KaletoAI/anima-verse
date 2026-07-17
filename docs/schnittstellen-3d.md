@@ -203,8 +203,9 @@ Spiel-Client — eine Admin-Vorschau, die dem folgt, zeigt exakt dasselbe:
   Outdoor-Räume, die **nicht** schon im Gebäude-3D-Modell abgebildet
   sind (sonst doppelt). Figuren stehen dann in jeder Zoomstufe an ihrer
   Raum-Position. Pflege: Checkbox im Raum-Editor.
-- Figuren stehen in Räumen im **Maßstab 1/3** ihrer Kartengröße (für
-  Testfiguren in einer Vorschau).
+- Figuren stehen in Räumen im **Maßstab 1/3** ihrer Kartengröße —
+  **pro Location übersteuerbar** via `map3d.figure_scale` (0..1;
+  Regler/Feld im Editor, der Client liest es bereits).
 
 **Pflege:** am sinnvollsten ein kleiner Grundriss-Editor im Game-Admin
 (Räume als Rechtecke ziehen + Etagen-Wahl + Ausgangspunkt setzen, analog

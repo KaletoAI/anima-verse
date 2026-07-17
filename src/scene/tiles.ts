@@ -755,16 +755,18 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
     tile.roomExits.get(roomId)?.setY(floor + 0.01);
   }
 
-  // Marker-Höhen verfeinern: an der Marker-Stelle abtasten (Sofa-Sitzhöhe
-  // statt Platten-Höhe), plus Server-Feinjustierung; ohne Treffer Bodenhöhe
+  // Marker-Höhen verfeinern, plus Server-Feinjustierung. Sitz-Marker
+  // verankern die FÜSSE auf dem Boden (der Sitz-Clip senkt die Hüfte auf
+  // die Sitzfläche dahinter); Liege- und sonstige Marker liegen auf der
+  // Möbel-Oberfläche an der Marker-Stelle (Bett-Matratze).
   const markers = tile.roomMarkers.get(roomId);
   if (markers) {
-    for (const entries of markers.values()) {
+    for (const [kind, entries] of markers) {
       for (const e of entries) {
         ray.set(new THREE.Vector3(e.p.x, base.y + 20, e.p.z), down);
         const hit = ray.intersectObject(model, true)[0];
         const surface = hit && hit.point.y < floor + 0.5 ? hit.point.y : floor;
-        e.p.setY(surface + 0.01 + e.offsetY);
+        e.p.setY((kind === 'sit' ? floor : surface) + 0.01 + e.offsetY);
       }
     }
   }
