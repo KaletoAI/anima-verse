@@ -228,14 +228,52 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
         dot.position.set((lay.exit[0] - 0.5) * w, -lh * 0.4, (lay.exit[1] - 0.5) * d)
         roomGroup.add(dot)
       }
-      // Animation markers (green — exit stays orange), on the room floor.
+      // Animation markers (green — exit stays orange): a dot on the room
+      // floor plus a small TEST FIGURE at the contract's in-room figure
+      // scale (1/3 of the ~1.7 m map figure ≈ 0.57 m) with the animation
+      // kind as a label — placement is judgeable at a glance. A simple
+      // mannequin for now; an animated skinned figure would need a bundled
+      // rigged model.
       for (const m of lay.markers || []) {
+        const mx = (m.at[0] - 0.5) * w
+        const mz = (m.at[1] - 0.5) * d
+        const floor = -lh * 0.44
         const dot = new THREE.Mesh(
-          new THREE.SphereGeometry(0.13, 12, 12),
+          new THREE.SphereGeometry(0.1, 12, 12),
           new THREE.MeshBasicMaterial({ color: 0x3fb950 }),
         )
-        dot.position.set((m.at[0] - 0.5) * w, -lh * 0.4, (m.at[1] - 0.5) * d)
+        dot.position.set(mx, floor, mz)
         roomGroup.add(dot)
+
+        const figMat = new THREE.MeshStandardMaterial({
+          color: 0x3fb950, transparent: true, opacity: 0.85,
+        })
+        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.3, 4, 10), figMat)
+        body.position.set(mx, floor + 0.24, mz)
+        roomGroup.add(body)
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), figMat)
+        head.position.set(mx, floor + 0.5, mz)
+        roomGroup.add(head)
+
+        const mc = document.createElement('canvas')
+        mc.width = 128
+        mc.height = 40
+        const mctx = mc.getContext('2d')
+        if (mctx) {
+          mctx.font = '600 22px sans-serif'
+          mctx.textAlign = 'center'
+          mctx.textBaseline = 'middle'
+          mctx.shadowColor = 'rgba(0,0,0,0.9)'
+          mctx.shadowBlur = 5
+          mctx.fillStyle = '#7ee2a0'
+          mctx.fillText(m.animation.slice(0, 10), 64, 20)
+        }
+        const msprite = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: new THREE.CanvasTexture(mc), transparent: true, depthTest: false,
+        }))
+        msprite.scale.set(1.3, 0.4, 1)
+        msprite.position.set(mx, floor + 0.78, mz)
+        roomGroup.add(msprite)
       }
 
       // Name label as a canvas sprite floating above the box.
