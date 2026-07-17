@@ -290,8 +290,8 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             pass
     # Storey height in WORLD metres: stacks the room-layout levels AND
     # derives the figure scale in rooms (level_height / 3) — the former
-    # figure_scale field is gone (client keeps it only as a legacy
-    # fallback for locations without level_height). Absent = default 3.
+    # figure_scale field is gone WITHOUT replacement (drop 2026-07-17: the
+    # client no longer reads it at all). Absent = default 3.
     lh = raw.get("level_height")
     if lh is not None and f"{lh}".strip() != "":
         try:
