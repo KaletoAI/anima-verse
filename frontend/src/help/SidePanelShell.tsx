@@ -41,6 +41,7 @@ export function SidePanelShell({ id, title, children }: {
   if (panel !== id) return null
   return (
     <aside
+      data-side-panel=""
       style={{
         position: 'fixed', right: 0, top: 100, bottom: 0, width: 320, zIndex: 1100,
         background: '#0d1117', borderLeft: '1px solid #30363d',

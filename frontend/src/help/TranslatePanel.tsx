@@ -12,7 +12,7 @@ interface LangOpt { value: string; label: string; label_de?: string }
  * the same single source the rest of the app uses.
  */
 export function TranslatePanel() {
-  const { panel } = useHelp()
+  const { panel, getCapture, captureTick } = useHelp()
   const { t, lang } = useI18n()
   const [langs, setLangs] = useState<LangOpt[]>([])
   const [source, setSource] = useState('')
@@ -29,6 +29,13 @@ export function TranslatePanel() {
       .then((d) => setLangs(d.languages || []))
       .catch(() => setLangs([{ value: 'en', label: 'English' }, { value: 'de', label: 'German', label_de: 'Deutsch' }]))
   }, [open, langs])
+
+  // Take over the text of the last focused admin field (live while open).
+  useEffect(() => {
+    if (!open) return
+    const c = getCapture()
+    if (c && c.text.trim()) setInput(c.text)
+  }, [open, captureTick, getCapture])
 
   const langLabel = (l: LangOpt) => (lang === 'de' && l.label_de ? l.label_de : l.label)
 
@@ -72,7 +79,7 @@ export function TranslatePanel() {
         </div>
         <textarea
           className="ga-textarea"
-          rows={7}
+          rows={11}
           placeholder={t('Text to translate…')}
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -90,7 +97,7 @@ export function TranslatePanel() {
         <div style={{ position: 'relative' }}>
           <textarea
             className="ga-textarea"
-            rows={7}
+            rows={11}
             readOnly
             placeholder={t('Translation…')}
             value={output}
