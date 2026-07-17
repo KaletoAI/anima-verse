@@ -82,6 +82,8 @@ export interface Tile {
   elevatorStops?: Map<number, THREE.Vector3>;
   /** Grundriss-Wandstücke mit Außennormale (Welt-XZ) — fürs Blickrichtungs-Culling */
   outlineWalls: { mesh: THREE.Mesh; mid: THREE.Vector2; normal: THREE.Vector2 }[];
+  /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
+  levelSlabs: Map<number, THREE.Mesh>;
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
   highlightRing: THREE.Mesh;
@@ -486,9 +488,12 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
         slabMat
       );
       slab.rotation.x = Math.PI / 2;                 // Shape-XY -> Boden-XZ
-      slab.position.y = floorY + 0.24;               // unter den Raum-Platten
+      // nach UNTEN extrudiert: Oberkante knapp über der Etage, damit die
+      // Böden der Raum-Modelle (ab +0.12) nicht überdeckt werden
+      slab.position.y = floorY + 0.08;
       slab.castShadow = level > 0;
       g.add(slab);
+      tile.levelSlabs.set(level, slab);
       let doorsCut = 0;
       for (let k = 0; k < pts.length; k++) {
         const a = pts[k], b = pts[(k + 1) % pts.length];
@@ -597,7 +602,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
-    outlineWalls: [],
+    outlineWalls: [], levelSlabs: new Map(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 
@@ -725,6 +730,32 @@ export function applyBuildingModel(tile: Tile, model: THREE.Group) {
   tile.labelObj?.position.set(0, h + 2.2, 0);
 }
 
+/** Durchschnittsfarbe einer Textur an mehreren UV-Stellen auslesen. */
+function textureColorAt(mesh: THREE.Mesh, uvs: THREE.Vector2[]): THREE.Color | null {
+  try {
+    const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial;
+    const img = mat?.map?.image as (CanvasImageSource & { width: number; height: number }) | undefined;
+    if (!img?.width || !uvs.length) return null;
+    const N = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = N;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, N, N);
+    const data = ctx.getImageData(0, 0, N, N).data;
+    let r = 0, g2 = 0, b = 0, n = 0;
+    for (const uv of uvs) {
+      const px = Math.min(N - 1, Math.max(0, Math.floor(uv.x * N)));
+      const py = Math.min(N - 1, Math.max(0, Math.floor((1 - uv.y) * N)));
+      const o = (py * N + px) * 4;
+      r += data[o]; g2 += data[o + 1]; b += data[o + 2]; n++;
+    }
+    return n ? new THREE.Color().setRGB(r / n / 255, g2 / n / 255, b / n / 255, THREE.SRGBColorSpace) : null;
+  } catch {
+    return null;   // z.B. Bildformat nicht zeichenbar
+  }
+}
+
 /** Server-Raummodell (AV3D-2) auf seine Bodenplatte setzen. Das Modell ist
  *  auf Einheits-Grundfläche normalisiert und wird in den Raum eingepasst.
  *  Danach wird die begehbare Fläche abgetastet: Fußhöhe + freie Stellen. */
@@ -744,14 +775,14 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   const down = new THREE.Vector3(0, -1, 0);
   const base = slot.holder.getWorldPosition(new THREE.Vector3());
   const N = 6;
-  const samples: { p: THREE.Vector3; ix: number; iz: number }[] = [];
+  const samples: { p: THREE.Vector3; ix: number; iz: number; uv?: THREE.Vector2; mesh?: THREE.Mesh }[] = [];
   for (let ix = 0; ix < N; ix++) {
     for (let iz = 0; iz < N; iz++) {
       const ox = (ix / (N - 1) - 0.5) * slot.w * 0.78;
       const oz = (iz / (N - 1) - 0.5) * slot.d * 0.78;
       ray.set(new THREE.Vector3(base.x + ox, base.y + 20, base.z + oz), down);
       const hit = ray.intersectObject(model, true)[0];
-      if (hit) samples.push({ p: hit.point.clone(), ix, iz });
+      if (hit) samples.push({ p: hit.point.clone(), ix, iz, uv: hit.uv?.clone(), mesh: hit.object as THREE.Mesh });
     }
   }
   if (samples.length < 5) return;
@@ -806,6 +837,18 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
     // Mitte/Ausgang auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
     center?.setY(floor + 0.01);
     tile.roomExits.get(roomId)?.setY(floor + 0.01);
+  }
+
+  // Boden-Farbe des Raum-Modells auf die Etagen-Platte übernehmen: an den
+  // begehbaren Treffern die Textur auslesen (Testlauf für einheitliche Böden)
+  const slab = tile.levelSlabs.get(tile.roomLevels.get(roomId) ?? 0);
+  if (slab) {
+    const floorSamples = samples.filter((s) => s.p.y < floor + 0.12 && s.uv && s.mesh);
+    const m0 = floorSamples[0]?.mesh;
+    if (m0) {
+      const col = textureColorAt(m0, floorSamples.filter((s) => s.mesh === m0).map((s) => s.uv!));
+      if (col) (slab.material as THREE.MeshStandardMaterial).color.copy(col);
+    }
   }
 
   // Marker-Höhen verfeinern, plus Server-Feinjustierung. Sitz-Marker:
