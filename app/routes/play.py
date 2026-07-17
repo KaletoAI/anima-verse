@@ -427,6 +427,30 @@ def play_location_model_meta(location_id: str):
     return {**meta, "url": f"/play/locations/{quote(location_id)}/model"}
 
 
+@router.get("/play/test-figure/model")
+def play_test_figure_model(request: Request):
+    """A humanoid (mixamo-rigged) character model for preview TEST FIGURES
+    (floor-plan marker preview): the first available one. 404 when no
+    character has one — the preview falls back to its mannequin."""
+    import json as _json
+    from fastapi.responses import Response
+    from app.models.character import list_available_characters
+    from app.core.model3d import find_model3d
+    from app.core.http_files import etag_file_response
+    for name in list_available_characters():
+        p = find_model3d(name)
+        if not p or p.suffix.lower() not in (".glb", ".gltf"):
+            continue
+        try:
+            meta = _json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+        if (meta.get("rig") or "mixamo") != "mixamo":
+            continue
+        return etag_file_response(p, request, "model/gltf-binary")
+    return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+
+
 # --- Room models (AV3D-2) — same contract as the building model, addressed
 # by room id alone (room ids are template-identical across clones).
 

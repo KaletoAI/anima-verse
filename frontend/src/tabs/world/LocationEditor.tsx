@@ -481,11 +481,14 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         <RoomLayoutEditor
           rooms={draft.rooms || []}
           onChange={(rooms) => upd('rooms', rooms)}
+          map3d={draft.map3d}
+          onMap3d={updMap3d}
           onSelectRoom={setFloorRoomSel}
         />
         <FloorPlanPreview
           locationId={location.id}
           rooms={draft.rooms || []}
+          map3d={draft.map3d}
           levelHeightM={draft.map3d?.level_height}
         />
       </div>

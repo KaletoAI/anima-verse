@@ -10,6 +10,9 @@ export interface RoomLayout {
   d: number
   rotation?: number
   exit?: [number, number]
+  /** AV3D-12: show this room permanently, independent of the interior view
+   *  — for outdoor rooms not covered by the building model. */
+  always_visible?: boolean
   /** Animation markers: spots a figure with a matching active animation
    *  snaps to. at = fraction of the room rectangle; animation = a clip kind
    *  from the open animation-clip vocabulary; rotation = facing in degrees
@@ -53,6 +56,13 @@ export interface Map3D {
   /** Storey height in metres — stacks the floor-plan levels (preview +
    *  3D client). Absent = default 3. */
   level_height?: number
+  /** Drawn building outline (AV3D-12): polygon points as fractions of the
+   *  8×8 reference square, auto-closed — the client renders floor plates
+   *  and walls per used level from it. Absent = rectangle as before. */
+  outline?: Array<[number, number]>
+  /** Elevator position (fractions of the reference square) — placed once,
+   *  valid for all levels (client builds the shaft). */
+  elevator?: [number, number]
 }
 
 export interface EventSettings {

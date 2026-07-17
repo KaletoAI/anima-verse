@@ -298,6 +298,31 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["level_height"] = round(v, 2)
         except (TypeError, ValueError):
             pass
+    # Building outline (AV3D-12): a drawn polygon replacing the rectangle —
+    # points as fractions of the 8×8 reference square (auto-closed), the
+    # client renders floor plates + walls per used level from it.
+    ol = raw.get("outline")
+    if isinstance(ol, list):
+        pts = []
+        for pt in ol[:64]:
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                continue
+            try:
+                pts.append([round(min(max(float(pt[0]), 0.0), 1.0), 4),
+                            round(min(max(float(pt[1]), 0.0), 1.0), 4)])
+            except (TypeError, ValueError):
+                continue
+        if len(pts) >= 3:
+            out["outline"] = pts
+    # Elevator position (AV3D-12): placed once, valid for ALL levels — the
+    # client builds a shaft with a platform per level.
+    ev = raw.get("elevator")
+    if isinstance(ev, (list, tuple)) and len(ev) == 2:
+        try:
+            out["elevator"] = [round(min(max(float(ev[0]), 0.0), 1.0), 4),
+                               round(min(max(float(ev[1]), 0.0), 1.0), 4)]
+        except (TypeError, ValueError):
+            pass
     return out
 
 
@@ -336,6 +361,10 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             out["rotation"] = int(round(float(rot))) % 360
         except (TypeError, ValueError):
             pass
+    # AV3D-12: the room is shown permanently, independent of the interior
+    # view — for outdoor rooms that are not part of the building model.
+    if raw.get("always_visible"):
+        out["always_visible"] = True
     ex = raw.get("exit")
     if isinstance(ex, (list, tuple)) and len(ex) == 2:
         try:

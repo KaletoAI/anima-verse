@@ -20,10 +20,10 @@
  * dynamically — it stays in the shared chunk.
  */
 import { useEffect, useRef, useState } from 'react'
-import type { Object3D, Group, Material, Mesh } from 'three'
+import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
-import type { Room } from './worldTypes'
+import type { Map3D, Room } from './worldTypes'
 
 // Contract constants: the 8×8 m reference square and the 3 m storey.
 const PLATE_M = 8
@@ -46,12 +46,14 @@ type CacheEntry = CachedModel | 'loading' | 'missing'
 interface FloorPlanPreviewProps {
   locationId: string
   rooms: Room[]
+  /** map3d draft — outline/elevator (AV3D-12) are drawn from it. */
+  map3d?: Map3D
   /** Storey height in metres (map3d.level_height) — empty = the contract's 3. */
   levelHeightM?: number
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, height = 360 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -66,6 +68,7 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
   const handleRef = useRef<{
     THREE: typeof import('three')
     boxes: Group
+    skclone: (obj: Object3D) => Object3D
   } | null>(null)
   const roomsRef = useRef(rooms)
   roomsRef.current = rooms
@@ -76,6 +79,17 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
   // Loaded models by key ("room:<id>" / "building") — originals live here,
   // the scene gets clones (shared geometry, nothing to dispose per rebuild).
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map())
+  const map3dRef = useRef(map3d)
+  map3dRef.current = map3d
+  // Mixamo TEST FIGURE (any humanoid character model the server offers) +
+  // animation clips per kind — markers show a real animated figure; without
+  // figure/clip the mannequin stays the fallback.
+  const figRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'; obj?: Object3D }>({ status: 'idle' })
+  const clipListRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'
+    clips: Array<{ kind: string; set: string; url: string }> }>({ status: 'idle', clips: [] })
+  const clipCacheRef = useRef<Map<string, { clip: AnimationClip; restObj: Object3D } | 'loading' | 'missing'>>(new Map())
+  const mixersRef = useRef<AnimationMixer[]>([])
+  const clockRef = useRef<Clock | null>(null)
 
   const lh = levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M
 
@@ -109,20 +123,88 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
     return null
   }
 
+  // Test figure + clip loaders (async → bump; rebuild stays synchronous).
+  const ensureTestFigure = (): Object3D | null => {
+    const f = figRef.current
+    if (f.status === 'ready') return f.obj || null
+    if (f.status !== 'idle') return null
+    figRef.current = { status: 'loading' }
+    ;(async () => {
+      try {
+        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
+        const gltf = await new GLTFLoader().loadAsync('/play/test-figure/model')
+        figRef.current = { status: 'ready', obj: gltf.scene }
+      } catch {
+        figRef.current = { status: 'missing' }  // no humanoid model → mannequin
+      }
+      setBump((b) => b + 1)
+    })()
+    return null
+  }
+  const ensureClip = (kind: string) => {
+    const idx = clipListRef.current
+    if (idx.status === 'idle') {
+      clipListRef.current = { status: 'loading', clips: [] }
+      apiGet<{ clips?: Array<{ kind: string; set: string; url: string }> }>('/assets/animation-clips')
+        .then((d) => {
+          clipListRef.current = { status: 'ready', clips: d.clips || [] }
+          setBump((b) => b + 1)
+        })
+        .catch(() => { clipListRef.current = { status: 'missing', clips: [] } })
+      return null
+    }
+    if (idx.status !== 'ready') return null
+    const cached = clipCacheRef.current.get(kind)
+    if (cached === 'loading' || cached === 'missing') return null
+    if (cached) return cached
+    // Prefer a set-less clip, then female, then anything of the kind.
+    const of = idx.clips.filter((c) => c.kind === kind)
+    const pick = of.find((c) => !c.set) || of.find((c) => c.set === 'female') || of[0]
+    if (!pick) {
+      clipCacheRef.current.set(kind, 'missing')
+      return null
+    }
+    clipCacheRef.current.set(kind, 'loading')
+    ;(async () => {
+      try {
+        const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
+        const clipObj = await new FBXLoader().loadAsync(pick.url)
+        const clip = clipObj.animations?.[0]
+        if (!clip) throw new Error('no track')
+        // Play IN PLACE — drop the root/hips position track (clip units are
+        // Mixamo centimetres; it would fling the scaled figure around).
+        clip.tracks = clip.tracks.filter(
+          (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
+        clipCacheRef.current.set(kind, { clip, restObj: clipObj })
+      } catch {
+        clipCacheRef.current.set(kind, 'missing')
+      }
+      setBump((b) => b + 1)
+    })()
+    return null
+  }
+
   // Rebuild the plan content from the current layout (called on every rooms/
   // toggle change and once after scene init).
   const rebuild = (h: NonNullable<typeof handleRef.current>, current: Room[]) => {
     const { THREE, boxes } = h
+    for (const mixer of mixersRef.current) mixer.stopAllAction()
+    mixersRef.current = []
+    // Recursive disposal that BAILS on __noDispose subtrees — cached-model
+    // and test-figure clones share geometry/materials with their caches
+    // (a plain traverse would visit and kill the shared resources).
+    const disposeSafe = (o: Object3D) => {
+      if (o.userData.__noDispose) return
+      const mesh = o as Mesh
+      mesh.geometry?.dispose?.()
+      const m = mesh.material as Material | Material[] | undefined
+      if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
+      else m?.dispose?.()
+      for (const c of o.children) disposeSafe(c)
+    }
     for (const child of [...boxes.children]) {
       boxes.remove(child)
-      if (child.userData.__noDispose) continue  // cached-model clone
-      child.traverse((o: Object3D) => {
-        const mesh = o as Mesh
-        mesh.geometry?.dispose?.()
-        const m = mesh.material as Material | Material[] | undefined
-        if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
-        else m?.dispose?.()
-      })
+      disposeSafe(child)
     }
 
     const deg = (v?: number) => ((v || 0) * Math.PI) / 180
@@ -248,23 +330,78 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
         dot.position.y = floor
         fig.add(dot)
 
-        const figMat = new THREE.MeshStandardMaterial({
-          color: 0x3fb950, transparent: true, opacity: 0.85,
-        })
-        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.3, 4, 10), figMat)
-        body.position.y = floor + 0.24
-        fig.add(body)
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), figMat)
-        head.position.y = floor + 0.5
-        fig.add(head)
-        // Facing nose — only when a facing is set (0 = south/+Z, 90 = east/+X;
-        // unset = the client decides, so the preview stays direction-less).
-        if (m.rotation !== undefined) {
-          const nose = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 10), figMat)
-          nose.rotation.x = Math.PI / 2
-          nose.position.set(0, floor + 0.42, 0.14)
-          fig.add(nose)
-          fig.rotation.y = ((m.rotation || 0) * Math.PI) / 180
+        // Preferred: a REAL Mixamo figure with the marker's animation (any
+        // humanoid character model the server offers + the shared clip of
+        // the kind). Falls back to the mannequin while loading / when
+        // figure or clip is missing.
+        const figSrc = ensureTestFigure()
+        const anim = figSrc ? ensureClip(m.animation) : null
+        if (figSrc && anim) {
+          const inst = h.skclone(figSrc)
+          const pivot = new THREE.Group()
+          pivot.add(inst)
+          // Up-axis fix measured on the REST skeletons (never the animated
+          // pose) — same logic as the model viewer.
+          const hipsOf = (root: Object3D): Object3D | null => {
+            let found: Object3D | null = null
+            root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
+            return found
+          }
+          const modelHips = hipsOf(inst)
+          const clipHips = hipsOf(anim.restObj)
+          if (modelHips?.parent && clipHips?.parent) {
+            inst.updateMatrixWorld(true)
+            anim.restObj.updateMatrixWorld(true)
+            const restModel = modelHips.parent.getWorldQuaternion(new THREE.Quaternion())
+            const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
+            let bestRx = 0
+            let bestAngle = Infinity
+            for (const rx of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+              const cand = new THREE.Quaternion()
+                .setFromEuler(new THREE.Euler(rx, 0, 0)).multiply(restModel)
+              const angle = cand.angleTo(restClip)
+              if (angle < bestAngle) { bestAngle = angle; bestRx = rx }
+            }
+            pivot.rotation.x = bestRx
+          }
+          const mixer = new THREE.AnimationMixer(inst)
+          mixer.clipAction(anim.clip).play()
+          mixer.update(0)
+          mixersRef.current.push(mixer)
+          // Contract figure scale in rooms: 1/3 of the ~1.7 m map figure.
+          pivot.updateMatrixWorld(true)
+          const fb = new THREE.Box3().setFromObject(pivot)
+          const fs = fb.getSize(new THREE.Vector3())
+          const k = (1.7 / 3) / (fs.y || 1)
+          pivot.scale.setScalar(k)
+          pivot.updateMatrixWorld(true)
+          const fb2 = new THREE.Box3().setFromObject(pivot)
+          const fc2 = fb2.getCenter(new THREE.Vector3())
+          pivot.position.set(-fc2.x, floor - fb2.min.y, -fc2.z)
+          pivot.userData.__noDispose = true
+          fig.add(pivot)
+          if (m.rotation !== undefined) {
+            fig.rotation.y = ((m.rotation || 0) * Math.PI) / 180
+          }
+        } else {
+          const figMat = new THREE.MeshStandardMaterial({
+            color: 0x3fb950, transparent: true, opacity: 0.85,
+          })
+          const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.3, 4, 10), figMat)
+          body.position.y = floor + 0.24
+          fig.add(body)
+          const head = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), figMat)
+          head.position.y = floor + 0.5
+          fig.add(head)
+          // Facing nose — only when a facing is set (0 = south/+Z, 90 = east/+X;
+          // unset = the client decides, so the preview stays direction-less).
+          if (m.rotation !== undefined) {
+            const nose = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 10), figMat)
+            nose.rotation.x = Math.PI / 2
+            nose.position.set(0, floor + 0.42, 0.14)
+            fig.add(nose)
+            fig.rotation.y = ((m.rotation || 0) * Math.PI) / 180
+          }
         }
 
         const mc = document.createElement('canvas')
@@ -320,6 +457,43 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
       roomGroup.position.set(cx, cy, cz)
       boxes.add(roomGroup)
     })
+
+    // Building outline + elevator (AV3D-12): the drawn contour per used
+    // level (walls are the client's job — the preview shows the shape) and
+    // the elevator as a translucent shaft through all levels.
+    const m3 = map3dRef.current
+    const usedLevels = Array.from(new Set(
+      current.filter((r) => r.layout).map((r) => r.layout!.level || 0)))
+    if (m3?.outline?.length) {
+      const base = m3.outline.map(([x, y]) =>
+        [(x - 0.5) * PLATE_M, (y - 0.5) * PLATE_M] as [number, number])
+      base.push(base[0])
+      for (const lv of (usedLevels.length ? usedLevels : [0])) {
+        const geo = new THREE.BufferGeometry().setFromPoints(
+          base.map(([x, z]) => new THREE.Vector3(x, lv * lh + 0.02, z)))
+        boxes.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
+          color: 0x58a6ff, transparent: true, opacity: lv === 0 ? 0.9 : 0.45,
+        })))
+      }
+    }
+    if (m3?.elevator) {
+      const lo = Math.min(0, ...usedLevels)
+      const hi = Math.max(0, ...usedLevels)
+      const hgt = (hi - lo + 1) * lh
+      const shaft = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, hgt, 0.5),
+        new THREE.MeshStandardMaterial({ color: 0x8b949e, transparent: true, opacity: 0.35 }),
+      )
+      shaft.position.set((m3.elevator[0] - 0.5) * PLATE_M, lo * lh + hgt / 2,
+                         (m3.elevator[1] - 0.5) * PLATE_M)
+      boxes.add(shaft)
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(shaft.geometry),
+        new THREE.LineBasicMaterial({ color: 0x8b949e }),
+      )
+      edges.position.copy(shaft.position)
+      boxes.add(edges)
+    }
 
     // Building shell over everything — ghosted so the rooms stay visible.
     if (showBuildingRef.current) {
@@ -392,17 +566,21 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
         const boxes = new THREE.Group()
         scene.add(boxes)
         disposers.push(() => {
-          scene.traverse((o: Object3D) => {
+          const disposeSafe = (o: Object3D) => {
             if (o.userData.__noDispose) return
             const mesh = o as Mesh
             mesh.geometry?.dispose?.()
             const m = mesh.material as Material | Material[] | undefined
             if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
             else m?.dispose?.()
-          })
+            for (const c of o.children) disposeSafe(c)
+          }
+          disposeSafe(scene)
         })
 
-        handleRef.current = { THREE, boxes }
+        const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
+        clockRef.current = new THREE.Clock()
+        handleRef.current = { THREE, boxes, skclone }
         disposers.push(() => { handleRef.current = null })
         rebuild(handleRef.current, roomsRef.current)
 
@@ -418,6 +596,8 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
         let raf = 0
         const animate = () => {
           raf = requestAnimationFrame(animate)
+          const delta = clockRef.current?.getDelta() || 0
+          for (const mixer of mixersRef.current) mixer.update(delta)
           controls.update()
           renderer.render(scene, camera)
         }
@@ -451,6 +631,7 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
   // Dispose the cached model ORIGINALS only on unmount.
   useEffect(() => {
     const cache = cacheRef.current
+    const clipCache = clipCacheRef.current
     return () => {
       const disposeTree = (root: Object3D) => root.traverse((o: Object3D) => {
         const mesh = o as Mesh
@@ -465,6 +646,9 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
         if (entry.ghost) disposeTree(entry.ghost)
       }
       cache.clear()
+      if (figRef.current.obj) disposeTree(figRef.current.obj)
+      figRef.current = { status: 'idle' }
+      clipCache.clear()
     }
   }, [])
 
@@ -473,7 +657,7 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
   useEffect(() => {
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms, showModels, showBuilding, bump, lh])
+  }, [rooms, map3d, showModels, showBuilding, bump, lh])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>

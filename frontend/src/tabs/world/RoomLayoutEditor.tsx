@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { renderTopDownSnapshot } from './topDownSnapshot'
-import type { Room, RoomLayout } from './worldTypes'
+import type { Map3D, Room, RoomLayout } from './worldTypes'
 
 const CANVAS_W = 420
 const MIN_FRAC = 0.05
@@ -22,6 +22,10 @@ const MIN_FRAC = 0.05
 interface RoomLayoutEditorProps {
   rooms: Room[]
   onChange: (rooms: Room[]) => void
+  /** Location map3d draft — the editor draws/edits the building outline and
+   *  the elevator position (AV3D-12) in it. */
+  map3d?: Map3D
+  onMap3d?: <K extends keyof Map3D>(key: K, value: Map3D[K] | undefined) => void
   /** Reports the selected room id ('' = none) — the Floor-plan tab shows the
    *  model adjustment strip for it. */
   onSelectRoom?: (roomId: string) => void
@@ -35,7 +39,7 @@ type DragState =
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
 const r4 = (v: number) => Math.round(v * 10000) / 10000
 
-export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const [level, setLevel] = useState(0)
   const [selected, setSelectedRaw] = useState<string>('')
@@ -46,12 +50,14 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
   }, [onSelectRoom])
   // Click-to-place modes: the next click inside the room sets the exit point
   // or drops an animation marker of the chosen kind.
-  const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker'>('')
+  const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker' | 'marker-move' | 'outline' | 'elevator'>('')
   const [markerKind, setMarkerKind] = useState('')
+  // Building outline drawing (AV3D-12): points collected while in outline
+  // mode, committed to map3d.outline on finish (>= 3 points).
+  const [outlineDraft, setOutlineDraft] = useState<Array<[number, number]>>([])
   // Selected marker (index into the selected room's markers) for the
   // per-marker controls: facing, height offset, remove.
   const [markerSel, setMarkerSel] = useState<number | null>(null)
-  const [markerOffDraft, setMarkerOffDraft] = useState('0')
   const [clipKinds, setClipKinds] = useState<string[]>([])
   useEffect(() => {
     apiGet<{ kinds?: string[] }>('/assets/animation-clips')
@@ -173,7 +179,15 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
     const py = r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))
     if (clickMode === 'exit') {
       updateLayout(room.id, { exit: [px, py] })
-    } else if (markerKind) {
+    } else if (clickMode === 'marker-move') {
+      // Reposition the SELECTED marker — only inside its own room.
+      if (room.id === selected && markerSel !== null) {
+        updateLayout(room.id, {
+          markers: (room.layout.markers || []).map((m, idx) =>
+            idx === markerSel ? { ...m, at: [px, py] as [number, number] } : m),
+        })
+      }
+    } else if (clickMode === 'marker' && markerKind) {
       updateLayout(room.id, {
         markers: [...(room.layout.markers || []),
                   { at: [px, py] as [number, number], animation: markerKind }],
@@ -181,13 +195,9 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
       setMarkerSel((room.layout.markers || []).length)
     }
     setClickMode('')
-  }, [clickMode, markerKind, updateLayout])
+  }, [clickMode, markerKind, markerSel, selected, updateLayout])
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
-  const selMarker = markerSel !== null ? selectedRoom?.layout?.markers?.[markerSel] : undefined
-  useEffect(() => {
-    setMarkerOffDraft(String(selMarker?.offset_y ?? 0))
-  }, [markerSel, selMarker?.offset_y])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
@@ -234,6 +244,72 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
         </span>
       </div>
 
+      {onMap3d ? (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {clickMode === 'outline' ? (
+            <>
+              <span className="ga-hint">{t('Click corner points on the canvas…')}</span>
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm ga-btn-primary"
+                disabled={outlineDraft.length < 3}
+                onClick={() => {
+                  onMap3d('outline', outlineDraft)
+                  setOutlineDraft([])
+                  setClickMode('')
+                }}
+              >
+                ✓ {t('Finish outline')} ({outlineDraft.length})
+              </button>
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                onClick={() => { setOutlineDraft([]); setClickMode('') }}
+              >
+                {t('Cancel')}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              onClick={() => { setOutlineDraft([]); setClickMode('outline') }}
+              title={t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
+            >
+              🏗 {map3d?.outline?.length ? t('Redraw outline') : t('Draw outline')}
+            </button>
+          )}
+          {map3d?.outline?.length && clickMode !== 'outline' ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-danger"
+              onClick={() => onMap3d('outline', undefined)}
+              title={t('Remove the outline — the client falls back to the rectangle.')}
+            >
+              ✕ {t('Clear outline')}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={`ga-btn ga-btn-sm${clickMode === 'elevator' ? ' ga-btn-primary' : ''}`}
+            onClick={() => setClickMode((m) => (m === 'elevator' ? '' : 'elevator'))}
+            title={t('Place the elevator with one click — it serves ALL levels (the client builds the shaft).')}
+          >
+            🛗 {clickMode === 'elevator' ? t('Click on the canvas…') : (map3d?.elevator ? t('Move elevator') : t('Set elevator'))}
+          </button>
+          {map3d?.elevator && clickMode !== 'elevator' ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-danger"
+              onClick={() => onMap3d('elevator', undefined)}
+              title={t('Remove the elevator')}
+            >
+              ✕
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       <div
         ref={canvasRef}
         style={{
@@ -243,7 +319,53 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
           cursor: clickMode ? 'crosshair' : undefined,
         }}
         onClick={() => { if (!clickMode) setSelected('') }}
+        onClickCapture={(e) => {
+          // Building-level placement (outline points / elevator) applies at
+          // CANVAS coordinates, also when the click lands inside a room —
+          // capture phase keeps the room handlers out of the way.
+          if (clickMode !== 'outline' && clickMode !== 'elevator') return
+          e.stopPropagation()
+          const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
+          const px = r4(clamp((e.clientX - rect.left) / rect.width, 0, 1))
+          const py = r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))
+          if (clickMode === 'outline') {
+            setOutlineDraft((prev) => [...prev, [px, py]])
+          } else {
+            onMap3d?.('elevator', [px, py])
+            setClickMode('')
+          }
+        }}
       >
+        {/* Building outline (existing + draft) as an SVG overlay. */}
+        {(map3d?.outline?.length || outlineDraft.length) ? (
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+            {map3d?.outline?.length ? (
+              <polygon
+                points={map3d.outline.map(([x, y]) => `${x * 100},${y * 100}`).join(' ')}
+                fill="rgba(88,166,255,0.07)" stroke="#58a6ff" strokeWidth={0.6}
+              />
+            ) : null}
+            {outlineDraft.length ? (
+              <polyline
+                points={outlineDraft.map(([x, y]) => `${x * 100},${y * 100}`).join(' ')}
+                fill="none" stroke="#e0a356" strokeWidth={0.6} strokeDasharray="2 1.4"
+              />
+            ) : null}
+            {outlineDraft.map(([x, y], i) => (
+              <circle key={i} cx={x * 100} cy={y * 100} r={1.1} fill="#e0a356" />
+            ))}
+          </svg>
+        ) : null}
+        {map3d?.elevator ? (
+          <span title={t('Elevator (all levels)')} style={{
+            position: 'absolute',
+            left: `calc(${map3d.elevator[0] * 100}% - 9px)`,
+            top: `calc(${map3d.elevator[1] * 100}% - 9px)`,
+            fontSize: 15, lineHeight: '18px', pointerEvents: 'none',
+            filter: 'drop-shadow(0 0 2px #0d1117)',
+          }}>🛗</span>
+        ) : null}
         {underlay && underlayUrl ? (
           <img src={underlayUrl} alt="" style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%',
@@ -401,6 +523,17 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
                 {t('Clear exit')}
               </button>
             ) : null}
+            <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+              title={t('Show this room permanently in the 3D client, independent of the interior view — for outdoor rooms the building model does not cover.')}>
+              <input
+                type="checkbox"
+                checked={!!selectedRoom.layout?.always_visible}
+                onChange={(e) => updateLayout(selectedRoom.id || '', {
+                  always_visible: e.target.checked || undefined,
+                })}
+              />
+              <span>{t('Always visible')}</span>
+            </label>
             {clipKinds.length ? (
               <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
                 <select
@@ -467,43 +600,62 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
         // Facing per contract: 0 = south, 90 = east, 180 = north, 270 = west;
         // unset = the client's face-the-neighbours default.
         const FACING: Record<number, string> = { 0: 'S', 90: 'E', 180: 'N', 270: 'W' }
-        const cycleFacing = () => {
-          const cur = marker.rotation
-          const next = cur === undefined ? 0 : cur + 90
-          patchMarker(next >= 360 ? { rotation: undefined } : { rotation: next })
-        }
+        const fac = marker.rotation
         return (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="ga-hint" style={{ fontWeight: 600 }}>
               🎯 {markerSel + 1} · {marker.animation}:
             </span>
             <button
               type="button"
-              className="ga-btn ga-btn-sm"
-              onClick={cycleFacing}
-              title={t('Facing of the figure (0 south, 90 east, 180 north, 270 west; — = face the neighbours).')}
+              className={`ga-btn ga-btn-sm${clickMode === 'marker-move' ? ' ga-btn-primary' : ''}`}
+              onClick={() => setClickMode((m) => (m === 'marker-move' ? '' : 'marker-move'))}
+              title={t('Then click inside the room to move this marker there.')}
             >
-              🧭 {marker.rotation === undefined ? '—' : `${FACING[marker.rotation] || ''} (${marker.rotation}°)`}
+              ✥ {clickMode === 'marker-move' ? t('Click into the room…') : t('Move')}
             </button>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Facing of the figure (0 south, 90 east, 180 north, 270 west; — = face the neighbours).')}>
+              🧭
+              <input
+                type="range"
+                min={0}
+                max={359}
+                step={1}
+                value={fac ?? 0}
+                onChange={(e) => patchMarker({ rotation: parseInt(e.target.value, 10) || 0 })}
+                style={{ width: 120 }}
+              />
+              <span style={{ minWidth: 58 }}>
+                {fac === undefined ? '—' : `${fac}°${FACING[fac] ? ` (${FACING[fac]})` : ''}`}
+              </span>
+              {fac !== undefined ? (
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  onClick={() => patchMarker({ rotation: undefined })}
+                  title={t('Back to default: face the neighbours.')}
+                >
+                  ↺
+                </button>
+              ) : null}
+            </label>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Additive to the seat height the client samples under the marker.')}>
               {t('Height offset (m)')}
               <input
-                className="ga-input"
-                type="number"
-                step={0.05}
-                style={{ width: 84 }}
-                value={markerOffDraft}
-                onChange={(e) => setMarkerOffDraft(e.target.value)}
-                onBlur={() => {
-                  const v = parseFloat(markerOffDraft)
-                  patchMarker(Number.isFinite(v) && v !== 0
-                    ? { offset_y: Math.round(v * 1000) / 1000 }
-                    : { offset_y: undefined })
-                  if (!Number.isFinite(v)) setMarkerOffDraft('0')
+                type="range"
+                min={-1}
+                max={1}
+                step={0.01}
+                value={marker.offset_y ?? 0}
+                onChange={(e) => {
+                  const v = Math.round(parseFloat(e.target.value) * 100) / 100
+                  patchMarker({ offset_y: v === 0 ? undefined : v })
                 }}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                title={t('Additive to the seat height the client samples under the marker.')}
+                style={{ width: 120 }}
               />
+              <span style={{ minWidth: 44 }}>{(marker.offset_y ?? 0).toFixed(2)}</span>
             </label>
             <button
               type="button"
