@@ -589,6 +589,79 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           new THREE.Vector3(-hp, y, -hp),
         ]), storeyMat))
       }
+
+      // Comparison figure at the ruler: the room-scale Mixamo test figure
+      // (1.7 m × level_height/3) standing on the ground next to the metre
+      // scale — storey height vs. figure height is judgeable at a glance.
+      {
+        const target = 1.7 * (lh / 3)
+        const fig = new THREE.Group()
+        const figSrc = ensureTestFigure()
+        const kinds = clipListRef.current.clips.map((c) => c.kind)
+        const kind = kinds.includes('idle') ? 'idle'
+          : kinds.includes('stand') ? 'stand' : kinds[0]
+        const anim = figSrc && kind ? ensureClip(kind) : null
+        if (figSrc && anim) {
+          const inst = h.skclone(figSrc)
+          const pivot = new THREE.Group()
+          pivot.add(inst)
+          // Same up-axis fix as the marker figures (rest skeletons only).
+          const hipsOf = (root: Object3D): Object3D | null => {
+            let found: Object3D | null = null
+            root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
+            return found
+          }
+          const modelHips = hipsOf(inst)
+          const clipHips = hipsOf(anim.restObj)
+          if (modelHips?.parent && clipHips?.parent) {
+            inst.updateMatrixWorld(true)
+            anim.restObj.updateMatrixWorld(true)
+            const restModel = modelHips.parent.getWorldQuaternion(new THREE.Quaternion())
+            const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
+            let bestRx = 0
+            let bestAngle = Infinity
+            for (const rxc of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+              const cand = new THREE.Quaternion()
+                .setFromEuler(new THREE.Euler(rxc, 0, 0)).multiply(restModel)
+              const angle = cand.angleTo(restClip)
+              if (angle < bestAngle) { bestAngle = angle; bestRx = rxc }
+            }
+            pivot.rotation.x = bestRx
+          }
+          const mixer = new THREE.AnimationMixer(inst)
+          mixer.clipAction(anim.clip).play()
+          mixer.update(0)
+          mixersRef.current.push(mixer)
+          pivot.updateMatrixWorld(true)
+          const fb = new THREE.Box3().setFromObject(pivot)
+          const fs = fb.getSize(new THREE.Vector3())
+          const k = target / (fs.y || 1)
+          pivot.scale.setScalar(k)
+          pivot.updateMatrixWorld(true)
+          const fb2 = new THREE.Box3().setFromObject(pivot)
+          const fc2 = fb2.getCenter(new THREE.Vector3())
+          pivot.position.set(-fc2.x, -fb2.min.y, -fc2.z)
+          pivot.userData.__noDispose = true
+          fig.add(pivot)
+        } else {
+          // Mannequin fallback while figure/clip load (or are missing).
+          const figMat = new THREE.MeshStandardMaterial({
+            color: 0x8b949e, transparent: true, opacity: 0.85,
+          })
+          const body = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.055 * target, 0.62 * target, 4, 10), figMat)
+          body.position.y = 0.42 * target
+          fig.add(body)
+          const head = new THREE.Mesh(
+            new THREE.SphereGeometry(0.09 * target, 12, 12), figMat)
+          head.position.y = 0.88 * target
+          fig.add(head)
+        }
+        // Facing the plate, just inside the ruler corner.
+        fig.position.set(rx + 0.55, 0, rz - 0.35)
+        fig.rotation.y = Math.PI / 4
+        boxes.add(fig)
+      }
     }
   }
 
