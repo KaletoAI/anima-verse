@@ -452,7 +452,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             filter: 'drop-shadow(0 0 2px #0d1117)',
           }}>🛗</span>
         ) : null}
-        {underlay && underlayUrl ? (
+        {(underlay || bUnderlay) && underlayUrl ? (
           <img src={underlayUrl} alt="" style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%',
             opacity: 0.9, pointerEvents: 'none',
