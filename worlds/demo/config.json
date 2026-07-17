@@ -337,6 +337,62 @@
             "prompt_instruction": ""
           }
         }
+      },
+      "scene": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "tpose": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "tpose_animal": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
+      },
+      "building": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        }
       }
     },
     "postprocess_enabled": false,

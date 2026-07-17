@@ -883,35 +883,6 @@
       }
     },
     {
-      "id": "item_189fa0ff",
-      "name": "Tanga",
-      "category": "outfit_piece",
-      "prompt_fragment": "tanga",
-      "created_at": "2026-04-15T12:44:30.379033",
-      "description": "",
-      "image": "1776458666.png",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [],
-        "slots": [
-          "underwear_bottom"
-        ]
-      }
-    },
-    {
       "id": "item_ae7616b3",
       "name": "Tailored blazer",
       "category": "outfit_piece",
@@ -1174,5 +1145,5 @@
       }
     }
   ],
-  "last_updated": "2026-05-29T00:21:55.381978"
+  "last_updated": "2026-07-15T21:29:46+00:00"
 }
