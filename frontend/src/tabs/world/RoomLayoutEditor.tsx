@@ -590,6 +590,25 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
             ) : null}
           </>
         ) : null}
+        {/* Markers of the selected room — appended dynamically; the
+            adjustment sliders stay below the plan. */}
+        {selectedRoom?.layout?.markers?.length ? (
+          <>
+            <span className="ga-hint" style={{ marginTop: 6 }}>{t('Markers')}</span>
+            {selectedRoom.layout.markers.map((m, i) => (
+              <button
+                key={`${m.animation}-${i}`}
+                type="button"
+                className={`ga-btn ga-btn-sm${markerSel === i ? ' ga-btn-primary' : ''}`}
+                style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                onClick={() => setMarkerSel(markerSel === i ? null : i)}
+                title={t('Select this marker to adjust facing/height or remove it.')}
+              >
+                🎯 {i + 1} · {m.animation}
+              </button>
+            ))}
+          </>
+        ) : null}
       </div>
       </div>
 
@@ -610,23 +629,6 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
           <span className="ga-hint">{t('Select a room rectangle — the toolbar next to the plan works on it.')}</span>
         )}
       </div>
-
-      {selectedRoom?.layout?.markers?.length ? (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span className="ga-hint">{t('Markers:')}</span>
-          {selectedRoom.layout.markers.map((m, i) => (
-            <button
-              key={`${m.animation}-${i}`}
-              type="button"
-              className={`ga-btn ga-btn-sm${markerSel === i ? ' ga-btn-primary' : ''}`}
-              onClick={() => setMarkerSel(markerSel === i ? null : i)}
-              title={t('Select this marker to adjust facing/height or remove it.')}
-            >
-              🎯 {i + 1} · {m.animation}
-            </button>
-          ))}
-        </div>
-      ) : null}
 
       {selectedRoom && markerSel !== null && selectedRoom.layout?.markers?.[markerSel] ? (() => {
         const marker = selectedRoom.layout!.markers![markerSel]
