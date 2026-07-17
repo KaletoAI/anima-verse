@@ -223,6 +223,48 @@ Game Admin → Character → Reiter „3D": Modell ansehen/hochladen/generieren/
 entfernen. Gestaltung und Abläufe frei; einzige Erwartung: die
 Workflow-Auswahl kommt dynamisch vom Gateway (keine hartkodierten Listen).
 
+## Kamera & Maussteuerung (Referenz für die Admin-Vorschau)
+
+So steuert der Spiel-Client die Kamera — eine Vorschau, die dem folgt,
+fühlt sich identisch an. Alle Werte aus `src/scene/engine.ts`.
+
+**Kamera-Modell (Orbit um einen Zielpunkt auf dem Boden):**
+- Perspektiv-Kamera, **FOV 45°**, near 0.5, far 800.
+- Zustand: Zielpunkt `target` (auf y=0), Distanz `dist`
+  (**min 2,5 / max 150** Welt-Einheiten; 1 Einheit = 1 m), Drehung `yaw`,
+  freier Neigungs-Anteil `pitchOffset` (Grad).
+- **Neigung ist an den Zoom gekoppelt:** Basis-Pitch =
+  `lerp(18°, 62°, sqrt((dist − 2,5) / (150 − 2,5)))` — nah = flach auf
+  Augenhöhe, fern = steile Draufsicht. Dazu `pitchOffset` (frei, geklemmt
+  −35°..+35°); Gesamt-Pitch geklemmt 8°..85°.
+- Kameraposition = `target + (sin(yaw)·cos(pitch), sin(pitch),
+  cos(yaw)·cos(pitch)) · dist`, Blick auf `target`.
+- **Glättung:** `dist` und `yaw` nähern sich ihren Zielwerten pro Frame
+  mit Faktor `1 − exp(−8·dt)` (exponentiell, ~8/s).
+
+**Maus:**
+- **Links ziehen = Verschieben (boden-verankert):** Der beim Drücken
+  unter dem Cursor liegende Bodenpunkt (Raycast auf die y=0-Ebene) bleibt
+  unter dem Cursor — `target += (Startpunkt − aktueller Bodenpunkt)`.
+  Kein fester Pixel-Faktor; die Rate ergibt sich aus der Geometrie.
+- **Mitte ziehen ODER Shift/Strg/Alt + Links = Drehen/Neigen:**
+  `yaw −= dx · 0.005 rad/Pixel` (≈ 0,29°/px);
+  `pitchOffset += dy · 0.25°/Pixel` (geklemmt −35..35).
+  Rechte Taste identisch (Alt-Belegung).
+- **Rad = Zoom auf den Cursor:** `dist *= exp(deltaY · 0.0012)`, geklemmt
+  2,5..150. Beim **Hinein**zoomen wandert `target` zusätzlich Richtung
+  Bodenpunkt unter dem Cursor: `target = lerp(target, cursorPunkt,
+  1 − distNeu/distAlt)`.
+- **Klick = Auswahl** nur, wenn zwischen Drücken und Loslassen keine
+  Bewegung > 0,15 Welt-Einheiten (sonst war es ein Drag).
+
+**Tastatur (optional fürs Vorschau-Gefühl):** Q/E = ±45°-Drehschritte;
++/− = Zoom ×0,8 bzw. ×1,25; WASD/Pfeile = Verschieben entlang der
+Blickrichtung mit `0,9 · dist` Einheiten pro Sekunde.
+
+**Für die Raum-Vorschau passende Startwerte** (so startet auch
+`floorplan.html`): `dist 22`, `pitchOffset +28°`, `target` = Kachelmitte.
+
 ## Referenzwissen (kein Vertrag)
 
 - Funktionierende ComfyUI-Kette + Einstellungen: `implementierung-3d-pipeline.md`
