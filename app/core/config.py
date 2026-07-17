@@ -90,6 +90,17 @@ _NEG_TPOSE_ANIMAL = ("illustration, anime, cgi, 3d render, painting, cartoon, dr
 # terms); it keeps the WHOLE building in frame and free of people/interior.
 _NEG_BUILDING = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery")
 
+# Negative of the ROOM model-source renders: must NOT fight the subject —
+# furniture (indoor) and plants (outdoor room) ARE the content, unlike
+# _NEG_BUILDING which negates interior/furniture/trees for clean exteriors.
+# Walls/ceiling/roof are negated hard so the diorama stays fully open.
+_NEG_ROOM = ("illustration, anime, cartoon, drawing, sketch, painting, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery")
+
+# Negative of the OUTDOOR location scene diorama (building_outdoor): plants,
+# trees and water are the subject there — only people, framing problems,
+# shadows and off-base surroundings are pushed away.
+_NEG_OUTDOOR_SCENE = ("illustration, anime, cartoon, drawing, sketch, painting, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood")
+
 # Eingebaute Defaults pro use_case × Familie. Diese Werte werden NICHT in die
 # config.json geseedet — sie sind Resolver-Default UND grauer Placeholder in der
 # Admin-UI (leeres Feld = dieser Default greift). Ohne Backend-Fallback braucht
@@ -166,6 +177,53 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_style": "an exterior photo of a single building seen from a three-quarter angle at a slightly elevated eye level, the entire structure from ground to rooftop inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_BUILDING,
             "prompt_instruction": "Describe a three-quarter exterior view of the WHOLE building — architecture, materials, roof, storeys, style. The entire structure is in frame with a margin, neutral background, no people, no interior.",
+        },
+    },
+    # Outdoor location (park, plaza …): the "building model" of such a tile is
+    # an open-air scene diorama, not a structure — same mesh-input rules.
+    # Picked via the location's indoor/outdoor field (dialog + server).
+    "building_outdoor": {
+        "keywords": {
+            "prompt_style": "outdoor scene diorama on a square ground base, three-quarter view, elevated eye level, the entire scene from ground to treetops in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_OUTDOOR_SCENE,
+            "prompt_instruction": "Write comma-separated tags for a three-quarter view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. Entire scene in frame with a margin, neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a photo of a single outdoor scene diorama on a square ground base seen from a three-quarter angle at an elevated eye level, the entire scene from ground to treetops inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_OUTDOOR_SCENE,
+            "prompt_instruction": "Describe a three-quarter view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. The entire scene is in frame with a margin, neutral background, no people.",
+        },
+    },
+    # Room model source (AV3D-2): the interior counterpart of "building" — the
+    # render feeds the SAME image-to-3D pass, so the mesh-input rules hold
+    # (isolated, neutral background, shadowless), but the subject is a fully
+    # OPEN diorama: no walls at all and no ceiling — just the floor and its
+    # furnishings, so top-down and cutaway room views work without shells.
+    # Outdoor rooms (a park section) use "room_model_outdoor" instead —
+    # picked via the room's indoor/outdoor field (room overrides location).
+    "room_model": {
+        "keywords": {
+            "prompt_style": "open room diorama, no walls, no ceiling, only the floor with its furniture and decor, three-quarter view, elevated eye level, the entire room in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM,
+            "prompt_instruction": "Write comma-separated tags for the WHOLE room as an open diorama — floor, furniture, decor, style. No walls at all, no ceiling, neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a photo of a single room as an open diorama with no walls at all and no ceiling — only the floor plate with its furniture and decor, seen from a three-quarter angle at an elevated eye level, the entire room inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM,
+            "prompt_instruction": "Describe the WHOLE room as an open diorama — floor, furniture, decor, style. No walls at all, no ceiling, neutral background, no people.",
+        },
+    },
+    # Open-air "room" (park section, courtyard): no walls or ceiling at all.
+    "room_model_outdoor": {
+        "keywords": {
+            "prompt_style": "open-air area diorama on a square ground base, no walls, no ceiling, three-quarter view, elevated eye level, the entire area in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM,
+            "prompt_instruction": "Write comma-separated tags for the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a photo of a single open-air area diorama on a square ground base with no walls and no ceiling, seen from a three-quarter angle at an elevated eye level, the entire area inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM,
+            "prompt_instruction": "Describe the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
         },
     },
     "item": {

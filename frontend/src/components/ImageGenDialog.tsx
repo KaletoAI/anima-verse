@@ -17,14 +17,24 @@ interface LoraDefault {
   strength: number
 }
 
+export interface LoraOption {
+  name: string
+  // Library entry whose LoRA vanished from this backend's listing — still
+  // offered (the flag can be stale), rendered as "name (missing)".
+  missing?: boolean
+}
+
 interface ImagegenOption {
   name: string
   label: string
   available?: boolean
   has_loras?: boolean
-  lora_options?: string[] // LoRA names for the backend (from the LoRA Library, endpoint-filtered)
+  lora_options?: LoraOption[] // this backend's LoRAs from the LoRA library
   ref_slot_count?: number // number of reference-image slots (0 = none)
   category?: string // 'inpaint' = only for Map-Fit/Match-Edges, not for normal renders
+  // Use-case styles resolved per backend (family + model) — shown as an
+  // editable prompt part when the caller sets `styleUseCase`.
+  prompt_styles?: Record<string, string>
 }
 
 interface ImagegenOptionsResponse {
@@ -64,6 +74,14 @@ interface Props {
    */
   settingsPrefix?: { label: string; text: string }
   settingsSuffix?: { label: string; text: string }
+  /**
+   * Use-case key ('location' | 'map' | 'building' | 'room_model'): show the
+   * use case's prompt STYLE (resolved per backend family) as an editable
+   * field above the prompt — the dialog then displays the COMPLETE final
+   * prompt (house rule) and submits with `prompt_settings_applied`, so the
+   * server prepends nothing. Swapping the backend re-fills the style.
+   */
+  styleUseCase?: string
   /** Show a "Room / background" reference toggle (counts against the slot budget). */
   showRoomReference?: boolean
   /** Initial state of the "use current image as reference" toggle. */
@@ -119,6 +137,7 @@ const LORA_SLOTS = 4
 
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
+  styleUseCase,
   showRoomReference, defaultUseSource, requireSourceReference,
   showCreateNew, defaultCreateNew,
   enhanceEndpoint = '/world/imagegen-enhance-prompt', onSubmit, onClose,
@@ -224,17 +243,28 @@ export function ImageGenDialog({
   useEffect(() => {
     if (!entries.length || optionKey) return
     const def = defaultLocationOpt.replace(/^backend:/i, '').trim()
-    const match = def ? entries.find((e) => e.name === def) : null
+    let match = def ? entries.find((e) => e.name === def) : null
+    // "Adjust this image" NEEDS a reference slot — preselecting a slotless
+    // default would only show the blocked-submit hint. Prefer the first
+    // reference-capable backend (available ones sort first) instead.
+    if (requireSourceReference && (match?.ref_slot_count || 0) === 0) {
+      match = entries.find((e) => (e.ref_slot_count || 0) > 0) || match
+    }
     setOptionKey((match || entries[0]).name)
-  }, [entries, defaultLocationOpt, optionKey])
+  }, [entries, defaultLocationOpt, optionKey, requireSourceReference])
 
   const currentOption = useMemo<ImagegenOption | null>(
     () => entries.find((e) => e.name === optionKey) || null, [entries, optionKey])
 
-  // LoRA picks deliberately SURVIVE a backend change: a LoRA missing on one
-  // endpoint is the normal case, and the intended flow is "pick the LoRA,
-  // then switch to a backend that has it" — the conflict guard below blocks
-  // submitting a combination the backend cannot run.
+  // Use-case style of the CURRENT backend as an editable prompt part — the
+  // final prompt is fully visible in the dialog; a backend swap re-fills the
+  // text (families phrase their styles differently).
+  const [styleText, setStyleText] = useState('')
+  useEffect(() => {
+    if (open && styleUseCase) {
+      setStyleText(currentOption?.prompt_styles?.[styleUseCase] || '')
+    }
+  }, [open, styleUseCase, currentOption])
 
   // ESC closes; lock body scroll while open.
   useEffect(() => {
@@ -251,54 +281,31 @@ export function ImageGenDialog({
     }
   }, [open, submitting, onClose])
 
-  // LoRA names of the CURRENT backend (live endpoint listing, delivered by
-  // the server) …
-  const filteredLoras = useMemo(() => {
+  // LoRA options of the CURRENT backend, from the LoRA library (selection is
+  // backend-scoped; entries flagged missing stay offered, marked "(missing)").
+  const backendLoras = useMemo<LoraOption[]>(() => {
     if (!currentOption || !currentOption.has_loras) return []
     return currentOption.lora_options || []
   }, [currentOption])
 
-  // … plus the union across ALL backends: LoRA -> backends that have it. A
-  // LoRA missing on the current endpoint stays selectable (grouped under
-  // "other backends") — picking it constrains the backend choice.
-  const loraBackends = useMemo(() => {
-    const m = new Map<string, string[]>()
-    for (const o of entries) {
-      if (!o.has_loras) continue
-      for (const n of o.lora_options || []) {
-        const arr = m.get(n) || []
-        arr.push(o.name)
-        m.set(n, arr)
-      }
-    }
-    return m
-  }, [entries])
-
-  const otherLoras = useMemo(
-    () => Array.from(loraBackends.keys())
-      .filter((n) => !filteredLoras.includes(n))
-      .sort(),
-    [loraBackends, filteredLoras],
-  )
-
-  // Active picks the current backend cannot run — submit is blocked and the
-  // hint names the backends that CAN (server enforces the same rule).
-  const loraConflicts = useMemo(() => {
-    if (!currentOption?.has_loras) return []
-    const active = loraSlots.filter((l) => l.name && l.name !== 'None')
-    return active
-      .filter((l) => !filteredLoras.includes(l.name))
-      .map((l) => ({ name: l.name, backends: loraBackends.get(l.name) || [] }))
-  }, [currentOption, loraSlots, filteredLoras, loraBackends])
+  // A backend switch resets picks the new backend does not offer.
+  useEffect(() => {
+    const offered = new Set(backendLoras.map((l) => l.name))
+    setLoraSlots((prev) => {
+      if (prev.every((s) => s.name === 'None' || offered.has(s.name))) return prev
+      return prev.map((s) =>
+        s.name === 'None' || offered.has(s.name) ? s : { name: 'None', strength: 1.0 })
+    })
+  }, [backendLoras])
 
   const handleSubmit = useCallback(async () => {
-    if (!currentOption || loraConflicts.length) return
-    // Assemble the full prompt: prefix + base + suffix (all editable). The
-    // server then does not re-append the independent config parts.
-    const fullPrompt = [prefixText.trim(), prompt.trim(), suffixText.trim()]
+    if (!currentOption) return
+    // Assemble the full prompt: style + prefix + base + suffix (all
+    // editable). The server then does not re-append any config parts.
+    const fullPrompt = [styleText.trim(), prefixText.trim(), prompt.trim(), suffixText.trim()]
       .filter(Boolean).join(', ')
     const payload: ImageGenSubmit = { prompt: fullPrompt }
-    if (settingsPrefix || settingsSuffix) payload.prompt_settings_applied = true
+    if (settingsPrefix || settingsSuffix || styleUseCase) payload.prompt_settings_applied = true
     // Exact backend name — backends match their own name on the server.
     payload.backend = currentOption.name
     if (currentOption.has_loras) {
@@ -318,8 +325,9 @@ export function ImageGenDialog({
     } finally {
       setSubmitting(false)
     }
-  }, [currentOption, loraConflicts, prompt, prefixText, suffixText, settingsPrefix,
-      settingsSuffix, loraSlots, onSubmit, onClose, isRegen, showCreateNew, createNew,
+  }, [currentOption, prompt, prefixText, suffixText, settingsPrefix,
+      settingsSuffix, styleText, styleUseCase, loraSlots, onSubmit, onClose,
+      isRegen, showCreateNew, createNew,
       improvement, hideNegative, negative, characterOptions, selectedChars,
       showRoomReference, useRoom, sourceImageUrl, useSource])
 
@@ -387,82 +395,50 @@ export function ImageGenDialog({
                 <>
                   <label className="ga-imagegen-label">{t('LoRAs')}</label>
                   <div className="ga-imagegen-loras">
-                    {loraSlots.map((slot, i) => {
-                      // A selected name unknown to every backend (stale pick)
-                      // still renders so it stays deselectable.
-                      const stale =
-                        slot.name && slot.name !== 'None' &&
-                        !filteredLoras.includes(slot.name) && !otherLoras.includes(slot.name)
-                      return (
-                        <div key={i} className="ga-imagegen-lora-row">
-                          <span className="ga-imagegen-lora-label">LoRA {i + 1}</span>
-                          <select
-                            className="ga-input"
-                            value={slot.name}
-                            disabled={submitting}
-                            onChange={(e) =>
-                              setLoraSlots((prev) =>
-                                prev.map((s, idx) =>
-                                  idx === i ? { ...s, name: e.target.value } : s,
-                                ),
-                              )
-                            }
-                          >
-                            {/* 'None' first (= default + deselect). */}
-                            <option value="None">None</option>
-                            {stale ? <option value={slot.name}>{slot.name}</option> : null}
-                            {filteredLoras.filter((l) => l !== 'None').map((l) => (
-                              <option key={l} value={l}>
-                                {l}
-                              </option>
-                            ))}
-                            {otherLoras.length ? (
-                              <optgroup label={t('Other backends (switch required)')}>
-                                {otherLoras.map((l) => (
-                                  <option key={l} value={l}>
-                                    {l}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            ) : null}
-                          </select>
-                          <input
-                            type="number"
-                            className="ga-input ga-imagegen-lora-strength"
-                            min={-2}
-                            max={2}
-                            step={0.05}
-                            disabled={submitting || slot.name === 'None'}
-                            value={slot.strength}
-                            onChange={(e) =>
-                              setLoraSlots((prev) =>
-                                prev.map((s, idx) =>
-                                  idx === i
-                                    ? { ...s, strength: parseFloat(e.target.value) || 0 }
-                                    : s,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                      )
-                    })}
+                    {loraSlots.map((slot, i) => (
+                      <div key={i} className="ga-imagegen-lora-row">
+                        <span className="ga-imagegen-lora-label">LoRA {i + 1}</span>
+                        <select
+                          className="ga-input"
+                          value={slot.name}
+                          disabled={submitting}
+                          onChange={(e) =>
+                            setLoraSlots((prev) =>
+                              prev.map((s, idx) =>
+                                idx === i ? { ...s, name: e.target.value } : s,
+                              ),
+                            )
+                          }
+                        >
+                          {/* 'None' first (= default + deselect). */}
+                          <option value="None">None</option>
+                          {backendLoras.filter((l) => l.name !== 'None').map((l) => (
+                            <option key={l.name} value={l.name}>
+                              {l.name}{l.missing ? ` ${t('(missing)')}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          className="ga-input ga-imagegen-lora-strength"
+                          min={-2}
+                          max={2}
+                          step={0.05}
+                          disabled={submitting || slot.name === 'None'}
+                          value={slot.strength}
+                          onChange={(e) =>
+                            setLoraSlots((prev) =>
+                              prev.map((s, idx) =>
+                                idx === i
+                                  ? { ...s, strength: parseFloat(e.target.value) || 0 }
+                                  : s,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                    ))}
                   </div>
-                  {loraConflicts.length ? (
-                    <div className="ga-hint" style={{ color: '#f0883e' }}>
-                      {loraConflicts.map((c) => (
-                        <div key={c.name}>
-                          {c.backends.length
-                            ? t('"{lora}" is not on {backend} — switch to: {list}')
-                                .replace('{lora}', c.name)
-                                .replace('{backend}', currentOption?.name || '')
-                                .replace('{list}', c.backends.join(', '))
-                            : t('"{lora}" is not on any configured backend')
-                                .replace('{lora}', c.name)}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
                 </>
               ) : null}
               </div>
@@ -470,6 +446,16 @@ export function ImageGenDialog({
               <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {sourceImageUrl ? (
                 <img src={sourceImageUrl} alt="" style={{ maxHeight: 150, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
+              ) : null}
+
+              {styleUseCase ? (
+                <div className="ga-imagegen-settings-part">
+                  <label className="ga-imagegen-label ga-imagegen-settings-label">
+                    {t('From use-case style')} ({styleUseCase})
+                  </label>
+                  <textarea className="ga-textarea" rows={3} value={styleText}
+                    disabled={submitting} onChange={(e) => setStyleText(e.target.value)} />
+                </div>
               ) : null}
 
               {settingsPrefix ? (
@@ -626,8 +612,7 @@ export function ImageGenDialog({
           <button
             className="ga-btn ga-btn-primary"
             onClick={handleSubmit}
-            disabled={submitting || enhancing || !currentOption || sourceRefBlocked
-              || loraConflicts.length > 0}
+            disabled={submitting || enhancing || !currentOption || sourceRefBlocked}
           >
             {submitting ? '…' : t('Generate')}
           </button>
