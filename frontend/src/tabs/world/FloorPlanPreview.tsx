@@ -323,12 +323,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
         // the preview has no sampling, so it applies from the room floor.
         const floor = -lh * 0.44 + (m.offset_y || 0)
         const fig = new THREE.Group()
-        const dot = new THREE.Mesh(
-          new THREE.SphereGeometry(0.1, 12, 12),
-          new THREE.MeshBasicMaterial({ color: 0x3fb950 }),
-        )
-        dot.position.y = floor
-        fig.add(dot)
+        // No marker dot in 3D — it sat exactly where the figure is judged
+        // and got in the way; the figure + numbered label mark the spot,
+        // the 2D plan keeps its green dot for precise positioning.
 
         // Preferred: a REAL Mixamo figure with the marker's animation (any
         // humanoid character model the server offers + the shared clip of
