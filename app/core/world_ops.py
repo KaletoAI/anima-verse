@@ -298,6 +298,17 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["level_height"] = round(v, 2)
         except (TypeError, ValueError):
             pass
+    # Figure scale inside this location's rooms (0..1, absent = the client
+    # default 1/3) — the client reads it, the preview scales its test
+    # figures with it.
+    fs = raw.get("figure_scale")
+    if fs is not None and f"{fs}".strip() != "":
+        try:
+            v = float(fs)
+            if 0 < v <= 1:
+                out["figure_scale"] = round(v, 3)
+        except (TypeError, ValueError):
+            pass
     # Building outline (AV3D-12): a drawn polygon replacing the rectangle —
     # points as fractions of the 8×8 reference square (auto-closed), the
     # client renders floor plates + walls per used level from it.

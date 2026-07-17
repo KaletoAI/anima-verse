@@ -446,6 +446,21 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             }}
           />
         </Field>
+        <Field label={t('Figure scale in rooms')} hint={t('Scale of the figures inside this location’s rooms (0..1). Empty = client default 1/3.')}>
+          <input
+            className="ga-input"
+            type="number"
+            min={0.05}
+            max={1}
+            step={0.01}
+            value={draft.map3d?.figure_scale ?? ''}
+            placeholder="0.33"
+            onChange={(e) => {
+              const n = parseFloat(e.target.value)
+              updMap3d('figure_scale', Number.isFinite(n) && n > 0 && n <= 1 ? n : undefined)
+            }}
+          />
+        </Field>
       </div>
 
       <div className="ga-loc-twocol">

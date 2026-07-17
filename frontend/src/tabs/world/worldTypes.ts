@@ -56,6 +56,9 @@ export interface Map3D {
   /** Storey height in metres — stacks the floor-plan levels (preview +
    *  3D client). Absent = default 3. */
   level_height?: number
+  /** Figure scale inside this location's rooms (0..1) — absent = the
+   *  client default 1/3. */
+  figure_scale?: number
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
    *  8×8 reference square, auto-closed — the client renders floor plates
    *  and walls per used level from it. Absent = rectangle as before. */
