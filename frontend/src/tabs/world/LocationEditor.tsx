@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPut } from '../../lib/api'
+import { apiDelete, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
@@ -39,21 +39,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const [tab, setTab] = useState<LocTab>('general')
   // Building image picked via 🧊 in the 3D gallery — consumed by the model panel.
   const [modelGenSrc, setModelGenSrc] = useState<string | null>(null)
-  // Floor-plan tab: selected room (for the model adjustment strip) + which
-  // preview to show. The external 3D client delivers the live preview as an
-  // embeddable page when its base URL is configured (ui.client3d_url).
+  // Floor-plan tab: selected room, for the model adjustment strip.
   const [floorRoomSel, setFloorRoomSel] = useState('')
-  const [client3dUrl, setClient3dUrl] = useState('')
-  const [previewMode, setPreviewMode] = useState<'client' | 'local'>('local')
-  useEffect(() => {
-    apiGet<{ client3d_url?: string }>('/world/ui-config')
-      .then((d) => {
-        const url = (d.client3d_url || '').trim()
-        setClient3dUrl(url)
-        if (url) setPreviewMode('client')
-      })
-      .catch(() => setClient3dUrl(''))
-  }, [])
 
   useEffect(() => {
     setDraft({ ...location })
@@ -493,53 +480,14 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
       <div className="ga-loc-twocol">
         <RoomLayoutEditor
           rooms={draft.rooms || []}
-          footprint={draft.map3d?.footprint}
           onChange={(rooms) => upd('rooms', rooms)}
           onSelectRoom={setFloorRoomSel}
         />
-        <div className="ga-form" style={{ gap: 6 }}>
-          {client3dUrl ? (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <div className="ga-form-section-label" style={{ margin: 0, flex: 1 }}>{t('3D preview')}</div>
-              {(['client', 'local'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`ga-btn ga-btn-sm${previewMode === m ? ' ga-btn-primary' : ''}`}
-                  onClick={() => setPreviewMode(m)}
-                  title={m === 'client'
-                    ? t('Embedded 3D-client preview — shows the SAVED state, polls every few seconds (browser must be logged in to the 3D client).')
-                    : t('Built-in preview — follows the draft live while editing.')}
-                >
-                  {m === 'client' ? t('3D client') : t('Local')}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {client3dUrl && previewMode === 'client' ? (
-            <>
-              <iframe
-                src={`${client3dUrl}/floorplan.html?location=${encodeURIComponent(location.id)}`}
-                title={t('3D preview')}
-                style={{
-                  width: '100%', height: 420, border: '1px solid var(--border, #30363d)',
-                  borderRadius: 8, background: 'rgba(255,255,255,0.04)',
-                }}
-              />
-              <span className="ga-hint">
-                {t('Live from the 3D client — shows the SAVED layout (Save first) and picks up model changes within seconds.')}
-              </span>
-            </>
-          ) : (
-            <FloorPlanPreview
-              locationId={location.id}
-              rooms={draft.rooms || []}
-              footprint={draft.map3d?.footprint}
-              levelHeightM={draft.map3d?.level_height}
-              hideLabel={!!client3dUrl}
-            />
-          )}
-        </div>
+        <FloorPlanPreview
+          locationId={location.id}
+          rooms={draft.rooms || []}
+          levelHeightM={draft.map3d?.level_height}
+        />
       </div>
       {floorSelRoom?.id ? (
         <RoomModelAdjust

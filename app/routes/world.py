@@ -678,14 +678,6 @@ def get_location_background(
     )
 
 
-@router.get("/ui-config")
-def get_ui_config() -> Dict[str, Any]:
-    """UI-relevant config bits for the game admin — currently the external
-    3D client base URL (embedded floor-plan preview)."""
-    from app.core import config as _cfg
-    return {"client3d_url": str(_cfg.get("ui.client3d_url", "") or "").strip().rstrip("/")}
-
-
 @router.head("/locations/{location_name}/map-icon-2d")
 @router.get("/locations/{location_name}/map-icon-2d")
 def get_location_map_icon_2d(location_name: str):

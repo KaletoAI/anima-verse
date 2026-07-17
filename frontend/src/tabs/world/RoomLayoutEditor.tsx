@@ -21,9 +21,6 @@ const MIN_FRAC = 0.05
 
 interface RoomLayoutEditorProps {
   rooms: Room[]
-  /** Building footprint in grid cells (map3d.footprint) — sets the canvas
-   *  aspect ratio only; all layout values stay fractions. */
-  footprint?: number[]
   onChange: (rooms: Room[]) => void
   /** Reports the selected room id ('' = none) — the Floor-plan tab shows the
    *  model adjustment strip for it. */
@@ -38,7 +35,7 @@ type DragState =
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
 const r4 = (v: number) => Math.round(v * 10000) / 10000
 
-export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const [level, setLevel] = useState(0)
   const [selected, setSelectedRaw] = useState<string>('')
@@ -69,9 +66,9 @@ export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: R
   const roomsRef = useRef(rooms)
   roomsRef.current = rooms
 
-  const fw = Math.max(1, footprint?.[0] || 1)
-  const fd = Math.max(1, footprint?.[1] || 1)
-  const canvasH = Math.round((CANVAS_W * fd) / fw)
+  // The contract's reference surface is a fixed 8×8 m SQUARE — the canvas
+  // is square too, whatever the building footprint says.
+  const canvasH = CANVAS_W
 
   const placed = rooms.filter((r) => r.layout && (r.layout.level || 0) === level)
   const unplaced = rooms.filter((r) => !r.layout)
@@ -92,13 +89,12 @@ export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: R
       return
     }
     const tid = setTimeout(() => {
-      renderTopDownSnapshot({ rooms: roomsRef.current, level, fw, fd })
+      renderTopDownSnapshot({ rooms: roomsRef.current, level })
         .then((url) => setUnderlayUrl(url || ''))
         .catch(() => setUnderlayUrl(''))
     }, 350)
     return () => clearTimeout(tid)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [underlay, level, fw, fd, geomKey])
+  }, [underlay, level, geomKey])
 
   const updateLayout = useCallback((roomId: string, patch: Partial<RoomLayout> | null) => {
     const next = roomsRef.current.map((r) => {
@@ -159,7 +155,7 @@ export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: R
     dragRef.current = kind === 'move'
       ? { kind, roomId: room.id, startX: e.clientX, startY: e.clientY, origX: lay.x, origY: lay.y }
       : { kind, roomId: room.id, startX: e.clientX, startY: e.clientY, origW: lay.w, origD: lay.d }
-  }, [clickMode])
+  }, [clickMode, setSelected])
 
   // Click-to-place: one click inside a room sets the exit point or drops an
   // animation marker — both as fractions of the ROOM rectangle (contract).

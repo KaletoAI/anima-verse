@@ -1,22 +1,23 @@
 /**
  * FloorPlanPreview — live 3D preview of the room layout (AV3D-2), shown next
- * to the floor-plan editor. Renders the building footprint as a ground plate
- * and every laid-out room as a translucent box on its level (stacked floors,
- * basements below ground), with name labels and the exit point as an orange
- * dot — the same data the external 3D client reads, so what you see here is
- * what the client will place.
+ * to the floor-plan editor. Follows the CONTRACT placement semantics
+ * (schnittstellen-3d.md → "Platzierungs-Semantik (Referenz für Vorschauen)")
+ * so it renders exactly what the game client renders:
  *
- * Two compare switches: "Real room models" swaps the boxes for the rooms'
- * ACTIVE 3D models (contain-fit into each room rectangle, per-model
- * orientation fix applied; rooms without a model keep their box), and
- * "Building model overlay" ghosts the location's building model over the
- * plan (contain-fit to the footprint) — so plan, room models and building
- * shell can be checked against each other. Models are fetched once and
- * cached; the boxes rebuild live while dragging in the editor (the three.js
- * scene itself is created once).
+ *   - reference surface = fixed 8×8 m square (layout fractions refer to it),
+ *   - floor height = level × 3 m (map3d.level_height may override the 3),
+ *   - room model: normalized to unit footprint (largest XZ side = 1, XZ
+ *     centred, bottom y=0), uniformly scaled by min(w/fp_x, d/fp_z) × 0.96,
+ *     bottom at floor + 0.12 m — THEN the meta rotation {x,y,z}, the layout
+ *     yaw and offset_y (metres) apply,
+ *   - exit = fraction of the room rectangle (orange dot), markers green.
  *
- * three.js is imported dynamically, same as Model3DViewer — it stays in the
- * shared chunk that only loads when a 3D view is opened.
+ * Two compare switches: "Real room models" swaps the level boxes for the
+ * rooms' ACTIVE models (rooms without one keep their box), "Building model
+ * overlay" ghosts the location's building model over the plan. Models are
+ * fetched once and cached; the boxes rebuild live while dragging in the
+ * editor (the three.js scene itself is created once). three.js is imported
+ * dynamically — it stays in the shared chunk.
  */
 import { useEffect, useRef, useState } from 'react'
 import type { Object3D, Group, Material, Mesh } from 'three'
@@ -24,9 +25,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { Room } from './worldTypes'
 
-// Metres per map tile assumed by the preview — 3 m storeys render as 0.2
-// plate units, which lined up with real building models.
-const TILE_METERS = 15
+// Contract constants: the 8×8 m reference square and the 3 m storey.
+const PLATE_M = 8
 const DEFAULT_LEVEL_M = 3
 const PALETTE = [0x58a6ff, 0x3fb950, 0xd29922, 0xf778ba,
                  0xa371f7, 0xf85149, 0x79c0ff, 0x56d364]
@@ -34,7 +34,7 @@ const PALETTE = [0x58a6ff, 0x3fb950, 0xd29922, 0xf778ba,
 interface CachedModel {
   obj: Object3D
   rotation: { x?: number; y?: number; z?: number }
-  /** Vertical placement offset in model units/metres (negative sinks it). */
+  /** Vertical placement offset in metres (negative sinks it). */
   offsetY: number
   /** Prepared once on first overlay use: the model with its own textures on
    *  unlit, semi-transparent materials — visibly the building, still
@@ -46,17 +46,12 @@ type CacheEntry = CachedModel | 'loading' | 'missing'
 interface FloorPlanPreviewProps {
   locationId: string
   rooms: Room[]
-  /** Building footprint in grid cells (map3d.footprint) — plate aspect. */
-  footprint?: number[]
-  /** Storey height in metres (map3d.level_height) — empty = 3. */
+  /** Storey height in metres (map3d.level_height) — empty = the contract's 3. */
   levelHeightM?: number
   height?: number
-  /** The Floor-plan tab renders its own header row when the 3D-client
-   *  preview toggle is present. */
-  hideLabel?: boolean
 }
 
-export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, height = 360, hideLabel }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -82,11 +77,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
   // the scene gets clones (shared geometry, nothing to dispose per rebuild).
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map())
 
-  const fw = Math.max(1, footprint?.[0] || 1)
-  const fd = Math.max(1, footprint?.[1] || 1)
-  // Storey height in plate units: configured metres over the assumed
-  // metres-per-tile (default 3 m ≙ 0.2 units).
-  const lh = (levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M) / TILE_METERS
+  const lh = levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M
 
   // Fetch a model (meta + GLB) into the cache; returns it when ready. A miss
   // is cached too — no retry storm per drag frame.
@@ -136,11 +127,13 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
 
     const deg = (v?: number) => ((v || 0) * Math.PI) / 180
 
-    // Contain-fit a cached model into a target rectangle: per-model
-    // orientation fix on an inner pivot, uniform scale so the horizontal
-    // extents fit, bottom on the given floor height, centred on cx/cz.
+    // Place a model per the CONTRACT chain: normalize to unit footprint
+    // (largest XZ side = 1, XZ centred, bottom y=0), uniform fit
+    // min(w/fp_x, d/fp_z) × 0.96 measured on the UNROTATED model, bottom on
+    // floor + 0.12 m — then meta rotation, layout yaw and offset_y. After
+    // the rotations the bottom is re-grounded from the rotated bounds.
     const placeModel = (entry: CachedModel, targetW: number, targetD: number,
-                        cx: number, bottomY: number, cz: number,
+                        cx: number, floorY: number, cz: number,
                         yawDeg: number, ghost: boolean) => {
       if (ghost && !entry.ghost) {
         // Keep the model's own textures — a flat gray ghost was near
@@ -159,27 +152,36 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
         })
         entry.ghost = g
       }
-      const inner = new THREE.Group()
       const clone = (ghost ? entry.ghost! : entry.obj).clone(true)
-      inner.add(clone)
-      inner.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y), deg(entry.rotation.z))
+      const norm = new THREE.Group()
+      norm.add(clone)
+      norm.updateMatrixWorld(true)
+      const b0 = new THREE.Box3().setFromObject(norm)
+      const s0 = b0.getSize(new THREE.Vector3())
+      const unit = 1 / (Math.max(s0.x, s0.z) || 1)
+      const fpX = s0.x * unit
+      const fpZ = s0.z * unit
+      norm.scale.setScalar(unit)
+      norm.updateMatrixWorld(true)
+      const b1 = new THREE.Box3().setFromObject(norm)
+      const c1 = b1.getCenter(new THREE.Vector3())
+      norm.position.set(-c1.x, -b1.min.y, -c1.z)
+
+      const fit = new THREE.Group()
+      fit.add(norm)
+      fit.scale.setScalar(Math.min(targetW / (fpX || 1), targetD / (fpZ || 1)) * 0.96)
+
       const holder = new THREE.Group()
-      holder.add(inner)
-      // Yaw BEFORE measuring: the contain-fit must use the rotated extents,
-      // or a 90°-turned model gets fitted against the wrong rectangle sides
-      // (uniform scale commutes with the rotation).
-      holder.rotation.y = -deg(yawDeg)
-      holder.updateMatrixWorld(true)
-      const b = new THREE.Box3().setFromObject(holder)
-      const s = b.getSize(new THREE.Vector3())
-      holder.scale.setScalar(Math.min(targetW / (s.x || 1), targetD / (s.z || 1)))
+      holder.add(fit)
+      holder.rotation.set(deg(entry.rotation.x),
+                          deg(entry.rotation.y) - deg(yawDeg),
+                          deg(entry.rotation.z))
       holder.updateMatrixWorld(true)
       const b2 = new THREE.Box3().setFromObject(holder)
       const c2 = b2.getCenter(new THREE.Vector3())
-      // offset_y is in model units/metres — scale with the model (same
-      // proportion the 3D client renders).
       holder.position.set(cx - c2.x,
-        bottomY - b2.min.y + entry.offsetY * holder.scale.x, cz - c2.z)
+                          floorY + 0.12 - b2.min.y + entry.offsetY,
+                          cz - c2.z)
       holder.userData.__noDispose = true
       boxes.add(holder)
     }
@@ -188,22 +190,22 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
       const lay = room.layout
       if (!lay) return
       const color = PALETTE[idx % PALETTE.length]
-      const w = lay.w * fw
-      const d = lay.d * fd
+      const w = lay.w * PLATE_M
+      const d = lay.d * PLATE_M
       const level = lay.level || 0
-      const bottomY = level * lh
-      const cy = bottomY + lh / 2
-      const cx = (lay.x + lay.w / 2 - 0.5) * fw
-      const cz = (lay.y + lay.d / 2 - 0.5) * fd
+      const floorY = level * lh
+      const cy = floorY + lh / 2
+      const cx = (lay.x + lay.w / 2 - 0.5) * PLATE_M
+      const cz = (lay.y + lay.d / 2 - 0.5) * PLATE_M
 
       const model = showModelsRef.current && room.id
         ? ensureModel(`room:${room.id}`, room.id)
         : null
       if (model) {
-        placeModel(model, w, d, cx, bottomY, cz, lay.rotation || 0, false)
+        placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0, false)
       }
 
-      // Label + exit dot always; the box only when no real model stands in.
+      // Label + exit/marker dots always; the box only when no model stands in.
       const roomGroup = new THREE.Group()
       if (!model) {
         const box = new THREE.Mesh(
@@ -220,7 +222,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
 
       if (lay.exit) {
         const dot = new THREE.Mesh(
-          new THREE.SphereGeometry(Math.min(fw, fd) * 0.02, 12, 12),
+          new THREE.SphereGeometry(0.16, 12, 12),
           new THREE.MeshBasicMaterial({ color: 0xe0a356 }),
         )
         dot.position.set((lay.exit[0] - 0.5) * w, -lh * 0.4, (lay.exit[1] - 0.5) * d)
@@ -229,7 +231,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
       // Animation markers (green — exit stays orange), on the room floor.
       for (const m of lay.markers || []) {
         const dot = new THREE.Mesh(
-          new THREE.SphereGeometry(Math.min(fw, fd) * 0.016, 12, 12),
+          new THREE.SphereGeometry(0.13, 12, 12),
           new THREE.MeshBasicMaterial({ color: 0x3fb950 }),
         )
         dot.position.set((m.at[0] - 0.5) * w, -lh * 0.4, (m.at[1] - 0.5) * d)
@@ -254,14 +256,14 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: tex, transparent: true, depthTest: false,
       }))
-      sprite.scale.set(Math.min(fw, fd) * 0.45, Math.min(fw, fd) * 0.11, 1)
+      sprite.scale.set(3.2, 0.8, 1)
       sprite.position.y = lh * 0.62
       roomGroup.add(sprite)
 
       // The group does NOT yaw: x/y/w/d are the rectangle AS PLACED and the
-      // exit is a fraction of that placed rectangle (matches the 2D editor
-      // exactly) — layout.rotation only orients the room MODEL, applied in
-      // placeModel above.
+      // exit/markers are fractions of that placed rectangle (matches the 2D
+      // editor exactly) — layout.rotation only orients the room MODEL,
+      // applied in placeModel above.
       roomGroup.position.set(cx, cy, cz)
       boxes.add(roomGroup)
     })
@@ -269,7 +271,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
     // Building shell over everything — ghosted so the rooms stay visible.
     if (showBuildingRef.current) {
       const building = ensureModel('building')
-      if (building) placeModel(building, fw, fd, 0, 0, 0, 0, true)
+      if (building) placeModel(building, PLATE_M, PLATE_M, 0, -0.12, 0, 0, true)
     }
   }
 
@@ -289,7 +291,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
         const width = mount.clientWidth || 320
         const scene = new THREE.Scene()
         scene.background = null
-        const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 100)
+        const camera = new THREE.PerspectiveCamera(45, width / height, 0.05, 500)
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
         renderer.setSize(width, height)
@@ -311,15 +313,15 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
         scene.add(new THREE.AmbientLight(0xffffff, 1.6))
         scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 2.0))
         const key = new THREE.DirectionalLight(0xffffff, 2.0)
-        key.position.set(2, 3, 2)
+        key.position.set(6, 10, 6)
         scene.add(key)
 
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.enableDamping = true
         disposers.push(() => controls.dispose())
 
-        // Ground plate = the building footprint, plus an outline.
-        const groundGeo = new THREE.PlaneGeometry(fw, fd)
+        // Ground plate = the contract's 8×8 m reference square, plus outline.
+        const groundGeo = new THREE.PlaneGeometry(PLATE_M, PLATE_M)
         const ground = new THREE.Mesh(
           groundGeo,
           new THREE.MeshBasicMaterial({ color: 0x2e3742 }),
@@ -331,7 +333,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
           new THREE.LineBasicMaterial({ color: 0x58a6ff }),
         )
         outline.rotation.x = -Math.PI / 2
-        outline.position.y = 0.002
+        outline.position.y = 0.01
         scene.add(outline)
 
         const boxes = new THREE.Group()
@@ -351,8 +353,8 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
         disposers.push(() => { handleRef.current = null })
         rebuild(handleRef.current, roomsRef.current)
 
-        // Frame plate + a couple of levels from a raised angle.
-        const extent = Math.max(fw, fd, lh * 4)
+        // Frame plate + a couple of storeys from a raised angle.
+        const extent = Math.max(PLATE_M * 1.2, lh * 4)
         const dist = (extent / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.5
         camera.position.set(dist * 0.7, dist * 0.75, dist * 0.85)
         controls.target.set(0, lh, 0)
@@ -391,10 +393,9 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
       cleanup?.()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fw, fd, height])
+  }, [height])
 
-  // Dispose the cached model ORIGINALS only on unmount — the init effect may
-  // re-run on a footprint change while clones of these are still wanted.
+  // Dispose the cached model ORIGINALS only on unmount.
   useEffect(() => {
     const cache = cacheRef.current
     return () => {
@@ -423,8 +424,8 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
-      {hideLabel ? null : <div className="ga-form-section-label">{t('3D preview')}</div>}
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="ga-form-section-label" style={{ margin: 0, flex: 1 }}>{t('3D preview')}</div>
         <label className="ga-check-row">
           <input type="checkbox" checked={showModels}
             onChange={(e) => setShowModels(e.target.checked)} />
@@ -456,7 +457,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
         ) : null}
       </div>
       <span className="ga-hint">
-        {t('Rooms as boxes per level — live while editing the plan; exit points in orange. Rooms without a model keep their box; the building shell renders ghosted.')}
+        {t('Renders per the client contract (8×8 m reference, 0.96 fit, floor + 0.12 m) — live while editing; exit points orange, markers green.')}
       </span>
     </div>
   )

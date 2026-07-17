@@ -2,10 +2,9 @@
  * RoomModelAdjust — compact adjustment strip for the SELECTED room's active
  * 3D model on the location's Floor-plan tab (AV3D-10 addendum): orientation
  * fix (↻ 90° per axis) + height offset in metres, persisted immediately on
- * the model's sidecar. Lives next to the embedded 3D-client preview, which
- * polls the meta and shows changes after a few seconds — no window switching
- * while dialing a room in. The full model management (list/select/upload)
- * stays in the room editor's 3D tab.
+ * the model's sidecar — no window switching while dialing a room in. The
+ * full model management (list/select/upload) stays in the room editor's
+ * 3D tab; the built-in preview re-reads the meta on its next model load.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -118,7 +117,7 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
         />
       </label>
       <span className="ga-hint">
-        {t('Persisted on the active model — the embedded preview picks it up within seconds.')}
+        {t('Persisted on the active model — preview and 3D client pick it up.')}
       </span>
     </div>
   )
