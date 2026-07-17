@@ -125,13 +125,22 @@ GET /play/rooms/{room_id}/model       → GLB-Bytes (ETag)
   als einfache Bodenplatte (heutige Slabs).
 - Während einer Generierung: 404, keine Zwischenstände (wie AV3D-9).
 
-**Animations-Marker (generisch, geplant):**
+**Animations-Marker (generisch; Basis geliefert, erweitert 2026-07-17):**
 - Optionale Marker pro Raum in den Layout-Daten — **generisch über das
   Animations-Vokabular**, nicht auf sit/sleep festgenagelt:
-  `markers: [{ "at": [x, y], "animation": "sit" }, …]`
-  (`at` = Fraktion der Raum-Grundfläche; `animation` = Clip-Kind aus dem
-  offenen Vokabular von `/assets/animation-clips` — später also auch
-  `dance`, `cook`, … ohne Vertragsänderung).
+  `markers: [{ "at": [x, y], "animation": "sit", "rotation": 180, "offset_y": -0.05 }, …]`
+  - `at` = Fraktion der Raum-Grundfläche; `animation` = Clip-Kind aus dem
+    offenen Vokabular von `/assets/animation-clips` — später also auch
+    `dance`, `cook`, … ohne Vertragsänderung.
+  - **`rotation`** (Grad): Blickrichtung der Figur — 0 = Süd, 90 = Ost,
+    180 = Nord, 270 = West. Fehlt sie, schaut die Figur wie üblich zu
+    den Nachbarn.
+  - **`offset_y`** (Meter, ±): Höhen-Feinjustierung, **additiv** zur vom
+    Client abgetasteten Auflagehöhe (der Client setzt die Figur auf die
+    Oberfläche unterm Marker, z.B. die Sofa-Sitzfläche; offset_y
+    korrigiert von dort aus).
+  - Die **Nummer** eines Markers ist seine Position im Array (1-basiert) —
+    für Anzeige/Auswahl im Editor; der Client braucht sie nicht.
 - **Client-Verhalten:** Eine Figur, deren aktive Animation zu einem Marker
   passt, nutzt den nächsten freien Marker (die exakte Höhe holt sich der
   Client per Abtastung an der Marker-Stelle). Marker **schlagen** die

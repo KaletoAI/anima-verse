@@ -309,6 +309,7 @@ async function startApp(username: string) {
       chars.forEach((c, i) => {
         let pos: THREE.Vector3;
         let via: THREE.Vector3[] | undefined;
+        let face: THREE.Vector3 | undefined;
         let scale = 1;
         const room = roomOf.get(c.name);
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
@@ -323,10 +324,17 @@ async function startApp(username: string) {
           const marked = tile.roomMarkers.get(inRoom)?.get(kind);
           const sit = tile.roomSitSpots.get(inRoom);
           const lieDown = tile.roomLieSpots.get(inRoom);
-          const pool = marked?.length ? marked
-            : kind === 'lie' ? (lieDown?.length ? lieDown : sit)
+          const pool = kind === 'lie' ? (lieDown?.length ? lieDown : sit)
             : kind === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
-          if (pool?.length) {
+          if (marked?.length) {
+            // kuratierter Marker: Position + eingestellte Blickrichtung
+            const m = marked[idx % marked.length];
+            pos = m.p.clone();
+            if (m.rotation !== undefined) {
+              const a = THREE.MathUtils.degToRad(m.rotation);
+              face = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+            }
+          } else if (pool?.length) {
             pos = pool[idx % pool.length].clone();
           } else if (spots?.length) {
             // abgetastete freie Stellfläche im Raum-Modell (nicht in Möbeln)
@@ -357,6 +365,7 @@ async function startApp(username: string) {
           pos,
           scale,
           via,
+          face,
           travelTo: targetTile && c.movement_target_id !== locId ? targetTile.center.clone() : null,
         });
       });

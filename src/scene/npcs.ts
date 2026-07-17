@@ -82,6 +82,8 @@ interface Npc {
   target: THREE.Vector3;
   /** Ziel-Skalierung (1 = Kartengröße; kleiner in Innenräumen) */
   targetScale: number;
+  /** feste Blickrichtung im Stand (Marker) — sonst Nachbarn ansehen */
+  face: THREE.Vector3 | null;
   /** Restliche Wegpunkte bis zum Ziel (Wegfindung um Gebäude) */
   waypoints: THREE.Vector3[];
   activity: string;
@@ -95,6 +97,8 @@ export interface NpcState {
   pos: THREE.Vector3;               // Zielposition auf der Karte
   /** Skalierung der Figur (1 = Kartengröße; kleiner in Innenräumen) */
   scale?: number;
+  /** feste Blickrichtung im Stand (z.B. vom Animations-Marker) */
+  face?: THREE.Vector3;
   /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
   via?: THREE.Vector3[];
   travelTo: THREE.Vector3 | null;   // Reiseziel (Linien-Endpunkt) oder null
@@ -149,6 +153,7 @@ export class NpcManager {
       }
       npc.target.copy(st.pos);
       npc.targetScale = st.scale ?? 1;
+      npc.face = st.face ?? null;
       npc.activity = st.char.activity || '';
       npc.animation = st.char.activity_animation || undefined;
       npc.labelActivity.textContent = npc.activity;
@@ -221,7 +226,7 @@ export class NpcManager {
     return {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
-      target: st.pos.clone(), targetScale: st.scale ?? 1, waypoints: [], activity: st.char.activity || '',
+      target: st.pos.clone(), targetScale: st.scale ?? 1, face: st.face ?? null, waypoints: [], activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
@@ -310,11 +315,13 @@ export class NpcManager {
         npc.root.scale.setScalar(s + (npc.targetScale - s) * Math.min(1, dt * 5));
       }
       if (!moving && npc.figure) {
-        // Stehend: Nachbarn ansehen, sonst leicht zur Kamera-Grundrichtung
+        // Stehend: Marker-Richtung > Nachbarn ansehen > Kamera-Grundrichtung
         const target = faceTo.get(npc.name);
-        const dir = target
-          ? target.clone().sub(npc.root.position).setY(0)
-          : new THREE.Vector3(0, 0, 1);
+        const dir = npc.face
+          ? npc.face.clone()
+          : target
+            ? target.clone().sub(npc.root.position).setY(0)
+            : new THREE.Vector3(0, 0, 1);
         npc.figure.faceTowards(dir);
       }
 

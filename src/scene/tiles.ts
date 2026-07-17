@@ -66,8 +66,9 @@ export interface Tile {
   roomSitSpots: Map<string, THREE.Vector3[]>;
   /** erkannte Liegeflächen (Möbelhöhe, große zusammenhängende Flächen) */
   roomLieSpots: Map<string, THREE.Vector3[]>;
-  /** kuratierte Animations-Marker (AV3D-11): Raum -> Clip-Kind -> Punkte */
-  roomMarkers: Map<string, Map<string, THREE.Vector3[]>>;
+  /** kuratierte Animations-Marker (AV3D-11): Raum -> Clip-Kind -> Punkte
+   *  (rotation = Blickrichtung in Grad, offsetY additiv zur Auflagehöhe) */
+  roomMarkers: Map<string, Map<string, { p: THREE.Vector3; rotation?: number; offsetY: number }[]>>;
   /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
   roomGroups: Map<string, THREE.Group>;
   /** Raum-Rechtecke in Welt-Koordinaten (Fokus-Erkennung) */
@@ -374,13 +375,14 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     // Animations-Marker (AV3D-11): Welt-Positionen auf Platten-Höhe;
     // applyRoomModel verfeinert die Höhe später per Abtastung
     if (lay.markers?.length) {
-      const byKind = new Map<string, THREE.Vector3[]>();
+      const byKind = new Map<string, { p: THREE.Vector3; rotation?: number; offsetY: number }[]>();
       for (const m of lay.markers) {
         if (!m?.at || !m.animation) continue;
         const mx = -LW / 2 + (lay.x + m.at[0] * lay.w) * LW;
         const mz = -LD / 2 + (lay.y + m.at[1] * lay.d) * LD;
-        const p = tile.center.clone().add(new THREE.Vector3(mx, floorY + 0.45, mz));
-        (byKind.get(m.animation) ?? byKind.set(m.animation, []).get(m.animation)!).push(p);
+        const p = tile.center.clone().add(new THREE.Vector3(mx, floorY + 0.45 + (m.offset_y ?? 0), mz));
+        const entry = { p, rotation: m.rotation, offsetY: m.offset_y ?? 0 };
+        (byKind.get(m.animation) ?? byKind.set(m.animation, []).get(m.animation)!).push(entry);
         if (opts.markers) {   // Debug-/Editor-Ansicht: Marker als türkise Punkte
           const dot = new THREE.Mesh(new THREE.CircleGeometry(0.22, 16), std({ color: 0x4ac3e0 }));
           dot.rotation.x = -Math.PI / 2;
@@ -656,14 +658,15 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   }
 
   // Marker-Höhen verfeinern: an der Marker-Stelle abtasten (Sofa-Sitzhöhe
-  // statt Platten-Höhe); ohne Treffer auf Bodenhöhe
+  // statt Platten-Höhe), plus Server-Feinjustierung; ohne Treffer Bodenhöhe
   const markers = tile.roomMarkers.get(roomId);
   if (markers) {
-    for (const pts of markers.values()) {
-      for (const p of pts) {
-        ray.set(new THREE.Vector3(p.x, base.y + 20, p.z), down);
+    for (const entries of markers.values()) {
+      for (const e of entries) {
+        ray.set(new THREE.Vector3(e.p.x, base.y + 20, e.p.z), down);
         const hit = ray.intersectObject(model, true)[0];
-        p.setY(hit && hit.point.y < floor + 0.5 ? hit.point.y + 0.01 : floor + 0.01);
+        const surface = hit && hit.point.y < floor + 0.5 ? hit.point.y : floor;
+        e.p.setY(surface + 0.01 + e.offsetY);
       }
     }
   }

@@ -254,6 +254,20 @@ Ursprüngliche Anforderung:
   `/assets/animation-clips`, dynamisch). Die Admin-Vorschau zeigt an
   jedem Marker idealerweise eine Testfigur mit der Animation
   (Platzierungs-Semantik und Figuren-Maßstab: `schnittstellen-3d.md`).
+- **Erweiterung (2026-07-17) — Marker-Editor statt nur Setzen/Löschen:**
+  - Marker-Felder ergänzen: **`rotation`** (Grad; Blickrichtung der Figur:
+    0 = Süd, 90 = Ost, 180 = Nord, 270 = West) und **`offset_y`** (Meter,
+    ±; additiv zur vom Client abgetasteten Auflagehöhe). Der Client liest
+    beide bereits.
+  - **Jeder Marker bekommt eine Nummer** (= Array-Position, 1-basiert);
+    die Nummer wird in der Vorschau über der Figur angezeigt.
+  - **Marker-Liste im Editor:** Marker auswählen und dann Löschen,
+    Position neu setzen, **Ausrichtung drehen (Schieberegler)** und
+    **Höhe verändern (Schieberegler)**.
+  - **Vorschau: echte Mixamo-Figur mit der jeweiligen Animation** statt
+    der grünen Platzhalter-Figuren — Figuren und Clips sind im Server
+    vorhanden; Figuren-Maßstab in Räumen: 1/3 (siehe
+    Platzierungs-Semantik).
 - **Client-Verhalten:** Marker schlagen die Heuristik; Höhe ermittelt der
   Client selbst (Abtastung). Ohne Marker: Heuristik (Sitz-/Liegeflächen
   aus der Modell-Geometrie) — bereits eingebaut.

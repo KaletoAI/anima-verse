@@ -2,6 +2,10 @@
 export interface RoomMarker {
   at: [number, number];    // Fraktion der Raum-Grundfläche
   animation: string;       // Clip-Kind (sit, lie, dance, ...)
+  /** Blickrichtung der Figur in Grad: 0 = Süd, 90 = Ost, 180 = Nord, 270 = West */
+  rotation?: number;
+  /** Höhen-Feinjustierung in Metern, additiv zur abgetasteten Auflagehöhe */
+  offset_y?: number;
 }
 
 /** AV3D-2: Platzierung eines Raums relativ zur Gebäude-Grundfläche. */
