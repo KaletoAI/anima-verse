@@ -614,6 +614,39 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
             >
               ✥ {clickMode === 'marker-move' ? t('Click into the room…') : t('Move')}
             </button>
+            {/* Fine X/Y correction after the coarse mouse placement. */}
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Fine-tune the marker position (fraction of the room rectangle).')}>
+              X
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.005}
+                value={marker.at[0]}
+                onChange={(e) => patchMarker({
+                  at: [r4(parseFloat(e.target.value) || 0), marker.at[1]] as [number, number],
+                })}
+                style={{ width: 100 }}
+              />
+              <span style={{ minWidth: 40 }}>{marker.at[0].toFixed(3)}</span>
+            </label>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Fine-tune the marker position (fraction of the room rectangle).')}>
+              Y
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.005}
+                value={marker.at[1]}
+                onChange={(e) => patchMarker({
+                  at: [marker.at[0], r4(parseFloat(e.target.value) || 0)] as [number, number],
+                })}
+                style={{ width: 100 }}
+              />
+              <span style={{ minWidth: 40 }}>{marker.at[1].toFixed(3)}</span>
+            </label>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
               title={t('Facing of the figure (0 south, 90 east, 180 north, 270 west; — = face the neighbours).')}>
               🧭
