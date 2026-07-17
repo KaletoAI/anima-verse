@@ -100,6 +100,15 @@ export interface Tile {
 /** Etagenhöhe der Innenansicht (level * STOREY über dem Boden) */
 const STOREY = 3;
 
+/** Figuren-Maßstab in Räumen: folgt aus der Etagenhöhe (reale Etage ≈ 3 m,
+ *  also level_height / 3). Ohne level_height: figure_scale (Altbestand),
+ *  sonst 1/3. */
+export function roomFigureScale(loc: WorldLocation): number {
+  const lh = loc.map3d?.level_height;
+  if (lh && lh > 0) return lh / 3;
+  return loc.map3d?.figure_scale || 1 / 3;
+}
+
 function detectStyle(loc: WorldLocation): TileStyle {
   // Priorität: map3d.style (AV3D-1) > terrain (AV3D-7) > Namens-Heuristik
   const explicit = styleKind(loc.map3d?.style) ?? terrainKind(loc.terrain);
@@ -948,7 +957,7 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   // Boden). Liege-/sonstige Marker liegen auf der Oberfläche (Matratze).
   const markers = tile.roomMarkers.get(roomId);
   if (markers) {
-    const seatDrop = 0.44 * (tile.loc.map3d?.figure_scale || 1 / 3);   // Mixamo-Sitzhöhe x Raum-Maßstab
+    const seatDrop = 0.44 * roomFigureScale(tile.loc);   // Mixamo-Sitzhöhe x Raum-Maßstab
     for (const [kind, entries] of markers) {
       for (const e of entries) {
         ray.set(new THREE.Vector3(e.p.x, base.y + 20, e.p.z), down);

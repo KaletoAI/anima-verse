@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, setSurfaceTextures, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, roomFigureScale, setSurfaceTextures, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -11,9 +11,6 @@ import { createHud, InfoPanel, showLogin } from './ui';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
-/** Innenraum-Maßstab: Figuren sind in Räumen um diesen Faktor kleiner als
- *  auf der Karte (Kartenmaßstab vs. Raummaßstab) — Stellschraube. */
-const ROOM_FIGURE_SCALE = 1 / 3;
 const ROOMS_POLL_MS = 4000;
 const INTERIOR_CAM_DIST = 26; // näher als das -> Räume auflösen
 
@@ -367,8 +364,9 @@ async function startApp(username: string) {
         // dauerhaft sichtbare Räume gelten in jeder Zoomstufe
         const inRoom = roomCenter && room && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(room))
           ? room : null;
-        // Innenraum-Maßstab: pro Location einstellbar (map3d.figure_scale)
-        const roomScale = tile.loc.map3d?.figure_scale || ROOM_FIGURE_SCALE;
+        // Innenraum-Maßstab folgt der Etagenhöhe (level_height / 3);
+        // figure_scale nur noch als Fallback für Altbestand
+        const roomScale = roomFigureScale(tile.loc);
         if (inRoom && roomCenter) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);
