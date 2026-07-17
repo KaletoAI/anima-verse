@@ -71,6 +71,39 @@ async def outfit_event_stream(request: Request) -> StreamingResponse:
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+@router.get("/state-stream")
+async def state_event_stream(request: Request) -> StreamingResponse:
+    """SSE stream of typed character-state events (AV3D-3).
+
+    Payloads: ``location_changed {character, from_id, to_id, room_id}``,
+    ``room_changed {character, location_id, room_id}``,
+    ``activity_changed {character, activity, animation}``. Pushes what
+    polling /play/worldmap would discover — the 3D client animates NPC
+    movement without the poll jumps; polling stays the baseline.
+
+    Auth like /play/worldmap: any authenticated user, NO per-character
+    filter — the worldmap shows all characters, so the stream that mirrors
+    it must too (deliberate deviation from the outfit stream).
+    Unauthenticated: 401.
+    """
+    from app.core.state_events import subscribe as _subscribe_state
+    from app.core.auth_dependency import get_current_user_optional
+
+    user = get_current_user_optional(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    async def gen():
+        yield f"data: {_json.dumps({'type': 'connected'})}\n\n"
+        try:
+            async for event in _subscribe_state():
+                yield f"data: {_json.dumps(event)}\n\n"
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
 @router.get("")
 def list_events_route() -> Dict[str, Any]:
     """Listet alle Events eines Users."""

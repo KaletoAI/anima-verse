@@ -1240,6 +1240,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # Weggehen haengen). Greift fuer ALLE Bewegungswege zentral: Move-Skill,
     # SetLocation, Teleport-Spell, Scheduler, Drag&Drop. Teleport bewusst NICHT
     # auf "walking" setzen — man ist nicht gelaufen, also einfach leeren.
+    old_pose = (profile.get("pose_intent") or "")
     if location_changed:
         profile["pose_intent"] = ""
         profile["pose_variant_id"] = None  # = None, nicht pop (sonst Save-Skip → alter Variant bleibt)
@@ -1248,6 +1249,21 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
     # (Lebenszyklus gemaess plan-outfit-system-rethink.md §3)
     save_character_profile(character_name, profile)
+    # AV3D-3: push the movement to connected map clients (SSE state stream) —
+    # polling /play/worldmap stays the baseline, the event just arrives
+    # instantly. The location-change pose reset above is pushed too, so a
+    # streaming client drops the stale activity without waiting for a poll.
+    if location_changed:
+        try:
+            from app.core.state_events import publish as _publish_state
+            _publish_state("location_changed", character_name,
+                           from_id=old_location, to_id=location,
+                           room_id=profile.get("current_room", "") or "")
+            if old_pose:
+                _publish_state("activity_changed", character_name,
+                               activity="", animation="")
+        except Exception:
+            pass
     # C1: movement trace (storyteller) on a real location change — make the exit
     # from the old place + arrival in the new one visible. Off-map (sleep sentinel) excluded.
     if location_changed and old_location and old_location != OFFMAP_SLEEP_SENTINEL \
@@ -1365,12 +1381,14 @@ def set_pose_intent(character_name: str, pose: str) -> None:
         except Exception:
             variant = None
     profile = get_character_profile(character_name) or {}
+    old_pose = (profile.get("pose_intent") or "")
     profile["pose_intent"] = pose
     if variant:
         profile["pose_variant_id"] = variant["id"]
     elif not pose:
         profile["pose_variant_id"] = None  # = None, nicht pop (sonst Save-Skip → alter Variant bleibt)
     save_character_profile(character_name, profile)
+    _publish_activity_changed(character_name, pose, old_pose)
 
 
 def clear_pose_intent(character_name: str) -> None:
@@ -1379,9 +1397,27 @@ def clear_pose_intent(character_name: str) -> None:
         return
     profile = get_character_profile(character_name) or {}
     if profile.get("pose_intent") or profile.get("pose_variant_id"):
+        old_pose = (profile.get("pose_intent") or "")
         profile["pose_intent"] = ""
         profile.pop("pose_variant_id", None)
         save_character_profile(character_name, profile)
+        _publish_activity_changed(character_name, "", old_pose)
+
+
+def _publish_activity_changed(character_name: str, pose: str, old_pose: str) -> None:
+    """AV3D-3: push an activity change to the SSE state stream — carries the
+    animation kind the worldmap would deliver, so a streaming client swaps
+    the figure's clip without waiting for its next poll. No-op when the
+    activity did not actually change."""
+    if pose == old_pose:
+        return
+    try:
+        from app.core.state_events import publish as _publish_state
+        from app.core.expression_pose_maps import resolve_pose_animation
+        _publish_state("activity_changed", character_name,
+                       activity=pose, animation=resolve_pose_animation(pose))
+    except Exception:
+        pass
 
 
 def get_effective_activity(character_name: str) -> str:
@@ -1423,6 +1459,17 @@ def save_character_current_room(character_name: str, room_id: str,
     cur_loc = profile.get("current_location", "")
     profile["current_room"] = room_id
     save_character_profile(character_name, profile)
+
+    # AV3D-3: room-change push (within-location moves; cross-location moves
+    # publish via save_character_current_location). Clearing counts too —
+    # the map client moves the figure back to the location default.
+    if room_id != old_room:
+        try:
+            from app.core.state_events import publish as _publish_state
+            _publish_state("room_changed", character_name,
+                           location_id=cur_loc, room_id=room_id or "")
+        except Exception:
+            pass
 
     # state_history-Event bei echtem Raumwechsel — sonst sind Raum-Aenderungen
     # in der Diary/Activity-Auswertung unsichtbar (frueher nur location getrackt).
@@ -3156,6 +3203,14 @@ def enter_offmap_sleep(character_name: str) -> bool:
     profile["current_location"] = ""
     profile["current_room"] = ""
     save_character_profile(character_name, profile)
+    # AV3D-3: this path intentionally bypasses save_character_current_location
+    # — publish the disappearance explicitly (empty to_id = off the map).
+    try:
+        from app.core.state_events import publish as _publish_state
+        _publish_state("location_changed", character_name,
+                       from_id=current_loc, to_id="", room_id="")
+    except Exception:
+        pass
     get_logger("character").info(
         "Offmap-Sleep: %s -> verschwindet von der Karte (return: %s/%s)",
         character_name, current_loc or "-", current_room or "-")
@@ -3190,6 +3245,14 @@ def wake_from_offmap(character_name: str) -> bool:
     profile["pose_intent"] = ""
     profile["pose_variant_id"] = None  # = None, nicht pop: pop wird beim Save uebersprungen
     save_character_profile(character_name, profile)
+    # AV3D-3: bypass path — publish the reappearance explicitly.
+    try:
+        from app.core.state_events import publish as _publish_state
+        _publish_state("location_changed", character_name,
+                       from_id="", to_id=return_loc,
+                       room_id=return_room or "")
+    except Exception:
+        pass
     get_logger("character").info(
         "Offmap-Wake: %s -> zurueck nach %s/%s",
         character_name, return_loc, return_room or "-")
@@ -3235,6 +3298,13 @@ def appear_in_world(character_name: str) -> bool:
     profile.pop("_offmap_return_location", None)
     profile.pop("_offmap_return_room", None)
     save_character_profile(character_name, profile)
+    # AV3D-3: bypass path — publish the placement explicitly.
+    try:
+        from app.core.state_events import publish as _publish_state
+        _publish_state("location_changed", character_name,
+                       from_id="", to_id=loc_id, room_id=room_id or "")
+    except Exception:
+        pass
     get_logger("character").info(
         "Appear-in-world: %s -> %s/%s", character_name, loc_id, room_id or "-")
     return True
