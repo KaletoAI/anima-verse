@@ -58,6 +58,9 @@ export interface Map3dMeta {
   /** Skalierungsfaktor der Figuren in den Räumen dieser Location
    *  (0..1 der Kartengröße; Default 1/3) */
   figure_scale?: number;
+  /** Etagenhöhe in Welt-Metern (Kartenmaßstab!). Realistische Innenhöhe
+   *  ≈ 3 x figure_scale (z.B. 1,2 bei figure_scale 0,4). Default: 3 */
+  level_height?: number;
 }
 
 export interface WorldLocation {

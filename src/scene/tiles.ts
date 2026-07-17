@@ -394,6 +394,10 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
   // unabhängig vom Gebäudestil, damit Editor/Admin-Vorschau/Client dieselbe
   // Geometrie sehen (Vertrag: schnittstellen-3d.md, Platzierungs-Semantik).
   const LW = 8, LD = 8;
+  // Etagenhöhe: Server-Einstellung (map3d.level_height, WELT-Meter =
+  // Kartenmaßstab; realistische Innenhöhe ≈ 3 x figure_scale) — ohne
+  // Angabe bleibt der bisherige Default
+  const storey = loc.map3d?.level_height || STOREY;
   const usedLevels = new Set<number>();
   const exitPtsL0: THREE.Vector2[] = [];   // EG-Ausgänge (lokal) -> Türen im Grundriss
   loc.rooms.forEach((room, i) => {
@@ -403,7 +407,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     const roomD = Math.max(lay.d * LD, 0.5);
     const x = -LW / 2 + (lay.x + lay.w / 2) * LW;
     const z = -LD / 2 + (lay.y + lay.d / 2) * LD;
-    const floorY = (lay.level ?? 0) * STOREY;
+    const floorY = (lay.level ?? 0) * storey;
     usedLevels.add(lay.level ?? 0);
     tile.roomLevels.set(room.id, lay.level ?? 0);
     tile.roomLevels.set(room.name, lay.level ?? 0);
@@ -505,7 +509,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
       const dx = (b.x - a.x) / len, dz = (b.y - a.y) / len;
       tile.outlineWalls.push({
         mesh: seg,
-        level: Math.round(floorY / STOREY),
+        level: Math.round(floorY / storey),
         mid: new THREE.Vector2(tile.center.x + (a.x + b.x) / 2, tile.center.z + (a.y + b.y) / 2),
         normal: ccw ? new THREE.Vector2(dz, -dx) : new THREE.Vector2(-dz, dx),
       });
@@ -518,7 +522,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
       if (mid > southZ) { southZ = mid; southIdx = k; }
     }
     for (const level of usedLevels) {
-      const floorY = level * STOREY;
+      const floorY = level * storey;
       // Obergeschosse halbtransparent — sonst verdecken sie in der
       // Draufsicht das Erdgeschoss vollständig
       const upper = level > 0;
@@ -592,7 +596,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     const ezl = -LD / 2 + elev[1] * LD;
     const stopLevels = new Set([0, ...usedLevels]);
     const maxLevel = Math.max(...stopLevels);
-    const topY = maxLevel * STOREY + 1.4;
+    const topY = maxLevel * storey + 1.4;
     const postMat = std({ color: 0x8a93a0 });
     for (const [px, pz] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]] as const) {
       const post = box(0.06, topY, 0.06, postMat);
@@ -602,7 +606,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     }
     tile.elevatorStops = new Map();
     for (const level of stopLevels) {
-      const floorY = level * STOREY;
+      const floorY = level * storey;
       const plat = box(0.75, 0.06, 0.75, std({ color: 0xaab4be }));
       plat.position.set(exl, floorY + 0.42, ezl);
       g.add(plat);
