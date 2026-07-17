@@ -500,6 +500,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           map3d={draft.map3d}
           levelHeightM={draft.map3d?.level_height}
           onLevelHeight={(v) => updMap3d('level_height', v)}
+          fallbackYawDeg={location.map_rotation_2d || 0}
         />
       </div>
     </div>

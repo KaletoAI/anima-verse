@@ -62,10 +62,13 @@ interface FloorPlanPreviewProps {
   /** When set, the toolbar shows a level-height field next to the metre
    *  scale (writes map3d.level_height on the location draft). */
   onLevelHeight?: (v: number | undefined) => void
+  /** The 2D icon rotation (map_rotation_2d) — the contract's yaw fallback
+   *  when map3d.rotation is unset (the model turns with the 2D icon). */
+  fallbackYawDeg?: number
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, fallbackYawDeg = 0, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -566,14 +569,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     }
 
     // Building shell over everything — ghosted so the rooms stay visible.
-    // Placement per the drop 2026-07-17 "Gebäude-Modell-Normalisierung":
-    // largest XZ side = 10 m × 0.92 × map3d.size (tile = 10 m, size default
-    // 0.92), XZ centred, bottom at 0.06 m — then meta rotation, the map yaw
-    // (map3d.rotation) and offset_y. The metre ruler next to it therefore
-    // shows exactly the client's proportions.
+    // DETAIL-view scale: with height_m declared the shell is scaled
+    // UNIFORMLY (no distortion) so its total height equals height_m; the
+    // tile fit (largest XZ side = 10 × 0.92 × map3d.size) stays the
+    // fallback without the anchor. Yaw per contract chain: map3d.rotation,
+    // absent → map_rotation_2d (the model turns with the 2D icon), else 0.
     let buildingTopY = 0
     if (showBuildingRef.current) {
-      const building = ensureModel('building')
+      const building = bAnchor
       if (building) {
         if (!building.ghost) {
           // Keep the model's own textures — a flat gray ghost was near
@@ -595,8 +598,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         const clone = building.ghost.clone(true)
         const holder = new THREE.Group()
         holder.add(clone)
+        const mapYaw = m3?.rotation !== undefined ? m3.rotation : fallbackYawDeg
         holder.rotation.set(deg(building.rotation.x),
-                            deg(building.rotation.y) - deg(m3?.rotation || 0),
+                            deg(building.rotation.y) - deg(mapYaw),
                             deg(building.rotation.z))
         holder.updateMatrixWorld(true)
         const br = new THREE.Box3().setFromObject(holder)
@@ -1007,7 +1011,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   useEffect(() => {
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms, map3d, showModels, showBuilding, bump, lh])
+  }, [rooms, map3d, showModels, showBuilding, bump, lh, fallbackYawDeg])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
