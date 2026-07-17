@@ -100,6 +100,12 @@ export interface Tile {
 /** Etagenhöhe der Innenansicht (level * STOREY über dem Boden) */
 const STOREY = 3;
 
+/** Etagenhöhe einer Location in Welt-Metern (map3d.level_height, Default 3). */
+export function storeyHeight(loc: WorldLocation): number {
+  const lh = loc.map3d?.level_height;
+  return lh && lh > 0 ? lh : STOREY;
+}
+
 /** Figuren-Maßstab in Räumen: folgt aus der Etagenhöhe (reale Etage ≈ 3 m,
  *  also level_height / 3); ohne level_height 1/3. */
 export function roomFigureScale(loc: WorldLocation): number {
@@ -331,6 +337,8 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
   if (!loc.rooms.length) return;
   const g = new THREE.Group();
   g.visible = false;
+  // Etagenhöhe: Server-Einstellung (map3d.level_height, Welt-Meter)
+  const storey = storeyHeight(loc);
 
   const W = spec.w;
   const D = spec.d;
@@ -365,7 +373,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     el.className = 'room-label';
     el.textContent = room.name;
     const label = new CSS2DObject(el);
-    label.position.set(x, floorY + 1.5, z);
+    label.position.set(x, floorY + Math.min(1.5, storey * 0.8), z);
     parent.add(label);
     tile.interiorLabels.push(label);
 
@@ -401,10 +409,6 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
   // unabhängig vom Gebäudestil, damit Editor/Admin-Vorschau/Client dieselbe
   // Geometrie sehen (Vertrag: schnittstellen-3d.md, Platzierungs-Semantik).
   const LW = 8, LD = 8;
-  // Etagenhöhe: Server-Einstellung (map3d.level_height, WELT-Meter =
-  // Kartenmaßstab; realistische Innenhöhe ≈ 3 x figure_scale) — ohne
-  // Angabe bleibt der bisherige Default
-  const storey = loc.map3d?.level_height || STOREY;
   const usedLevels = new Set<number>();
   const exitPtsL0: THREE.Vector2[] = [];   // EG-Ausgänge (lokal) -> Türen im Grundriss
   loc.rooms.forEach((room, i) => {
@@ -497,7 +501,8 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
   if (outline.length >= 3 && usedLevels.size) {
     const pts = outline.map(([fx, fz]) => new THREE.Vector2(-LW / 2 + fx * LW, -LD / 2 + fz * LD));
     const floorShape = new THREE.Shape(pts);
-    const WALL_H = 0.8, DOOR_HALF = 0.4;
+    // Wandhöhe folgt der Etagenhöhe (knapp unter der nächsten Platte)
+    const WALL_H = Math.max(0.6, storey - 0.15), DOOR_HALF = 0.4;
     // Polygon-Umlaufrichtung -> Außennormale der Wandstücke (fürs Culling)
     let area = 0;
     for (let k = 0; k < pts.length; k++) {
@@ -603,7 +608,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     const ezl = -LD / 2 + elev[1] * LD;
     const stopLevels = new Set([0, ...usedLevels]);
     const maxLevel = Math.max(...stopLevels);
-    const topY = maxLevel * storey + 1.4;
+    const topY = (maxLevel + 1) * storey;
     const postMat = std({ color: 0x8a93a0 });
     for (const [px, pz] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]] as const) {
       const post = box(0.06, topY, 0.06, postMat);
@@ -638,7 +643,8 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
       el.appendChild(btn);
     }
     const sw = new CSS2DObject(el);
-    sw.position.set(2.2, tile.height + 2.2, 0);
+    // knapp über der obersten Etage — skaliert mit der Etagenhöhe
+    sw.position.set(2.2, (Math.max(...usedLevels) + 1) * storey + 0.6, 0);
     g.add(sw);
   }
 
@@ -817,7 +823,12 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   const slot = tile.roomSlots.get(roomId);
   if (!slot || slot.holder.children.length) return;
   const fp = (model.userData.footprint as { x: number; z: number }) ?? { x: 1, z: 1 };
-  model.scale.setScalar(Math.min(slot.w / fp.x, slot.d / fp.z) * 0.96);
+  // In den Raum einpassen: Grundfläche UND Etagenhöhe deckeln — sonst
+  // schneiden hohe Modelle durch Platte/Wände der nächsten Etage
+  const modelH = (model.userData.height as number) || 1;
+  const kFoot = Math.min(slot.w / fp.x, slot.d / fp.z) * 0.96;
+  const kHeight = (storeyHeight(tile.loc) * 0.92) / modelH;
+  model.scale.setScalar(Math.min(kFoot, kHeight));
   model.position.y = (model.userData.offsetY as number) || 0;   // Server-Feinjustierung (Meter)
   slot.holder.add(model);
   slot.plate.visible = false;   // Platte nur als Platzhalter ohne Modell
