@@ -6,6 +6,7 @@ import { ExportButton, ImportButton } from '../../components/ImportExport'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { FitDialog } from './FitDialog'
 import { EdgeDialog } from './EdgeDialog'
+import { SurfaceTexturesDialog } from './SurfaceTexturesDialog'
 
 /**
  * Map tab — replaces the placement UI that used to live on the main
@@ -104,6 +105,7 @@ export function MapTab() {
   const [gen, setGen] = useState<{ loc: Location; type: 'map_2d' | 'map_3x3' } | null>(null)
   const [fit, setFit] = useState<{ loc: Location } | null>(null)
   const [edge, setEdge] = useState<{ loc: Location; available: Record<string, string> } | null>(null)
+  const [showTextures, setShowTextures] = useState(false)
   // Inpaint backends (category=="inpaint") for the Fit/Edge selection + the
   // mapfit default prompts per family (prefill the prompt field).
   const [inpaintBackends, setInpaintBackends] = useState<{ name: string; family: string; prompt: string; terrainHint: boolean }[]>([])
@@ -518,6 +520,14 @@ export function MapTab() {
           >
             <span>{t('Layout')}</span>
             <span style={{ display: 'flex', gap: 4 }}>
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                onClick={() => setShowTextures(true)}
+                title={t('Global ground textures for terrain tiles in the 3D client (AV3D-13)')}
+              >
+                🧱
+              </button>
               <ExportButton
                 endpoint="/world/map/export"
                 filename="map_layout.zip"
@@ -888,6 +898,10 @@ export function MapTab() {
           onSubmit={(sides, prompt, backend) => submitEdge(sides, prompt, backend, edge.loc)}
           onClose={() => setEdge(null)}
         />
+      ) : null}
+
+      {showTextures ? (
+        <SurfaceTexturesDialog onClose={() => setShowTextures(false)} />
       ) : null}
     </div>
   )

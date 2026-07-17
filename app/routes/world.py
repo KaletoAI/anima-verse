@@ -568,6 +568,82 @@ async def room_model3d_offset(location_id: str, room_id: str,
     return {"meta": meta}
 
 
+# ── Surface textures (AV3D-13) ──
+# Global tileable ground materials for terrain tiles; the 3D client reads
+# them via GET /assets/surface-textures. ONE texture per kind (open
+# vocabulary matching `terrain`); managed from the Map tab.
+
+@router.get("/surface-textures")
+def surface_textures_admin() -> Dict[str, Any]:
+    """Admin listing: textures + running generations + backends with their
+    resolved use-case style, so the dialog can show and edit the COMPLETE
+    final prompt before generating (final-prompt rule)."""
+    from app.core.surface_textures import compose_prompt, is_pending, list_textures
+    from app.imagegen.service import get_image_service
+    svc = get_image_service()
+    backends = []
+    try:
+        for b in svc.list_available_backends(media="image"):
+            style = compose_prompt("", b)
+            backends.append({"name": b.name,
+                             "prompt_style": style["style"],
+                             "prompt_negative": style["negative"]})
+    except Exception:
+        pass
+    return {"textures": list_textures(), "pending": is_pending(),
+            "backends": backends}
+
+
+@router.post("/surface-textures/generate")
+async def surface_texture_generate(request: Request) -> Dict[str, Any]:
+    """Generate ONE kind's texture via the image pipeline (body: {kind,
+    backend?, prompt?, negative?} — prompt/negative come verbatim from the
+    dialog; empty = server-composed use-case default)."""
+    from app.core.surface_textures import safe_kind, trigger_generation
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    kind = safe_kind(str(data.get("kind") or ""))
+    if not kind:
+        raise HTTPException(status_code=400,
+                            detail="kind required (lowercase, like the terrain field: road, water, …)")
+    if not trigger_generation(kind,
+                              backend_glob=str(data.get("backend") or "").strip(),
+                              prompt=str(data.get("prompt") or ""),
+                              negative=str(data.get("negative") or "")):
+        return {"status": "already_running"}
+    return {"status": "generating"}
+
+
+@router.post("/surface-textures/{kind}/upload")
+async def surface_texture_upload(kind: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Upload a texture for a kind (JPEG/PNG/WebP, sniffed; ≤ 10 MB)."""
+    from app.core.surface_textures import save_uploaded
+    contents = await file.read()
+    res = save_uploaded(kind, contents)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error") or "upload failed")
+    return res
+
+
+@router.post("/surface-textures/{kind}/size")
+async def surface_texture_size(kind: str, request: Request) -> Dict[str, Any]:
+    """Set the physical edge length in metres (body: {size_m}; 3 = default)."""
+    from app.core.surface_textures import set_size_m
+    data = await request.json()
+    if not isinstance(data, dict) or not set_size_m(kind, data.get("size_m")):
+        raise HTTPException(status_code=400, detail="bad kind or size_m")
+    return {"status": "ok"}
+
+
+@router.delete("/surface-textures/{kind}")
+def surface_texture_delete(kind: str) -> Dict[str, Any]:
+    from app.core.surface_textures import delete_texture
+    if not delete_texture(kind):
+        raise HTTPException(status_code=404, detail="No texture for this kind")
+    return {"status": "deleted"}
+
+
 # ── Map Layout Import / Export ──
 
 @router.get("/map/export")

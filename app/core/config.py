@@ -226,6 +226,22 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
         },
     },
+    # Terrain surface texture (AV3D-13): seamless tileable top-down ground
+    # material for the 3D map (road, water, grass, …). Must tile without
+    # visible seams and carry NO baked lighting — objects, shadows and
+    # perspective all break the tiling illusion on the map floor.
+    "surface_texture": {
+        "keywords": {
+            "prompt_style": "seamless tileable texture, orthographic top-down view, flat even lighting, no shadows, no objects, uniform material filling the entire frame edge to edge, photorealistic, high detail",
+            "prompt_negative": "objects, people, animals, plants sticking out, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, blurry, low quality",
+            "prompt_instruction": "Write comma-separated tags for a seamless tileable top-down texture of the ground material only — surface structure and color, flat even lighting. No objects, no shadows, no perspective.",
+        },
+        "natural": {
+            "prompt_style": "a seamless tileable texture photographed orthographically from directly above, flat even lighting without shadows, no objects, the uniform material filling the entire frame edge to edge, photorealistic, high detail",
+            "prompt_negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, blurry, low quality",
+            "prompt_instruction": "Describe a seamless tileable top-down texture of the ground material only — surface structure and color, flat even lighting. No objects, no shadows, no perspective.",
+        },
+    },
     "item": {
         "keywords": {
             "prompt_style": "product photo, single object, isolated on a plain neutral background, soft studio lighting, sharp focus, highly detailed",

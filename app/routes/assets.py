@@ -1,9 +1,12 @@
-"""Shared 3D assets — animation clips (world-independent, read-only).
+"""Shared 3D assets — animation clips + surface textures (read-only).
 
 Clips live in ``shared/models/clips`` (see the README there for the hard file
 requirements: Mixamo FBX "Without Skin", one rig source, 52-bone rig). They
 belong to the RIG, not to a character or a world, so every client — the
 Game-Admin 3D preview and the external 3D map client — reads them from here.
+Surface textures (AV3D-13) are the second asset family: per-world tileable
+ground materials, managed via /world/surface-textures, served here because
+the 3D client consumes them exactly like the clip library.
 
 ``kind`` (idle / walk / run / sit / dance / wave / …) is derived from the file
 name; the vocabulary is OPEN — no list of kinds exists in the code, a new kind
@@ -70,3 +73,27 @@ def get_animation_clip(filename: str, request: Request):
     return etag_file_response(path, request,
                               media_type or "application/octet-stream",
                               cache_control="public, max-age=86400")
+
+
+@router.get("/surface-textures")
+def list_surface_textures():
+    """Global surface-texture library (AV3D-13) — contract shape: a BARE
+    array ``[{kind, url, size_m}, …]``. ``kind`` is the open vocabulary
+    matching the location ``terrain`` field; an empty list is the normal
+    state (the client falls back to its procedural materials)."""
+    from app.core.surface_textures import list_textures
+    return [{"kind": t["kind"], "url": t["url"], "size_m": t["size_m"]}
+            for t in list_textures()]
+
+
+@router.get("/surface-textures/{filename}")
+def get_surface_texture(filename: str, request: Request):
+    """Serves a texture image. ETag + If-None-Match; textures can be
+    regenerated, so revalidation stays cheap but caching moderate."""
+    from app.core.surface_textures import file_by_name
+    path = file_by_name(filename)
+    if not path:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media_type, _ = mimetypes.guess_type(str(path))
+    return etag_file_response(path, request, media_type or "image/jpeg",
+                              cache_control="public, max-age=3600")
