@@ -463,7 +463,7 @@ export function BuildingModelPanel({
         </label>
         {!roomId ? (
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The shell is scaled uniformly (no distortion) to this height; storey height derives as height ÷ storeys. Empty = tile-fit proportions as before.')}>
+            title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The footprint keeps following the floor plan (tile fit); only the height is scaled to this value, so a too-flat mesh gets repaired. Storey height derives as height ÷ storeys; empty = natural proportions.')}>
             {t('Model height (m)')}
             <input
               className="ga-input"

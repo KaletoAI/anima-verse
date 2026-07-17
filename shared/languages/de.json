@@ -379,7 +379,7 @@
     "Error starting batch generation": "Fehler beim Starten der Batch-Generierung",
     "Estimated cost of this session": "Geschätzte Kosten dieser Session",
     "estimated from": "geschätzt aus",
-    "Estimated height of the building MODEL in world metres — dial it at the metre ruler. The shell is scaled uniformly (no distortion) to this height; storey height derives as height ÷ storeys. Empty = tile-fit proportions as before.": "Geschätzte Höhe des Gebäude-MODELLS in Welt-Metern — an der Meter-Skala einstellen. Die Hülle wird uniform (ohne Verzerrung) auf diese Höhe skaliert; die Etagenhöhe ergibt sich als Höhe ÷ Geschosse. Leer = Kachel-Fit-Proportionen wie bisher.",
+    "Estimated height of the building MODEL in world metres — dial it at the metre ruler. The footprint keeps following the floor plan (tile fit); only the height is scaled to this value, so a too-flat mesh gets repaired. Storey height derives as height ÷ storeys; empty = natural proportions.": "Geschätzte Höhe des Gebäude-MODELLS in Welt-Metern — an der Meter-Skala einstellen. Die Grundfläche folgt weiter dem Grundriss (Kachel-Fit); nur die Höhe wird auf diesen Wert skaliert, ein zu flaches Mesh wird so repariert. Etagenhöhe = Höhe ÷ Geschosse; leer = natürliche Proportionen.",
     "Estimated real-world width of the room (largest side, from the source image, e.g. 6). Placement is unchanged — the value sets the room’s content scale, and figures in the room size themselves from it automatically.": "Geschätzte reale Breite des Raums (größte Seite, vom Quellbild, z.B. 6). Die Platzierung bleibt unverändert — der Wert bestimmt den Inhalts-Maßstab des Raums, und Figuren im Raum skalieren sich automatisch daraus.",
     "euphoric": "euphorisch",
     "Events": "Ereignisse",

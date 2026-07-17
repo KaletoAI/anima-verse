@@ -569,11 +569,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     }
 
     // Building shell over everything — ghosted so the rooms stay visible.
-    // DETAIL-view scale: with height_m declared the shell is scaled
-    // UNIFORMLY (no distortion) so its total height equals height_m; the
-    // tile fit (largest XZ side = 10 × 0.92 × map3d.size) stays the
-    // fallback without the anchor. Yaw per contract chain: map3d.rotation,
-    // absent → map_rotation_2d (the model turns with the 2D icon), else 0.
+    // DETAIL-view scale is PER AXIS: the footprint (XZ) always follows the
+    // plan (tile fit, largest XZ side = 10 × 0.92 × map3d.size) so the
+    // floor-plan rectangles land on the shell; the height (Y) follows
+    // height_m when declared. With correct mesh proportions both factors
+    // coincide (no distortion) — a too-flat relief gets exactly the
+    // repair it needs. Yaw per contract chain: map3d.rotation, absent →
+    // map_rotation_2d (the model turns with the 2D icon), else 0.
     let buildingTopY = 0
     if (showBuildingRef.current) {
       const building = bAnchor
@@ -605,16 +607,19 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         holder.updateMatrixWorld(true)
         const br = new THREE.Box3().setFromObject(holder)
         const sr = br.getSize(new THREE.Vector3())
-        const k = building.heightM > 0
-          ? building.heightM / (sr.y || 1)
-          : (10 * 0.92 * (m3?.size || 0.92)) / (Math.max(sr.x, sr.z) || 1)
-        holder.scale.setScalar(k)
-        holder.updateMatrixWorld(true)
-        const b2 = new THREE.Box3().setFromObject(holder)
+        const kxz = (10 * 0.92 * (m3?.size || 0.92)) / (Math.max(sr.x, sr.z) || 1)
+        const ky = building.heightM > 0 ? building.heightM / (sr.y || 1) : kxz
+        // Per-axis scale in WORLD space — the outer group sits above the
+        // rotation fix, so a lying model raised by 90° stretches upward.
+        const outer = new THREE.Group()
+        outer.add(holder)
+        outer.scale.set(kxz, ky, kxz)
+        outer.updateMatrixWorld(true)
+        const b2 = new THREE.Box3().setFromObject(outer)
         const c2 = b2.getCenter(new THREE.Vector3())
-        holder.position.set(-c2.x, 0.06 - b2.min.y + building.offsetY, -c2.z)
-        holder.userData.__noDispose = true
-        boxes.add(holder)
+        outer.position.set(-c2.x, 0.06 - b2.min.y + building.offsetY, -c2.z)
+        outer.userData.__noDispose = true
+        boxes.add(outer)
         buildingTopY = 0.06 + building.offsetY + (b2.max.y - b2.min.y)
       }
     }
@@ -1052,7 +1057,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         ) : null}
         {buildingEntry ? (
           <label className="ga-check-row"
-            title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The shell is scaled uniformly (no distortion) to this height; storey height derives as height ÷ storeys. Empty = tile-fit proportions as before.')}>
+            title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The footprint keeps following the floor plan (tile fit); only the height is scaled to this value, so a too-flat mesh gets repaired. Storey height derives as height ÷ storeys; empty = natural proportions.')}>
             <span>{t('Model height (m)')}</span>
             <input
               key={`bh-${buildingEntry.heightM}`}
