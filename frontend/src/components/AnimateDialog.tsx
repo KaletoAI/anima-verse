@@ -31,8 +31,9 @@ interface AnimateService {
   id: string
   label: string
   enabled?: boolean
-  /** LoRAs discovered for this video alias (gateway lora_url). */
-  loras?: string[]
+  /** This video alias' LoRAs from the LoRA library (backend-scoped; entries
+   *  flagged missing stay offered, rendered as "name (missing)"). */
+  loras?: Array<{ name: string; missing?: boolean }>
 }
 
 interface Props {
@@ -77,6 +78,16 @@ export function AnimateDialog({
   const [seconds, setSeconds] = useState('')
 
   useEffect(() => { if (open) setPrompt(defaultPrompt) }, [open, defaultPrompt])
+
+  // A service switch resets picks the new service does not offer.
+  useEffect(() => {
+    const offered = new Set(
+      (services?.find((s) => s.id === serviceId)?.loras || []).map((l) => l.name))
+    setLoraSlots((prev) => {
+      if (prev.every((s) => !s.name || offered.has(s.name))) return prev
+      return prev.map((s) => (!s.name || offered.has(s.name) ? s : { name: '', strength: '1.0' }))
+    })
+  }, [services, serviceId])
 
   // Load services and the LLM list once.
   useEffect(() => {
@@ -175,7 +186,11 @@ export function AnimateDialog({
                           disabled={submitting} aria-label={`LoRA ${i + 1}`}
                           onChange={(e) => setLoraSlot(i, { name: e.target.value })}>
                           <option value="">— {t('none')} —</option>
-                          {svcLoras.map((l) => <option key={l} value={l}>{l}</option>)}
+                          {svcLoras.map((l) => (
+                            <option key={l.name} value={l.name}>
+                              {l.name}{l.missing ? ` ${t('(missing)')}` : ''}
+                            </option>
+                          ))}
                         </select>
                         <input className="ga-input" type="number" step={0.05} min={0} max={2}
                           style={{ width: 76, flex: '0 0 auto' }} value={s.strength}

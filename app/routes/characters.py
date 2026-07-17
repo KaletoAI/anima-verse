@@ -378,7 +378,8 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
     """Returns the LoRA list for the outfit-piece editor.
 
     Response:
-        loras: LoRA list (without 'None')
+        loras: [{name, missing}] from the LoRA library, scoped to the backend
+        the outfit/variant render would resolve (no 'None' entry).
     """
     from app.imagegen.service import get_image_service
     imagegen = get_image_service()
@@ -392,7 +393,7 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
     # Without this, the Add-LoRA list ignored the page's "Backend match".
     try:
         import os as _os
-        from app.core.config import get_lora_library_names
+        from app.core.config import get_lora_options
         from app.imagegen.service import render_has_reference_image
         # These are outfit/variant renders: they pin the profile image as
         # identity reference. Resolve the SAME img2img preference the render
@@ -417,13 +418,13 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
         if not eff and character_name:
             eff = imagegen._select_backend_for_agent(character_name,
                                                      has_input_image=_has_ref)
-        lib_names = get_lora_library_names(
-            eff.name if eff else None,
+        lib_options = get_lora_options(
+            eff.name if eff else "",
             lora_filter=(getattr(eff, "lora_filter", "") or "") if eff else "")
     except Exception:
-        lib_names = []
+        lib_options = []
 
-    return {"loras": list(dict.fromkeys(lib_names))}
+    return {"loras": lib_options}
 
 
 @router.get("/outfit-rules")
@@ -1333,14 +1334,16 @@ def get_character_model_file(character_name: str, request: Request):
 
 @router.get("/{character_name}/model/texture")
 def get_character_model_texture_file(character_name: str, request: Request):
-    """Serves the basecolor PNG of a generic/FBX model (a GLB embeds its
-    textures and has none here). 404 when absent."""
+    """Serves the basecolor image of a generic/FBX model — PNG or JPEG, the
+    gateway prefers JPEG since 2026-07-17 (a GLB embeds its textures and has
+    none here). 404 when absent."""
     from fastapi.responses import Response
     from app.core.model3d import find_texture
     tex = find_texture(character_name)
     if not tex:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    return etag_file_response(tex, request, "image/png")
+    media = "image/jpeg" if tex.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+    return etag_file_response(tex, request, media)
 
 
 # --- 3D reference renders (T-pose / default pose, app/core/model_refs.py) ---

@@ -40,7 +40,7 @@ export function ImageOverrides({ character }: { character: string }) {
   const [loras, setLoras] = useState<Lora[]>([])
   const [backends, setBackends] = useState<string[]>([])  // image-backend names (match target)
   const [outfitDefault, setOutfitDefault] = useState('')  // global outfit default (match spec)
-  const [availableLoras, setAvailableLoras] = useState<string[]>([])
+  const [availableLoras, setAvailableLoras] = useState<Array<{ name: string; missing?: boolean }>>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [addName, setAddName] = useState('')
@@ -50,10 +50,10 @@ export function ImageOverrides({ character }: { character: string }) {
   // must be refetched after every pattern save, not loaded just once.
   const refreshLoraOptions = useCallback(async () => {
     try {
-      const loraOpts = await apiGet<{ loras?: string[] }>(
+      const loraOpts = await apiGet<{ loras?: Array<{ name: string; missing?: boolean }> }>(
         `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
       )
-      setAvailableLoras((loraOpts.loras || []).filter((l) => l && l !== 'None'))
+      setAvailableLoras((loraOpts.loras || []).filter((l) => l.name && l.name !== 'None'))
     } catch { /* keep the previous list */ }
   }, [character])
 
@@ -90,7 +90,7 @@ export function ImageOverrides({ character }: { character: string }) {
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
           apiGet<{ options?: Array<{ name?: string; category?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
-          apiGet<{ loras?: string[] }>(
+          apiGet<{ loras?: Array<{ name: string; missing?: boolean }> }>(
             `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
           )
         ])
@@ -105,7 +105,7 @@ export function ImageOverrides({ character }: { character: string }) {
             .map((o) => o.name as string),
         )
         setOutfitDefault(opts.outfit_imagegen_default || '')
-        setAvailableLoras((loraOpts.loras || []).filter((l) => l && l !== 'None'))
+        setAvailableLoras((loraOpts.loras || []).filter((l) => l.name && l.name !== 'None'))
       } catch (e) {
         if (!cancelled) toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
       } finally {
@@ -232,10 +232,10 @@ export function ImageOverrides({ character }: { character: string }) {
             <select className="ga-input" value={addName} onChange={(e) => setAddName(e.target.value)}>
               <option value="">— {t('pick a LoRA')} —</option>
               {availableLoras
-                .filter((l) => !loras.some((x) => x.name === l))
+                .filter((l) => !loras.some((x) => x.name === l.name))
                 .map((l) => (
-                  <option key={l} value={l}>
-                    {l}
+                  <option key={l.name} value={l.name}>
+                    {l.name}{l.missing ? ` ${t('(missing)')}` : ''}
                   </option>
                 ))}
             </select>

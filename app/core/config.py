@@ -327,10 +327,10 @@ def get_use_case_prompts(use_case: str, image_model: str = "") -> dict:
 
 
 def get_lora_trigger_words(lora_names) -> list:
-    """Aktivierungs-Woerter fuer die aktiven LoRAs (aus dem per-Welt-Repository
-    ``image_generation.lora_triggers`` = [{lora, word}, …]). Matcht per Dateiname
-    (auch Basename, falls Pfad/Endung leicht abweicht). Reihenfolge wie im Repo,
-    Duplikate entfernt.
+    """Activation words for the active LoRAs (from the per-world library
+    ``image_generation.lora_triggers`` = [{lora, word, …}, …]). Matches by file
+    name (basename too, in case path/extension differ slightly). Library order,
+    duplicates removed.
     """
     if not lora_names:
         return []
@@ -357,19 +357,20 @@ def get_lora_trigger_words(lora_names) -> list:
     return out
 
 
-def get_lora_library_names(backend_name=None, lora_filter: str = "") -> list:
-    """LoRA names from the per-world LoRA library
-    (``image_generation.lora_triggers`` = [{lora, word, endpoint, …}, …]),
-    filtered by endpoint and optionally by the backend's LoRA glob:
+def get_lora_options(backend_name: str, lora_filter: str = "") -> list:
+    """LoRA options for ONE backend from the consolidated LoRA library
+    (``image_generation.lora_triggers`` = [{lora, word, source, backends,
+    missing_on}, …]). Selection is backend-scoped (user decision 2026-07-16).
 
-    - Entries with ``endpoint == backend_name`` OR an empty ``endpoint``
-      (= applies to all backends) are included.
-    - ``backend_name=None`` -> all names (no endpoint filter).
+    Returns ``[{"name": str, "missing": bool}, …]``, sorted by name:
+
+    - entries whose ``backends`` contain ``backend_name``; ``missing`` is True
+      when the sync flagged the backend in ``missing_on`` (manual/touched
+      entries only — they stay offered, marked "(missing)" in the dialogs).
+    - manual entries with ``backends == []`` ("all backends").
     - ``lora_filter`` (e.g. "Qwen*"): case-insensitive glob applied to the
-      LoRA name — mirrors the backend's ``lora_filter`` so global/"all"
-      entries of foreign model families don't leak into the dropdowns.
-
-    Order as in the repo, duplicates removed.
+      name — mirrors the backend's ``lora_filter`` so "all backends" entries
+      of foreign model families don't leak into the dropdowns.
     """
     import fnmatch
     triggers = get("image_generation.lora_triggers", []) or []
@@ -383,17 +384,17 @@ def get_lora_library_names(backend_name=None, lora_filter: str = "") -> list:
         lora = (e.get("lora") or "").strip()
         if not lora or lora in seen:
             continue
-        # Flagged by the sync job: no longer exists on its backend — keep the
-        # library entry visible in the editor, but never offer it in dropdowns.
-        if e.get("missing"):
+        backends = [str(x) for x in (e.get("backends") or []) if x]
+        if backends and backend_name not in backends:
             continue
-        ep = (e.get("endpoint") or "").strip()
-        if backend_name is not None and ep and ep != backend_name:
-            continue
+        if not backends and (e.get("source") or "manual") == "discovered":
+            continue  # discovered entries always carry their backends
         if _pat and not fnmatch.fnmatch(lora.lower(), _pat):
             continue
         seen.add(lora)
-        out.append(lora)
+        out.append({"name": lora,
+                    "missing": backend_name in (e.get("missing_on") or [])})
+    out.sort(key=lambda o: o["name"].lower())
     return out
 
 
@@ -468,6 +469,77 @@ def _migrate_backend_categories(config: dict, config_path: Path) -> bool:
         return True
     except OSError as e:
         logger.error("Failed to migrate backend categories in %s: %s", config_path, e)
+        return False
+
+
+def _migrate_lora_triggers(config: dict, config_path: Path) -> bool:
+    """One-time consolidation of the LoRA library to one entry per LoRA.
+
+    Old shape: one entry per (lora, endpoint) pair — ``{lora, word, endpoint,
+    source, missing}``. New shape (user decision 2026-07-16): one entry per
+    unique LoRA name — ``{lora, word, source, backends, missing_on}``.
+
+    Merge rules per name group (in list order): first non-empty ``word`` wins
+    (dropped alternatives are logged once); ``source`` is manual when any
+    member was manual or user-touched (non-empty word); ``backends`` is the
+    union of the non-empty endpoints — unless a member had the empty endpoint
+    ("all backends"), which wins as ``backends: []``; ``missing_on`` collects
+    the endpoints of members flagged missing.
+    """
+    ig = config.get("image_generation") or {}
+    triggers = ig.get("lora_triggers")
+    if not isinstance(triggers, list):
+        return False
+    if not any(isinstance(e, dict) and "endpoint" in e for e in triggers):
+        return False  # already in the consolidated shape (or empty)
+
+    merged: dict = {}
+    order: list = []
+    for e in triggers:
+        if not isinstance(e, dict):
+            continue
+        name = (e.get("lora") or "").strip()
+        if not name:
+            continue
+        word = (e.get("word") or "").strip()
+        endpoint = (e.get("endpoint") or "").strip()
+        manual = (e.get("source") or "manual").strip() != "discovered" or bool(word)
+        entry = merged.get(name)
+        if entry is None:
+            entry = {"lora": name, "word": word,
+                     "source": "manual" if manual else "discovered",
+                     "backends": [], "missing_on": [], "_all": False}
+            merged[name] = entry
+            order.append(name)
+        else:
+            if word and not entry["word"]:
+                entry["word"] = word
+            elif word and entry["word"] and word != entry["word"]:
+                logger.info("LoRA library migration: '%s' keeps word '%s', "
+                            "drops '%s'", name, entry["word"], word)
+            if manual:
+                entry["source"] = "manual"
+        if not endpoint:
+            entry["_all"] = True
+        else:
+            if endpoint not in entry["backends"]:
+                entry["backends"].append(endpoint)
+            if e.get("missing") and endpoint not in entry["missing_on"]:
+                entry["missing_on"].append(endpoint)
+    for entry in merged.values():
+        if entry.pop("_all"):
+            entry["backends"] = []
+            entry["missing_on"] = []
+
+    ig["lora_triggers"] = [merged[n] for n in order]
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        logger.info("LoRA library migrated: %d entries -> %d unique (%s)",
+                    len(triggers), len(order), config_path)
+        return True
+    except OSError as e:
+        logger.error("Failed to migrate LoRA library in %s: %s", config_path, e)
         return False
 
 
@@ -564,6 +636,7 @@ def load(config_path: Optional[Path] = None) -> dict:
     _strip_legacy_imagegen_prompt_fields(_CONFIG, path)
     _seed_default_marketplace_catalogs(_CONFIG, path)
     _migrate_backend_categories(_CONFIG, path)
+    _migrate_lora_triggers(_CONFIG, path)
 
     # Overlay secrets.json (gitignored — holds api keys / passwords)
     if _SECRETS_PATH.exists():

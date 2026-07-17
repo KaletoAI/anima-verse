@@ -194,23 +194,26 @@ function copyUseCaseDefault(p, uc, fam, fld) {
     renderSection(ACTIVE_SECTION);
 }
 
-// Repository: LoRA -> activation word. List of {lora, word, endpoint, source,
-// missing}; the image-creation code automatically prepends the word to the
-// prompt whenever the LoRA is used. Stored in image_generation.lora_triggers
-// (per world). The discovery sync job fills it from every backend with a
-// LoRA Query URL; every LoRA dropdown in the UI feeds from this library.
+// Repository: LoRA -> activation word. ONE entry per unique LoRA — {lora,
+// word, source, backends, missing_on}; the image-creation code automatically
+// prepends the word to the prompt whenever the LoRA is used. Stored in
+// image_generation.lora_triggers (per world). The discovery sync job
+// consolidates every backend with a LoRA Query URL into this list; every
+// LoRA dropdown in the UI feeds from this library, scoped to its backend.
 function renderLoraTriggersEditor(path) {
     const items = getVal(path) || [];
     let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
              + 'Central LoRA library of the world — <b>every LoRA dropdown</b> (game admin + player UI) '
-             + 'feeds from this list. One activation word per LoRA: whenever an image uses the LoRA, '
+             + 'feeds from this list, scoped to the selected backend. One entry per LoRA with the backends '
+             + 'that have it; one activation word per LoRA: whenever an image uses the LoRA, '
              + 'the word is automatically prepended to the prompt.</p>';
     html += '<p class="hint" style="opacity:.7;margin-bottom:12px">'
              + 'Backends with a <b>LoRA Query URL</b> are scanned automatically (hourly + on '
-             + '<b>Discover now</b>): found LoRAs are added as <b>discovered</b>; entries whose LoRA '
-             + 'vanished are removed (discovered, untouched) or flagged <b style="color:#f85149">missing</b> '
-             + '(manual / edited) and excluded from the dropdowns. Backends without a listing '
-             + '(CivitAI, Together): add entries manually.</p>';
+             + '<b>Discover now</b>): found LoRAs are added as <b>discovered</b>; a backend whose LoRA '
+             + 'vanished is dropped from the entry (discovered, untouched) or flagged '
+             + '<b style="color:#f85149">missing</b> (manual / edited) — missing entries stay offered '
+             + 'in the dialogs, marked "(missing)". Backends without a listing (CivitAI, Together): '
+             + 'add entries manually; no backend assigned = offered on all backends.</p>';
     html += '<div style="margin-bottom:12px;display:flex;gap:8px">'
           + '<button class="btn btn-sm" onclick="addLoraTrigger(\'' + path + '\')">+ Add</button>'
           + '<button class="btn btn-sm" onclick="syncLoraLibrary()">⟳ Discover now</button>'
@@ -221,42 +224,58 @@ function renderLoraTriggersEditor(path) {
     for (let i = 0; i < items.length; i++) {
         const it = items[i] || {};
         const ip = path + '[' + i + ']';
+        const isManual = (it.source || 'manual') !== 'discovered';
+        const backends = Array.isArray(it.backends) ? it.backends : [];
+        const missingOn = Array.isArray(it.missing_on) ? it.missing_on : [];
         html += '<div class="lora-row" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">';
-        // Column 1: endpoint assignment (backend name) — empty = all backends.
-        // Prevents a LoRA from being offered on the wrong backend (other model).
-        html += '<select title="Endpoint (backend) — empty = all" style="flex:2;min-width:0;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px" onchange="ltTouch(\'' + ip + '\', \'endpoint\', this.value); setVal(\'' + ip + '.endpoint\', this.value)">';
-        html += '<option value="">— All endpoints —</option>';
-        for (const be of ((CONFIG.image_generation && CONFIG.image_generation.backends) || [])) {
-            const bn = be.name || '';
-            if (!bn) continue;
-            html += '<option value="' + esc(bn) + '"' + (bn === (it.endpoint || '') ? ' selected' : '') + '>' + esc(bn) + '</option>';
-        }
-        html += '</select>';
-        // Column 2: LoRA name. Custom dark search combobox instead of a native
-        // <select> (whose option list renders OS-side white). Free text allowed.
-        html += '<div class="lt-combo" style="flex:3;min-width:0">';
-        html += '<input type="text" class="lt-lora-input" autocomplete="off" value="' + esc(it.lora || '') + '" '
-              + 'placeholder="LoRA name — type to search or note freely" style="width:100%" '
-              + 'oninput="ltFilter(this, \'' + ip + '\')" '
-              + 'onfocus="ltFilter(this, \'' + ip + '\')" '
-              + 'onkeydown="ltKey(event, this, \'' + ip + '\')" '
-              + 'onblur="ltBlur(this)">';
-        html += '<div class="lt-dd"></div>';
-        html += '</div>';
-        // Column 3: activation word.
+        // Column 1: LoRA name (free text; renaming a discovered entry makes
+        // it a manual claim — ltRename also warns on duplicate names).
+        html += '<input type="text" autocomplete="off" value="' + esc(it.lora || '') + '" '
+              + 'placeholder="LoRA name (as the backend lists it)" style="flex:3;min-width:0" '
+              + 'onchange="ltRename(\'' + ip + '\', this)">';
+        // Column 2: activation word.
         html += '<input type="text" value="' + esc(it.word || '') + '" placeholder="Activation word" '
               + 'style="flex:2;min-width:0" onchange="ltTouch(\'' + ip + '\', \'word\', this.value); setVal(\'' + ip + '.word\', this.value)">';
-        // Column 4: origin + availability badges.
-        const src = it.source === 'discovered' ? 'discovered' : 'manual';
-        html += '<span style="flex:0 0 auto;display:flex;flex-direction:column;gap:2px;align-items:flex-start;padding-top:4px">';
-        html += '<span class="badge" title="' + (src === 'discovered' ? 'Found by the backend scan' : 'Created/edited by hand') + '" '
-              + 'style="font-size:10px;' + (src === 'discovered' ? 'background:#1f3a5f;color:#79c0ff;' : '') + '">' + src + '</span>';
-        if (it.missing) {
-            html += '<span class="badge" title="No longer exists on its backend — excluded from dropdowns" '
-                  + 'style="font-size:10px;background:#5a1e1e;color:#f85149;">missing</span>';
+        // Column 3: backend associations. Discovered entries: sync-owned,
+        // read-only. Manual entries: editable chips; empty = all backends.
+        html += '<div style="flex:3;min-width:0;display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding-top:4px">';
+        if (!backends.length) {
+            html += '<span class="badge" style="font-size:10px;opacity:.7" '
+                  + 'title="Offered on every backend (each backend\'s LoRA filter still applies)">all backends</span>';
         }
-        html += '</span>';
-        html += '<button class="btn btn-sm" title="Copy (e.g. for another endpoint)" onclick="copyLoraTrigger(\'' + path + '\', ' + i + ')">⧉</button>';
+        for (const bn of backends) {
+            const miss = missingOn.indexOf(bn) !== -1;
+            html += '<span class="badge" style="font-size:10px;'
+                  + (miss ? 'background:#5a1e1e;color:#f85149;text-decoration:line-through;'
+                          : 'background:#1f3a5f;color:#79c0ff;')
+                  + '" title="' + (miss ? 'The backend no longer lists this LoRA — still offered, marked (missing)'
+                                        : 'This backend has the LoRA') + '">'
+                  + esc(bn)
+                  + (isManual ? ' <a style="cursor:pointer;text-decoration:none" title="Remove backend" '
+                              + 'onclick="ltRemoveBackend(\'' + ip + '\', \'' + esc(bn) + '\')">✕</a>' : '')
+                  + '</span>';
+        }
+        if (isManual) {
+            let opts = '';
+            for (const be of ((CONFIG.image_generation && CONFIG.image_generation.backends) || [])) {
+                const bn = be.name || '';
+                if (bn && backends.indexOf(bn) === -1) {
+                    opts += '<option value="' + esc(bn) + '">' + esc(bn) + '</option>';
+                }
+            }
+            if (opts) {
+                html += '<select title="Assign a backend" style="font-size:10px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:2px 4px" '
+                      + 'onchange="ltAddBackend(\'' + ip + '\', this.value)">'
+                      + '<option value="">+ backend…</option>' + opts + '</select>';
+            }
+        }
+        html += '</div>';
+        // Column 4: origin badge.
+        const src = isManual ? 'manual' : 'discovered';
+        html += '<span style="flex:0 0 auto;padding-top:4px">'
+              + '<span class="badge" title="' + (src === 'discovered' ? 'Found by the backend scan' : 'Created/edited by hand') + '" '
+              + 'style="font-size:10px;' + (src === 'discovered' ? 'background:#1f3a5f;color:#79c0ff;' : '') + '">' + src + '</span>'
+              + '</span>';
         html += '<button class="btn btn-sm btn-danger" title="Delete" onclick="removeItem(\'' + ip + '\')">✕</button>';
         html += '</div>';
     }
@@ -265,18 +284,39 @@ function renderLoraTriggersEditor(path) {
 
 function addLoraTrigger(path) {
     const arr = _ensureContainer(path, 'array');
-    arr.push({ lora: '', word: '', endpoint: '', source: 'manual', missing: false });
+    arr.push({ lora: '', word: '', source: 'manual', backends: [], missing_on: [] });
     renderSection(ACTIVE_SECTION);
 }
 
-// Duplicates a LoRA entry (same LoRA + word) right below — then just switch
-// the endpoint to use the same LoRA for another backend. The copy is a manual
-// claim (the scan verifies it against the new endpoint).
-function copyLoraTrigger(path, i) {
-    const arr = _ensureContainer(path, 'array');
-    const src = arr[i] || {};
-    arr.splice(i + 1, 0, { lora: src.lora || '', word: src.word || '', endpoint: src.endpoint || '', source: 'manual', missing: false });
+// Assign/remove a backend on a manual entry's chip list. Removing a backend
+// also clears its missing flag; an empty list means "all backends".
+function ltAddBackend(ip, name) {
+    if (!name) return;
+    const e = getVal(ip) || {};
+    if (!Array.isArray(e.backends)) e.backends = [];
+    if (e.backends.indexOf(name) === -1) e.backends.push(name);
     renderSection(ACTIVE_SECTION);
+}
+
+function ltRemoveBackend(ip, name) {
+    const e = getVal(ip) || {};
+    e.backends = (e.backends || []).filter(function (b) { return b !== name; });
+    e.missing_on = (e.missing_on || []).filter(function (b) { return b !== name; });
+    renderSection(ACTIVE_SECTION);
+}
+
+// Rename handler for the LoRA name — flips discovered -> manual and warns on
+// a duplicate name (entries are unique per LoRA; the sync and the dropdowns
+// only honor the first occurrence).
+function ltRename(ip, inp) {
+    const v = inp.value;
+    ltTouch(ip, 'lora', v);
+    setVal(ip + '.lora', v);
+    if (!v) return;
+    const items = (CONFIG.image_generation && CONFIG.image_generation.lora_triggers) || [];
+    let count = 0;
+    for (const it of items) { if (it && (it.lora || '') === v) count++; }
+    if (count > 1) toast('Duplicate LoRA name — only the first entry counts', 'error');
 }
 
 // Editing a discovered entry turns it into a manual claim: the sync job then
@@ -324,83 +364,6 @@ async function syncLoraLibrary() {
     } catch (e) {
         toast('LoRA sync failed: ' + e.message, 'error');
     }
-}
-
-// Suggestion list for the LoRA search combobox. There is no server-side LoRA
-// scan anymore — suggestions are the LoRA names already entered in the list
-// (useful when reusing the same LoRA for another endpoint).
-function ltSuggestions() {
-    const items = (CONFIG.image_generation && CONFIG.image_generation.lora_triggers) || [];
-    const seen = {};
-    const out = [];
-    for (const it of items) {
-        const n = (it && it.lora) ? String(it.lora) : '';
-        if (n && !seen[n]) { seen[n] = true; out.push(n); }
-    }
-    return out;
-}
-
-// Fill the dropdown below the input, filtered by the typed text.
-function ltFilter(inp, ip) {
-    ltTouch(ip, 'lora', inp.value);   // renaming a discovered entry → manual
-    setVal(ip + '.lora', inp.value);  // apply free text immediately
-    const dd = inp.nextElementSibling;
-    if (!dd) return;
-    const q = (inp.value || '').toLowerCase();
-    const all = ltSuggestions();
-    const opts = q ? all.filter(function (m) { return m.toLowerCase().indexOf(q) !== -1; }) : all;
-    if (!all.length) {
-        dd.innerHTML = '<div class="lt-dd-empty">No suggestions — type the LoRA name manually</div>';
-        dd.style.display = 'block';
-        return;
-    }
-    if (!opts.length) {
-        dd.innerHTML = '<div class="lt-dd-empty">Kein Treffer — Eingabe wird als Freitext gespeichert</div>';
-        dd.style.display = 'block';
-        return;
-    }
-    let h = '';
-    for (let i = 0; i < opts.length && i < 80; i++) {
-        h += '<div class="lt-opt" data-v="' + esc(opts[i]) + '" '
-           + 'onmousedown="ltPick(this, \'' + ip + '\')">' + esc(opts[i]) + '</div>';
-    }
-    dd.innerHTML = h;
-    dd.style.display = 'block';
-}
-
-// Mouse selection (onmousedown fires before onblur, so no race).
-function ltPick(el, ip) {
-    const v = el.getAttribute('data-v');
-    const dd = el.parentElement;
-    const inp = dd.previousElementSibling;
-    inp.value = v;
-    ltTouch(ip, 'lora', v);
-    setVal(ip + '.lora', v);
-    dd.style.display = 'none';
-}
-
-// Tastatur: Pfeil hoch/runter markiert, Enter uebernimmt, Esc schliesst.
-function ltKey(ev, inp, ip) {
-    const dd = inp.nextElementSibling;
-    if (!dd || dd.style.display === 'none') return;
-    const opts = dd.querySelectorAll('.lt-opt');
-    if (!opts.length) return;
-    let idx = -1;
-    for (let i = 0; i < opts.length; i++) { if (opts[i].classList.contains('active')) { idx = i; break; } }
-    if (ev.key === 'ArrowDown') { ev.preventDefault(); idx = Math.min(idx + 1, opts.length - 1); }
-    else if (ev.key === 'ArrowUp') { ev.preventDefault(); idx = Math.max(idx - 1, 0); }
-    else if (ev.key === 'Enter') {
-        if (idx >= 0) { ev.preventDefault(); ltPick(opts[idx], ip); }
-        return;
-    } else if (ev.key === 'Escape') { dd.style.display = 'none'; return; }
-    else { return; }
-    for (let i = 0; i < opts.length; i++) opts[i].classList.toggle('active', i === idx);
-    opts[idx].scrollIntoView({ block: 'nearest' });
-}
-
-function ltBlur(inp) {
-    // Verzoegert schliessen, damit ein Klick auf eine Option noch ankommt.
-    setTimeout(function () { const dd = inp.nextElementSibling; if (dd) dd.style.display = 'none'; }, 150);
 }
 
 function renderSection(key) {

@@ -1,23 +1,33 @@
 """Per-world LoRA library sync — the library is the single source for every
 LoRA selection (game admin + player UI).
 
-The library lives in ``image_generation.lora_triggers``; entries are
-``{lora, word, endpoint, source, missing}``:
+The library lives in ``image_generation.lora_triggers``; ONE entry per unique
+LoRA name (user decision 2026-07-16, plan-lora-library.md):
+``{lora, word, source, backends, missing_on}``:
 
 - ``source``: "discovered" (added by this sync) or "manual" (user-created;
-  missing field counts as manual for backward compatibility).
-- ``missing``: True when the entry's LoRA no longer exists on its backend.
+  a user-touched discovered entry — non-empty trigger word or edited in the
+  library editor — counts as manual).
+- ``backends``: backend names associated with this LoRA. ``[]`` on a manual
+  entry means "all backends" (offered everywhere, never reconciled — the
+  civitai/together case, nothing to verify against).
+- ``missing_on``: subset of ``backends`` whose listing no longer reports the
+  LoRA. Only ever non-empty on manual/touched entries — untouched discovered
+  associations are removed instead. Missing entries stay offered in the
+  dialogs, marked "(missing)" (the flag can be stale; a wrong pick fails
+  visibly in the render).
 
-Reconciliation rules (user decision 2026-07-06):
-- Names reported by a backend but absent from the library are added with
-  ``source="discovered"``.
-- Entries whose LoRA vanished from their backend: manual entries (and
-  user-touched discovered ones — non-empty trigger word) are kept and
-  flagged ``missing``; untouched discovered entries are removed.
-- Entries with an empty endpoint ("all backends") or an endpoint without a
-  LoRA listing (civitai/together) are never touched — unverifiable.
-- A scan returning no names (backend down/unreachable/empty) leaves that
-  backend's entries untouched instead of mass-flagging them missing.
+Reconciliation rules per scanned backend B:
+
+- Name reported by B, no entry -> new discovered entry with ``backends=[B]``.
+- Name reported by B, entry exists (not "all backends") -> ensure B is in
+  ``backends``, clear B from ``missing_on``.
+- Entry lists B but B no longer reports the name: untouched discovered ->
+  drop B (entry removed once ``backends`` empties); manual/touched -> keep B
+  and flag it in ``missing_on``.
+- A scan returning no names (backend down/unreachable/empty are
+  indistinguishable) leaves that backend's associations untouched instead of
+  mass-flagging them missing.
 """
 import threading
 from typing import Any, Dict, List
@@ -30,12 +40,21 @@ logger = get_logger("lora_library")
 _sync_lock = threading.Lock()
 
 
+def _is_touched(entry: Dict[str, Any]) -> bool:
+    """Manual entries and user-touched discovered ones survive a vanished
+    backend listing (flagged missing) instead of being dropped."""
+    if (entry.get("source") or "manual").strip() != "discovered":
+        return True
+    return bool((entry.get("word") or "").strip())
+
+
 def sync_lora_library() -> Dict[str, Any]:
     """Reconciles the LoRA library against all discoverable image backends.
 
     Returns ``{"changed", "added", "removed", "missing", "scanned"}`` —
-    ``missing`` is the number of entries currently flagged missing on the
-    scanned backends, ``scanned`` the backend names that delivered a list.
+    ``added``/``removed`` count library entries, ``missing`` the (entry,
+    backend) associations currently flagged missing on the scanned backends,
+    ``scanned`` the backend names that delivered a list.
     """
     result: Dict[str, Any] = {"changed": False, "added": 0, "removed": 0,
                               "missing": 0, "scanned": []}
@@ -62,6 +81,7 @@ def sync_lora_library() -> Dict[str, Any]:
             if not getattr(b, "lora_url", ""):
                 continue
             try:
+                # fetch_loras applies the backend's lora_filter itself.
                 names = [str(n).strip() for n in (b.fetch_loras() or [])
                          if n and str(n).strip()]
             except Exception as e:
@@ -74,43 +94,69 @@ def sync_lora_library() -> Dict[str, Any]:
                 continue
             result["scanned"].append(b.name)
             nameset = set(names)
-            known = {(e.get("lora") or "").strip()
-                     for e in triggers
-                     if isinstance(e, dict) and (e.get("endpoint") or "") == b.name}
 
-            # New discoveries
+            by_name: Dict[str, Dict[str, Any]] = {}
+            for e in triggers:
+                if isinstance(e, dict):
+                    n = (e.get("lora") or "").strip()
+                    if n and n not in by_name:
+                        by_name[n] = e
+
+            # Reported names: new discoveries + confirmed associations.
             for n in names:
-                if n not in known:
-                    triggers.append({"lora": n, "word": "", "endpoint": b.name,
-                                     "source": "discovered", "missing": False})
+                e = by_name.get(n)
+                if e is None:
+                    e = {"lora": n, "word": "", "source": "discovered",
+                         "backends": [b.name], "missing_on": []}
+                    triggers.append(e)
+                    by_name[n] = e
                     result["added"] += 1
                     changed = True
+                    continue
+                backends = e.setdefault("backends", [])
+                if not backends:
+                    continue  # "all backends" entry — never reconciled
+                if b.name not in backends:
+                    backends.append(b.name)
+                    changed = True
+                missing_on = e.get("missing_on") or []
+                if b.name in missing_on:
+                    e["missing_on"] = [x for x in missing_on if x != b.name]
+                    changed = True
 
-            # Reconcile existing entries of this backend
+            # Associations of B whose LoRA vanished from the listing.
             kept: List[Any] = []
             for e in triggers:
-                if not isinstance(e, dict) or (e.get("endpoint") or "") != b.name:
+                if not isinstance(e, dict):
                     kept.append(e)
                     continue
+                backends = e.get("backends") or []
                 lname = (e.get("lora") or "").strip()
-                if lname in nameset:
-                    if e.get("missing"):
-                        e["missing"] = False
+                if b.name not in backends or lname in nameset:
+                    kept.append(e)
+                    continue
+                if _is_touched(e):
+                    missing_on = e.setdefault("missing_on", [])
+                    if b.name not in missing_on:
+                        missing_on.append(b.name)
                         changed = True
                     kept.append(e)
                     continue
-                source = (e.get("source") or "manual").strip()
-                touched = bool((e.get("word") or "").strip())
-                if source == "discovered" and not touched:
-                    result["removed"] += 1
-                    changed = True
-                    continue  # vanished from the backend — drop silently
-                if not e.get("missing"):
-                    e["missing"] = True
-                    changed = True
-                result["missing"] += 1
-                kept.append(e)
+                remaining = [x for x in backends if x != b.name]
+                changed = True
+                if remaining:
+                    e["backends"] = remaining
+                    kept.append(e)
+                else:
+                    result["removed"] += 1  # last association gone — drop
             triggers = kept
+
+        # Missing count over the scanned backends (for the admin toast).
+        for e in triggers:
+            if isinstance(e, dict):
+                result["missing"] += sum(
+                    1 for x in (e.get("missing_on") or [])
+                    if x in result["scanned"])
 
         if changed:
             ig["lora_triggers"] = triggers

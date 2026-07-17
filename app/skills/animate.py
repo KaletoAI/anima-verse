@@ -30,13 +30,16 @@ def get_animate_services() -> List[Dict[str, Any]]:
     ``enabled`` reflects the globally-enabled + currently-available state.
     """
     try:
+        from app.core.config import get_lora_options
         svc = _image_service()
         return [
             {"id": b.name, "label": b.name,
              "enabled": bool(getattr(b, "instance_enabled", False) and b.available),
-             # LoRAs of the video alias (gateway discovery) — the animate
-             # dialog offers them as optional slots.
-             "loras": list(getattr(b, "available_loras", []) or [])}
+             # LoRAs of the video alias from the LoRA library ([{name,
+             # missing}], backend-scoped) — the animate dialog offers them
+             # as optional slots.
+             "loras": get_lora_options(
+                 b.name, lora_filter=getattr(b, "lora_filter", "") or "")}
             for b in svc.backends
             if getattr(b, "MEDIA_TYPE", "image") == "video"
         ]
