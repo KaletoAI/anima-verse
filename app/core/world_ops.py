@@ -288,25 +288,16 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["size"] = round(s, 3)
         except (TypeError, ValueError):
             pass
-    # Storey height in metres for stacking the room-layout levels (floor-plan
-    # preview + 3D client). Absent = default 3.
+    # Storey height in WORLD metres: stacks the room-layout levels AND
+    # derives the figure scale in rooms (level_height / 3) — the former
+    # figure_scale field is gone (client keeps it only as a legacy
+    # fallback for locations without level_height). Absent = default 3.
     lh = raw.get("level_height")
     if lh is not None and f"{lh}".strip() != "":
         try:
             v = float(lh)
             if 0.5 <= v <= 50:
                 out["level_height"] = round(v, 2)
-        except (TypeError, ValueError):
-            pass
-    # Figure scale inside this location's rooms (0..1, absent = the client
-    # default 1/3) — the client reads it, the preview scales its test
-    # figures with it.
-    fs = raw.get("figure_scale")
-    if fs is not None and f"{fs}".strip() != "":
-        try:
-            v = float(fs)
-            if 0 < v <= 1:
-                out["figure_scale"] = round(v, 3)
         except (TypeError, ValueError):
             pass
     # Building outline (AV3D-12): a drawn polygon replacing the rectangle —

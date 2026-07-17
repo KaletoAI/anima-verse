@@ -365,12 +365,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
           mixer.clipAction(anim.clip).play()
           mixer.update(0)
           mixersRef.current.push(mixer)
-          // Contract figure scale in rooms: 1/3 of the ~1.7 m map figure —
-          // per location overridable via map3d.figure_scale.
+          // Contract figure scale in rooms: derived from the storey height
+          // (level_height / 3, real storey ≈ 3 m) — one value, always
+          // consistent with the metre scale. Default 3 → 1/3.
           pivot.updateMatrixWorld(true)
           const fb = new THREE.Box3().setFromObject(pivot)
           const fs = fb.getSize(new THREE.Vector3())
-          const figScale = map3dRef.current?.figure_scale || 1 / 3
+          const figScale = (map3dRef.current?.level_height || 3) / 3
           const k = (1.7 * figScale) / (fs.y || 1)
           pivot.scale.setScalar(k)
           pivot.updateMatrixWorld(true)

@@ -395,18 +395,18 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             }}
           />
         </Field>
-        <Field label={t('Figure scale in rooms')} hint={t('Scale of the figures inside this location’s rooms (0..1). Empty = client default 1/3.')}>
+        <Field label={t('Level height (m)')} hint={t('Storey height in WORLD metres — stacks the floor-plan levels and sets the figure scale in rooms (level_height / 3). Realistic interiors are ≈ 1–1.5; the default 3 reads as a triple-height storey.')}>
           <input
             className="ga-input"
             type="number"
-            min={0.05}
-            max={1}
-            step={0.01}
-            value={draft.map3d?.figure_scale ?? ''}
-            placeholder="0.33"
+            min={0.5}
+            max={50}
+            step={0.1}
+            value={draft.map3d?.level_height ?? ''}
+            placeholder="3"
             onChange={(e) => {
               const n = parseFloat(e.target.value)
-              updMap3d('figure_scale', Number.isFinite(n) && n > 0 && n <= 1 ? n : undefined)
+              updMap3d('level_height', Number.isFinite(n) && n > 0 ? n : undefined)
             }}
           />
         </Field>
@@ -448,21 +448,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
               onChange={(e) => updMap3d('color', e.target.value.trim() ? e.target.value.trim() : undefined)}
             />
           </div>
-        </Field>
-        <Field label={t('Level height (m)')} hint={t('Storey height in metres — stacks the floor-plan levels (preview + 3D client).')}>
-          <input
-            className="ga-input"
-            type="number"
-            min={0.5}
-            max={50}
-            step={0.1}
-            value={draft.map3d?.level_height ?? ''}
-            placeholder="3"
-            onChange={(e) => {
-              const n = parseFloat(e.target.value)
-              updMap3d('level_height', Number.isFinite(n) && n > 0 ? n : undefined)
-            }}
-          />
         </Field>
       </div>
 
