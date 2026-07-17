@@ -328,10 +328,10 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const tab3d = (
     <div className="ga-form">
       <div className="ga-form-section-label">{t('Map metadata (3D clients)')}</div>
-      {/* 4-column grid: the building prompt spans both rows in the last
-          column (row 1: terrain/footprint/floors, row 2: style/color/level
-          height). */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1.4fr', gap: 12, alignItems: 'start' }}>
+      {/* 5-column grid: row 1 terrain/footprint/floors/figure-scale, row 2
+          style/color/level-height; the building prompt spans both rows in
+          column 5. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1.4fr', gap: 12, alignItems: 'start' }}>
         <Field label={t('Terrain')} hint={t('Ground type of this map cell. Free text; without it, clients guess from the name.')}>
           <input
             className="ga-input"
@@ -392,6 +392,21 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             }}
           />
         </Field>
+        <Field label={t('Figure scale in rooms')} hint={t('Scale of the figures inside this location’s rooms (0..1). Empty = client default 1/3.')}>
+          <input
+            className="ga-input"
+            type="number"
+            min={0.05}
+            max={1}
+            step={0.01}
+            value={draft.map3d?.figure_scale ?? ''}
+            placeholder="0.33"
+            onChange={(e) => {
+              const n = parseFloat(e.target.value)
+              updMap3d('figure_scale', Number.isFinite(n) && n > 0 && n <= 1 ? n : undefined)
+            }}
+          />
+        </Field>
         <div style={{ gridRow: 'span 2' }}>
           <Field label={t('Building prompt')} help="image_prompt">
             <textarea
@@ -443,21 +458,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             onChange={(e) => {
               const n = parseFloat(e.target.value)
               updMap3d('level_height', Number.isFinite(n) && n > 0 ? n : undefined)
-            }}
-          />
-        </Field>
-        <Field label={t('Figure scale in rooms')} hint={t('Scale of the figures inside this location’s rooms (0..1). Empty = client default 1/3.')}>
-          <input
-            className="ga-input"
-            type="number"
-            min={0.05}
-            max={1}
-            step={0.01}
-            value={draft.map3d?.figure_scale ?? ''}
-            placeholder="0.33"
-            onChange={(e) => {
-              const n = parseFloat(e.target.value)
-              updMap3d('figure_scale', Number.isFinite(n) && n > 0 && n <= 1 ? n : undefined)
             }}
           />
         </Field>

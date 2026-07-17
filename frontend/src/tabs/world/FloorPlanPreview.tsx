@@ -510,14 +510,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
     ;(async () => {
       try {
         const THREE = await import('three')
-        const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js')
         const mount = mountRef.current
         if (!mount || disposed) return
 
         const width = mount.clientWidth || 320
         const scene = new THREE.Scene()
         scene.background = null
-        const camera = new THREE.PerspectiveCamera(45, width / height, 0.05, 500)
+        // Contract camera (Kamera & Maussteuerung): FOV 45, near 0.5, far 800.
+        const camera = new THREE.PerspectiveCamera(45, width / height, 0.5, 800)
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
         renderer.setSize(width, height)
@@ -542,54 +542,109 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
         key.position.set(6, 10, 6)
         scene.add(key)
 
-        const controls = new OrbitControls(camera, renderer.domElement)
-        controls.enableDamping = true
-        // Requested interaction: LEFT drag pans the view, SHIFT+LEFT rotates
-        // — around the point under the mouse (target snaps there first).
-        // Wheel zooms toward the cursor and may go in close.
-        controls.mouseButtons = {
-          LEFT: THREE.MOUSE.PAN,
-          MIDDLE: THREE.MOUSE.DOLLY,
-          RIGHT: THREE.MOUSE.ROTATE,
+        // ── Camera rig per the client contract (schnittstellen-3d.md →
+        // "Kamera & Maussteuerung") — the preview feels identical to the
+        // game client. Orbit around a ground target: dist 2.5..150, pitch
+        // coupled to zoom (18°..62° base + free offset −35..35, clamped
+        // 8..85), dist/yaw exponentially smoothed (~8/s).
+        const cam = {
+          target: new THREE.Vector3(0, 0, 0),
+          dist: 14, distGoal: 14,
+          yaw: 0.6, yawGoal: 0.6,
+          pitchOffset: 0,
         }
-        ;(controls as unknown as { zoomToCursor?: boolean }).zoomToCursor = true
-        controls.minDistance = 0.2
-        controls.maxDistance = 80
-        const onShift = (e: KeyboardEvent) => {
-          if (e.key !== 'Shift') return
-          controls.mouseButtons.LEFT = e.type === 'keydown' ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN
+        const applyCamera = () => {
+          const tNorm = Math.sqrt(Math.max(0, (cam.dist - 2.5) / (150 - 2.5)))
+          const basePitch = 18 + (62 - 18) * tNorm
+          const pitch = ((Math.min(85, Math.max(8, basePitch + cam.pitchOffset))) * Math.PI) / 180
+          camera.position.set(
+            cam.target.x + Math.sin(cam.yaw) * Math.cos(pitch) * cam.dist,
+            cam.target.y + Math.sin(pitch) * cam.dist,
+            cam.target.z + Math.cos(cam.yaw) * Math.cos(pitch) * cam.dist,
+          )
+          camera.lookAt(cam.target)
         }
-        window.addEventListener('keydown', onShift)
-        window.addEventListener('keyup', onShift)
-        disposers.push(() => {
-          window.removeEventListener('keydown', onShift)
-          window.removeEventListener('keyup', onShift)
-        })
-        const onRotateAnchor = (e: PointerEvent) => {
-          if (!e.shiftKey) return
+        const groundPoint = (clientX: number, clientY: number) => {
           const rect = renderer.domElement.getBoundingClientRect()
           const ndc = new THREE.Vector2(
-            ((e.clientX - rect.left) / rect.width) * 2 - 1,
-            -((e.clientY - rect.top) / rect.height) * 2 + 1,
+            ((clientX - rect.left) / rect.width) * 2 - 1,
+            -((clientY - rect.top) / rect.height) * 2 + 1,
           )
           const ray = new THREE.Raycaster()
           ray.setFromCamera(ndc, camera)
-          const hits = ray.intersectObjects(scene.children, true)
-          let pt = hits.length ? hits[0].point.clone() : null
-          if (!pt) {
-            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
-            const p = new THREE.Vector3()
-            if (ray.ray.intersectPlane(plane, p)) pt = p
+          const p = new THREE.Vector3()
+          return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), p)
+            ? p.clone() : null
+        }
+        const dragRefLocal: {
+          mode: '' | 'pan' | 'rotate'
+          startGround: InstanceType<typeof THREE.Vector3> | null
+          lastX: number
+          lastY: number
+        } = { mode: '', startGround: null, lastX: 0, lastY: 0 }
+        renderer.domElement.style.touchAction = 'none'
+        const onPointerDown = (e: PointerEvent) => {
+          renderer.domElement.setPointerCapture(e.pointerId)
+          if (e.button === 0 && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+            // Left drag = ground-anchored pan: the pressed ground point
+            // stays under the cursor.
+            dragRefLocal.mode = 'pan'
+            dragRefLocal.startGround = groundPoint(e.clientX, e.clientY)
+          } else {
+            // Middle/right or modifier+left = rotate/tilt.
+            dragRefLocal.mode = 'rotate'
           }
-          if (pt) {
-            controls.target.copy(pt)
-            controls.update()
+          dragRefLocal.lastX = e.clientX
+          dragRefLocal.lastY = e.clientY
+        }
+        const onPointerMove = (e: PointerEvent) => {
+          if (!dragRefLocal.mode) return
+          if (dragRefLocal.mode === 'pan') {
+            const g = groundPoint(e.clientX, e.clientY)
+            if (g && dragRefLocal.startGround) {
+              cam.target.add(dragRefLocal.startGround.clone().sub(g))
+              applyCamera()
+            }
+          } else {
+            const dx = e.clientX - dragRefLocal.lastX
+            const dy = e.clientY - dragRefLocal.lastY
+            cam.yawGoal -= dx * 0.005
+            cam.pitchOffset = Math.min(35, Math.max(-35, cam.pitchOffset + dy * 0.25))
+          }
+          dragRefLocal.lastX = e.clientX
+          dragRefLocal.lastY = e.clientY
+        }
+        const onPointerUp = (e: PointerEvent) => {
+          dragRefLocal.mode = ''
+          dragRefLocal.startGround = null
+          try { renderer.domElement.releasePointerCapture(e.pointerId) } catch { /* released */ }
+        }
+        const onWheel = (e: WheelEvent) => {
+          e.preventDefault()
+          const cursor = groundPoint(e.clientX, e.clientY)
+          const old = cam.distGoal
+          cam.distGoal = Math.min(150, Math.max(2.5, old * Math.exp(e.deltaY * 0.0012)))
+          // Zooming IN pulls the target toward the ground point under the
+          // cursor (contract: lerp by 1 − distNew/distOld).
+          if (cursor && cam.distGoal < old) {
+            cam.target.lerp(cursor, 1 - cam.distGoal / old)
           }
         }
-        renderer.domElement.addEventListener('pointerdown', onRotateAnchor)
-        disposers.push(() =>
-          renderer.domElement.removeEventListener('pointerdown', onRotateAnchor))
-        disposers.push(() => controls.dispose())
+        const onContext = (e: Event) => e.preventDefault()
+        renderer.domElement.addEventListener('pointerdown', onPointerDown)
+        renderer.domElement.addEventListener('pointermove', onPointerMove)
+        renderer.domElement.addEventListener('pointerup', onPointerUp)
+        renderer.domElement.addEventListener('pointercancel', onPointerUp)
+        renderer.domElement.addEventListener('wheel', onWheel, { passive: false })
+        renderer.domElement.addEventListener('contextmenu', onContext)
+        disposers.push(() => {
+          renderer.domElement.removeEventListener('pointerdown', onPointerDown)
+          renderer.domElement.removeEventListener('pointermove', onPointerMove)
+          renderer.domElement.removeEventListener('pointerup', onPointerUp)
+          renderer.domElement.removeEventListener('pointercancel', onPointerUp)
+          renderer.domElement.removeEventListener('wheel', onWheel)
+          renderer.domElement.removeEventListener('contextmenu', onContext)
+        })
 
         // Ground plate = the contract's 8×8 m reference square, plus outline.
         const groundGeo = new THREE.PlaneGeometry(PLATE_M, PLATE_M)
@@ -628,12 +683,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
         disposers.push(() => { handleRef.current = null })
         rebuild(handleRef.current, roomsRef.current)
 
-        // Frame plate + a couple of storeys from a raised angle.
-        const extent = Math.max(PLATE_M * 1.2, lh * 4)
-        const dist = (extent / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.5
-        camera.position.set(dist * 0.7, dist * 0.75, dist * 0.85)
-        controls.target.set(0, lh, 0)
-        controls.update()
+        // Initial framing: distance so the 8 m plate fits comfortably.
+        cam.dist = cam.distGoal = Math.max(
+          6, (PLATE_M * 1.2 / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.35)
+        applyCamera()
 
         setLoading(false)
 
@@ -642,7 +695,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
           raf = requestAnimationFrame(animate)
           const delta = clockRef.current?.getDelta() || 0
           for (const mixer of mixersRef.current) mixer.update(delta)
-          controls.update()
+          // Contract smoothing: dist/yaw approach their goals with
+          // 1 − exp(−8·dt) per frame.
+          const k = 1 - Math.exp(-8 * delta)
+          cam.dist += (cam.distGoal - cam.dist) * k
+          cam.yaw += (cam.yawGoal - cam.yaw) * k
+          applyCamera()
           renderer.render(scene, camera)
         }
         animate()
