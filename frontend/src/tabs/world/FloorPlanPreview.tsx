@@ -53,7 +53,7 @@ interface FloorPlanPreviewProps {
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, height = 360 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -547,6 +547,51 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
 
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.enableDamping = true
+        // Requested interaction: LEFT drag pans the view, SHIFT+LEFT rotates
+        // — around the point under the mouse (target snaps there first).
+        // Wheel zooms toward the cursor and may go in close.
+        controls.mouseButtons = {
+          LEFT: THREE.MOUSE.PAN,
+          MIDDLE: THREE.MOUSE.DOLLY,
+          RIGHT: THREE.MOUSE.ROTATE,
+        }
+        ;(controls as unknown as { zoomToCursor?: boolean }).zoomToCursor = true
+        controls.minDistance = 0.2
+        controls.maxDistance = 80
+        const onShift = (e: KeyboardEvent) => {
+          if (e.key !== 'Shift') return
+          controls.mouseButtons.LEFT = e.type === 'keydown' ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN
+        }
+        window.addEventListener('keydown', onShift)
+        window.addEventListener('keyup', onShift)
+        disposers.push(() => {
+          window.removeEventListener('keydown', onShift)
+          window.removeEventListener('keyup', onShift)
+        })
+        const onRotateAnchor = (e: PointerEvent) => {
+          if (!e.shiftKey) return
+          const rect = renderer.domElement.getBoundingClientRect()
+          const ndc = new THREE.Vector2(
+            ((e.clientX - rect.left) / rect.width) * 2 - 1,
+            -((e.clientY - rect.top) / rect.height) * 2 + 1,
+          )
+          const ray = new THREE.Raycaster()
+          ray.setFromCamera(ndc, camera)
+          const hits = ray.intersectObjects(scene.children, true)
+          let pt = hits.length ? hits[0].point.clone() : null
+          if (!pt) {
+            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+            const p = new THREE.Vector3()
+            if (ray.ray.intersectPlane(plane, p)) pt = p
+          }
+          if (pt) {
+            controls.target.copy(pt)
+            controls.update()
+          }
+        }
+        renderer.domElement.addEventListener('pointerdown', onRotateAnchor)
+        disposers.push(() =>
+          renderer.domElement.removeEventListener('pointerdown', onRotateAnchor))
         disposers.push(() => controls.dispose())
 
         // Ground plate = the contract's 8×8 m reference square, plus outline.

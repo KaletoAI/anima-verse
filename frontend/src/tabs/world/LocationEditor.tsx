@@ -492,7 +492,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const floorSelRoom = (draft.rooms || []).find((r) => r.id === floorRoomSel)
   const tabFloor = (
     <div className="ga-form">
-      <div className="ga-loc-twocol">
+      <div className="ga-loc-twocol ga-loc-twocol--4060">
         <RoomLayoutEditor
           rooms={draft.rooms || []}
           onChange={(rooms) => upd('rooms', rooms)}

@@ -2173,6 +2173,12 @@ html, * {
   align-items: start;
 }
 
+/* Floor-plan tab: editor 40% / 3D preview 60% (the media query below still
+   collapses both variants to one column on narrow screens). */
+.ga-loc-twocol--4060 {
+  grid-template-columns: 2fr 3fr;
+}
+
 @media (max-width: 900px) {
   .ga-loc-twocol { grid-template-columns: 1fr; }
 }
