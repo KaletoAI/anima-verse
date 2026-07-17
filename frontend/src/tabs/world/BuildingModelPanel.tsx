@@ -139,8 +139,16 @@ export function BuildingModelPanel({
       const src = generateSource
       onGenerateSourceConsumed()
       if (!src) return
-      void apiPost(`/world/locations/${enc}/model3d/generate`, { source_image: src, backend })
-        .then(() => { toast(t('Generating the 3D model…')); setPreview(''); startPoll() })
+      void apiPost<{ status?: string }>(`/world/locations/${enc}/model3d/generate`, { source_image: src, backend })
+        .then((d) => {
+          // already_running = double-click guard for the SAME image; jobs
+          // from different images queue up on the backend channel.
+          toast(d?.status === 'already_running'
+            ? t('This image is already being meshed — the model appears when it finishes.')
+            : t('Generating the 3D model…'))
+          setPreview('')
+          startPoll()
+        })
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
     },
     [generateSource, onGenerateSourceConsumed, enc, startPoll, t, toast],

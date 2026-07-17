@@ -43,7 +43,7 @@ _STEM = "building"
 _SEL_FILE = "selection.json"
 
 _lock = threading.Lock()
-_generating: set = set()  # "<owner id>:<stem>" keys with a running generation
+_generating: set = set()  # "<owner>:<stem>:<source image>" running job keys
 
 
 def _stem(room_id: str = "") -> str:
@@ -193,14 +193,22 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
     return out
 
 
-def _gen_key(owner_id: str, room_id: str = "") -> str:
-    return f"{owner_id}:{_stem(room_id)}"
+def _gen_key(owner_id: str, room_id: str = "", source_image: str = "") -> str:
+    """Job key: guards ONE generation per (target, source image) — several
+    models from DIFFERENT images may run/queue concurrently (the backend
+    GPU channel serializes them anyway); only a double-click of the same
+    job is rejected."""
+    return f"{owner_id}:{_stem(room_id)}:{source_image}"
 
 
 def is_pending(location_id: str, room_id: str = "") -> bool:
+    """True while ANY generation job for this target is running/queued."""
     owner = _owner_id(location_id)
+    if not owner:
+        return False
+    prefix = f"{owner}:{_stem(room_id)}:"
     with _lock:
-        return bool(owner) and _gen_key(owner, room_id) in _generating
+        return any(k.startswith(prefix) for k in _generating)
 
 
 def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
@@ -443,20 +451,22 @@ def _run(location_id: str, source_image: str, backend_glob: str,
         logger.error("Location model generation for %s failed: %s", owner, e)
     finally:
         with _lock:
-            _generating.discard(_gen_key(owner, room_id))
+            _generating.discard(_gen_key(owner, room_id, source_image))
 
 
 def trigger_generation(location_id: str, *, source_image: str,
                        backend_glob: str = "", room_id: str = "") -> bool:
-    """Start the building/room-model generation in the background. False when
-    one is already running for this location (owner) + stem."""
+    """Start a building/room-model generation in the background. Generations
+    from different source images run concurrently as far as the backend GPU
+    channel allows (it serializes per backend); False only when THIS image
+    is already being meshed for this target (double-click guard)."""
     owner = _owner_id(location_id)
     if not owner:
         return False
     with _lock:
-        if _gen_key(owner, room_id) in _generating:
+        if _gen_key(owner, room_id, source_image) in _generating:
             return False
-        _generating.add(_gen_key(owner, room_id))
+        _generating.add(_gen_key(owner, room_id, source_image))
     threading.Thread(target=_run,
                      args=[location_id, source_image, backend_glob, room_id],
                      daemon=True).start()
