@@ -37,6 +37,14 @@ export interface Map3dMeta {
   rotation?: number;
   /** Grundflächen-Anteil an der Kachel (0..1, Default 0.92) */
   size?: number;
+  /** AV3D-12: gezeichneter Gebäude-Grundriss — Polygonpunkte als Fraktionen
+   *  des 8x8-Referenzquadrats, automatisch geschlossen. Der Client rendert
+   *  daraus pro genutzter Etage Boden und Wände (Tür im EG). */
+  outline?: [number, number][];
+  /** AV3D-12: Fahrstuhl-Position (Fraktion des Referenzquadrats) — wird
+   *  automatisch auf allen Etagen platziert; Figuren nutzen ihn beim
+   *  Etagenwechsel */
+  elevator?: [number, number];
 }
 
 export interface WorldLocation {

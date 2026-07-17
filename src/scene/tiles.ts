@@ -73,6 +73,10 @@ export interface Tile {
   roomGroups: Map<string, THREE.Group>;
   /** Raum-Rechtecke in Welt-Koordinaten (Fokus-Erkennung) */
   roomRects: Map<string, { x: number; z: number; w: number; d: number }>;
+  /** Etage je Raum (Schlüssel: ID und Name) */
+  roomLevels: Map<string, number>;
+  /** Fahrstuhl-Haltepunkte je Etage (Welt-Koordinaten), AV3D-12 */
+  elevatorStops?: Map<number, THREE.Vector3>;
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
   highlightRing: THREE.Mesh;
@@ -348,6 +352,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
   // unabhängig vom Gebäudestil, damit Editor/Admin-Vorschau/Client dieselbe
   // Geometrie sehen (Vertrag: schnittstellen-3d.md, Platzierungs-Semantik).
   const LW = 8, LD = 8;
+  const usedLevels = new Set<number>();
   loc.rooms.forEach((room, i) => {
     const lay = room.layout;
     if (!lay) return;
@@ -356,6 +361,9 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     const x = -LW / 2 + (lay.x + lay.w / 2) * LW;
     const z = -LD / 2 + (lay.y + lay.d / 2) * LD;
     const floorY = (lay.level ?? 0) * STOREY;
+    usedLevels.add(lay.level ?? 0);
+    tile.roomLevels.set(room.id, lay.level ?? 0);
+    tile.roomLevels.set(room.name, lay.level ?? 0);
     // eigene Gruppe pro Raum — für den Fokus-Modus komplett ausblendbar
     const rg = new THREE.Group();
     g.add(rg);
@@ -413,6 +421,84 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     }
   });
 
+  // AV3D-12: gezeichneter GEBÄUDE-Grundriss (map3d.outline) — pro genutzter
+  // Etage Boden + Wände entlang der Kontur; Türöffnung im Erdgeschoss am
+  // südlichsten Wandstück (Räume selbst bleiben Rechtecke)
+  const outline = (loc.map3d?.outline ?? []).filter((p) => Array.isArray(p) && p.length === 2);
+  if (outline.length >= 3 && usedLevels.size) {
+    const pts = outline.map(([fx, fz]) => new THREE.Vector2(-LW / 2 + fx * LW, -LD / 2 + fz * LD));
+    const floorShape = new THREE.Shape(pts);
+    const WALL_H = 0.8, DOOR_HALF = 0.4;
+    // Tür im EG: Wandstück, dessen Mitte am weitesten südlich (+z) liegt
+    let doorIdx = 0, doorZ = -Infinity;
+    for (let k = 0; k < pts.length; k++) {
+      const mid = (pts[k].y + pts[(k + 1) % pts.length].y) / 2;
+      if (mid > doorZ) { doorZ = mid; doorIdx = k; }
+    }
+    const wallSeg = (a: THREE.Vector2, b: THREE.Vector2, floorY: number, mat: THREE.Material) => {
+      const len = a.distanceTo(b);
+      if (len < 0.06) return;
+      const seg = box(len, WALL_H, 0.07, mat);
+      seg.position.set((a.x + b.x) / 2, floorY + 0.24 + WALL_H / 2, (a.y + b.y) / 2);
+      seg.rotation.y = -Math.atan2(b.y - a.y, b.x - a.x);
+      seg.receiveShadow = false;
+      g.add(seg);
+    };
+    for (const level of usedLevels) {
+      const floorY = level * STOREY;
+      // Obergeschosse halbtransparent — sonst verdecken sie in der
+      // Draufsicht das Erdgeschoss vollständig
+      const upper = level > 0;
+      const wallMat = std({ color: 0xcfc4b2, opacity: upper ? 0.45 : 1 });
+      const slabMat = std({ color: 0xd8d0c2, opacity: upper ? 0.4 : 1 });
+      const slab = new THREE.Mesh(
+        new THREE.ExtrudeGeometry(floorShape, { depth: 0.14, bevelEnabled: false }),
+        slabMat
+      );
+      slab.rotation.x = Math.PI / 2;                 // Shape-XY -> Boden-XZ
+      slab.position.y = floorY + 0.24;               // unter den Raum-Platten
+      slab.castShadow = level > 0;
+      g.add(slab);
+      for (let k = 0; k < pts.length; k++) {
+        const a = pts[k], b = pts[(k + 1) % pts.length];
+        if (level === 0 && k === doorIdx) {
+          const len = a.distanceTo(b);
+          const dir = b.clone().sub(a).divideScalar(len);
+          wallSeg(a, a.clone().addScaledVector(dir, Math.max(0, len / 2 - DOOR_HALF)), floorY, wallMat);
+          wallSeg(a.clone().addScaledVector(dir, Math.min(len, len / 2 + DOOR_HALF)), b, floorY, wallMat);
+        } else {
+          wallSeg(a, b, floorY, wallMat);
+        }
+      }
+    }
+  }
+
+  // AV3D-12: Fahrstuhl (map3d.elevator) — auf allen Etagen; Haltepunkte
+  // fürs Routing beim Etagenwechsel
+  const elev = loc.map3d?.elevator;
+  if (elev?.length === 2 && usedLevels.size) {
+    const exl = -LW / 2 + elev[0] * LW;
+    const ezl = -LD / 2 + elev[1] * LD;
+    const stopLevels = new Set([0, ...usedLevels]);
+    const maxLevel = Math.max(...stopLevels);
+    const topY = maxLevel * STOREY + 1.4;
+    const postMat = std({ color: 0x8a93a0 });
+    for (const [px, pz] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]] as const) {
+      const post = box(0.06, topY, 0.06, postMat);
+      post.position.set(exl + px, topY / 2, ezl + pz);
+      post.receiveShadow = false;
+      g.add(post);
+    }
+    tile.elevatorStops = new Map();
+    for (const level of stopLevels) {
+      const floorY = level * STOREY;
+      const plat = box(0.75, 0.06, 0.75, std({ color: 0xaab4be }));
+      plat.position.set(exl, floorY + 0.42, ezl);
+      g.add(plat);
+      tile.elevatorStops.set(level, tile.center.clone().add(new THREE.Vector3(exl, floorY + 0.45, ezl)));
+    }
+  }
+
   tile.interior = g;
   tile.group.add(g);
 }
@@ -446,7 +532,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
-    roomGroups: new Map(), roomRects: new Map(),
+    roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 

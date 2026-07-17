@@ -84,6 +84,28 @@ GET /play/locations/{location_id}/model       → GLB-Bytes (ETag)
 - **404 bleibt normal:** Locations ohne Modell rendert der Client weiterhin
   prozedural (aus `map3d.style` / `terrain`).
 
+### Gebäude-Grundriss & Fahrstuhl (AV3D-12)
+
+Der Grundriss des **Gebäudes** (nicht der Räume — die bleiben Rechtecke)
+wird im Server-Editor **gezeichnet** (Linien/Punkte verbinden, beliebiges
+Polygon statt Rechteck). Der **Client rendert daraus die Wände**, für jede
+genutzte Etage.
+
+Zwei Felder an der Location (`map3d`), der Client liest beide bereits:
+
+- **`map3d.outline`**: `[[x, y], …]` — Polygonpunkte als Fraktionen des
+  8×8-Referenzquadrats (dieselbe Fläche wie die Raum-Layouts), automatisch
+  geschlossen. Client-Verhalten: pro genutzter Etage eine Bodenplatte in
+  Konturform + Wände entlang der Kontur; Türöffnung im Erdgeschoss am
+  südlichsten Wandstück; Obergeschosse halbtransparent, damit die
+  Draufsicht aufs Erdgeschoss frei bleibt.
+- **`map3d.elevator`**: `[x, y]` — Fahrstuhl-Position (Fraktion des
+  Referenzquadrats). **Im Editor auf EINER Etage platziert, gilt er
+  automatisch für alle.** Client-Verhalten: Schacht + Plattform auf jeder
+  Etage; beim Etagenwechsel laufen Figuren Raum-Ausgang → Fahrstuhl,
+  fahren vertikal zur Ziel-Etage und laufen dort weiter (im Erdgeschoss
+  dann durch die Tür hinaus). Treppen gibt es weiterhin nicht.
+
 ### Raum-Layout & Raum-Modelle (AV3D-2, erweitert 2026-07-16)
 
 Räume haben heute keine Position und keine Größe. Der Client legt sie als

@@ -307,8 +307,10 @@ export class NpcManager {
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
       }
-      // Höhe dem Ziel angleichen (Etagen-Räume, AV3D-2) — sanft, ohne Treppe
-      npc.root.position.y += (npc.target.y - npc.root.position.y) * Math.min(1, dt * 4);
+      // Höhe dem AKTUELLEN Wegpunkt angleichen — so entsteht am Fahrstuhl
+      // die vertikale Fahrt zwischen den Haltepunkten (AV3D-12)
+      const goalY = npc.waypoints[0]?.y ?? npc.target.y;
+      npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
       // Skalierung weich überblenden (Innenraum-Maßstab vs. Kartengröße)
       const s = npc.root.scale.x;
       if (Math.abs(s - npc.targetScale) > 1e-3) {

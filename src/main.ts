@@ -349,13 +349,23 @@ async function startApp(username: string) {
           pos = tile.center.clone().add(slotOffset(tile, i, chars.length));
         }
         // Exit-Routing: bei Betreten/Verlassen/Wechsel des dargestellten
-        // Raums über die Ausgänge laufen statt durch Wände
+        // Raums über die Ausgänge laufen statt durch Wände; bei
+        // Etagenwechseln zusätzlich über den Fahrstuhl (AV3D-12)
         const prevShown = shownRoom.get(c.name) ?? null;
         if (inRoom !== prevShown) {
-          const exits = [
-            prevShown ? tile.roomExits.get(prevShown) : undefined,   // alten Raum verlassen
-            inRoom ? tile.roomExits.get(inRoom) : undefined,         // neuen Raum betreten
-          ].filter((v): v is THREE.Vector3 => !!v).map((v) => v.clone());
+          const exits: THREE.Vector3[] = [];
+          const prevExit = prevShown ? tile.roomExits.get(prevShown) : undefined;
+          if (prevExit) exits.push(prevExit.clone());                // alten Raum verlassen
+          const levelOf = (r: string | null) => (r ? tile.roomLevels.get(r) ?? 0 : 0);
+          const lf = levelOf(prevShown), lt = levelOf(inRoom);
+          if (lf !== lt && tile.elevatorStops) {
+            const a = tile.elevatorStops.get(lf) ?? tile.elevatorStops.get(0);
+            const b = tile.elevatorStops.get(lt) ?? tile.elevatorStops.get(0);
+            if (a) exits.push(a.clone());                            // Fahrstuhl einsteigen
+            if (b) exits.push(b.clone());                            // Fahrt zur Ziel-Etage
+          }
+          const nextExit = inRoom ? tile.roomExits.get(inRoom) : undefined;
+          if (nextExit) exits.push(nextExit.clone());                // neuen Raum betreten
           if (exits.length) via = exits;
           shownRoom.set(c.name, inRoom);
         }

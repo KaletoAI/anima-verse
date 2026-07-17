@@ -273,3 +273,23 @@ Ursprüngliche Anforderung:
   aus der Modell-Geometrie) — bereits eingebaut.
 - **Fallback bleibt:** ohne Marker und ohne Modell stehen Figuren auf der
   Bodenplatte wie bisher.
+
+## AV3D-12: Gebäude-Grundriss zeichnen + Fahrstuhl — angefordert (2026-07-17)
+
+- **Motivation:** Der Grundriss im Editor ist bisher ein Viereck. Gebäude
+  sollen einen echten, selbst gezeichneten Grundriss bekommen; die Räume
+  darin bleiben Rechtecke. Wände rendert der Client automatisch pro Etage.
+- **Erwartung Server (Editor):**
+  - Grundriss **zeichnen** statt Rechteck: Punkte setzen / Linien
+    verbinden zu einem geschlossenen Polygon; Ablage als
+    `map3d.outline: [[x, y], ...]` (Fraktionen des 8×8-Referenzquadrats,
+    gleiche Fläche wie die Raum-Layouts).
+  - **Fahrstuhl platzieren** (ein Klick auf einer Etage):
+    `map3d.elevator: [x, y]` — gilt automatisch für alle Etagen.
+- **Client (bereits eingebaut, mit Testdaten verifiziert):** pro genutzter
+  Etage Bodenplatte in Konturform + Wände (Tür im EG am südlichsten
+  Wandstück; Obergeschosse halbtransparent); Fahrstuhl als Schacht mit
+  Plattform je Etage; Figuren nutzen ihn beim Etagenwechsel (Raum-Ausgang
+  → Fahrstuhl → vertikale Fahrt → weiter; im EG durch die Tür hinaus).
+- **Details/Vertrag:** `docs/schnittstellen-3d.md` → „Gebäude-Grundriss &
+  Fahrstuhl".
