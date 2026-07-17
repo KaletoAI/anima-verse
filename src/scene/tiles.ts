@@ -75,6 +75,8 @@ export interface Tile {
   roomRects: Map<string, { x: number; z: number; w: number; d: number }>;
   /** Etage je Raum (Schlüssel: ID und Name) */
   roomLevels: Map<string, number>;
+  /** Outdoor-Räume (immer sichtbar; Figuren stehen dort auch in der Übersicht) */
+  outdoorRooms: Set<string>;
   /** Fahrstuhl-Haltepunkte je Etage (Welt-Koordinaten), AV3D-12 */
   elevatorStops?: Map<number, THREE.Vector3>;
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
@@ -364,9 +366,19 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     usedLevels.add(lay.level ?? 0);
     tile.roomLevels.set(room.id, lay.level ?? 0);
     tile.roomLevels.set(room.name, lay.level ?? 0);
-    // eigene Gruppe pro Raum — für den Fokus-Modus komplett ausblendbar
+    // eigene Gruppe pro Raum — für den Fokus-Modus komplett ausblendbar.
+    // Outdoor-Räume (Terrasse, Park, ...) liegen außerhalb des Gebäudes:
+    // sie hängen direkt an der Kachel und sind damit IMMER sichtbar,
+    // nicht nur in der aufgedeckten Innenansicht.
+    const outdoor = (room.indoor ?? '').toLowerCase() === 'outdoor';
     const rg = new THREE.Group();
-    g.add(rg);
+    if (outdoor) {
+      tile.group.add(rg);
+      tile.outdoorRooms.add(room.id);
+      tile.outdoorRooms.add(room.name);
+    } else {
+      g.add(rg);
+    }
     tile.roomGroups.set(room.id, rg);
     tile.roomRects.set(room.id, { x: tile.center.x + x, z: tile.center.z + z, w: roomW, d: roomD });
     const plate = addRoomCommon(room, x, z, floorY, (i * 67) % 360, roomW, roomD, rg);
@@ -532,7 +544,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
-    roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(),
+    roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), outdoorRooms: new Set(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 

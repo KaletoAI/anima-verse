@@ -25,6 +25,9 @@ export interface Room {
   id: string;
   name: string;
   description?: string;
+  /** "indoor" | "outdoor" — Outdoor-Räume liegen außerhalb des
+   *  Gebäude-Grundrisses und sind immer sichtbar */
+  indoor?: string;
   layout?: RoomLayout;
 }
 

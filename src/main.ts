@@ -313,7 +313,9 @@ async function startApp(username: string) {
         let scale = 1;
         const room = roomOf.get(c.name);
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
-        const inRoom = tile.fade > 0.5 && roomCenter && room ? room : null;
+        // Outdoor-Räume gelten in jeder Zoomstufe — sie sind immer sichtbar
+        const inRoom = roomCenter && room && (tile.fade > 0.5 || tile.outdoorRooms.has(room))
+          ? room : null;
         if (inRoom && roomCenter) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);
