@@ -188,6 +188,7 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "source_image": meta.get("source_image", ""),
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
             "offset_y": float(meta.get("offset_y") or 0.0),
+            "floors": int(meta.get("floors") or 0),
             "active": bool(active and p.name == active.name),
         })
     return out
@@ -250,6 +251,11 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
             # have different socket thicknesses; negative sinks the model
             # into the terrain, e.g. a park). Client applies it on load.
             "offset_y": float(meta.get("offset_y") or 0.0),
+            # Storeys the mesh depicts (0 = undeclared): the client
+            # stretches the model to floors × map3d.level_height after the
+            # footprint normalization — building storeys track the room
+            # levels through any later level_height change.
+            "floors": int(meta.get("floors") or 0),
             # Changes whenever ANOTHER model file becomes active (new
             # generation, upload, selection) — a running client polls the
             # meta and re-downloads on a signature change (AV3D-2 addendum);
@@ -317,6 +323,34 @@ def set_offset_y(location_id: str, offset_y: Any,
     except (TypeError, ValueError):
         v = float(meta.get("offset_y") or 0.0)
     meta["offset_y"] = round(max(-25.0, min(25.0, v)), 3)
+    _write_sidecar(p, meta)
+    return meta
+
+
+def set_floors(location_id: str, floors: Any,
+               room_id: str = "", filename: str = "") -> Dict[str, Any]:
+    """Persist how many storeys ONE building model depicts (sidecar,
+    default: the active model). Mesh heights are random — with the storey
+    count declared, clients stretch the model vertically to
+    ``floors × level_height`` AFTER the footprint normalization, so the
+    model's storeys stay aligned with the room levels no matter how
+    level_height changes later. 0/empty = natural proportions."""
+    owner = _owner_id(location_id)
+    if not owner:
+        raise ValueError("no model")
+    p = (model_file_path(location_id, filename, room_id) if filename
+         else find_building_model(location_id, room_id))
+    if not p:
+        raise ValueError("no model")
+    meta = _read_sidecar(p)
+    try:
+        v = int(floors)
+    except (TypeError, ValueError):
+        v = int(meta.get("floors") or 0)
+    if v > 0:
+        meta["floors"] = min(v, 200)
+    else:
+        meta.pop("floors", None)
     _write_sidecar(p, meta)
     return meta
 

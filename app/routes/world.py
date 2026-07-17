@@ -422,6 +422,27 @@ async def location_model3d_offset(location_id: str, request: Request) -> Dict[st
     return {"meta": meta}
 
 
+@router.post("/locations/{location_id}/model3d/floors")
+async def location_model3d_floors(location_id: str, request: Request) -> Dict[str, Any]:
+    """Persist how many storeys a building model depicts (body: {floors},
+    0/empty = natural proportions; optional {file} targets a stored model,
+    default the active one). Delivered via /model/meta — clients stretch
+    the model to floors × level_height, so its storeys stay aligned with
+    the room levels through any later level_height change."""
+    from app.core.location_model3d import set_floors
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    try:
+        meta = set_floors(location_id, data.get("floors"),
+                          filename=str(data.get("file") or "").strip())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="No model")
+    return {"meta": meta}
+
+
 # --- Room models (AV3D-2) — same store/contract as the building model, one
 # per room (stem room_<room_id>, shared with clones via the template rooms).
 

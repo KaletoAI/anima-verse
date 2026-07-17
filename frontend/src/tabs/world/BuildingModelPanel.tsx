@@ -28,6 +28,10 @@ export interface ModelEntry {
   rotation?: { x?: number; y?: number; z?: number }
   /** Vertical placement offset in metres (± — negative sinks the model). */
   offset_y?: number
+  /** Storeys the mesh depicts (building models; 0 = undeclared) — clients
+   *  stretch the shell to floors × level_height, so the model's storeys
+   *  track the room levels through any level_height change. */
+  floors?: number
   /** The model the clients get (/play/... routes serve only this one). */
   active?: boolean
 }
@@ -215,6 +219,35 @@ export function BuildingModelPanel({
     }
   }, [current, offsetDraft, enc, t, toast])
 
+  // Storeys the shown BUILDING model depicts — clients stretch the shell
+  // to floors × level_height, so it stays aligned with the room levels
+  // whenever level_height changes. Empty/0 = natural mesh proportions.
+  const [floorsDraft, setFloorsDraft] = useState('')
+  useEffect(() => {
+    setFloorsDraft(current?.floors ? String(current.floors) : '')
+  }, [current?.filename, current?.floors])
+  const commitFloors = useCallback(async () => {
+    if (!current || roomId) return
+    const n = parseInt(floorsDraft, 10)
+    const floors = Number.isFinite(n) && n > 0 ? n : 0
+    if (floors === (current.floors || 0)) {
+      setFloorsDraft(current.floors ? String(current.floors) : '')
+      return
+    }
+    try {
+      const d = await apiPost<{ meta: { floors?: number } }>(
+        `/world/locations/${enc}/model3d/floors`,
+        { floors, file: current.filename })
+      setModel3d((prev) => (prev ? {
+        ...prev,
+        models: (prev.models || []).map((m) =>
+          m.filename === current.filename ? { ...m, floors: d.meta?.floors || 0 } : m),
+      } : prev))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [current, roomId, floorsDraft, enc, t, toast])
+
   // Make a stored model the active one (what the 3D clients get).
   const select = useCallback(async (filename: string) => {
     try {
@@ -369,6 +402,25 @@ export function BuildingModelPanel({
             onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
           />
         </label>
+        {!roomId ? (
+          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Storeys the building MODEL depicts — the shell is stretched to storeys × level height, so its floors stay on the level lines whenever the level height changes. Empty = natural mesh proportions.')}>
+            {t('Model storeys')}
+            <input
+              className="ga-input"
+              type="number"
+              min={0}
+              max={200}
+              step={1}
+              style={{ width: 66 }}
+              value={floorsDraft}
+              placeholder={t('natural')}
+              onChange={(e) => setFloorsDraft(e.target.value)}
+              onBlur={() => { void commitFloors() }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          </label>
+        ) : null}
         <span className="ga-hint">
           {t('Orientation fix + height offset of the shown model — persisted; negative sinks it into the terrain, the 3D client applies both.')}
         </span>

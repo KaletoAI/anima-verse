@@ -22,7 +22,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
+import { useToast } from '../../lib/Toast'
 import type { Map3D, Room } from './worldTypes'
 
 // Contract constants: the 8×8 m reference square and the 3 m storey.
@@ -36,6 +37,10 @@ interface CachedModel {
   rotation: { x?: number; y?: number; z?: number }
   /** Vertical placement offset in metres (negative sinks it). */
   offsetY: number
+  /** Storeys the mesh depicts (building models; 0 = undeclared) — the
+   *  shell is stretched to floors × level_height, so its storeys track
+   *  the room levels through any level_height change. */
+  floors: number
   /** Prepared once on first overlay use: the model with its own textures on
    *  unlit, semi-transparent materials — visibly the building, still
    *  see-through. Scene inserts clones of this (shared materials). */
@@ -96,6 +101,27 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
 
   const lh = levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M
 
+  // Active building model in the cache (re-read on every bump-triggered
+  // render) — feeds the "Model storeys" field in the toolbar.
+  const bEntryRaw = cacheRef.current.get('building')
+  const buildingEntry = bEntryRaw && bEntryRaw !== 'loading' && bEntryRaw !== 'missing'
+    ? bEntryRaw : null
+
+  const { toast } = useToast()
+  const commitBuildingFloors = (raw: string) => {
+    const n = parseInt(raw, 10)
+    const floors = Number.isFinite(n) && n > 0 ? n : 0
+    if (!buildingEntry || floors === buildingEntry.floors) return
+    void apiPost<{ meta?: { floors?: number } }>(
+      `/world/locations/${encodeURIComponent(locationId)}/model3d/floors`,
+      { floors })
+      .then((d) => {
+        buildingEntry.floors = d.meta?.floors || 0
+        setBump((b) => b + 1)
+      })
+      .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+  }
+
   // Fetch a model (meta + GLB) into the cache; returns it when ready. A miss
   // is cached too — no retry storm per drag frame.
   const ensureModel = (key: string, roomId?: string): CachedModel | null => {
@@ -111,13 +137,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           : `/play/locations/${encodeURIComponent(locationId)}/model`
         const meta = await apiGet<{ format?: string; url?: string
           rotation?: { x?: number; y?: number; z?: number }
-          offset_y?: number }>(`${base}/meta`)
+          offset_y?: number; floors?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') throw new Error(`format ${fmt}`)
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
         const gltf = await new GLTFLoader().loadAsync(meta.url || base)
         cache.set(key, { obj: gltf.scene, rotation: meta.rotation || {},
-                         offsetY: meta.offset_y || 0 })
+                         offsetY: meta.offset_y || 0,
+                         floors: meta.floors || 0 })
       } catch {
         cache.set(key, 'missing')  // 404 = no model — the box stays
       }
@@ -521,12 +548,24 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         holder.rotation.set(deg(building.rotation.x),
                             deg(building.rotation.y) - deg(m3?.rotation || 0),
                             deg(building.rotation.z))
-        holder.updateMatrixWorld(true)
-        const b2 = new THREE.Box3().setFromObject(holder)
+        // Declared storey count: stretch the shell vertically (WORLD y,
+        // after the rotation fix) to floors × level_height — mesh heights
+        // are random, and this keeps the model's storeys on the level
+        // lines through any later level_height change. 0 = natural.
+        const stretch = new THREE.Group()
+        stretch.add(holder)
+        if (building.floors > 0) {
+          holder.updateMatrixWorld(true)
+          const bn = new THREE.Box3().setFromObject(holder)
+          const natH = bn.max.y - bn.min.y
+          if (natH > 0.001) stretch.scale.y = (building.floors * lh) / natH
+        }
+        stretch.updateMatrixWorld(true)
+        const b2 = new THREE.Box3().setFromObject(stretch)
         const c2 = b2.getCenter(new THREE.Vector3())
-        holder.position.set(-c2.x, 0.06 - b2.min.y + building.offsetY, -c2.z)
-        holder.userData.__noDispose = true
-        boxes.add(holder)
+        stretch.position.set(-c2.x, 0.06 - b2.min.y + building.offsetY, -c2.z)
+        stretch.userData.__noDispose = true
+        boxes.add(stretch)
         buildingTopY = 0.06 + building.offsetY + (b2.max.y - b2.min.y)
       }
     }
@@ -956,6 +995,25 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
                 const n = parseFloat(e.target.value)
                 onLevelHeight(Number.isFinite(n) && n > 0 ? n : undefined)
               }}
+            />
+          </label>
+        ) : null}
+        {showBuilding && buildingEntry ? (
+          <label className="ga-check-row"
+            title={t('Storeys the building MODEL depicts — the shell is stretched to storeys × level height, so its floors stay on the level lines whenever the level height changes. Empty = natural mesh proportions.')}>
+            <span>{t('Model storeys')}</span>
+            <input
+              key={`bf-${buildingEntry.floors}`}
+              className="ga-input"
+              type="number"
+              min={0}
+              max={200}
+              step={1}
+              style={{ width: 62 }}
+              defaultValue={buildingEntry.floors || ''}
+              placeholder={t('natural')}
+              onBlur={(e) => commitBuildingFloors(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             />
           </label>
         ) : null}
