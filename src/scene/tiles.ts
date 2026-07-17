@@ -101,12 +101,10 @@ export interface Tile {
 const STOREY = 3;
 
 /** Figuren-Maßstab in Räumen: folgt aus der Etagenhöhe (reale Etage ≈ 3 m,
- *  also level_height / 3). Ohne level_height: figure_scale (Altbestand),
- *  sonst 1/3. */
+ *  also level_height / 3); ohne level_height 1/3. */
 export function roomFigureScale(loc: WorldLocation): number {
   const lh = loc.map3d?.level_height;
-  if (lh && lh > 0) return lh / 3;
-  return loc.map3d?.figure_scale || 1 / 3;
+  return lh && lh > 0 ? lh / 3 : 1 / 3;
 }
 
 function detectStyle(loc: WorldLocation): TileStyle {

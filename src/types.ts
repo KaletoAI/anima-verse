@@ -55,11 +55,9 @@ export interface Map3dMeta {
    *  automatisch auf allen Etagen platziert; Figuren nutzen ihn beim
    *  Etagenwechsel */
   elevator?: [number, number];
-  /** Skalierungsfaktor der Figuren in den Räumen dieser Location
-   *  (0..1 der Kartengröße; Default 1/3) */
-  figure_scale?: number;
-  /** Etagenhöhe in Welt-Metern (Kartenmaßstab!). Realistische Innenhöhe
-   *  ≈ 3 x figure_scale (z.B. 1,2 bei figure_scale 0,4). Default: 3 */
+  /** Etagenhöhe in Welt-Metern (Kartenmaßstab). Definiert auch den
+   *  Figuren-Maßstab in Räumen (level_height / 3, reale Etage ≈ 3 m).
+   *  Default: 3 */
   level_height?: number;
 }
 

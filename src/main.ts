@@ -364,8 +364,7 @@ async function startApp(username: string) {
         // dauerhaft sichtbare Räume gelten in jeder Zoomstufe
         const inRoom = roomCenter && room && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(room))
           ? room : null;
-        // Innenraum-Maßstab folgt der Etagenhöhe (level_height / 3);
-        // figure_scale nur noch als Fallback für Altbestand
+        // Innenraum-Maßstab folgt der Etagenhöhe (level_height / 3)
         const roomScale = roomFigureScale(tile.loc);
         if (inRoom && roomCenter) {
           const mates = roomMates.get(inRoom)!;
