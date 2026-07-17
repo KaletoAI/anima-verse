@@ -141,6 +141,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       .catch(() => undefined)
     return () => { stale = true }
   }, [locationId])
+  // Live height edits in the preview toolbar reach the derivation without
+  // a location reload (the dims helper caches per location).
+  useEffect(() => {
+    const onHeight = (e: Event) => {
+      const det = (e as CustomEvent).detail as { locationId?: string; heightM?: number }
+      if (det?.locationId !== locationId) return
+      setBDims((prev) => (prev ? { ...prev, heightM: det.heightM || 0 } : prev))
+    }
+    window.addEventListener('anima-building-height', onHeight)
+    return () => window.removeEventListener('anima-building-height', onHeight)
+  }, [locationId])
   // Explicit anchor wins; otherwise auto-derived from the building model
   // (declared height × the mesh's width-per-height ratio).
   const planW = map3d?.plan_width_m

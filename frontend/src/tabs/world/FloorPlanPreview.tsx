@@ -175,6 +175,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       .then((d) => {
         buildingEntry.heightM = d.meta?.height_m || 0
         setBump((b) => b + 1)
+        // The layout editor derives room sizes from the auto plan width —
+        // let it pick up the new height without a location reload.
+        window.dispatchEvent(new CustomEvent('anima-building-height', {
+          detail: { locationId, heightM: buildingEntry.heightM },
+        }))
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }
