@@ -50,10 +50,13 @@ interface FloorPlanPreviewProps {
   map3d?: Map3D
   /** Storey height in metres (map3d.level_height) — empty = the contract's 3. */
   levelHeightM?: number
+  /** When set, the toolbar shows a level-height field next to the metre
+   *  scale (writes map3d.level_height on the location draft). */
+  onLevelHeight?: (v: number | undefined) => void
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -216,25 +219,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
     // the rotations the bottom is re-grounded from the rotated bounds.
     const placeModel = (entry: CachedModel, targetW: number, targetD: number,
                         cx: number, floorY: number, cz: number,
-                        yawDeg: number, ghost: boolean) => {
-      if (ghost && !entry.ghost) {
-        // Keep the model's own textures — a flat gray ghost was near
-        // invisible on the dark canvas. Unlit (basic) + semi-transparent +
-        // no depth write: clearly the building, rooms shine through.
-        const g = entry.obj.clone(true)
-        g.traverse((o: Object3D) => {
-          const mesh = o as Mesh
-          if (!mesh.isMesh) return
-          const src = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
-          const map = (src as { map?: unknown })?.map || null
-          mesh.material = new THREE.MeshBasicMaterial({
-            map: map as never, color: 0xffffff,
-            transparent: true, opacity: 0.55, depthWrite: false,
-          })
-        })
-        entry.ghost = g
-      }
-      const clone = (ghost ? entry.ghost! : entry.obj).clone(true)
+                        yawDeg: number) => {
+      const clone = entry.obj.clone(true)
       const norm = new THREE.Group()
       norm.add(clone)
       norm.updateMatrixWorld(true)
@@ -284,7 +270,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
         ? ensureModel(`room:${room.id}`, room.id)
         : null
       if (model) {
-        placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0, false)
+        placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0)
       }
 
       // Label + exit/marker dots always; the box only when no model stands in.
@@ -496,9 +482,113 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
     }
 
     // Building shell over everything — ghosted so the rooms stay visible.
+    // Placement per the drop 2026-07-17 "Gebäude-Modell-Normalisierung":
+    // largest XZ side = 10 m × 0.92 × map3d.size (tile = 10 m, size default
+    // 0.92), XZ centred, bottom at 0.06 m — then meta rotation, the map yaw
+    // (map3d.rotation) and offset_y. The metre ruler next to it therefore
+    // shows exactly the client's proportions.
+    let buildingTopY = 0
     if (showBuildingRef.current) {
       const building = ensureModel('building')
-      if (building) placeModel(building, PLATE_M, PLATE_M, 0, -0.12, 0, 0, true)
+      if (building) {
+        if (!building.ghost) {
+          // Keep the model's own textures — a flat gray ghost was near
+          // invisible on the dark canvas. Unlit (basic) + semi-transparent +
+          // no depth write: clearly the building, rooms shine through.
+          const g = building.obj.clone(true)
+          g.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            if (!mesh.isMesh) return
+            const src = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+            const map = (src as { map?: unknown })?.map || null
+            mesh.material = new THREE.MeshBasicMaterial({
+              map: map as never, color: 0xffffff,
+              transparent: true, opacity: 0.55, depthWrite: false,
+            })
+          })
+          building.ghost = g
+        }
+        const clone = building.ghost.clone(true)
+        const norm = new THREE.Group()
+        norm.add(clone)
+        norm.updateMatrixWorld(true)
+        const b0 = new THREE.Box3().setFromObject(norm)
+        const s0 = b0.getSize(new THREE.Vector3())
+        const target = 10 * 0.92 * (m3?.size || 0.92)
+        norm.scale.setScalar(target / (Math.max(s0.x, s0.z) || 1))
+        const holder = new THREE.Group()
+        holder.add(norm)
+        holder.rotation.set(deg(building.rotation.x),
+                            deg(building.rotation.y) - deg(m3?.rotation || 0),
+                            deg(building.rotation.z))
+        holder.updateMatrixWorld(true)
+        const b2 = new THREE.Box3().setFromObject(holder)
+        const c2 = b2.getCenter(new THREE.Vector3())
+        holder.position.set(-c2.x, 0.06 - b2.min.y + building.offsetY, -c2.z)
+        holder.userData.__noDispose = true
+        boxes.add(holder)
+        buildingTopY = 0.06 + building.offsetY + (b2.max.y - b2.min.y)
+      }
+    }
+
+    // Height scale (drop 2026-07-17): a vertical metre ruler with 1-m ticks
+    // at the south-west corner plus a storey line per level at level × lh —
+    // whether the storey height fits the building model is visible at a
+    // glance. The ruler is in WORLD metres, same basis as the client.
+    {
+      const lo = Math.min(0, ...usedLevels)
+      const hi = Math.max(0, ...usedLevels)
+      const bottomY = Math.min(0, Math.floor(lo * lh))
+      const topY = Math.ceil(Math.max((hi + 1) * lh, buildingTopY, lh))
+      const rx = -PLATE_M / 2 - 0.7
+      const rz = PLATE_M / 2 + 0.7
+      const rulerMat = new THREE.LineBasicMaterial({ color: 0xc9d1d9 })
+      boxes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(rx, bottomY, rz), new THREE.Vector3(rx, topY, rz),
+      ]), rulerMat))
+      const labelEvery = topY - bottomY > 14 ? 5 : 1
+      for (let y = bottomY; y <= topY; y++) {
+        const len = y % 5 === 0 ? 0.3 : 0.16
+        boxes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(rx - len, y, rz), new THREE.Vector3(rx + len, y, rz),
+        ]), rulerMat))
+        if (y !== 0 && y % labelEvery === 0) {
+          const c = document.createElement('canvas')
+          c.width = 64
+          c.height = 32
+          const cctx = c.getContext('2d')
+          if (cctx) {
+            cctx.font = '600 20px sans-serif'
+            cctx.textAlign = 'center'
+            cctx.textBaseline = 'middle'
+            cctx.shadowColor = 'rgba(0,0,0,0.9)'
+            cctx.shadowBlur = 4
+            cctx.fillStyle = '#c9d1d9'
+            cctx.fillText(`${y}`, 32, 16)
+          }
+          const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: new THREE.CanvasTexture(c), transparent: true, depthTest: false,
+          }))
+          spr.scale.set(0.6, 0.3, 1)
+          spr.position.set(rx - 0.55, y, rz)
+          boxes.add(spr)
+        }
+      }
+      // Storey lines around the reference square at every level plate
+      // (ground level 0 is the plate itself).
+      const storeyMat = new THREE.LineBasicMaterial({
+        color: 0x8b949e, transparent: true, opacity: 0.45,
+      })
+      const hp = PLATE_M / 2
+      for (let lv = lo; lv <= hi + 1; lv++) {
+        const y = lv * lh
+        if (Math.abs(y) < 1e-6) continue
+        boxes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(-hp, y, -hp), new THREE.Vector3(hp, y, -hp),
+          new THREE.Vector3(hp, y, hp), new THREE.Vector3(-hp, y, hp),
+          new THREE.Vector3(-hp, y, -hp),
+        ]), storeyMat))
+      }
     }
   }
 
@@ -776,6 +866,26 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
             onChange={(e) => setShowBuilding(e.target.checked)} />
           <span>{t('Building model overlay')}</span>
         </label>
+        {onLevelHeight ? (
+          <label className="ga-check-row"
+            title={t('Storey height in WORLD metres — stacks the floor-plan levels and sets the figure scale in rooms (level_height / 3). Realistic interiors are ≈ 1–1.5; the default 3 reads as a triple-height storey.')}>
+            <span>{t('Level height (m)')}</span>
+            <input
+              className="ga-input"
+              type="number"
+              min={0.5}
+              max={50}
+              step={0.1}
+              style={{ width: 70 }}
+              value={levelHeightM ?? ''}
+              placeholder="3"
+              onChange={(e) => {
+                const n = parseFloat(e.target.value)
+                onLevelHeight(Number.isFinite(n) && n > 0 ? n : undefined)
+              }}
+            />
+          </label>
+        ) : null}
       </div>
       <div style={{ position: 'relative' }}>
         <div
@@ -797,7 +907,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, heigh
         ) : null}
       </div>
       <span className="ga-hint">
-        {t('Renders per the client contract (8×8 m reference, 0.96 fit, floor + 0.12 m) — live while editing; exit points orange, markers green.')}
+        {t('Renders per the client contract (8×8 m reference, 0.96 fit, floor + 0.12 m; building: largest side = 10 × 0.92 × size m) — metre ruler + storey lines check the level height against the model.')}
       </span>
     </div>
   )
