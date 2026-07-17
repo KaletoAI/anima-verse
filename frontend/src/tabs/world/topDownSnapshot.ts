@@ -20,6 +20,8 @@ interface CachedModel {
   obj: Object3D
   rotation: { x?: number; y?: number; z?: number }
   offsetY: number
+  /** Declared real-world width of the largest side (metres, 0 = unset). */
+  widthM: number
 }
 
 const modelCache = new Map<string, Promise<CachedModel | null>>()
@@ -32,13 +34,13 @@ function loadRoomModel(roomId: string): Promise<CachedModel | null> {
         const base = `/play/rooms/${encodeURIComponent(roomId)}/model`
         const meta = await apiGet<{ format?: string; url?: string
           rotation?: { x?: number; y?: number; z?: number }
-          offset_y?: number }>(`${base}/meta`)
+          offset_y?: number; width_m?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') return null
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
         const gltf = await new GLTFLoader().loadAsync(meta.url || base)
         return { obj: gltf.scene, rotation: meta.rotation || {},
-                 offsetY: meta.offset_y || 0 }
+                 offsetY: meta.offset_y || 0, widthM: meta.width_m || 0 }
       } catch {
         return null  // 404 = no model — the room just has no underlay
       }
@@ -46,6 +48,21 @@ function loadRoomModel(roomId: string): Promise<CachedModel | null> {
     modelCache.set(roomId, p)
   }
   return p
+}
+
+/** Declared width + normalized footprint of a room's ACTIVE model — the
+ *  floor-plan editor derives the room-rectangle size from it in anchored
+ *  mode (plan_width_m set): long side = width_m / plan_width_m, short side
+ *  via the footprint aspect. null = no model. Shares the model cache. */
+export async function getRoomModelDims(roomId: string):
+    Promise<{ widthM: number; fpX: number; fpZ: number } | null> {
+  const entry = await loadRoomModel(roomId)
+  if (!entry) return null
+  const THREE = await import('three')
+  const box = new THREE.Box3().setFromObject(entry.obj)
+  const size = box.getSize(new THREE.Vector3())
+  const m = Math.max(size.x, size.z) || 1
+  return { widthM: entry.widthM, fpX: size.x / m, fpZ: size.z / m }
 }
 
 export async function renderTopDownSnapshot(opts: {

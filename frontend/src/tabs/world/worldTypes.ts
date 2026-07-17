@@ -58,8 +58,14 @@ export interface Map3D {
   size?: number
   /** Storey height in WORLD metres — stacks the floor-plan levels AND
    *  derives the figure scale in rooms (level_height / 3). Absent =
-   *  default 3 (figure scale 1/3). */
+   *  default 3 (figure scale 1/3). Fallback only — with plan_width_m +
+   *  building anchors everything derives instead. */
   level_height?: number
+  /** Real-world width the floor-plan reference square represents (m) —
+   *  THE detail-view scale anchor: k = 8 / plan_width_m derives room-rect
+   *  sizes (from width_m), figure size (1.7 × k), storey stacking and the
+   *  shell height. Absent = legacy behavior. */
+  plan_width_m?: number
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
    *  8×8 reference square, auto-closed — the client renders floor plates
    *  and walls per used level from it. Absent = rectangle as before. */

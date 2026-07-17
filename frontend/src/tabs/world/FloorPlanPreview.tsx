@@ -62,13 +62,16 @@ interface FloorPlanPreviewProps {
   /** When set, the toolbar shows a level-height field next to the metre
    *  scale (writes map3d.level_height on the location draft). */
   onLevelHeight?: (v: number | undefined) => void
+  /** When set, the toolbar shows the plan-width anchor field (writes
+   *  map3d.plan_width_m on the location draft). */
+  onPlanWidth?: (v: number | undefined) => void
   /** The 2D icon rotation (map_rotation_2d) — the contract's yaw fallback
    *  when map3d.rotation is unset (the model turns with the 2D icon). */
   fallbackYawDeg?: number
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, fallbackYawDeg = 0, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, onPlanWidth, fallbackYawDeg = 0, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -262,13 +265,17 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // toggle change and once after scene init).
   const rebuild = (h: NonNullable<typeof handleRef.current>, current: Room[]) => {
     const { THREE, boxes } = h
-    // Effective storey height: derived from the building's scale anchors
-    // (height_m / floors) when declared — the shell then defines the level
-    // stacking; map3d.level_height stays the fallback. Fetched regardless
-    // of the overlay toggle so the derivation is always live.
+    // ONE compression factor per location (anchored mode): the reference
+    // square (8 world-m) represents plan_width_m real metres → k = 8 /
+    // plan_width_m. EVERYTHING derives from real size × k — storeys,
+    // figures, shell height; without the anchor k = 1 (legacy). The
+    // building entry is fetched regardless of the overlay toggle so the
+    // storey derivation is always live.
     const bAnchor = ensureModel('building')
+    const planW = map3dRef.current?.plan_width_m || 0
+    const kFac = planW > 0 ? PLATE_M / planW : 1
     const lhEff = bAnchor && bAnchor.heightM > 0 && bAnchor.floors > 0
-      ? bAnchor.heightM / bAnchor.floors
+      ? (bAnchor.heightM / bAnchor.floors) * kFac
       : lh
     for (const mixer of mixersRef.current) mixer.stopAllAction()
     mixersRef.current = []
@@ -356,13 +363,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       if (model) {
         fitScale = placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0)
       }
-      // Figure scale in THIS room: explicit via the model's declared real
-      // width (rect extent / width_m) — figures always match the room's
-      // furniture; storey-height fallback (lhEff / 3) without a declared
-      // width or without a shown model.
-      const roomFigScale = model && model.widthM > 0 && fitScale > 0
-        ? fitScale / model.widthM
-        : lhEff / 3
+      // Figure scale in THIS room. Anchored mode: the ONE location factor
+      // k — rect sizes derive from width_m, so content and figures share
+      // it automatically. Legacy: per-room rect/width_m, else storey/3.
+      const roomFigScale = planW > 0
+        ? kFac
+        : (model && model.widthM > 0 && fitScale > 0
+            ? fitScale / model.widthM
+            : lhEff / 3)
 
       // Label + exit/marker dots always; the box only when no model stands in.
       const roomGroup = new THREE.Group()
@@ -457,21 +465,28 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             fig.rotation.y = ((m.rotation || 0) * Math.PI) / 180
           }
         } else {
+          // Mannequin fallback — scaled to the SAME figure size as the real
+          // figure would be (it used to be a fixed ~0.57 m regardless of
+          // the room scale).
+          const tgt = 1.7 * roomFigScale
           const figMat = new THREE.MeshStandardMaterial({
             color: 0x3fb950, transparent: true, opacity: 0.85,
           })
-          const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.3, 4, 10), figMat)
-          body.position.y = floor + 0.24
+          const body = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.055 * tgt, 0.62 * tgt, 4, 10), figMat)
+          body.position.y = floor + 0.42 * tgt
           fig.add(body)
-          const head = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), figMat)
-          head.position.y = floor + 0.5
+          const head = new THREE.Mesh(
+            new THREE.SphereGeometry(0.09 * tgt, 12, 12), figMat)
+          head.position.y = floor + 0.88 * tgt
           fig.add(head)
           // Facing nose — only when a facing is set (0 = south/+Z, 90 = east/+X;
           // unset = the client decides, so the preview stays direction-less).
           if (m.rotation !== undefined) {
-            const nose = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 10), figMat)
+            const nose = new THREE.Mesh(
+              new THREE.ConeGeometry(0.05 * tgt, 0.16 * tgt, 10), figMat)
             nose.rotation.x = Math.PI / 2
-            nose.position.set(0, floor + 0.42, 0.14)
+            nose.position.set(0, floor + 0.74 * tgt, 0.14 * tgt)
             fig.add(nose)
             fig.rotation.y = ((m.rotation || 0) * Math.PI) / 180
           }
@@ -608,7 +623,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         const br = new THREE.Box3().setFromObject(holder)
         const sr = br.getSize(new THREE.Vector3())
         const kxz = (10 * 0.92 * (m3?.size || 0.92)) / (Math.max(sr.x, sr.z) || 1)
-        const ky = building.heightM > 0 ? building.heightM / (sr.y || 1) : kxz
+        const ky = building.heightM > 0
+          ? (building.heightM * kFac) / (sr.y || 1)
+          : kxz
         // Per-axis scale in WORLD space — the outer group sits above the
         // rotation fix, so a lying model raised by 90° stretches upward.
         const outer = new THREE.Group()
@@ -631,21 +648,27 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     {
       const lo = Math.min(0, ...usedLevels)
       const hi = Math.max(0, ...usedLevels)
-      const bottomY = Math.min(0, Math.floor(lo * lhEff))
-      const topY = Math.ceil(Math.max((hi + 1) * lhEff, buildingTopY, lhEff))
+      // Anchored mode: the ruler counts REAL metres (one tick = kFac world
+      // units) — the admin thinks in real sizes, and the shell top lands
+      // exactly on its declared height_m label.
+      const unit = kFac
+      const topWorld = Math.max((hi + 1) * lhEff, buildingTopY, lhEff)
+      const bottomY = Math.min(0, Math.floor((lo * lhEff) / unit))
+      const topY = Math.ceil(topWorld / unit)
       const rx = -PLATE_M / 2 - 0.7
       const rz = PLATE_M / 2 + 0.7
       const rulerMat = new THREE.LineBasicMaterial({ color: 0xc9d1d9 })
       boxes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(rx, bottomY, rz), new THREE.Vector3(rx, topY, rz),
+        new THREE.Vector3(rx, bottomY * unit, rz), new THREE.Vector3(rx, topY * unit, rz),
       ]), rulerMat))
       const labelEvery = topY - bottomY > 14 ? 5 : 1
-      for (let y = bottomY; y <= topY; y++) {
-        const len = y % 5 === 0 ? 0.3 : 0.16
+      for (let yi = bottomY; yi <= topY; yi++) {
+        const y = yi * unit
+        const len = yi % 5 === 0 ? 0.3 : 0.16
         boxes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(rx - len, y, rz), new THREE.Vector3(rx + len, y, rz),
         ]), rulerMat))
-        if (y !== 0 && y % labelEvery === 0) {
+        if (yi !== 0 && yi % labelEvery === 0) {
           const c = document.createElement('canvas')
           c.width = 64
           c.height = 32
@@ -657,7 +680,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             cctx.shadowColor = 'rgba(0,0,0,0.9)'
             cctx.shadowBlur = 4
             cctx.fillStyle = '#c9d1d9'
-            cctx.fillText(`${y}`, 32, 16)
+            cctx.fillText(`${yi}`, 32, 16)
           }
           const spr = new THREE.Sprite(new THREE.SpriteMaterial({
             map: new THREE.CanvasTexture(c), transparent: true, depthTest: false,
@@ -687,7 +710,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       // (1.7 m × level_height/3) standing on the ground next to the metre
       // scale — storey height vs. figure height is judgeable at a glance.
       {
-        const target = 1.7 * (lhEff / 3)
+        const target = planW > 0 ? 1.7 * kFac : 1.7 * (lhEff / 3)
         const fig = new THREE.Group()
         const figSrc = ensureTestFigure()
         const kinds = clipListRef.current.clips.map((c) => c.kind)
@@ -1032,6 +1055,26 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             onChange={(e) => setShowBuilding(e.target.checked)} />
           <span>{t('Building model overlay')}</span>
         </label>
+        {onPlanWidth ? (
+          <label className="ga-check-row"
+            title={t('Real-world width the floor-plan square represents (estimate the building footprint, e.g. 12). THE scale anchor: room sizes derive from their declared widths, figures and storeys from real size × 8/plan width. Empty = legacy free sizing.')}>
+            <span>{t('Plan width (m)')}</span>
+            <input
+              className="ga-input"
+              type="number"
+              min={0.5}
+              max={500}
+              step={0.5}
+              style={{ width: 70 }}
+              value={map3d?.plan_width_m ?? ''}
+              placeholder="—"
+              onChange={(e) => {
+                const n = parseFloat(e.target.value)
+                onPlanWidth(Number.isFinite(n) && n > 0 ? n : undefined)
+              }}
+            />
+          </label>
+        ) : null}
         {onLevelHeight ? (
           <label className="ga-check-row"
             title={t('Storey height in WORLD metres — stacks the floor-plan levels and sets the figure scale in rooms (level_height / 3). Realistic interiors are ≈ 1–1.5; the default 3 reads as a triple-height storey.')}>

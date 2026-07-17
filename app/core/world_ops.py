@@ -288,6 +288,19 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["size"] = round(s, 3)
         except (TypeError, ValueError):
             pass
+    # Real-world width the floor-plan reference square represents (metres)
+    # — THE scale anchor of the detail view: one compression factor
+    # k = 8 / plan_width_m per location derives room-rect sizes (from the
+    # room models' width_m), figure size (1.7 m × k), storey stacking
+    # (height_m / floors × k) and the shell height. Absent = legacy mode.
+    pw = raw.get("plan_width_m")
+    if pw is not None and f"{pw}".strip() != "":
+        try:
+            v = float(pw)
+            if 0.5 <= v <= 500:
+                out["plan_width_m"] = round(v, 2)
+        except (TypeError, ValueError):
+            pass
     # Storey height in WORLD metres: stacks the room-layout levels AND
     # derives the figure scale in rooms (level_height / 3) — the former
     # figure_scale field is gone WITHOUT replacement (drop 2026-07-17: the

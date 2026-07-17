@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
-import { renderTopDownSnapshot } from './topDownSnapshot'
+import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { Map3D, Room, RoomLayout } from './worldTypes'
 
 const CANVAS_W = 420
@@ -112,6 +112,62 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
     }, 350)
     return () => clearTimeout(tid)
   }, [underlay, level, geomKey])
+
+  // Anchored mode (map3d.plan_width_m set): room-rectangle sizes DERIVE
+  // from the models' declared real width — long side = width_m /
+  // plan_width_m, short side via the model's footprint aspect. Dims are
+  // loaded per room once; rooms without model/width keep free resize.
+  const planW = map3d?.plan_width_m || 0
+  const [modelDims, setModelDims] = useState<Record<string,
+    { widthM: number; fpX: number; fpZ: number } | null>>({})
+  useEffect(() => {
+    if (!planW) return
+    let stale = false
+    for (const room of roomsRef.current) {
+      const id = room.id || ''
+      if (!id || id in modelDims) continue
+      getRoomModelDims(id)
+        .then((d) => { if (!stale) setModelDims((prev) => ({ ...prev, [id]: d })) })
+        .catch(() => { if (!stale) setModelDims((prev) => ({ ...prev, [id]: null })) })
+    }
+    return () => { stale = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planW, rooms.length])
+
+  const derivedSize = useCallback((roomId: string):
+      { w: number; d: number } | null => {
+    if (!planW) return null
+    const dims = modelDims[roomId]
+    if (!dims || !(dims.widthM > 0)) return null
+    const long = Math.min(dims.widthM / planW, 1)
+    const aspect = Math.min(dims.fpX, dims.fpZ) / (Math.max(dims.fpX, dims.fpZ) || 1)
+    const short = Math.max(long * aspect, MIN_FRAC)
+    // The model's X side carries the largest extent when fpX >= fpZ.
+    return dims.fpX >= dims.fpZ ? { w: long, d: short } : { w: short, d: long }
+  }, [planW, modelDims])
+
+  // Auto-correct placed rooms to their derived size (rotation 90/270 swaps
+  // w/d, matching the rotate-as-unit behavior). Runs whenever anchors or
+  // dims change; r4 rounding keeps it from oscillating.
+  useEffect(() => {
+    if (!planW) return
+    let changed = false
+    const next = roomsRef.current.map((r) => {
+      const lay = r.layout
+      const ds = r.id ? derivedSize(r.id) : null
+      if (!lay || !ds) return r
+      const swap = ((lay.rotation || 0) % 180) === 90
+      const wantW = r4(swap ? ds.d : ds.w)
+      const wantD = r4(swap ? ds.w : ds.d)
+      if (Math.abs(lay.w - wantW) < 0.0005 && Math.abs(lay.d - wantD) < 0.0005) return r
+      changed = true
+      return { ...r, layout: { ...lay,
+        w: wantW, d: wantD,
+        x: r4(clamp(lay.x + (lay.w - wantW) / 2, 0, 1 - wantW)),
+        y: r4(clamp(lay.y + (lay.d - wantD) / 2, 0, 1 - wantD)) } }
+    })
+    if (changed) onChange(next)
+  }, [planW, derivedSize, geomKey, onChange])
 
   const updateLayout = useCallback((roomId: string, patch: Partial<RoomLayout> | null) => {
     const next = roomsRef.current.map((r) => {
@@ -435,18 +491,22 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
                   }}
                 />
               ))}
-              {/* Resize handle (bottom-right) */}
-              <span
-                onPointerDown={(e) => startDrag(e, room, 'resize')}
-                style={{
-                  position: 'absolute', right: -1, bottom: -1, width: 12, height: 12,
-                  cursor: 'nwse-resize',
-                  borderRight: '3px solid var(--accent, #58a6ff)',
-                  borderBottom: '3px solid var(--accent, #58a6ff)',
-                  borderBottomRightRadius: 4,
-                  opacity: isSel ? 1 : 0.35,
-                }}
-              />
+              {/* Resize handle (bottom-right) — hidden in anchored mode for
+                  rooms whose size DERIVES from the model's declared width
+                  (there is nothing to resize then, only to position). */}
+              {room.id && derivedSize(room.id) ? null : (
+                <span
+                  onPointerDown={(e) => startDrag(e, room, 'resize')}
+                  style={{
+                    position: 'absolute', right: -1, bottom: -1, width: 12, height: 12,
+                    cursor: 'nwse-resize',
+                    borderRight: '3px solid var(--accent, #58a6ff)',
+                    borderBottom: '3px solid var(--accent, #58a6ff)',
+                    borderBottomRightRadius: 4,
+                    opacity: isSel ? 1 : 0.35,
+                  }}
+                />
+              )}
             </div>
           )
         })}
