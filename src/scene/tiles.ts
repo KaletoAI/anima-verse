@@ -399,7 +399,7 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     // Platzhalter-Platte wird beim Modell-Einwechseln ohnehin ausgeblendet.
     // layout.rotation dreht den Raum-INHALT (analog map3d.rotation).
     const holder = new THREE.Group();
-    holder.position.set(x, floorY + 0.09, z);
+    holder.position.set(x, floorY + 0.06, z);
     holder.rotation.y = -THREE.MathUtils.degToRad(lay.rotation ?? 0);
     rg.add(holder);
     tile.roomSlots.set(room.id, { holder, w: roomW, d: roomD, plate });
@@ -820,13 +820,17 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
     tile.roomExits.get(roomId)?.setY(floor + 0.01);
   }
 
-  // TEST (fest verdrahtet): Boden-TEXTUR der Bibliothek auf die Etagen-
-  // Platte übernehmen. Die begehbaren Treffer spannen den UV-Bereich des
-  // Bodens im Texturatlas auf; der Ausschnitt wird im Welt-Maßstab
-  // gekachelt (Extrude-UVs der Platte sind Welt-Koordinaten in Metern).
-  const roomName = tile.loc.rooms.find((r) => r.id === roomId)?.name;
+  // Boden-TEXTUR eines gewählten Raums auf die Etagen-Platte übernehmen
+  // (layout.floor_source; solange kein Raum markiert ist, testweise die
+  // Bibliothek). Die begehbaren Treffer spannen den UV-Bereich des Bodens
+  // im Texturatlas auf; der Ausschnitt wird im Welt-Maßstab gekachelt
+  // (Extrude-UVs der Platte sind Welt-Koordinaten in Metern).
+  const sourceRoom = tile.loc.rooms.find((r) => r.id === roomId);
+  const anySourceFlag = tile.loc.rooms.some((r) => r.layout?.floor_source === true);
+  const isFloorSource = sourceRoom?.layout?.floor_source === true
+    || (!anySourceFlag && sourceRoom?.name === 'Bibliothek');
   const slab = tile.levelSlabs.get(tile.roomLevels.get(roomId) ?? 0);
-  if (slab && roomName === 'Bibliothek') {
+  if (slab && isFloorSource) {
     const floorSamples = samples.filter((s) => s.p.y < floor + 0.12 && s.uv && s.mesh);
     const m0 = floorSamples[0]?.mesh;
     const same = floorSamples.filter((s) => s.mesh === m0);

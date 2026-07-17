@@ -23,6 +23,9 @@ export interface RoomLayout {
    *  Outdoor-Räume, die NICHT schon im Gebäude-Modell abgebildet sind.
    *  Default: false */
   always_visible?: boolean;
+  /** Boden-Textur dieses Raums für die Etagen-Platte übernehmen
+   *  (Checkbox im Editor; Default: false) */
+  floor_source?: boolean;
 }
 
 export interface Room {

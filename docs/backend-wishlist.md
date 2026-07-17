@@ -293,6 +293,11 @@ Ursprüngliche Anforderung:
   - **Figuren-Maßstab pro Location** → `map3d.figure_scale` (0..1,
     Default 1/3): Skalierung der Figuren in den Räumen dieser Location;
     Feld/Regler im Editor. Client liest das Feld bereits.
+  - **Checkbox „Boden für die Etage übernehmen" pro Raum** →
+    `layout.floor_source` (bool, Default false): Der Client kachelt die
+    Boden-Textur dieses Raum-Modells über die Etagen-Platte des
+    Grundrisses (bereits eingebaut; ohne markierten Raum greift testweise
+    die Bibliothek). Sinnvoll ein Raum pro Etage.
 - **Client (bereits eingebaut, mit Testdaten verifiziert):** pro genutzter
   Etage Bodenplatte in Konturform + Wände (Tür im EG am südlichsten
   Wandstück; Obergeschosse halbtransparent); Fahrstuhl als Schacht mit
