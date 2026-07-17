@@ -51,9 +51,12 @@ interface FloorPlanPreviewProps {
   /** Storey height in metres (map3d.level_height) — empty = 3. */
   levelHeightM?: number
   height?: number
+  /** The Floor-plan tab renders its own header row when the 3D-client
+   *  preview toggle is present. */
+  hideLabel?: boolean
 }
 
-export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, height = 360 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, height = 360, hideLabel }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -221,6 +224,15 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
           new THREE.MeshBasicMaterial({ color: 0xe0a356 }),
         )
         dot.position.set((lay.exit[0] - 0.5) * w, -lh * 0.4, (lay.exit[1] - 0.5) * d)
+        roomGroup.add(dot)
+      }
+      // Animation markers (green — exit stays orange), on the room floor.
+      for (const m of lay.markers || []) {
+        const dot = new THREE.Mesh(
+          new THREE.SphereGeometry(Math.min(fw, fd) * 0.016, 12, 12),
+          new THREE.MeshBasicMaterial({ color: 0x3fb950 }),
+        )
+        dot.position.set((m.at[0] - 0.5) * w, -lh * 0.4, (m.at[1] - 0.5) * d)
         roomGroup.add(dot)
       }
 
@@ -411,7 +423,7 @@ export function FloorPlanPreview({ locationId, rooms, footprint, levelHeightM, h
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
-      <div className="ga-form-section-label">{t('3D preview')}</div>
+      {hideLabel ? null : <div className="ga-form-section-label">{t('3D preview')}</div>}
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
         <label className="ga-check-row">
           <input type="checkbox" checked={showModels}

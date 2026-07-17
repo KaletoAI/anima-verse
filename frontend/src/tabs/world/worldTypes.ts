@@ -10,6 +10,10 @@ export interface RoomLayout {
   d: number
   rotation?: number
   exit?: [number, number]
+  /** Animation markers: spots a figure with a matching active animation
+   *  snaps to. at = fraction of the room rectangle; animation = a clip kind
+   *  from the open animation-clip vocabulary. */
+  markers?: Array<{ at: [number, number]; animation: string }>
 }
 
 export interface Room {

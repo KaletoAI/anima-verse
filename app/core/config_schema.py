@@ -681,6 +681,13 @@ SECTIONS = {
                 "max": 4096,
                 "description": "Longest side for multi-tile map patches (image_type=map_3x3). The image spans 3x3 cells, so it keeps 3x the single-tile resolution (1200 = 400 per cell).",
             },
+            "_grp_client3d": {"type": "group_header", "label": "External 3D client"},
+            "client3d_url": {
+                "type": "string",
+                "label": "3D client base URL",
+                "default": "",
+                "description": "Base URL of the external 3D map client (e.g. http://localhost:5210). When set, the location Floor-plan tab embeds the client's live preview (floorplan.html) instead of the built-in one — the browser must be logged in to the 3D client.",
+            },
             "_grp_migrate": {"type": "group_header", "label": "Migrate existing images"},
             "_action_dryrun_items_current": {
                 "type": "button",

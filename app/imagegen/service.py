@@ -505,7 +505,9 @@ class ImageService:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(model_blob)
             if texture_blob is not None:
-                tex = out.with_suffix(".png")
+                # PNG or JPEG — the gateway prefers JPEG now (a third of the
+                # size); the extension follows the content.
+                tex = out.with_suffix(_sniff_suffix(texture_blob) or ".png")
                 tex.write_bytes(texture_blob)
                 texture_path = str(tex)
         except Exception as e:

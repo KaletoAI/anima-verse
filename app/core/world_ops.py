@@ -343,6 +343,30 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                            round(min(max(float(ex[1]), 0.0), 1.0), 4)]
         except (TypeError, ValueError):
             pass
+    # Animation markers (schnittstellen-3d.md): optional spots in the room a
+    # figure with a matching active animation snaps to. ``at`` = fraction of
+    # the ROOM rectangle, ``animation`` = a clip kind from the OPEN clip
+    # vocabulary (nothing hardcoded — the editor offers what exists).
+    mk = raw.get("markers")
+    if isinstance(mk, list):
+        markers = []
+        for m in mk:
+            if not isinstance(m, dict):
+                continue
+            at = m.get("at")
+            anim = str(m.get("animation") or "").strip()
+            if not anim or not isinstance(at, (list, tuple)) or len(at) != 2:
+                continue
+            try:
+                markers.append({
+                    "at": [round(min(max(float(at[0]), 0.0), 1.0), 4),
+                           round(min(max(float(at[1]), 0.0), 1.0), 4)],
+                    "animation": anim,
+                })
+            except (TypeError, ValueError):
+                continue
+        if markers:
+            out["markers"] = markers[:50]
     return out
 
 

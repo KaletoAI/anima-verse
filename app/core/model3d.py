@@ -128,13 +128,17 @@ def list_mesh_backends(rig: str = "") -> Dict[str, Any]:
 
 def find_texture(character_name: str,
                  signature: Optional[str] = None) -> Optional[Path]:
-    """Basecolor PNG belonging to the cached mesh (generic/FBX case), or None.
-    It is stored next to the model with the same stem — same generation run."""
+    """Basecolor image belonging to the cached mesh (generic/FBX case), or
+    None. Stored next to the model with the same stem — same generation run.
+    PNG or JPEG (the gateway prefers JPEG since 2026-07-17)."""
     model = find_model3d(character_name, signature)
     if not model:
         return None
-    tex = model.with_suffix(".png")
-    return tex if tex.exists() else None
+    for ext in (".png", ".jpg", ".jpeg"):
+        tex = model.with_suffix(ext)
+        if tex.exists():
+            return tex
+    return None
 
 
 def get_model3d_info(character_name: str) -> Dict[str, Any]:
@@ -195,7 +199,7 @@ def _purge_combination(out_dir: Path, signature: str) -> None:
     """Remove any stored model of this outfit combination (model + texture +
     sidecar), whatever its format/source — the caller writes a fresh one."""
     for old in out_dir.glob(f"{signature}.*"):
-        if old.suffix.lower() in MODEL_EXTS + (".png", ".json"):
+        if old.suffix.lower() in MODEL_EXTS + (".png", ".jpg", ".jpeg", ".json"):
             old.unlink()
 
 
@@ -388,9 +392,10 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             if old != path and old.suffix.lower() in MODEL_EXTS:
                 old.unlink()
         if not res.get("texture_path"):
-            stale_tex = path.with_suffix(".png")
-            if stale_tex.exists():
-                stale_tex.unlink()
+            for ext in (".png", ".jpg", ".jpeg"):
+                stale_tex = path.with_suffix(ext)
+                if stale_tex.exists():
+                    stale_tex.unlink()
         meta = {
             "created_at": utc_now_iso(),
             "source": "generated",

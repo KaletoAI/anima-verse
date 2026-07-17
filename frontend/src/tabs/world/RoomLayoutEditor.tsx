@@ -3,13 +3,16 @@
  * location editor's "3D world" tab. Rooms are placed as rectangles on the
  * building footprint: drag to move, corner handle to resize, ↻ rotates in
  * 90° steps, "Set exit" places the walk-in/out point with one click inside
- * the room. Everything edits the LOCATION draft (rooms[].layout) and is
- * persisted by the location's Save button — the external 3D client reads the
- * layout from /world/locations; rooms without a layout fall back to its
- * auto-grid.
+ * the room, and animation markers (spots a figure with a matching animation
+ * snaps to — kinds from the OPEN clip vocabulary, nothing hardcoded) are
+ * placed the same way. Everything edits the LOCATION draft (rooms[].layout)
+ * and is persisted by the location's Save button — the external 3D client
+ * reads the layout from /world/locations; rooms without a layout fall back
+ * to its auto-grid.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import { apiGet } from '../../lib/api'
 import type { Room, RoomLayout } from './worldTypes'
 
 const CANVAS_W = 420
@@ -21,6 +24,9 @@ interface RoomLayoutEditorProps {
    *  aspect ratio only; all layout values stay fractions. */
   footprint?: number[]
   onChange: (rooms: Room[]) => void
+  /** Reports the selected room id ('' = none) — the Floor-plan tab shows the
+   *  model adjustment strip for it. */
+  onSelectRoom?: (roomId: string) => void
 }
 
 type DragState =
@@ -31,11 +37,28 @@ type DragState =
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
 const r4 = (v: number) => Math.round(v * 10000) / 10000
 
-export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, footprint, onChange, onSelectRoom }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const [level, setLevel] = useState(0)
-  const [selected, setSelected] = useState<string>('')
-  const [exitMode, setExitMode] = useState(false)
+  const [selected, setSelectedRaw] = useState<string>('')
+  const setSelected = useCallback((id: string) => {
+    setSelectedRaw(id)
+    onSelectRoom?.(id)
+  }, [onSelectRoom])
+  // Click-to-place modes: the next click inside the room sets the exit point
+  // or drops an animation marker of the chosen kind.
+  const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker'>('')
+  const [markerKind, setMarkerKind] = useState('')
+  const [clipKinds, setClipKinds] = useState<string[]>([])
+  useEffect(() => {
+    apiGet<{ kinds?: string[] }>('/assets/animation-clips')
+      .then((d) => {
+        const kinds = d.kinds || []
+        setClipKinds(kinds)
+        setMarkerKind((k) => k || kinds[0] || '')
+      })
+      .catch(() => setClipKinds([]))
+  }, [])
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState>(null)
   const roomsRef = useRef(rooms)
@@ -101,7 +124,7 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
   }, [updateLayout])
 
   const startDrag = useCallback((e: React.PointerEvent, room: Room, kind: 'move' | 'resize') => {
-    if (exitMode) return
+    if (clickMode) return
     const lay = room.layout
     if (!lay || !room.id) return
     e.preventDefault()
@@ -110,20 +133,27 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
     dragRef.current = kind === 'move'
       ? { kind, roomId: room.id, startX: e.clientX, startY: e.clientY, origX: lay.x, origY: lay.y }
       : { kind, roomId: room.id, startX: e.clientX, startY: e.clientY, origW: lay.w, origD: lay.d }
-  }, [exitMode])
+  }, [clickMode])
 
-  // Exit mode: one click inside a room sets the walk-in/out point as a
-  // fraction of the ROOM rectangle (client contract).
+  // Click-to-place: one click inside a room sets the exit point or drops an
+  // animation marker — both as fractions of the ROOM rectangle (contract).
   const onRoomClick = useCallback((e: React.MouseEvent, room: Room) => {
-    if (!exitMode || !room.id || !room.layout) return
+    if (!clickMode || !room.id || !room.layout) return
     e.stopPropagation()
     const target = e.currentTarget as HTMLDivElement
     const rect = target.getBoundingClientRect()
-    const ex = r4(clamp((e.clientX - rect.left) / rect.width, 0, 1))
-    const ey = r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))
-    updateLayout(room.id, { exit: [ex, ey] })
-    setExitMode(false)
-  }, [exitMode, updateLayout])
+    const px = r4(clamp((e.clientX - rect.left) / rect.width, 0, 1))
+    const py = r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))
+    if (clickMode === 'exit') {
+      updateLayout(room.id, { exit: [px, py] })
+    } else if (markerKind) {
+      updateLayout(room.id, {
+        markers: [...(room.layout.markers || []),
+                  { at: [px, py] as [number, number], animation: markerKind }],
+      })
+    }
+    setClickMode('')
+  }, [clickMode, markerKind, updateLayout])
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
 
@@ -142,7 +172,7 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
               const n = parseInt(e.target.value, 10)
               setLevel(Number.isFinite(n) ? n : 0)
               setSelected('')
-              setExitMode(false)
+              setClickMode('')
             }}
           />
         </label>
@@ -153,7 +183,7 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
                 key={lv}
                 type="button"
                 className={`ga-btn ga-btn-sm${lv === level ? ' ga-btn-primary' : ''}`}
-                onClick={() => { setLevel(lv); setSelected(''); setExitMode(false) }}
+                onClick={() => { setLevel(lv); setSelected(''); setClickMode('') }}
                 title={t('Rooms on this level: {n}').replace('{n}',
                   String(rooms.filter((r) => r.layout && (r.layout.level || 0) === lv).length))}
               >
@@ -173,9 +203,9 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
           position: 'relative', width: CANVAS_W, height: canvasH, maxWidth: '100%',
           border: '1px solid var(--border, #30363d)', borderRadius: 6,
           background: 'rgba(255,255,255,0.03)', overflow: 'hidden', touchAction: 'none',
-          cursor: exitMode ? 'crosshair' : undefined,
+          cursor: clickMode ? 'crosshair' : undefined,
         }}
-        onClick={() => { if (!exitMode) setSelected('') }}
+        onClick={() => { if (!clickMode) setSelected('') }}
       >
         {placed.map((room) => {
           const lay = room.layout!
@@ -186,7 +216,7 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
               onPointerDown={(e) => startDrag(e, room, 'move')}
               onClick={(e) => {
                 e.stopPropagation()
-                if (exitMode) onRoomClick(e, room)
+                if (clickMode) onRoomClick(e, room)
                 else setSelected(room.id || '')
               }}
               title={room.name || room.id}
@@ -197,7 +227,7 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
                 border: `2px solid ${isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)'}`,
                 background: isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)',
                 borderRadius: 4, boxSizing: 'border-box',
-                cursor: exitMode ? 'crosshair' : 'move', userSelect: 'none',
+                cursor: clickMode ? 'crosshair' : 'move', userSelect: 'none',
               }}
             >
               <span style={{
@@ -221,6 +251,20 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
                   }}
                 />
               ) : null}
+              {(lay.markers || []).map((m, i) => (
+                <span
+                  key={`${m.animation}-${i}`}
+                  title={m.animation}
+                  style={{
+                    position: 'absolute',
+                    left: `calc(${m.at[0] * 100}% - 4px)`,
+                    top: `calc(${m.at[1] * 100}% - 4px)`,
+                    width: 8, height: 8, borderRadius: '50%',
+                    background: '#3fb950', border: '1px solid #0d1117',
+                    pointerEvents: 'none',
+                  }}
+                />
+              ))}
               {/* Resize handle (bottom-right) */}
               <span
                 onPointerDown={(e) => startDrag(e, room, 'resize')}
@@ -272,6 +316,13 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
                   ...(lay.exit
                     ? { exit: [r4(1 - lay.exit[1]), r4(lay.exit[0])] as [number, number] }
                     : {}),
+                  // Markers are content points too — they turn with the room.
+                  ...(lay.markers?.length
+                    ? { markers: lay.markers.map((m) => ({
+                        ...m,
+                        at: [r4(1 - m.at[1]), r4(m.at[0])] as [number, number],
+                      })) }
+                    : {}),
                 })
               }}
               title={t('Rotate the room 90° clockwise — rectangle, exit point and 3D model turn together.')}
@@ -280,11 +331,11 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
             </button>
             <button
               type="button"
-              className={`ga-btn ga-btn-sm${exitMode ? ' ga-btn-primary' : ''}`}
-              onClick={() => setExitMode((v) => !v)}
+              className={`ga-btn ga-btn-sm${clickMode === 'exit' ? ' ga-btn-primary' : ''}`}
+              onClick={() => setClickMode((m) => (m === 'exit' ? '' : 'exit'))}
               title={t('Then click inside the room to place the walk-in/out point.')}
             >
-              🚪 {exitMode ? t('Click into the room…') : t('Set exit')}
+              🚪 {clickMode === 'exit' ? t('Click into the room…') : t('Set exit')}
             </button>
             {selectedRoom.layout?.exit ? (
               <button
@@ -295,6 +346,29 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
               >
                 {t('Clear exit')}
               </button>
+            ) : null}
+            {clipKinds.length ? (
+              <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                <select
+                  className="ga-input"
+                  style={{ width: 110 }}
+                  value={markerKind}
+                  onChange={(e) => setMarkerKind(e.target.value)}
+                  title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
+                >
+                  {clipKinds.map((k) => (
+                    <option key={k} value={k}>{k}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={`ga-btn ga-btn-sm${clickMode === 'marker' ? ' ga-btn-primary' : ''}`}
+                  onClick={() => setClickMode((m) => (m === 'marker' ? '' : 'marker'))}
+                  title={t('Then click inside the room to drop the marker — figures with this animation snap to it.')}
+                >
+                  🎯 {clickMode === 'marker' ? t('Click into the room…') : t('Add marker')}
+                </button>
+              </span>
             ) : null}
             <button
               type="button"
@@ -309,6 +383,29 @@ export function RoomLayoutEditor({ rooms, footprint, onChange }: RoomLayoutEdito
           <span className="ga-hint">{t('Select a room rectangle to rotate it or set its exit.')}</span>
         )}
       </div>
+
+      {selectedRoom?.layout?.markers?.length ? (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="ga-hint">{t('Markers:')}</span>
+          {selectedRoom.layout.markers.map((m, i) => (
+            <span key={`${m.animation}-${i}`} className="ga-btn ga-btn-sm"
+              style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'default' }}>
+              🎯 {m.animation}
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm ga-btn-danger"
+                style={{ padding: '0 5px', lineHeight: 1.4 }}
+                onClick={() => updateLayout(selectedRoom.id || '', {
+                  markers: (selectedRoom.layout?.markers || []).filter((_, idx) => idx !== i),
+                })}
+                title={t('Remove this marker')}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       {unplaced.length ? (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
