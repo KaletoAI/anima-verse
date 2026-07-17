@@ -141,16 +141,26 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       .catch(() => undefined)
     return () => { stale = true }
   }, [locationId])
-  // Live height edits in the preview toolbar reach the derivation without
-  // a location reload (the dims helper caches per location).
+  // ANY model mutation (panel, adjust strip, preview toolbar) lands here
+  // via the generic refresh channel: refetch the fresh metas — plan width,
+  // rect derivation and the underlay recompute from them.
   useEffect(() => {
-    const onHeight = (e: Event) => {
-      const det = (e as CustomEvent).detail as { locationId?: string; heightM?: number }
-      if (det?.locationId !== locationId) return
-      setBDims((prev) => (prev ? { ...prev, heightM: det.heightM || 0 } : prev))
+    const onChanged = (e: Event) => {
+      const det = (e as CustomEvent).detail as { locationId?: string; roomId?: string }
+      if (det?.roomId) {
+        const rid = det.roomId
+        getRoomModelDims(rid)
+          .then((d) => setModelDims((prev) => ({ ...prev, [rid]: d })))
+          .catch(() => undefined)
+      }
+      if (det?.locationId === locationId) {
+        getBuildingDims(locationId)
+          .then((d) => setBDims(d ? { heightM: d.heightM, widthPerHeight: d.widthPerHeight } : null))
+          .catch(() => undefined)
+      }
     }
-    window.addEventListener('anima-building-height', onHeight)
-    return () => window.removeEventListener('anima-building-height', onHeight)
+    window.addEventListener('anima-model3d-changed', onChanged)
+    return () => window.removeEventListener('anima-model3d-changed', onChanged)
   }, [locationId])
   // Explicit anchor wins; otherwise auto-derived from the building model
   // (declared height × the mesh's width-per-height ratio).

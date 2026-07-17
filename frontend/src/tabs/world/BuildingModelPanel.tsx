@@ -15,6 +15,7 @@ import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog, type MeshBackend } from '../../components/MeshBackendDialog'
 import { Model3DViewer } from '../characters/Model3DViewer'
+import { notifyModel3dChanged } from './topDownSnapshot'
 import type { Map3D } from './worldTypes'
 
 export interface ModelEntry {
@@ -188,11 +189,12 @@ export function BuildingModelPanel({
           models: (prev.models || []).map((m) =>
             m.filename === current.filename ? { ...m, rotation: d.meta?.rotation } : m),
         } : prev))
+        notifyModel3dChanged(roomId ? { roomId } : { locationId })
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [current, enc, t, toast],
+    [current, enc, locationId, roomId, t, toast],
   )
 
   // Vertical placement offset of the PREVIEWED model — a model property like
@@ -218,10 +220,11 @@ export function BuildingModelPanel({
         models: (prev.models || []).map((m) =>
           m.filename === current.filename ? { ...m, offset_y: d.meta?.offset_y || 0 } : m),
       } : prev))
+      notifyModel3dChanged(roomId ? { roomId } : { locationId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [current, offsetDraft, enc, t, toast])
+  }, [current, offsetDraft, enc, locationId, roomId, t, toast])
 
   // Storeys the shown BUILDING model depicts — clients stretch the shell
   // to floors × level_height, so it stays aligned with the room levels
@@ -247,10 +250,11 @@ export function BuildingModelPanel({
         models: (prev.models || []).map((m) =>
           m.filename === current.filename ? { ...m, floors: d.meta?.floors || 0 } : m),
       } : prev))
+      notifyModel3dChanged({ locationId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [current, roomId, floorsDraft, enc, t, toast])
+  }, [current, roomId, floorsDraft, enc, locationId, t, toast])
 
   // Metre anchors of the detail view: building height (uniform scale
   // target; storey height = height / storeys) and room width (real-world
@@ -276,10 +280,11 @@ export function BuildingModelPanel({
         models: (prev.models || []).map((m) =>
           m.filename === current.filename ? { ...m, height_m: d.meta?.height_m || 0 } : m),
       } : prev))
+      notifyModel3dChanged({ locationId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [current, roomId, heightDraft, enc, t, toast])
+  }, [current, roomId, heightDraft, enc, locationId, t, toast])
 
   const [widthDraft, setWidthDraft] = useState('')
   useEffect(() => {
@@ -302,21 +307,23 @@ export function BuildingModelPanel({
         models: (prev.models || []).map((m) =>
           m.filename === current.filename ? { ...m, width_m: d.meta?.width_m || 0 } : m),
       } : prev))
+      notifyModel3dChanged(roomId ? { roomId } : { locationId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [current, roomId, widthDraft, enc, t, toast])
+  }, [current, roomId, widthDraft, enc, locationId, t, toast])
 
   // Make a stored model the active one (what the 3D clients get).
   const select = useCallback(async (filename: string) => {
     try {
       await apiPost(`/world/locations/${enc}/model3d/select`, { file: filename })
       await load()
+      notifyModel3dChanged(roomId ? { roomId } : { locationId })
       toast(t('Active model set'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, load, t, toast])
+  }, [enc, load, locationId, roomId, t, toast])
 
   const deleteModel = useCallback(async (filename: string) => {
     setArmedDel(null)
@@ -324,11 +331,12 @@ export function BuildingModelPanel({
       await apiDelete(`/world/locations/${enc}/model3d?file=${encodeURIComponent(filename)}`)
       if (preview === filename) setPreview('')
       await load()
+      notifyModel3dChanged(roomId ? { roomId } : { locationId })
       toast(t('Deleted'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, preview, load, t, toast])
+  }, [enc, preview, load, locationId, roomId, t, toast])
 
   // Upload a GLB as a NEW model (validated; surface 422 reasons).
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -347,11 +355,12 @@ export function BuildingModelPanel({
       }
       setPreview('')
       await load()
+      notifyModel3dChanged(roomId ? { roomId } : { locationId })
       toast(t('Saved'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, load, t, toast])
+  }, [enc, load, locationId, roomId, t, toast])
 
   const yaw = map3d?.rotation
   const size = map3d?.size

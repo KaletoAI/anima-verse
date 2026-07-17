@@ -23,7 +23,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
-import { getBuildingDims } from './topDownSnapshot'
+import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room } from './worldTypes'
 
@@ -129,21 +129,26 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     return () => { stale = true }
   }, [locationId])
 
-  // The adjust strip edits room-model metas the preview has cached —
-  // its width event patches the cache so marker figures rescale live.
+  // ANY model mutation anywhere (panel, adjust strip, preview toolbar)
+  // invalidates the module caches and lands here: drop our cached entry
+  // and refetch — everything derived recomputes on the next rebuild.
   useEffect(() => {
-    const onWidth = (e: Event) => {
-      const det = (e as CustomEvent).detail as { roomId?: string; widthM?: number }
-      if (!det?.roomId) return
-      const entry = cacheRef.current.get(`room:${det.roomId}`)
-      if (entry && entry !== 'loading' && entry !== 'missing') {
-        entry.widthM = det.widthM || 0
-        setBump((b) => b + 1)
+    const onChanged = (e: Event) => {
+      const det = (e as CustomEvent).detail as { locationId?: string; roomId?: string }
+      if (det?.roomId) {
+        cacheRef.current.delete(`room:${det.roomId}`)
       }
+      if (det?.locationId === locationId) {
+        cacheRef.current.delete('building')
+        getBuildingDims(locationId)
+          .then((d) => { if (d) wphRef.current = d.widthPerHeight; setBump((b) => b + 1) })
+          .catch(() => undefined)
+      }
+      setBump((b) => b + 1)
     }
-    window.addEventListener('anima-room-model-width', onWidth)
-    return () => window.removeEventListener('anima-room-model-width', onWidth)
-  }, [])
+    window.addEventListener('anima-model3d-changed', onChanged)
+    return () => window.removeEventListener('anima-model3d-changed', onChanged)
+  }, [locationId])
 
   // Active building model in the cache (re-read on every bump-triggered
   // render) — feeds the "Model storeys" field in the toolbar.
@@ -159,10 +164,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     void apiPost<{ meta?: { floors?: number } }>(
       `/world/locations/${encodeURIComponent(locationId)}/model3d/floors`,
       { floors })
-      .then((d) => {
-        buildingEntry.floors = d.meta?.floors || 0
-        setBump((b) => b + 1)
-      })
+      .then(() => notifyModel3dChanged({ locationId }))
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }
   const commitBuildingHeight = (raw: string) => {
@@ -172,15 +174,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     void apiPost<{ meta?: { height_m?: number } }>(
       `/world/locations/${encodeURIComponent(locationId)}/model3d/height`,
       { height_m: heightM })
-      .then((d) => {
-        buildingEntry.heightM = d.meta?.height_m || 0
-        setBump((b) => b + 1)
-        // The layout editor derives room sizes from the auto plan width —
-        // let it pick up the new height without a location reload.
-        window.dispatchEvent(new CustomEvent('anima-building-height', {
-          detail: { locationId, heightM: buildingEntry.heightM },
-        }))
-      })
+      .then(() => notifyModel3dChanged({ locationId }))
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }
   // Storey height derived from the building anchors — shown as the

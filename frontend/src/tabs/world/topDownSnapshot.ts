@@ -83,6 +83,18 @@ function loadBuildingModel(locationId: string): Promise<BuildingModel | null> {
   return p
 }
 
+/** ONE refresh channel for every 3D-model mutation (height, storeys,
+ *  width, rotation, offset, select, delete — from the panel, the adjust
+ *  strip or the preview toolbar): invalidates the module caches here and
+ *  broadcasts 'anima-model3d-changed'. The floor-plan editor and the
+ *  preview listen and refetch — EVERYTHING derived (plan width, rect
+ *  sizes, figures, storeys, shell) recomputes from fresh metas. */
+export function notifyModel3dChanged(detail: { locationId?: string; roomId?: string }) {
+  if (detail.roomId) modelCache.delete(detail.roomId)
+  if (detail.locationId) buildingCache.delete(detail.locationId)
+  window.dispatchEvent(new CustomEvent('anima-model3d-changed', { detail }))
+}
+
 /** Scale-anchor inputs of the building model: declared height/storeys plus
  *  the mesh's width-per-height ratio (largest XZ side / Y, measured AFTER
  *  the meta rotation fix). The auto plan width derives as

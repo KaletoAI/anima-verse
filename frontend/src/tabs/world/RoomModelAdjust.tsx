@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { notifyModel3dChanged } from './topDownSnapshot'
 
 interface ActiveModel {
   filename: string
@@ -63,10 +64,11 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
       const d = await apiPost<{ meta: { rotation?: ActiveModel['rotation'] } }>(
         `/world/locations/${enc}/model3d/rotation`, next)
       setModel((prev) => (prev ? { ...prev, rotation: d.meta?.rotation } : prev))
+      notifyModel3dChanged({ roomId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [model, enc, t, toast])
+  }, [model, enc, roomId, t, toast])
 
   const commitWidth = useCallback(async () => {
     if (!model) return
@@ -81,11 +83,7 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
         `/world/locations/${enc}/model3d/width`,
         { width_m: v, file: model.filename })
       setModel((prev) => (prev ? { ...prev, width_m: d.meta?.width_m || 0 } : prev))
-      // Live-update the floor-plan preview's cached meta (figures rescale
-      // immediately while dialing the width).
-      window.dispatchEvent(new CustomEvent('anima-room-model-width', {
-        detail: { roomId, widthM: d.meta?.width_m || 0 },
-      }))
+      notifyModel3dChanged({ roomId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
@@ -103,10 +101,11 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
         `/world/locations/${enc}/model3d/offset`,
         { offset_y: v, file: model.filename })
       setModel((prev) => (prev ? { ...prev, offset_y: d.meta?.offset_y || 0 } : prev))
+      notifyModel3dChanged({ roomId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [model, offsetDraft, enc, t, toast])
+  }, [model, offsetDraft, enc, roomId, t, toast])
 
   if (!loaded) return null
   if (!model) {
