@@ -65,6 +65,7 @@ from app.routes import storyteller as storyteller_route
 from app.routes import observer as observer_route
 from app.routes import play as play_route
 from app.routes import api_images as api_images_route
+from app.routes import assist as assist_route
 from app.scheduler.scheduler_manager import SchedulerManager
 from app.core.dependencies import initialize_channels, get_skill_manager
 from app.core.provider_manager import initialize_provider_manager
@@ -467,6 +468,7 @@ app.include_router(storyteller_route.router)
 app.include_router(observer_route.router)
 app.include_router(play_route.router)
 app.include_router(api_images_route.router)
+app.include_router(assist_route.router)
 
 # Static files (the legacy vanilla-JS UI in templates/index.html was removed)
 app.mount("/static", StaticFiles(directory="static"), name="static")

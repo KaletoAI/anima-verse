@@ -9,6 +9,9 @@ import { GameClock } from './components/GameClock'
 import { useAuth } from './lib/AuthGate'
 import { HelpProvider } from './help/HelpContext'
 import { HelpPanel } from './help/HelpPanel'
+import { TranslatePanel } from './help/TranslatePanel'
+import { PromptHelpPanel } from './help/PromptHelpPanel'
+import { SidePanelDock } from './help/SidePanelDock'
 
 function readHashTab(): TabId {
   const raw = window.location.hash.replace(/^#\/?/, '').toLowerCase()
@@ -95,6 +98,9 @@ export default function App() {
         )}
       </main>
       <HelpPanel />
+      <TranslatePanel />
+      <PromptHelpPanel />
+      <SidePanelDock />
     </div>
     </HelpProvider>
   )
