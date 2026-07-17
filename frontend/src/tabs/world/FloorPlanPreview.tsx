@@ -234,26 +234,38 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
       // kind as a label — placement is judgeable at a glance. A simple
       // mannequin for now; an animated skinned figure would need a bundled
       // rigged model.
-      for (const m of lay.markers || []) {
+      ;(lay.markers || []).forEach((m, mi) => {
         const mx = (m.at[0] - 0.5) * w
         const mz = (m.at[1] - 0.5) * d
-        const floor = -lh * 0.44
+        // offset_y is additive to the sampled seat height in the client —
+        // the preview has no sampling, so it applies from the room floor.
+        const floor = -lh * 0.44 + (m.offset_y || 0)
+        const fig = new THREE.Group()
         const dot = new THREE.Mesh(
           new THREE.SphereGeometry(0.1, 12, 12),
           new THREE.MeshBasicMaterial({ color: 0x3fb950 }),
         )
-        dot.position.set(mx, floor, mz)
-        roomGroup.add(dot)
+        dot.position.y = floor
+        fig.add(dot)
 
         const figMat = new THREE.MeshStandardMaterial({
           color: 0x3fb950, transparent: true, opacity: 0.85,
         })
         const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.3, 4, 10), figMat)
-        body.position.set(mx, floor + 0.24, mz)
-        roomGroup.add(body)
+        body.position.y = floor + 0.24
+        fig.add(body)
         const head = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), figMat)
-        head.position.set(mx, floor + 0.5, mz)
-        roomGroup.add(head)
+        head.position.y = floor + 0.5
+        fig.add(head)
+        // Facing nose — only when a facing is set (0 = south/+Z, 90 = east/+X;
+        // unset = the client decides, so the preview stays direction-less).
+        if (m.rotation !== undefined) {
+          const nose = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 10), figMat)
+          nose.rotation.x = Math.PI / 2
+          nose.position.set(0, floor + 0.42, 0.14)
+          fig.add(nose)
+          fig.rotation.y = ((m.rotation || 0) * Math.PI) / 180
+        }
 
         const mc = document.createElement('canvas')
         mc.width = 128
@@ -266,15 +278,18 @@ export function FloorPlanPreview({ locationId, rooms, levelHeightM, height = 360
           mctx.shadowColor = 'rgba(0,0,0,0.9)'
           mctx.shadowBlur = 5
           mctx.fillStyle = '#7ee2a0'
-          mctx.fillText(m.animation.slice(0, 10), 64, 20)
+          mctx.fillText(`${mi + 1} · ${m.animation}`.slice(0, 14), 64, 20)
         }
         const msprite = new THREE.Sprite(new THREE.SpriteMaterial({
           map: new THREE.CanvasTexture(mc), transparent: true, depthTest: false,
         }))
         msprite.scale.set(1.3, 0.4, 1)
-        msprite.position.set(mx, floor + 0.78, mz)
-        roomGroup.add(msprite)
-      }
+        msprite.position.y = floor + 0.78
+        fig.add(msprite)
+
+        fig.position.set(mx, 0, mz)
+        roomGroup.add(fig)
+      })
 
       // Name label as a canvas sprite floating above the box.
       const canvas = document.createElement('canvas')

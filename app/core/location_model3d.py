@@ -222,13 +222,15 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
 
 
 def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, Any]]:
-    """Lean meta for the 3D client (``{format, rig, rotation}``) of the ACTIVE
-    model, or None when there is none — no backend/model enumeration (that is
-    the admin status's job). ``rotation`` is the admin's persisted 90°-step
-    orientation fix; the client applies it to the model root on load. Map
-    placement (yaw + tile size) is NOT here — that is ``map3d.rotation``/
-    ``map3d.size`` on the location (rooms: ``room.layout``), delivered via
-    the worldmap/locations (see schnittstellen-3d.md)."""
+    """Lean meta for the 3D client (``{format, rig, rotation, offset_y,
+    signature}``) of the ACTIVE model, or None when there is none — no
+    backend/model enumeration (that is the admin status's job). ``rotation``
+    is the admin's persisted 90°-step orientation fix; the client applies it
+    to the model root on load. Map placement (yaw + tile size) is NOT here —
+    that is ``map3d.rotation``/``map3d.size`` on the location (rooms:
+    ``room.layout``), delivered via the worldmap/locations (see
+    schnittstellen-3d.md)."""
+    import hashlib
     p = find_building_model(location_id, room_id)
     if not p:
         return None
@@ -239,7 +241,13 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
             # Vertical placement offset in metres (model property — reliefs
             # have different socket thicknesses; negative sinks the model
             # into the terrain, e.g. a park). Client applies it on load.
-            "offset_y": float(meta.get("offset_y") or 0.0)}
+            "offset_y": float(meta.get("offset_y") or 0.0),
+            # Changes whenever ANOTHER model file becomes active (new
+            # generation, upload, selection) — a running client polls the
+            # meta and re-downloads on a signature change (AV3D-2 addendum);
+            # rotation/offset edits are visible in the meta itself.
+            "signature": hashlib.md5(
+                f"{p.name}:{meta.get('created_at', '')}".encode()).hexdigest()[:12]}
 
 
 def model_file_path(location_id: str, filename: str,

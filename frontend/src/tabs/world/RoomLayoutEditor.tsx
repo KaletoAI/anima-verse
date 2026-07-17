@@ -41,12 +41,17 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
   const [selected, setSelectedRaw] = useState<string>('')
   const setSelected = useCallback((id: string) => {
     setSelectedRaw(id)
+    setMarkerSel(null)
     onSelectRoom?.(id)
   }, [onSelectRoom])
   // Click-to-place modes: the next click inside the room sets the exit point
   // or drops an animation marker of the chosen kind.
   const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker'>('')
   const [markerKind, setMarkerKind] = useState('')
+  // Selected marker (index into the selected room's markers) for the
+  // per-marker controls: facing, height offset, remove.
+  const [markerSel, setMarkerSel] = useState<number | null>(null)
+  const [markerOffDraft, setMarkerOffDraft] = useState('0')
   const [clipKinds, setClipKinds] = useState<string[]>([])
   useEffect(() => {
     apiGet<{ kinds?: string[] }>('/assets/animation-clips')
@@ -173,11 +178,16 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
         markers: [...(room.layout.markers || []),
                   { at: [px, py] as [number, number], animation: markerKind }],
       })
+      setMarkerSel((room.layout.markers || []).length)
     }
     setClickMode('')
   }, [clickMode, markerKind, updateLayout])
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
+  const selMarker = markerSel !== null ? selectedRoom?.layout?.markers?.[markerSel] : undefined
+  useEffect(() => {
+    setMarkerOffDraft(String(selMarker?.offset_y ?? 0))
+  }, [markerSel, selMarker?.offset_y])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
@@ -287,21 +297,21 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
               {(lay.markers || []).map((m, i) => (
                 <span
                   key={`${m.animation}-${i}`}
-                  title={`${m.animation} — ${t('click to remove')}`}
+                  title={`${i + 1} · ${m.animation}`}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation()
                     if (clickMode) return
-                    updateLayout(room.id || '', {
-                      markers: (lay.markers || []).filter((_, idx) => idx !== i),
-                    })
+                    setSelected(room.id || '')
+                    setMarkerSel(i)
                   }}
                   style={{
                     position: 'absolute',
                     left: `calc(${m.at[0] * 100}% - 5px)`,
                     top: `calc(${m.at[1] * 100}% - 5px)`,
                     width: 10, height: 10, borderRadius: '50%',
-                    background: '#3fb950', border: '1px solid #0d1117',
+                    background: '#3fb950',
+                    border: `2px solid ${room.id === selected && markerSel === i ? '#fff' : '#0d1117'}`,
                     cursor: 'pointer',
                   }}
                 />
@@ -362,6 +372,9 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
                     ? { markers: lay.markers.map((m) => ({
                         ...m,
                         at: [r4(1 - m.at[1]), r4(m.at[0])] as [number, number],
+                        ...(m.rotation !== undefined
+                          ? { rotation: (m.rotation + 90) % 360 }
+                          : {}),
                       })) }
                     : {}),
                 })
@@ -429,24 +442,80 @@ export function RoomLayoutEditor({ rooms, onChange, onSelectRoom }: RoomLayoutEd
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="ga-hint">{t('Markers:')}</span>
           {selectedRoom.layout.markers.map((m, i) => (
-            <span key={`${m.animation}-${i}`} className="ga-btn ga-btn-sm"
-              style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'default' }}>
-              🎯 {m.animation}
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm ga-btn-danger"
-                style={{ padding: '0 5px', lineHeight: 1.4 }}
-                onClick={() => updateLayout(selectedRoom.id || '', {
-                  markers: (selectedRoom.layout?.markers || []).filter((_, idx) => idx !== i),
-                })}
-                title={t('Remove this marker')}
-              >
-                ×
-              </button>
-            </span>
+            <button
+              key={`${m.animation}-${i}`}
+              type="button"
+              className={`ga-btn ga-btn-sm${markerSel === i ? ' ga-btn-primary' : ''}`}
+              onClick={() => setMarkerSel(markerSel === i ? null : i)}
+              title={t('Select this marker to adjust facing/height or remove it.')}
+            >
+              🎯 {i + 1} · {m.animation}
+            </button>
           ))}
         </div>
       ) : null}
+
+      {selectedRoom && markerSel !== null && selectedRoom.layout?.markers?.[markerSel] ? (() => {
+        const marker = selectedRoom.layout!.markers![markerSel]
+        const patchMarker = (patch: Partial<typeof marker> | null) => {
+          const markers = (selectedRoom.layout?.markers || [])
+            .map((m, idx) => (idx === markerSel ? { ...m, ...patch } : m))
+            .filter((_, idx) => !(patch === null && idx === markerSel))
+          if (patch === null) setMarkerSel(null)
+          updateLayout(selectedRoom.id || '', { markers })
+        }
+        // Facing per contract: 0 = south, 90 = east, 180 = north, 270 = west;
+        // unset = the client's face-the-neighbours default.
+        const FACING: Record<number, string> = { 0: 'S', 90: 'E', 180: 'N', 270: 'W' }
+        const cycleFacing = () => {
+          const cur = marker.rotation
+          const next = cur === undefined ? 0 : cur + 90
+          patchMarker(next >= 360 ? { rotation: undefined } : { rotation: next })
+        }
+        return (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="ga-hint" style={{ fontWeight: 600 }}>
+              🎯 {markerSel + 1} · {marker.animation}:
+            </span>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              onClick={cycleFacing}
+              title={t('Facing of the figure (0 south, 90 east, 180 north, 270 west; — = face the neighbours).')}
+            >
+              🧭 {marker.rotation === undefined ? '—' : `${FACING[marker.rotation] || ''} (${marker.rotation}°)`}
+            </button>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
+              {t('Height offset (m)')}
+              <input
+                className="ga-input"
+                type="number"
+                step={0.05}
+                style={{ width: 84 }}
+                value={markerOffDraft}
+                onChange={(e) => setMarkerOffDraft(e.target.value)}
+                onBlur={() => {
+                  const v = parseFloat(markerOffDraft)
+                  patchMarker(Number.isFinite(v) && v !== 0
+                    ? { offset_y: Math.round(v * 1000) / 1000 }
+                    : { offset_y: undefined })
+                  if (!Number.isFinite(v)) setMarkerOffDraft('0')
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                title={t('Additive to the seat height the client samples under the marker.')}
+              />
+            </label>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-danger"
+              onClick={() => patchMarker(null)}
+              title={t('Remove this marker')}
+            >
+              × {t('Remove')}
+            </button>
+          </div>
+        )
+      })() : null}
 
       {unplaced.length ? (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>

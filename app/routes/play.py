@@ -1295,6 +1295,17 @@ async def play_worldmap(user=Depends(get_current_user)):
         if (loc.get("map_patch_2d") or "").strip():
             entry["map_patch_2d"] = True
             entry["map_patch_span"] = int(loc.get("map_patch_span") or 3)
+        # Room-layout signature (AV3D-2 addendum): a running client loads
+        # /world/locations only once — this bump tells it a room layout of
+        # this location changed, so it can re-fetch specifically.
+        _lay_rooms = [(r.get("id"), r.get("layout"))
+                      for r in (loc.get("rooms") or [])
+                      if isinstance(r, dict) and r.get("layout")]
+        if _lay_rooms:
+            import hashlib as _hashlib
+            import json as _json
+            entry["layout_sig"] = _hashlib.md5(_json.dumps(
+                _lay_rooms, sort_keys=True, default=str).encode()).hexdigest()[:10]
         locations.append(entry)
 
     characters = []

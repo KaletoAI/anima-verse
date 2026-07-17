@@ -347,6 +347,10 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # figure with a matching active animation snaps to. ``at`` = fraction of
     # the ROOM rectangle, ``animation`` = a clip kind from the OPEN clip
     # vocabulary (nothing hardcoded — the editor offers what exists).
+    # Optional per marker: ``rotation`` = the figure's facing in degrees
+    # (0 = south, 90 = east, 180 = north, 270 = west; absent = the client's
+    # face-the-neighbours default) and ``offset_y`` (metres, ± — ADDITIVE to
+    # the client-sampled seat height under the marker).
     mk = raw.get("markers")
     if isinstance(mk, list):
         markers = []
@@ -358,13 +362,26 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             if not anim or not isinstance(at, (list, tuple)) or len(at) != 2:
                 continue
             try:
-                markers.append({
+                entry = {
                     "at": [round(min(max(float(at[0]), 0.0), 1.0), 4),
                            round(min(max(float(at[1]), 0.0), 1.0), 4)],
                     "animation": anim,
-                })
+                }
             except (TypeError, ValueError):
                 continue
+            rot = m.get("rotation")
+            if rot is not None and f"{rot}".strip() != "":
+                try:
+                    entry["rotation"] = int(round(float(rot))) % 360
+                except (TypeError, ValueError):
+                    pass
+            off = m.get("offset_y")
+            if off is not None and f"{off}".strip() != "":
+                try:
+                    entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
+                except (TypeError, ValueError):
+                    pass
+            markers.append(entry)
         if markers:
             out["markers"] = markers[:50]
     return out

@@ -12,8 +12,11 @@ export interface RoomLayout {
   exit?: [number, number]
   /** Animation markers: spots a figure with a matching active animation
    *  snaps to. at = fraction of the room rectangle; animation = a clip kind
-   *  from the open animation-clip vocabulary. */
-  markers?: Array<{ at: [number, number]; animation: string }>
+   *  from the open animation-clip vocabulary; rotation = facing in degrees
+   *  (0 south / 90 east / 180 north / 270 west, absent = client default);
+   *  offset_y = metres, additive to the sampled seat height. */
+  markers?: Array<{ at: [number, number]; animation: string
+    rotation?: number; offset_y?: number }>
 }
 
 export interface Room {
