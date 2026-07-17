@@ -11,7 +11,7 @@
  * reads the layout from /world/locations; rooms without a layout fall back
  * to its auto-grid.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { renderTopDownSnapshot } from './topDownSnapshot'
@@ -30,6 +30,9 @@ interface RoomLayoutEditorProps {
   /** Reports the selected room id ('' = none) — the Floor-plan tab shows the
    *  model adjustment strip for it. */
   onSelectRoom?: (roomId: string) => void
+  /** Rendered at the bottom INSIDE the editor's frame — the Floor-plan tab
+   *  slots the model adjustment strip of the selected room here. */
+  children?: ReactNode
 }
 
 type DragState =
@@ -40,7 +43,7 @@ type DragState =
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
 const r4 = (v: number) => Math.round(v * 10000) / 10000
 
-export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const [level, setLevel] = useState(0)
   const [selected, setSelectedRaw] = useState<string>('')
@@ -769,6 +772,8 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
           ))}
         </div>
       ) : null}
+
+      {children}
     </div>
   )
 }

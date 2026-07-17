@@ -500,7 +500,15 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           map3d={draft.map3d}
           onMap3d={updMap3d}
           onSelectRoom={setFloorRoomSel}
-        />
+        >
+          {floorSelRoom?.id ? (
+            <RoomModelAdjust
+              locationId={location.id}
+              roomId={floorSelRoom.id}
+              roomName={floorSelRoom.name || floorSelRoom.id}
+            />
+          ) : null}
+        </RoomLayoutEditor>
         <FloorPlanPreview
           locationId={location.id}
           rooms={draft.rooms || []}
@@ -508,13 +516,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           levelHeightM={draft.map3d?.level_height}
         />
       </div>
-      {floorSelRoom?.id ? (
-        <RoomModelAdjust
-          locationId={location.id}
-          roomId={floorSelRoom.id}
-          roomName={floorSelRoom.name || floorSelRoom.id}
-        />
-      ) : null}
     </div>
   )
 
