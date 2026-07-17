@@ -1,11 +1,12 @@
 /**
  * RoomLayoutEditor — the floor plan of a location (AV3D-2), embedded in the
- * location editor's "3D world" tab. Rooms are placed as rectangles on the
- * building footprint: drag to move, corner handle to resize, ↻ rotates in
- * 90° steps, "Set exit" places the walk-in/out point with one click inside
- * the room, and animation markers (spots a figure with a matching animation
- * snaps to — kinds from the OPEN clip vocabulary, nothing hardcoded) are
- * placed the same way. Everything edits the LOCATION draft (rooms[].layout)
+ * location editor's "Floor plan" tab. Rooms are placed as rectangles on the
+ * building footprint: drag to move, corner handle to resize; the toolbar at
+ * the right of the plan rotates in 90° steps, places the exit and animation
+ * markers (spots a figure with a matching animation snaps to — kinds from
+ * the OPEN clip vocabulary, nothing hardcoded) with one click inside the
+ * room, and draws the building outline / places the elevator (AV3D-12).
+ * Everything edits the LOCATION draft (rooms[].layout)
  * and is persisted by the location's Save button — the external 3D client
  * reads the layout from /world/locations; rooms without a layout fall back
  * to its auto-grid.
@@ -55,6 +56,8 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
   // Building outline drawing (AV3D-12): points collected while in outline
   // mode, committed to map3d.outline on finish (>= 3 points).
   const [outlineDraft, setOutlineDraft] = useState<Array<[number, number]>>([])
+  // Cursor position while drawing the outline — feeds the rubber-band lines.
+  const [hoverPt, setHoverPt] = useState<[number, number] | null>(null)
   // Selected marker (index into the selected room's markers) for the
   // per-marker controls: facing, height offset, remove.
   const [markerSel, setMarkerSel] = useState<number | null>(null)
@@ -199,6 +202,33 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
 
+  // Rotate the room AS A UNIT (clockwise on the plan): the rectangle swaps
+  // w/d around its centre, exit and markers turn with the content
+  // ((x,y) -> (1-y, x)), rotation yaws the room MODEL inside the rectangle.
+  const rotateSelected = () => {
+    const lay = selectedRoom?.layout
+    if (!lay || !selectedRoom) return
+    const w = lay.d
+    const d = lay.w
+    updateLayout(selectedRoom.id || '', {
+      rotation: (((lay.rotation || 0) + 90) % 360) || undefined,
+      w,
+      d,
+      x: r4(clamp(lay.x + (lay.w - w) / 2, 0, 1 - w)),
+      y: r4(clamp(lay.y + (lay.d - d) / 2, 0, 1 - d)),
+      ...(lay.exit
+        ? { exit: [r4(1 - lay.exit[1]), r4(lay.exit[0])] as [number, number] }
+        : {}),
+      ...(lay.markers?.length
+        ? { markers: lay.markers.map((m) => ({
+            ...m,
+            at: [r4(1 - m.at[1]), r4(m.at[0])] as [number, number],
+            ...(m.rotation !== undefined ? { rotation: (m.rotation + 90) % 360 } : {}),
+          })) }
+        : {}),
+    })
+  }
+
   return (
     <div className="ga-form" style={{ gap: 6 }}>
       <div className="ga-form-section-label">{t('Room layout (floor plan)')}</div>
@@ -244,72 +274,7 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
         </span>
       </div>
 
-      {onMap3d ? (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          {clickMode === 'outline' ? (
-            <>
-              <span className="ga-hint">{t('Click corner points on the canvas…')}</span>
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm ga-btn-primary"
-                disabled={outlineDraft.length < 3}
-                onClick={() => {
-                  onMap3d('outline', outlineDraft)
-                  setOutlineDraft([])
-                  setClickMode('')
-                }}
-              >
-                ✓ {t('Finish outline')} ({outlineDraft.length})
-              </button>
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                onClick={() => { setOutlineDraft([]); setClickMode('') }}
-              >
-                {t('Cancel')}
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              onClick={() => { setOutlineDraft([]); setClickMode('outline') }}
-              title={t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
-            >
-              🏗 {map3d?.outline?.length ? t('Redraw outline') : t('Draw outline')}
-            </button>
-          )}
-          {map3d?.outline?.length && clickMode !== 'outline' ? (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => onMap3d('outline', undefined)}
-              title={t('Remove the outline — the client falls back to the rectangle.')}
-            >
-              ✕ {t('Clear outline')}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className={`ga-btn ga-btn-sm${clickMode === 'elevator' ? ' ga-btn-primary' : ''}`}
-            onClick={() => setClickMode((m) => (m === 'elevator' ? '' : 'elevator'))}
-            title={t('Place the elevator with one click — it serves ALL levels (the client builds the shaft).')}
-          >
-            🛗 {clickMode === 'elevator' ? t('Click on the canvas…') : (map3d?.elevator ? t('Move elevator') : t('Set elevator'))}
-          </button>
-          {map3d?.elevator && clickMode !== 'elevator' ? (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => onMap3d('elevator', undefined)}
-              title={t('Remove the elevator')}
-            >
-              ✕
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
       <div
         ref={canvasRef}
         style={{
@@ -319,6 +284,13 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
           cursor: clickMode ? 'crosshair' : undefined,
         }}
         onClick={() => { if (!clickMode) setSelected('') }}
+        onPointerMove={(e) => {
+          if (clickMode !== 'outline') return
+          const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
+          setHoverPt([r4(clamp((e.clientX - rect.left) / rect.width, 0, 1)),
+                      r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))])
+        }}
+        onPointerLeave={() => setHoverPt(null)}
         onClickCapture={(e) => {
           // Building-level placement (outline points / elevator) applies at
           // CANVAS coordinates, also when the click lands inside a room —
@@ -352,6 +324,28 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
                 fill="none" stroke="#e0a356" strokeWidth={0.6} strokeDasharray="2 1.4"
               />
             ) : null}
+            {/* Rubber band: the running segment follows the cursor, and the
+                closing line back to the start point is always visible. */}
+            {clickMode === 'outline' && outlineDraft.length ? (() => {
+              const first = outlineDraft[0]
+              const last = outlineDraft[outlineDraft.length - 1]
+              const cur = hoverPt || last
+              return (
+                <>
+                  {hoverPt ? (
+                    <line x1={last[0] * 100} y1={last[1] * 100}
+                      x2={hoverPt[0] * 100} y2={hoverPt[1] * 100}
+                      stroke="#e0a356" strokeWidth={0.6} />
+                  ) : null}
+                  {(outlineDraft.length >= 2 || hoverPt) ? (
+                    <line x1={cur[0] * 100} y1={cur[1] * 100}
+                      x2={first[0] * 100} y2={first[1] * 100}
+                      stroke="#e0a356" strokeWidth={0.45}
+                      strokeDasharray="1.2 1.2" opacity={0.75} />
+                  ) : null}
+                </>
+              )
+            })() : null}
             {outlineDraft.map(([x, y], i) => (
               <circle key={i} cx={x * 100} cy={y * 100} r={1.1} fill="#e0a356" />
             ))}
@@ -463,111 +457,157 @@ export function RoomLayoutEditor({ rooms, onChange, map3d, onMap3d, onSelectRoom
         ) : null}
       </div>
 
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        {selectedRoom ? (
+      {/* Toolbar at the right side of the plan — room tools on top,
+          building tools (outline/elevator) below. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 118, flex: '0 0 auto' }}>
+        <span className="ga-hint">{t('Room')}</span>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={!selectedRoom}
+          onClick={rotateSelected}
+          title={t('Rotate the room 90° clockwise — rectangle, exit point and 3D model turn together.')}
+        >
+          ↻ 90° ({selectedRoom?.layout?.rotation || 0}°)
+        </button>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${clickMode === 'exit' ? ' ga-btn-primary' : ''}`}
+          disabled={!selectedRoom}
+          onClick={() => setClickMode((m) => (m === 'exit' ? '' : 'exit'))}
+          title={t('Then click inside the room to place the walk-in/out point.')}
+        >
+          🚪 {clickMode === 'exit' ? '…' : t('Exit')}
+        </button>
+        {selectedRoom?.layout?.exit ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            onClick={() => updateLayout(selectedRoom.id || '', { exit: undefined })}
+            title={t('Remove the exit point — the client falls back to the edge facing the building centre.')}
+          >
+            ⌫ {t('Exit')}
+          </button>
+        ) : null}
+        {clipKinds.length ? (
           <>
+            <select
+              className="ga-input"
+              style={{ width: '100%' }}
+              value={markerKind}
+              disabled={!selectedRoom}
+              onChange={(e) => setMarkerKind(e.target.value)}
+              title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
+            >
+              {clipKinds.map((k) => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
             <button
               type="button"
-              className="ga-btn ga-btn-sm"
-              onClick={() => {
-                // Rotate the room AS A UNIT (clockwise on the plan): the
-                // rectangle swaps w/d around its centre, the exit point
-                // turns with the content ((x,y) -> (1-y, x)) and rotation
-                // yaws the room MODEL inside the rectangle — plan, exit and
-                // 3D model stay in sync (x/y/w/d are always the rectangle AS
-                // PLACED, rotation only orients the content).
-                const lay = selectedRoom.layout
-                if (!lay) return
-                const w = lay.d
-                const d = lay.w
-                updateLayout(selectedRoom.id || '', {
-                  rotation: (((lay.rotation || 0) + 90) % 360) || undefined,
-                  w,
-                  d,
-                  x: r4(clamp(lay.x + (lay.w - w) / 2, 0, 1 - w)),
-                  y: r4(clamp(lay.y + (lay.d - d) / 2, 0, 1 - d)),
-                  ...(lay.exit
-                    ? { exit: [r4(1 - lay.exit[1]), r4(lay.exit[0])] as [number, number] }
-                    : {}),
-                  // Markers are content points too — they turn with the room.
-                  ...(lay.markers?.length
-                    ? { markers: lay.markers.map((m) => ({
-                        ...m,
-                        at: [r4(1 - m.at[1]), r4(m.at[0])] as [number, number],
-                        ...(m.rotation !== undefined
-                          ? { rotation: (m.rotation + 90) % 360 }
-                          : {}),
-                      })) }
-                    : {}),
-                })
-              }}
-              title={t('Rotate the room 90° clockwise — rectangle, exit point and 3D model turn together.')}
+              className={`ga-btn ga-btn-sm${clickMode === 'marker' ? ' ga-btn-primary' : ''}`}
+              disabled={!selectedRoom}
+              onClick={() => setClickMode((m) => (m === 'marker' ? '' : 'marker'))}
+              title={t('Then click inside the room to drop the marker — figures with this animation snap to it.')}
             >
-              ↻ +90° ({selectedRoom.layout?.rotation || 0}°)
+              🎯 {clickMode === 'marker' ? '…' : t('Marker')}
             </button>
-            <button
-              type="button"
-              className={`ga-btn ga-btn-sm${clickMode === 'exit' ? ' ga-btn-primary' : ''}`}
-              onClick={() => setClickMode((m) => (m === 'exit' ? '' : 'exit'))}
-              title={t('Then click inside the room to place the walk-in/out point.')}
-            >
-              🚪 {clickMode === 'exit' ? t('Click into the room…') : t('Set exit')}
-            </button>
-            {selectedRoom.layout?.exit ? (
+          </>
+        ) : null}
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm ga-btn-danger"
+          disabled={!selectedRoom}
+          onClick={() => { updateLayout(selectedRoom?.id || '', null); setSelected('') }}
+          title={t('Remove from the floor plan — the 3D client auto-grids this room again.')}
+        >
+          ✕ {t('Unplace')}
+        </button>
+        {onMap3d ? (
+          <>
+            <span className="ga-hint" style={{ marginTop: 6 }}>{t('Building')}</span>
+            {clickMode === 'outline' ? (
+              <>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm ga-btn-primary"
+                  disabled={outlineDraft.length < 3}
+                  onClick={() => {
+                    onMap3d('outline', outlineDraft)
+                    setOutlineDraft([])
+                    setHoverPt(null)
+                    setClickMode('')
+                  }}
+                  title={t('Finish outline')}
+                >
+                  ✓ ({outlineDraft.length})
+                </button>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  onClick={() => { setOutlineDraft([]); setHoverPt(null); setClickMode('') }}
+                >
+                  {t('Cancel')}
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 className="ga-btn ga-btn-sm"
-                onClick={() => updateLayout(selectedRoom.id || '', { exit: undefined })}
-                title={t('Remove the exit point — the client falls back to the edge facing the building centre.')}
+                onClick={() => { setOutlineDraft([]); setClickMode('outline') }}
+                title={t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
               >
-                {t('Clear exit')}
+                🏗 {t('Outline')}
               </button>
-            ) : null}
-            <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-              title={t('Show this room permanently in the 3D client, independent of the interior view — for outdoor rooms the building model does not cover.')}>
-              <input
-                type="checkbox"
-                checked={!!selectedRoom.layout?.always_visible}
-                onChange={(e) => updateLayout(selectedRoom.id || '', {
-                  always_visible: e.target.checked || undefined,
-                })}
-              />
-              <span>{t('Always visible')}</span>
-            </label>
-            {clipKinds.length ? (
-              <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                <select
-                  className="ga-input"
-                  style={{ width: 110 }}
-                  value={markerKind}
-                  onChange={(e) => setMarkerKind(e.target.value)}
-                  title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
-                >
-                  {clipKinds.map((k) => (
-                    <option key={k} value={k}>{k}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className={`ga-btn ga-btn-sm${clickMode === 'marker' ? ' ga-btn-primary' : ''}`}
-                  onClick={() => setClickMode((m) => (m === 'marker' ? '' : 'marker'))}
-                  title={t('Then click inside the room to drop the marker — figures with this animation snap to it.')}
-                >
-                  🎯 {clickMode === 'marker' ? t('Click into the room…') : t('Add marker')}
-                </button>
-              </span>
+            )}
+            {map3d?.outline?.length && clickMode !== 'outline' ? (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm ga-btn-danger"
+                onClick={() => onMap3d('outline', undefined)}
+                title={t('Remove the outline — the client falls back to the rectangle.')}
+              >
+                ⌫ {t('Outline')}
+              </button>
             ) : null}
             <button
               type="button"
-              className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => { updateLayout(selectedRoom.id || '', null); setSelected('') }}
-              title={t('Remove from the floor plan — the 3D client auto-grids this room again.')}
+              className={`ga-btn ga-btn-sm${clickMode === 'elevator' ? ' ga-btn-primary' : ''}`}
+              onClick={() => setClickMode((m) => (m === 'elevator' ? '' : 'elevator'))}
+              title={t('Place the elevator with one click — it serves ALL levels (the client builds the shaft).')}
             >
-              ✕ {t('Unplace')}
+              🛗 {clickMode === 'elevator' ? '…' : t('Elevator')}
             </button>
+            {map3d?.elevator && clickMode !== 'elevator' ? (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm ga-btn-danger"
+                onClick={() => onMap3d('elevator', undefined)}
+                title={t('Remove the elevator')}
+              >
+                ⌫ {t('Elevator')}
+              </button>
+            ) : null}
           </>
+        ) : null}
+      </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        {selectedRoom ? (
+          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+            title={t('Show this room permanently in the 3D client, independent of the interior view — for outdoor rooms the building model does not cover.')}>
+            <input
+              type="checkbox"
+              checked={!!selectedRoom.layout?.always_visible}
+              onChange={(e) => updateLayout(selectedRoom.id || '', {
+                always_visible: e.target.checked || undefined,
+              })}
+            />
+            <span>{t('Always visible')}</span>
+          </label>
         ) : (
-          <span className="ga-hint">{t('Select a room rectangle to rotate it or set its exit.')}</span>
+          <span className="ga-hint">{t('Select a room rectangle — the toolbar next to the plan works on it.')}</span>
         )}
       </div>
 

@@ -327,11 +327,14 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
 
   const tab3d = (
     <div className="ga-form">
+      {/* Two columns: metadata + building images left, the whole building
+          model panel right. */}
+      <div className="ga-loc-twocol">
+        <div className="ga-form" style={{ gap: 6 }}>
       <div className="ga-form-section-label">{t('Map metadata (3D clients)')}</div>
-      {/* 5-column grid: row 1 terrain/footprint/floors/figure-scale, row 2
-          style/color/level-height; the building prompt spans both rows in
-          column 5. */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1.4fr', gap: 12, alignItems: 'start' }}>
+      {/* 3-column grid; the building prompt spans 2×2 cells next to the
+          figure-scale field, the remaining fields flow around it. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'start' }}>
         <Field label={t('Terrain')} hint={t('Ground type of this map cell. Free text; without it, clients guess from the name.')}>
           <input
             className="ga-input"
@@ -407,7 +410,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             }}
           />
         </Field>
-        <div style={{ gridRow: 'span 2' }}>
+        <div style={{ gridColumn: 'span 2', gridRow: 'span 2' }}>
           <Field label={t('Building prompt')} help="image_prompt">
             <textarea
               className="ga-textarea"
@@ -463,8 +466,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         </Field>
       </div>
 
-      <div className="ga-loc-twocol">
-        <div className="ga-form" style={{ gap: 6 }}>
           <div className="ga-form-section-label">{t('Building images')}</div>
           <LocationGallery
             mode="3d"
