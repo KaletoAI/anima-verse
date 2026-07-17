@@ -286,6 +286,10 @@ Ursprüngliche Anforderung:
     gleiche Fläche wie die Raum-Layouts).
   - **Fahrstuhl platzieren** (ein Klick auf einer Etage):
     `map3d.elevator: [x, y]` — gilt automatisch für alle Etagen.
+  - **Checkbox „immer sichtbar" pro Raum** → `layout.always_visible`
+    (bool, Default false): Raum wird unabhängig von der Innenansicht
+    dauerhaft gezeigt — für Outdoor-Räume, die nicht schon im
+    Gebäude-3D-Modell abgebildet sind. Client liest das Feld bereits.
 - **Client (bereits eingebaut, mit Testdaten verifiziert):** pro genutzter
   Etage Bodenplatte in Konturform + Wände (Tür im EG am südlichsten
   Wandstück; Obergeschosse halbtransparent); Fahrstuhl als Schacht mit
