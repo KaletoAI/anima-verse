@@ -139,9 +139,9 @@ GET /play/rooms/{room_id}/model       → GLB-Bytes (ETag)
   Heuristik der Fallback.
 - **Pflege im Grundriss-Editor:** Marker per Klick setzen, Animations-Kind
   aus dem Clip-Vokabular wählen (dynamisch, keine feste Liste). Die
-  3D-Vorschau (`floorplan.html`) zeigt an jedem Marker eine Testfigur mit
-  der jeweiligen Animation, sobald Marker geliefert werden — so lässt sich
-  die Platzierung direkt beurteilen.
+  **Admin-Vorschau** zeigt an jedem Marker idealerweise eine Testfigur mit
+  der jeweiligen Animation — so lässt sich die Platzierung direkt
+  beurteilen. Der Spiel-Client nutzt die Marker für die echten Figuren.
 
 **Ausgang statt Treppen/Aufzüge:**
 - Treppen und Aufzüge werden vorerst ignoriert — keine begehbare
@@ -154,10 +154,29 @@ GET /play/rooms/{room_id}/model       → GLB-Bytes (ETag)
 - Ohne Angabe nimmt der Client die Mitte der dem Gebäudezentrum
   zugewandten Raumkante als Fallback.
 
+**Platzierungs-Semantik (Referenz für Vorschauen):** So rendert der
+Spiel-Client — eine Admin-Vorschau, die dem folgt, zeigt exakt dasselbe:
+- **Referenzfläche** = festes **8 × 8 m-Quadrat**, zentriert auf der
+  Kachel (unabhängig vom Gebäudestil). `layout.x/y` = linke obere Ecke,
+  `w/d` = Größe, alles als Fraktion 0..1 dieser Fläche; +x = Osten,
+  +y = Süden.
+- **Etage:** Bodenhöhe = `level × 3 m` (level 0 = Gelände).
+- **Raum-Modell:** wird auf Einheits-Grundfläche normalisiert (größte
+  XZ-Seite = 1, XZ zentriert, Unterkante y=0), dann uniform so skaliert,
+  dass es in das Raum-Rechteck passt (Faktor `min(w/fp_x, d/fp_z) × 0,96`),
+  Unterkante auf `Etagenboden + 0,12 m`. Danach wirken `rotation {x,y,z}`
+  (Grad) und `offset_y` (Meter) aus dem Modell-Meta.
+- **exit** = Fraktion der Raum-Grundfläche (gleiche Orientierung).
+- Figuren stehen in Räumen im **Maßstab 1/3** ihrer Kartengröße (für
+  Testfiguren in einer Vorschau).
+
 **Pflege:** am sinnvollsten ein kleiner Grundriss-Editor im Game-Admin
 (Räume als Rechtecke ziehen + Etagen-Wahl + Ausgangspunkt setzen, analog
 zum Map-Editor für Location-Positionen). Ableiten lässt sich das nicht
-sinnvoll.
+sinnvoll. Die 3D-Vorschau daneben ist die **vorhandene Admin-Vorschau**,
+erweitert nach obiger Semantik (die iframe-Einbettung der Client-Seite
+war ein verworfener Vorschlag; `floorplan.html` bleibt Debug-Werkzeug
+des Clients).
 
 **Fallback bleibt:** ohne Layout weiterhin Auto-Grid — kein Alles-oder-nichts.
 

@@ -340,14 +340,18 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     }
   });
 
-  // Räume mit Layout (AV3D-2): Position/Größe/Etage vom Server
+  // Räume mit Layout (AV3D-2): Position/Größe/Etage vom Server.
+  // Referenzfläche ist ein FESTES 8x8-m-Quadrat zentriert auf der Kachel —
+  // unabhängig vom Gebäudestil, damit Editor/Admin-Vorschau/Client dieselbe
+  // Geometrie sehen (Vertrag: schnittstellen-3d.md, Platzierungs-Semantik).
+  const LW = 8, LD = 8;
   loc.rooms.forEach((room, i) => {
     const lay = room.layout;
     if (!lay) return;
-    const roomW = Math.max(lay.w * W, 0.5);
-    const roomD = Math.max(lay.d * D, 0.5);
-    const x = -W / 2 + (lay.x + lay.w / 2) * W;
-    const z = -D / 2 + (lay.y + lay.d / 2) * D;
+    const roomW = Math.max(lay.w * LW, 0.5);
+    const roomD = Math.max(lay.d * LD, 0.5);
+    const x = -LW / 2 + (lay.x + lay.w / 2) * LW;
+    const z = -LD / 2 + (lay.y + lay.d / 2) * LD;
     const floorY = (lay.level ?? 0) * STOREY;
     // eigene Gruppe pro Raum — für den Fokus-Modus komplett ausblendbar
     const rg = new THREE.Group();
@@ -366,10 +370,10 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     // Ausgangspunkt: vom Server (exit) oder Mitte der dem Zentrum
     // zugewandten Raumkante als Fallback
     const ex = lay.exit
-      ? -W / 2 + (lay.x + lay.exit[0] * lay.w) * W
+      ? -LW / 2 + (lay.x + lay.exit[0] * lay.w) * LW
       : x - Math.sign(x) * roomW / 2 * (Math.abs(x) > Math.abs(z) ? 1 : 0);
     const ez = lay.exit
-      ? -D / 2 + (lay.y + lay.exit[1] * lay.d) * D
+      ? -LD / 2 + (lay.y + lay.exit[1] * lay.d) * LD
       : z - Math.sign(z) * roomD / 2 * (Math.abs(z) >= Math.abs(x) ? 1 : 0);
     const exitWorld = tile.center.clone().add(new THREE.Vector3(ex, floorY + 0.45, ez));
     tile.roomExits.set(room.id, exitWorld);

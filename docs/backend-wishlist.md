@@ -212,24 +212,25 @@ Ursprüngliche Anforderung:
 - **Fallback bleibt:** ohne Modell weiterhin die prozeduralen Formen
   (Stil aus `map3d.style`/`terrain`).
 
-## AV3D-10: Game-Admin — Location-Reiter „Floorplan" — angefordert (2026-07-16)
+## AV3D-10: Game-Admin — Location-Reiter „Floorplan" — angefordert (2026-07-16), korrigiert (2026-07-17)
 
 - **Neuer 3. Reiter „Floorplan"** pro Location: **links der Grundriss-Editor**
   (zieht aus dem 3D-Reiter um), **rechts eine 3D-Vorschau**.
-- **Die 3D-Vorschau liefert der 3D-Client fertig** — als iframe einbetten:
-  `http://<3d-client>/floorplan.html?location=<id>`
-  Sie zeigt die Location isoliert mit aufgedeckter Innenansicht
-  (Raum-Platten, Etagen, Exit-Marker, geladene Raum-Modelle) und pollt das
-  Layout alle 4 s — Änderungen im Editor erscheinen ohne Reload rechts.
-  Voraussetzung: der Browser ist im 3D-Client angemeldet (die Vorschau
-  nutzt dessen Session); sonst zeigt sie einen entsprechenden Hinweis.
+- **KORREKTUR (2026-07-17): Die 3D-Vorschau ist die VORHANDENE
+  Admin-Vorschau, korrekt erweitert** — die zwischenzeitlich empfohlene
+  iframe-Einbettung der Client-Seite (`floorplan.html`) war ein Vorschlag
+  des 3D-Clients, **nie Anforderung** — falls schon eingebaut, wieder
+  entfernen. Die Admin-Vorschau soll zeigen: Räume an Layout-Position mit
+  Etagen, Raum-Modelle mit `rotation`/`offset_y`, Exit-Punkte. Damit sie
+  exakt dasselbe rendert wie der Spiel-Client, ist die
+  **Platzierungs-Semantik jetzt als Vertrag dokumentiert**:
+  `docs/schnittstellen-3d.md` → „Platzierungs-Semantik (Referenz für
+  Vorschauen)". `floorplan.html` bleibt nur als Debug-Werkzeug des Clients.
 - **3D-Reiter:** die Bilder rücken hoch an die Stelle, wo bisher der
   Grundriss-Editor war.
-- **Nachtrag (2026-07-17):** Die Modell-Justierung der Räume (`offset_y`,
-  `rotation`) am besten ebenfalls auf den Floorplan-Reiter neben die
-  Vorschau legen — kein Fensterwechsel beim Einstellen. Die eingebettete
-  Vorschau pollt die Meta-Werte und zeigt Änderungen automatisch nach
-  wenigen Sekunden; UI/Regler sind Server-Sache, der Client stellt nur dar.
+- Die Modell-Justierung der Räume (`offset_y`, `rotation`) idealerweise
+  ebenfalls auf den Floorplan-Reiter neben die Vorschau — kein
+  Fensterwechsel beim Einstellen.
 
 ## AV3D-11: Generische Animations-Marker pro Raum — angefordert (2026-07-17)
 
@@ -241,9 +242,9 @@ Ursprüngliche Anforderung:
   `markers: [{ "at": [x, y], "animation": "sit" }, ...]`
   (`at` als Fraktion der Raum-Grundfläche).
 - **Pflege:** im Grundriss-Editor (Klick + Animations-Kind aus
-  `/assets/animation-clips`, dynamisch). Die 3D-Vorschau daneben
-  (`floorplan.html`) zeigt an jedem Marker eine Testfigur mit der
-  Animation — der Client baut das ein, sobald Marker im Layout ankommen.
+  `/assets/animation-clips`, dynamisch). Die Admin-Vorschau zeigt an
+  jedem Marker idealerweise eine Testfigur mit der Animation
+  (Platzierungs-Semantik und Figuren-Maßstab: `schnittstellen-3d.md`).
 - **Client-Verhalten:** Marker schlagen die Heuristik; Höhe ermittelt der
   Client selbst (Abtastung). Ohne Marker: Heuristik (Sitz-/Liegeflächen
   aus der Modell-Geometrie) — bereits eingebaut.
