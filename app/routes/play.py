@@ -427,16 +427,21 @@ def play_location_model_meta(location_id: str):
     return {**meta, "url": f"/play/locations/{quote(location_id)}/model"}
 
 
-@router.get("/play/test-figure/model")
-def play_test_figure_model(request: Request):
-    """A humanoid (mixamo-rigged) character model for preview TEST FIGURES
-    (floor-plan marker preview): the first available one. 404 when no
-    character has one — the preview falls back to its mannequin."""
+def _test_figure_file():
+    """The preview test figure, in priority order: a user-provided Mixamo
+    STANDARD character (X Bot & Co.) from shared/models/figure/ — else the
+    first humanoid character model as the fallback. Returns (path,
+    format, source) or (None, '', '')."""
     import json as _json
-    from fastapi.responses import Response
+    from app.core.paths import get_test_figure_dir
+    d = get_test_figure_dir()
+    if d.is_dir():
+        for p in sorted(d.iterdir()):
+            if p.is_file() and p.suffix.lower() in (".glb", ".gltf", ".fbx"):
+                fmt = "fbx" if p.suffix.lower() == ".fbx" else "glb"
+                return p, fmt, "standard"
     from app.models.character import list_available_characters
     from app.core.model3d import find_model3d
-    from app.core.http_files import etag_file_response
     for name in list_available_characters():
         p = find_model3d(name)
         if not p or p.suffix.lower() not in (".glb", ".gltf"):
@@ -447,8 +452,34 @@ def play_test_figure_model(request: Request):
             meta = {}
         if (meta.get("rig") or "mixamo") != "mixamo":
             continue
-        return etag_file_response(p, request, "model/gltf-binary")
-    return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+        return p, "glb", "character"
+    return None, "", ""
+
+
+@router.get("/play/test-figure/model")
+def play_test_figure_model(request: Request):
+    """The preview TEST FIGURE (floor-plan marker/scale figures): a
+    Mixamo standard character from shared/models/figure/ when provided,
+    else the first humanoid character model. 404 when neither exists —
+    the preview falls back to its mannequin."""
+    from fastapi.responses import Response
+    from app.core.http_files import etag_file_response
+    p, fmt, _src = _test_figure_file()
+    if not p:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media = "model/gltf-binary" if fmt == "glb" else "application/octet-stream"
+    return etag_file_response(p, request, media)
+
+
+@router.get("/play/test-figure/meta")
+def play_test_figure_meta():
+    """Format/source of the test figure — the preview picks its loader
+    (GLTF vs FBX) from it. 404 = no figure available."""
+    p, fmt, src = _test_figure_file()
+    if not p:
+        raise HTTPException(status_code=404, detail="No test figure")
+    return {"format": fmt, "source": src,
+            "url": "/play/test-figure/model"}
 
 
 # --- Room models (AV3D-2) — same contract as the building model, addressed

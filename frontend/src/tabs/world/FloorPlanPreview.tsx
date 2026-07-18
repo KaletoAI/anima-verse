@@ -235,17 +235,27 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     figRef.current = { status: 'loading' }
     ;(async () => {
       try {
-        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-        const gltf = await new GLTFLoader().loadAsync('/play/test-figure/model')
-        // NEUTRAL example figure: strip the character's textures/materials
-        // to one flat clay-gray material — the preview judges placement and
-        // scale, not a specific character. Replaced ONCE on the cached
-        // source; the skeleton clones share the material.
+        // Preferred: a Mixamo STANDARD character (X Bot & Co.) the admin
+        // dropped into shared/models/figure/ — FBX or GLB; fallback is the
+        // first humanoid character model. The meta names the format.
+        const meta = await apiGet<{ format?: string }>('/play/test-figure/meta')
+        let obj: Object3D
+        if ((meta.format || 'glb') === 'fbx') {
+          const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
+          obj = await new FBXLoader().loadAsync('/play/test-figure/model')
+        } else {
+          const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
+          obj = (await new GLTFLoader().loadAsync('/play/test-figure/model')).scene
+        }
+        // NEUTRAL example figure: strip any textures/materials to one flat
+        // clay-gray material — the preview judges placement and scale, not
+        // a specific look. Replaced ONCE on the cached source; the
+        // skeleton clones share the material.
         const THREE = await import('three')
         const clay = new THREE.MeshStandardMaterial({
           color: 0x9aa4af, roughness: 0.85, metalness: 0,
         })
-        gltf.scene.traverse((o: Object3D) => {
+        obj.traverse((o: Object3D) => {
           const mesh = o as Mesh
           if (!mesh.isMesh) return
           const old = mesh.material
@@ -253,9 +263,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           if (Array.isArray(old)) old.forEach((m) => m.dispose?.())
           else old?.dispose?.()
         })
-        figRef.current = { status: 'ready', obj: gltf.scene }
+        figRef.current = { status: 'ready', obj }
       } catch {
-        figRef.current = { status: 'missing' }  // no humanoid model → mannequin
+        figRef.current = { status: 'missing' }  // no figure → mannequin
       }
       setBump((b) => b + 1)
     })()

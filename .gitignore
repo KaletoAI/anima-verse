@@ -186,3 +186,7 @@ exports/
 shared/models/clips/*.fbx
 shared/models/clips/*.glb
 shared/models/clips/*.gltf
+# Shared test figure (Mixamo standard character), provided per installation
+shared/models/figure/*.fbx
+shared/models/figure/*.glb
+shared/models/figure/*.gltf

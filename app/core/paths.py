@@ -67,6 +67,20 @@ def get_animation_clips_dir() -> Path:
     return get_shared_dir() / "models" / "clips"
 
 
+def get_test_figure_dir() -> Path:
+    """Shared neutral TEST FIGURE (a Mixamo standard character like X Bot) —
+    world-independent, used by the admin previews for marker/scale figures.
+    User-provided binary like the clips (gitignored); see the README there.
+
+    ``TEST_FIGURE_DIR`` overrides the location — tests must set it (same
+    rule as ANIMATION_CLIPS_DIR: never touch the real user files).
+    """
+    override = os.environ.get("TEST_FIGURE_DIR", "").strip()
+    if override:
+        return Path(override)
+    return get_shared_dir() / "models" / "figure"
+
+
 def get_templates_dir() -> Path:
     """Character templates directory (shared across all worlds).
 
