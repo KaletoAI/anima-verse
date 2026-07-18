@@ -82,8 +82,15 @@ def list_surface_textures():
     matching the location ``terrain`` field; an empty list is the normal
     state (the client falls back to its procedural materials)."""
     from app.core.surface_textures import list_textures
-    return [{"kind": t["kind"], "url": t["url"], "size_m": t["size_m"]}
-            for t in list_textures()]
+    out = []
+    for t in list_textures():
+        if "blend" in t:
+            # Composition entry (AV3D-13 v2) — no url/size_m.
+            out.append({"kind": t["kind"], "blend": t["blend"]})
+        else:
+            out.append({"kind": t["kind"], "url": t["url"],
+                        "size_m": t["size_m"]})
+    return out
 
 
 @router.get("/surface-textures/{filename}")

@@ -174,12 +174,14 @@ export async function renderTopDownSnapshot(opts: {
         transparent: true, opacity: 0.55, depthWrite: false,
       })
     })
-    holder.add(clone)
+    const metaG = new THREE.Group()
+    metaG.add(clone)
+    metaG.rotation.set(deg(bModel.rotation.x), deg(bModel.rotation.y),
+                       deg(bModel.rotation.z))
+    holder.add(metaG)
     const mapYaw = m3?.rotation !== undefined
       ? m3.rotation : (building.fallbackYawDeg || 0)
-    holder.rotation.set(deg(bModel.rotation.x),
-                        deg(bModel.rotation.y) - deg(mapYaw),
-                        deg(bModel.rotation.z))
+    holder.rotation.y = -deg(mapYaw)
     holder.updateMatrixWorld(true)
     const br = new THREE.Box3().setFromObject(holder)
     const sr = br.getSize(new THREE.Vector3())
@@ -216,17 +218,21 @@ export async function renderTopDownSnapshot(opts: {
     const fit = new THREE.Group()
     fit.add(norm)
     fit.scale.setScalar(Math.min(w / (fpX || 1), d / (fpZ || 1)) * 0.96)
+    // Contract order: meta rotation fix first (inner), THEN the layout yaw
+    // as its own parent — one combined Euler drifts once an x/z fix is set.
     const holder = new THREE.Group()
     holder.add(fit)
-    holder.rotation.set(deg(entry.rotation.x),
-                        deg(entry.rotation.y) - deg(lay.rotation),
+    holder.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y),
                         deg(entry.rotation.z))
-    holder.updateMatrixWorld(true)
-    const b2 = new THREE.Box3().setFromObject(holder)
+    const yawG = new THREE.Group()
+    yawG.add(holder)
+    yawG.rotation.y = -deg(lay.rotation)
+    yawG.updateMatrixWorld(true)
+    const b2 = new THREE.Box3().setFromObject(yawG)
     const c2 = b2.getCenter(new THREE.Vector3())
-    holder.position.set((lay.x + lay.w / 2 - 0.5) * PLATE_M - c2.x, -b2.min.y,
-                        (lay.y + lay.d / 2 - 0.5) * PLATE_M - c2.z)
-    scene.add(holder)
+    yawG.position.set((lay.x + lay.w / 2 - 0.5) * PLATE_M - c2.x, -b2.min.y,
+                      (lay.y + lay.d / 2 - 0.5) * PLATE_M - c2.z)
+    scene.add(yawG)
   })
 
   // Straight down, up = -Z: image top = plan top, image left = plan left —

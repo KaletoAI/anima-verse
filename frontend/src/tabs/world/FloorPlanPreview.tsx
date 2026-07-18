@@ -381,19 +381,24 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       const fitScale = Math.min(targetW / (fpX || 1), targetD / (fpZ || 1)) * 0.96
       fit.scale.setScalar(fitScale)
 
+      // Contract order: meta rotation FIX first (inner group), THEN the
+      // layout yaw as its own parent — combining both in one Euler drifts
+      // as soon as an x/z fix is set (the yaw would tilt the fixed axis).
       const holder = new THREE.Group()
       holder.add(fit)
-      holder.rotation.set(deg(entry.rotation.x),
-                          deg(entry.rotation.y) - deg(yawDeg),
+      holder.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y),
                           deg(entry.rotation.z))
-      holder.updateMatrixWorld(true)
-      const b2 = new THREE.Box3().setFromObject(holder)
+      const yawG = new THREE.Group()
+      yawG.add(holder)
+      yawG.rotation.y = -deg(yawDeg)
+      yawG.updateMatrixWorld(true)
+      const b2 = new THREE.Box3().setFromObject(yawG)
       const c2 = b2.getCenter(new THREE.Vector3())
-      holder.position.set(cx - c2.x,
-                          floorY + 0.12 - b2.min.y + entry.offsetY,
-                          cz - c2.z)
-      holder.userData.__noDispose = true
-      boxes.add(holder)
+      yawG.position.set(cx - c2.x,
+                        floorY + 0.12 - b2.min.y + entry.offsetY,
+                        cz - c2.z)
+      yawG.userData.__noDispose = true
+      boxes.add(yawG)
       // World extent of the model's largest side — with the model's
       // declared real width this yields the room's content scale.
       return fitScale
@@ -833,12 +838,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           building.ghost = g
         }
         const clone = building.ghost.clone(true)
-        const holder = new THREE.Group()
-        holder.add(clone)
+        const metaG = new THREE.Group()
+        metaG.add(clone)
+        metaG.rotation.set(deg(building.rotation.x), deg(building.rotation.y),
+                           deg(building.rotation.z))
         const mapYaw = m3?.rotation !== undefined ? m3.rotation : fallbackYawDeg
-        holder.rotation.set(deg(building.rotation.x),
-                            deg(building.rotation.y) - deg(mapYaw),
-                            deg(building.rotation.z))
+        // Contract order: meta fix first, THEN the map yaw as its own parent.
+        const holder = new THREE.Group()
+        holder.add(metaG)
+        holder.rotation.y = -deg(mapYaw)
         holder.updateMatrixWorld(true)
         const br = new THREE.Box3().setFromObject(holder)
         const sr = br.getSize(new THREE.Vector3())
