@@ -201,16 +201,22 @@ _DEFAULT_IMAGE_USE_CASES = {
     # furnishings, so top-down and cutaway room views work without shells.
     # Outdoor rooms (a park section) use "room_model_outdoor" instead —
     # picked via the room's indoor/outdoor field (room overrides location).
+    # Wall avoidance (learned on Flux2, which IGNORES negative prompts —
+    # distilled guidance, no CFG negative): everything must be positive, and
+    # negation keywords ("no walls") plus the word "room" itself DRAW walls.
+    # So the subject is reframed: a bare FLOOR SLAB with furniture standing
+    # on it — an object that never had walls — floating like a game-asset
+    # product render. The negative stays for CFG backends (SD/Z-Image).
     "room_model": {
         "keywords": {
-            "prompt_style": "open room diorama, no walls, no ceiling, only the floor with its furniture and decor, three-quarter view, elevated eye level, the entire room in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "furniture and decor arranged on a bare rectangular floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high three-quarter camera angle, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_ROOM,
-            "prompt_instruction": "Write comma-separated tags for the WHOLE room as an open diorama — floor, furniture, decor, style. No walls at all, no ceiling, neutral background, no people.",
+            "prompt_instruction": "Write comma-separated tags for the furniture, decor, floor and style ONLY — the interior as a set piece on a bare floor slab. Never mention walls, ceilings or the building; describe just what stands on the floor. Neutral background, no people.",
         },
         "natural": {
-            "prompt_style": "a photo of a single room as an open diorama with no walls at all and no ceiling — only the floor plate with its furniture and decor, seen from a three-quarter angle at an elevated eye level, the entire room inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "a product render of an interior reduced to its bare rectangular floor slab with all of its furniture and decor arranged on top — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furniture. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed",
             "prompt_negative": _NEG_ROOM,
-            "prompt_instruction": "Describe the WHOLE room as an open diorama — floor, furniture, decor, style. No walls at all, no ceiling, neutral background, no people.",
+            "prompt_instruction": "Describe the furniture, decor, floor and style ONLY — the interior as a set piece on a bare floor slab. Never mention walls, ceilings or the building; describe just what stands on the floor. Neutral background, no people.",
         },
     },
     # Open-air "room" (park section, courtyard): no walls or ceiling at all.
