@@ -168,10 +168,35 @@ export function BuildingModelPanel({
     || models.find((m) => m.active)
     || models[0]
 
-  // Persisted 90°-step orientation fix of the PREVIEWED model: generated
-  // meshes come out arbitrarily oriented — each click rotates one axis by
-  // +90°, the viewer applies it live and the 3D client reads it from
-  // /model/meta (of the active model).
+  // Persisted orientation fix of the PREVIEWED model: generated meshes
+  // come out arbitrarily oriented AND often slightly tilted — ↻ adds a
+  // coarse +90°, the degree field sets a FREE exact angle per axis; the
+  // viewer applies it live and the 3D client reads it from /model/meta.
+  const setRotationAxis = useCallback(
+    async (axis: 'x' | 'y' | 'z', raw: string) => {
+      if (!current) return
+      const n = parseFloat(raw)
+      const v = Number.isFinite(n) ? ((n % 360) + 360) % 360 : 0
+      if (v === (current.rotation?.[axis] || 0)) return
+      const cur = current.rotation || {}
+      try {
+        const d = await apiPost<{ meta: { rotation?: ModelEntry['rotation'] } }>(
+          `/world/locations/${enc}/model3d/rotation`,
+          { x: cur.x || 0, y: cur.y || 0, z: cur.z || 0, [axis]: v,
+            file: current.filename })
+        setModel3d((prev) => (prev ? {
+          ...prev,
+          models: (prev.models || []).map((m) =>
+            m.filename === current.filename ? { ...m, rotation: d.meta?.rotation } : m),
+        } : prev))
+        notifyModel3dChanged(roomId ? { roomId } : { locationId })
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [current, enc, locationId, roomId, t, toast],
+  )
+
   const rotate = useCallback(
     async (axis: 'x' | 'y' | 'z') => {
       if (!current) return
@@ -448,14 +473,29 @@ export function BuildingModelPanel({
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         {(['x', 'y', 'z'] as const).map((axis) => (
-          <button
-            key={axis}
-            type="button"
-            className="ga-btn ga-btn-sm"
-            onClick={() => { void rotate(axis) }}
-          >
-            ↻ {axis.toUpperCase()} +90° ({current.rotation?.[axis] || 0}°)
-          </button>
+          <span key={axis} style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              onClick={() => { void rotate(axis) }}
+              title={t('+90°')}
+            >
+              ↻ {axis.toUpperCase()}
+            </button>
+            <input
+              key={`${axis}-${current.filename}-${current.rotation?.[axis] || 0}`}
+              className="ga-input"
+              type="number"
+              min={-360}
+              max={720}
+              step={1}
+              style={{ width: 62 }}
+              defaultValue={current.rotation?.[axis] || 0}
+              title={t('Exact angle in degrees — free rotation for meshes that came out tilted.')}
+              onBlur={(e) => { void setRotationAxis(axis, e.target.value) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          </span>
         ))}
         <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
           {t('Height offset (m)')}

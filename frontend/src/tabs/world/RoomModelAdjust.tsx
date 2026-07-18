@@ -52,6 +52,24 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
     return () => { stale = true }
   }, [enc])
 
+  const setRotationAxis = useCallback(async (axis: 'x' | 'y' | 'z', raw: string) => {
+    if (!model) return
+    const n = parseFloat(raw)
+    const v = Number.isFinite(n) ? ((n % 360) + 360) % 360 : 0
+    if (v === (model.rotation?.[axis] || 0)) return
+    const cur = model.rotation || {}
+    try {
+      const d = await apiPost<{ meta: { rotation?: ActiveModel['rotation'] } }>(
+        `/world/locations/${enc}/model3d/rotation`,
+        { x: cur.x || 0, y: cur.y || 0, z: cur.z || 0, [axis]: v,
+          file: model.filename })
+      setModel((prev) => (prev ? { ...prev, rotation: d.meta?.rotation } : prev))
+      notifyModel3dChanged({ roomId })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [model, enc, roomId, t, toast])
+
   const rotate = useCallback(async (axis: 'x' | 'y' | 'z') => {
     if (!model) return
     const cur = model.rotation || {}
@@ -121,14 +139,29 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
       <span className="ga-hint" style={{ fontWeight: 600 }}>{roomName}:</span>
       {(['x', 'y', 'z'] as const).map((axis) => (
-        <button
-          key={axis}
-          type="button"
-          className="ga-btn ga-btn-sm"
-          onClick={() => { void rotate(axis) }}
-        >
-          ↻ {axis.toUpperCase()} ({model.rotation?.[axis] || 0}°)
-        </button>
+        <span key={axis} style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            onClick={() => { void rotate(axis) }}
+            title={t('+90°')}
+          >
+            ↻ {axis.toUpperCase()}
+          </button>
+          <input
+            key={`${axis}-${model.filename}-${model.rotation?.[axis] || 0}`}
+            className="ga-input"
+            type="number"
+            min={-360}
+            max={720}
+            step={1}
+            style={{ width: 58 }}
+            defaultValue={model.rotation?.[axis] || 0}
+            title={t('Exact angle in degrees — free rotation for meshes that came out tilted.')}
+            onBlur={(e) => { void setRotationAxis(axis, e.target.value) }}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          />
+        </span>
       ))}
       <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
         {t('Height offset (m)')}

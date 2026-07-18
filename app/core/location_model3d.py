@@ -284,11 +284,11 @@ def model_file_path(location_id: str, filename: str,
 
 def set_rotation(location_id: str, rotation: Dict[str, Any],
                  room_id: str = "", filename: str = "") -> Dict[str, Any]:
-    """Persist the admin's orientation fix ({x,y,z} in degrees, each snapped
-    to 0/90/180/270) on ONE model's sidecar (default: the active model).
-    Generated meshes come out arbitrarily oriented and nobody can compute
-    which way is up — the admin dials it in the viewer, every client applies
-    it on load. Returns the updated sidecar meta."""
+    """Persist the admin's orientation fix ({x,y,z} in degrees, FREE values
+    0..359 — meshes also come out slightly tilted, not just axis-swapped)
+    on ONE model's sidecar (default: the active model). Nobody can compute
+    which way is up — the admin dials it in the viewer, every client
+    applies it on load. Returns the updated sidecar meta."""
     owner = _owner_id(location_id)
     if not owner:
         raise ValueError("no model")
@@ -298,13 +298,18 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
         raise ValueError("no model")
     meta = _read_sidecar(p)
     cur = meta.get("rotation") or {}
-    rot: Dict[str, int] = {}
+    rot: Dict[str, float] = {}
     for axis in ("x", "y", "z"):
         try:
-            v = int(rotation.get(axis, cur.get(axis, 0)) or 0)
+            v = float(rotation.get(axis, cur.get(axis, 0)) or 0)
         except (TypeError, ValueError):
-            v = int(cur.get(axis, 0) or 0)
-        rot[axis] = (v // 90 * 90) % 360
+            try:
+                v = float(cur.get(axis, 0) or 0)
+            except (TypeError, ValueError):
+                v = 0.0
+        v = round(v % 360, 1)
+        # Whole numbers stay ints in the sidecar (no 90.0 noise).
+        rot[axis] = int(v) if float(v).is_integer() else v
     meta["rotation"] = rot
     _write_sidecar(p, meta)
     return meta
