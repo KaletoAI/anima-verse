@@ -144,16 +144,11 @@ export function buildingLibrary(): ModelLibrary {
     }
     scene.updateMatrixWorld(true);
     let box = new THREE.Box3().setFromObject(scene);
-    let size = box.getSize(new THREE.Vector3());
-    // Z-up-Export aufrichten — aber nur, wenn das Modell auch aufgerichtet
-    // noch substanzielle Tiefe hätte: flache Relief-Modelle (Bild-Generierung)
-    // sind flach gemeint und würden als dünne Wand auf der Kachel stehen.
-    if (!explicit && size.z > size.y * 1.8 && size.y > Math.max(size.x, size.z) * 0.45) {
-      scene.rotation.x = -Math.PI / 2;
-      scene.updateMatrixWorld(true);
-      box = new THREE.Box3().setFromObject(scene);
-      size = box.getSize(new THREE.Vector3());
-    }
+    const size = box.getSize(new THREE.Vector3());
+    // KEIN Auto-Aufrichten mehr: Gebäude kommen als Y-up-GLB aus der
+    // Pipeline; die alte Z-up-Heuristik kippte normale flach-tiefe Häuser
+    // hochkant (Grenzfall Haus von Kai). Ausnahmen korrigiert der Admin
+    // über meta.rotation.
     if (!explicit) flipReliefFaceUp(scene, size);
     // Mesh-Proportion nach Rotations-Fix (für die plan_width_m-Auto-Ableitung)
     const aspectXZoverY = Math.max(size.x, size.z) / Math.max(size.y, 1e-3);

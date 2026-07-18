@@ -355,34 +355,17 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
   }
 }
 
-/** Innenansicht: Raum-Slabs im Auto-Grid, Labels, Eingangs-Marker. */
-function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; markers?: boolean } = {}) {
+/** Innenansicht: gesetzte Räume (Layout), Grundriss-Wände, Fahrstuhl. */
+function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean; markers?: boolean } = {}) {
   const loc = tile.loc;
-  if (!loc.rooms.length) return;
+  // NUR gesetzte Räume (mit Layout) werden angezeigt — ohne sie gibt es
+  // keine Innenansicht (kein Auto-Grid, keine Legacy-Wände); das Gebäude
+  // bleibt beim Reinzoomen geschlossen.
+  if (!loc.rooms.some((r) => r.layout)) return;
   const g = new THREE.Group();
   g.visible = false;
   // Etagenhöhe: Server-Einstellung (map3d.level_height, Welt-Meter)
   const storey = storeyHeight(loc);
-
-  const W = spec.w;
-  const D = spec.d;
-  if (opts.walls !== false) {
-    const floorMat = std({ color: 0xd8d0c2 });
-    const floor = box(W, 0.25, D, floorMat);
-    floor.position.y = 0.125;
-    g.add(floor);
-
-    // niedrige Außenwände, damit man "hineinsehen" kann
-    const wallMat = std({ color: 0xa89a86 });
-    const t = 0.22, wh = 1.1;
-    for (const [w, d, x, z] of [
-      [W, t, 0, -D / 2], [W, t, 0, D / 2], [t, D, -W / 2, 0], [t, D, W / 2, 0],
-    ] as const) {
-      const wall = box(w, wh, d, wallMat);
-      wall.position.set(x, wh / 2 + 0.25, z);
-      g.add(wall);
-    }
-  }
 
   const open = opts.walls === false; // Naturfläche: flacher + durchscheinend
   const addRoomCommon = (room: Room, x: number, z: number, floorY: number, hue: number, rw: number, rd: number, parent: THREE.Group = g): THREE.Mesh => {
@@ -406,27 +389,6 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     tile.roomCenters.set(room.name, worldPos);
     return plate;
   };
-
-  // Räume ohne Layout: Auto-Grid im Erdgeschoss (bisheriges Verhalten)
-  const autoRooms = loc.rooms.filter((r) => !r.layout);
-  const n = autoRooms.length;
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
-  const gap = 0.35;
-  const rw = n ? (W - 0.6 - gap * (cols - 1)) / cols : 0;
-  const rd = n ? (D - 0.6 - gap * (rows - 1)) / rows : 0;
-  autoRooms.forEach((room, i) => {
-    const x = -W / 2 + 0.3 + (i % cols) * (rw + gap) + rw / 2;
-    const z = -D / 2 + 0.3 + Math.floor(i / cols) * (rd + gap) + rd / 2;
-    addRoomCommon(room, x, z, 0, (i * 67) % 360, rw, rd);
-
-    if (opts.markers && loc.entry_room && room.id === loc.entry_room) {
-      const mark = new THREE.Mesh(new THREE.CircleGeometry(0.45, 20), std({ color: 0xe0b64a }));
-      mark.rotation.x = -Math.PI / 2;
-      mark.position.set(x, 0.46, z + rd / 2 - 0.5);
-      g.add(mark);
-    }
-  });
 
   // Räume mit Layout (AV3D-2): Position/Größe/Etage vom Server.
   // Referenzfläche ist ein FESTES 8x8-m-Quadrat zentriert auf der Kachel —
@@ -624,30 +586,57 @@ function buildInterior(tile: Tile, spec: BuildingSpec, opts: { walls?: boolean; 
     }
   }
 
-  // AV3D-12: Fahrstuhl (map3d.elevator) — auf allen Etagen; Haltepunkte
-  // fürs Routing beim Etagenwechsel
+  // AV3D-12: Fahrstuhl (map3d.elevator) — verglaster Schacht mit Rahmen,
+  // Ebenen-Pads bündig zur Etagen-Platte, Kabine; die Zugangsseite (zur
+  // Gebäudemitte) bleibt offen. Haltepunkte fürs Etagen-Routing.
   const elev = loc.map3d?.elevator;
   if (elev?.length === 2 && usedLevels.size) {
     const exl = -LW / 2 + elev[0] * LW;
     const ezl = -LD / 2 + elev[1] * LD;
     const stopLevels = new Set([0, ...usedLevels]);
     const maxLevel = Math.max(...stopLevels);
-    const topY = (maxLevel + 1) * storey;
-    const postMat = std({ color: 0x8a93a0 });
-    for (const [px, pz] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]] as const) {
-      const post = box(0.06, topY, 0.06, postMat);
+    const topY = (maxLevel + 1) * storey + 0.08;
+    const frameMat = std({ color: 0x6d7681 });
+    const glassMat = std({ color: 0x9fc2d8, opacity: 0.22, roughness: 0.3 });
+    // Ecksäulen + Dach
+    for (const [px, pz] of [[-0.45, -0.45], [0.45, -0.45], [-0.45, 0.45], [0.45, 0.45]] as const) {
+      const post = box(0.07, topY, 0.07, frameMat);
       post.position.set(exl + px, topY / 2, ezl + pz);
       post.receiveShadow = false;
       g.add(post);
     }
+    const cap = box(0.98, 0.06, 0.98, frameMat);
+    cap.position.set(exl, topY + 0.03, ezl);
+    g.add(cap);
+    // Glas auf drei Seiten — offen Richtung Gebäudemitte
+    const open = Math.abs(exl) > Math.abs(ezl) ? (exl > 0 ? 'nx' : 'px') : (ezl > 0 ? 'nz' : 'pz');
+    const panes: Record<string, [number, number, number, number]> = {
+      px: [0.03, 0.84, exl + 0.45, ezl],
+      nx: [0.03, 0.84, exl - 0.45, ezl],
+      pz: [0.84, 0.03, exl, ezl + 0.45],
+      nz: [0.84, 0.03, exl, ezl - 0.45],
+    };
+    for (const [key, [w, d, px, pz]] of Object.entries(panes)) {
+      if (key === open) continue;
+      const pane = new THREE.Mesh(new THREE.BoxGeometry(w, topY, d), glassMat);
+      pane.position.set(px, topY / 2, pz);
+      g.add(pane);
+    }
+    // Ebenen-Pads bündig mit der Etagen-Platte + Haltepunkte
     tile.elevatorStops = new Map();
     for (const level of stopLevels) {
       const floorY = level * storey;
-      const plat = box(0.75, 0.06, 0.75, std({ color: 0xaab4be }));
-      plat.position.set(exl, floorY + 0.42, ezl);
-      g.add(plat);
-      tile.elevatorStops.set(level, tile.center.clone().add(new THREE.Vector3(exl, floorY + 0.45, ezl)));
+      const pad = box(0.8, 0.05, 0.8, std({ color: 0xaab4be }));
+      pad.position.set(exl, floorY + 0.08, ezl);
+      pad.receiveShadow = false;
+      g.add(pad);
+      tile.elevatorStops.set(level, tile.center.clone().add(new THREE.Vector3(exl, floorY + 0.11, ezl)));
     }
+    // Kabine (statisch im Erdgeschoss)
+    const cabH = Math.max(0.5, storey * 0.6);
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(0.7, cabH, 0.7), std({ color: 0x3d4650, opacity: 0.85 }));
+    cab.position.set(exl, 0.11 + cabH / 2, ezl);
+    g.add(cab);
   }
 
   // Etagen-Umschalter neben dem Label (nur bei mehreren Etagen; hängt an
