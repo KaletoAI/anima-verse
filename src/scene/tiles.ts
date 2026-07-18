@@ -954,16 +954,23 @@ export function applyBuildingModel(tile: Tile, model: THREE.Group) {
   let size = box.getSize(new THREE.Vector3());
   const frac = tile.loc.map3d?.size;
   const sizeFrac = frac && frac > 0.05 && frac <= 1.5 ? frac : 0.92;
-  const kXZ = (CELL * sizeFrac) / Math.max(size.x, size.z, 1e-3);
+  // Gebäude: uniform auf die größte Seite (Proportionen bleiben).
+  // Terrain-/Template-Kacheln (Wald usw.): beide Achsen getrennt füllen,
+  // damit Nachbar-Kacheln bei size=1 nahtlos aneinanderstoßen.
+  const fill = !tile.isBuilding;
+  const kUni = (CELL * sizeFrac) / Math.max(size.x, size.z, 1e-3);
+  const kX = fill ? (CELL * sizeFrac) / Math.max(size.x, 1e-3) : kUni;
+  const kZ = fill ? (CELL * sizeFrac) / Math.max(size.z, 1e-3) : kUni;
+  const kBaseY = fill ? Math.min(kX, kZ) : kUni;
   const metaA = model.userData.meta as { height_m?: number; offset_y?: number } | undefined;
   const anchor = locationAnchors.get(tile.loc.id);
   const kY = metaA?.height_m
     ? (metaA.height_m * (anchor?.k ?? 1)) / Math.max(size.y, 1e-3)
-    : kXZ;
-  // 4. Skalierung auf Welt-Achsen (XZ uniform -> kommutiert mit dem Yaw).
-  //    Kachel-Sicht startet uniform; der Fade blendet Y auf k_y (Detail).
-  model.scale.set(kXZ, kXZ, kXZ);
-  model.userData.scaleBase = kXZ;
+    : kBaseY;
+  // 4. Skalierung auf Welt-Achsen (XZ uniform bei Gebäuden -> kommutiert mit
+  //    dem Yaw). Kachel-Sicht startet mit Basis-Y; der Fade blendet auf k_y.
+  model.scale.set(kX, kBaseY, kZ);
+  model.userData.scaleBase = kBaseY;
   model.userData.scaleYDetail = kY;
   // 5. BBox des Ergebnisses -> Unterkante auf 0,06 + offset_y, XZ zentrieren
   model.updateMatrixWorld(true);
