@@ -44,6 +44,9 @@ export function SurfaceTexturesTab() {
   const [textures, setTextures] = useState<TexGroup[]>([])
   const [pending, setPending] = useState<string[]>([])
   const [backends, setBackends] = useState<BackendInfo[]>([])
+  // Per-kind subject phrases (curated server-side) — the visual character
+  // of the material; unknown kinds get the generic fallback.
+  const [subjects, setSubjects] = useState<Record<string, string>>({})
   const [loaded, setLoaded] = useState(false)
   const [kind, setKind] = useState('')
   const [backend, setBackend] = useState('')
@@ -59,11 +62,13 @@ export function SurfaceTexturesTab() {
 
   const load = useCallback(async () => {
     try {
-      const d = await apiGet<{ textures?: TexGroup[]; pending?: string[]; backends?: BackendInfo[] }>(
+      const d = await apiGet<{ textures?: TexGroup[]; pending?: string[]
+        backends?: BackendInfo[]; subjects?: Record<string, string> }>(
         '/world/surface-textures')
       setTextures(d.textures || [])
       setPending(d.pending || [])
       setBackends(d.backends || [])
+      setSubjects(d.subjects || {})
       setLoaded(true)
       return d
     } catch {
@@ -98,10 +103,14 @@ export function SurfaceTexturesTab() {
   useEffect(() => {
     if (promptTouched) return
     const style = backendInfo?.prompt_style || ''
-    const subject = `${(kind || 'ground').trim()} ground material`
+    const k = kind.trim().toLowerCase()
+    // Same composition as the server: curated phrase, else the generic
+    // "surface of <kind>" fallback.
+    const subject = !k ? 'a natural ground surface'
+      : (subjects[k] || `the surface of ${k} seen straight from above`)
     setPrompt(style ? `${style}, ${subject}` : subject)
     setNegative(backendInfo?.prompt_negative || '')
-  }, [kind, backendInfo, promptTouched])
+  }, [kind, backendInfo, subjects, promptTouched])
 
   const generate = useCallback(() => {
     const k = kind.trim().toLowerCase()

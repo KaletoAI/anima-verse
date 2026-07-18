@@ -236,16 +236,22 @@ _DEFAULT_IMAGE_USE_CASES = {
     # material for the 3D map (road, water, grass, …). Must tile without
     # visible seams and carry NO baked lighting — objects, shadows and
     # perspective all break the tiling illusion on the map floor.
+    # The subject phrase comes from surface_textures.compose_prompt (per-kind
+    # wording — "calm water surface with gentle ripples", not "water ground
+    # material"): an abstract "<kind> ground material" subject plus a
+    # "uniform material" style produced featureless gray swatches on every
+    # backend. The style asks for color and structure positively; negation
+    # keywords are gone (Flux lesson).
     "surface_texture": {
         "keywords": {
-            "prompt_style": "seamless tileable texture, orthographic top-down view, flat even lighting, no shadows, no objects, uniform material filling the entire frame edge to edge, photorealistic, high detail",
-            "prompt_negative": "objects, people, animals, plants sticking out, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, blurry, low quality",
-            "prompt_instruction": "Write comma-separated tags for a seamless tileable top-down texture of the ground material only — surface structure and color, flat even lighting. No objects, no shadows, no perspective.",
+            "prompt_style": "seamless tileable texture photographed straight from above, macro surface detail, rich natural color, the surface fills the entire frame edge to edge, soft even diffuse daylight, crisp sharp focus, photorealistic, high detail",
+            "prompt_negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, gray, monochrome, flat color, blurry, low quality",
+            "prompt_instruction": "Write comma-separated tags for a seamless tileable top-down texture of the surface only — its color, structure and fine detail under soft even daylight. Nothing but the surface itself.",
         },
         "natural": {
-            "prompt_style": "a seamless tileable texture photographed orthographically from directly above, flat even lighting without shadows, no objects, the uniform material filling the entire frame edge to edge, photorealistic, high detail",
-            "prompt_negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, blurry, low quality",
-            "prompt_instruction": "Describe a seamless tileable top-down texture of the ground material only — surface structure and color, flat even lighting. No objects, no shadows, no perspective.",
+            "prompt_style": "a seamless tileable texture photographed straight from above in macro detail: the surface fills the entire frame edge to edge with its rich natural color and fine structure, lit by soft even diffuse daylight, crisp sharp focus, photorealistic",
+            "prompt_negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, gray, monochrome, flat color, blurry, low quality",
+            "prompt_instruction": "Describe a seamless tileable top-down texture of the surface only — its color, structure and fine detail under soft even daylight. Nothing but the surface itself.",
         },
     },
     "item": {

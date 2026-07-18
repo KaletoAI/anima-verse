@@ -640,7 +640,8 @@ def surface_textures_admin() -> Dict[str, Any]:
     """Admin listing: textures + running generations + backends with their
     resolved use-case style, so the dialog can show and edit the COMPLETE
     final prompt before generating (final-prompt rule)."""
-    from app.core.surface_textures import admin_list, compose_prompt, is_pending
+    from app.core.surface_textures import (SURFACE_SUBJECTS, admin_list,
+                                            compose_prompt, is_pending)
     from app.imagegen.service import get_image_service
     svc = get_image_service()
     backends = []
@@ -653,7 +654,7 @@ def surface_textures_admin() -> Dict[str, Any]:
     except Exception:
         pass
     return {"textures": admin_list(), "pending": is_pending(),
-            "backends": backends}
+            "backends": backends, "subjects": SURFACE_SUBJECTS}
 
 
 @router.post("/surface-textures/generate")

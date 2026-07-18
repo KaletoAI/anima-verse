@@ -319,17 +319,43 @@ def save_uploaded(kind: str, contents: bytes) -> Dict[str, Any]:
     return {"ok": True, "kind": kind, "filename": p.name}
 
 
+# Subject phrases per kind — the visual character of the material, which the
+# generic "<kind> ground material" wording completely failed to convey (gray
+# swatches on every backend). The vocabulary stays OPEN: unknown kinds get
+# the generic fallback and the phrase is editable in the tab anyway.
+SURFACE_SUBJECTS: Dict[str, str] = {
+    "water": "calm water surface with gentle ripples and small waves, natural blue-green tones",
+    "road": "worn gray asphalt with fine grain, subtle cracks and faint tire marks",
+    "grass": "dense short lawn grass, natural fresh green blades",
+    "sand": "fine beach sand with slight wind ripples, warm beige tones",
+    "rock": "rough natural stone with fissures and mineral speckles",
+    "gravel": "small mixed gravel pebbles densely packed, varied gray-brown tones",
+    "dirt": "dry brown earth with small stones, cracks and fine soil texture",
+    "snow": "fresh untouched snow with fine sparkling crystals",
+    "forest": "forest floor of brown leaf litter, moss patches and small twigs",
+}
+
+
+def surface_subject(kind: str) -> str:
+    """The subject phrase for a kind (curated wording or generic fallback)."""
+    kind = (kind or "").strip().lower()
+    if not kind:
+        return "a natural ground surface"
+    return SURFACE_SUBJECTS.get(kind, f"the surface of {kind} seen straight from above")
+
+
 def compose_prompt(kind: str, backend) -> Dict[str, str]:
     """Final prompt + negative for a kind on a backend — use-case style
-    (``surface_texture``, per image family) plus the material subject. The
-    dialog shows exactly this and may edit it (final-prompt rule); ``style``
-    is returned separately so the UI can recompose per kind."""
+    (``surface_texture``, per image family) plus the per-kind subject
+    phrase. The dialog shows exactly this and may edit it (final-prompt
+    rule); ``style`` is returned separately so the UI can recompose per
+    kind."""
     from app.core import config as _cfg
     ucp = _cfg.resolve_use_case_style(
         "surface_texture",
         backend_model=getattr(backend, "model", "") or "",
         backend_family=getattr(backend, "image_family", ""))
-    subject = f"{kind} ground material" if kind else "ground material"
+    subject = surface_subject(kind)
     style = (ucp.get("prompt_style") or "").strip()
     return {
         "style": style,
