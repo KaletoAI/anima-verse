@@ -54,6 +54,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   const setSelected = useCallback((id: string) => {
     setSelectedRaw(id)
     setMarkerSel(null)
+    setElevatorSel(false)
     onSelectRoom?.(id)
   }, [onSelectRoom])
   // Click-to-place modes: the next click inside the room sets the exit point
@@ -68,6 +69,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // Selected marker (index into the selected room's markers) for the
   // per-marker controls: facing, height offset, remove.
   const [markerSel, setMarkerSel] = useState<number | null>(null)
+  // Elevator selected on the plan → the slider row below fine-tunes it.
+  const [elevatorSel, setElevatorSel] = useState(false)
   const [clipKinds, setClipKinds] = useState<string[]>([])
   useEffect(() => {
     apiGet<{ kinds?: string[] }>('/assets/animation-clips')
@@ -464,15 +467,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             ))}
           </svg>
         ) : null}
-        {map3d?.elevator ? (
-          <span title={t('Elevator (all levels)')} style={{
-            position: 'absolute',
-            left: `calc(${map3d.elevator[0] * 100}% - 9px)`,
-            top: `calc(${map3d.elevator[1] * 100}% - 9px)`,
-            fontSize: 15, lineHeight: '18px', pointerEvents: 'none',
-            filter: 'drop-shadow(0 0 2px #0d1117)',
-          }}>🛗</span>
-        ) : null}
         {(underlay || bUnderlay) && underlayUrl ? (
           <img src={underlayUrl} alt="" style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%',
@@ -564,6 +558,30 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             </div>
           )
         })}
+        {map3d?.elevator ? (
+          // True-size elevator footprint: the shaft is 0.5 × 0.5 m on the
+          // 8 × 8 m reference square → 6.25 % of the plan. On top of the
+          // rooms so it stays clickable; click selects it for the sliders.
+          <div
+            title={t('Elevator (all levels) — true size from above (0.5 × 0.5 m). Click to fine-tune with the sliders below.')}
+            onClick={(e) => {
+              if (clickMode) return
+              e.stopPropagation()
+              setElevatorSel(true)
+              setMarkerSel(null)
+            }}
+            style={{
+              position: 'absolute',
+              left: `${(map3d.elevator[0] - 0.03125) * 100}%`,
+              top: `${(map3d.elevator[1] - 0.03125) * 100}%`,
+              width: '6.25%', height: '6.25%',
+              background: 'rgba(139,148,158,0.5)',
+              border: elevatorSel ? '2px solid #fff' : '1px solid #8b949e',
+              borderRadius: 2, boxSizing: 'border-box',
+              cursor: clickMode ? 'crosshair' : 'pointer',
+            }}
+          />
+        ) : null}
         {placed.length === 0 ? (
           <span className="ga-hint" style={{
             position: 'absolute', inset: 0, display: 'flex',
@@ -885,6 +903,50 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           </div>
         )
       })() : null}
+
+      {elevatorSel && map3d?.elevator ? (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="ga-hint" style={{ fontWeight: 600 }}>🛗 {t('Elevator')}:</span>
+          <button
+            type="button"
+            className={`ga-btn ga-btn-sm${clickMode === 'elevator' ? ' ga-btn-primary' : ''}`}
+            onClick={() => setClickMode((m) => (m === 'elevator' ? '' : 'elevator'))}
+            title={t('Then click on the plan to move the elevator there.')}
+          >
+            ✥ {clickMode === 'elevator' ? t('Click on the plan…') : t('Move')}
+          </button>
+          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Fine-tune the elevator position (fraction of the reference square).')}>
+            X
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.005}
+              value={map3d.elevator[0]}
+              onChange={(e) => onMap3d?.('elevator',
+                [r4(parseFloat(e.target.value) || 0), map3d.elevator![1]] as [number, number])}
+              style={{ width: 100 }}
+            />
+            <span style={{ minWidth: 40 }}>{map3d.elevator[0].toFixed(3)}</span>
+          </label>
+          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Fine-tune the elevator position (fraction of the reference square).')}>
+            Y
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.005}
+              value={map3d.elevator[1]}
+              onChange={(e) => onMap3d?.('elevator',
+                [map3d.elevator![0], r4(parseFloat(e.target.value) || 0)] as [number, number])}
+              style={{ width: 100 }}
+            />
+            <span style={{ minWidth: 40 }}>{map3d.elevator[1].toFixed(3)}</span>
+          </label>
+        </div>
+      ) : null}
 
       {unplaced.length ? (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
