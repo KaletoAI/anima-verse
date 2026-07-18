@@ -79,6 +79,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   const [loading, setLoading] = useState(true)
   const [showModels, setShowModels] = useState(false)
   const [showBuilding, setShowBuilding] = useState(false)
+  // "Walls & floor" overlay — the client's render recipe (schnittstellen
+  // → "Render-Rezept Wände & Boden"): outline floor plates + outer walls
+  // with door gaps at the ground-floor exits.
+  const [showWalls, setShowWalls] = useState(false)
   // Model-load completion re-triggers the rebuild (loads are async, the
   // rebuild itself is synchronous against the cache).
   const [bump, setBump] = useState(0)
@@ -95,6 +99,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   showModelsRef.current = showModels
   const showBuildingRef = useRef(showBuilding)
   showBuildingRef.current = showBuilding
+  const showWallsRef = useRef(showWalls)
+  showWallsRef.current = showWalls
+  // Wall pieces for the per-frame camera culling (a wall whose OUTSIDE
+  // faces the camera hides, so the interior stays visible — recipe rule).
+  const wallCullRef = useRef<Array<{
+    mesh: Object3D; mx: number; mz: number; nx: number; nz: number }>>([])
   // Loaded models by key ("room:<id>" / "building") — originals live here,
   // the scene gets clones (shared geometry, nothing to dispose per rebuild).
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map())
@@ -583,6 +593,124 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         })))
       }
     }
+    // "Walls & floor" per the client recipe: per used level a floor plate
+    // in outline shape (extruded downward) + one box per polygon edge as
+    // the outer wall; the ground floor gets door gaps at the projected
+    // room exits (fallback: a central door in the southernmost piece).
+    wallCullRef.current = []
+    if (showWallsRef.current && (m3?.outline?.length || 0) >= 3) {
+      const pts = m3!.outline!.map(([fx, fy]) =>
+        [(fx - 0.5) * PLATE_M, (fy - 0.5) * PLATE_M] as [number, number])
+      const lvls = (usedLevels.length ? usedLevels : [0]).slice().sort((a, b) => a - b)
+      let area2 = 0
+      for (let i = 0; i < pts.length; i++) {
+        const [x1, z1] = pts[i]
+        const [x2, z2] = pts[(i + 1) % pts.length]
+        area2 += x1 * z2 - x2 * z1
+      }
+      const ccw = area2 > 0
+
+      // Ground-floor exits projected onto the contour (< 0.45 m = a door).
+      const exits: Array<[number, number]> = current
+        .filter((r) => r.layout?.exit && (r.layout.level || 0) === 0)
+        .map((r) => {
+          const lay = r.layout!
+          return [
+            (lay.x + lay.exit![0] * lay.w - 0.5) * PLATE_M,
+            (lay.y + lay.exit![1] * lay.d - 0.5) * PLATE_M,
+          ] as [number, number]
+        })
+      const doorsPerEdge = new Map<number, number[]>()
+      let anyDoor = false
+      pts.forEach((a, i) => {
+        const b = pts[(i + 1) % pts.length]
+        const dx = b[0] - a[0]
+        const dz = b[1] - a[1]
+        const len = Math.hypot(dx, dz) || 1
+        for (const [ex, ez] of exits) {
+          const tp = Math.min(len, Math.max(0, ((ex - a[0]) * dx + (ez - a[1]) * dz) / len))
+          const px = a[0] + (dx / len) * tp
+          const pz = a[1] + (dz / len) * tp
+          if (Math.hypot(ex - px, ez - pz) < 0.45) {
+            if (!doorsPerEdge.has(i)) doorsPerEdge.set(i, [])
+            doorsPerEdge.get(i)!.push(tp)
+            anyDoor = true
+          }
+        }
+      })
+      if (!anyDoor) {
+        let best = 0
+        let bestZ = -Infinity
+        pts.forEach((a, i) => {
+          const b = pts[(i + 1) % pts.length]
+          const mz = (a[1] + b[1]) / 2
+          if (mz > bestZ) { bestZ = mz; best = i }
+        })
+        const a = pts[best]
+        const b = pts[(best + 1) % pts.length]
+        doorsPerEdge.set(best, [Math.hypot(b[0] - a[0], b[1] - a[1]) / 2])
+      }
+
+      // Floor plates: outline shape, extruded DOWNWARD (top at
+      // level × storey + 0.08, thickness 0.14).
+      const shape = new THREE.Shape()
+      pts.forEach(([x, z], i) => { if (i === 0) shape.moveTo(x, z); else shape.lineTo(x, z) })
+      shape.closePath()
+      const plateGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.14, bevelEnabled: false })
+      for (const lv of lvls) {
+        const plate = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({
+          color: 0xd8d0c2, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.4,
+        }))
+        plate.rotation.x = Math.PI / 2
+        plate.position.y = lv * lhEff + 0.08
+        boxes.add(plate)
+      }
+
+      // Outer walls: one box per edge per level; ground floor split at the
+      // doors (gap ±0.4 m, residues < 0.06 dropped).
+      const WALL_H = Math.max(0.6, lhEff - 0.15)
+      pts.forEach((a, i) => {
+        const b = pts[(i + 1) % pts.length]
+        const dx = b[0] - a[0]
+        const dz = b[1] - a[1]
+        const len = Math.hypot(dx, dz)
+        if (len < 0.001) return
+        const yaw = -Math.atan2(dz, dx)
+        const nx = (ccw ? dz : -dz) / len
+        const nz = (ccw ? -dx : dx) / len
+        for (const lv of lvls) {
+          let segs: Array<[number, number]> = [[0, len]]
+          if (lv === 0 && doorsPerEdge.has(i)) {
+            for (const tp of doorsPerEdge.get(i)!.sort((p, q) => p - q)) {
+              const next: Array<[number, number]> = []
+              for (const [s0, s1] of segs) {
+                if (tp - 0.4 > s0) next.push([s0, Math.min(s1, tp - 0.4)])
+                if (tp + 0.4 < s1) next.push([Math.max(s0, tp + 0.4), s1])
+              }
+              segs = next
+            }
+          }
+          for (const [s0, s1] of segs) {
+            const sl = s1 - s0
+            if (sl < 0.06) continue
+            const wall = new THREE.Mesh(
+              new THREE.BoxGeometry(sl, WALL_H, 0.07),
+              new THREE.MeshStandardMaterial({
+                color: 0xcfc4b2, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.45,
+              }),
+            )
+            const tc = (s0 + s1) / 2
+            const mx = a[0] + (dx / len) * tc
+            const mz = a[1] + (dz / len) * tc
+            wall.position.set(mx, lv * lhEff + 0.08 + WALL_H / 2, mz)
+            wall.rotation.y = yaw
+            boxes.add(wall)
+            wallCullRef.current.push({ mesh: wall, mx, mz, nx, nz })
+          }
+        }
+      })
+    }
+
     if (m3?.elevator) {
       const lo = Math.min(0, ...usedLevels)
       const hi = Math.max(0, ...usedLevels)
@@ -993,6 +1121,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         const animate = () => {
           raf = requestAnimationFrame(animate)
           const delta = clockRef.current?.getDelta() || 0
+          // Recipe camera culling: hide a wall piece whose OUTSIDE faces
+          // the camera — the interior stays visible despite the walls.
+          for (const w of wallCullRef.current) {
+            w.mesh.visible =
+              (camera.position.x - w.mx) * w.nx + (camera.position.z - w.mz) * w.nz <= 0
+          }
           for (const mixer of mixersRef.current) mixer.update(delta)
           // Contract smoothing: dist/yaw approach their goals with
           // 1 − exp(−8·dt) per frame.
@@ -1058,7 +1192,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   useEffect(() => {
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms, map3d, showModels, showBuilding, bump, lh, fallbackYawDeg])
+  }, [rooms, map3d, showModels, showBuilding, showWalls, bump, lh, fallbackYawDeg])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
@@ -1073,6 +1207,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           <input type="checkbox" checked={showBuilding}
             onChange={(e) => setShowBuilding(e.target.checked)} />
           <span>{t('Building model overlay')}</span>
+        </label>
+        <label className="ga-check-row"
+          title={t('Render the outline floor plates and outer walls exactly like the game client (doors at the ground-floor exits; walls facing the camera hide). Needs a drawn outline.')}>
+          <input type="checkbox" checked={showWalls}
+            onChange={(e) => setShowWalls(e.target.checked)} />
+          <span>{t('Walls & floor')}</span>
         </label>
         {onPlanWidth ? (
           <label className="ga-check-row"
