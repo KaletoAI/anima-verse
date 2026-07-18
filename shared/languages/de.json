@@ -1195,7 +1195,7 @@
     "This character is sleeping. A message will wake them up.": "Dieser Charakter schläft gerade. Eine Nachricht weckt ihn auf.",
     "This image is already being meshed — the model appears when it finishes.": "Dieses Bild wird bereits gemesht — das Modell erscheint, sobald es fertig ist.",
     "This is the generated mesh of the current outfit. An upload here overrides it.": "Dies ist das generierte Mesh des aktuellen Outfits. Ein Upload hier überschreibt es.",
-    "This kind is already generating.": "Diese Art wird bereits generiert.",
+    "This kind is already generating on that backend.": "Diese Art wird auf diesem Backend bereits generiert.",
     "This tab has not been ported yet.": "Dieser Reiter ist noch nicht portiert.",
     "Threshold": "Schwelle",
     "Tick slots the character does not need to wear for a given outfit_type.": "Setze Haken für Slots, die der Charakter bei einem bestimmten outfit_type nicht anziehen muss.",

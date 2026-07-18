@@ -47,7 +47,10 @@ _TS_RE = re.compile(r"^(.+)_(\d{9,})$")
 _SEL_FILE = "selection.json"
 
 _lock = threading.Lock()
-_generating: set = set()  # kinds with a running generation
+# Running job keys "<kind>|<backend glob>" — generations of the SAME kind on
+# DIFFERENT backends may run/queue concurrently (each serializes on its own
+# GPU channel); only a double-click of the same kind+backend is rejected.
+_generating: set = set()
 
 
 def _dir(*, create: bool = False) -> Path:
@@ -364,10 +367,15 @@ def compose_prompt(kind: str, backend) -> Dict[str, str]:
     }
 
 
+def _gen_key(kind: str, backend_glob: str) -> str:
+    return f"{kind}|{(backend_glob or '').strip().lower()}"
+
+
 def is_pending(kind: str = "") -> List[str]:
+    """KINDS with at least one running generation (any backend)."""
     with _lock:
-        return sorted(_generating) if not kind else (
-            [kind] if kind in _generating else [])
+        kinds = sorted({k.split("|", 1)[0] for k in _generating})
+    return kinds if not kind else ([kind] if kind in kinds else [])
 
 
 def _generate(kind: str, backend_glob: str, prompt: str, negative: str) -> Dict[str, Any]:
@@ -451,22 +459,25 @@ def _generate(kind: str, backend_glob: str, prompt: str, negative: str) -> Dict[
 
 def trigger_generation(kind: str, *, backend_glob: str = "",
                        prompt: str = "", negative: str = "") -> bool:
-    """Start a texture generation in the background. False while THIS kind
-    is already generating (double-click guard)."""
+    """Start a texture generation in the background. Different backends for
+    the same kind run concurrently (each queues on its own GPU channel);
+    False only while THIS kind+backend combination is already generating
+    (double-click guard)."""
     kind = safe_kind(kind)
     if not kind:
         return False
+    key = _gen_key(kind, backend_glob)
     with _lock:
-        if kind in _generating:
+        if key in _generating:
             return False
-        _generating.add(kind)
+        _generating.add(key)
 
     def _run() -> None:
         try:
             _generate(kind, backend_glob, prompt, negative)
         finally:
             with _lock:
-                _generating.discard(kind)
+                _generating.discard(key)
 
     threading.Thread(target=_run, daemon=True).start()
     return True

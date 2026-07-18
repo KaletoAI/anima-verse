@@ -120,7 +120,7 @@ export function SurfaceTexturesTab() {
     })
       .then((d) => {
         toast(d?.status === 'already_running'
-          ? t('This kind is already generating.')
+          ? t('This kind is already generating on that backend.')
           : t('Generating the texture…'))
         startPoll()
         void load()
