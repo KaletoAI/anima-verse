@@ -2507,7 +2507,10 @@ def _build_full_system_prompt(character_name: str,
             # the thought context (a character SEES the people around it).
             try:
                 from app.core.thought_context import present_people_details
-                from app.models.character import get_character_current_location
+                # NO local import of get_character_current_location here —
+                # it would shadow the module-level import and turn line
+                # ~2305 into an UnboundLocalError, killing EVERY room
+                # respond-turn (broken 07-09..07-18 exactly this way).
                 _loc = get_character_current_location(character_name) or ""
                 _present_details = present_people_details(
                     [(n, n) for n in _others], _loc)
