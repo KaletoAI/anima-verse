@@ -320,7 +320,11 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             const horiz = Math.max(s.x, s.z) || 1
             const k = Math.max(0.02, Math.min(1.5, p.size)) / horiz
             place.scale.setScalar(k)
-            place.rotation.y = _deg(p.yawDeg)
+            // NEGATIVE yaw — the contract convention (floor preview + 3D
+            // client): map3d.rotation turns clockwise seen from above,
+            // synchronous with the 2D icon's CSS rotation. The viewer used
+            // +yaw and mirrored the rotation against everything else.
+            place.rotation.y = -_deg(p.yawDeg)
             place.updateMatrixWorld(true)
             const b2 = new THREE.Box3().setFromObject(place)
             const c2 = b2.getCenter(new THREE.Vector3())
