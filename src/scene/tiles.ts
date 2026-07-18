@@ -167,6 +167,10 @@ export function setSurfaceTextures(list: { kind: string; url: string; size_m?: n
   for (const t of list) serverSurfaces.set(t.kind, { url: t.url, sizeM: t.size_m || 3 });
 }
 
+export function hasSurfaceTexture(kind: string): boolean {
+  return serverSurfaces.has(kind);
+}
+
 /** Kachelbare Oberflächen-Textur für einen Terrain-Typ: Server-Bibliothek
  *  vor eingebautem Fallback; Wiederholung im Welt-Maßstab (CELL/size_m). */
 function surfaceTexture(kind: string, fallback: THREE.Texture): THREE.Texture {
@@ -701,12 +705,17 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
 
   const rnd = seededRandom(loc.id);
   const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
-  // Straßen und Wasser -> kachelbare Oberflächen-Textur statt Illustrations-
-  // Icon (Server-Bibliothek vor eingebautem prozeduralem Material). Gras-,
-  // Wald- und benannte Kacheln behalten ihre Icons (Stadtteil-Luftbilder!).
-  const isSurfaceTile = style === 'road' || style === 'water';
+  // Oberflächen-Texturen statt Illustrations-Icons: Straße/Wasser immer;
+  // Gras/Wald nur bei EXPLIZITEM terrain UND vorhandener Server-Textur
+  // (AV3D-13) — benannte Kacheln und die Stadtteil-Luftbilder (ohne
+  // terrain) behalten ihre Icons.
+  const explicitTerrain = terrainKind(loc.terrain);
+  const surfaceKind = style === 'road' || style === 'water'
+    ? style
+    : explicitTerrain && hasSurfaceTexture(explicitTerrain) ? explicitTerrain : null;
+  const isSurfaceTile = !!surfaceKind;
   const groundTexFor = (s: string) =>
-    isSurfaceTile ? surfaceTexture(style, fallbackFor(s)) : fallbackFor(s);
+    surfaceKind ? surfaceTexture(surfaceKind, fallbackFor(s)) : fallbackFor(s);
   // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
   const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
 
