@@ -328,9 +328,12 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             place.updateMatrixWorld(true)
             const b2 = new THREE.Box3().setFromObject(place)
             const c2 = b2.getCenter(new THREE.Vector3())
-            // offset_y is in model units/metres — scale it with the model so
-            // the sink-in proportion matches what the 3D client renders.
-            place.position.set(-c2.x, -b2.min.y + (offsetYRef.current || 0) * k, -c2.z)
+            // offset_y is WORLD METRES (contract). The tile here is 1 unit
+            // = 10 m world, so divide by 10 — the old `* k` treated the
+            // offset as raw mesh units and inflated it ~10× against the
+            // floor preview and the 3D client (Mondschein calibration:
+            // −0.49 dialed here acted like −5 world metres elsewhere).
+            place.position.set(-c2.x, -b2.min.y + (offsetYRef.current || 0) / 10, -c2.z)
           }
           placeFnRef.current = applyPlacement
           disposers.push(() => {
