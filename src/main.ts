@@ -103,13 +103,16 @@ async function startApp(username: string) {
   }
   engine.setPickables([...tiles.values()].map((t) => t.group));
 
-  // Gebäude-Modelle vom Server (AV3D-9): lazy laden, prozedurale Hülle
-  // ersetzen; solange 404/Generierung läuft, regelmäßig erneut fragen.
+  // Gebäude-/Kachel-Modelle vom Server (AV3D-9): lazy laden, prozedurale
+  // Hülle ersetzen; solange 404/Generierung läuft, regelmäßig erneut fragen.
+  // Klon-Kacheln (z.B. viele Wald-Kacheln einer Template-Location) teilen
+  // sich ein Modell — der Schlüssel ist die Template-ID, jede Kachel bekommt
+  // einen Klon mit geteilter Geometrie.
+  const modelKeyOf = (loc: WorldLocation) => loc.template_location_id || loc.id;
   const buildings = buildingLibrary();
-  buildings.onModelReady = (locId) => {
-    const tile = tiles.get(locId);
-    const model = buildings.get(locId);
-    if (!tile || !model) return;
+  const applyServerBuilding = (tile: Tile) => {
+    const model = buildings.get(modelKeyOf(tile.loc));
+    if (!model) return;
     // v3-Maßstabs-Anker (backend-note-scale-anchors.md): explizites
     // plan_width_m, sonst Auto-Ableitung height_m x Mesh-Proportion.
     // Ändert sich der Anker, wird die Kachel mit den Anker-Maßen neu gebaut.
@@ -121,12 +124,18 @@ async function startApp(username: string) {
       const storeyWorld = meta?.height_m && meta?.floors
         ? (meta.height_m / meta.floors) * k
         : storeyHeight(tile.loc);
-      if (setLocationAnchor(locId, { k, storeyWorld })) {
-        rebuildTile(tile, tile.loc);   // wendet das Gebäude-Modell wieder an
+      if (setLocationAnchor(tile.loc.id, { k, storeyWorld })) {
+        rebuildTile(tile, tile.loc);   // wendet das Modell wieder an
         return;
       }
     }
     applyBuildingModel(tile, model);
+  };
+  buildings.onModelReady = (key) => {
+    // Multimap-Auflösung: ein Template-Modell landet auf allen Klon-Kacheln
+    for (const tile of [...tiles.values()]) {
+      if (modelKeyOf(tile.loc) === key) applyServerBuilding(tile);
+    }
   };
   // Raum-Modelle (AV3D-2): nur Räume mit Layout haben einen Andockpunkt
   const roomModels = roomModelLibrary();
@@ -141,7 +150,7 @@ async function startApp(username: string) {
   };
   const requestServerModels = () => {
     for (const tile of tiles.values()) {
-      if (tile.isBuilding && !tile.serverModel) buildings.request(tile.loc.id);
+      if (!tile.serverModel) buildings.request(modelKeyOf(tile.loc));
     }
     for (const roomId of tileByRoom.keys()) roomModels.request(roomId);
     // neu generierte Modelle ohne Reload erkennen (signature im Meta)
@@ -169,7 +178,7 @@ async function startApp(username: string) {
     tile.fadeTarget = old.fadeTarget;
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
-    const bm = buildings.get(loc.id);
+    const bm = buildings.get(modelKeyOf(loc));
     if (bm) applyBuildingModel(tile, bm);
     for (const r of loc.rooms) {
       if (!r.layout) continue;

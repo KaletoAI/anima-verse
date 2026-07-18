@@ -49,6 +49,8 @@ export interface Tile {
   shell?: THREE.Group;
   /** bereits eingewechseltes Server-Gebäudemodell */
   serverModel?: THREE.Group;
+  /** prozedurale Deko (Bäume) — weicht einem Server-Modell */
+  decor?: THREE.Group;
   /** Namens-Label — Höhe wird beim Modell-Tausch nachgeführt */
   labelObj?: CSS2DObject;
   shellMats: THREE.MeshStandardMaterial[];
@@ -866,23 +868,29 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
   if (!isBuilding) {
     group.add(groundPlateFor());
     if (style === 'forest') {
+      const decor = new THREE.Group();
       for (let i = 0; i < 8; i++) {
         const tree = makeTree(rnd);
         tree.position.set((rnd() - 0.5) * (CELL - 3), 0, (rnd() - 0.5) * (CELL - 3));
-        group.add(tree);
+        decor.add(tree);
       }
+      group.add(decor);
+      tile.decor = decor;
     }
     tile.height = style === 'forest' ? 3 : 0.3;
   } else if (natureSite) {
     group.add(groundPlateFor());
     if (style === 'forest') {
       // Bäume am Rand, Mitte bleibt frei für die Raum-Slabs
+      const decor = new THREE.Group();
       for (let i = 0; i < 7; i++) {
         const tree = makeTree(rnd);
         const a = (i / 7) * Math.PI * 2 + rnd() * 0.5;
         tree.position.set(Math.cos(a) * (3.2 + rnd()), 0, Math.sin(a) * (3.2 + rnd()));
-        group.add(tree);
+        decor.add(tree);
       }
+      group.add(decor);
+      tile.decor = decor;
     }
     tile.height = style === 'forest' ? 3 : 0.6;
     const spec: BuildingSpec = { w: 8, d: 8, h: 0, build() { /* Naturfläche */ } };
@@ -924,23 +932,46 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
  *  Fürs Reinzoomen verhält sich das ganze Modell wie ein Dach — es blendet
  *  aus und gibt den Blick auf die Räume frei. */
 export function applyBuildingModel(tile: Tile, model: THREE.Group) {
-  if (!tile.isBuilding || tile.serverModel) return;
+  if (tile.serverModel) return;
   tile.serverModel = model;
-  // prozedurale Hülle ersetzen; Natur-Flächen (z.B. terrain "road"/"forest")
-  // haben keine — dort kommt das Modell auf die Bodenplatte dazu
+  // prozedurale Hülle ersetzen; Kacheln ohne Hülle (Naturflächen,
+  // Terrain-/Template-Kacheln wie der Wald) bekommen das Modell dazu
   if (tile.shell) {
     tile.group.remove(tile.shell);
     tile.shell = undefined;
   }
+  // prozedurale Deko (Bäume) weicht dem Servermodell
+  if (tile.decor) tile.decor.visible = false;
 
-  // Ausrichtung & Größe bestimmt der Server pro Location (map3d.rotation in
-  // Grad, map3d.size als Kachel-Anteil); map_rotation_2d dreht als Fallback
-  // synchron zum 2D-Icon. Ohne Angaben: wie generiert, 92 % der Kachel.
+  // Platzierungs-Kette exakt nach backend-note-scale-anchors.md (Antwort 3):
+  // 1. Meta-Rotations-Fix (bereits in der Normalisierung angewendet)
+  // 2. Karten-Yaw als eigene Rotation
   const yawDeg = tile.loc.map3d?.rotation ?? tile.loc.map_rotation_2d ?? 0;
   model.rotation.y = -THREE.MathUtils.degToRad(yawDeg);
+  model.updateMatrixWorld(true);
+  // 3. BBox des ROTIERTEN Ganzen messen -> k_xz (Kachel-Fit) und k_y
+  let box = new THREE.Box3().setFromObject(model);
+  let size = box.getSize(new THREE.Vector3());
   const frac = tile.loc.map3d?.size;
-  const k = frac && frac > 0.05 && frac <= 1.5 ? frac / 0.92 : 1;
-  model.scale.setScalar(k);
+  const sizeFrac = frac && frac > 0.05 && frac <= 1.5 ? frac : 0.92;
+  const kXZ = (CELL * sizeFrac) / Math.max(size.x, size.z, 1e-3);
+  const metaA = model.userData.meta as { height_m?: number; offset_y?: number } | undefined;
+  const anchor = locationAnchors.get(tile.loc.id);
+  const kY = metaA?.height_m
+    ? (metaA.height_m * (anchor?.k ?? 1)) / Math.max(size.y, 1e-3)
+    : kXZ;
+  // 4. Skalierung auf Welt-Achsen (XZ uniform -> kommutiert mit dem Yaw).
+  //    Kachel-Sicht startet uniform; der Fade blendet Y auf k_y (Detail).
+  model.scale.set(kXZ, kXZ, kXZ);
+  model.userData.scaleBase = kXZ;
+  model.userData.scaleYDetail = kY;
+  // 5. BBox des Ergebnisses -> Unterkante auf 0,06 + offset_y, XZ zentrieren
+  model.updateMatrixWorld(true);
+  box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.x = -center.x;
+  model.position.z = -center.z;
+  model.position.y = -(box.min.y) + 0.06 + (metaA?.offset_y || 0);
 
   // Fade-Verwaltung auf das Modell umziehen: Materialien pro Tile klonen
   // (Vorlage wird geteilt) und als "Dach" registrieren.
@@ -967,16 +998,7 @@ export function applyBuildingModel(tile: Tile, model: THREE.Group) {
   });
   tile.group.add(model);
 
-  // Detail-Ansicht (v2.1/v3): Hüllen-Y folgt height_m x k(Anker), XZ bleibt
-  // Kachel-Fit — der Fade blendet zwischen beiden Sichten (applyTileFade)
-  const metaA = model.userData.meta as { height_m?: number } | undefined;
-  const anchor = locationAnchors.get(tile.loc.id);
-  if (metaA?.height_m && anchor) {
-    model.userData.scaleBase = k;
-    model.userData.scaleYDetail = (metaA.height_m * anchor.k) / ((model.userData.height as number) || 1);
-  }
-
-  const h = ((model.userData.height as number) || tile.height) * k;
+  const h = box.max.y - box.min.y;
   tile.height = h;
   tile.labelObj?.position.set(0, h + 2.2, 0);
 }

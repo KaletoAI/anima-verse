@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { getLocationModel, getRoomModel } from '../api';
-import { CELL } from './tiles';
 
 /** frühestens nach dieser Zeit erneut fragen (Generierung dauert Minuten) */
 const RETRY_MS = 60_000;
@@ -95,7 +94,8 @@ export class ModelLibrary {
         const model = this.normalize(gltf.scene, meta);
         model.userData.meta = {
           height_m: meta.height_m || 0, floors: meta.floors || 0,
-          width_m: meta.width_m || 0, signature: meta.signature ?? '',
+          width_m: meta.width_m || 0, offset_y: meta.offset_y || 0,
+          signature: meta.signature ?? '',
         };
         this.models.set(id, model);
         this.metaSigs.set(id, metaSig(meta));
@@ -138,7 +138,10 @@ function flipReliefFaceUp(scene: THREE.Group, size: THREE.Vector3) {
   }
 }
 
-/** Gebäude: aufrichten, auf die Kachel skalieren, Unterkante auf den Sockel. */
+/** Gebäude: nur den Meta-Rotations-Fix anwenden (Schritt 1 der Platzierungs-
+ *  Kette aus backend-note-scale-anchors.md). Yaw, Skalierung und Gründung
+ *  passieren pro Kachel in applyBuildingModel — die BBox muss dort NACH dem
+ *  Karten-Yaw gemessen werden. */
 export function buildingLibrary(): ModelLibrary {
   return new ModelLibrary('buildings', getLocationModel, (scene, meta) => {
     // Rotations-Fix aus dem Meta (Admin-Regler) hat Vorrang vor Heuristiken
@@ -152,8 +155,7 @@ export function buildingLibrary(): ModelLibrary {
       );
     }
     scene.updateMatrixWorld(true);
-    let box = new THREE.Box3().setFromObject(scene);
-    const size = box.getSize(new THREE.Vector3());
+    const size = new THREE.Box3().setFromObject(scene).getSize(new THREE.Vector3());
     // KEIN Auto-Aufrichten mehr: Gebäude kommen als Y-up-GLB aus der
     // Pipeline; die alte Z-up-Heuristik kippte normale flach-tiefe Häuser
     // hochkant (Grenzfall Haus von Kai). Ausnahmen korrigiert der Admin
@@ -161,14 +163,6 @@ export function buildingLibrary(): ModelLibrary {
     if (!explicit) flipReliefFaceUp(scene, size);
     // Mesh-Proportion nach Rotations-Fix (für die plan_width_m-Auto-Ableitung)
     const aspectXZoverY = Math.max(size.x, size.z) / Math.max(size.y, 1e-3);
-    const s = (CELL * 0.92) / Math.max(size.x, size.z, 1e-3);
-    scene.scale.setScalar(s);
-    scene.updateMatrixWorld(true);
-    box = new THREE.Box3().setFromObject(scene);
-    const c = box.getCenter(new THREE.Vector3());
-    scene.position.x -= c.x;
-    scene.position.z -= c.z;
-    scene.position.y -= box.min.y - 0.06 - (meta.offset_y || 0);   // knapp über der Sockel-Platte
     scene.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) {
         o.castShadow = true;
@@ -177,7 +171,6 @@ export function buildingLibrary(): ModelLibrary {
     });
     const root = new THREE.Group();
     root.add(scene);
-    root.userData.height = box.max.y - box.min.y;
     root.userData.aspectXZoverY = aspectXZoverY;
     return root;
   });
