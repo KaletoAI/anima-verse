@@ -105,10 +105,9 @@ class ImageBackend(ABC):
         except ValueError:
             self.ref_slot_count = self.DEFAULT_REF_SLOT_COUNT
 
-        # Static fallback configuration (fallback_mode/fallback_specific) removed:
-        # on failure run_with_fallback dynamically picks the next available
-        # compatible backend — the availability logic IS the fallback (match
-        # concept).
+        # Fallback removed entirely (2026-07-18, user decision): a render
+        # runs on exactly the chosen backend — run_on_backend handles busy
+        # (typed, no cooldown) vs. defect (cooldown), never switches.
 
         # NVFP4 architecture: backend requires NVFP4-quantized models (legacy)
         self.nvfp4 = os.environ.get(

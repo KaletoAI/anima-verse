@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Any, Dict, Optional
 from app.core.log import get_logger
+from app.imagegen.base import BackendBusyError
 
 logger = get_logger("world")
 
@@ -1101,10 +1102,10 @@ async def generate_location_background(location_name: str,
         return b.generate(full_prompt, negative, params)
     try:
         images, backend = await asyncio.to_thread(
-            lambda: img_skill.run_with_fallback(
-                primary_backend=backend,
-                op=_op,
-                character_name=""))
+            lambda: img_skill.run_on_backend(backend, op=_op))
+    except BackendBusyError as _busy:
+        raise HTTPException(status_code=503,
+                            detail=f"{backend.name} ist ausgelastet — bitte später erneut versuchen ({_busy})")
     except RuntimeError as _err:
         raise HTTPException(status_code=500, detail=str(_err))
 
@@ -2080,9 +2081,11 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 return _gen()
             try:
                 images, backend = await asyncio.to_thread(
-                    lambda: img_skill.run_with_fallback(
-                        primary_backend=backend, op=_op,
-                        character_name=""))
+                    lambda: img_skill.run_on_backend(backend, op=_op))
+            except BackendBusyError as _busy:
+                _tq.track_finish(_track_id, error=f"{backend.name} ausgelastet")
+                raise HTTPException(status_code=503,
+                                    detail=f"{backend.name} ist ausgelastet — bitte später erneut versuchen ({_busy})")
             except RuntimeError as _err:
                 _tq.track_finish(_track_id, error=str(_err)[:200])
                 raise HTTPException(status_code=500, detail=str(_err))
@@ -2449,9 +2452,11 @@ async def generate_time_variant_core(location_name: str, image_name: str,
             return _gen()
         try:
             images, backend = await asyncio.to_thread(
-                lambda: img_skill.run_with_fallback(
-                    primary_backend=backend, op=_op,
-                    character_name=""))
+                lambda: img_skill.run_on_backend(backend, op=_op))
+        except BackendBusyError as _busy:
+            _tq.track_finish(_track_id, error=f"{backend.name} ausgelastet")
+            raise HTTPException(status_code=503,
+                                detail=f"{backend.name} ist ausgelastet — bitte später erneut versuchen ({_busy})")
         except RuntimeError as _err:
             _tq.track_finish(_track_id, error=str(_err)[:200])
             raise HTTPException(status_code=500, detail=str(_err))

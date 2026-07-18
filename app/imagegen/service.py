@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
+from app.imagegen.base import BackendBusyError
 from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
 
 from app.core.config import MAX_IMAGE_BACKENDS
@@ -295,10 +296,8 @@ class ImageService:
                                 media: str = "image") -> List[ImageBackend]:
         return self._pool.list_available_backends(character_name, media=media)
 
-    def run_with_fallback(self, primary_backend, op, character_name="",
-                          max_attempts=3):
-        return self._pool.run_with_fallback(
-            primary_backend, op, character_name, max_attempts)
+    def run_on_backend(self, backend, op, character_name=""):
+        return self._pool.run_on_backend(backend, op, character_name)
 
     def _wait_for_backend(self, character_name, has_input_image: bool = False):
         return self._pool._wait_for_backend(character_name, has_input_image)
@@ -362,7 +361,7 @@ class ImageService:
                 backend, _gen, task_type="video_generation",
                 agent_name=character_name)
         try:
-            result, _used = self.run_with_fallback(
+            result, _used = self.run_on_backend(
                 primary, _op, character_name=character_name)
         except Exception as e:
             logger.error("generate_video fehlgeschlagen: %s", e)
@@ -452,11 +451,10 @@ class ImageService:
                 backend, _gen, task_type="mesh_generation",
                 agent_name=character_name)
         try:
-            # NO fallback for mesh (max_attempts=1): a different alias means a
-            # different rig or quality tier — a wrong-rig mesh binds unusably.
-            # The engine still handles busy (no cooldown) vs. defect (cooldown).
-            result, used = self.run_with_fallback(
-                primary, _op, character_name=character_name, max_attempts=1)
+            # Busy (no cooldown) vs. defect (cooldown) is handled by the
+            # runner; there is no cross-backend fallback anywhere anymore.
+            result, used = self.run_on_backend(
+                primary, _op, character_name=character_name)
         except Exception as e:
             logger.error("generate_mesh fehlgeschlagen: %s", e)
             return {"ok": False, "error": str(e)}
@@ -1488,17 +1486,18 @@ class ImageService:
                     agent_name=character_name, label=b.name,
                     gpu_type=b.api_type)
 
-            # Re-Check anderer Backends, falls sie beim Start unavailable waren
-            for b in self.backends:
-                if b.instance_enabled and not b.available and b != backend:
-                    b.check_availability()
-
             try:
-                images, backend = self.run_with_fallback(
-                    primary_backend=backend, op=_op,
-                    character_name=character_name)
+                images, backend = self.run_on_backend(
+                    backend, op=_op, character_name=character_name)
+            except BackendBusyError as _busy:
+                logger.warning("Bildgenerierung: %s ausgelastet (%s)",
+                               backend.name, _busy)
+                _tq.track_finish(_track_id, error=f"{backend.name} ausgelastet")
+                return (f"Fehler: {backend.name} ist gerade ausgelastet — "
+                        "bitte später erneut versuchen.")
             except RuntimeError as _err:
-                logger.error("Bildgenerierung fehlgeschlagen (alle Backends): %s", _err)
+                logger.error("Bildgenerierung fehlgeschlagen (%s): %s",
+                             backend.name, _err)
                 images = []
 
             if not images:

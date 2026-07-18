@@ -249,132 +249,72 @@ class BackendPool:
         return out
 
     # ------------------------------------------------------------------
-    # Backend fallback engine
+    # Backend runner (single backend — NO cross-backend fallback)
     # ------------------------------------------------------------------
 
-    def _pick_fallback_backend(
+    def run_on_backend(
         self,
-        failed: ImageBackend,
-        character_name: str,
-        exclude: Set[str],
-    ) -> Optional[ImageBackend]:
-        """Next available backend — the match/availability logic IS the
-        fallback (no static fallback_mode/fallback_specific anymore).
-        """
-        # Fall back within the same media kind (video -> video, image -> image).
-        candidates = self.list_available_backends(
-            character_name=character_name, media=self._media_of(failed))
-        candidates = [b for b in candidates if b.name not in exclude]
-        # Inpaint backends are no fallback for normal renders. Only if the
-        # failed backend itself was inpaint, the chain stays on inpaint.
-        if not self._is_inpaint_backend(failed):
-            candidates = [b for b in candidates if not self._is_inpaint_backend(b)]
-        # A mesh fallback must keep the failed backend's rig: a humanoid job
-        # meshed by a generic alias (or the reverse) binds unusably — the same
-        # media kind is not enough. (Mesh runs max_attempts=1 today, so this is
-        # also the guard that keeps it right if the chain is ever lengthened.)
-        if self._media_of(failed) == "mesh":
-            failed_rig = getattr(failed, "mesh_rig", "mixamo") or "mixamo"
-            candidates = [b for b in candidates
-                          if (getattr(b, "mesh_rig", "mixamo") or "mixamo") == failed_rig]
-        return candidates[0] if candidates else None
-
-    def run_with_fallback(
-        self,
-        primary_backend: ImageBackend,
+        backend: ImageBackend,
         op: Callable[[ImageBackend], Any],
         character_name: str = "",
-        max_attempts: int = 3,
     ) -> Tuple[Any, ImageBackend]:
-        """Runs op(backend), falling back to the next backend on failure.
+        """Runs op(backend) on exactly THIS backend — no fallback.
 
-        Strategy:
-        - Try primary_backend
-        - On exception OR empty list: set backend.available=False, dynamically
-          pick the next available (compatible) backend (_pick_fallback_backend)
-          — the availability logic IS the fallback
-        - BackendBusyError means load, not a defect: fall back WITHOUT the
-          cooldown (busy is not broken — see base.BackendBusyError)
-        - Repeat until success, max_attempts reached, or the chain is exhausted
+        The dialogs show which backend renders; silently switching to
+        another one behind that choice is worse than failing (removed
+        2026-07-18 on user decision — the old fallback chain was no longer
+        surfaced anywhere in the UI). Error semantics stay:
+
+        - BackendBusyError = load, not a defect: NO cooldown, re-raised
+          typed so the queue boundary can retry (see base.BackendBusyError).
+        - 4xx payload errors: backend stays available (the service is
+          reachable, the sent JSON is broken) — re-raised.
+        - Other exceptions / empty result: cooldown + raise.
 
         op(backend) -> List[bytes] | [] | None
-        The caller is responsible for adapting params per backend.
-
-        Returns (result, used_backend) on success.
-        Raises RuntimeError once exhausted.
+        Returns (result, backend) on success; ``character_name`` is kept
+        for call-site symmetry/logging only.
         """
-        if not primary_backend:
-            raise RuntimeError("run_with_fallback: no primary_backend provided")
+        if not backend:
+            raise RuntimeError("run_on_backend: no backend provided")
 
-        tried: Set[str] = set()
-        last_error: Optional[Exception] = None
-        current = primary_backend
-
-        for attempt in range(max_attempts):
-            if not current or current.name in tried:
-                break
-            tried.add(current.name)
-
-            logger.info("Fallback-Engine Versuch %d/%d: backend=%s (cost=%s)",
-                        attempt + 1, max_attempts, current.name, current.cost)
-
-            try:
-                result = op(current)
-            except BackendBusyError as e:
-                # Busy is not broken: a timeout / 429 / 503 / gateway queue wait
-                # says the GPU is working, not that the backend is defective.
-                # A cooldown would push the load onto another alias of the SAME
-                # GPU and walk the whole pool to sleep in a busy phase.
-                last_error = e
+        logger.info("Backend-Runner: backend=%s (cost=%s, character=%s)",
+                    backend.name, backend.cost, character_name or "-")
+        try:
+            result = op(backend)
+        except BackendBusyError:
+            # Busy is not broken: a timeout / 429 / 503 / gateway queue wait
+            # says the GPU is working. No cooldown, no other backend — the
+            # typed exception survives to the retry layer.
+            logger.warning("Backend-Runner: %s ausgelastet — kein Cooldown, "
+                           "kein Backend-Wechsel", backend.name)
+            raise
+        except Exception as e:
+            _err_str = str(e)
+            if _re_4xx.search(_err_str):
+                # 4xx (workflow validation & co.): service reachable, payload
+                # broken — the backend must stay in the pool.
                 logger.warning(
-                    "Fallback-Engine: %s ausgelastet (%s) — KEIN Cooldown, "
-                    "versuche Fallback", current.name, str(e)[:200])
-                current = self._pick_fallback_backend(
-                    current, character_name, tried)
-                continue
-            except Exception as e:
-                last_error = e
-                # Distinguish connection/server problems vs. payload errors.
-                # 4xx errors (HTTP 400/422 like workflow validation) mean the
-                # service is reachable — only the sent JSON is broken. In that
-                # case do NOT mark it unavailable, otherwise the backend is
-                # removed from the pool and downstream steps wrongly find no
-                # ComfyUI anymore.
-                _err_str = str(e)
-                _is_payload_err = bool(_re_4xx.search(_err_str))
-                if _is_payload_err:
-                    logger.warning(
-                        "Fallback-Engine: %s warf Payload-Fehler (%s: %s) — Backend bleibt verfuegbar, "
-                        "versuche anderen Backend (Workflow/Prompt vermutlich inkompatibel)",
-                        current.name, type(e).__name__, _err_str[:200])
-                else:
-                    logger.warning(
-                        "Fallback-Engine: %s warf Exception (%s: %s) — Backend in Cooldown, versuche Fallback",
-                        current.name, type(e).__name__, _err_str[:200])
-                    current.mark_unhealthy(
-                        f"generate failed: {type(e).__name__}: {_err_str[:120]}",
-                        _BACKEND_COOLDOWN_SECONDS)
-                current = self._pick_fallback_backend(
-                    current, character_name, tried)
-                continue
+                    "Backend-Runner: %s warf Payload-Fehler (%s: %s) — "
+                    "Backend bleibt verfuegbar", backend.name,
+                    type(e).__name__, _err_str[:200])
+            else:
+                logger.warning(
+                    "Backend-Runner: %s warf Exception (%s: %s) — Cooldown",
+                    backend.name, type(e).__name__, _err_str[:200])
+                backend.mark_unhealthy(
+                    f"generate failed: {type(e).__name__}: {_err_str[:120]}",
+                    _BACKEND_COOLDOWN_SECONDS)
+            raise
 
-            # List of bytes -> success
-            if result:
-                return result, current
+        if result:
+            return result, backend
 
-            # Empty result = fail (busy raises BackendBusyError instead), try
-            # the next one.
-            logger.warning("Fallback-Engine: %s lieferte leeres Ergebnis — Cooldown, versuche Fallback",
-                           current.name)
-            current.mark_unhealthy("generate returned empty result",
-                                   _BACKEND_COOLDOWN_SECONDS)
-            current = self._pick_fallback_backend(
-                current, character_name, tried)
-
-        _err_suffix = f" (letzter Fehler: {type(last_error).__name__}: {last_error})" if last_error else ""
+        # Empty result = failure (busy raises BackendBusyError instead).
+        backend.mark_unhealthy("generate returned empty result",
+                               _BACKEND_COOLDOWN_SECONDS)
         raise RuntimeError(
-            f"Fallback-Engine: alle {len(tried)} probierten Backends fehlgeschlagen "
-            f"({', '.join(sorted(tried))}){_err_suffix}")
+            f"Backend {backend.name} lieferte keine Bilder (leeres Ergebnis)")
 
     def _wait_for_backend(self, character_name, has_input_image: bool = False):
         """Picks an available backend for this agent.

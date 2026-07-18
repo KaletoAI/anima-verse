@@ -367,13 +367,10 @@ def regenerate_image(character_name: str,
     try:
         _op = _build_op(final_prompt, negative_prompt, params)
         try:
-            images, backend = skill.run_with_fallback(
-                primary_backend=backend,
-                op=_op,
-                character_name=character_name)
-        except RuntimeError as _fb_err:
-            msg = str(_fb_err)
-            logger.error("Regen Fallback-Engine: %s", msg)
+            images, backend = skill.run_on_backend(
+                backend, op=_op, character_name=character_name)
+        except RuntimeError as _err:
+            logger.error("Regen: %s", _err)
             raise
         if not images:
             msg = "Backend gab keine Bilder zurueck"
