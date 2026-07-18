@@ -41,7 +41,7 @@ interface Model3DStatus {
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
-  options?: { no_fingers?: boolean | null }
+  options?: { no_fingers?: boolean | null; auto_generate?: boolean }
   backends?: MeshBackend[]
   default?: string
   animation_set?: string
@@ -176,6 +176,24 @@ export function FieldModel3D({ character }: { character: string }) {
       try {
         const d = await apiPost<{ options: Model3DStatus['options'] }>(
           `/characters/${enc}/model3d/options`, { no_fingers: value })
+        setSt((prev) => ({ ...prev, options: d.options }))
+        toast(t('Saved'))
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        load()
+      }
+    },
+    [enc, load, t, toast],
+  )
+
+  // Opt-in: generate the mesh automatically (cheapest backend) once a new
+  // outfit combination's T-pose render succeeded.
+  const setAutoGenerate = useCallback(
+    async (value: boolean) => {
+      setSt((prev) => ({ ...prev, options: { ...(prev.options || {}), auto_generate: value } }))
+      try {
+        const d = await apiPost<{ options: Model3DStatus['options'] }>(
+          `/characters/${enc}/model3d/options`, { auto_generate: value })
         setSt((prev) => ({ ...prev, options: d.options }))
         toast(t('Saved'))
       } catch (e) {
@@ -396,6 +414,15 @@ export function FieldModel3D({ character }: { character: string }) {
       <div className="ga-hint">
         {t('One model per outfit combination — upload a GLB/FBX or generate it from the T-pose render.')}
       </div>
+      <label className="ga-check-row"
+        title={t('Once the T-pose render of a NEW outfit combination has succeeded, the mesh is generated automatically on the cheapest matching backend — the T-pose is always awaited first.')}>
+        <input
+          type="checkbox"
+          checked={!!st.options?.auto_generate}
+          onChange={(e) => setAutoGenerate(e.target.checked)}
+        />
+        <span>{t('Auto-generate 3D model (cheapest backend)')}</span>
+      </label>
       {/* "no fingers" is a humanoid-alias param — the generic ones don't take it. */}
       {mixamo ? (
         <>

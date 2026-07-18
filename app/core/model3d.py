@@ -44,7 +44,10 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
     except Exception:
         raw = {}
     nf = raw.get("no_fingers")
-    return {"no_fingers": None if nf is None else bool(nf)}
+    return {"no_fingers": None if nf is None else bool(nf),
+            # Auto-generate the mesh on the CHEAPEST backend as soon as a
+            # fresh T-pose render of a new outfit combination succeeds.
+            "auto_generate": bool(raw.get("auto_generate"))}
 
 
 def set_model3d_options(character_name: str,
@@ -60,6 +63,11 @@ def set_model3d_options(character_name: str,
             opts.pop("no_fingers", None)
         else:
             opts["no_fingers"] = bool(nf)
+    if "auto_generate" in updates:
+        if updates["auto_generate"]:
+            opts["auto_generate"] = True
+        else:
+            opts.pop("auto_generate", None)
     profile["model3d_opts"] = opts
     save_character_profile(character_name, profile)
     return get_model3d_options(character_name)
@@ -327,19 +335,22 @@ def _char_lock(character_name: str) -> threading.Lock:
 
 
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
-                                backend_glob: str = "") -> Dict[str, Any]:
+                                backend_glob: str = "",
+                                prefer_cheapest: bool = False) -> Dict[str, Any]:
     """Generates the mesh for the currently worn outfit from its T-pose render.
 
     Backend: ``backend_glob`` → admin default (``image_generation.
-    mesh_imagegen_default``) → cheapest available mesh backend. Cached per
-    combination — an existing mesh is kept unless ``force``.
+    mesh_imagegen_default``) → cheapest available mesh backend.
+    ``prefer_cheapest`` skips the admin default (the auto-generate hook
+    always takes the cheapest matching backend). Cached per combination —
+    an existing mesh is kept unless ``force``.
     Blocking (minutes); call from a worker thread.
     """
     from app.core import config
     from app.imagegen.service import get_image_service
     from app.core.task_queue import get_task_queue
 
-    if not backend_glob:
+    if not backend_glob and not prefer_cheapest:
         backend_glob = str(
             config.get("image_generation.mesh_imagegen_default", "") or "").strip()
 
@@ -423,11 +434,13 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                 pass
 
 
-def _run(character_name: str, force: bool, backend_glob: str = "") -> None:
+def _run(character_name: str, force: bool, backend_glob: str = "",
+         prefer_cheapest: bool = False) -> None:
     with _char_lock(character_name):
         try:
             generate_for_current_outfit(character_name, force=force,
-                                        backend_glob=backend_glob)
+                                        backend_glob=backend_glob,
+                                        prefer_cheapest=prefer_cheapest)
         except Exception as e:
             logger.error("Model3D-Generierung fuer %s fehlgeschlagen: %s",
                          character_name, e)
@@ -437,17 +450,46 @@ def _run(character_name: str, force: bool, backend_glob: str = "") -> None:
 
 
 def trigger_generation(character_name: str, *, force: bool = False,
-                       backend_glob: str = "") -> bool:
-    """Starts the mesh generation in the background (manual button today).
-    ``backend_glob`` picks the mesh backend (empty = admin default → cheapest).
+                       backend_glob: str = "",
+                       prefer_cheapest: bool = False) -> bool:
+    """Starts the mesh generation in the background.
+    ``backend_glob`` picks the mesh backend (empty = admin default →
+    cheapest; ``prefer_cheapest`` always cheapest — the auto hook).
     False when one is already running for this character."""
     with _lock:
         if character_name in _generating:
             return False
         _generating.add(character_name)
-    threading.Thread(target=_run, args=[character_name, force, backend_glob],
+    threading.Thread(target=_run,
+                     args=[character_name, force, backend_glob, prefer_cheapest],
                      daemon=True).start()
     return True
+
+
+def maybe_auto_generate_for_outfit(character_name: str) -> bool:
+    """Auto-mesh hook — model_refs calls it AFTER a T-pose render pass, so
+    a run only ever starts once the T-pose for the CURRENT combination
+    exists (freshly rendered or cached). Conditions: the character's
+    ``auto_generate`` option is on, the combination has no mesh yet, no
+    run is active. Uses the CHEAPEST matching mesh backend (user decision
+    2026-07-18). Returns True when a generation was started."""
+    try:
+        if not get_model3d_options(character_name).get("auto_generate"):
+            return False
+        _, _, signature = current_outfit_state(character_name)
+        if not signature or find_model3d(character_name, signature):
+            return False
+        if not find_ref_image(character_name, "tpose", signature):
+            return False  # render failed / not there yet — wait for the next pass
+    except Exception as e:
+        logger.debug("Model3D-Auto-Check fuer %s fehlgeschlagen: %s",
+                     character_name, e)
+        return False
+    started = trigger_generation(character_name, prefer_cheapest=True)
+    if started:
+        logger.info("Model3D %s: Auto-Generierung gestartet (T-Pose vorhanden, "
+                    "guenstigstes Backend)", character_name)
+    return started
 
 
 def delete_model3d(character_name: str, signature: Optional[str] = None) -> bool:

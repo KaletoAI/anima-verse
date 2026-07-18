@@ -363,6 +363,17 @@ def _run_generation(character_name: str, kind: str, force: bool = False) -> None
     finally:
         with _lock:
             _running.discard(key)
+    # Auto-mesh (opt-in per character): ONLY after the T-pose pass, and the
+    # hook itself verifies the T-pose file exists for the current
+    # combination — a mesh run never starts before its input succeeded.
+    # Spawns its own worker; the tpose kind lock is released here.
+    if kind == "tpose":
+        try:
+            from app.core.model3d import maybe_auto_generate_for_outfit
+            maybe_auto_generate_for_outfit(character_name)
+        except Exception as e:
+            logger.debug("Model3D-Auto-Hook fuer %s fehlgeschlagen: %s",
+                         character_name, e)
 
 
 def _fire_kinds(character_name: str, kinds: tuple, force: bool = False) -> None:
