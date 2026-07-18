@@ -3,33 +3,48 @@
 Seamless tileable top-down ground textures for terrain tiles (road, water,
 grass, …), delivered world-globally via ``GET /assets/surface-textures`` —
 analogous to the animation-clip library. ``kind`` is an OPEN vocabulary
-matching the location ``terrain`` field; ONE texture per kind. The 3D
-client tiles them in world scale (``size_m`` = physical edge length,
-default 3 m); an empty list is the normal state — the client falls back
-to its built-in procedural materials.
+matching the location ``terrain`` field; the client gets ONE texture per
+kind — the ACTIVE one. Like the image galleries and the building models,
+SEVERAL versions per kind may be stored: every generation/upload adds a
+timestamped file, one of them is selected. ``size_m`` = physical edge
+length (default 3 m); an empty list is the normal state — the client
+falls back to its built-in procedural materials.
 
-Storage: ``worlds/<world>/surface_textures/<kind>.jpg`` (JPEG preferred
-per contract; uploads may be PNG/WebP) plus an optional ``<kind>.json``
-sidecar (``{"size_m": …}`` when it differs from the default). Generation
-runs through the normal image pipeline — use case ``surface_texture``,
+Storage: ``worlds/<world>/surface_textures/``:
+
+    <kind>_<ts>.jpg          — one file per version (uploads may be PNG/WebP)
+    <kind>_<ts>.json         — sidecar: created_at, source, backend, prompt,
+                               negative, size_m
+    <kind>.jpg / <kind>.json — the legacy single-version store, stays valid
+    selection.json           — {"<kind>": "<active filename>"}
+
+Without a selection entry the NEWEST version is active. Generation runs
+through the normal image pipeline — use case ``surface_texture``,
 serialized on the backend GPU channel like every other render — and the
-result is converted to JPEG ≤ 1024².
+result is converted to JPEG ≤ 1024²; the sidecar records HOW the texture
+was made (backend + final prompt).
 """
 
 import json
 import random
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
+from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
 
 DEFAULT_SIZE_M = 3.0
 TEXTURE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 _KIND_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+# Version-timestamp suffix: unix seconds (≥ 9 digits) — kinds themselves may
+# contain digits/underscores, the length keeps the split unambiguous.
+_TS_RE = re.compile(r"^(.+)_(\d{9,})$")
+_SEL_FILE = "selection.json"
 
 _lock = threading.Lock()
 _generating: set = set()  # kinds with a running generation
@@ -49,13 +64,97 @@ def safe_kind(kind: str) -> str:
     return kind if _KIND_RE.match(kind) else ""
 
 
-def texture_file(kind: str) -> Optional[Path]:
+def _stem_kind(stem: str) -> str:
+    """Kind of a file stem: ``<kind>_<ts>`` (versioned) or ``<kind>``
+    (legacy). '' when the stem is no valid kind."""
+    m = _TS_RE.match(stem)
+    return safe_kind(m.group(1) if m else stem)
+
+
+def _sidecar_path(p: Path) -> Path:
+    return p.with_suffix(".json")
+
+
+def _read_meta(p: Path) -> Dict[str, Any]:
+    sp = _sidecar_path(p)
+    if sp.exists():
+        try:
+            meta = json.loads(sp.read_text(encoding="utf-8"))
+            if isinstance(meta, dict):
+                return meta
+        except (OSError, ValueError):
+            pass
+    return {}
+
+
+def _write_meta(p: Path, meta: Dict[str, Any]) -> None:
+    _sidecar_path(p).write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _created_key(p: Path) -> float:
+    meta = _read_meta(p)
+    ts = meta.get("created_at") or ""
+    if ts:
+        from app.core.timeutils import parse_iso
+        try:
+            return parse_iso(ts).timestamp()
+        except (TypeError, ValueError):
+            pass
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _files_by_kind() -> Dict[str, List[Path]]:
+    """All stored texture files grouped by kind, newest first per kind."""
     d = _dir()
-    for ext in (".jpg", ".jpeg", ".png", ".webp"):
-        p = d / f"{kind}{ext}"
-        if p.exists():
+    if not d.is_dir():
+        return {}
+    out: Dict[str, List[Path]] = {}
+    for p in d.iterdir():
+        if not p.is_file() or p.suffix.lower() not in TEXTURE_EXTS:
+            continue
+        kind = _stem_kind(p.stem)
+        if kind:
+            out.setdefault(kind, []).append(p)
+    for kind in out:
+        out[kind].sort(key=_created_key, reverse=True)
+    return out
+
+
+def _read_selection() -> Dict[str, str]:
+    sp = _dir() / _SEL_FILE
+    if sp.exists():
+        try:
+            sel = json.loads(sp.read_text(encoding="utf-8"))
+            if isinstance(sel, dict):
+                return sel
+        except (OSError, ValueError):
+            pass
+    return {}
+
+
+def _write_selection(sel: Dict[str, str]) -> None:
+    (_dir(create=True) / _SEL_FILE).write_text(
+        json.dumps(sel, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def texture_file(kind: str) -> Optional[Path]:
+    """The ACTIVE version of a kind: the selection entry when it points at an
+    existing file, else the newest stored version (legacy files need no
+    migration this way)."""
+    kind = safe_kind(kind)
+    if not kind:
+        return None
+    sel = _read_selection().get(kind, "")
+    if sel and "/" not in sel and "\\" not in sel and ".." not in sel:
+        p = _dir() / sel
+        if p.exists() and _stem_kind(p.stem) == kind:
             return p
-    return None
+    files = _files_by_kind().get(kind) or []
+    return files[0] if files else None
 
 
 def file_by_name(filename: str) -> Optional[Path]:
@@ -65,25 +164,25 @@ def file_by_name(filename: str) -> Optional[Path]:
     p = _dir() / filename
     if not p.exists() or p.suffix.lower() not in TEXTURE_EXTS:
         return None
-    return p
+    return p if _stem_kind(p.stem) else None
 
 
-def _sidecar(kind: str) -> Path:
-    return _dir() / f"{kind}.json"
-
-
-def _read_size_m(kind: str) -> float:
+def _size_m_of(p: Path) -> float:
     try:
-        v = float(json.loads(_sidecar(kind).read_text()).get("size_m"))
+        v = float(_read_meta(p).get("size_m"))
         return v if v > 0 else DEFAULT_SIZE_M
-    except Exception:
+    except (TypeError, ValueError):
         return DEFAULT_SIZE_M
 
 
-def set_size_m(kind: str, size_m: float) -> bool:
-    """Persist the physical edge length; the default drops the sidecar."""
+def set_size_m(kind: str, size_m: float, filename: str = "") -> bool:
+    """Persist the physical edge length on ONE version's sidecar (default:
+    the active one) — a property of the image (what area it depicts)."""
     kind = safe_kind(kind)
-    if not kind or not texture_file(kind):
+    if not kind:
+        return False
+    p = (file_by_name(filename) if filename else texture_file(kind))
+    if not p or _stem_kind(p.stem) != kind:
         return False
     try:
         size_m = float(size_m)
@@ -91,48 +190,115 @@ def set_size_m(kind: str, size_m: float) -> bool:
         return False
     if size_m <= 0 or size_m > 100:
         return False
+    meta = _read_meta(p)
     if abs(size_m - DEFAULT_SIZE_M) < 1e-9:
-        _sidecar(kind).unlink(missing_ok=True)
+        meta.pop("size_m", None)
     else:
-        _dir(create=True)
-        _sidecar(kind).write_text(json.dumps({"size_m": round(size_m, 2)}))
+        meta["size_m"] = round(size_m, 2)
+    if meta:
+        _write_meta(p, meta)
+    else:
+        _sidecar_path(p).unlink(missing_ok=True)
+    return True
+
+
+def select_texture(kind: str, filename: str) -> bool:
+    """Make ``filename`` the active version of its kind."""
+    kind = safe_kind(kind)
+    p = file_by_name(filename) if kind else None
+    if not p or _stem_kind(p.stem) != kind:
+        return False
+    sel = _read_selection()
+    sel[kind] = p.name
+    _write_selection(sel)
     return True
 
 
 def list_textures() -> List[Dict[str, Any]]:
-    """All textures, sorted by kind: {kind, filename, url, size_m, size}."""
-    d = _dir()
-    if not d.is_dir():
-        return []
+    """CLIENT list — one entry per kind, the ACTIVE version:
+    {kind, filename, url, size_m, size}."""
     out = []
-    for p in sorted(d.iterdir()):
-        if p.suffix.lower() not in TEXTURE_EXTS:
-            continue
-        kind = safe_kind(p.stem)
-        if not kind:
+    for kind in sorted(_files_by_kind()):
+        p = texture_file(kind)
+        if not p:
             continue
         out.append({
             "kind": kind,
             "filename": p.name,
             "url": f"/assets/surface-textures/{p.name}",
-            "size_m": _read_size_m(kind),
+            "size_m": _size_m_of(p),
             "size": p.stat().st_size,
         })
     return out
 
 
-def delete_texture(kind: str) -> bool:
+def admin_list() -> List[Dict[str, Any]]:
+    """Admin listing — ALL versions per kind (newest first) incl. HOW each
+    was made: [{kind, versions: [{filename, url, size_m, created_at,
+    source, backend, prompt, negative, active}]}]."""
+    out = []
+    by_kind = _files_by_kind()
+    for kind in sorted(by_kind):
+        active = texture_file(kind)
+        versions = []
+        for p in by_kind[kind]:
+            meta = _read_meta(p)
+            versions.append({
+                "filename": p.name,
+                "url": f"/assets/surface-textures/{p.name}",
+                "size_m": _size_m_of(p),
+                "created_at": meta.get("created_at", ""),
+                "source": meta.get("source", ""),
+                "backend": meta.get("backend", ""),
+                "prompt": meta.get("prompt", ""),
+                "negative": meta.get("negative", ""),
+                "active": bool(active and p.name == active.name),
+            })
+        out.append({"kind": kind, "versions": versions})
+    return out
+
+
+def delete_texture(kind: str, filename: str = "") -> bool:
+    """Remove ONE version (+ sidecar) by filename, or ALL versions of the
+    kind when ``filename`` is empty. Deleting the active version moves the
+    selection to the newest remaining one."""
     kind = safe_kind(kind)
-    p = texture_file(kind) if kind else None
-    if not p:
+    if not kind:
         return False
-    p.unlink()
-    _sidecar(kind).unlink(missing_ok=True)
+    if filename:
+        p = file_by_name(filename)
+        if not p or _stem_kind(p.stem) != kind:
+            return False
+        p.unlink()
+        _sidecar_path(p).unlink(missing_ok=True)
+    else:
+        files = _files_by_kind().get(kind) or []
+        if not files:
+            return False
+        for p in files:
+            p.unlink()
+            _sidecar_path(p).unlink(missing_ok=True)
+    sel = _read_selection()
+    if kind in sel and not (_dir() / sel[kind]).exists():
+        sel.pop(kind)
+        _write_selection(sel)
     return True
 
 
+def _new_path(kind: str, ext: str) -> Path:
+    """Fresh timestamped target file; bumps the timestamp on a collision."""
+    d = _dir(create=True)
+    ts = int(time.time())
+    while True:
+        p = d / f"{kind}_{ts}{ext}"
+        if not p.exists():
+            return p
+        ts += 1
+
+
 def save_uploaded(kind: str, contents: bytes) -> Dict[str, Any]:
-    """Store an uploaded texture (magic-byte sniffed; replaces any format)."""
+    """Store an uploaded texture as a NEW version (magic-byte sniffed) and
+    select it — existing versions stay."""
     kind = safe_kind(kind)
     if not kind:
         return {"ok": False, "error": "bad_kind"}
@@ -146,12 +312,11 @@ def save_uploaded(kind: str, contents: bytes) -> Dict[str, Any]:
         ext = ".webp"
     else:
         return {"ok": False, "error": "not_an_image"}
-    d = _dir(create=True)
-    old = texture_file(kind)
-    if old and old.suffix.lower() != ext:
-        old.unlink()
-    (d / f"{kind}{ext}").write_bytes(contents)
-    return {"ok": True, "kind": kind, "filename": f"{kind}{ext}"}
+    p = _new_path(kind, ext)
+    p.write_bytes(contents)
+    _write_meta(p, {"created_at": utc_now_iso(), "source": "uploaded"})
+    select_texture(kind, p.name)
+    return {"ok": True, "kind": kind, "filename": p.name}
 
 
 def compose_prompt(kind: str, backend) -> Dict[str, str]:
@@ -181,7 +346,8 @@ def is_pending(kind: str = "") -> List[str]:
 
 def _generate(kind: str, backend_glob: str, prompt: str, negative: str) -> Dict[str, Any]:
     """Blocking generation on a worker thread — the GPU job itself runs on
-    the backend queue channel like every image render."""
+    the backend queue channel like every image render. Adds a NEW version
+    and selects it; the sidecar records backend + final prompt."""
     from app.imagegen.service import get_image_service
     svc = get_image_service()
     backend = None
@@ -232,12 +398,16 @@ def _generate(kind: str, backend_glob: str, prompt: str, negative: str) -> Dict[
         img = Image.open(io.BytesIO(images[0])).convert("RGB")
         if max(img.size) > 1024:
             img.thumbnail((1024, 1024))
-        d = _dir(create=True)
-        old = texture_file(kind)
-        if old and old.suffix.lower() != ".jpg":
-            old.unlink()
-        out = d / f"{kind}.jpg"
+        out = _new_path(kind, ".jpg")
         img.save(out, "JPEG", quality=90)
+        _write_meta(out, {
+            "created_at": utc_now_iso(),
+            "source": "generated",
+            "backend": backend.name,
+            "prompt": prompt,
+            "negative": negative,
+        })
+        select_texture(kind, out.name)
         logger.info("Surface texture %s: %s (%d bytes, backend %s)",
                     kind, out.name, out.stat().st_size, backend.name)
         return {"ok": True, "filename": out.name}

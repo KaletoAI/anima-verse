@@ -640,7 +640,7 @@ def surface_textures_admin() -> Dict[str, Any]:
     """Admin listing: textures + running generations + backends with their
     resolved use-case style, so the dialog can show and edit the COMPLETE
     final prompt before generating (final-prompt rule)."""
-    from app.core.surface_textures import compose_prompt, is_pending, list_textures
+    from app.core.surface_textures import admin_list, compose_prompt, is_pending
     from app.imagegen.service import get_image_service
     svc = get_image_service()
     backends = []
@@ -652,7 +652,7 @@ def surface_textures_admin() -> Dict[str, Any]:
                              "prompt_negative": style["negative"]})
     except Exception:
         pass
-    return {"textures": list_textures(), "pending": is_pending(),
+    return {"textures": admin_list(), "pending": is_pending(),
             "backends": backends}
 
 
@@ -690,18 +690,34 @@ async def surface_texture_upload(kind: str, file: UploadFile = File(...)) -> Dic
 
 @router.post("/surface-textures/{kind}/size")
 async def surface_texture_size(kind: str, request: Request) -> Dict[str, Any]:
-    """Set the physical edge length in metres (body: {size_m}; 3 = default)."""
+    """Set the physical edge length in metres (body: {size_m}, optional
+    {file} targets a stored version, default the active one; 3 = default)."""
     from app.core.surface_textures import set_size_m
     data = await request.json()
-    if not isinstance(data, dict) or not set_size_m(kind, data.get("size_m")):
+    if not isinstance(data, dict) or not set_size_m(
+            kind, data.get("size_m"), filename=str(data.get("file") or "").strip()):
         raise HTTPException(status_code=400, detail="bad kind or size_m")
     return {"status": "ok"}
 
 
+@router.post("/surface-textures/{kind}/select")
+async def surface_texture_select(kind: str, request: Request) -> Dict[str, Any]:
+    """Make a stored version the ACTIVE one (body: {file}) — the one the
+    3D client gets via /assets/surface-textures."""
+    from app.core.surface_textures import select_texture
+    data = await request.json()
+    if not isinstance(data, dict) or not select_texture(
+            kind, str(data.get("file") or "").strip()):
+        raise HTTPException(status_code=404, detail="No such texture version")
+    return {"status": "ok"}
+
+
 @router.delete("/surface-textures/{kind}")
-def surface_texture_delete(kind: str) -> Dict[str, Any]:
+def surface_texture_delete(kind: str, file: str = "") -> Dict[str, Any]:
+    """Remove ONE version (?file=) or ALL versions of the kind. Deleting
+    the active version moves the selection to the newest remaining one."""
     from app.core.surface_textures import delete_texture
-    if not delete_texture(kind):
+    if not delete_texture(kind, filename=file.strip()):
         raise HTTPException(status_code=404, detail="No texture for this kind")
     return {"status": "deleted"}
 

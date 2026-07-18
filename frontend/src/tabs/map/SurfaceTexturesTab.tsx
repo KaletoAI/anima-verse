@@ -2,11 +2,12 @@
  * SurfaceTexturesTab — the global surface-texture library (AV3D-13) as its
  * own Game-Admin tab (next to the Map). Terrain tiles (road, water, …) in
  * the 3D client use these seamless top-down materials as ground instead of
- * the 2D icons; ONE texture per kind (open vocabulary matching the location
- * `terrain` field). Generate runs through the normal image pipeline (use
- * case "surface_texture"); the COMPLETE final prompt is shown and editable
- * before generating. An empty library is fine — the client falls back to
- * its procedural materials.
+ * the 2D icons. Like the galleries, SEVERAL versions per kind are stored —
+ * one is ACTIVE (what the client gets); each version shows HOW it was made
+ * (backend/upload + date, full prompt in the lightbox). Generate runs
+ * through the normal image pipeline (use case "surface_texture"); the
+ * COMPLETE final prompt is shown and editable before generating. An empty
+ * library is fine — the client falls back to its procedural materials.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -14,12 +15,21 @@ import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { TERRAIN_TYPES } from '../world/worldTypes'
 
-interface Tex {
-  kind: string
+interface TexVersion {
   filename: string
   url: string
   size_m: number
-  size: number
+  created_at: string
+  source: string
+  backend: string
+  prompt: string
+  negative: string
+  active: boolean
+}
+
+interface TexGroup {
+  kind: string
+  versions: TexVersion[]
 }
 
 interface BackendInfo {
@@ -31,7 +41,7 @@ interface BackendInfo {
 export function SurfaceTexturesTab() {
   const { t } = useI18n()
   const { toast } = useToast()
-  const [textures, setTextures] = useState<Tex[]>([])
+  const [textures, setTextures] = useState<TexGroup[]>([])
   const [pending, setPending] = useState<string[]>([])
   const [backends, setBackends] = useState<BackendInfo[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -41,6 +51,7 @@ export function SurfaceTexturesTab() {
   const [negative, setNegative] = useState('')
   const [promptTouched, setPromptTouched] = useState(false)
   const [armedDel, setArmedDel] = useState('')
+  const [zoom, setZoom] = useState<{ kind: string; v: TexVersion } | null>(null)
   const [cacheBump, setCacheBump] = useState(0)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -48,7 +59,7 @@ export function SurfaceTexturesTab() {
 
   const load = useCallback(async () => {
     try {
-      const d = await apiGet<{ textures?: Tex[]; pending?: string[]; backends?: BackendInfo[] }>(
+      const d = await apiGet<{ textures?: TexGroup[]; pending?: string[]; backends?: BackendInfo[] }>(
         '/world/surface-textures')
       setTextures(d.textures || [])
       setPending(d.pending || [])
@@ -114,33 +125,56 @@ export function SurfaceTexturesTab() {
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [load, t, toast])
 
-  const setSize = useCallback((k: string, v: string) => {
-    const n = parseFloat(v)
+  const setSize = useCallback((k: string, filename: string, raw: string) => {
+    const n = parseFloat(raw)
     if (!Number.isFinite(n) || n <= 0) return
-    void apiPost(`/world/surface-textures/${encodeURIComponent(k)}/size`, { size_m: n })
+    void apiPost(`/world/surface-textures/${encodeURIComponent(k)}/size`,
+      { size_m: n, file: filename })
       .then(() => load())
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [load, t, toast])
 
-  const remove = useCallback((k: string) => {
-    if (armedDel !== k) {
-      setArmedDel(k)
+  const select = useCallback((k: string, filename: string) => {
+    void apiPost(`/world/surface-textures/${encodeURIComponent(k)}/select`, { file: filename })
+      .then(() => load())
+      .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+  }, [load, t, toast])
+
+  const remove = useCallback((k: string, filename: string) => {
+    if (armedDel !== filename) {
+      setArmedDel(filename)
       return
     }
     setArmedDel('')
-    void apiDelete(`/world/surface-textures/${encodeURIComponent(k)}`)
+    void apiDelete(`/world/surface-textures/${encodeURIComponent(k)}?file=${encodeURIComponent(filename)}`)
       .then(() => load())
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [armedDel, load, t, toast])
+
+  // Compact "how was this made" label: backend for generated versions,
+  // upload marker for uploads, em dash for legacy files without meta.
+  const madeWith = (v: TexVersion) =>
+    v.source === 'generated' ? (v.backend || t('generated'))
+      : v.source === 'uploaded' ? t('uploaded') : '—'
+
+  const dateShort = (iso: string) => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    })
+  }
 
   const knownKinds = Array.from(new Set([...TERRAIN_TYPES, 'gravel', 'dirt', 'snow']))
 
   return (
     <div style={{ padding: 16, height: '100%', overflow: 'auto' }}>
-      <div className="ga-form" style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="ga-form" style={{ maxWidth: 860, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div className="ga-form-section-label">{t('Surface textures (3D terrain)')}</div>
         <span className="ga-hint">
           {t('Seamless top-down ground materials for terrain tiles in the 3D client — one texture per kind, matching the terrain field (road, water, …). Without a texture the client uses its built-in materials.')}
+          {' '}
+          {t('Several versions per kind can be stored — the ⭐ active one is what the client gets; click a thumbnail to enlarge.')}
         </span>
 
         {!loaded ? (
@@ -148,38 +182,17 @@ export function SurfaceTexturesTab() {
         ) : textures.length === 0 ? (
           <div className="ga-empty">{t('No textures yet.')}</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {textures.map((tex) => (
-              <div key={tex.kind} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <img
-                  src={`${tex.url}?v=${cacheBump}`}
-                  alt={tex.kind}
-                  style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4,
-                           border: '1px solid var(--border, #30363d)' }}
-                />
-                <span style={{ fontWeight: 600, minWidth: 70 }}>{tex.kind}</span>
-                {pending.includes(tex.kind) ? (
+          textures.map((tx) => (
+            <div key={tx.kind} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ fontWeight: 600 }}>{tx.kind}</span>
+                {pending.includes(tx.kind) ? (
                   <span className="ga-hint">{t('Generating…')}</span>
                 ) : null}
-                <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center',
-                                fontSize: '0.82em', marginLeft: 'auto' }}
-                  title={t('Physical edge length in metres — the client tiles in world scale (10 m cell = 10/size repetitions).')}>
-                  {t('Size (m)')}
-                  <input
-                    className="ga-input"
-                    type="number"
-                    min={0.1}
-                    step={0.5}
-                    style={{ width: 64 }}
-                    defaultValue={tex.size_m}
-                    onBlur={(e) => setSize(tex.kind, e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                  />
-                </label>
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm"
-                  onClick={() => { setKind(tex.kind); setPromptTouched(false) }}
+                  onClick={() => { setKind(tx.kind); setPromptTouched(false) }}
                   title={t('Prefill the generator with this kind')}
                 >
                   ↻ {t('Regenerate')}
@@ -188,23 +201,77 @@ export function SurfaceTexturesTab() {
                   type="button"
                   className="ga-btn ga-btn-sm"
                   onClick={() => {
-                    uploadKindRef.current = tex.kind
+                    uploadKindRef.current = tx.kind
                     uploadRef.current?.click()
                   }}
-                  title={t('Replace with an uploaded image (JPEG/PNG/WebP, seamless, top-down)')}
+                  title={t('Upload a new version for this kind (JPEG/PNG/WebP, seamless, top-down)')}
                 >
                   ⬆
                 </button>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm ga-btn-danger"
-                  onClick={() => remove(tex.kind)}
-                >
-                  {armedDel === tex.kind ? t('Really delete?') : '🗑'}
-                </button>
               </div>
-            ))}
-          </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {tx.versions.map((v) => (
+                  <div
+                    key={v.filename}
+                    style={{
+                      display: 'flex', flexDirection: 'column', gap: 4, width: 128,
+                      padding: 6, borderRadius: 6,
+                      border: v.active
+                        ? '2px solid var(--accent, #58a6ff)'
+                        : '1px solid var(--border, #30363d)',
+                    }}
+                  >
+                    <img
+                      src={`${v.url}?v=${cacheBump}`}
+                      alt={`${tx.kind} ${v.filename}`}
+                      style={{ width: '100%', height: 96, objectFit: 'cover',
+                               borderRadius: 4, cursor: 'zoom-in' }}
+                      title={t('Click to enlarge')}
+                      onClick={() => setZoom({ kind: tx.kind, v })}
+                    />
+                    <span className="ga-hint" style={{ fontSize: '0.75em', lineHeight: 1.25 }}
+                      title={v.prompt || undefined}>
+                      {madeWith(v)}
+                      {dateShort(v.created_at) ? ` · ${dateShort(v.created_at)}` : ''}
+                    </span>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input
+                        className="ga-input"
+                        type="number"
+                        min={0.1}
+                        step={0.5}
+                        style={{ width: 52 }}
+                        defaultValue={v.size_m}
+                        title={t('Physical edge length in metres — the client tiles in world scale (10 m cell = 10/size repetitions).')}
+                        onBlur={(e) => setSize(tx.kind, v.filename, e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                      />
+                      {v.active ? (
+                        <span title={t('Active — this version is what the 3D client gets.')}>⭐</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ga-btn ga-btn-sm"
+                          onClick={() => select(tx.kind, v.filename)}
+                          title={t('Make this version the active one (what the 3D client gets)')}
+                        >
+                          {t('Select')}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="ga-btn ga-btn-sm ga-btn-danger"
+                        style={{ marginLeft: 'auto' }}
+                        onClick={() => remove(tx.kind, v.filename)}
+                      >
+                        {armedDel === v.filename ? t('Really delete?') : '🗑'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))
         )}
 
         <div className="ga-form-section-label">{t('Generate texture')}</div>
@@ -280,6 +347,42 @@ export function SurfaceTexturesTab() {
           }}
         />
       </div>
+
+      {zoom ? (
+        <div className="ga-gallery-lightbox" onClick={() => setZoom(null)} role="dialog">
+          <img src={`${zoom.v.url}?v=${cacheBump}`} alt={zoom.kind} />
+          {/* Provenance caption — kind, how it was made, date, full prompt. */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute', left: '50%', bottom: 16, transform: 'translateX(-50%)',
+              maxWidth: '84vw', maxHeight: '30vh', overflow: 'auto', cursor: 'auto',
+              background: 'rgba(0,0,0,0.75)', color: '#e6edf3', borderRadius: 6,
+              padding: '8px 12px', fontSize: '0.85em', lineHeight: 1.4,
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>
+              {zoom.kind} · {madeWith(zoom.v)}
+              {dateShort(zoom.v.created_at) ? ` · ${dateShort(zoom.v.created_at)}` : ''}
+              {` · ${zoom.v.size_m} m`}
+            </div>
+            {zoom.v.prompt ? (
+              <div style={{ opacity: 0.85, marginTop: 4 }}>{zoom.v.prompt}</div>
+            ) : null}
+            {zoom.v.negative ? (
+              <div style={{ opacity: 0.6, marginTop: 2 }}>{t('Negative prompt')}: {zoom.v.negative}</div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="ga-gallery-lightbox-close"
+            onClick={() => setZoom(null)}
+            aria-label={t('Close')}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }
