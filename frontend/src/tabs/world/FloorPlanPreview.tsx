@@ -237,6 +237,22 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       try {
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
         const gltf = await new GLTFLoader().loadAsync('/play/test-figure/model')
+        // NEUTRAL example figure: strip the character's textures/materials
+        // to one flat clay-gray material — the preview judges placement and
+        // scale, not a specific character. Replaced ONCE on the cached
+        // source; the skeleton clones share the material.
+        const THREE = await import('three')
+        const clay = new THREE.MeshStandardMaterial({
+          color: 0x9aa4af, roughness: 0.85, metalness: 0,
+        })
+        gltf.scene.traverse((o: Object3D) => {
+          const mesh = o as Mesh
+          if (!mesh.isMesh) return
+          const old = mesh.material
+          mesh.material = clay
+          if (Array.isArray(old)) old.forEach((m) => m.dispose?.())
+          else old?.dispose?.()
+        })
         figRef.current = { status: 'ready', obj: gltf.scene }
       } catch {
         figRef.current = { status: 'missing' }  // no humanoid model → mannequin
