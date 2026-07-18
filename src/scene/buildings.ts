@@ -9,8 +9,14 @@ const RETRY_MS = 60_000;
 interface ModelMeta {
   url: string;
   rotation?: { x?: number; y?: number; z?: number };
-  /** Höhen-Feinjustierung in Metern (Raum-Modelle) */
+  /** Höhen-Feinjustierung in Metern */
   offset_y?: number;
+  /** Maßstabs-Anker (backend-note-scale-anchors.md): 0 = nicht deklariert */
+  height_m?: number;
+  floors?: number;
+  width_m?: number;
+  /** Änderungs-Kennung (Cache-Invalidierung ohne Reload) */
+  signature?: string;
 }
 
 /**
@@ -25,6 +31,7 @@ export class ModelLibrary {
   private models = new Map<string, THREE.Group>();
   private pending = new Set<string>();
   private retryAt = new Map<string, number>();
+  private signatures = new Map<string, string>();
   /** wird gerufen, sobald ein Modell bereit ist */
   onModelReady: ((id: string) => void) | null = null;
 
@@ -44,6 +51,22 @@ export class ModelLibrary {
   invalidate(id: string) {
     this.models.delete(id);
     this.retryAt.delete(id);
+    this.signatures.delete(id);
+  }
+
+  /** Signatur-Sweep: neu generierte Modelle ohne Reload erkennen — Meta
+   *  der gecachten Modelle prüfen, bei geänderter signature neu laden. */
+  async sweepSignatures() {
+    for (const [id, known] of [...this.signatures]) {
+      try {
+        const meta = await this.fetchMeta(id);
+        if (meta?.signature && meta.signature !== known) {
+          console.info(`[${this.tag}] ${id}: Modell geändert (${known} -> ${meta.signature}) — lade neu`);
+          this.invalidate(id);
+          this.request(id);
+        }
+      } catch { /* Server kurz weg -> nächster Sweep */ }
+    }
   }
 
   /** Modell nachladen, falls nicht vorhanden (drosselt sich selbst). */
@@ -61,7 +84,12 @@ export class ModelLibrary {
         }
         const gltf = await new GLTFLoader().loadAsync(meta.url);
         const model = this.normalize(gltf.scene, meta);
+        model.userData.meta = {
+          height_m: meta.height_m || 0, floors: meta.floors || 0,
+          width_m: meta.width_m || 0, signature: meta.signature ?? '',
+        };
         this.models.set(id, model);
+        if (meta.signature) this.signatures.set(id, meta.signature);
         console.info(`[${this.tag}] ${id}: Modell vom Server`);
         this.onModelReady?.(id);
       } catch (e) {
@@ -103,20 +131,32 @@ function flipReliefFaceUp(scene: THREE.Group, size: THREE.Vector3) {
 
 /** Gebäude: aufrichten, auf die Kachel skalieren, Unterkante auf den Sockel. */
 export function buildingLibrary(): ModelLibrary {
-  return new ModelLibrary('buildings', getLocationModel, (scene) => {
+  return new ModelLibrary('buildings', getLocationModel, (scene, meta) => {
+    // Rotations-Fix aus dem Meta (Admin-Regler) hat Vorrang vor Heuristiken
+    const r = meta.rotation;
+    const explicit = !!r && ((r.x ?? 0) !== 0 || (r.y ?? 0) !== 0 || (r.z ?? 0) !== 0);
+    if (explicit) {
+      scene.rotation.set(
+        THREE.MathUtils.degToRad(r!.x ?? 0),
+        THREE.MathUtils.degToRad(r!.y ?? 0),
+        THREE.MathUtils.degToRad(r!.z ?? 0)
+      );
+    }
     scene.updateMatrixWorld(true);
     let box = new THREE.Box3().setFromObject(scene);
     let size = box.getSize(new THREE.Vector3());
     // Z-up-Export aufrichten — aber nur, wenn das Modell auch aufgerichtet
     // noch substanzielle Tiefe hätte: flache Relief-Modelle (Bild-Generierung)
     // sind flach gemeint und würden als dünne Wand auf der Kachel stehen.
-    if (size.z > size.y * 1.8 && size.y > Math.max(size.x, size.z) * 0.45) {
+    if (!explicit && size.z > size.y * 1.8 && size.y > Math.max(size.x, size.z) * 0.45) {
       scene.rotation.x = -Math.PI / 2;
       scene.updateMatrixWorld(true);
       box = new THREE.Box3().setFromObject(scene);
       size = box.getSize(new THREE.Vector3());
     }
-    flipReliefFaceUp(scene, size);
+    if (!explicit) flipReliefFaceUp(scene, size);
+    // Mesh-Proportion nach Rotations-Fix (für die plan_width_m-Auto-Ableitung)
+    const aspectXZoverY = Math.max(size.x, size.z) / Math.max(size.y, 1e-3);
     const s = (CELL * 0.92) / Math.max(size.x, size.z, 1e-3);
     scene.scale.setScalar(s);
     scene.updateMatrixWorld(true);
@@ -124,7 +164,7 @@ export function buildingLibrary(): ModelLibrary {
     const c = box.getCenter(new THREE.Vector3());
     scene.position.x -= c.x;
     scene.position.z -= c.z;
-    scene.position.y -= box.min.y - 0.06;        // knapp über der Sockel-Platte
+    scene.position.y -= box.min.y - 0.06 - (meta.offset_y || 0);   // knapp über der Sockel-Platte
     scene.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) {
         o.castShadow = true;
@@ -134,6 +174,7 @@ export function buildingLibrary(): ModelLibrary {
     const root = new THREE.Group();
     root.add(scene);
     root.userData.height = box.max.y - box.min.y;
+    root.userData.aspectXZoverY = aspectXZoverY;
     return root;
   });
 }

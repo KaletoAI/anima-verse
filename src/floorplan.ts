@@ -8,8 +8,8 @@ import * as THREE from 'three';
 import { Engine } from './scene/engine';
 import { applyRoomModel, applyTileFade, buildTile, type Tile } from './scene/tiles';
 import { roomModelLibrary } from './scene/buildings';
-import { getRoomModel, getSurfaceTextures } from './api';
-import { setSurfaceTextures } from './scene/tiles';
+import { getLocationModel, getRoomModel, getSurfaceTextures } from './api';
+import { setLocationAnchor, setSurfaceTextures, storeyHeight } from './scene/tiles';
 void getSurfaceTextures().then(setSurfaceTextures);
 import { grassTexture } from './scene/textures';
 import type { WorldLocation } from './types';
@@ -92,16 +92,29 @@ roomModels.onModelReady = (roomId) => {
 async function poll() {
   const loc = await fetchLocation();
   if (!loc) return;
-  // Auch Meta-Justierungen (rotation/offset_y) live übernehmen: Metas der
-  // Layout-Räume abfragen und geänderte Modelle aus dem Cache werfen.
+  // Auch Meta-Justierungen (rotation/offset_y/Anker/signature) live
+  // übernehmen: Metas abfragen und geänderte Modelle aus dem Cache werfen.
   const metas: unknown[] = [];
   for (const r of loc.rooms ?? []) {
     if (!r.layout) continue;
     try {
       const meta = await getRoomModel(r.id);
-      metas.push([r.id, meta?.rotation, meta?.offset_y]);
+      metas.push([r.id, meta?.rotation, meta?.offset_y, meta?.width_m, meta?.signature]);
     } catch { /* Server kurz weg -> nächster Poll */ }
   }
+  // v3-Anker (explizit): plan_width_m + Gebäude-Meta -> Etagen/Figuren-Maßstab
+  try {
+    const bmeta = await getLocationModel(loc.id);
+    metas.push(['building', bmeta?.height_m, bmeta?.floors, bmeta?.signature]);
+    const planW = loc.map3d?.plan_width_m || 0;
+    if (planW > 0) {
+      const k = 8 / planW;
+      const storeyWorld = bmeta?.height_m && bmeta?.floors
+        ? (bmeta.height_m / bmeta.floors) * k
+        : storeyHeight(loc);
+      setLocationAnchor(loc.id, { k, storeyWorld });
+    }
+  } catch { /* Server kurz weg */ }
   const sig = JSON.stringify([
     loc.entry_room,
     (loc.rooms ?? []).map((r) => [r.id, r.name, r.layout]),

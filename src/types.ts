@@ -55,10 +55,12 @@ export interface Map3dMeta {
    *  automatisch auf allen Etagen platziert; Figuren nutzen ihn beim
    *  Etagenwechsel */
   elevator?: [number, number];
-  /** Etagenhöhe in Welt-Metern (Kartenmaßstab). Definiert auch den
-   *  Figuren-Maßstab in Räumen (level_height / 3, reale Etage ≈ 3 m).
-   *  Default: 3 */
+  /** Etagenhöhe in Welt-Metern (Kartenmaßstab) — LEGACY-Fallback, wenn
+   *  keine Maßstabs-Anker deklariert sind. Default: 3 */
   level_height?: number;
+  /** v3-Maßstabs-Anker: reale Breite des Grundriss-Referenzquadrats in
+   *  Metern („das Gebäude ist ≈ 12 m breit") -> k = 8 / plan_width_m */
+  plan_width_m?: number;
 }
 
 export interface WorldLocation {

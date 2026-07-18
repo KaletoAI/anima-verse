@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, roomFigureScale, setSurfaceTextures, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, storeyHeight, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -105,7 +105,24 @@ async function startApp(username: string) {
   buildings.onModelReady = (locId) => {
     const tile = tiles.get(locId);
     const model = buildings.get(locId);
-    if (tile && model) applyBuildingModel(tile, model);
+    if (!tile || !model) return;
+    // v3-Maßstabs-Anker (backend-note-scale-anchors.md): explizites
+    // plan_width_m, sonst Auto-Ableitung height_m x Mesh-Proportion.
+    // Ändert sich der Anker, wird die Kachel mit den Anker-Maßen neu gebaut.
+    const meta = model.userData.meta as { height_m?: number; floors?: number } | undefined;
+    const planW = tile.loc.map3d?.plan_width_m
+      || ((meta?.height_m || 0) * ((model.userData.aspectXZoverY as number) || 0));
+    if (planW > 0) {
+      const k = 8 / planW;
+      const storeyWorld = meta?.height_m && meta?.floors
+        ? (meta.height_m / meta.floors) * k
+        : storeyHeight(tile.loc);
+      if (setLocationAnchor(locId, { k, storeyWorld })) {
+        rebuildTile(tile, tile.loc);   // wendet das Gebäude-Modell wieder an
+        return;
+      }
+    }
+    applyBuildingModel(tile, model);
   };
   // Raum-Modelle (AV3D-2): nur Räume mit Layout haben einen Andockpunkt
   const roomModels = roomModelLibrary();
@@ -123,6 +140,9 @@ async function startApp(username: string) {
       if (tile.isBuilding && !tile.serverModel) buildings.request(tile.loc.id);
     }
     for (const roomId of tileByRoom.keys()) roomModels.request(roomId);
+    // neu generierte Modelle ohne Reload erkennen (signature im Meta)
+    void buildings.sweepSignatures();
+    void roomModels.sweepSignatures();
   };
   requestServerModels();
   setInterval(requestServerModels, 60_000);

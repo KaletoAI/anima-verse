@@ -78,6 +78,22 @@ export interface ApiModel {
   textureUrl?: string;
 }
 
+/** Maßstabs-Anker (backend-note-scale-anchors.md, v3): 0 = nicht deklariert. */
+export interface ApiModelAnchors {
+  /** Orientierungs-Korrektur in Grad (Admin-Regler) */
+  rotation?: { x?: number; y?: number; z?: number };
+  /** Höhen-Feinjustierung in Metern */
+  offset_y?: number;
+  /** Gebäude: geschätzte Gesamthöhe in realen Metern */
+  height_m?: number;
+  /** Gebäude: sichtbare Geschosse des Meshs */
+  floors?: number;
+  /** Raum: geschätzte reale Breite (größte Seite) in Metern */
+  width_m?: number;
+  /** Änderungs-Kennung des Modells (Cache-Invalidierung) */
+  signature?: string;
+}
+
 /** Modell-Info eines Charakters; null wenn der Server keins hat (404).
  *  Andere Fehler (Netzwerk, 5xx) werfen — der Aufrufer darf sie nicht als
  *  "hat keins" cachen, sondern soll später erneut versuchen. */
@@ -97,7 +113,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
   };
 }
 
-export interface ApiLocationModel {
+export interface ApiLocationModel extends ApiModelAnchors {
   url: string;
   format: string;
 }
@@ -111,16 +127,16 @@ export async function getLocationModel(locationId: string): Promise<ApiLocationM
   if (!res.ok) throw new Error(`location model ${locationId}: HTTP ${res.status}`);
   const data = await res.json();
   if (!data?.url) return null;
-  return { url: data.url, format: data.format ?? 'glb' };
+  return {
+    url: data.url, format: data.format ?? 'glb',
+    rotation: data.rotation, offset_y: data.offset_y,
+    height_m: data.height_m, floors: data.floors, signature: data.signature,
+  };
 }
 
-export interface ApiRoomModel {
+export interface ApiRoomModel extends ApiModelAnchors {
   url: string;
   format: string;
-  /** Orientierungs-Korrektur in Grad (im Admin am Modell eingestellt) */
-  rotation?: { x?: number; y?: number; z?: number };
-  /** Höhen-Feinjustierung in Metern (± — z.B. Park leicht ins Gelände) */
-  offset_y?: number;
 }
 
 /** 3D-Modell eines Raums (AV3D-2); null wenn keins da ist (404 = Normalfall). */
@@ -130,7 +146,11 @@ export async function getRoomModel(roomId: string): Promise<ApiRoomModel | null>
   if (!res.ok) throw new Error(`room model ${roomId}: HTTP ${res.status}`);
   const data = await res.json();
   if (!data?.url) return null;
-  return { url: data.url, format: data.format ?? 'glb', rotation: data.rotation, offset_y: data.offset_y };
+  return {
+    url: data.url, format: data.format ?? 'glb',
+    rotation: data.rotation, offset_y: data.offset_y,
+    width_m: data.width_m, signature: data.signature,
+  };
 }
 
 export interface ApiSurfaceTexture {
