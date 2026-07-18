@@ -475,15 +475,20 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             }
             pivot.rotation.x = bestRx
           }
-          const mixer = new THREE.AnimationMixer(inst)
-          mixer.clipAction(anim.clip).play()
-          mixer.update(0)
-          mixersRef.current.push(mixer)
+          // BODY size comes from the REST pose (standing T-pose) — the
+          // posed bbox would blow lying/sitting figures up (a lying box is
+          // ~half as tall, so the figure came out ~twice as large).
           pivot.updateMatrixWorld(true)
           const fb = new THREE.Box3().setFromObject(pivot)
           const fs = fb.getSize(new THREE.Vector3())
           const k = (1.7 * roomFigScale) / (fs.y || 1)
+          const mixer = new THREE.AnimationMixer(inst)
+          mixer.clipAction(anim.clip).play()
+          mixer.update(0)
+          mixersRef.current.push(mixer)
           pivot.scale.setScalar(k)
+          // Grounding DOES use the posed bounds — a lying figure rests on
+          // the floor, not on where its feet would be standing.
           pivot.updateMatrixWorld(true)
           const fb2 = new THREE.Box3().setFromObject(pivot)
           const fc2 = fb2.getCenter(new THREE.Vector3())
@@ -891,14 +896,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             }
             pivot.rotation.x = bestRx
           }
-          const mixer = new THREE.AnimationMixer(inst)
-          mixer.clipAction(anim.clip).play()
-          mixer.update(0)
-          mixersRef.current.push(mixer)
+          // Same rest-pose measurement as the marker figures.
           pivot.updateMatrixWorld(true)
           const fb = new THREE.Box3().setFromObject(pivot)
           const fs = fb.getSize(new THREE.Vector3())
           const k = target / (fs.y || 1)
+          const mixer = new THREE.AnimationMixer(inst)
+          mixer.clipAction(anim.clip).play()
+          mixer.update(0)
+          mixersRef.current.push(mixer)
           pivot.scale.setScalar(k)
           pivot.updateMatrixWorld(true)
           const fb2 = new THREE.Box3().setFromObject(pivot)
