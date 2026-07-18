@@ -158,7 +158,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
 
   const { toast } = useToast()
   const commitBuildingFloors = (raw: string) => {
-    const n = parseInt(raw, 10)
+    const n = parseFloat(raw)
     const floors = Number.isFinite(n) && n > 0 ? n : 0
     if (!buildingEntry || floors === buildingEntry.floors) return
     void apiPost<{ meta?: { floors?: number } }>(
@@ -1148,7 +1148,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
               type="number"
               min={0}
               max={200}
-              step={1}
+              step={0.5}
               style={{ width: 62 }}
               defaultValue={buildingEntry.floors || ''}
               placeholder="—"

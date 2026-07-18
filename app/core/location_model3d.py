@@ -188,7 +188,7 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "source_image": meta.get("source_image", ""),
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
             "offset_y": float(meta.get("offset_y") or 0.0),
-            "floors": int(meta.get("floors") or 0),
+            "floors": float(meta.get("floors") or 0.0),
             "height_m": float(meta.get("height_m") or 0.0),
             "width_m": float(meta.get("width_m") or 0.0),
             "active": bool(active and p.name == active.name),
@@ -260,7 +260,7 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
             # map3d.level_height). Rooms — width_m (real-world width of
             # the model's largest side; content scale = rect extent /
             # width_m, figures in the room derive from it).
-            "floors": int(meta.get("floors") or 0),
+            "floors": float(meta.get("floors") or 0.0),
             "height_m": float(meta.get("height_m") or 0.0),
             "width_m": float(meta.get("width_m") or 0.0),
             # Changes whenever ANOTHER model file becomes active (new
@@ -367,10 +367,13 @@ def set_floors(location_id: str, floors: Any,
     """Persist how many storeys ONE building model depicts (sidecar). With
     ``height_m`` declared, the storey height derives as
     ``height_m / floors`` — level stacking and level lines follow it
-    (fallback: map3d.level_height). 0/empty = undeclared."""
+    (fallback: map3d.level_height). FRACTIONS are allowed (a roof or a
+    half-height attic reads as e.g. 2.5 storeys — only then does the
+    derived storey height hit the visible floor bands). 0/empty =
+    undeclared."""
     return _set_sidecar_number(location_id, "floors", floors,
                                room_id=room_id, filename=filename,
-                               cast=int, lo=1, hi=200)
+                               lo=0.5, hi=200)
 
 
 def set_height_m(location_id: str, height_m: Any,

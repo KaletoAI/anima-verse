@@ -235,7 +235,7 @@ export function BuildingModelPanel({
   }, [current?.filename, current?.floors])
   const commitFloors = useCallback(async () => {
     if (!current || roomId) return
-    const n = parseInt(floorsDraft, 10)
+    const n = parseFloat(floorsDraft)
     const floors = Number.isFinite(n) && n > 0 ? n : 0
     if (floors === (current.floors || 0)) {
       setFloorsDraft(current.floors ? String(current.floors) : '')
@@ -498,7 +498,7 @@ export function BuildingModelPanel({
               type="number"
               min={0}
               max={200}
-              step={1}
+              step={0.5}
               style={{ width: 66 }}
               value={floorsDraft}
               placeholder="—"
