@@ -45,6 +45,7 @@ _KIND_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 # contain digits/underscores, the length keeps the split unambiguous.
 _TS_RE = re.compile(r"^(.+)_(\d{9,})$")
 _SEL_FILE = "selection.json"
+_BLENDS_FILE = "blends.json"
 
 _lock = threading.Lock()
 # Running job keys "<kind>|<backend glob>" — generations of the SAME kind on
@@ -217,11 +218,116 @@ def select_texture(kind: str, filename: str) -> bool:
     return True
 
 
+# ── Blend compositions (AV3D-13 v2) ─────────────────────────────────────
+# A library entry may be a COMPOSITION instead of a texture: a zone
+# gradient toward a neighbor kind ("coast" = water → sand → whatever the
+# other neighbors are). The client mixes generically — a new ground look
+# is a new entry, never a client change. One JSON file holds all blends;
+# a blend WINS over texture files of the same kind in the client list.
+
+def _read_blends() -> Dict[str, Dict[str, Any]]:
+    bp = _dir() / _BLENDS_FILE
+    if bp.exists():
+        try:
+            data = json.loads(bp.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {k: v for k, v in data.items()
+                        if safe_kind(k) and isinstance(v, dict)}
+        except (OSError, ValueError):
+            pass
+    return {}
+
+
+def _write_blends(blends: Dict[str, Dict[str, Any]]) -> None:
+    (_dir(create=True) / _BLENDS_FILE).write_text(
+        json.dumps(blends, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def sanitize_blend(raw: Any) -> Optional[Dict[str, Any]]:
+    """Whitelist + coerce a blend definition (contract → schnittstellen-3d
+    „Oberflächen-Bibliothek"): ``toward`` = the neighbor kind the gradient
+    runs to, ``zones`` from the toward edge (each {kind, until 0..1};
+    ascending; the last zone may omit ``until`` = rest; kind "neighbor" =
+    the dominant non-toward neighbor), ``noise`` = border fraying."""
+    if not isinstance(raw, dict):
+        return None
+    toward = safe_kind(str(raw.get("toward") or ""))
+    if not toward:
+        return None
+    zones_in = raw.get("zones")
+    if not isinstance(zones_in, list) or not zones_in or len(zones_in) > 8:
+        return None
+    zones: List[Dict[str, Any]] = []
+    last_until = 0.0
+    for i, z in enumerate(zones_in):
+        if not isinstance(z, dict):
+            return None
+        zk = str(z.get("kind") or "").strip().lower()
+        if zk != "neighbor":
+            zk = safe_kind(zk)
+        if not zk:
+            return None
+        entry: Dict[str, Any] = {"kind": zk}
+        if "until" in z and z.get("until") is not None:
+            try:
+                u = round(float(z["until"]), 3)
+            except (TypeError, ValueError):
+                return None
+            if not (last_until < u <= 1.0):
+                return None
+            last_until = u
+            entry["until"] = u
+        elif i != len(zones_in) - 1:
+            return None  # only the LAST zone may omit until
+        zones.append(entry)
+    out: Dict[str, Any] = {"toward": toward, "zones": zones}
+    noise = raw.get("noise")
+    if noise is not None:
+        try:
+            n = round(float(noise), 3)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= n <= 0.5:
+            out["noise"] = n
+    return out
+
+
+def get_blends() -> Dict[str, Dict[str, Any]]:
+    return _read_blends()
+
+
+def set_blend(kind: str, blend: Any) -> Optional[Dict[str, Any]]:
+    """Create/replace a composition entry. None on invalid input."""
+    kind = safe_kind(kind)
+    clean = sanitize_blend(blend)
+    if not kind or clean is None:
+        return None
+    blends = _read_blends()
+    blends[kind] = clean
+    _write_blends(blends)
+    return clean
+
+
+def delete_blend(kind: str) -> bool:
+    kind = safe_kind(kind)
+    blends = _read_blends()
+    if kind not in blends:
+        return False
+    blends.pop(kind)
+    _write_blends(blends)
+    return True
+
+
 def list_textures() -> List[Dict[str, Any]]:
     """CLIENT list — one entry per kind, the ACTIVE version:
     {kind, filename, url, size_m, size}."""
-    out = []
-    for kind in sorted(_files_by_kind()):
+    blends = _read_blends()
+    out: List[Dict[str, Any]] = []
+    for kind in sorted(set(_files_by_kind()) | set(blends)):
+        if kind in blends:
+            # A composition wins over texture files of the same kind.
+            out.append({"kind": kind, "blend": blends[kind]})
+            continue
         p = texture_file(kind)
         if not p:
             continue

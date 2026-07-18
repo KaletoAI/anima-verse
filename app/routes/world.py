@@ -653,8 +653,10 @@ def surface_textures_admin() -> Dict[str, Any]:
                              "prompt_negative": style["negative"]})
     except Exception:
         pass
+    from app.core.surface_textures import get_blends
     return {"textures": admin_list(), "pending": is_pending(),
-            "backends": backends, "subjects": SURFACE_SUBJECTS}
+            "backends": backends, "subjects": SURFACE_SUBJECTS,
+            "blends": get_blends()}
 
 
 @router.post("/surface-textures/generate")
@@ -676,6 +678,31 @@ async def surface_texture_generate(request: Request) -> Dict[str, Any]:
                               negative=str(data.get("negative") or "")):
         return {"status": "already_running"}
     return {"status": "generating"}
+
+
+@router.post("/surface-textures/blends/{kind}")
+async def surface_texture_blend_set(kind: str, request: Request) -> Dict[str, Any]:
+    """Create/replace a COMPOSITION entry (AV3D-13 v2, body: {blend}) —
+    a zone gradient toward a neighbor kind instead of a texture; the
+    client mixes it generically. A blend wins over texture files of the
+    same kind in the client list."""
+    from app.core.surface_textures import set_blend
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    clean = set_blend(kind, data.get("blend"))
+    if clean is None:
+        raise HTTPException(status_code=400,
+                            detail="bad kind or blend (toward + ordered zones required)")
+    return {"status": "ok", "blend": clean}
+
+
+@router.delete("/surface-textures/blends/{kind}")
+def surface_texture_blend_delete(kind: str) -> Dict[str, Any]:
+    from app.core.surface_textures import delete_blend
+    if not delete_blend(kind):
+        raise HTTPException(status_code=404, detail="No blend for this kind")
+    return {"status": "deleted"}
 
 
 @router.post("/surface-textures/{kind}/upload")

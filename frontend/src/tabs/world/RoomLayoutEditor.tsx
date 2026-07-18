@@ -558,30 +558,35 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             </div>
           )
         })}
-        {map3d?.elevator ? (
-          // True-size elevator footprint: the shaft is 0.5 × 0.5 m on the
-          // 8 × 8 m reference square → 6.25 % of the plan. On top of the
-          // rooms so it stays clickable; click selects it for the sliders.
-          <div
-            title={t('Elevator (all levels) — true size from above (0.5 × 0.5 m). Click to fine-tune with the sliders below.')}
-            onClick={(e) => {
-              if (clickMode) return
-              e.stopPropagation()
-              setElevatorSel(true)
-              setMarkerSel(null)
-            }}
-            style={{
-              position: 'absolute',
-              left: `${(map3d.elevator[0] - 0.03125) * 100}%`,
-              top: `${(map3d.elevator[1] - 0.03125) * 100}%`,
-              width: '6.25%', height: '6.25%',
-              background: 'rgba(139,148,158,0.5)',
-              border: elevatorSel ? '2px solid #fff' : '1px solid #8b949e',
-              borderRadius: 2, boxSizing: 'border-box',
-              cursor: clickMode ? 'crosshair' : 'pointer',
-            }}
-          />
-        ) : null}
+        {map3d?.elevator ? (() => {
+          // True-size elevator footprint per the client recipe: shaft outer
+          // = 1.8 m × figure scale k (anchored 8/plan width, legacy
+          // level_height/3) on the 8 m square. On top of the rooms so it
+          // stays clickable; click selects it for the sliders.
+          const kEl = planW > 0 ? 8 / planW : ((map3d?.level_height || 3) / 3)
+          const frac = Math.min((1.8 * kEl) / 8, 0.5)
+          return (
+            <div
+              title={t('Elevator (all levels) — true shaft size from above (1.8 m × figure scale). Click to fine-tune with the sliders below.')}
+              onClick={(e) => {
+                if (clickMode) return
+                e.stopPropagation()
+                setElevatorSel(true)
+                setMarkerSel(null)
+              }}
+              style={{
+                position: 'absolute',
+                left: `${(map3d.elevator![0] - frac / 2) * 100}%`,
+                top: `${(map3d.elevator![1] - frac / 2) * 100}%`,
+                width: `${frac * 100}%`, height: `${frac * 100}%`,
+                background: 'rgba(139,148,158,0.5)',
+                border: elevatorSel ? '2px solid #fff' : '1px solid #8b949e',
+                borderRadius: 2, boxSizing: 'border-box',
+                cursor: clickMode ? 'crosshair' : 'pointer',
+              }}
+            />
+          )
+        })() : null}
         {placed.length === 0 ? (
           <span className="ga-hint" style={{
             position: 'absolute', inset: 0, display: 'flex',

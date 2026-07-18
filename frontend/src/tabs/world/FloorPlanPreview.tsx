@@ -743,22 +743,64 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     }
 
     if (m3?.elevator) {
-      const lo = Math.min(0, ...usedLevels)
+      // Elevator per the client's render recipe (schnittstellen →
+      // "Render-Rezept Fahrstuhl"): all sizes are real metres × the figure
+      // scale k (anchored 8/plan_width, legacy storey/3). Shaft 1.8 m
+      // square with four corner columns + roof, glass on three sides (the
+      // side toward the building centre stays open), a 1.6 m pad per
+      // level, a static cabin on the ground floor.
+      const kEl = planW > 0 ? kFac : lhEff / 3
+      const ex = (m3.elevator[0] - 0.5) * PLATE_M
+      const ez = (m3.elevator[1] - 0.5) * PLATE_M
       const hi = Math.max(0, ...usedLevels)
-      const hgt = (hi - lo + 1) * lhEff
-      const shaft = new THREE.Mesh(
-        new THREE.BoxGeometry(0.5, hgt, 0.5),
-        new THREE.MeshStandardMaterial({ color: 0x8b949e, transparent: true, opacity: 0.35 }),
+      const outer = 1.8 * kEl
+      const col = Math.max(0.14 * kEl, 0.05)
+      const shaftTop = (hi + 1) * lhEff + 0.08
+      const colMat = new THREE.MeshStandardMaterial({ color: 0x6d7681 })
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(col, shaftTop, col), colMat)
+          post.position.set(ex + sx * (outer - col) / 2, shaftTop / 2,
+                            ez + sz * (outer - col) / 2)
+          boxes.add(post)
+        }
+      }
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(outer, 0.05, outer), colMat)
+      roof.position.set(ex, shaftTop + 0.025, ez)
+      boxes.add(roof)
+      // Open side = dominant axis of the elevator position, sign toward
+      // the centre; glass on the three other sides.
+      const openSide = Math.abs(ex) >= Math.abs(ez)
+        ? (ex > 0 ? 'west' : 'east')
+        : (ez > 0 ? 'north' : 'south')
+      const glassMat = new THREE.MeshStandardMaterial({
+        color: 0x9fc2d8, transparent: true, opacity: 0.22,
+      })
+      const sides: Array<['north' | 'south' | 'east' | 'west', number, number, number, number]> = [
+        ['north', ex, ez - outer / 2, outer, 0.03],
+        ['south', ex, ez + outer / 2, outer, 0.03],
+        ['west', ex - outer / 2, ez, 0.03, outer],
+        ['east', ex + outer / 2, ez, 0.03, outer],
+      ]
+      for (const [side, gx, gz, w2, d2] of sides) {
+        if (side === openSide) continue
+        const glass = new THREE.Mesh(new THREE.BoxGeometry(w2, shaftTop, d2), glassMat)
+        glass.position.set(gx, shaftTop / 2, gz)
+        boxes.add(glass)
+      }
+      const padMat = new THREE.MeshStandardMaterial({ color: 0xaab4be })
+      for (const lv of (usedLevels.length ? usedLevels : [0])) {
+        const pad = new THREE.Mesh(
+          new THREE.BoxGeometry(1.6 * kEl, 0.05, 1.6 * kEl), padMat)
+        pad.position.set(ex, lv * lhEff + 0.08 - 0.025, ez)
+        boxes.add(pad)
+      }
+      const cab = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4 * kEl, Math.max(0.6 * lhEff, 0.3), 1.4 * kEl),
+        new THREE.MeshStandardMaterial({ color: 0x3d4650, transparent: true, opacity: 0.85 }),
       )
-      shaft.position.set((m3.elevator[0] - 0.5) * PLATE_M, lo * lhEff + hgt / 2,
-                         (m3.elevator[1] - 0.5) * PLATE_M)
-      boxes.add(shaft)
-      const edges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(shaft.geometry),
-        new THREE.LineBasicMaterial({ color: 0x8b949e }),
-      )
-      edges.position.copy(shaft.position)
-      boxes.add(edges)
+      cab.position.set(ex, 0.08 + Math.max(0.6 * lhEff, 0.3) / 2, ez)
+      boxes.add(cab)
     }
 
     // Building shell over everything — ghosted so the rooms stay visible.

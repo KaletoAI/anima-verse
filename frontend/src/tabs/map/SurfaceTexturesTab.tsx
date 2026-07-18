@@ -38,6 +38,17 @@ interface BackendInfo {
   prompt_negative: string
 }
 
+interface BlendZone {
+  kind: string
+  until?: number
+}
+
+interface Blend {
+  toward: string
+  zones: BlendZone[]
+  noise?: number
+}
+
 export function SurfaceTexturesTab() {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -47,6 +58,10 @@ export function SurfaceTexturesTab() {
   // Per-kind subject phrases (curated server-side) — the visual character
   // of the material; unknown kinds get the generic fallback.
   const [subjects, setSubjects] = useState<Record<string, string>>({})
+  // Compositions (AV3D-13 v2): zone gradients toward a neighbor kind —
+  // "coast" = water → sand → whatever the other neighbors are.
+  const [blends, setBlends] = useState<Record<string, Blend>>({})
+  const [blendEdit, setBlendEdit] = useState<{ kind: string; blend: Blend } | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [kind, setKind] = useState('')
   const [backend, setBackend] = useState('')
@@ -63,12 +78,14 @@ export function SurfaceTexturesTab() {
   const load = useCallback(async () => {
     try {
       const d = await apiGet<{ textures?: TexGroup[]; pending?: string[]
-        backends?: BackendInfo[]; subjects?: Record<string, string> }>(
+        backends?: BackendInfo[]; subjects?: Record<string, string>
+        blends?: Record<string, Blend> }>(
         '/world/surface-textures')
       setTextures(d.textures || [])
       setPending(d.pending || [])
       setBackends(d.backends || [])
       setSubjects(d.subjects || {})
+      setBlends(d.blends || {})
       setLoaded(true)
       return d
     } catch {
@@ -156,6 +173,27 @@ export function SurfaceTexturesTab() {
     }
     setArmedDel('')
     void apiDelete(`/world/surface-textures/${encodeURIComponent(k)}?file=${encodeURIComponent(filename)}`)
+      .then(() => load())
+      .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+  }, [armedDel, load, t, toast])
+
+  const saveBlend = useCallback(() => {
+    if (!blendEdit) return
+    const k = blendEdit.kind.trim().toLowerCase()
+    if (!k) return
+    void apiPost(`/world/surface-textures/blends/${encodeURIComponent(k)}`,
+      { blend: blendEdit.blend })
+      .then(() => { setBlendEdit(null); void load() })
+      .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+  }, [blendEdit, load, t, toast])
+
+  const removeBlend = useCallback((k: string) => {
+    if (armedDel !== `blend:${k}`) {
+      setArmedDel(`blend:${k}`)
+      return
+    }
+    setArmedDel('')
+    void apiDelete(`/world/surface-textures/blends/${encodeURIComponent(k)}`)
       .then(() => load())
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [armedDel, load, t, toast])
@@ -281,6 +319,158 @@ export function SurfaceTexturesTab() {
               </div>
             </div>
           ))
+        )}
+
+        <div className="ga-form-section-label">{t('Compositions (blends)')}</div>
+        <span className="ga-hint">
+          {t('A composition is a zone gradient toward a neighbor kind instead of a texture — e.g. coast: water → sand → whatever the other neighbors are. The tiles involved need their terrain set (sea: water, coast: coast). A composition wins over textures of the same kind.')}
+        </span>
+        {Object.keys(blends).length === 0 && !blendEdit ? (
+          <div className="ga-empty">{t('No compositions yet.')}</div>
+        ) : null}
+        {Object.entries(blends).map(([bk, b]) => (
+          <div key={bk} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600, minWidth: 70 }}>{bk}</span>
+            <span className="ga-hint">
+              → {b.toward} · {b.zones.map((z) =>
+                z.until != null ? `${z.kind} ${Math.round(z.until * 100)}%` : z.kind).join(' · ')}
+              {b.noise != null ? ` · ${t('noise')} ${b.noise}` : ''}
+            </span>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              style={{ marginLeft: 'auto' }}
+              onClick={() => setBlendEdit({ kind: bk, blend: JSON.parse(JSON.stringify(b)) })}
+            >
+              {t('Edit')}
+            </button>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-danger"
+              onClick={() => removeBlend(bk)}
+            >
+              {armedDel === `blend:${bk}` ? t('Really delete?') : '🗑'}
+            </button>
+          </div>
+        ))}
+        {blendEdit ? (
+          <div className="ga-form" style={{ gap: 6 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                className="ga-input"
+                style={{ width: 120 }}
+                placeholder={t('kind (coast, …)')}
+                value={blendEdit.kind}
+                onChange={(e) => setBlendEdit({ ...blendEdit, kind: e.target.value })}
+              />
+              <span className="ga-hint">{t('toward')}</span>
+              <input
+                className="ga-input"
+                list="surface-kind-options"
+                style={{ width: 110 }}
+                value={blendEdit.blend.toward}
+                title={t('The neighbor kind the gradient runs to (from the map grid).')}
+                onChange={(e) => setBlendEdit({ ...blendEdit,
+                  blend: { ...blendEdit.blend, toward: e.target.value } })}
+              />
+              <span className="ga-hint">{t('noise')}</span>
+              <input
+                className="ga-input"
+                type="number"
+                min={0}
+                max={0.5}
+                step={0.01}
+                style={{ width: 64 }}
+                value={blendEdit.blend.noise ?? ''}
+                placeholder="0.06"
+                title={t('Border fraying (0..0.5).')}
+                onChange={(e) => {
+                  const n = parseFloat(e.target.value)
+                  setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend,
+                    noise: Number.isFinite(n) ? n : undefined } })
+                }}
+              />
+            </div>
+            {blendEdit.blend.zones.map((z, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span className="ga-hint" style={{ width: 52 }}>{t('Zone')} {i + 1}</span>
+                <input
+                  className="ga-input"
+                  list="surface-zone-options"
+                  style={{ width: 120 }}
+                  value={z.kind}
+                  title={t('A library kind — or "neighbor" for the dominant non-toward neighbor kind.')}
+                  onChange={(e) => {
+                    const zones = blendEdit.blend.zones.map((zz, j) =>
+                      j === i ? { ...zz, kind: e.target.value } : zz)
+                    setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend, zones } })
+                  }}
+                />
+                <input
+                  className="ga-input"
+                  type="number"
+                  min={0.01}
+                  max={1}
+                  step={0.01}
+                  style={{ width: 72 }}
+                  value={z.until ?? ''}
+                  placeholder={i === blendEdit.blend.zones.length - 1 ? t('rest') : '0.5'}
+                  title={t('Share of the transition path (0..1, ascending) — the last zone may stay empty (= rest).')}
+                  onChange={(e) => {
+                    const n = parseFloat(e.target.value)
+                    const zones = blendEdit.blend.zones.map((zz, j) =>
+                      j === i ? { ...zz, until: Number.isFinite(n) ? n : undefined } : zz)
+                    setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend, zones } })
+                  }}
+                />
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  disabled={blendEdit.blend.zones.length <= 1}
+                  onClick={() => setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend,
+                    zones: blendEdit.blend.zones.filter((_, j) => j !== i) } })}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                disabled={blendEdit.blend.zones.length >= 8}
+                onClick={() => setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend,
+                  zones: [...blendEdit.blend.zones, { kind: 'neighbor' }] } })}
+              >
+                + {t('Zone')}
+              </button>
+              <button type="button" className="ga-btn ga-btn-primary" onClick={saveBlend}
+                disabled={!blendEdit.kind.trim() || !blendEdit.blend.toward.trim()}>
+                {t('Save')}
+              </button>
+              <button type="button" className="ga-btn" onClick={() => setBlendEdit(null)}>
+                {t('Cancel')}
+              </button>
+            </div>
+            <datalist id="surface-zone-options">
+              {['neighbor', ...knownKinds].map((k) => <option key={k} value={k} />)}
+            </datalist>
+          </div>
+        ) : (
+          <div>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              onClick={() => setBlendEdit({ kind: 'coast', blend: {
+                toward: 'water',
+                zones: [{ kind: 'water', until: 0.42 }, { kind: 'sand', until: 0.62 }, { kind: 'neighbor' }],
+                noise: 0.08,
+              } })}
+              title={t('Prefilled with the contract example (coast: water → sand → neighbor).')}
+            >
+              + {t('New composition')}
+            </button>
+          </div>
         )}
 
         <div className="ga-form-section-label">{t('Generate texture')}</div>
