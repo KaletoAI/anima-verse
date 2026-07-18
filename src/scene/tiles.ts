@@ -581,9 +581,14 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
 
   // AV3D-12: Fahrstuhl (map3d.elevator) — verglaster Schacht mit Rahmen,
   // Ebenen-Pads bündig zur Etagen-Platte, Kabine; die Zugangsseite (zur
-  // Gebäudemitte) bleibt offen. Haltepunkte fürs Etagen-Routing.
+  // Gebäudemitte) bleibt offen. Alle Maße in REALEN Metern x Maßstab k,
+  // damit Client und Server-Vorschau identisch sind. Haltepunkte fürs
+  // Etagen-Routing.
   const elev = loc.map3d?.elevator;
   if (elev?.length === 2 && usedLevels.size) {
+    const s = roomFigureScale(loc);            // Welt-Meter je Real-Meter
+    const half = 0.9 * s;                      // Schacht außen = 1,8 m real
+    const postT = Math.max(0.05, 0.14 * s);    // Rahmen-Säulen 0,14 m real
     const exl = -LW / 2 + elev[0] * LW;
     const ezl = -LD / 2 + elev[1] * LD;
     const stopLevels = new Set([0, ...usedLevels]);
@@ -592,22 +597,23 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
     const frameMat = std({ color: 0x6d7681 });
     const glassMat = std({ color: 0x9fc2d8, opacity: 0.22, roughness: 0.3 });
     // Ecksäulen + Dach
-    for (const [px, pz] of [[-0.45, -0.45], [0.45, -0.45], [-0.45, 0.45], [0.45, 0.45]] as const) {
-      const post = box(0.07, topY, 0.07, frameMat);
+    for (const [px, pz] of [[-half, -half], [half, -half], [-half, half], [half, half]] as const) {
+      const post = box(postT, topY, postT, frameMat);
       post.position.set(exl + px, topY / 2, ezl + pz);
       post.receiveShadow = false;
       g.add(post);
     }
-    const cap = box(0.98, 0.06, 0.98, frameMat);
-    cap.position.set(exl, topY + 0.03, ezl);
+    const cap = box(half * 2 + postT, 0.05, half * 2 + postT, frameMat);
+    cap.position.set(exl, topY + 0.025, ezl);
     g.add(cap);
     // Glas auf drei Seiten — offen Richtung Gebäudemitte
     const open = Math.abs(exl) > Math.abs(ezl) ? (exl > 0 ? 'nx' : 'px') : (ezl > 0 ? 'nz' : 'pz');
+    const paneLen = half * 2 - postT;
     const panes: Record<string, [number, number, number, number]> = {
-      px: [0.03, 0.84, exl + 0.45, ezl],
-      nx: [0.03, 0.84, exl - 0.45, ezl],
-      pz: [0.84, 0.03, exl, ezl + 0.45],
-      nz: [0.84, 0.03, exl, ezl - 0.45],
+      px: [0.03, paneLen, exl + half, ezl],
+      nx: [0.03, paneLen, exl - half, ezl],
+      pz: [paneLen, 0.03, exl, ezl + half],
+      nz: [paneLen, 0.03, exl, ezl - half],
     };
     for (const [key, [w, d, px, pz]] of Object.entries(panes)) {
       if (key === open) continue;
@@ -619,15 +625,16 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
     tile.elevatorStops = new Map();
     for (const level of stopLevels) {
       const floorY = level * storey;
-      const pad = box(0.8, 0.05, 0.8, std({ color: 0xaab4be }));
+      const pad = box(1.6 * s, 0.05, 1.6 * s, std({ color: 0xaab4be }));
       pad.position.set(exl, floorY + 0.08, ezl);
       pad.receiveShadow = false;
       g.add(pad);
       tile.elevatorStops.set(level, tile.center.clone().add(new THREE.Vector3(exl, floorY + 0.11, ezl)));
     }
     // Kabine (statisch im Erdgeschoss)
-    const cabH = Math.max(0.5, storey * 0.6);
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(0.7, cabH, 0.7), std({ color: 0x3d4650, opacity: 0.85 }));
+    const cabW = 1.4 * s;
+    const cabH = Math.max(0.3, storey * 0.6);
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(cabW, cabH, cabW), std({ color: 0x3d4650, opacity: 0.85 }));
     cab.position.set(exl, 0.11 + cabH / 2, ezl);
     g.add(cab);
   }
