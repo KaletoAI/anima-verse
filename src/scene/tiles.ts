@@ -158,23 +158,52 @@ let grassTex: THREE.Texture | null = null;
 let asphaltTex: THREE.Texture | null = null;
 let waterTex: THREE.Texture | null = null;
 
-/** Globale Oberflächen-Texturen vom Server (kind -> url/size); Fallback
- *  sind die eingebauten prozeduralen Texturen. */
-const serverSurfaces = new Map<string, { url: string; sizeM: number }>();
+/** Globale Oberflächen-Bibliothek vom Server (kind -> Fläche ODER
+ *  Zusammenstellung); Fallback sind die eingebauten prozeduralen Texturen.
+ *  Neuer Boden = neuer Bibliotheks-Eintrag, KEINE Client-Änderung. */
+interface SurfaceBlend {
+  toward: string;
+  zones: { kind: string; until?: number }[];
+  noise?: number;
+}
+interface SurfaceEntry { url?: string; sizeM: number; blend?: SurfaceBlend }
+const serverSurfaces = new Map<string, SurfaceEntry>();
 const serverSurfaceCache = new Map<string, THREE.Texture>();
-export function setSurfaceTextures(list: { kind: string; url: string; size_m?: number }[]) {
-  for (const t of list) serverSurfaces.set(t.kind, { url: t.url, sizeM: t.size_m || 3 });
+export function setSurfaceTextures(list: { kind: string; url?: string; size_m?: number; blend?: SurfaceBlend }[]) {
+  for (const t of list) {
+    serverSurfaces.set(t.kind.toLowerCase(), { url: t.url, sizeM: t.size_m || 3, blend: t.blend });
+  }
 }
 
 export function hasSurfaceTexture(kind: string): boolean {
   return serverSurfaces.has(kind);
 }
 
+/** Terrain-Arten der Nachbar-Kacheln ("gx,gy" -> kind) für Zusammenstellungen. */
+const terrainGrid = new Map<string, string>();
+export function setTerrainGrid(entries: { gx: number; gy: number; kind: string }[]) {
+  terrainGrid.clear();
+  for (const e of entries) terrainGrid.set(`${e.gx},${e.gy}`, e.kind);
+}
+
+/** Oberflächen-Art fürs Nachbarschafts-Grid (Zusammenstellungen). */
+export function gridSurfaceKind(loc: WorldLocation): string {
+  return surfaceKindOf(loc, detectStyle(loc));
+}
+
+/** Oberflächen-Art einer Location: terrain als Bibliotheks-kind (offenes
+ *  Vokabular) vor dem normalisierten Legacy-Vokabular. */
+export function surfaceKindOf(loc: WorldLocation, style: string): string {
+  const raw = (loc.terrain || '').toLowerCase().trim();
+  if (raw && serverSurfaces.has(raw)) return raw;
+  return style;   // Legacy: road/grass/water/forest (prozedurale Fallbacks)
+}
+
 /** Kachelbare Oberflächen-Textur für einen Terrain-Typ: Server-Bibliothek
  *  vor eingebautem Fallback; Wiederholung im Welt-Maßstab (CELL/size_m). */
 function surfaceTexture(kind: string, fallback: THREE.Texture): THREE.Texture {
   const entry = serverSurfaces.get(kind);
-  if (!entry) return fallback;
+  if (!entry?.url) return fallback;
   let tex = serverSurfaceCache.get(kind);
   if (!tex) {
     tex = loader.load(entry.url);
@@ -183,6 +212,106 @@ function surfaceTexture(kind: string, fallback: THREE.Texture): THREE.Texture {
     tex.repeat.set(CELL / entry.sizeM, CELL / entry.sizeM);
     serverSurfaceCache.set(kind, tex);
   }
+  return tex;
+}
+
+/** Bild einer Art fürs Canvas-Compositing laden (Server-Bild oder das
+ *  Canvas der prozeduralen Fallback-Textur). */
+async function surfaceImage(kind: string, fallback: THREE.Texture): Promise<{ img: CanvasImageSource; sizeM: number }> {
+  const entry = serverSurfaces.get(kind);
+  if (entry?.url) {
+    const tex = await loader.loadAsync(entry.url);
+    return { img: tex.image as CanvasImageSource, sizeM: entry.sizeM };
+  }
+  return { img: fallback.image as CanvasImageSource, sizeM: 3 };
+}
+
+/** Wert-Rauschen (deterministisch je Kachel) für organische Zonengrenzen. */
+function makeNoise(seed: string): (x: number, y: number) => number {
+  const rnd = seededRandom('surface:' + seed);
+  const grid: number[] = Array.from({ length: 64 }, () => rnd());
+  const at = (ix: number, iy: number) => grid[((iy & 7) * 8 + (ix & 7))];
+  return (x, y) => {
+    const fx = x * 7, fy = y * 7;
+    const ix = Math.floor(fx), iy = Math.floor(fy);
+    const tx = fx - ix, ty = fy - iy;
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * (t * t * (3 - 2 * t));
+    return lerp(
+      lerp(at(ix, iy), at(ix + 1, iy), tx),
+      lerp(at(ix, iy + 1), at(ix + 1, iy + 1), tx),
+      ty
+    );
+  };
+}
+
+/** Zusammenstellung backen (z.B. Küste): Zonen-Verlauf Richtung der
+ *  toward-Nachbarn, Zonengrenzen mit Rauschen, Texturen im Welt-Maßstab. */
+async function bakeBlendTexture(
+  loc: WorldLocation, blend: SurfaceBlend, fallbackFor: (kind: string) => THREE.Texture
+): Promise<THREE.CanvasTexture | null> {
+  const gx = loc.grid_x!, gy = loc.grid_y!;
+  // Richtungen der toward-Nachbarn (4er-Nachbarschaft; +y = Süden)
+  const dirs: [number, number][] = [];
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    if (terrainGrid.get(`${gx + dx},${gy + dy}`) === blend.toward) dirs.push([dx, dy]);
+  }
+  if (!dirs.length) return null;   // kein toward-Nachbar -> Landzone pur
+  // Land-Art: häufigste Nachbar-Art, die nicht toward ist
+  const counts = new Map<string, number>();
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    const k = terrainGrid.get(`${gx + dx},${gy + dy}`);
+    if (k && k !== blend.toward) counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const neighborKind = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'grass';
+
+  const N = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = N;
+  const ctx = canvas.getContext('2d')!;
+  const noise = makeNoise(loc.id);
+  const amp = blend.noise ?? 0.06;
+
+  // Zonen auflösen (kind "neighbor" ersetzen) und Muster vorbereiten
+  const zones = blend.zones.map((z) => ({
+    kind: z.kind === 'neighbor' ? neighborKind : z.kind,
+    until: z.until ?? 1.01,
+  }));
+  const patterns: CanvasPattern[] = [];
+  for (const z of zones) {
+    const { img, sizeM } = await surfaceImage(z.kind, fallbackFor(z.kind));
+    const px = Math.max(8, Math.round((sizeM / CELL) * N));   // Musterkachel in Pixeln
+    const pc = document.createElement('canvas');
+    pc.width = pc.height = px;
+    pc.getContext('2d')!.drawImage(img, 0, 0, px, px);
+    patterns.push(ctx.createPattern(pc, 'repeat')!);
+  }
+
+  // Pro Zone eine Maske aus dem Abstand zur toward-Kante malen
+  const cell = 4;                                   // Masken-Auflösung (64x64 Blöcke)
+  for (let zi = 0; zi < zones.length; zi++) {
+    const prev = zi === 0 ? -1 : zones[zi - 1].until;
+    ctx.save();
+    ctx.beginPath();
+    for (let by = 0; by < N; by += cell) {
+      for (let bx = 0; bx < N; bx += cell) {
+        const ux = (bx + cell / 2) / N, uy = (by + cell / 2) / N;
+        let ramp = 0;
+        for (const [dx, dy] of dirs) {
+          const r = dx > 0 ? ux : dx < 0 ? 1 - ux : dy > 0 ? uy : 1 - uy;
+          ramp = Math.max(ramp, r);
+        }
+        const d = 1 - ramp + (noise(ux, uy) - 0.5) * 2 * amp;   // Abstand zur Wasserkante
+        if (d > prev && d <= zones[zi].until) ctx.rect(bx, by, cell, cell);
+      }
+    }
+    ctx.clip();
+    ctx.fillStyle = patterns[zi];
+    ctx.fillRect(0, 0, N, N);
+    ctx.restore();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
@@ -703,7 +832,24 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
   const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
   // Boden = Oberflächen-Textur des Terrain-Typs (Server-Bibliothek AV3D-13,
   // sonst prozedural) — 2D-Kartenbilder sind kein Fallback mehr.
-  const groundTexFor = (s: string) => surfaceTexture(s, fallbackFor(s));
+  // Boden: Art auflösen (terrain als Bibliotheks-kind vor Legacy-Stil);
+  // Zusammenstellungen (blend, z.B. Küste) werden asynchron gebacken und
+  // ersetzen die Start-Textur, sobald fertig.
+  const groundPlateFor = (): THREE.Mesh => {
+    const kind = surfaceKindOf(loc, style);
+    const entry = serverSurfaces.get(kind);
+    const plate = groundPlate(loc, surfaceTexture(kind, fallbackFor(style)));
+    if (entry?.blend) {
+      void bakeBlendTexture(loc, entry.blend, (k) => fallbackFor(k)).then((tex) => {
+        if (tex) {
+          const m = plate.material as THREE.MeshStandardMaterial;
+          m.map = tex;
+          m.needsUpdate = true;
+        }
+      });
+    }
+    return plate;
+  };
   // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
   const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
 
@@ -718,7 +864,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
   };
 
   if (!isBuilding) {
-    group.add(groundPlate(loc, groundTexFor(style)));
+    group.add(groundPlateFor());
     if (style === 'forest') {
       for (let i = 0; i < 8; i++) {
         const tree = makeTree(rnd);
@@ -728,7 +874,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     }
     tile.height = style === 'forest' ? 3 : 0.3;
   } else if (natureSite) {
-    group.add(groundPlate(loc, groundTexFor(style)));
+    group.add(groundPlateFor());
     if (style === 'forest') {
       // Bäume am Rand, Mitte bleibt frei für die Raum-Slabs
       for (let i = 0; i < 7; i++) {

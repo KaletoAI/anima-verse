@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, storeyHeight, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, setTerrainGrid, storeyHeight, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -90,6 +90,10 @@ async function startApp(username: string) {
   ground.position.copy(center);
   ground.receiveShadow = true;
   engine.scene.add(ground);
+
+  // Nachbarschafts-Grid der Oberflächen-Arten (für Zusammenstellungen
+  // wie die Küste: Verlauf Richtung Wasser-Nachbarn)
+  setTerrainGrid(placeable.map((l) => ({ gx: l.grid_x!, gy: l.grid_y!, kind: gridSurfaceKind(l) })));
 
   const tiles = new Map<string, Tile>();
   for (const loc of placeable) {

@@ -153,11 +153,25 @@ export async function getRoomModel(roomId: string): Promise<ApiRoomModel | null>
   };
 }
 
+/** Zusammenstellung (Surface-Tab): Zonen-Verlauf Richtung einer Nachbar-Art. */
+export interface ApiSurfaceBlend {
+  /** Nachbar-Art, zu der der Verlauf zeigt (z.B. "water") */
+  toward: string;
+  /** Zonen von der toward-Kante aus; until = Anteil 0..1 des Übergangswegs,
+   *  letzte Zone ohne until = Rest; kind "neighbor" = Art des Land-Nachbarn */
+  zones: { kind: string; until?: number }[];
+  /** Ausfransung der Zonengrenzen (0..~0.15, Default 0.06) */
+  noise?: number;
+}
+
 export interface ApiSurfaceTexture {
-  kind: string;      // road | grass | water | gravel | ... (offen, wie terrain)
-  url: string;
+  kind: string;      // road | grass | water | coast | ... (offen, wie terrain)
+  /** einfache Fläche: kachelbares Bild */
+  url?: string;
   /** physische Kantenlänge der Textur in Metern (Kachel-Maßstab; Default 3) */
   size_m?: number;
+  /** ODER Zusammenstellung aus anderen Arten (Küste usw.) */
+  blend?: ApiSurfaceBlend;
 }
 
 /** Globale Oberflächen-Texturen für Terrain-Kacheln; leer/404 = Client
@@ -168,7 +182,7 @@ export async function getSurfaceTextures(): Promise<ApiSurfaceTexture[]> {
     if (!res.ok) return [];
     const data = await res.json();
     const list = Array.isArray(data) ? data : data.textures ?? [];
-    return list.filter((t: ApiSurfaceTexture) => t?.kind && t?.url);
+    return list.filter((t: ApiSurfaceTexture) => t?.kind && (t.url || t.blend));
   } catch {
     return [];
   }
