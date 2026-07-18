@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { Room, WorldLocation } from '../types';
-import { mapIconUrl } from '../api';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
@@ -198,25 +197,15 @@ function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Materi
   return m;
 }
 
-/** Bodenplatte der Zelle; optional mit dem 2D-Kartensymbol des Backends.
- *  Terrain-Kacheln (explizites terrain road/grass/water) nutzen stattdessen
- *  die kachelbare Oberflächen-Textur — Illustrations-Icons mit eingebackenen
- *  Schatten/Objekten wirken dort als Boden fehl am Platz. */
-function groundPlate(loc: WorldLocation, fallback: THREE.Texture, useIcon = true): THREE.Mesh {
-  const mat = std({ map: fallback });
-  const plate = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), mat);
+/** Bodenplatte der Zelle — Oberflächen-Textur des Terrain-Typs (Server-
+ *  Bibliothek, sonst prozedural). Die 2D-Kartenbilder werden NICHT mehr
+ *  als Boden verwendet (Illustrationen mit eingebackenen Schatten/Objekten
+ *  passen nicht in die 3D-Szene). */
+function groundPlate(_loc: WorldLocation, tex: THREE.Texture): THREE.Mesh {
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), std({ map: tex }));
   plate.rotation.x = -Math.PI / 2;
   plate.position.y = 0.04;
   plate.receiveShadow = true;
-  if (useIcon) {
-    loader.load(mapIconUrl(loc.id), (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.center.set(0.5, 0.5);
-      tex.rotation = -THREE.MathUtils.degToRad(loc.map_rotation_2d || 0);
-      mat.map = tex;
-      mat.needsUpdate = true;
-    }, undefined, () => { /* kein Icon vorhanden -> Fallback-Textur bleibt */ });
-  }
   return plate;
 }
 
@@ -705,17 +694,9 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
 
   const rnd = seededRandom(loc.id);
   const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
-  // Oberflächen-Texturen statt Illustrations-Icons: Straße/Wasser immer;
-  // Gras/Wald nur bei EXPLIZITEM terrain UND vorhandener Server-Textur
-  // (AV3D-13) — benannte Kacheln und die Stadtteil-Luftbilder (ohne
-  // terrain) behalten ihre Icons.
-  const explicitTerrain = terrainKind(loc.terrain);
-  const surfaceKind = style === 'road' || style === 'water'
-    ? style
-    : explicitTerrain && hasSurfaceTexture(explicitTerrain) ? explicitTerrain : null;
-  const isSurfaceTile = !!surfaceKind;
-  const groundTexFor = (s: string) =>
-    surfaceKind ? surfaceTexture(surfaceKind, fallbackFor(s)) : fallbackFor(s);
+  // Boden = Oberflächen-Textur des Terrain-Typs (Server-Bibliothek AV3D-13,
+  // sonst prozedural) — 2D-Kartenbilder sind kein Fallback mehr.
+  const groundTexFor = (s: string) => surfaceTexture(s, fallbackFor(s));
   // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
   const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
 
@@ -730,7 +711,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
   };
 
   if (!isBuilding) {
-    group.add(groundPlate(loc, groundTexFor(style), !isSurfaceTile));
+    group.add(groundPlate(loc, groundTexFor(style)));
     if (style === 'forest') {
       for (let i = 0; i < 8; i++) {
         const tree = makeTree(rnd);
@@ -740,7 +721,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     }
     tile.height = style === 'forest' ? 3 : 0.3;
   } else if (natureSite) {
-    group.add(groundPlate(loc, fallbackFor(style)));
+    group.add(groundPlate(loc, groundTexFor(style)));
     if (style === 'forest') {
       // Bäume am Rand, Mitte bleibt frei für die Raum-Slabs
       for (let i = 0; i < 7; i++) {
