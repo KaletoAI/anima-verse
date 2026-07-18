@@ -6,6 +6,14 @@ import { CELL } from './tiles';
 /** frühestens nach dieser Zeit erneut fragen (Generierung dauert Minuten) */
 const RETRY_MS = 60_000;
 
+/** Vergleichs-Kennung über alle darstellungsrelevanten Meta-Felder. */
+function metaSig(meta: ModelMeta): string {
+  return JSON.stringify([
+    meta.url, meta.signature, meta.rotation, meta.offset_y,
+    meta.height_m, meta.floors, meta.width_m,
+  ]);
+}
+
 interface ModelMeta {
   url: string;
   rotation?: { x?: number; y?: number; z?: number };
@@ -31,7 +39,7 @@ export class ModelLibrary {
   private models = new Map<string, THREE.Group>();
   private pending = new Set<string>();
   private retryAt = new Map<string, number>();
-  private signatures = new Map<string, string>();
+  private metaSigs = new Map<string, string>();
   /** wird gerufen, sobald ein Modell bereit ist */
   onModelReady: ((id: string) => void) | null = null;
 
@@ -51,17 +59,18 @@ export class ModelLibrary {
   invalidate(id: string) {
     this.models.delete(id);
     this.retryAt.delete(id);
-    this.signatures.delete(id);
+    this.metaSigs.delete(id);
   }
 
-  /** Signatur-Sweep: neu generierte Modelle ohne Reload erkennen — Meta
-   *  der gecachten Modelle prüfen, bei geänderter signature neu laden. */
+  /** Meta-Sweep: neu generierte Modelle UND Regler-Änderungen (rotation/
+   *  offset_y/Anker) ohne Reload erkennen — das komplette Meta vergleichen,
+   *  nicht nur die Datei-signature. */
   async sweepSignatures() {
-    for (const [id, known] of [...this.signatures]) {
+    for (const [id, known] of [...this.metaSigs]) {
       try {
         const meta = await this.fetchMeta(id);
-        if (meta?.signature && meta.signature !== known) {
-          console.info(`[${this.tag}] ${id}: Modell geändert (${known} -> ${meta.signature}) — lade neu`);
+        if (meta && metaSig(meta) !== known) {
+          console.info(`[${this.tag}] ${id}: Meta geändert — lade neu`);
           this.invalidate(id);
           this.request(id);
         }
@@ -89,7 +98,7 @@ export class ModelLibrary {
           width_m: meta.width_m || 0, signature: meta.signature ?? '',
         };
         this.models.set(id, model);
-        if (meta.signature) this.signatures.set(id, meta.signature);
+        this.metaSigs.set(id, metaSig(meta));
         console.info(`[${this.tag}] ${id}: Modell vom Server`);
         this.onModelReady?.(id);
       } catch (e) {
