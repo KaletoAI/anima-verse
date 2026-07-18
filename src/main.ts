@@ -446,6 +446,12 @@ async function startApp(username: string) {
           shownRoom.set(c.name, inRoom);
         }
         const targetTile = c.movement_target_id ? tiles.get(c.movement_target_id) : undefined;
+        const travelTo = targetTile && c.movement_target_id !== locId ? targetTile.center.clone() : null;
+        // Reisende schauen Richtung Ziel — sonst spielt die Lauf-Animation
+        // im Stand in eine beliebige Richtung (Nachbarn/Süden)
+        if (travelTo && !face) {
+          face = travelTo.clone().sub(pos).setY(0);
+        }
         // Etagen-Umschalter: Figuren auf nicht gewählten Etagen ausblenden
         const hidden = !!inRoom && tile.fade > 0.5
           && !tile.alwaysVisibleRooms.has(inRoom)
@@ -457,7 +463,7 @@ async function startApp(username: string) {
           via,
           face,
           hidden,
-          travelTo: targetTile && c.movement_target_id !== locId ? targetTile.center.clone() : null,
+          travelTo,
         });
       });
     }
