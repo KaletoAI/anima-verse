@@ -51,6 +51,9 @@ export interface BuildingModelStatus {
 
 /** Client default when map3d.size is unset (schnittstellen-3d.md). */
 const DEFAULT_TILE_SIZE = 0.92
+/** Upper size bound (server sanitizer + contract): > 1 lets a model
+ *  overflow its tile on purpose, e.g. forests overlapping neighbours. */
+const MAX_TILE_SIZE = 2
 
 interface BuildingModelPanelProps {
   locationId: string
@@ -626,7 +629,7 @@ export function BuildingModelPanel({
             <input
               type="range"
               min={0.05}
-              max={1}
+              max={MAX_TILE_SIZE}
               step={0.01}
               value={effectiveSize}
               onChange={(e) => onMap3dField('size', parseFloat(e.target.value) || DEFAULT_TILE_SIZE)}
@@ -636,14 +639,14 @@ export function BuildingModelPanel({
               className="ga-input"
               type="number"
               min={0.05}
-              max={1}
+              max={MAX_TILE_SIZE}
               step={0.01}
               style={{ width: 70 }}
               value={size ?? ''}
               placeholder={String(DEFAULT_TILE_SIZE)}
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
-                onMap3dField('size', Number.isFinite(n) && n > 0 && n <= 1 ? n : undefined)
+                onMap3dField('size', Number.isFinite(n) && n > 0 && n <= MAX_TILE_SIZE ? n : undefined)
               }}
             />
             {size !== undefined ? (

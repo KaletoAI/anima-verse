@@ -274,7 +274,8 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # Building placement on the map tile (schnittstellen-3d.md): rotation =
     # yaw in degrees (explicit 0 is meaningful — absent falls back to
     # map_rotation_2d on the client), size = footprint fraction of the tile
-    # (0..1; absent = client default 0.92).
+    # (]0, 2]; > 1 deliberately overflows the tile so large models can
+    # overlap neighbouring tiles; absent = client default 0.92).
     rot = raw.get("rotation")
     if rot is not None and f"{rot}".strip() != "":
         try:
@@ -285,7 +286,7 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     if size is not None and f"{size}".strip() != "":
         try:
             s = float(size)
-            if 0 < s <= 1:
+            if 0 < s <= 2:
                 out["size"] = round(s, 3)
         except (TypeError, ValueError):
             pass

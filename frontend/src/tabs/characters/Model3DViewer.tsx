@@ -19,7 +19,8 @@ const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
 export interface TilePlacement {
   /** Yaw around the vertical axis in degrees. */
   yawDeg: number
-  /** Base size as a fraction of the tile edge (0..1). */
+  /** Base size as a fraction of the tile edge (]0, 2]; > 1 overflows the
+   *  tile on purpose — overlapping models). */
   size: number
   /** Declared model height in world metres (0 = natural) — applies the
    *  detail view's per-axis k_y so this viewer matches the floor-plan
@@ -340,7 +341,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             const b = new THREE.Box3().setFromObject(place)
             const s = b.getSize(new THREE.Vector3())
             const maxXZ = Math.max(s.x, s.z) || 1
-            const size = Math.max(0.02, Math.min(1.5, p.size))
+            const size = Math.max(0.02, Math.min(2, p.size))
             const kxzWorld = (10 * 0.92 * size) / maxXZ
             let kyWorld = kxzWorld
             if (p.heightM && p.heightM > 0) {
