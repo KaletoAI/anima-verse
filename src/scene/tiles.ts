@@ -217,6 +217,24 @@ function surfaceTexture(kind: string, fallback: THREE.Texture): THREE.Texture {
   return tex;
 }
 
+/** Etagenboden-Textur aus der Surface-Library (Kind "floor", Ersatz für
+ *  das zurückgezogene layout.floor_source): die Extrude-UVs der Platten
+ *  sind Welt-Meter -> Wiederholung 1/size_m. Ohne kuratierten "floor"-
+ *  Eintrag bleibt das eingebaute einfarbige Material. */
+function floorSlabTexture(): THREE.Texture | null {
+  const entry = serverSurfaces.get('floor');
+  if (!entry?.url) return null;
+  let tex = serverSurfaceCache.get('floor@slab');
+  if (!tex) {
+    tex = loader.load(entry.url);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1 / entry.sizeM, 1 / entry.sizeM);
+    serverSurfaceCache.set('floor@slab', tex);
+  }
+  return tex;
+}
+
 /** Bild einer Art fürs Canvas-Compositing laden (Server-Bild oder das
  *  Canvas der prozeduralen Fallback-Textur). */
 async function surfaceImage(kind: string, fallback: THREE.Texture): Promise<{ img: CanvasImageSource; sizeM: number }> {
@@ -651,6 +669,11 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
       const upper = level > 0;
       const wallMat = std({ color: 0xcfc4b2, opacity: upper ? 0.45 : 1 });
       const slabMat = std({ color: 0xd8d0c2, opacity: upper ? 0.4 : 1 });
+      const floorTex = floorSlabTexture();
+      if (floorTex) {
+        slabMat.map = floorTex;
+        slabMat.color.set(0xffffff);
+      }
       tile.levelWallMats.set(level, wallMat);
       const slab = new THREE.Mesh(
         new THREE.ExtrudeGeometry(floorShape, { depth: 0.14, bevelEnabled: false }),
@@ -1114,62 +1137,6 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
     // Mitte/Ausgang auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
     center?.setY(floor + 0.01);
     tile.roomExits.get(roomId)?.setY(floor + 0.01);
-  }
-
-  // Boden-TEXTUR eines gewählten Raums auf die Etagen-Platte übernehmen
-  // (layout.floor_source; solange kein Raum markiert ist, testweise die
-  // Bibliothek). Die begehbaren Treffer spannen den UV-Bereich des Bodens
-  // im Texturatlas auf; der Ausschnitt wird im Welt-Maßstab gekachelt
-  // (Extrude-UVs der Platte sind Welt-Koordinaten in Metern).
-  const sourceRoom = tile.loc.rooms.find((r) => r.id === roomId);
-  const level = tile.roomLevels.get(roomId) ?? 0;
-  // pro ETAGE gilt: der dort markierte Raum liefert den Boden seiner Platte;
-  // nur wenn auf der Etage keiner markiert ist, greift der Bibliothek-Test
-  const anySourceOnLevel = tile.loc.rooms.some(
-    (r) => r.layout?.floor_source === true && (r.layout?.level ?? 0) === level
-  );
-  const isFloorSource = sourceRoom?.layout?.floor_source === true
-    || (!anySourceOnLevel && sourceRoom?.name === 'Bibliothek');
-  const slab = tile.levelSlabs.get(level);
-  if (slab && isFloorSource) {
-    const floorSamples = samples.filter((s) => s.p.y < floor + 0.12 && s.uv && s.mesh);
-    const m0 = floorSamples[0]?.mesh;
-    const same = floorSamples.filter((s) => s.mesh === m0);
-    const mat0 = m0 ? (Array.isArray(m0.material) ? m0.material[0] : m0.material) as THREE.MeshStandardMaterial : null;
-    const img = mat0?.map?.image as (CanvasImageSource & { width: number; height: number }) | undefined;
-    if (img?.width && same.length >= 4) {
-      let u0 = 1, u1 = 0, v0 = 1, v1 = 0;
-      const worldBox = new THREE.Box3();
-      for (const s of same) {
-        u0 = Math.min(u0, s.uv!.x); u1 = Math.max(u1, s.uv!.x);
-        v0 = Math.min(v0, s.uv!.y); v1 = Math.max(v1, s.uv!.y);
-        worldBox.expandByPoint(s.p);
-      }
-      const wSize = worldBox.getSize(new THREE.Vector3());
-      if (u1 - u0 > 0.02 && v1 - v0 > 0.02 && wSize.x > 0.3 && wSize.z > 0.3) {
-        try {
-          const C = 256;
-          const canvas = document.createElement('canvas');
-          canvas.width = canvas.height = C;
-          const ctx = canvas.getContext('2d')!;
-          ctx.drawImage(
-            img,
-            u0 * img.width, v0 * img.height,
-            (u1 - u0) * img.width, (v1 - v0) * img.height,
-            0, 0, C, C
-          );
-          const tex = new THREE.CanvasTexture(canvas);
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-          tex.repeat.set(1 / Math.max(wSize.x, 0.5), 1 / Math.max(wSize.z, 0.5));
-          const sm = slab.material as THREE.MeshStandardMaterial;
-          sm.map = tex;
-          sm.color.set(0xffffff);
-          sm.needsUpdate = true;
-          console.info('[rooms] Etagen-Boden übernimmt die Bibliotheks-Bodentextur');
-        } catch { /* Bild nicht zeichenbar -> Platte bleibt einfarbig */ }
-      }
-    }
   }
 
   // Marker-Höhen verfeinern, plus Server-Feinjustierung. Sitz-Marker:
