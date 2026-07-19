@@ -952,15 +952,20 @@ export function applyBuildingModel(tile: Tile, model: THREE.Group) {
   // 3. BBox des ROTIERTEN Ganzen messen -> k_xz (Kachel-Fit) und k_y
   let box = new THREE.Box3().setFromObject(model);
   let size = box.getSize(new THREE.Vector3());
+  // Vertrag (backend-note-scale-anchors.md): größte XZ-Seite der GEDREHTEN
+  // BBox = 10 m x 0,92 x size; size in ]0, 2], Werte > 1 ragen bewusst über
+  // die Kachel hinaus (rein visuell, Begehbarkeit unberührt) — nicht clampen,
+  // nicht an der Kachelgrenze clippen.
   const frac = tile.loc.map3d?.size;
-  const sizeFrac = frac && frac > 0.05 && frac <= 1.5 ? frac : 0.92;
-  // Gebäude: uniform auf die größte Seite (Proportionen bleiben).
-  // Terrain-/Template-Kacheln (Wald usw.): beide Achsen getrennt füllen,
-  // damit Nachbar-Kacheln bei size=1 nahtlos aneinanderstoßen.
+  const sizeK = frac && frac > 0.05 && frac <= 2 ? frac : 1;
+  // Gebäude: uniform auf die größte Seite (Proportionen bleiben), mit dem
+  // 0,92-Sockelrand aus dem Vertrag. Terrain-/Template-Kacheln (Wald usw.):
+  // beide Achsen getrennt und OHNE Sockelrand füllen, damit Nachbar-Kacheln
+  // bei size=1 nahtlos aneinanderstoßen.
   const fill = !tile.isBuilding;
-  const kUni = (CELL * sizeFrac) / Math.max(size.x, size.z, 1e-3);
-  const kX = fill ? (CELL * sizeFrac) / Math.max(size.x, 1e-3) : kUni;
-  const kZ = fill ? (CELL * sizeFrac) / Math.max(size.z, 1e-3) : kUni;
+  const kUni = (CELL * 0.92 * sizeK) / Math.max(size.x, size.z, 1e-3);
+  const kX = fill ? (CELL * sizeK) / Math.max(size.x, 1e-3) : kUni;
+  const kZ = fill ? (CELL * sizeK) / Math.max(size.z, 1e-3) : kUni;
   const kBaseY = fill ? Math.min(kX, kZ) : kUni;
   const metaA = model.userData.meta as { height_m?: number; offset_y?: number } | undefined;
   const anchor = locationAnchors.get(tile.loc.id);
