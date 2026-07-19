@@ -36,6 +36,9 @@ export interface Room {
   activity_hint?: string
   image_prompt_day?: string
   image_prompt_night?: string
+  /** Subject for the room's 3D-model source image (🧊 render, room_model
+   *  use case). Falls back to the room description when empty. */
+  image_prompt_building?: string
   layout?: RoomLayout
 }
 
@@ -50,7 +53,8 @@ export interface Map3D {
   /** Building yaw on the map tile in degrees (0..359). Absent = the 3D client
    *  falls back to map_rotation_2d (the model turns with the 2D icon). */
   rotation?: number
-  /** Building base size as a fraction of the tile edge (0..1).
+  /** Building base size as a fraction of the tile edge (]0, 2]; > 1
+   *  overflows the tile on purpose — overlapping models).
    *  Absent = client default 0.92. */
   size?: number
   /** Storey height in WORLD metres — stacks the floor-plan levels AND

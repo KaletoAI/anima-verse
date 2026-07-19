@@ -343,7 +343,8 @@ export function LocationGallery({
       // ceiling, two open walls) comes from the room_model use-case STYLE,
       // which the dialog shows as its own editable field.
       if (promptType === 'building' && room) {
-        return (room.description || room.name || '').trim()
+        return (room.image_prompt_building || '').trim()
+          || (room.description || room.name || '').trim()
           || (location.description || location.name || '')
       }
       // The 3x3 patch shares the map prompt — same top-down look, larger area.

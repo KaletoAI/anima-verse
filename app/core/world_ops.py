@@ -1734,6 +1734,11 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                         description = (room.get("image_prompt_day", "") or "").strip()
                     elif prompt_type == "night":
                         description = (room.get("image_prompt_night", "") or "").strip()
+                    elif prompt_type == "building":
+                        # Room-model source image: dedicated per-room prompt,
+                        # else the room text (mirrors the gallery dialog).
+                        description = ((room.get("image_prompt_building", "") or "").strip()
+                                       or (room.get("description", "") or "").strip())
                     if not description:
                         description = room.get("image_prompt_day", "") or room.get("description", "")
             if not description and prompt_type == "day":

@@ -205,6 +205,18 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
                 onChange={(e) => upd('image_prompt_night', e.target.value)}
               />
             </Field>
+            <Field
+              label={t('3D model prompt')}
+              help="image_prompt"
+              hint={t('Subject for the 3D-model source image (🧊). Falls back to the room description when empty.')}
+            >
+              <textarea
+                className="ga-textarea"
+                rows={2}
+                value={draft.image_prompt_building || ''}
+                onChange={(e) => upd('image_prompt_building', e.target.value)}
+              />
+            </Field>
           </div>
         </div>
 
