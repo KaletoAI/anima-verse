@@ -766,33 +766,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             <span>{t('Always visible')}</span>
           </label>
         ) : null}
-        {selectedRoom ? (
-          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-            title={t('Tile this room model’s floor texture over the whole level plate — exactly one room per level (checking it unchecks the previous one).')}>
-            <input
-              type="checkbox"
-              checked={!!selectedRoom.layout?.floor_source}
-              onChange={(e) => {
-                const on = e.target.checked
-                const lvl = selectedRoom.layout?.level || 0
-                // Exactly one floor source per level: checking a room
-                // unchecks any other room on the same level.
-                onChange(roomsRef.current.map((r) => {
-                  if (r.id === selectedRoom.id && r.layout) {
-                    return { ...r, layout: { ...r.layout, floor_source: on || undefined } }
-                  }
-                  if (on && r.layout && (r.layout.level || 0) === lvl && r.layout.floor_source) {
-                    return { ...r, layout: { ...r.layout, floor_source: undefined } }
-                  }
-                  return r
-                }))
-              }}
-            />
-            <span>{t('Floor for the level')}</span>
-          </label>
-        ) : (
+        {!selectedRoom ? (
           <span className="ga-hint">{t('Select a room rectangle — the toolbar next to the plan works on it.')}</span>
-        )}
+        ) : null}
       </div>
 
       {selectedRoom && markerSel !== null && selectedRoom.layout?.markers?.[markerSel] ? (() => {

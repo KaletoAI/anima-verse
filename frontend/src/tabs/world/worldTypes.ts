@@ -13,9 +13,6 @@ export interface RoomLayout {
   /** AV3D-12: show this room permanently, independent of the interior view
    *  — for outdoor rooms not covered by the building model. */
   always_visible?: boolean
-  /** AV3D-12⁺: this room model's floor texture tiles the WHOLE level plate
-   *  of its level — exactly one room per level (the editor enforces it). */
-  floor_source?: boolean
   /** Animation markers: spots a figure with a matching active animation
    *  snaps to. at = fraction of the room rectangle; animation = a clip kind
    *  from the open animation-clip vocabulary; rotation = facing in degrees

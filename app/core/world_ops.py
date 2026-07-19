@@ -382,10 +382,6 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # view — for outdoor rooms that are not part of the building model.
     if raw.get("always_visible"):
         out["always_visible"] = True
-    # AV3D-12⁺: this room model's floor texture tiles the whole level plate
-    # of its level (exactly one room per level — the editor enforces it).
-    if raw.get("floor_source"):
-        out["floor_source"] = True
     ex = raw.get("exit")
     if isinstance(ex, (list, tuple)) and len(ex) == 2:
         try:

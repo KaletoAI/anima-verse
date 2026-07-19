@@ -442,6 +442,9 @@ SURFACE_SUBJECTS: Dict[str, str] = {
     "dirt": "dry brown earth with small stones, cracks and fine soil texture",
     "snow": "fresh untouched snow with fine sparkling crystals",
     "forest": "forest floor of brown leaf litter, moss patches and small twigs",
+    # Indoor level-plate floor (the 3D client tiles storey plates with the
+    # active "floor" texture; floor_source was withdrawn 2026-07-19).
+    "floor": "smooth wooden plank flooring with natural grain and subtle wear",
 }
 
 
