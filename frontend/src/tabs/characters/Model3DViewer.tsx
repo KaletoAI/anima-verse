@@ -21,6 +21,12 @@ export interface TilePlacement {
   yawDeg: number
   /** Base size as a fraction of the tile edge (0..1). */
   size: number
+  /** Declared model height in world metres (0 = natural) — applies the
+   *  detail view's per-axis k_y so this viewer matches the floor-plan
+   *  preview and the 3D client exactly. */
+  heightM?: number
+  /** Explicit plan width anchor (map3d.plan_width_m, 0 = auto/legacy). */
+  planWidthM?: number
 }
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
@@ -68,7 +74,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   // Live-apply placement changes (yaw slider / size slider) without reload.
   useEffect(() => {
     if (placement) placeFnRef.current?.(placement)
-  }, [placement, placement?.yawDeg, placement?.size])
+  }, [placement, placement?.yawDeg, placement?.size,
+    placement?.heightM, placement?.planWidthM])
 
   useEffect(() => {
     let disposed = false
@@ -310,30 +317,51 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           // Derive scale + yaw + ground offset fresh from the model's current
           // bounding box — the orientation fix changes the box, so this runs
           // again after every ↻ click (see the rotation effect above).
+          // SAME placement chain as the floor-plan preview / 3D client
+          // (v3 contract, in tile units: 1 unit = 10 m world): rotation
+          // first, then k_xz = (10 × 0.92 × size)/maxXZ and k_y from the
+          // declared model height (natural without it), bottom of the
+          // scaled bbox at the 0.06 m socle + offset_y (world metres).
           const applyPlacement = (p: TilePlacement) => {
             place.rotation.set(0, 0, 0)
             place.scale.setScalar(1)
             place.position.set(0, 0, 0)
             place.updateMatrixWorld(true)
+            // Yaw-free measurement first: the auto plan width derives from
+            // the mesh's width-per-height ratio AFTER the meta rotation fix
+            // but BEFORE the map yaw (getBuildingDims does the same) —
+            // yawing a non-square footprint would change the AABB and drift
+            // the two viewers apart.
+            const b0 = new THREE.Box3().setFromObject(place)
+            const s0 = b0.getSize(new THREE.Vector3())
+            const wph = (Math.max(s0.x, s0.z) || 1) / (s0.y || 1)
+            place.rotation.y = -_deg(p.yawDeg)
+            place.updateMatrixWorld(true)
             const b = new THREE.Box3().setFromObject(place)
             const s = b.getSize(new THREE.Vector3())
-            const horiz = Math.max(s.x, s.z) || 1
-            const k = Math.max(0.02, Math.min(1.5, p.size)) / horiz
-            place.scale.setScalar(k)
-            // NEGATIVE yaw — the contract convention (floor preview + 3D
-            // client): map3d.rotation turns clockwise seen from above,
-            // synchronous with the 2D icon's CSS rotation. The viewer used
-            // +yaw and mirrored the rotation against everything else.
-            place.rotation.y = -_deg(p.yawDeg)
+            const maxXZ = Math.max(s.x, s.z) || 1
+            const size = Math.max(0.02, Math.min(1.5, p.size))
+            const kxzWorld = (10 * 0.92 * size) / maxXZ
+            let kyWorld = kxzWorld
+            if (p.heightM && p.heightM > 0) {
+              // Effective plan width: explicit anchor, else auto-derived
+              // (height × width-per-height) — the identical chain the
+              // floor preview computes.
+              const planW = (p.planWidthM && p.planWidthM > 0)
+                ? p.planWidthM
+                : p.heightM * wph
+              const kFac = planW > 0 ? 8 / planW : 1
+              kyWorld = (p.heightM * kFac) / (s.y || 1)
+            }
+            // Tile units = world / 10.
+            place.scale.set(kxzWorld / 10, kyWorld / 10, kxzWorld / 10)
             place.updateMatrixWorld(true)
             const b2 = new THREE.Box3().setFromObject(place)
             const c2 = b2.getCenter(new THREE.Vector3())
-            // offset_y is WORLD METRES (contract). The tile here is 1 unit
-            // = 10 m world, so divide by 10 — the old `* k` treated the
-            // offset as raw mesh units and inflated it ~10× against the
-            // floor preview and the 3D client (Mondschein calibration:
-            // −0.49 dialed here acted like −5 world metres elsewhere).
-            place.position.set(-c2.x, -b2.min.y + (offsetYRef.current || 0) / 10, -c2.z)
+            place.position.set(
+              -c2.x,
+              -b2.min.y + (0.06 + (offsetYRef.current || 0)) / 10,
+              -c2.z)
           }
           placeFnRef.current = applyPlacement
           disposers.push(() => {

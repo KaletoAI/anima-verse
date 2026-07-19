@@ -468,7 +468,11 @@ export function BuildingModelPanel({
           // floats centred). Yaw/size are fixed; the real placement comes
           // from the floor plan.
           ? { yawDeg: 0, size: 0.9 }
-          : { yawDeg: effectiveYaw, size: effectiveSize }}
+          : {
+            yawDeg: effectiveYaw, size: effectiveSize,
+            heightM: current.height_m || 0,
+            planWidthM: map3d?.plan_width_m || 0,
+          }}
       />
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
