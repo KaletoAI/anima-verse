@@ -205,35 +205,36 @@ export function buildingLibrary(): ModelLibrary {
   });
 }
 
-/** Räume: Orientierung aus dem Meta (Grad), auf Einheits-Grundfläche
- *  normalisieren — die Skalierung auf die Raumgröße passiert am Tile. */
+/** Räume: Kette aus backend-note-scale-anchors.md (Raum-Rezept) —
+ *  Schritt 1 hier: an der ROHEN BBox normalisieren (größte XZ-Seite = 1,
+ *  XZ zentriert, Unterkante y = 0 — nie dem Pivot trauen, die Trellis-
+ *  Meshes haben ihren Ursprung in der Box-MITTE). Der Fußabdruck fürs
+ *  Fit stammt ebenfalls von der UNROTIERTEN Box. Danach Meta-Rotations-
+ *  Fix als innere Gruppe; Fit, Layout-Yaw und die Neu-Erdung der
+ *  rotierten Box passieren am Tile (applyRoomModel). */
 export function roomModelLibrary(): ModelLibrary {
   return new ModelLibrary('rooms', getRoomModel, (scene, meta) => {
     const r = meta.rotation;
     const explicit = !!r && ((r.x ?? 0) !== 0 || (r.y ?? 0) !== 0 || (r.z ?? 0) !== 0);
-    if (explicit) {
-      scene.rotation.set(
-        THREE.MathUtils.degToRad(r!.x ?? 0),
-        THREE.MathUtils.degToRad(r!.y ?? 0),
-        THREE.MathUtils.degToRad(r!.z ?? 0)
-      );
-    }
-    scene.updateMatrixWorld(true);
-    let box = new THREE.Box3().setFromObject(scene);
-    let size = box.getSize(new THREE.Vector3());
-    // Ohne explizite Rotation: hochkant stehende Reliefs (Bild-Generierung)
-    // flach auf den Boden legen, Bildseite nach oben
-    if (!explicit && size.y > size.z * 1.8) {
-      scene.rotation.x = -Math.PI / 2;
+    if (!explicit) {
+      // Ohne Sidecar-Fix ersetzen Heuristiken den Meta-Fix und gehören
+      // deshalb VOR die Roh-Messung: hochkant stehende Reliefs
+      // (Bild-Generierung) flach legen, Bildseite nach oben.
       scene.updateMatrixWorld(true);
-      box = new THREE.Box3().setFromObject(scene);
-      size = box.getSize(new THREE.Vector3());
+      let size = new THREE.Box3().setFromObject(scene).getSize(new THREE.Vector3());
+      if (size.y > size.z * 1.8) {
+        scene.rotation.x = -Math.PI / 2;
+        scene.updateMatrixWorld(true);
+        size = new THREE.Box3().setFromObject(scene).getSize(new THREE.Vector3());
+      }
+      flipReliefFaceUp(scene, size);
     }
-    if (!explicit) flipReliefFaceUp(scene, size);
-    const s = 1 / Math.max(size.x, size.z, 1e-3);
-    scene.scale.setScalar(s);
     scene.updateMatrixWorld(true);
-    box = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Box3().setFromObject(scene).getSize(new THREE.Vector3());
+    const s = 1 / Math.max(size.x, size.z, 1e-3);
+    scene.scale.multiplyScalar(s);
+    scene.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(scene);
     const c = box.getCenter(new THREE.Vector3());
     scene.position.x -= c.x;
     scene.position.z -= c.z;
@@ -244,8 +245,18 @@ export function roomModelLibrary(): ModelLibrary {
         o.receiveShadow = false;
       }
     });
+    // Meta-Rotations-Fix als eigene innere Gruppe ÜBER der Normalisierung
+    const metaG = new THREE.Group();
+    metaG.add(scene);
+    if (explicit) {
+      metaG.rotation.set(
+        THREE.MathUtils.degToRad(r!.x ?? 0),
+        THREE.MathUtils.degToRad(r!.y ?? 0),
+        THREE.MathUtils.degToRad(r!.z ?? 0)
+      );
+    }
     const root = new THREE.Group();
-    root.add(scene);
+    root.add(metaG);
     root.userData.footprint = { x: size.x * s, z: size.z * s };
     root.userData.height = size.y * s;
     root.userData.offsetY = meta.offset_y ?? 0;

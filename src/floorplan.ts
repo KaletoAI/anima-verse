@@ -29,6 +29,7 @@ const say = (t: string) => {
 
 const engine = new Engine(document.body);
 setModelEnvironment(engine.modelEnv);
+(window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (wie main)
 engine.setGameHour(11);
 engine.target.set(0, 0, 0);
 engine.dist = engine.targetDist = 22;

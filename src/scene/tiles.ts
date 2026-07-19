@@ -552,12 +552,13 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
     tile.roomRects.set(room.id, { x: tile.center.x + x, z: tile.center.z + z, w: roomW, d: roomD });
     const plate = addRoomCommon(room, x, z, floorY, (i * 67) % 360, roomW, roomD, rg);
 
-    // Andockpunkt für das Raum-Modell: knapp über der Etagen-Platte (+0.08),
-    // damit der Modell-Boden fast mit dem Etagen-Boden verschmilzt — die
-    // Platzhalter-Platte wird beim Modell-Einwechseln ohnehin ausgeblendet.
-    // layout.rotation dreht den Raum-INHALT (analog map3d.rotation).
+    // Andockpunkt für das Raum-Modell auf Etagenboden-Höhe — die Erdung
+    // (Unterkante = +0,12 + offset_y) macht applyRoomModel an der
+    // gemessenen Box; die Platzhalter-Platte wird beim Modell-Einwechseln
+    // ausgeblendet. layout.rotation dreht den Raum-INHALT (analog
+    // map3d.rotation).
     const holder = new THREE.Group();
-    holder.position.set(x, floorY + 0.06, z);
+    holder.position.set(x, floorY, z);
     holder.rotation.y = -THREE.MathUtils.degToRad(lay.rotation ?? 0);
     rg.add(holder);
     tile.roomSlots.set(room.id, { holder, w: roomW, d: roomD, plate });
@@ -1022,15 +1023,27 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   const slot = tile.roomSlots.get(roomId);
   if (!slot || slot.holder.children.length) return;
   const fp = (model.userData.footprint as { x: number; z: number }) ?? { x: 1, z: 1 };
-  // In den Raum einpassen: Grundfläche UND Etagenhöhe deckeln — sonst
-  // schneiden hohe Modelle durch Platte/Wände der nächsten Etage
-  const modelH = (model.userData.height as number) || 1;
-  const kFoot = Math.min(slot.w / fp.x, slot.d / fp.z) * 0.96;
-  const kHeight = (storeyHeight(tile.loc) * 0.92) / modelH;
-  model.scale.setScalar(Math.min(kFoot, kHeight));
-  model.position.y = (model.userData.offsetY as number) || 0;   // Server-Feinjustierung (Meter)
+  // Raum-Rezept (backend-note-scale-anchors.md): Fit uniform an der
+  // UNROTIERTEN Box — kein Höhen-Deckel, die Höhe folgt den Proportionen
+  model.scale.setScalar(Math.min(slot.w / fp.x, slot.d / fp.z) * 0.96);
   slot.holder.add(model);
   slot.plate.visible = false;   // Platte nur als Platzhalter ohne Modell
+  // Neu-Erdung der ROTIERTEN Box (nach Meta-Fix + Layout-Yaw): Unterkante
+  // auf Etagenboden + 0,12 + offset_y (Welt-Meter), XZ-Zentrum auf die
+  // Rechteck-Mitte — nach einem Kipp-Fix wandert min.y, ohne Neu-Erdung
+  // schwingt das Modell unter den Boden.
+  tile.group.updateMatrixWorld(true);
+  const rbox = new THREE.Box3().setFromObject(model);
+  const rc = rbox.getCenter(new THREE.Vector3());
+  const hw = slot.holder.getWorldPosition(new THREE.Vector3());
+  const offY = (model.userData.offsetY as number) || 0;
+  const delta = new THREE.Vector3(
+    hw.x - rc.x,
+    hw.y + 0.12 + offY - rbox.min.y,
+    hw.z - rc.z
+  );
+  delta.applyQuaternion(slot.holder.getWorldQuaternion(new THREE.Quaternion()).invert());
+  model.position.add(delta);
 
   // Begehbarkeit abtasten: Raster von oben, 20. Perzentil = Bodenhöhe,
   // deutlich höhere Treffer sind Möbel/Wände (dort keine Figuren).
