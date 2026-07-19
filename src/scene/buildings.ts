@@ -91,6 +91,17 @@ export class ModelLibrary {
           return;
         }
         const gltf = await new GLTFLoader().loadAsync(meta.url);
+        // Generierte GLBs lassen metallicFactor oft unbelegt — der glTF-
+        // Default ist 1.0 (voll metallisch), und ohne Environment-Map
+        // rendert das fast schwarz. Gemeint ist kein Metall: neutralisieren.
+        gltf.scene.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (!mesh.isMesh) return;
+          for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+            const std = m as THREE.MeshStandardMaterial;
+            if (std.isMeshStandardMaterial && std.metalness > 0.5) std.metalness = 0;
+          }
+        });
         const model = this.normalize(gltf.scene, meta);
         model.userData.meta = {
           height_m: meta.height_m || 0, floors: meta.floors || 0,
