@@ -5,6 +5,13 @@ import { getLocationModel, getRoomModel } from '../api';
 /** frühestens nach dieser Zeit erneut fragen (Generierung dauert Minuten) */
 const RETRY_MS = 60_000;
 
+/** Neutrale Environment-Map für Modelle mit echter Metal-Roughness-Textur
+ *  (AV3D-14) — ohne sie rendern metallische Pixel schwarz. */
+let modelEnv: THREE.Texture | null = null;
+export function setModelEnvironment(tex: THREE.Texture) {
+  modelEnv = tex;
+}
+
 /** Vergleichs-Kennung über alle darstellungsrelevanten Meta-Felder. */
 function metaSig(meta: ModelMeta): string {
   return JSON.stringify([
@@ -94,12 +101,23 @@ export class ModelLibrary {
         // Generierte GLBs lassen metallicFactor oft unbelegt — der glTF-
         // Default ist 1.0 (voll metallisch), und ohne Environment-Map
         // rendert das fast schwarz. Gemeint ist kein Metall: neutralisieren.
+        // Liefert das GLB dagegen eine echte Metal-Roughness-Textur
+        // (AV3D-14), bleibt sie unangetastet — dann bekommt das Material
+        // eine neutrale Environment-Map, damit Metall-Pixel reflektieren.
         gltf.scene.traverse((o) => {
           const mesh = o as THREE.Mesh;
           if (!mesh.isMesh) return;
           for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
             const std = m as THREE.MeshStandardMaterial;
-            if (std.isMeshStandardMaterial && std.metalness > 0.5) std.metalness = 0;
+            if (!std.isMeshStandardMaterial) continue;
+            if (std.metalnessMap) {
+              if (modelEnv) {
+                std.envMap = modelEnv;
+                std.envMapIntensity = 0.7;
+              }
+            } else if (std.metalness > 0.5) {
+              std.metalness = 0;
+            }
           }
         });
         const model = this.normalize(gltf.scene, meta);

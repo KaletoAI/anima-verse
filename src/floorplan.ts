@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { Engine } from './scene/engine';
 import { applyRoomModel, applyTileFade, buildTile, type Tile } from './scene/tiles';
-import { roomModelLibrary } from './scene/buildings';
+import { roomModelLibrary, setModelEnvironment } from './scene/buildings';
 import { getLocationModel, getRoomModel, getSurfaceTextures } from './api';
 import { setLocationAnchor, setSurfaceTextures, storeyHeight } from './scene/tiles';
 void getSurfaceTextures().then(setSurfaceTextures);
@@ -28,6 +28,7 @@ const say = (t: string) => {
 };
 
 const engine = new Engine(document.body);
+setModelEnvironment(engine.modelEnv);
 engine.setGameHour(11);
 engine.target.set(0, 0, 0);
 engine.dist = engine.targetDist = 22;

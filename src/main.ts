@@ -4,7 +4,7 @@ import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
 import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, setTerrainGrid, storeyHeight, CELL, type Tile } from './scene/tiles';
-import { buildingLibrary, roomModelLibrary } from './scene/buildings';
+import { buildingLibrary, roomModelLibrary, setModelEnvironment } from './scene/buildings';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { createHud, InfoPanel, showLogin } from './ui';
@@ -30,6 +30,7 @@ async function boot() {
 
 async function startApp(username: string) {
   const engine = new Engine(app);
+  setModelEnvironment(engine.modelEnv);
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
   const figures = new FigureLibrary();
   const [allLocs, firstMap, surfaces] = await Promise.all([

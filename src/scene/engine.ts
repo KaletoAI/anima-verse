@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const MIN_DIST = 2.5;   // ganz nah = Figur formatfüllend
 const MAX_DIST = 150;
@@ -16,6 +17,8 @@ export class Engine {
   sun: THREE.DirectionalLight;
   hemi!: THREE.HemisphereLight;
   fill!: THREE.DirectionalLight;
+  /** neutrale IBL für Server-Modelle mit echter Metal-Roughness-Textur */
+  modelEnv: THREE.Texture;
   /** Sonnenstand aus der Spielzeit (0..24); steuert Licht, Farben, Himmel. */
   private sunAngle = Math.PI * 0.35;   // Default: später Vormittag
   /** 0 = heller Tag, 1 = tiefe Nacht — für Fensterlichter u.ä. */
@@ -57,6 +60,9 @@ export class Engine {
     this.labelRenderer = new CSS2DRenderer();
     this.labelRenderer.domElement.className = 'label-layer';
     container.appendChild(this.labelRenderer.domElement);
+
+    this.modelEnv = new THREE.PMREMGenerator(this.renderer)
+      .fromScene(new RoomEnvironment(), 0.04).texture;
 
     this.scene.background = new THREE.Color(0x9fc7e8);
     this.scene.fog = new THREE.Fog(0x9fc7e8, 220, 520);
