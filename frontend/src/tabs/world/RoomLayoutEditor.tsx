@@ -15,10 +15,37 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { getBuildingDims, getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
-import type { Map3D, Room, RoomLayout } from './worldTypes'
+import type { Map3D, Room, RoomLayout, RoomOpening } from './worldTypes'
 
 const CANVAS_W = 420
 const MIN_FRAC = 0.05
+
+// ── Openings layer (B3) ──
+// Openings sit on a room's rectangle edges ('N'|'S'|'E'|'W'); the schematic
+// symbol is drawn in a small fixed-size SVG, rotated so the interior side
+// faces into the room (N up, then clockwise). New openings default to a
+// standard door.
+type EdgeLetter = 'N' | 'S' | 'E' | 'W'
+const EDGE_ROT: Record<EdgeLetter, number> = { N: 0, S: 180, E: 270, W: 90 }
+const OPENING_DEFAULT = { type: 'door' as const, width_m: 1.0, height_m: 2.1, sill_m: 0 }
+const OPENING_COLOR: Record<string, string> = {
+  door: '#e0a356', window: '#79c0ff', passage: '#8b949e',
+}
+
+/** Nearest rectangle edge + position along it for a click inside a room
+ *  (px/py = fractions of the room rectangle). */
+const nearestEdge = (px: number, py: number): { edge: EdgeLetter; at: number } => {
+  const d: Record<EdgeLetter, number> = { N: py, S: 1 - py, W: px, E: 1 - px }
+  const edge = (Object.keys(d) as EdgeLetter[]).reduce((a, b) => (d[a] <= d[b] ? a : b))
+  return { edge, at: edge === 'N' || edge === 'S' ? px : py }
+}
+
+/** Point on the room rectangle (fractions) for an opening on an edge. */
+const edgePoint = (edge: EdgeLetter, at: number): { x: number; y: number } =>
+  edge === 'N' ? { x: at, y: 0 }
+    : edge === 'S' ? { x: at, y: 1 }
+      : edge === 'W' ? { x: 0, y: at }
+        : { x: 1, y: at }
 
 interface RoomLayoutEditorProps {
   rooms: Room[]
@@ -42,10 +69,19 @@ interface RoomLayoutEditorProps {
 type DragState =
   | { kind: 'move'; roomId: string; startX: number; startY: number; origX: number; origY: number }
   | { kind: 'resize'; roomId: string; startX: number; startY: number; origW: number; origD: number }
+  | { kind: 'opening'; roomId: string; index: number; edge: EdgeLetter }
   | null
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
 const r4 = (v: number) => Math.round(v * 10000) / 10000
+
+/** Edge + position of an opening after rotating the room 90° clockwise
+ *  ((x,y) -> (1-y,x)), so openings turn with the room like exit/markers. */
+const rotateOpeningCW = (edge: EdgeLetter, at: number): { edge: EdgeLetter; at: number } =>
+  edge === 'N' ? { edge: 'E', at }
+    : edge === 'E' ? { edge: 'S', at: r4(1 - at) }
+      : edge === 'S' ? { edge: 'W', at }
+        : { edge: 'N', at: r4(1 - at) }
 
 export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
@@ -54,12 +90,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   const setSelected = useCallback((id: string) => {
     setSelectedRaw(id)
     setMarkerSel(null)
+    setOpeningSel(null)
     setElevatorSel(false)
     onSelectRoom?.(id)
   }, [onSelectRoom])
-  // Click-to-place modes: the next click inside the room sets the exit point
-  // or drops an animation marker of the chosen kind.
-  const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker' | 'marker-move' | 'outline' | 'elevator'>('')
+  // Click-to-place modes: the next click inside the room sets the exit point,
+  // drops an animation marker of the chosen kind, or places a wall opening on
+  // the nearest edge.
+  const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker' | 'marker-move' | 'outline' | 'elevator' | 'opening'>('')
+  // Selected opening (index into the selected room's openings) for the
+  // per-opening controls below the plan.
+  const [openingSel, setOpeningSel] = useState<number | null>(null)
   const [markerKind, setMarkerKind] = useState('')
   // Building outline drawing (AV3D-12): points collected while in outline
   // mode, committed to map3d.outline on finish (>= 3 points).
@@ -243,20 +284,36 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       const canvas = canvasRef.current
       if (!drag || !canvas) return
       e.preventDefault()
-      const dx = (e.clientX - drag.startX) / canvas.clientWidth
-      const dy = (e.clientY - drag.startY) / canvas.clientHeight
       const room = roomsRef.current.find((r) => r.id === drag.roomId)
       const lay = room?.layout
       if (!lay) return
       if (drag.kind === 'move') {
+        const dx = (e.clientX - drag.startX) / canvas.clientWidth
+        const dy = (e.clientY - drag.startY) / canvas.clientHeight
         updateLayout(drag.roomId, {
           x: r4(clamp(drag.origX + dx, 0, 1 - lay.w)),
           y: r4(clamp(drag.origY + dy, 0, 1 - lay.d)),
         })
-      } else {
+      } else if (drag.kind === 'resize') {
+        const dx = (e.clientX - drag.startX) / canvas.clientWidth
+        const dy = (e.clientY - drag.startY) / canvas.clientHeight
         updateLayout(drag.roomId, {
           w: r4(clamp(drag.origW + dx, MIN_FRAC, 1 - lay.x)),
           d: r4(clamp(drag.origD + dy, MIN_FRAC, 1 - lay.y)),
+        })
+      } else {
+        // Opening drag: slide it along its edge — project the cursor onto the
+        // edge as a fraction of the ROOM rectangle.
+        const rect = canvas.getBoundingClientRect()
+        const fx = (e.clientX - rect.left) / rect.width
+        const fy = (e.clientY - rect.top) / rect.height
+        const along = (drag.edge === 'N' || drag.edge === 'S')
+          ? (fx - lay.x) / (lay.w || 1)
+          : (fy - lay.y) / (lay.d || 1)
+        const at = r4(clamp(along, 0, 1))
+        updateLayout(drag.roomId, {
+          openings: (lay.openings || []).map((o, idx) =>
+            idx === drag.index ? { ...o, at } : o),
         })
       }
     }
@@ -280,6 +337,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       ? { kind, roomId: room.id, startX: e.clientX, startY: e.clientY, origX: lay.x, origY: lay.y }
       : { kind, roomId: room.id, startX: e.clientX, startY: e.clientY, origW: lay.w, origD: lay.d }
   }, [clickMode, setSelected])
+
+  // Drag a placed opening along its edge (no drag while placing).
+  const startOpeningDrag = useCallback(
+    (e: React.PointerEvent, room: Room, index: number, edge: EdgeLetter) => {
+      if (clickMode || !room.id) return
+      e.preventDefault()
+      e.stopPropagation()
+      setSelected(room.id)
+      setOpeningSel(index)
+      dragRef.current = { kind: 'opening', roomId: room.id, index, edge }
+    }, [clickMode, setSelected])
 
   // Click-to-place: one click inside a room sets the exit point or drops an
   // animation marker — both as fractions of the ROOM rectangle (contract).
@@ -306,6 +374,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   { at: [px, py] as [number, number], animation: markerKind }],
       })
       setMarkerSel((room.layout.markers || []).length)
+    } else if (clickMode === 'opening') {
+      // Place a door on the nearest edge at the clicked position.
+      const { edge, at } = nearestEdge(px, py)
+      const openings: RoomOpening[] = [...(room.layout.openings || []),
+        { edge, at: r4(at), ...OPENING_DEFAULT }]
+      updateLayout(room.id, { openings })
+      setOpeningSel(openings.length - 1)
     }
     setClickMode('')
   }, [clickMode, markerKind, markerSel, selected, updateLayout])
@@ -335,6 +410,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             at: [r4(1 - m.at[1]), r4(m.at[0])] as [number, number],
             ...(m.rotation !== undefined ? { rotation: (m.rotation + 90) % 360 } : {}),
           })) }
+        : {}),
+      ...(lay.openings?.length
+        ? { openings: lay.openings.map((o) => (typeof o.edge === 'string'
+            ? { ...o, ...rotateOpeningCW(o.edge as EdgeLetter, o.at) }
+            : o)) }
         : {}),
     })
   }
@@ -539,6 +619,60 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   }}
                 />
               ))}
+              {/* Wall openings on the room edges: door = gap + swing arc,
+                  window = double line, passage = dashed gap. Fixed-size SVG
+                  rotated so the interior side faces into the room; drag it
+                  along its edge. */}
+              {(lay.openings || []).map((op, i) => {
+                if (typeof op.edge !== 'string') return null
+                const edge = op.edge as EdgeLetter
+                const pt = edgePoint(edge, op.at)
+                const sel = room.id === selected && openingSel === i
+                const col = sel ? '#fff' : (OPENING_COLOR[op.type] || '#e0a356')
+                return (
+                  <div
+                    key={`op-${i}`}
+                    title={`${op.type} · ${op.width_m}×${op.height_m} m`}
+                    onPointerDown={(e) => {
+                      if (clickMode) return
+                      startOpeningDrag(e, room, i, edge)
+                    }}
+                    onClick={(e) => {
+                      if (clickMode) return
+                      e.stopPropagation()
+                      setSelected(room.id || '')
+                      setOpeningSel(i)
+                    }}
+                    style={{
+                      position: 'absolute',
+                      left: `${pt.x * 100}%`, top: `${pt.y * 100}%`,
+                      width: 24, height: 24,
+                      transform: `translate(-50%, -50%) rotate(${EDGE_ROT[edge]}deg)`,
+                      cursor: clickMode ? 'crosshair' : 'grab',
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" width={24} height={24} style={{ overflow: 'visible' }}>
+                      {op.type === 'door' ? (
+                        <>
+                          {/* Gap in the edge line + hinge leaf + swing arc. */}
+                          <line x1={4} y1={12} x2={20} y2={12} stroke={col}
+                            strokeWidth={1} strokeDasharray="1.5 2" opacity={0.5} />
+                          <line x1={4} y1={12} x2={4} y2={22} stroke={col} strokeWidth={1.5} />
+                          <path d="M4 22 A10 10 0 0 0 14 12" fill="none" stroke={col} strokeWidth={1.2} />
+                        </>
+                      ) : op.type === 'window' ? (
+                        <>
+                          <line x1={4} y1={11} x2={20} y2={11} stroke={col} strokeWidth={1.4} />
+                          <line x1={4} y1={13} x2={20} y2={13} stroke={col} strokeWidth={1.4} />
+                        </>
+                      ) : (
+                        <line x1={4} y1={12} x2={20} y2={12} stroke={col}
+                          strokeWidth={2} strokeDasharray="3 2.5" />
+                      )}
+                    </svg>
+                  </div>
+                )
+              })}
               {/* Resize handle (bottom-right) — hidden in anchored mode for
                   rooms whose size DERIVES from the model's declared width
                   (there is nothing to resize then, only to position). */}
@@ -654,6 +788,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             </button>
           </>
         ) : null}
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${clickMode === 'opening' ? ' ga-btn-primary' : ''}`}
+          disabled={!selectedRoom}
+          onClick={() => setClickMode((m) => (m === 'opening' ? '' : 'opening'))}
+          title={t('Then click a room edge to place a door — drag it along the edge, edit it below.')}
+        >
+          🚪 {clickMode === 'opening' ? '…' : t('Opening')}
+        </button>
         <button
           type="button"
           className="ga-btn ga-btn-sm ga-btn-danger"
@@ -878,6 +1021,86 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               className="ga-btn ga-btn-sm ga-btn-danger"
               onClick={() => patchMarker(null)}
               title={t('Remove this marker')}
+            >
+              × {t('Remove')}
+            </button>
+          </div>
+        )
+      })() : null}
+
+      {selectedRoom && openingSel !== null && selectedRoom.layout?.openings?.[openingSel] ? (() => {
+        const op = selectedRoom.layout!.openings![openingSel]
+        const patchOpening = (patch: Partial<RoomOpening> | null) => {
+          const list = (selectedRoom.layout?.openings || [])
+            .map((o, idx) => (idx === openingSel ? { ...o, ...patch } : o))
+            .filter((_, idx) => !(patch === null && idx === openingSel))
+          if (patch === null) setOpeningSel(null)
+          updateLayout(selectedRoom.id || '', { openings: list })
+        }
+        const numField = (
+          field: 'width_m' | 'height_m' | 'sill_m', label: string, max: number,
+        ) => (
+          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}>
+            {label}
+            <input
+              key={`${field}-${op[field]}`}
+              className="ga-input"
+              type="number"
+              min={field === 'sill_m' ? 0 : 0.4}
+              max={max}
+              step={0.1}
+              style={{ width: 64 }}
+              defaultValue={op[field]}
+              onBlur={(e) => {
+                const n = parseFloat(e.target.value)
+                if (Number.isFinite(n) && n !== op[field]) patchOpening({ [field]: Math.round(n * 1000) / 1000 })
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          </label>
+        )
+        // Connectivity target: another room (same building) or 'outside'.
+        const otherRooms = rooms.filter((r) => r.id && r.id !== selectedRoom.id)
+        return (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="ga-hint" style={{ fontWeight: 600 }}>
+              🚪 {typeof op.edge === 'string' ? op.edge : `#${op.edge}`} · {op.type}:
+            </span>
+            <select
+              className="ga-input"
+              style={{ width: 110 }}
+              value={op.type}
+              onChange={(e) => patchOpening({ type: e.target.value as RoomOpening['type'] })}
+              title={t('Door, window or open passage.')}
+            >
+              <option value="door">{t('Door')}</option>
+              <option value="window">{t('Window')}</option>
+              <option value="passage">{t('Passage')}</option>
+            </select>
+            {numField('width_m', t('W (m)'), 10)}
+            {numField('height_m', t('H (m)'), 10)}
+            {numField('sill_m', t('Sill (m)'), 3)}
+            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Where a door/passage leads — another room or outside. Windows leave it empty.')}>
+              {t('to')}
+              <select
+                className="ga-input"
+                style={{ width: 130 }}
+                value={op.to ?? ''}
+                onChange={(e) => patchOpening({ to: e.target.value || undefined })}
+              >
+                <option value="">{t('— none —')}</option>
+                <option value="outside">{t('outside')}</option>
+                {otherRooms.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-danger"
+              onClick={() => patchOpening(null)}
+              title={t('Remove this opening')}
             >
               × {t('Remove')}
             </button>
