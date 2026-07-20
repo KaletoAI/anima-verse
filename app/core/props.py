@@ -1,0 +1,397 @@
+"""Prop library — single 3D objects (chair, table, plant, …) for room furnishing.
+
+Plan: ``development_instructions/plan-room-props.md``. Unlike the room-diorama
+models (``location_model3d.py``), a prop is ONE isolated object generated from a
+dedicated product-shot render (use case ``prop``) → img2mesh (rig "none"). Each
+prop carries OBJECT-LOCAL animation markers — a figure with a matching activity
+snaps to the marker in the object's own space, so markers live on the OBJECT
+instead of being set per room.
+
+Storage: ``worlds/<world>/props/<prop_id>/``:
+
+    model.glb     — the mesh (unrigged GLB, embedded texture)
+    source.png    — the product-shot render the mesh was made from
+    sidecar.json  — {name, category, size_m, rotation{x,y,z}, tags[],
+                     markers[], created_at, source, backend, prompt}
+
+``prop_id`` = slug of the name + a short hash (stable, file-safe). ``size_m``
+is MANDATORY (> 0): the mesh normalization destroys the real scale (the
+height_m / width_m lesson), so the largest real edge in metres is stored
+explicitly and the client scales the object by it. ``markers[].at`` is an
+OBJECT-LOCAL ``[u, v, w]`` (fractions of the model bounding box, 0..1); the
+vocabulary is identical to ``layout.markers`` (animation + facing), only the
+frame is the object instead of the room rectangle.
+"""
+
+import hashlib
+import json
+import re
+import shutil
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from app.core.log import get_logger
+from app.core.timeutils import utc_now_iso
+
+logger = get_logger(__name__)
+
+MODEL_NAME = "model.glb"
+SOURCE_NAME = "source.png"
+SIDECAR_NAME = "sidecar.json"
+
+DEFAULT_SIZE_M = 1.0
+
+_PROP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+_lock = threading.Lock()
+# Running generation job keys "<prop_id>|<backend glob>" (see A2 generation
+# chain) — a prop may be regenerated on a DIFFERENT backend concurrently (each
+# serializes on its own GPU channel); only the same prop+backend double-click
+# is rejected.
+_generating: set = set()
+
+
+# ── Directories / id helpers ────────────────────────────────────────────
+
+def _props_dir(*, create: bool = False) -> Path:
+    from app.core.paths import get_storage_dir
+    d = get_storage_dir() / "props"
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def safe_prop_id(prop_id: str) -> str:
+    """Normalized prop id ('' = invalid) — lowercase, url/file-safe, no escapes."""
+    prop_id = (prop_id or "").strip().lower()
+    return prop_id if _PROP_ID_RE.match(prop_id) else ""
+
+
+def _prop_dir(prop_id: str, *, create: bool = False) -> Optional[Path]:
+    """``props/<prop_id>`` — created only on write paths (a read must not
+    conjure a ghost directory). None for an invalid id."""
+    pid = safe_prop_id(prop_id)
+    if not pid:
+        return None
+    d = _props_dir() / pid
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _slugify(name: str) -> str:
+    slug = _SLUG_RE.sub("-", (name or "").strip().lower()).strip("-")
+    return slug[:40] or "prop"
+
+
+def _new_prop_id(name: str) -> str:
+    """slug(name) + short hash; bumps the hash on the (very unlikely) collision."""
+    slug = _slugify(name)
+    n = 0
+    while True:
+        seed = f"{slug}:{time.time()}:{n}"
+        pid = f"{slug}-{hashlib.md5(seed.encode()).hexdigest()[:6]}"
+        if not (_props_dir() / pid).exists():
+            return pid
+        n += 1
+
+
+# ── Sidecar read / write ────────────────────────────────────────────────
+
+def _sidecar_path(prop_id: str) -> Optional[Path]:
+    d = _prop_dir(prop_id)
+    return (d / SIDECAR_NAME) if d else None
+
+
+def read_sidecar(prop_id: str) -> Dict[str, Any]:
+    sp = _sidecar_path(prop_id)
+    if sp and sp.exists():
+        try:
+            meta = json.loads(sp.read_text(encoding="utf-8"))
+            if isinstance(meta, dict):
+                return meta
+        except (OSError, ValueError):
+            pass
+    return {}
+
+
+def _write_sidecar(prop_id: str, meta: Dict[str, Any]) -> None:
+    d = _prop_dir(prop_id, create=True)
+    if not d:
+        raise ValueError("bad prop id")
+    (d / SIDECAR_NAME).write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# ── Field coercion ──────────────────────────────────────────────────────
+
+def _coerce_size_m(value: Any, fallback: float = DEFAULT_SIZE_M) -> float:
+    """Largest real edge in metres — mandatory > 0; clamped to (0, 100]."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if v <= 0:
+        return fallback
+    return round(min(v, 100.0), 3)
+
+
+def _coerce_tags(raw: Any) -> List[str]:
+    """Free-text tags — accepts a list or a comma/newline string; deduped
+    case-insensitively, capped at 30."""
+    if isinstance(raw, str):
+        raw = re.split(r"[,\n]", raw)
+    if not isinstance(raw, (list, tuple)):
+        return []
+    seen: set = set()
+    out: List[str] = []
+    for t in raw:
+        t = str(t or "").strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out[:30]
+
+
+def _sanitize_rotation(raw: Any, cur: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+    """Orientation fix {x,y,z} in degrees — FREE values, 0.1° resolution
+    (meshes come out slightly tilted, not just axis-swapped; pattern
+    ``location_model3d.set_rotation``). Whole numbers stay ints (no 90.0 noise)."""
+    cur = cur if isinstance(cur, dict) else {}
+    src = raw if isinstance(raw, dict) else {}
+    rot: Dict[str, float] = {}
+    for axis in ("x", "y", "z"):
+        try:
+            v = float(src.get(axis, cur.get(axis, 0)) or 0)
+        except (TypeError, ValueError):
+            try:
+                v = float(cur.get(axis, 0) or 0)
+            except (TypeError, ValueError):
+                v = 0.0
+        v = round(v % 360, 1)
+        rot[axis] = int(v) if float(v).is_integer() else v
+    return rot
+
+
+def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
+    """Object-local animation markers (A4). Same vocabulary as
+    ``layout.markers`` — ``animation`` = a clip kind from the OPEN clip
+    vocabulary, ``facing`` = degrees (0 south / 90 east / 180 north / 270 west,
+    absent = client default) — but ``at`` is an OBJECT-LOCAL ``[u, v, w]``
+    (three fractions of the model bounding box, 0..1) instead of a room
+    ``[x, y]``. Invalid entries are dropped individually; capped at 50."""
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for m in raw:
+        if not isinstance(m, dict):
+            continue
+        anim = str(m.get("animation") or "").strip()
+        at = m.get("at")
+        if not anim or not isinstance(at, (list, tuple)) or len(at) != 3:
+            continue
+        try:
+            at3 = [round(min(max(float(at[i]), 0.0), 1.0), 4) for i in range(3)]
+        except (TypeError, ValueError):
+            continue
+        entry: Dict[str, Any] = {"animation": anim, "at": at3}
+        fac = m.get("facing")
+        if fac is not None and f"{fac}".strip() != "":
+            try:
+                entry["facing"] = int(round(float(fac))) % 360
+            except (TypeError, ValueError):
+                pass
+        out.append(entry)
+    return out[:50]
+
+
+# ── CRUD ────────────────────────────────────────────────────────────────
+
+def create_prop(*, name: str, category: str = "", size_m: Any = DEFAULT_SIZE_M,
+                tags: Any = None, prompt: str = "", source: str = "manual",
+                backend: str = "") -> Dict[str, Any]:
+    """Create a new prop record (sidecar only — the model/source files are
+    added by upload or the generation chain). Returns ``{id, **sidecar}``."""
+    name = (name or "").strip() or "Prop"
+    prop_id = _new_prop_id(name)
+    meta = {
+        "name": name,
+        "category": (category or "").strip(),
+        "size_m": _coerce_size_m(size_m),
+        "rotation": {"x": 0, "y": 0, "z": 0},
+        "tags": _coerce_tags(tags),
+        "markers": [],
+        "created_at": utc_now_iso(),
+        "source": (source or "manual").strip(),
+        "backend": (backend or "").strip(),
+        "prompt": (prompt or "").strip(),
+    }
+    _write_sidecar(prop_id, meta)
+    logger.info("Prop %s created (%s)", prop_id, name)
+    return {"id": prop_id, **meta}
+
+
+def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update the editable sidecar fields (name / category / size_m / tags).
+    None when the prop does not exist."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return None
+    if not isinstance(patch, dict):
+        patch = {}
+    if "name" in patch:
+        nm = str(patch.get("name") or "").strip()
+        if nm:
+            meta["name"] = nm
+    if "category" in patch:
+        meta["category"] = str(patch.get("category") or "").strip()
+    if "size_m" in patch:
+        meta["size_m"] = _coerce_size_m(patch.get("size_m"),
+                                        float(meta.get("size_m") or DEFAULT_SIZE_M))
+    if "tags" in patch:
+        meta["tags"] = _coerce_tags(patch.get("tags"))
+    _write_sidecar(pid, meta)
+    return {"id": pid, **meta}
+
+
+def set_rotation(prop_id: str, rotation: Any) -> Optional[Dict[str, Any]]:
+    """Persist the orientation fix. None when the prop does not exist."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return None
+    meta["rotation"] = _sanitize_rotation(rotation, meta.get("rotation"))
+    _write_sidecar(pid, meta)
+    return {"id": pid, **meta}
+
+
+def set_markers(prop_id: str, markers: Any) -> Optional[Dict[str, Any]]:
+    """Replace the object-local marker list. None when the prop does not exist."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return None
+    meta["markers"] = sanitize_markers(markers)
+    _write_sidecar(pid, meta)
+    return {"id": pid, **meta}
+
+
+def delete_prop(prop_id: str) -> bool:
+    """Remove the whole prop directory (model + source + sidecar)."""
+    d = _prop_dir(prop_id)
+    if not d or not d.exists():
+        return False
+    shutil.rmtree(d, ignore_errors=True)
+    logger.info("Prop %s deleted", safe_prop_id(prop_id))
+    return True
+
+
+# ── Files ───────────────────────────────────────────────────────────────
+
+def model_path(prop_id: str) -> Optional[Path]:
+    d = _prop_dir(prop_id)
+    if not d:
+        return None
+    p = d / MODEL_NAME
+    return p if p.exists() else None
+
+
+def source_path(prop_id: str) -> Optional[Path]:
+    d = _prop_dir(prop_id)
+    if not d:
+        return None
+    p = d / SOURCE_NAME
+    return p if p.exists() else None
+
+
+def save_uploaded_glb(prop_id: str, contents: bytes) -> bool:
+    """Store an uploaded GLB as the prop's model. The prop record must already
+    exist (created first); validation is the caller's job."""
+    if not read_sidecar(prop_id):
+        return False
+    d = _prop_dir(prop_id, create=True)
+    if not d:
+        return False
+    (d / MODEL_NAME).write_bytes(contents)
+    logger.info("Prop %s: model uploaded (%d bytes)", safe_prop_id(prop_id), len(contents))
+    return True
+
+
+# ── Listing ─────────────────────────────────────────────────────────────
+
+def _all_prop_ids() -> List[str]:
+    d = _props_dir()
+    if not d.is_dir():
+        return []
+    out = []
+    for p in d.iterdir():
+        if p.is_dir() and safe_prop_id(p.name) and (p / SIDECAR_NAME).exists():
+            out.append(p.name)
+    return sorted(out)
+
+
+def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
+    has_model = model_path(prop_id) is not None
+    rec: Dict[str, Any] = {
+        "id": prop_id,
+        "name": meta.get("name") or prop_id,
+        "category": meta.get("category") or "",
+        "size_m": float(meta.get("size_m") or 0) or DEFAULT_SIZE_M,
+        "tags": meta.get("tags") or [],
+        "marker_count": len(meta.get("markers") or []),
+        "has_model": has_model,
+    }
+    if full:
+        has_source = source_path(prop_id) is not None
+        rec.update({
+            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
+            "markers": meta.get("markers") or [],
+            "has_source": has_source,
+            "created_at": meta.get("created_at") or "",
+            "source": meta.get("source") or "",
+            "backend": meta.get("backend") or "",
+            "prompt": meta.get("prompt") or "",
+            "model_url": f"/assets/props/{prop_id}/model" if has_model else "",
+            "source_url": f"/assets/props/{prop_id}/source" if has_source else "",
+        })
+    return rec
+
+
+def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
+    """All props. ``full`` adds the sidecar detail + file urls (admin);
+    otherwise the lean client shape (id, name, category, size_m, tags,
+    marker_count, has_model)."""
+    out = []
+    for pid in _all_prop_ids():
+        meta = read_sidecar(pid)
+        if meta:
+            out.append(_prop_record(pid, meta, full=full))
+    return out
+
+
+def get_prop(prop_id: str) -> Optional[Dict[str, Any]]:
+    """Full detail of ONE prop, or None."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return None
+    return _prop_record(pid, meta, full=True)
+
+
+# ── Generation state (populated by the generation chain, A2) ─────────────
+
+def _gen_key(prop_id: str, backend_glob: str) -> str:
+    return f"{prop_id}|{(backend_glob or '').strip().lower()}"
+
+
+def is_pending(prop_id: str = "") -> List[str]:
+    """Prop ids with at least one running generation (any backend)."""
+    with _lock:
+        ids = sorted({k.split("|", 1)[0] for k in _generating})
+    if not prop_id:
+        return ids
+    return [prop_id] if prop_id in ids else []

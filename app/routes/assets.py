@@ -104,3 +104,43 @@ def get_surface_texture(filename: str, request: Request):
     media_type, _ = mimetypes.guess_type(str(path))
     return etag_file_response(path, request, media_type or "image/jpeg",
                               cache_control="public, max-age=3600")
+
+
+# ── Props (plan-room-props.md) ──
+# Global per-world prop library — single furnishing objects (chair, table, …)
+# as their own GLB meshes + object-local markers. Managed via /world/props;
+# served here because the 3D client consumes them like the other asset
+# families. A prop's placement in a room is NOT here (that is the room recipe,
+# Fable's part) — this is the raw library.
+
+@router.get("/props")
+def list_props():
+    """Prop library — the lean client shape: a bare array
+    ``[{id, name, category, size_m, tags, marker_count, has_model}, …]``.
+    An empty list is the normal starting state."""
+    from app.core.props import list_props as _list
+    return _list()
+
+
+@router.get("/props/{prop_id}/model")
+def get_prop_model(prop_id: str, request: Request):
+    """Serves a prop's GLB mesh. ETag + If-None-Match; a 404 is the normal
+    "no model yet" state (the record may exist before the mesh does)."""
+    from app.core.props import model_path
+    path = model_path(prop_id)
+    if not path:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return etag_file_response(path, request, "model/gltf-binary",
+                              cache_control="public, max-age=3600")
+
+
+@router.get("/props/{prop_id}/source")
+def get_prop_source(prop_id: str, request: Request):
+    """Serves the product-shot render a prop's mesh was made from (the
+    library thumbnail). 404 when the prop was uploaded without a source."""
+    from app.core.props import source_path
+    path = source_path(prop_id)
+    if not path:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return etag_file_response(path, request, "image/png",
+                              cache_control="public, max-age=3600")

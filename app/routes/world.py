@@ -750,6 +750,126 @@ def surface_texture_delete(kind: str, file: str = "") -> Dict[str, Any]:
     return {"status": "deleted"}
 
 
+# ── Props (plan-room-props.md) ──
+# Prop library CRUD (single furnishing objects). Read-serving is /assets/props;
+# the 3D map client reads the library from there. Placement into a room (the
+# room recipe) is Fable's part and lives elsewhere.
+
+_PROP_MODEL_MAX_BYTES = 100 * 1024 * 1024
+
+
+@router.get("/props")
+def props_admin() -> Dict[str, Any]:
+    """Admin listing: all props (full sidecar detail) + running generations."""
+    from app.core.props import is_pending, list_props
+    return {"props": list_props(full=True), "pending": is_pending()}
+
+
+@router.post("/props")
+async def prop_create(request: Request) -> Dict[str, Any]:
+    """Create a prop record (body: {name, category?, size_m?, tags?}). The
+    model/source files follow via upload or the generation chain."""
+    from app.core.props import create_prop
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    prop = create_prop(name=name, category=str(data.get("category") or ""),
+                       size_m=data.get("size_m", 1.0), tags=data.get("tags"))
+    return {"status": "ok", "prop": prop}
+
+
+@router.get("/props/{prop_id}")
+def prop_detail(prop_id: str) -> Dict[str, Any]:
+    """Full detail of ONE prop."""
+    from app.core.props import get_prop
+    prop = get_prop(prop_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return {"prop": prop}
+
+
+@router.post("/props/{prop_id}")
+async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
+    """Update the editable sidecar fields (body: {name?, category?, size_m?,
+    tags?})."""
+    from app.core.props import update_prop
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    prop = update_prop(prop_id, data)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return {"status": "ok", "prop": prop}
+
+
+@router.post("/props/{prop_id}/rotation")
+async def prop_rotation(prop_id: str, request: Request) -> Dict[str, Any]:
+    """Persist the prop's orientation fix (body: {x,y,z} in degrees, free
+    values with 0.1° resolution — the 3D client applies it on load)."""
+    from app.core.props import set_rotation
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    prop = set_rotation(prop_id, data)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return {"status": "ok", "prop": prop}
+
+
+@router.post("/props/{prop_id}/markers")
+async def prop_markers(prop_id: str, request: Request) -> Dict[str, Any]:
+    """Replace the object-local marker list (body: {markers: [{animation, at:
+    [u,v,w], facing?}]}) — same vocabulary as room markers, object-local frame."""
+    from app.core.props import set_markers
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    prop = set_markers(prop_id, data.get("markers"))
+    if not prop:
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return {"status": "ok", "prop": prop}
+
+
+@router.post("/props/{prop_id}/upload")
+async def prop_upload(prop_id: str, file: UploadFile = File(...),
+                      force: str = "") -> Dict[str, Any]:
+    """Upload a GLB as the prop's model (validated as an unrigged GLB with an
+    embedded texture, like the building models; force=1 stores despite errors)."""
+    from app.core.props import get_prop, save_uploaded_glb
+    from app.core.model_validate import validate_static_glb
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    if not (file.filename or "").lower().endswith(".glb"):
+        raise HTTPException(status_code=400,
+                            detail="Props must be a GLB (embedded texture, no rig)")
+    contents = await file.read()
+    if len(contents) > _PROP_MODEL_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+    result = validate_static_glb(contents)
+    forced = str(force or "").strip().lower() in ("1", "true", "yes")
+    if not result["ok"] and not forced:
+        raise HTTPException(status_code=422, detail={
+            "reason": "invalid_model",
+            "errors": result["errors"],
+            "warnings": result["warnings"],
+        })
+    if not save_uploaded_glb(prop_id, contents):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return {"status": "ok", "warnings": result["warnings"]}
+
+
+@router.delete("/props/{prop_id}")
+def prop_delete(prop_id: str) -> Dict[str, Any]:
+    """Delete a prop (model + source + sidecar)."""
+    from app.core.props import delete_prop
+    if not delete_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return {"status": "deleted"}
+
+
 # ── Map Layout Import / Export ──
 
 @router.get("/map/export")
