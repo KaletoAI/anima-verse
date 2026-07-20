@@ -83,6 +83,60 @@ const rotateOpeningCW = (edge: EdgeLetter, at: number): { edge: EdgeLetter; at: 
       : edge === 'S' ? { edge: 'W', at }
         : { edge: 'N', at: r4(1 - at) }
 
+// ── Adjacency geometry (B4) — pure functions over rectangle rooms ──
+// All coordinates are fractions of the 8 m reference square; real metres come
+// from planW (the same plan_width_m the editor derives), so the thresholds are
+// stated in metres. Collinearity tolerance ~0.15 m, a shared segment counts
+// from 0.8 m, a window is suggested on exterior edges from 2.5 m.
+const SHARE_TOL_M = 0.15
+const MIN_SHARE_M = 0.8
+const MIN_WINDOW_EDGE_M = 2.5
+
+interface RectRoom { id: string; x: number; y: number; w: number; d: number }
+interface SharedEdge { edge: EdgeLetter; at: number; neighborId: string }
+
+const _overlap = (a0: number, a1: number, b0: number, b1: number): [number, number] | null => {
+  const s = Math.max(a0, b0)
+  const e = Math.min(a1, b1)
+  return e > s ? [s, e] : null
+}
+
+/** Shared edges of room A with the given others (same level only): edges that
+ *  are collinear with an opposite edge of a neighbour and overlap by ≥ 0.8 m.
+ *  `at` is the centre of the overlap along A's edge (fraction of A's edge). */
+function sharedEdges(a: RectRoom, others: RectRoom[], planW: number): SharedEdge[] {
+  const tol = planW > 0 ? SHARE_TOL_M / planW : 0.02
+  const minOv = planW > 0 ? MIN_SHARE_M / planW : 0.1
+  const ax1 = a.x + a.w
+  const ay1 = a.y + a.d
+  const out: SharedEdge[] = []
+  for (const b of others) {
+    const bx1 = b.x + b.w
+    const by1 = b.y + b.d
+    const centerAlong = (ov: [number, number], lo: number, len: number) =>
+      clamp(((ov[0] + ov[1]) / 2 - lo) / (len || 1), 0, 1)
+    // A.E vs B.W / A.W vs B.E — vertical edges, overlap in y.
+    let ov = _overlap(a.y, ay1, b.y, by1)
+    if (ov && ov[1] - ov[0] >= minOv) {
+      if (Math.abs(ax1 - b.x) <= tol) out.push({ edge: 'E', at: centerAlong(ov, a.y, a.d), neighborId: b.id })
+      if (Math.abs(a.x - bx1) <= tol) out.push({ edge: 'W', at: centerAlong(ov, a.y, a.d), neighborId: b.id })
+    }
+    // A.S vs B.N / A.N vs B.S — horizontal edges, overlap in x.
+    ov = _overlap(a.x, ax1, b.x, bx1)
+    if (ov && ov[1] - ov[0] >= minOv) {
+      if (Math.abs(ay1 - b.y) <= tol) out.push({ edge: 'S', at: centerAlong(ov, a.x, a.w), neighborId: b.id })
+      if (Math.abs(a.y - by1) <= tol) out.push({ edge: 'N', at: centerAlong(ov, a.x, a.w), neighborId: b.id })
+    }
+  }
+  return out
+}
+
+/** Edges of room A that share no segment with any neighbour (exterior walls). */
+function exteriorEdges(a: RectRoom, others: RectRoom[], planW: number): EdgeLetter[] {
+  const shared = new Set(sharedEdges(a, others, planW).map((s) => s.edge))
+  return (['N', 'S', 'E', 'W'] as EdgeLetter[]).filter((e) => !shared.has(e))
+}
+
 export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const [level, setLevel] = useState(0)
@@ -419,6 +473,54 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     })
   }
 
+  // "Suggest openings": a door on every shared wall (once per pair, on the
+  // room that triggers it, `to` = the neighbour) + a window on every exterior
+  // edge ≥ 2.5 m. Suggestions are normal, editable openings; the button never
+  // overwrites — it skips any edge that already carries an opening.
+  const suggestOpenings = () => {
+    const onLevel = rooms.filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
+    const rects: RectRoom[] = onLevel.map((r) => ({
+      id: r.id!, x: r.layout!.x, y: r.layout!.y, w: r.layout!.w, d: r.layout!.d,
+    }))
+    const additions = new Map<string, RoomOpening[]>()
+    const layoutOf = (id: string) => onLevel.find((r) => r.id === id)!.layout!
+    const edgeTaken = (id: string, edge: EdgeLetter) =>
+      (layoutOf(id).openings || []).some((o) => o.edge === edge)
+      || (additions.get(id) || []).some((o) => o.edge === edge)
+    const add = (id: string, op: RoomOpening) => {
+      const list = additions.get(id) || []
+      list.push(op)
+      additions.set(id, list)
+    }
+
+    // Doors on shared edges — once per pair (i < j = the trigger room).
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        for (const s of sharedEdges(rects[i], [rects[j]], planW)) {
+          if (edgeTaken(rects[i].id, s.edge)) continue
+          add(rects[i].id, { edge: s.edge, at: r4(s.at), type: 'door',
+            width_m: 1.0, height_m: 2.1, sill_m: 0, to: s.neighborId })
+        }
+      }
+    }
+    // Windows on exterior edges ≥ 2.5 m (needs planW to know the edge length).
+    if (planW > 0) {
+      for (const a of rects) {
+        for (const e of exteriorEdges(a, rects.filter((r) => r.id !== a.id), planW)) {
+          const edgeLenM = (e === 'N' || e === 'S') ? a.w * planW : a.d * planW
+          if (edgeLenM < MIN_WINDOW_EDGE_M || edgeTaken(a.id, e)) continue
+          add(a.id, { edge: e, at: 0.5, type: 'window',
+            width_m: 1.2, height_m: 1.2, sill_m: 0.9 })
+        }
+      }
+    }
+
+    if (additions.size === 0) return
+    onChange(rooms.map((r) => (r.id && r.layout && additions.has(r.id)
+      ? { ...r, layout: { ...r.layout, openings: [...(r.layout.openings || []), ...additions.get(r.id)!] } }
+      : r)))
+  }
+
   return (
     <div className="ga-form" style={{ gap: 6 }}>
       <div className="ga-form-section-label">{t('Room layout (floor plan)')}</div>
@@ -465,6 +567,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             onChange={(e) => setBUnderlay(e.target.checked)} />
           <span>{t('Building behind the plan')}</span>
         </label>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={placed.length < 1}
+          onClick={suggestOpenings}
+          title={t('Add a door on every shared wall (once, linked to the neighbour) and a window on every exterior wall ≥ 2.5 m. Existing openings are kept — needs the plan width for windows.')}
+        >
+          ✨ {t('Suggest openings')}
+        </button>
         <span className="ga-hint">
           {t('0 = ground floor, negative = basement. Saved with the location.')}
         </span>
