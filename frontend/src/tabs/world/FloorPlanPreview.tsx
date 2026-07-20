@@ -747,6 +747,96 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       })
     }
 
+    // Room-shell walls (B5): per placed room, the four rectangle edges as
+    // wall segments split around the room's openings (NO CSG). Doors/passages
+    // leave a full-height gap; windows keep a sill wall + a header wall and
+    // fill the opening with a translucent glass pane between sill and
+    // sill+height. Wall height = the derived storey height (lhEff). Surfaces
+    // are only a colour hint here (no texture sampling — preview latitude);
+    // the client does the real texturing. Walls register in the camera-cull
+    // set so the near ones hide and the interior stays visible.
+    if (showWallsRef.current) {
+      const WALL_T = 0.07
+      const WALL_H = Math.max(0.6, lhEff - 0.15)
+      for (const room of current) {
+        const lay = room.layout
+        if (!lay) continue
+        const lv = lay.level || 0
+        const floorY = lv * lhEff
+        const x0 = (lay.x - 0.5) * PLATE_M
+        const x1 = (lay.x + lay.w - 0.5) * PLATE_M
+        const z0 = (lay.y - 0.5) * PLATE_M
+        const z1 = (lay.y + lay.d - 0.5) * PLATE_M
+        // Colour hint from the surfaces (B1): a warmer off-white when a wall
+        // kind is set, the neutral grey otherwise.
+        const wallColor = lay.surfaces?.wall ? 0xe8e0d0 : 0xcfc4b2
+        const wallMat = new THREE.MeshStandardMaterial({
+          color: wallColor, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.5,
+        })
+        const glassMat = new THREE.MeshStandardMaterial({
+          color: 0x9fc2d8, transparent: true, opacity: 0.25,
+        })
+        // edge letter → endpoints (a→b) + outward normal (away from interior).
+        const edges: Array<{ e: string; ax: number; az: number; bx: number
+          bz: number; nx: number; nz: number }> = [
+          { e: 'N', ax: x0, az: z0, bx: x1, bz: z0, nx: 0, nz: -1 },
+          { e: 'S', ax: x0, az: z1, bx: x1, bz: z1, nx: 0, nz: 1 },
+          { e: 'W', ax: x0, az: z0, bx: x0, bz: z1, nx: -1, nz: 0 },
+          { e: 'E', ax: x1, az: z0, bx: x1, bz: z1, nx: 1, nz: 0 },
+        ]
+        for (const ed of edges) {
+          const L = Math.hypot(ed.bx - ed.ax, ed.bz - ed.az)
+          if (L < 0.05) continue
+          const ux = (ed.bx - ed.ax) / L
+          const uz = (ed.bz - ed.az) / L
+          const yaw = -Math.atan2(ed.bz - ed.az, ed.bx - ed.ax)
+          const placeBox = (segStart: number, segLen: number, y: number,
+                            h: number, thick: number, mat: Material) => {
+            if (segLen < 0.02 || h < 0.02) return
+            const tc = segStart + segLen / 2
+            const mx = ed.ax + ux * tc
+            const mz = ed.az + uz * tc
+            const box = new THREE.Mesh(new THREE.BoxGeometry(segLen, h, thick), mat)
+            box.position.set(mx, floorY + 0.08 + y + h / 2, mz)
+            box.rotation.y = yaw
+            boxes.add(box)
+            // Register on the ground floor only (upper floors stay ghosted).
+            if (lv === 0) wallCullRef.current.push({ mesh: box, mx, mz, nx: ed.nx, nz: ed.nz })
+          }
+          // Openings on this edge → along-edge spans (metres × kFac → world).
+          const ops = (lay.openings || []).filter(
+            (o) => typeof o.edge === 'string' && o.edge === ed.e)
+          const spans = ops.map((o) => {
+            const halfW = Math.min((o.width_m * kFac) / 2, L / 2)
+            const c = Math.min(Math.max(o.at, 0), 1) * L
+            return { s0: Math.max(0, c - halfW), s1: Math.min(L, c + halfW), op: o }
+          }).sort((a, b) => a.s0 - b.s0)
+          // Full-height solid wall = [0, L] minus every opening span.
+          let solids: Array<[number, number]> = [[0, L]]
+          for (const sp of spans) {
+            const next: Array<[number, number]> = []
+            for (const [s0, s1] of solids) {
+              if (sp.s0 > s0) next.push([s0, Math.min(s1, sp.s0)])
+              if (sp.s1 < s1) next.push([Math.max(s0, sp.s1), s1])
+            }
+            solids = next.filter(([a, b]) => b - a > 0.02)
+          }
+          for (const [s0, s1] of solids) placeBox(s0, s1 - s0, 0, WALL_H, WALL_T, wallMat)
+          // Windows: sill wall + header wall + glass pane; doors/passages
+          // stay a full gap.
+          for (const sp of spans) {
+            if (sp.op.type !== 'window') continue
+            const segLen = sp.s1 - sp.s0
+            const sill = Math.min(sp.op.sill_m, WALL_H)
+            const top = Math.min(sp.op.sill_m + sp.op.height_m, WALL_H)
+            if (sill > 0.02) placeBox(sp.s0, segLen, 0, sill, WALL_T, wallMat)
+            if (WALL_H - top > 0.02) placeBox(sp.s0, segLen, top, WALL_H - top, WALL_T, wallMat)
+            if (top - sill > 0.02) placeBox(sp.s0, segLen, sill, top - sill, WALL_T * 0.6, glassMat)
+          }
+        }
+      }
+    }
+
     if (m3?.elevator) {
       // Elevator per the client's render recipe (schnittstellen →
       // "Render-Rezept Fahrstuhl"): all sizes are real metres × the figure
