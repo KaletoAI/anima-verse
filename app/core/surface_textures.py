@@ -445,6 +445,9 @@ SURFACE_SUBJECTS: Dict[str, str] = {
     # Indoor level-plate floor (the 3D client tiles storey plates with the
     # active "floor" texture; floor_source was withdrawn 2026-07-19).
     "floor": "smooth wooden plank flooring with natural grain and subtle wear",
+    # Interior wall surface for the room shell (plan-room-props.md): the
+    # client skins walls derived from the room geometry with this kind.
+    "wall": "smooth plastered interior wall with fine even texture, neutral warm off-white tone",
 }
 
 
