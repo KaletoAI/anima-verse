@@ -350,7 +350,10 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     it. A layout counts as set when x/y/w/d are all valid (fractions of the
     building footprint, top-left corner + size); ``level`` defaults to 0,
     ``rotation`` (degrees yaw) and ``exit`` ([x, y] as fractions of the ROOM
-    rectangle) are optional. Empty result means "unset" → client auto-grid.
+    rectangle) are optional. Optional too: ``markers`` (figure snap spots),
+    ``surfaces`` ({floor?, wall?} surface-texture kinds) and ``openings``
+    (doors / windows / passages, see _sanitize_opening). Empty result means
+    "unset" → client auto-grid.
     """
     if not isinstance(raw, dict):
         return {}
@@ -430,6 +433,88 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             markers.append(entry)
         if markers:
             out["markers"] = markers[:50]
+    # Room shell (plan-room-props.md): per-room surface kinds + openings. Both
+    # are deterministic + admin-edited (no LLM); the client derives walls from
+    # the rectangle/polygon edges × storey height and splits them around the
+    # openings.
+    surf = raw.get("surfaces")
+    if isinstance(surf, dict):
+        surfaces: Dict[str, str] = {}
+        for key in ("floor", "wall"):
+            val = surf.get(key)
+            if isinstance(val, str) and val.strip():
+                surfaces[key] = val.strip()
+        if surfaces:
+            out["surfaces"] = surfaces
+    ops = raw.get("openings")
+    if isinstance(ops, list):
+        openings = []
+        for op in ops:
+            clean = _sanitize_opening(op)
+            if clean:
+                openings.append(clean)
+        if openings:
+            out["openings"] = openings[:50]
+    return out
+
+
+def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
+    """Whitelist + coerce ONE wall opening (door / window / passage). Returns
+    None for an invalid entry so the caller can drop it individually.
+
+    - ``edge``: 'N'|'S'|'E'|'W' (rectangle) OR an int >= 0 (polygon edge index),
+    - ``at``: 0..1 along the edge (centre of the opening),
+    - ``width_m`` / ``height_m``: 0.4..10 m,
+    - ``sill_m``: 0..3 m (door = 0, window ≈ 0.9), default 0,
+    - ``type``: 'door' | 'window' | 'passage',
+    - ``to`` (optional str): connectivity target (room id or 'outside'),
+    - ``prop_id`` (optional str): a frame/leaf prop scaled onto the opening.
+    """
+    if not isinstance(raw, dict):
+        return None
+    edge = raw.get("edge")
+    edge_val: Any = None
+    if isinstance(edge, str) and edge.strip().upper() in ("N", "S", "E", "W"):
+        edge_val = edge.strip().upper()
+    else:
+        try:
+            ei = int(edge)
+        except (TypeError, ValueError):
+            return None
+        if ei < 0:
+            return None
+        edge_val = ei
+    typ = str(raw.get("type") or "").strip().lower()
+    if typ not in ("door", "window", "passage"):
+        return None
+    try:
+        at = float(raw.get("at"))
+        width_m = float(raw.get("width_m"))
+        height_m = float(raw.get("height_m"))
+    except (TypeError, ValueError):
+        return None
+    if not (0.4 <= width_m <= 10.0 and 0.4 <= height_m <= 10.0):
+        return None
+    sill = raw.get("sill_m", 0)
+    try:
+        sill_m = float(sill) if sill is not None and f"{sill}".strip() != "" else 0.0
+    except (TypeError, ValueError):
+        sill_m = 0.0
+    sill_m = min(max(sill_m, 0.0), 3.0)
+    out: Dict[str, Any] = {
+        "edge": edge_val,
+        "at": round(min(max(at, 0.0), 1.0), 4),
+        "width_m": round(width_m, 3),
+        "height_m": round(height_m, 3),
+        "sill_m": round(sill_m, 3),
+        "type": typ,
+    }
+    to = raw.get("to")
+    if isinstance(to, str) and to.strip():
+        out["to"] = to.strip()
+    prop_id = raw.get("prop_id")
+    if isinstance(prop_id, str) and prop_id.strip():
+        out["prop_id"] = prop_id.strip()
     return out
 
 

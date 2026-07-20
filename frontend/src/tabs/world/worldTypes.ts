@@ -20,6 +20,29 @@ export interface RoomLayout {
    *  offset_y = metres, additive to the sampled seat height. */
   markers?: Array<{ at: [number, number]; animation: string
     rotation?: number; offset_y?: number }>
+  /** Room shell (plan-room-props.md): per-room surface-texture kinds. The
+   *  client derives walls/floor from the geometry × storey height and skins
+   *  them with these kinds (fallback: global 'floor' kind / client default). */
+  surfaces?: { floor?: string; wall?: string }
+  /** Wall openings — doors / windows / passages. Deterministic + admin-edited;
+   *  the client splits the wall edge into segments around them (no CSG). */
+  openings?: RoomOpening[]
+}
+
+export interface RoomOpening {
+  /** 'N'|'S'|'E'|'W' on a rectangle, or a polygon edge index (int >= 0). */
+  edge: 'N' | 'S' | 'E' | 'W' | number
+  /** Centre of the opening along the edge (0..1). */
+  at: number
+  width_m: number
+  height_m: number
+  /** Sill height in metres — door = 0, window ≈ 0.9. */
+  sill_m: number
+  type: 'door' | 'window' | 'passage'
+  /** Connectivity target: room id or 'outside' (door/passage). */
+  to?: string
+  /** Optional frame/leaf prop scaled onto the opening. */
+  prop_id?: string
 }
 
 export interface Room {
