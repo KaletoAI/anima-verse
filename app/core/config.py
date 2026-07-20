@@ -266,6 +266,25 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Write a short natural-language description of the single item only, isolated on a plain background. No people, no scene.",
         },
     },
+    # Prop source image (plan-room-props.md): the product-shot render feeding
+    # the img2mesh pass for a single furnishing object (chair, table, plant …).
+    # Mesh-input rules like "item"/"tpose" — ISOLATED on a plain neutral ground
+    # with a generous margin, flat even light (scene/shadows/perspective bake
+    # into the mesh and confuse the object mesher). Flux lesson: everything
+    # positive, no negation keywords in the style; the negative stays for CFG
+    # backends (SD/Z-Image) which alone use it effectively.
+    "prop": {
+        "keywords": {
+            "prompt_style": "single object, isolated, centered, plain light gray background, product photography, soft studio lighting, full view, no scene",
+            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark",
+            "prompt_instruction": "Write comma-separated keywords for the single object only, isolated on a plain light gray background. No people, no scene.",
+        },
+        "natural": {
+            "prompt_style": "a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
+            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark",
+            "prompt_instruction": "Describe the single object only, isolated on a plain light gray background. No people, no scene.",
+        },
+    },
     "character": {
         "keywords": {
             "prompt_style": "RAW photo, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail",

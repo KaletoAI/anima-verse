@@ -25,6 +25,7 @@ frame is the object instead of the room rectangle.
 
 import hashlib
 import json
+import random
 import re
 import shutil
 import threading
@@ -395,3 +396,174 @@ def is_pending(prop_id: str = "") -> List[str]:
     if not prop_id:
         return ids
     return [prop_id] if prop_id in ids else []
+
+
+# ── Generation chain: prompt → txt2img source.png → img2mesh GLB ─────────
+# The interior counterpart of location_model3d for single objects. Two GPU
+# steps, both on the backend queue channel like every render: a txt2img
+# product-shot render (use case ``prop``) becomes source.png, then
+# ``service.generate_mesh(rig="none")`` turns it into model.glb (NEVER a
+# mesh-backend fallback — the existing rule). Runs on a worker thread with the
+# per-job double-start guard (prop_id|mesh backend).
+
+def compose_prompt(subject: str, backend) -> Dict[str, str]:
+    """Final source-render prompt + negative for a prop on a backend — the
+    ``prop`` use-case style (per image family) plus the object subject
+    (usually the prop name). The dialog shows exactly this and may edit it
+    (final-prompt rule); ``style`` is returned separately so the UI can
+    recompose it per object."""
+    from app.core import config as _cfg
+    ucp = _cfg.resolve_use_case_style(
+        "prop",
+        backend_model=getattr(backend, "model", "") or "",
+        backend_family=getattr(backend, "image_family", ""))
+    subject = (subject or "").strip() or "a single object"
+    style = (ucp.get("prompt_style") or "").strip()
+    return {
+        "style": style,
+        "prompt": f"{style}, {subject}" if style else subject,
+        "negative": ucp.get("prompt_negative", ""),
+    }
+
+
+def _render_source(prop_id: str, backend_glob: str,
+                   prompt: str, negative: str) -> bool:
+    """txt2img render of the product shot → source.png. Runs the GPU job on
+    the backend queue channel (like every render). Records the image backend
+    + final prompt on the sidecar. Returns True on success."""
+    from app.imagegen.service import get_image_service
+    svc = get_image_service()
+    backend = None
+    if backend_glob.strip():
+        backend = svc.resolve_imagegen_target(backend_glob)
+    if not backend:
+        backend = svc._select_backend()
+    if not backend:
+        logger.warning("Prop %s: no image backend available", prop_id)
+        return False
+
+    if not prompt.strip():
+        composed = compose_prompt(read_sidecar(prop_id).get("name", ""), backend)
+        prompt = composed["prompt"]
+        if not negative.strip():
+            negative = composed["negative"]
+
+    params: Dict[str, Any] = {
+        "width": 1024, "height": 1024,
+        "seed": random.randint(1, 2**31 - 1),
+    }
+    from app.core.llm_queue import get_llm_queue, Priority
+    images = get_llm_queue().submit_gpu_task(
+        provider_name=backend.name,
+        task_type="prop_source",
+        priority=Priority.IMAGE_GEN,
+        callable_fn=lambda: backend.generate(prompt, negative, params),
+        agent_name="system",
+        label=f"Prop source: {prop_id}",
+        gpu_type=backend.api_type)
+    if not images:
+        logger.warning("Prop %s: empty source render", prop_id)
+        return False
+
+    import io
+    from PIL import Image
+    img = Image.open(io.BytesIO(images[0])).convert("RGB")
+    if max(img.size) > 1024:
+        img.thumbnail((1024, 1024))
+    d = _prop_dir(prop_id, create=True)
+    img.save(d / SOURCE_NAME, "PNG")
+    meta = read_sidecar(prop_id)
+    meta["backend_image"] = backend.name
+    meta["prompt"] = prompt
+    meta["negative"] = negative
+    _write_sidecar(prop_id, meta)
+    return True
+
+
+def _generate(prop_id: str, prompt: str, negative: str,
+              image_backend_glob: str, mesh_backend_glob: str) -> Dict[str, Any]:
+    """Blocking chain on a worker thread — source render then img2mesh. ONE
+    tracked header task wraps the whole chain (the actual GPU jobs show in the
+    queue panel via their channel entries)."""
+    from app.core.task_queue import get_task_queue
+    name = read_sidecar(prop_id).get("name") or prop_id
+    task_id = ""
+    try:
+        task_id = get_task_queue().track_start(
+            "model3d_generation", f"Prop: {name}", start_running=True)
+    except Exception:
+        task_id = ""
+
+    error = ""
+    try:
+        if not _render_source(prop_id, image_backend_glob, prompt, negative):
+            error = "source render failed"
+            return {"ok": False, "error": error}
+        src = source_path(prop_id)
+        if not src:
+            error = "source image missing"
+            return {"ok": False, "error": error}
+
+        from app.imagegen.service import get_image_service
+        d = _prop_dir(prop_id, create=True)
+        res = get_image_service().generate_mesh(
+            source_image_path=str(src),
+            output_path=str(d / MODEL_NAME),
+            backend_glob=mesh_backend_glob,
+            mesh_name=prop_id,
+            rig="none")
+        if not res.get("ok"):
+            error = str(res.get("error") or "mesh generation failed")
+            logger.error("Prop %s mesh failed: %s", prop_id, error)
+            return {"ok": False, "error": error}
+
+        # rig="none" always yields a GLB (buildings/props contract), so the
+        # output stays model.glb; the rename is a safety net if the sniffed
+        # suffix ever differed (our serving expects exactly model.glb).
+        path = Path(res["path"])
+        target = d / MODEL_NAME
+        if path != target and path.exists():
+            path.replace(target)
+
+        meta = read_sidecar(prop_id)
+        meta["source"] = "generated"
+        meta["backend"] = res.get("backend", "") or meta.get("backend", "")
+        _write_sidecar(prop_id, meta)
+        logger.info("Prop %s: model generated (backend %s)",
+                    prop_id, meta.get("backend", ""))
+        return {"ok": True}
+    finally:
+        if task_id:
+            try:
+                get_task_queue().track_finish(task_id, error=error)
+            except Exception:
+                pass
+
+
+def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
+                       image_backend_glob: str = "",
+                       mesh_backend_glob: str = "") -> bool:
+    """Start the source→mesh chain in the background. Different mesh backends
+    for the same prop run concurrently (each queues on its own GPU channel);
+    False only while THIS prop+backend combination is already generating
+    (double-click guard), or when the prop does not exist."""
+    pid = safe_prop_id(prop_id)
+    if not pid or not read_sidecar(pid):
+        return False
+    key = _gen_key(pid, mesh_backend_glob)
+    with _lock:
+        if key in _generating:
+            return False
+        _generating.add(key)
+
+    def _run() -> None:
+        try:
+            _generate(pid, prompt, negative, image_backend_glob, mesh_backend_glob)
+        except Exception as e:
+            logger.error("Prop generation for %s failed: %s", pid, e)
+        finally:
+            with _lock:
+                _generating.discard(key)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True

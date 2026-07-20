@@ -760,9 +760,51 @@ _PROP_MODEL_MAX_BYTES = 100 * 1024 * 1024
 
 @router.get("/props")
 def props_admin() -> Dict[str, Any]:
-    """Admin listing: all props (full sidecar detail) + running generations."""
-    from app.core.props import is_pending, list_props
-    return {"props": list_props(full=True), "pending": is_pending()}
+    """Admin listing: all props (full sidecar detail) + running generations +
+    the available backends. ``image_backends`` carry their resolved ``prop``
+    use-case style so the dialog can show and edit the COMPLETE final source
+    prompt (final-prompt rule); ``mesh_backends`` are the rig-'none' img2mesh
+    aliases."""
+    from app.core.props import compose_prompt, is_pending, list_props
+    from app.core.model3d import list_mesh_backends
+    from app.imagegen.service import get_image_service
+    svc = get_image_service()
+    image_backends = []
+    try:
+        for b in svc.list_available_backends(media="image"):
+            style = compose_prompt("", b)
+            image_backends.append({"name": b.name,
+                                   "prompt_style": style["style"],
+                                   "prompt_negative": style["negative"]})
+    except Exception:
+        pass
+    return {"props": list_props(full=True), "pending": is_pending(),
+            "image_backends": image_backends,
+            "mesh_backends": list_mesh_backends("none").get("backends", [])}
+
+
+@router.post("/props/generate")
+async def prop_generate(request: Request) -> Dict[str, Any]:
+    """Create a prop from a prompt and kick off the source→mesh chain (body:
+    {name, category?, size_m?, prompt?, negative?, image_backend?,
+    mesh_backend?}). Background job — poll /world/props for pending."""
+    from app.core.props import create_prop, trigger_generation
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    prop = create_prop(name=name, category=str(data.get("category") or ""),
+                       size_m=data.get("size_m", 1.0),
+                       prompt=str(data.get("prompt") or ""),
+                       source="generated")
+    trigger_generation(prop["id"],
+                        prompt=str(data.get("prompt") or ""),
+                        negative=str(data.get("negative") or ""),
+                        image_backend_glob=str(data.get("image_backend") or "").strip(),
+                        mesh_backend_glob=str(data.get("mesh_backend") or "").strip())
+    return {"status": "generating", "prop": prop}
 
 
 @router.post("/props")
