@@ -12,7 +12,13 @@ Storage: ``worlds/<world>/props/<prop_id>/``:
     model.glb     — the mesh (unrigged GLB, embedded texture)
     source.png    — the product-shot render the mesh was made from
     sidecar.json  — {name, category, size_m, rotation{x,y,z}, tags[],
-                     markers[], created_at, source, backend, prompt}
+                     markers[], bbox[3], created_at, source, backend, prompt}
+
+``bbox`` = ``[bx, by, bz]``, the AABB edge lengths of model.glb in MESH units
+on the RAW mesh axes (before the orientation fix), rounded to 5 decimals. It
+is measured once when the model arrives (generation or upload) and lazily
+backfilled for older props on the first listing; it is what turns the one
+real-world size into proportional width/depth/height.
 
 ``prop_id`` = slug of the name + a short hash (stable, file-safe). ``size_m``
 is MANDATORY (> 0): the mesh normalization destroys the real scale (the
@@ -34,6 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
+from app.core.model_validate import glb_bounds
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
@@ -53,6 +60,10 @@ _lock = threading.Lock()
 # serializes on its own GPU channel); only the same prop+backend double-click
 # is rejected.
 _generating: set = set()
+# Models whose bbox extraction already failed, keyed by (prop_id, model mtime)
+# — keeps the lazy backfill from re-parsing an unmeasurable GLB on every
+# listing. A restart or a re-upload retries.
+_bbox_failed: set = set()
 
 
 # ── Directories / id helpers ────────────────────────────────────────────
@@ -319,7 +330,74 @@ def save_uploaded_glb(prop_id: str, contents: bytes) -> bool:
         return False
     (d / MODEL_NAME).write_bytes(contents)
     logger.info("Prop %s: model uploaded (%d bytes)", safe_prop_id(prop_id), len(contents))
+    _store_bbox(prop_id)
     return True
+
+
+# ── Model bounding box ──────────────────────────────────────────────────
+
+def _extract_bbox(prop_id: str) -> Optional[List[float]]:
+    """Edge lengths ``[bx, by, bz]`` of the model's AABB in MESH units on the
+    RAW mesh axes (no orientation fix applied), round 5 — None when the model
+    is missing, unreadable or degenerate (a zero-volume box carries no
+    proportions)."""
+    mp = model_path(prop_id)
+    if not mp:
+        return None
+    try:
+        bounds = glb_bounds(mp.read_bytes())
+    except OSError:
+        return None
+    if not bounds:
+        return None
+    lo, hi = bounds
+    sizes = [round(hi[i] - lo[i], 5) for i in range(3)]
+    return sizes if max(sizes) > 0 else None
+
+
+def _store_bbox(prop_id: str) -> None:
+    """Measure the model and persist ``bbox`` on the sidecar (one
+    read-modify-write). A failed measurement leaves the sidecar untouched."""
+    bbox = _extract_bbox(prop_id)
+    if not bbox:
+        return
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return
+    meta["bbox"] = bbox
+    try:
+        _write_sidecar(pid, meta)
+    except (OSError, ValueError):
+        pass
+
+
+def _ensure_bbox(prop_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Lazy backfill for props whose model predates the ``bbox`` field: measure
+    once on the first read, persist it, and remember failures per model mtime
+    so an unmeasurable GLB is not re-parsed on every listing. Returns the
+    (possibly updated) meta."""
+    if meta.get("bbox") or not meta:
+        return meta
+    mp = model_path(prop_id)
+    if not mp:
+        return meta
+    try:
+        key = (safe_prop_id(prop_id), mp.stat().st_mtime_ns)
+    except OSError:
+        return meta
+    if key in _bbox_failed:
+        return meta
+    bbox = _extract_bbox(prop_id)
+    if not bbox:
+        _bbox_failed.add(key)
+        return meta
+    meta["bbox"] = bbox
+    try:
+        _write_sidecar(prop_id, meta)
+    except (OSError, ValueError):
+        pass
+    return meta
 
 
 # ── Listing ─────────────────────────────────────────────────────────────
@@ -336,6 +414,7 @@ def _all_prop_ids() -> List[str]:
 
 
 def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
+    meta = _ensure_bbox(prop_id, meta)
     has_model = model_path(prop_id) is not None
     rec: Dict[str, Any] = {
         "id": prop_id,
@@ -359,6 +438,8 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             "model_url": f"/assets/props/{prop_id}/model" if has_model else "",
             "source_url": f"/assets/props/{prop_id}/source" if has_source else "",
         })
+        if meta.get("bbox"):
+            rec["bbox"] = meta["bbox"]
     return rec
 
 
@@ -528,6 +609,9 @@ def _generate(prop_id: str, prompt: str, negative: str,
         meta = read_sidecar(prop_id)
         meta["source"] = "generated"
         meta["backend"] = res.get("backend", "") or meta.get("backend", "")
+        bbox = _extract_bbox(prop_id)
+        if bbox:
+            meta["bbox"] = bbox
         _write_sidecar(prop_id, meta)
         logger.info("Prop %s: model generated (backend %s)",
                     prop_id, meta.get("backend", ""))

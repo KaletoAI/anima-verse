@@ -16,8 +16,9 @@ Pure stdlib: a GLB is a 12-byte header + a JSON chunk + a BIN chunk, so the
 structure can be read without a glTF library.
 """
 import json
+import math
 import struct
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.log import get_logger
 
@@ -27,6 +28,9 @@ MIXAMO_JOINT_COUNT = 52
 # A texture this small is never real content — it is the known "empty texture"
 # artefact of a failed bake.
 MIN_TEXTURE_DIM = 8
+# Above this many vertices a primitive is sampled instead of read completely —
+# proportions do not get better from the last 100k points.
+MAX_POSITION_SAMPLES = 200_000
 
 
 def _png_size(data: bytes) -> Optional[Tuple[int, int]]:
@@ -59,7 +63,12 @@ def _image_size(data: bytes) -> Optional[Tuple[int, int]]:
 
 
 def parse_glb(data: bytes) -> Dict[str, Any]:
-    """Reads the glTF JSON + embedded image sizes out of a GLB container."""
+    """Reads the glTF JSON + embedded image sizes out of a GLB container.
+
+    Returns ``{gltf, images, joints, joint_count, bin}`` — ``bin`` is the raw
+    BIN chunk (needed to decode geometry, see ``glb_bounds``); callers index
+    by key, so the extra entry changes nothing for them.
+    """
     if len(data) < 20 or data[:4] != b"glTF":
         raise ValueError("not a GLB file (magic missing)")
     _magic, version, _length = struct.unpack("<III", data[:12])
@@ -105,7 +114,165 @@ def parse_glb(data: bytes) -> Dict[str, Any]:
             if 0 <= j < len(nodes):
                 joints.append(str(nodes[j].get("name", "")))
     return {"gltf": gltf, "images": images, "joints": joints,
-            "joint_count": len(joints)}
+            "joint_count": len(joints), "bin": bin_chunk}
+
+
+# ── Geometry: raw-axis bounding box ─────────────────────────────────────
+# Only the glTF node tree + POSITION accessors are needed, so this stays in
+# the same dependency-free style as the validators above.
+
+
+def _mat_identity() -> List[List[float]]:
+    return [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+
+
+def _mat_mul(a: List[List[float]], b: List[List[float]]) -> List[List[float]]:
+    return [[sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)]
+            for i in range(4)]
+
+
+def _node_matrix(node: Dict[str, Any]) -> List[List[float]]:
+    """Local transform of a glTF node as a row-major 4x4 — either its explicit
+    ``matrix`` (16 floats, COLUMN-major per spec) or T·R·S from the separate
+    translation / rotation (quaternion xyzw) / scale fields."""
+    m = node.get("matrix")
+    if isinstance(m, (list, tuple)) and len(m) == 16:
+        return [[float(m[c * 4 + r]) for c in range(4)] for r in range(4)]
+    t = node.get("translation") or [0.0, 0.0, 0.0]
+    q = node.get("rotation") or [0.0, 0.0, 0.0, 1.0]
+    s = node.get("scale") or [1.0, 1.0, 1.0]
+    x, y, z, w = (float(q[0]), float(q[1]), float(q[2]), float(q[3]))
+    rot = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+           [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+           [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+    sc = [float(s[0]), float(s[1]), float(s[2])]
+    tr = [float(t[0]), float(t[1]), float(t[2])]
+    return [[rot[r][0] * sc[0], rot[r][1] * sc[1], rot[r][2] * sc[2], tr[r]]
+            for r in range(3)] + [[0.0, 0.0, 0.0, 1.0]]
+
+
+def _mat_apply(m: List[List[float]], p: Sequence[float]) -> Tuple[float, float, float]:
+    x, y, z = float(p[0]), float(p[1]), float(p[2])
+    return (m[0][0] * x + m[0][1] * y + m[0][2] * z + m[0][3],
+            m[1][0] * x + m[1][1] * y + m[1][2] * z + m[1][3],
+            m[2][0] * x + m[2][1] * y + m[2][2] * z + m[2][3])
+
+
+def _accessor_corners(acc: Dict[str, Any]) -> Optional[List[Tuple[float, float, float]]]:
+    """The 8 corners of an accessor's declared min/max box (the glTF spec
+    requires both on POSITION accessors, sparse and Draco included)."""
+    mn, mx = acc.get("min"), acc.get("max")
+    if not (isinstance(mn, (list, tuple)) and isinstance(mx, (list, tuple))):
+        return None
+    if len(mn) < 3 or len(mx) < 3:
+        return None
+    return [(float(a[0]), float(b[1]), float(c[2]))
+            for a in (mn, mx) for b in (mn, mx) for c in (mn, mx)]
+
+
+def _accessor_positions(acc: Dict[str, Any], views: List[Dict[str, Any]],
+                        bin_chunk: bytes) -> List[Tuple[float, float, float]]:
+    """Raw FLOAT/VEC3 positions of an accessor out of the GLB's BIN chunk —
+    the fallback for the (spec-violating) accessors without min/max. Sparse
+    and Draco-compressed accessors cannot be read this way and yield []."""
+    if acc.get("sparse") is not None:
+        return []
+    if acc.get("componentType") != 5126 or acc.get("type") != "VEC3":
+        return []
+    bv_idx = acc.get("bufferView")
+    if not isinstance(bv_idx, int) or not (0 <= bv_idx < len(views)):
+        return []
+    bv = views[bv_idx]
+    if int(bv.get("buffer", 0)) != 0:
+        # Only buffer 0 is the embedded BIN chunk; an external buffer is a
+        # file we do not have.
+        return []
+    stride = int(bv.get("byteStride") or 12)
+    if stride < 12:
+        return []
+    base = int(bv.get("byteOffset", 0)) + int(acc.get("byteOffset", 0))
+    count = int(acc.get("count") or 0)
+    if count <= 0 or base < 0:
+        return []
+    step = 1 if count <= MAX_POSITION_SAMPLES else math.ceil(count / MAX_POSITION_SAMPLES)
+    out: List[Tuple[float, float, float]] = []
+    for i in range(0, count, step):
+        off = base + i * stride
+        if off < 0 or off + 12 > len(bin_chunk):
+            break
+        out.append(struct.unpack_from("<fff", bin_chunk, off))
+    return out
+
+
+def glb_bounds(data: bytes) -> Optional[Tuple[List[float], List[float]]]:
+    """Raw-axis AABB (min, max) of all rendered POSITION data in a GLB —
+    node transforms applied; None when nothing is measurable.
+
+    "Raw-axis" means the MESH axes as they come out of the file: no
+    orientation fix, no normalization. Callers turn (max - min) into the
+    ``bbox`` edge lengths that the prop dims are derived from
+    (``app/core/props.py``). Never raises — an unreadable or exotic file
+    (Draco-only geometry, external buffers) simply yields None.
+    """
+    try:
+        info = parse_glb(data)
+        gltf: Dict[str, Any] = info["gltf"]
+        bin_chunk: bytes = info.get("bin") or b""
+        nodes = gltf.get("nodes") or []
+        meshes = gltf.get("meshes") or []
+        accessors = gltf.get("accessors") or []
+        views = gltf.get("bufferViews") or []
+        scenes = gltf.get("scenes") or []
+
+        roots: List[Any] = []
+        scene_idx = gltf.get("scene", 0)
+        if scenes:
+            if isinstance(scene_idx, int) and 0 <= scene_idx < len(scenes):
+                roots = list(scenes[scene_idx].get("nodes") or [])
+            else:
+                for sc in scenes:
+                    roots.extend(sc.get("nodes") or [])
+        if not roots:
+            roots = list(range(len(nodes)))
+
+        lo = [math.inf] * 3
+        hi = [-math.inf] * 3
+        # (node index, world matrix of the PARENT, ancestor chain) — the chain
+        # guards against a cyclic node graph.
+        stack: List[Tuple[Any, List[List[float]], Tuple[int, ...]]] = [
+            (i, _mat_identity(), ()) for i in roots]
+        while stack:
+            idx, parent, chain = stack.pop()
+            if not isinstance(idx, int) or not (0 <= idx < len(nodes)) or idx in chain:
+                continue
+            node = nodes[idx]
+            world = _mat_mul(parent, _node_matrix(node))
+            mesh_idx = node.get("mesh")
+            if isinstance(mesh_idx, int) and 0 <= mesh_idx < len(meshes):
+                for prim in (meshes[mesh_idx].get("primitives") or []):
+                    acc_idx = (prim.get("attributes") or {}).get("POSITION")
+                    if not isinstance(acc_idx, int) or not (0 <= acc_idx < len(accessors)):
+                        continue
+                    acc = accessors[acc_idx]
+                    pts = _accessor_corners(acc)
+                    if pts is None:
+                        pts = _accessor_positions(acc, views, bin_chunk)
+                    for p in pts:
+                        wp = _mat_apply(world, p)
+                        for k in range(3):
+                            if wp[k] < lo[k]:
+                                lo[k] = wp[k]
+                            if wp[k] > hi[k]:
+                                hi[k] = wp[k]
+            for child in (node.get("children") or []):
+                stack.append((child, world, chain + (idx,)))
+    except (ValueError, KeyError, IndexError, TypeError, struct.error,
+            json.JSONDecodeError):
+        return None
+    if any(not math.isfinite(v) for v in lo + hi):
+        return None
+    return (lo, hi)
 
 
 def _check_embedded_textures(info: Dict[str, Any], subject: str,
