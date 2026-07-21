@@ -171,3 +171,140 @@ export function exteriorEdges(a: PolyRoom, others: PolyRoom[], planW: number): n
   const n = outlineOf(a).length
   return Array.from({ length: n }, (_, i) => i).filter((i) => !shared.has(i))
 }
+
+// ── Snapping engine (drawing aid) ──
+// Always on while drawing; the caller passes alt=true (Alt held) for
+// free-hand. Priorities: close the polygon on its first vertex > snap to an
+// existing vertex (closing small gaps beats everything) > the 45°-angle ray
+// intersected with a target edge (right angles that also land on a wall) >
+// plain edge projection > plain angle ray > free. All coordinates are plan
+// fractions; tolerances are passed in plan fractions too (the caller derives
+// them from pixels and metres).
+export const SNAP_TOL_PX = 10
+export const CLOSE_TOL_PX = 14
+
+export interface SnapTargets { points: Pt[]; segments: Array<{ a: Pt; b: Pt }> }
+
+/** Snap targets for a drawing session: the hulls of the placed rooms on the
+ *  level, optionally the building outline (NOT when it is the thing being
+ *  redrawn), plus loose extra points (the draft's own vertices). */
+export function buildSnapTargets(hulls: PolyRoom[], opts?: {
+  buildingOutline?: Pt[]; extraPoints?: Pt[] }): SnapTargets {
+  const points: Pt[] = []
+  const segments: Array<{ a: Pt; b: Pt }> = []
+  const addPoly = (pts: Pt[]) => {
+    for (let i = 0; i < pts.length; i++) {
+      points.push(pts[i])
+      segments.push({ a: pts[i], b: pts[(i + 1) % pts.length] })
+    }
+  }
+  for (const h of hulls) addPoly(absOutline(h))
+  const bo = opts?.buildingOutline
+  if (bo && bo.length >= 3) addPoly(bo)
+  for (const p of opts?.extraPoints || []) points.push(p)
+  return { points, segments }
+}
+
+export interface SnapResult {
+  p: Pt
+  kind: 'free' | 'vertex' | 'edge' | 'angle' | 'angle+edge' | 'close'
+  /** Constraint ray to visualize for the angle kinds. */
+  guide?: { a: Pt; b: Pt }
+  /** Target segment being snapped onto (edge kinds). */
+  seg?: { a: Pt; b: Pt }
+}
+
+const _dist2 = (a: Pt, b: Pt) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+const _r4p = (p: Pt): Pt => [r4(p[0]), r4(p[1])]
+
+export function snapDrawPoint(raw: Pt, opts: {
+  prev?: Pt; prevDir?: Pt; first?: Pt; draftLen?: number
+  targets: SnapTargets; tol: number; closeTol: number; alt?: boolean
+}): SnapResult {
+  const p: Pt = [clamp(raw[0], 0, 1), clamp(raw[1], 0, 1)]
+  if (opts.alt) return { p: _r4p(p), kind: 'free' }
+  const { targets, tol, closeTol } = opts
+
+  // 1) Close the polygon on its first vertex.
+  if (opts.first && (opts.draftLen || 0) >= 3
+      && _dist2(p, opts.first) <= closeTol * closeTol)
+    return { p: opts.first, kind: 'close' }
+
+  // 2) Existing vertices — never the previous point itself (zero segments).
+  let bestV: Pt | null = null
+  let bestVD = tol * tol
+  for (const v of targets.points) {
+    if (opts.prev && _dist2(v, opts.prev) < 1e-12) continue
+    const d = _dist2(p, v)
+    if (d <= bestVD) {
+      bestVD = d
+      bestV = v
+    }
+  }
+  if (bestV) return { p: _r4p(bestV), kind: 'vertex' }
+
+  // The angle constraint: 45° raster relative to the previous segment's
+  // direction (first segment: the plan's X axis).
+  let dir: Pt | null = null
+  if (opts.prev) {
+    const ref = opts.prevDir && (opts.prevDir[0] || opts.prevDir[1])
+      ? Math.atan2(opts.prevDir[1], opts.prevDir[0]) : 0
+    const rawA = Math.atan2(p[1] - opts.prev[1], p[0] - opts.prev[0])
+    const snapA = ref + Math.round((rawA - ref) / (Math.PI / 4)) * (Math.PI / 4)
+    dir = [Math.cos(snapA), Math.sin(snapA)]
+  }
+
+  // 3) Constrained ray ∩ target edge — right angles that also close gaps.
+  if (opts.prev && dir) {
+    let bestX: { p: Pt; seg: { a: Pt; b: Pt } } | null = null
+    let bestXD = tol * tol
+    for (const s of targets.segments) {
+      const ex = s.b[0] - s.a[0]
+      const ey = s.b[1] - s.a[1]
+      const denom = dir[0] * ey - dir[1] * ex
+      if (Math.abs(denom) < 1e-9) continue
+      const qx = s.a[0] - opts.prev[0]
+      const qy = s.a[1] - opts.prev[1]
+      const t = (qx * ey - qy * ex) / denom
+      const u = (qx * dir[1] - qy * dir[0]) / denom
+      if (t <= 0 || u < -0.02 || u > 1.02) continue
+      const x: Pt = [opts.prev[0] + t * dir[0], opts.prev[1] + t * dir[1]]
+      const d = _dist2(p, x)
+      if (d <= bestXD) {
+        bestXD = d
+        bestX = { p: x, seg: s }
+      }
+    }
+    if (bestX)
+      return { p: _r4p(bestX.p), kind: 'angle+edge', seg: bestX.seg,
+        guide: { a: opts.prev, b: bestX.p } }
+  }
+
+  // 4) Plain edge projection of the raw point (gap closing without angle).
+  let bestE: { p: Pt; seg: { a: Pt; b: Pt } } | null = null
+  let bestED = tol * tol
+  for (const s of targets.segments) {
+    const ex = s.b[0] - s.a[0]
+    const ey = s.b[1] - s.a[1]
+    const len2 = ex * ex + ey * ey
+    if (len2 < 1e-12) continue
+    const u = clamp(((p[0] - s.a[0]) * ex + (p[1] - s.a[1]) * ey) / len2, 0, 1)
+    const x: Pt = [s.a[0] + ex * u, s.a[1] + ey * u]
+    const d = _dist2(p, x)
+    if (d <= bestED) {
+      bestED = d
+      bestE = { p: x, seg: s }
+    }
+  }
+  if (bestE) return { p: _r4p(bestE.p), kind: 'edge', seg: bestE.seg }
+
+  // 5) Plain angle projection onto the constrained ray.
+  if (opts.prev && dir) {
+    const dot = (p[0] - opts.prev[0]) * dir[0] + (p[1] - opts.prev[1]) * dir[1]
+    const x: Pt = [clamp(opts.prev[0] + dot * dir[0], 0, 1),
+                   clamp(opts.prev[1] + dot * dir[1], 0, 1)]
+    return { p: _r4p(x), kind: 'angle', guide: { a: opts.prev, b: x } }
+  }
+
+  return { p: _r4p(p), kind: 'free' }
+}

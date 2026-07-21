@@ -11,16 +11,16 @@
  * reads the layout from /world/locations; rooms without a layout fall back
  * to its auto-grid.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import {
-  MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
-  absOutline, clamp, edgePointOnEdge, edgeSegment, exteriorEdges,
-  nearestPolygonEdge, normalizeOpeningEdge, outlineOf, r4, rotateOpeningCW,
-  sharedEdges,
+  CLOSE_TOL_PX, MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
+  SNAP_TOL_PX, absOutline, buildSnapTargets, clamp, edgePointOnEdge,
+  edgeSegment, exteriorEdges, nearestPolygonEdge, normalizeOpeningEdge,
+  outlineOf, r4, rotateOpeningCW, sharedEdges, snapDrawPoint,
 } from './planGeometry'
-import type { EdgeLetter, PolyRoom } from './planGeometry'
+import type { EdgeLetter, PolyRoom, SnapResult } from './planGeometry'
 import { getBuildingDims, getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { Map3D, Room, RoomLayout, RoomOpening } from './worldTypes'
 
@@ -71,10 +71,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   const [openingSel, setOpeningSel] = useState<number | null>(null)
   const [markerKind, setMarkerKind] = useState('')
   // Building outline drawing (AV3D-12): points collected while in outline
-  // mode, committed to map3d.outline on finish (>= 3 points).
+  // mode, committed to map3d.outline on finish (>= 3 points; clicking the
+  // first vertex closes too).
   const [outlineDraft, setOutlineDraft] = useState<Array<[number, number]>>([])
-  // Cursor position while drawing the outline — feeds the rubber-band lines.
-  const [hoverPt, setHoverPt] = useState<[number, number] | null>(null)
+  // Snapped cursor while drawing — feeds the rubber band AND the snap
+  // feedback (guide ray, highlighted target, vertex ring).
+  const [hoverSnap, setHoverSnap] = useState<SnapResult | null>(null)
   // Selected marker (index into the selected room's markers) for the
   // per-marker controls: facing, height offset, remove.
   const [markerSel, setMarkerSel] = useState<number | null>(null)
@@ -193,6 +195,59 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     return () => { stale = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planW, rooms.length])
+
+  // Snapping while drawing (always on, Alt = free-hand): targets are the
+  // hulls of the placed rooms on the current level plus the draft's own
+  // vertices; tolerances blend a pixel radius with a 0.15 m floor.
+  const snapTargets = useMemo(() => {
+    if (clickMode !== 'outline') return null
+    const hulls: PolyRoom[] = rooms
+      .filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
+      .map((r) => ({ id: r.id!, x: r.layout!.x, y: r.layout!.y,
+        w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline }))
+    return buildSnapTargets(hulls, { extraPoints: outlineDraft })
+  }, [clickMode, rooms, level, outlineDraft])
+
+  const computeSnap = useCallback((clientX: number, clientY: number,
+      alt: boolean): SnapResult => {
+    const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
+    const raw: [number, number] = [(clientX - rect.left) / rect.width,
+                                   (clientY - rect.top) / rect.height]
+    const planWEff = planW || 8
+    const tol = Math.min(0.05, Math.max(SNAP_TOL_PX / CANVAS_W, 0.15 / planWEff))
+    const prev = outlineDraft.length ? outlineDraft[outlineDraft.length - 1] : undefined
+    const prev2 = outlineDraft.length >= 2 ? outlineDraft[outlineDraft.length - 2] : undefined
+    return snapDrawPoint(raw, {
+      prev,
+      prevDir: prev && prev2 ? [prev[0] - prev2[0], prev[1] - prev2[1]] : undefined,
+      first: outlineDraft[0],
+      draftLen: outlineDraft.length,
+      targets: snapTargets || { points: [], segments: [] },
+      tol,
+      closeTol: CLOSE_TOL_PX / CANVAS_W,
+      alt,
+    })
+  }, [outlineDraft, snapTargets, planW])
+
+  const commitOutline = useCallback(() => {
+    if (outlineDraft.length < 3) return
+    onMap3d?.('outline', outlineDraft)
+    setOutlineDraft([])
+    setHoverSnap(null)
+    setClickMode('')
+  }, [outlineDraft, onMap3d])
+
+  // Esc cancels any armed mode and the current draft.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setClickMode('')
+      setOutlineDraft([])
+      setHoverSnap(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const derivedSize = useCallback((roomId: string):
       { w: number; d: number } | null => {
@@ -525,24 +580,29 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         onClick={() => { if (!clickMode) setSelected('') }}
         onPointerMove={(e) => {
           if (clickMode !== 'outline') return
-          const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
-          setHoverPt([r4(clamp((e.clientX - rect.left) / rect.width, 0, 1)),
-                      r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))])
+          setHoverSnap(computeSnap(e.clientX, e.clientY, e.altKey))
         }}
-        onPointerLeave={() => setHoverPt(null)}
+        onPointerLeave={() => setHoverSnap(null)}
         onClickCapture={(e) => {
           // Building-level placement (outline points / elevator) applies at
           // CANVAS coordinates, also when the click lands inside a room —
           // capture phase keeps the room handlers out of the way.
           if (clickMode !== 'outline' && clickMode !== 'elevator') return
           e.stopPropagation()
-          const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
-          const px = r4(clamp((e.clientX - rect.left) / rect.width, 0, 1))
-          const py = r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))
           if (clickMode === 'outline') {
-            setOutlineDraft((prev) => [...prev, [px, py]])
+            // Clicks go through the snap engine (Alt = free-hand); landing on
+            // the first vertex closes the polygon.
+            const res = computeSnap(e.clientX, e.clientY, e.altKey)
+            if (res.kind === 'close') {
+              commitOutline()
+            } else {
+              setOutlineDraft((prev) => [...prev, res.p])
+            }
           } else {
-            onMap3d?.('elevator', [px, py])
+            const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
+            onMap3d?.('elevator', [
+              r4(clamp((e.clientX - rect.left) / rect.width, 0, 1)),
+              r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))])
             setClickMode('')
           }
         }}
@@ -563,20 +623,21 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                 fill="none" stroke="#e0a356" strokeWidth={0.6} strokeDasharray="2 1.4"
               />
             ) : null}
-            {/* Rubber band: the running segment follows the cursor, and the
-                closing line back to the start point is always visible. */}
+            {/* Rubber band: the running segment ends at the SNAPPED cursor,
+                and the closing line back to the start point is always
+                visible. */}
             {clickMode === 'outline' && outlineDraft.length ? (() => {
               const first = outlineDraft[0]
               const last = outlineDraft[outlineDraft.length - 1]
-              const cur = hoverPt || last
+              const cur = hoverSnap?.p || last
               return (
                 <>
-                  {hoverPt ? (
+                  {hoverSnap ? (
                     <line x1={last[0] * 100} y1={last[1] * 100}
-                      x2={hoverPt[0] * 100} y2={hoverPt[1] * 100}
+                      x2={hoverSnap.p[0] * 100} y2={hoverSnap.p[1] * 100}
                       stroke="#e0a356" strokeWidth={0.6} />
                   ) : null}
-                  {(outlineDraft.length >= 2 || hoverPt) ? (
+                  {(outlineDraft.length >= 2 || hoverSnap) ? (
                     <line x1={cur[0] * 100} y1={cur[1] * 100}
                       x2={first[0] * 100} y2={first[1] * 100}
                       stroke="#e0a356" strokeWidth={0.45}
@@ -585,6 +646,29 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                 </>
               )
             })() : null}
+            {/* Snap feedback: guide ray (angle), highlighted target segment
+                (edge), ring on the snapped vertex; closing rings the first
+                vertex. */}
+            {clickMode === 'outline' && hoverSnap ? (
+              <>
+                {hoverSnap.guide ? (
+                  <line x1={hoverSnap.guide.a[0] * 100} y1={hoverSnap.guide.a[1] * 100}
+                    x2={hoverSnap.guide.b[0] * 100} y2={hoverSnap.guide.b[1] * 100}
+                    stroke="#58a6ff" strokeWidth={0.35}
+                    strokeDasharray="1 1" opacity={0.8} />
+                ) : null}
+                {hoverSnap.seg ? (
+                  <line x1={hoverSnap.seg.a[0] * 100} y1={hoverSnap.seg.a[1] * 100}
+                    x2={hoverSnap.seg.b[0] * 100} y2={hoverSnap.seg.b[1] * 100}
+                    stroke="#58a6ff" strokeWidth={0.9} opacity={0.9} />
+                ) : null}
+                {hoverSnap.kind === 'vertex' || hoverSnap.kind === 'close' ? (
+                  <circle cx={hoverSnap.p[0] * 100} cy={hoverSnap.p[1] * 100}
+                    r={hoverSnap.kind === 'close' ? 2.2 : 1.6} fill="none"
+                    stroke="#58a6ff" strokeWidth={0.5} />
+                ) : null}
+              </>
+            ) : null}
             {outlineDraft.map(([x, y], i) => (
               <circle key={i} cx={x * 100} cy={y * 100} r={1.1} fill="#e0a356" />
             ))}
@@ -866,20 +950,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   type="button"
                   className="ga-btn ga-btn-sm ga-btn-primary"
                   disabled={outlineDraft.length < 3}
-                  onClick={() => {
-                    onMap3d('outline', outlineDraft)
-                    setOutlineDraft([])
-                    setHoverPt(null)
-                    setClickMode('')
-                  }}
-                  title={t('Finish outline')}
+                  onClick={commitOutline}
+                  title={t('Finish outline — clicking the first vertex closes too')}
                 >
                   ✓ ({outlineDraft.length})
                 </button>
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm"
-                  onClick={() => { setOutlineDraft([]); setHoverPt(null); setClickMode('') }}
+                  onClick={() => { setOutlineDraft([]); setHoverSnap(null); setClickMode('') }}
                 >
                   {t('Cancel')}
                 </button>
