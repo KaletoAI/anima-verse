@@ -827,8 +827,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           for (const sp of spans) {
             if (sp.op.type !== 'window') continue
             const segLen = sp.s1 - sp.s0
-            const sill = Math.min(sp.op.sill_m, WALL_H)
-            const top = Math.min(sp.op.sill_m + sp.op.height_m, WALL_H)
+            const sill = Math.min(sp.op.sill_m * kFac, WALL_H)
+            const top = Math.min((sp.op.sill_m + sp.op.height_m) * kFac, WALL_H)
             if (sill > 0.02) placeBox(sp.s0, segLen, 0, sill, WALL_T, wallMat)
             if (WALL_H - top > 0.02) placeBox(sp.s0, segLen, top, WALL_H - top, WALL_T, wallMat)
             if (top - sill > 0.02) placeBox(sp.s0, segLen, sill, top - sill, WALL_T * 0.6, glassMat)
