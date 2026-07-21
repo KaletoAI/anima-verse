@@ -603,6 +603,7 @@ html, * {
 
 .ga-list-row-main { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
 .ga-list-row-sub { color: var(--text-muted, #8b949e); margin-left: 4px; }
+.ga-list-thumb { width: 28px; height: 28px; border-radius: 4px; object-fit: cover; flex: 0 0 auto; }
 
 .ga-source {
   font-size: 10px;
