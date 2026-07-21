@@ -13,14 +13,18 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from '../characters/Model3DViewer'
+import { orientedDims } from './dims'
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { PropFull, PropMarker } from './propTypes'
 
-/** The three real dims, in the order they are shown. */
-const DIM_FIELDS: Array<{ key: 'width_m' | 'depth_m' | 'height_m'; label: string }> = [
-  { key: 'width_m', label: 'Width (m)' },
-  { key: 'depth_m', label: 'Depth (m)' },
-  { key: 'height_m', label: 'Height (m)' },
+type DimKey = 'width_m' | 'depth_m' | 'height_m'
+
+/** The three real dims in display order; `axis` indexes orientedDims(),
+ *  which returns [width(x), height(y), depth(z)]. */
+const DIM_FIELDS: Array<{ key: DimKey; label: string; axis: number }> = [
+  { key: 'width_m', label: 'Width (m)', axis: 0 },
+  { key: 'depth_m', label: 'Depth (m)', axis: 2 },
+  { key: 'height_m', label: 'Height (m)', axis: 1 },
 ]
 
 export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, armedDelete }: {
@@ -52,6 +56,39 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
       height_m: String(prop.height_m),
     })
   }, [prop.id, prop.category, prop.tags, prop.width_m, prop.depth_m, prop.height_m])
+
+  // Proportional assist: editing one dim pulls the OTHER two along the model's
+  // proportions — unless they were edited too ("pinned"). Pins and the live
+  // box reset only when another prop is selected.
+  const [pinned, setPinned] = useState<Record<DimKey, boolean>>({
+    width_m: false, depth_m: false, height_m: false,
+  })
+  const [liveBbox, setLiveBbox] = useState<[number, number, number] | null>(null)
+  useEffect(() => {
+    setPinned({ width_m: false, depth_m: false, height_m: false })
+    setLiveBbox(null)
+  }, [prop.id])
+
+  // Per render, so turning the orientation fix updates the suggestions live —
+  // the viewer's measured box wins over the stored one.
+  const bbox = liveBbox ?? prop.bbox
+  const ratios = bbox ? orientedDims(bbox, prop.rotation) : null
+
+  const editDim = (field: typeof DIM_FIELDS[number], raw: string) => {
+    setPinned((p) => ({ ...p, [field.key]: true }))
+    setDims((d) => {
+      const next = { ...d, [field.key]: raw }
+      const n = parseFloat(raw)
+      if (ratios && Number.isFinite(n) && n > 0 && ratios[field.axis] > 0) {
+        for (const other of DIM_FIELDS) {
+          if (other.key === field.key || pinned[other.key]) continue
+          const v = (n * ratios[other.axis]) / ratios[field.axis]
+          next[other.key] = String(Math.round(v * 1000) / 1000)
+        }
+      }
+      return next
+    })
+  }
 
   const patch = useCallback(async (body: Record<string, unknown>) => {
     try {
@@ -202,6 +239,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
             format="glb"
             height={340}
             rotation={prop.rotation}
+            onBounds={(b) => setLiveBbox(b.size)}
           />
         ) : (
           <div className="ga-empty">
@@ -256,16 +294,21 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
         {/* Real size in metres — the mesh loses its scale, so the client sizes
             the object by these three values (after the orientation fix). */}
         <div className="ga-form-row">
-          {DIM_FIELDS.map(({ key, label }) => (
-            <Field key={key} label={t(label)} compact>
+          {DIM_FIELDS.map((field) => (
+            <Field key={field.key} label={t(field.label)} compact>
               <input className="ga-input" type="number" min={0.01} step={0.05}
-                style={{ width: 90 }} value={dims[key]}
-                onChange={(e) => setDims((d) => ({ ...d, [key]: e.target.value }))}
+                style={{ width: 90 }} value={dims[field.key]}
+                onChange={(e) => editDim(field, e.target.value)}
                 onBlur={commitDims}
                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
             </Field>
           ))}
         </div>
+        <span className="ga-hint">
+          {ratios
+            ? t('Linked to the model’s proportions — edit one value, the other two follow; a field you edited stays pinned until you switch props.')
+            : t('No model box yet — enter all three by hand.')}
+        </span>
         {prop.dims_estimated ? (
           <span className="ga-hint">
             {t('Estimated — refined automatically when the model arrives.')}

@@ -31,11 +31,17 @@ export interface TilePlacement {
 }
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
-  offsetY = 0, groundTextureUrl, placement }:
+  offsetY = 0, groundTextureUrl, placement, onBounds }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
+    /** Fires ONCE per successful load with the RAW model box (before pivot,
+     *  orientation fix and placement) — for callers that need the mesh's own
+     *  proportions. */
+    onBounds?: (b: { min: [number, number, number]
+                     max: [number, number, number]
+                     size: [number, number, number] }) => void
     /** Vertical placement offset in model units/metres (tile mode only) —
      *  negative sinks the model below the tile, like the 3D client does. */
     offsetY?: number
@@ -56,6 +62,10 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   placementRef.current = placement
   const offsetYRef = useRef(offsetY)
   offsetYRef.current = offsetY
+  // Ref, not a dependency: a fresh callback identity per render must not
+  // re-download the model.
+  const onBoundsRef = useRef(onBounds)
+  onBoundsRef.current = onBounds
 
   // Live-apply an offset change (the placement fn reads the ref).
   useEffect(() => {
@@ -157,6 +167,19 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           throw new Error(`Unsupported format: ${ext}`)
         }
         if (disposed) return
+
+        // Report the RAW model box — measured before pivot / orientation fix /
+        // placement, so the caller sees the mesh's own axes and proportions.
+        // (setFromObject updates the matrices itself.)
+        if (onBoundsRef.current) {
+          const raw = new THREE.Box3().setFromObject(object)
+          const rawSize = raw.getSize(new THREE.Vector3())
+          onBoundsRef.current({
+            min: [raw.min.x, raw.min.y, raw.min.z],
+            max: [raw.max.x, raw.max.y, raw.max.z],
+            size: [rawSize.x, rawSize.y, rawSize.z],
+          })
+        }
 
         // An FBX embeds no texture — the basecolor PNG of the same generation
         // run comes separately and has to be bound to the materials by hand
