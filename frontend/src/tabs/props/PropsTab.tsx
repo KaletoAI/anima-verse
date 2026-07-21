@@ -154,7 +154,10 @@ export function PropsTab() {
                         <span style={{ fontSize: 18 }}>📦</span>
                       )}
                       <span>{p.name}</span>
-                      {p.category ? <span className="ga-list-row-sub">{p.category}</span> : null}
+                      <span className="ga-list-row-sub">
+                        {p.category ? `${p.category} · ` : ''}
+                        {`${p.width_m}×${p.depth_m}×${p.height_m} m`}
+                      </span>
                     </span>
                     {pending.includes(p.id) ? (
                       <span className="ga-source">{t('generating…')}</span>

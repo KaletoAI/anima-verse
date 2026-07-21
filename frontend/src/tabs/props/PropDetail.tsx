@@ -16,6 +16,13 @@ import { Model3DViewer } from '../characters/Model3DViewer'
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { PropFull, PropMarker } from './propTypes'
 
+/** The three real dims, in the order they are shown. */
+const DIM_FIELDS: Array<{ key: 'width_m' | 'depth_m' | 'height_m'; label: string }> = [
+  { key: 'width_m', label: 'Width (m)' },
+  { key: 'depth_m', label: 'Depth (m)' },
+  { key: 'height_m', label: 'Height (m)' },
+]
+
 export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, armedDelete }: {
   prop: PropFull
   pending: boolean
@@ -30,13 +37,21 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
   const uploadRef = useRef<HTMLInputElement>(null)
 
   const [categoryDraft, setCategoryDraft] = useState(prop.category)
-  const [sizeDraft, setSizeDraft] = useState(String(prop.size_m))
   const [tagsDraft, setTagsDraft] = useState(prop.tags.join(', '))
+  // The three real dims as string drafts — committed on blur/Enter, reverted
+  // to the server value when the input is not a positive number.
+  const [dims, setDims] = useState({
+    width_m: String(prop.width_m), depth_m: String(prop.depth_m),
+    height_m: String(prop.height_m),
+  })
   useEffect(() => {
     setCategoryDraft(prop.category)
-    setSizeDraft(String(prop.size_m))
     setTagsDraft(prop.tags.join(', '))
-  }, [prop.id, prop.category, prop.size_m, prop.tags])
+    setDims({
+      width_m: String(prop.width_m), depth_m: String(prop.depth_m),
+      height_m: String(prop.height_m),
+    })
+  }, [prop.id, prop.category, prop.tags, prop.width_m, prop.depth_m, prop.height_m])
 
   const patch = useCallback(async (body: Record<string, unknown>) => {
     try {
@@ -46,6 +61,25 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [enc, onChanged, t, toast])
+
+  // Commit all three at once: an invalid field falls back to the server value,
+  // and nothing is sent when the trio is unchanged.
+  const commitDims = useCallback(() => {
+    const next: Record<string, number> = {}
+    let changed = false
+    for (const { key } of DIM_FIELDS) {
+      const n = parseFloat(dims[key])
+      if (Number.isFinite(n) && n > 0) {
+        next[key] = n
+        if (n !== prop[key]) changed = true
+      } else {
+        next[key] = prop[key]
+        setDims((d) => ({ ...d, [key]: String(prop[key]) }))
+      }
+    }
+    if (changed) void patch(next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dims, prop.width_m, prop.depth_m, prop.height_m, patch])
 
   const rotate = useCallback(async (axis: 'x' | 'y' | 'z') => {
     const cur = prop.rotation || {}
@@ -210,16 +244,6 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
               onChange={(e) => setCategoryDraft(e.target.value)}
               onBlur={() => { if (categoryDraft !== prop.category) void patch({ category: categoryDraft }) }} />
           </Field>
-          <Field label={t('Size (m)')} compact hint={t('Largest real edge in metres.')}>
-            <input className="ga-input" type="number" min={0.05} step={0.05} value={sizeDraft}
-              style={{ width: 90 }}
-              onChange={(e) => setSizeDraft(e.target.value)}
-              onBlur={() => {
-                const n = parseFloat(sizeDraft)
-                if (Number.isFinite(n) && n > 0 && n !== prop.size_m) void patch({ size_m: n })
-                else setSizeDraft(String(prop.size_m))
-              }} />
-          </Field>
           <Field label={t('Tags (comma-separated)')}>
             <input className="ga-input" value={tagsDraft}
               onChange={(e) => setTagsDraft(e.target.value)}
@@ -228,6 +252,25 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
               }} />
           </Field>
         </div>
+
+        {/* Real size in metres — the mesh loses its scale, so the client sizes
+            the object by these three values (after the orientation fix). */}
+        <div className="ga-form-row">
+          {DIM_FIELDS.map(({ key, label }) => (
+            <Field key={key} label={t(label)} compact>
+              <input className="ga-input" type="number" min={0.01} step={0.05}
+                style={{ width: 90 }} value={dims[key]}
+                onChange={(e) => setDims((d) => ({ ...d, [key]: e.target.value }))}
+                onBlur={commitDims}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+            </Field>
+          ))}
+        </div>
+        {prop.dims_estimated ? (
+          <span className="ga-hint">
+            {t('Estimated — refined automatically when the model arrives.')}
+          </span>
+        ) : null}
 
         {prop.prompt ? (
           <span className="ga-hint" style={{ fontSize: '0.78em' }} title={prop.prompt}>

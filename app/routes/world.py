@@ -786,8 +786,10 @@ def props_admin() -> Dict[str, Any]:
 @router.post("/props/generate")
 async def prop_generate(request: Request) -> Dict[str, Any]:
     """Create a prop from a prompt and kick off the source→mesh chain (body:
-    {name, category?, size_m?, prompt?, negative?, image_backend?,
-    mesh_backend?}). Background job — poll /world/props for pending."""
+    {name, category?, width_m?, depth_m?, height_m?, prompt?, negative?,
+    image_backend?, mesh_backend?}). Missing dims become the largest given one;
+    they are refined from the mesh proportions once the model exists.
+    Background job — poll /world/props for pending."""
     from app.core.props import create_prop, trigger_generation
     data = await request.json()
     if not isinstance(data, dict):
@@ -796,7 +798,8 @@ async def prop_generate(request: Request) -> Dict[str, Any]:
     if not name:
         raise HTTPException(status_code=400, detail="name required")
     prop = create_prop(name=name, category=str(data.get("category") or ""),
-                       size_m=data.get("size_m", 1.0),
+                       width_m=data.get("width_m"), depth_m=data.get("depth_m"),
+                       height_m=data.get("height_m"),
                        prompt=str(data.get("prompt") or ""),
                        source="generated")
     trigger_generation(prop["id"],
@@ -809,7 +812,8 @@ async def prop_generate(request: Request) -> Dict[str, Any]:
 
 @router.post("/props")
 async def prop_create(request: Request) -> Dict[str, Any]:
-    """Create a prop record (body: {name, category?, size_m?, tags?}). The
+    """Create a prop record (body: {name, category?, width_m?, depth_m?,
+    height_m?, tags?}). Missing dims become the largest given one. The
     model/source files follow via upload or the generation chain."""
     from app.core.props import create_prop
     data = await request.json()
@@ -819,7 +823,8 @@ async def prop_create(request: Request) -> Dict[str, Any]:
     if not name:
         raise HTTPException(status_code=400, detail="name required")
     prop = create_prop(name=name, category=str(data.get("category") or ""),
-                       size_m=data.get("size_m", 1.0), tags=data.get("tags"))
+                       width_m=data.get("width_m"), depth_m=data.get("depth_m"),
+                       height_m=data.get("height_m"), tags=data.get("tags"))
     return {"status": "ok", "prop": prop}
 
 
@@ -835,8 +840,9 @@ def prop_detail(prop_id: str) -> Dict[str, Any]:
 
 @router.post("/props/{prop_id}")
 async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
-    """Update the editable sidecar fields (body: {name?, category?, size_m?,
-    tags?})."""
+    """Update the editable sidecar fields (body: {name?, category?, width_m?,
+    depth_m?, height_m?, tags?}). Patching a dim marks the prop's dims as
+    admin-set — they are never redistributed from the mesh again."""
     from app.core.props import update_prop
     data = await request.json()
     if not isinstance(data, dict):

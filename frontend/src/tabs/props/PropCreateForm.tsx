@@ -53,15 +53,18 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
     ? (subject ? `${style.trim()}, ${subject}` : style.trim())
     : subject
 
-  const sizeValue = () => {
+  // One approximate size creates a placeholder cube — the three dims refine
+  // themselves from the mesh proportions as soon as the model exists.
+  const dimsPayload = () => {
     const n = parseFloat(sizeM)
-    return Number.isFinite(n) && n > 0 ? n : 1
+    const v = Number.isFinite(n) && n > 0 ? n : 1
+    return { width_m: v, depth_m: v, height_m: v }
   }
 
   const generate = useCallback(() => {
     if (!name.trim()) return
     void apiPost<{ status?: string; prop?: PropFull }>('/world/props/generate', {
-      name: name.trim(), category: category.trim(), size_m: sizeValue(),
+      name: name.trim(), category: category.trim(), ...dimsPayload(),
       prompt: finalPrompt, negative,
       image_backend: imageBackendInfo?.name || '', mesh_backend: meshBackend,
     })
@@ -78,7 +81,7 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
   const createEmpty = useCallback(() => {
     if (!name.trim()) return
     void apiPost<{ status?: string; prop?: PropFull }>('/world/props', {
-      name: name.trim(), category: category.trim(), size_m: sizeValue(),
+      name: name.trim(), category: category.trim(), ...dimsPayload(),
     })
       .then((d) => {
         toast(t('Prop created — upload a GLB or generate its model.'))
@@ -103,8 +106,8 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
               placeholder={t('chair, table, …')}
               onChange={(e) => setCategory(e.target.value)} />
           </Field>
-          <Field label={t('Size (m)')} compact
-            hint={t('Largest real edge in metres — the mesh loses its scale, so the client sizes the object by this.')}>
+          <Field label={t('Approx. size (m)')} compact
+            hint={t('Largest edge — width/depth/height refine automatically from the model’s proportions once it exists.')}>
             <input className="ga-input" type="number" min={0.05} step={0.05}
               style={{ width: 90 }}
               value={sizeM} onChange={(e) => setSizeM(e.target.value)} />

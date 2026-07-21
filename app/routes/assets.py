@@ -116,8 +116,10 @@ def get_surface_texture(filename: str, request: Request):
 @router.get("/props")
 def list_props():
     """Prop library — the lean client shape: a bare array
-    ``[{id, name, category, size_m, tags, marker_count, has_model}, …]``.
-    An empty list is the normal starting state."""
+    ``[{id, name, category, width_m, depth_m, height_m, tags, marker_count,
+    has_model}, …]``. The three dims are the object's REAL extent in metres
+    after its orientation fix (x/y/z = width/height/depth). An empty list is
+    the normal starting state."""
     from app.core.props import list_props as _list
     return _list()
 

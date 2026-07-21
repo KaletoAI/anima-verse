@@ -16,10 +16,18 @@ export interface PropFull {
   id: string
   name: string
   category: string
-  size_m: number
+  /** Real extent in metres AFTER the orientation fix (x/y/z). */
+  width_m: number
+  depth_m: number
+  height_m: number
   tags: string[]
   marker_count: number
   has_model: boolean
+  /** AABB edge lengths of the mesh on its RAW axes (before the fix) — the
+   *  proportions the dims are derived from. Absent = no measurable model. */
+  bbox?: [number, number, number]
+  /** True = placeholder cube, not informed by the model's proportions yet. */
+  dims_estimated?: boolean
   rotation?: { x?: number; y?: number; z?: number }
   markers?: PropMarker[]
   has_source?: boolean

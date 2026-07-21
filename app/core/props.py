@@ -11,26 +11,36 @@ Storage: ``worlds/<world>/props/<prop_id>/``:
 
     model.glb     — the mesh (unrigged GLB, embedded texture)
     source.png    — the product-shot render the mesh was made from
-    sidecar.json  — {name, category, size_m, rotation{x,y,z}, tags[],
-                     markers[], bbox[3], created_at, source, backend, prompt}
+    sidecar.json  — {name, category, width_m, depth_m, height_m,
+                     dims_estimated, rotation{x,y,z}, tags[], markers[],
+                     bbox[3], created_at, source, backend, prompt}
+
+``prop_id`` = slug of the name + a short hash (stable, file-safe).
+
+REAL SIZE. The mesh normalization destroys the real scale (the height_m /
+width_m lesson), so the object's real extent is stored explicitly in metres —
+as THREE dims after the orientation fix: ``width_m`` (x), ``height_m`` (y),
+``depth_m`` (z), each in (0, 100]. ``dims_estimated`` marks a placeholder
+cube that the model's proportions have not informed yet: it is True on
+creation, and False as soon as a dim is edited or the mesh arrives and the
+dims are redistributed over its proportions (largest edge kept).
 
 ``bbox`` = ``[bx, by, bz]``, the AABB edge lengths of model.glb in MESH units
 on the RAW mesh axes (before the orientation fix), rounded to 5 decimals. It
 is measured once when the model arrives (generation or upload) and lazily
-backfilled for older props on the first listing; it is what turns the one
-real-world size into proportional width/depth/height.
+backfilled for older props on the first listing; together with ``rotation``
+it is what turns one real-world size into proportional dims
+(``oriented_dims`` / ``_dims_from_size``).
 
-``prop_id`` = slug of the name + a short hash (stable, file-safe). ``size_m``
-is MANDATORY (> 0): the mesh normalization destroys the real scale (the
-height_m / width_m lesson), so the largest real edge in metres is stored
-explicitly and the client scales the object by it. ``markers[].at`` is an
-OBJECT-LOCAL ``[u, v, w]`` (fractions of the model bounding box, 0..1); the
-vocabulary is identical to ``layout.markers`` (animation + facing), only the
-frame is the object instead of the room rectangle.
+``markers[].at`` is an OBJECT-LOCAL ``[u, v, w]`` (fractions of the model
+bounding box, 0..1); the vocabulary is identical to ``layout.markers``
+(animation + facing), only the frame is the object instead of the room
+rectangle.
 """
 
 import hashlib
 import json
+import math
 import random
 import re
 import shutil
@@ -49,7 +59,8 @@ MODEL_NAME = "model.glb"
 SOURCE_NAME = "source.png"
 SIDECAR_NAME = "sidecar.json"
 
-DEFAULT_SIZE_M = 1.0
+DEFAULT_DIM_M = 1.0
+DIM_KEYS = ("width_m", "depth_m", "height_m")
 
 _PROP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -140,8 +151,8 @@ def _write_sidecar(prop_id: str, meta: Dict[str, Any]) -> None:
 
 # ── Field coercion ──────────────────────────────────────────────────────
 
-def _coerce_size_m(value: Any, fallback: float = DEFAULT_SIZE_M) -> float:
-    """Largest real edge in metres — mandatory > 0; clamped to (0, 100]."""
+def _coerce_dim_m(value: Any, fallback: float = DEFAULT_DIM_M) -> float:
+    """One real edge in metres — mandatory > 0; clamped to (0, 100], round 3."""
     try:
         v = float(value)
     except (TypeError, ValueError):
@@ -149,6 +160,90 @@ def _coerce_size_m(value: Any, fallback: float = DEFAULT_SIZE_M) -> float:
     if v <= 0:
         return fallback
     return round(min(v, 100.0), 3)
+
+
+def oriented_dims(bbox: Any, rotation: Any = None) -> List[float]:
+    """``[width, height, depth]`` = the AABB extents of the raw mesh box AFTER
+    the orientation fix: the 8 corners are rotated by Rx·Ry·Rz (degrees,
+    three.js 'XYZ' Euler order) and re-measured. Empty list when the box is
+    unusable.
+
+    Rotating an AABB overestimates for non-90° fixes (it measures a box around
+    the box), which is fine and deterministic — the numbers are used as
+    PROPORTIONS, not as a hull. Kept in lockstep with
+    ``frontend/src/tabs/props/dims.ts`` (``orientedDims``) — change both or
+    neither.
+    """
+    try:
+        b = [abs(float(bbox[i])) for i in range(3)]
+    except (TypeError, ValueError, IndexError, KeyError):
+        return []
+    if max(b) <= 0:
+        return []
+    rot = rotation if isinstance(rotation, dict) else {}
+    try:
+        rx = math.radians(float(rot.get("x") or 0))
+        ry = math.radians(float(rot.get("y") or 0))
+        rz = math.radians(float(rot.get("z") or 0))
+    except (TypeError, ValueError):
+        rx = ry = rz = 0.0
+    cx, sx = math.cos(rx), math.sin(rx)
+    cy, sy = math.cos(ry), math.sin(ry)
+    cz, sz = math.cos(rz), math.sin(rz)
+    # M = Rx · Ry · Rz
+    m = [
+        [cy * cz, -cy * sz, sy],
+        [cx * sz + sx * sy * cz, cx * cz - sx * sy * sz, -sx * cy],
+        [sx * sz - cx * sy * cz, sx * cz + cx * sy * sz, cx * cy],
+    ]
+    half = [v / 2 for v in b]
+    lo = [math.inf] * 3
+    hi = [-math.inf] * 3
+    for i in (-1, 1):
+        for j in (-1, 1):
+            for k in (-1, 1):
+                p = (i * half[0], j * half[1], k * half[2])
+                for r in range(3):
+                    v = m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2]
+                    lo[r] = min(lo[r], v)
+                    hi[r] = max(hi[r], v)
+    return [round(hi[r] - lo[r], 5) for r in range(3)]
+
+
+def _dims_from_size(size_m: Any, bbox: Any = None,
+                    rotation: Any = None) -> Dict[str, float]:
+    """Spread ONE real size (the largest edge in metres) over the three dims
+    using the model's proportions. Without a bbox every dim becomes that size
+    (a placeholder cube)."""
+    size = _coerce_dim_m(size_m, DEFAULT_DIM_M)
+    od = oriented_dims(bbox, rotation) if bbox else []
+    if od and max(od) > 0:
+        f = size / max(od)
+        return {"width_m": max(round(od[0] * f, 3), 0.001),
+                "height_m": max(round(od[1] * f, 3), 0.001),
+                "depth_m": max(round(od[2] * f, 3), 0.001)}
+    return {"width_m": size, "depth_m": size, "height_m": size}
+
+
+def _has_dims(meta: Dict[str, Any]) -> bool:
+    """True when all three dims are stored and usable."""
+    for key in DIM_KEYS:
+        try:
+            if float(meta.get(key)) <= 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _effective_dims(meta: Dict[str, Any]) -> Dict[str, float]:
+    """The dims to report: the stored ones, or — for a sidecar still carrying
+    the legacy single ``size_m`` — derived in memory (not persisted here;
+    ``_materialize_dims`` does that on the next write)."""
+    if _has_dims(meta):
+        return {key: _coerce_dim_m(meta.get(key)) for key in DIM_KEYS}
+    return _dims_from_size(meta.get("size_m", DEFAULT_DIM_M),
+                           meta.get("bbox"), meta.get("rotation"))
 
 
 def _coerce_tags(raw: Any) -> List[str]:
@@ -222,17 +317,37 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
 
 # ── CRUD ────────────────────────────────────────────────────────────────
 
-def create_prop(*, name: str, category: str = "", size_m: Any = DEFAULT_SIZE_M,
+def create_prop(*, name: str, category: str = "", width_m: Any = None,
+                depth_m: Any = None, height_m: Any = None,
                 tags: Any = None, prompt: str = "", source: str = "manual",
                 backend: str = "") -> Dict[str, Any]:
     """Create a new prop record (sidecar only — the model/source files are
-    added by upload or the generation chain). Returns ``{id, **sidecar}``."""
+    added by upload or the generation chain). Returns ``{id, **sidecar}``.
+
+    Dims: whatever is given is taken, every missing one becomes the LARGEST
+    given value (a rough cube); nothing given = 1 m per dim. The record starts
+    ``dims_estimated`` — the mesh's proportions refine it when the model
+    arrives."""
     name = (name or "").strip() or "Prop"
     prop_id = _new_prop_id(name)
+    dims: Dict[str, float] = {}
+    for key, raw in (("width_m", width_m), ("depth_m", depth_m),
+                     ("height_m", height_m)):
+        if raw is None or f"{raw}".strip() == "":
+            continue
+        v = _coerce_dim_m(raw, 0.0)
+        if v > 0:
+            dims[key] = v
+    base = max(dims.values()) if dims else DEFAULT_DIM_M
+    for key in DIM_KEYS:
+        dims.setdefault(key, base)
     meta = {
         "name": name,
         "category": (category or "").strip(),
-        "size_m": _coerce_size_m(size_m),
+        "width_m": dims["width_m"],
+        "depth_m": dims["depth_m"],
+        "height_m": dims["height_m"],
+        "dims_estimated": True,
         "rotation": {"x": 0, "y": 0, "z": 0},
         "tags": _coerce_tags(tags),
         "markers": [],
@@ -247,10 +362,12 @@ def create_prop(*, name: str, category: str = "", size_m: Any = DEFAULT_SIZE_M,
 
 
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Update the editable sidecar fields (name / category / size_m / tags).
-    None when the prop does not exist."""
+    """Update the editable sidecar fields (name / category / width_m / depth_m
+    / height_m / tags). Patching any dim clears ``dims_estimated`` — a value
+    the admin set is never redistributed again. None when the prop does not
+    exist."""
     pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
+    meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
     if not meta:
         return None
     if not isinstance(patch, dict):
@@ -261,9 +378,13 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
             meta["name"] = nm
     if "category" in patch:
         meta["category"] = str(patch.get("category") or "").strip()
-    if "size_m" in patch:
-        meta["size_m"] = _coerce_size_m(patch.get("size_m"),
-                                        float(meta.get("size_m") or DEFAULT_SIZE_M))
+    touched = False
+    for key in DIM_KEYS:
+        if key in patch:
+            meta[key] = _coerce_dim_m(patch.get(key), _coerce_dim_m(meta.get(key)))
+            touched = True
+    if touched:
+        meta["dims_estimated"] = False
     if "tags" in patch:
         meta["tags"] = _coerce_tags(patch.get("tags"))
     _write_sidecar(pid, meta)
@@ -271,9 +392,13 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
 
 def set_rotation(prop_id: str, rotation: Any) -> Optional[Dict[str, Any]]:
-    """Persist the orientation fix. None when the prop does not exist."""
+    """Persist the orientation fix. None when the prop does not exist.
+
+    The STORED dims stay untouched: re-orienting a prop does not silently
+    rewrite numbers the admin can see — the editor recomputes its proportional
+    suggestions live instead."""
     pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
+    meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
     if not meta:
         return None
     meta["rotation"] = _sanitize_rotation(rotation, meta.get("rotation"))
@@ -284,7 +409,7 @@ def set_rotation(prop_id: str, rotation: Any) -> Optional[Dict[str, Any]]:
 def set_markers(prop_id: str, markers: Any) -> Optional[Dict[str, Any]]:
     """Replace the object-local marker list. None when the prop does not exist."""
     pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
+    meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
     if not meta:
         return None
     meta["markers"] = sanitize_markers(markers)
@@ -357,15 +482,17 @@ def _extract_bbox(prop_id: str) -> Optional[List[float]]:
 
 def _store_bbox(prop_id: str) -> None:
     """Measure the model and persist ``bbox`` on the sidecar (one
-    read-modify-write). A failed measurement leaves the sidecar untouched."""
+    read-modify-write), redistributing still-estimated dims over the fresh
+    proportions. A failed measurement leaves the sidecar untouched."""
     bbox = _extract_bbox(prop_id)
     if not bbox:
         return
     pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
+    meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
     if not meta:
         return
     meta["bbox"] = bbox
+    _redistribute_dims(meta)
     try:
         _write_sidecar(pid, meta)
     except (OSError, ValueError):
@@ -400,6 +527,38 @@ def _ensure_bbox(prop_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
     return meta
 
 
+# ── Dims migration / redistribution ─────────────────────────────────────
+
+def _materialize_dims(prop_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Turn a legacy sidecar's single ``size_m`` into the three dims, in place.
+    Called at the START of every write path that begins with ``read_sidecar``,
+    so a legacy record migrates on its first write instead of needing a
+    migration pass. With a measurable model the dims come out proportional
+    (and count as informed), without one they are a cube (still estimated)."""
+    if not meta or _has_dims(meta):
+        meta.pop("size_m", None)
+        return meta
+    meta = _ensure_bbox(prop_id, meta)
+    bbox = meta.get("bbox")
+    meta.update(_dims_from_size(meta.get("size_m", DEFAULT_DIM_M), bbox,
+                                meta.get("rotation")))
+    meta["dims_estimated"] = not bool(bbox)
+    meta.pop("size_m", None)
+    return meta
+
+
+def _redistribute_dims(meta: Dict[str, Any]) -> None:
+    """Re-derive the dims from the model's proportions, keeping the largest
+    edge — ONLY for a still-estimated placeholder cube. Dims the admin set
+    (``dims_estimated`` False) are never touched."""
+    if not meta.get("dims_estimated") or not meta.get("bbox"):
+        return
+    dims = _effective_dims(meta)
+    meta.update(_dims_from_size(max(dims.values()), meta["bbox"],
+                                meta.get("rotation")))
+    meta["dims_estimated"] = False
+
+
 # ── Listing ─────────────────────────────────────────────────────────────
 
 def _all_prop_ids() -> List[str]:
@@ -416,11 +575,14 @@ def _all_prop_ids() -> List[str]:
 def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
     meta = _ensure_bbox(prop_id, meta)
     has_model = model_path(prop_id) is not None
+    dims = _effective_dims(meta)
     rec: Dict[str, Any] = {
         "id": prop_id,
         "name": meta.get("name") or prop_id,
         "category": meta.get("category") or "",
-        "size_m": float(meta.get("size_m") or 0) or DEFAULT_SIZE_M,
+        "width_m": dims["width_m"],
+        "depth_m": dims["depth_m"],
+        "height_m": dims["height_m"],
         "tags": meta.get("tags") or [],
         "marker_count": len(meta.get("markers") or []),
         "has_model": has_model,
@@ -440,13 +602,15 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]
+        rec["dims_estimated"] = (bool(meta.get("dims_estimated"))
+                                 if _has_dims(meta) else not bool(meta.get("bbox")))
     return rec
 
 
 def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
     """All props. ``full`` adds the sidecar detail + file urls (admin);
-    otherwise the lean client shape (id, name, category, size_m, tags,
-    marker_count, has_model)."""
+    otherwise the lean client shape (id, name, category, width_m, depth_m,
+    height_m, tags, marker_count, has_model)."""
     out = []
     for pid in _all_prop_ids():
         meta = read_sidecar(pid)
@@ -553,7 +717,7 @@ def _render_source(prop_id: str, backend_glob: str,
         img.thumbnail((1024, 1024))
     d = _prop_dir(prop_id, create=True)
     img.save(d / SOURCE_NAME, "PNG")
-    meta = read_sidecar(prop_id)
+    meta = _materialize_dims(prop_id, read_sidecar(prop_id))
     meta["backend_image"] = backend.name
     meta["prompt"] = prompt
     meta["negative"] = negative
@@ -606,12 +770,13 @@ def _generate(prop_id: str, prompt: str, negative: str,
         if path != target and path.exists():
             path.replace(target)
 
-        meta = read_sidecar(prop_id)
+        meta = _materialize_dims(prop_id, read_sidecar(prop_id))
         meta["source"] = "generated"
         meta["backend"] = res.get("backend", "") or meta.get("backend", "")
         bbox = _extract_bbox(prop_id)
         if bbox:
             meta["bbox"] = bbox
+            _redistribute_dims(meta)
         _write_sidecar(prop_id, meta)
         logger.info("Prop %s: model generated (backend %s)",
                     prop_id, meta.get("backend", ""))
