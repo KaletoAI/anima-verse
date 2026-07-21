@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { normalizeOpeningEdge, outlineOf } from './planGeometry'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room } from './worldTypes'
@@ -747,14 +748,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       })
     }
 
-    // Room-shell walls (B5): per placed room, the four rectangle edges as
-    // wall segments split around the room's openings (NO CSG). Doors/passages
-    // leave a full-height gap; windows keep a sill wall + a header wall and
-    // fill the opening with a translucent glass pane between sill and
-    // sill+height. Wall height = the derived storey height (lhEff). Surfaces
-    // are only a colour hint here (no texture sampling — preview latitude);
-    // the client does the real texturing. Walls register in the camera-cull
-    // set so the near ones hide and the interior stays visible.
+    // Room-shell walls (B5): per placed room, the hull edges (drawn outline
+    // or the implicit rectangle) as wall segments split around the room's
+    // openings (NO CSG). Doors/passages leave a full-height gap; windows keep
+    // a sill wall + a header wall and fill the opening with a translucent
+    // glass pane between sill and sill+height. Wall height = the derived
+    // storey height (lhEff). Surfaces are only a colour hint here (no texture
+    // sampling — preview latitude); the client does the real texturing. Walls
+    // register in the camera-cull set so the near ones hide and the interior
+    // stays visible.
     if (showWallsRef.current) {
       const WALL_T = 0.07
       const WALL_H = Math.max(0.6, lhEff - 0.15)
@@ -763,10 +765,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         if (!lay) continue
         const lv = lay.level || 0
         const floorY = lv * lhEff
-        const x0 = (lay.x - 0.5) * PLATE_M
-        const x1 = (lay.x + lay.w - 0.5) * PLATE_M
-        const z0 = (lay.y - 0.5) * PLATE_M
-        const z1 = (lay.y + lay.d - 0.5) * PLATE_M
         // Colour hint from the surfaces (B1): a warmer off-white when a wall
         // kind is set, the neutral grey otherwise.
         const wallColor = lay.surfaces?.wall ? 0xe8e0d0 : 0xcfc4b2
@@ -776,14 +774,18 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         const glassMat = new THREE.MeshStandardMaterial({
           color: 0x9fc2d8, transparent: true, opacity: 0.25,
         })
-        // edge letter → endpoints (a→b) + outward normal (away from interior).
-        const edges: Array<{ e: string; ax: number; az: number; bx: number
-          bz: number; nx: number; nz: number }> = [
-          { e: 'N', ax: x0, az: z0, bx: x1, bz: z0, nx: 0, nz: -1 },
-          { e: 'S', ax: x0, az: z1, bx: x1, bz: z1, nx: 0, nz: 1 },
-          { e: 'W', ax: x0, az: z0, bx: x0, bz: z1, nx: -1, nz: 0 },
-          { e: 'E', ax: x1, az: z0, bx: x1, bz: z1, nx: 1, nz: 0 },
-        ]
+        // Hull points in plate metres; with clockwise winding (screen coords
+        // = XZ here) the outward normal of edge (ux, uz) is (uz, -ux).
+        const hull = outlineOf(lay).map(([u, v]) => [
+          (lay.x + u * lay.w - 0.5) * PLATE_M,
+          (lay.y + v * lay.d - 0.5) * PLATE_M,
+        ])
+        const edges = hull.map((a, i) => {
+          const b = hull[(i + 1) % hull.length]
+          const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+          return { i, ax: a[0], az: a[1], bx: b[0], bz: b[1],
+            nx: (b[1] - a[1]) / len, nz: -(b[0] - a[0]) / len }
+        })
         for (const ed of edges) {
           const L = Math.hypot(ed.bx - ed.ax, ed.bz - ed.az)
           if (L < 0.05) continue
@@ -804,13 +806,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             if (lv === 0) wallCullRef.current.push({ mesh: box, mx, mz, nx: ed.nx, nz: ed.nz })
           }
           // Openings on this edge → along-edge spans (metres × kFac → world).
-          const ops = (lay.openings || []).filter(
-            (o) => typeof o.edge === 'string' && o.edge === ed.e)
-          const spans = ops.map((o) => {
-            const halfW = Math.min((o.width_m * kFac) / 2, L / 2)
-            const c = Math.min(Math.max(o.at, 0), 1) * L
-            return { s0: Math.max(0, c - halfW), s1: Math.min(L, c + halfW), op: o }
-          }).sort((a, b) => a.s0 - b.s0)
+          // Letters and indices read through ONE normalization (planGeometry).
+          const spans = (lay.openings || [])
+            .map((o) => ({ op: o, norm: normalizeOpeningEdge(o) }))
+            .filter(({ norm }) => norm.edge === ed.i)
+            .map(({ op: o, norm }) => {
+              const halfW = Math.min((o.width_m * kFac) / 2, L / 2)
+              const c = Math.min(Math.max(norm.at, 0), 1) * L
+              return { s0: Math.max(0, c - halfW), s1: Math.min(L, c + halfW), op: o }
+            }).sort((a, b) => a.s0 - b.s0)
           // Full-height solid wall = [0, L] minus every opening span.
           let solids: Array<[number, number]> = [[0, L]]
           for (const sp of spans) {

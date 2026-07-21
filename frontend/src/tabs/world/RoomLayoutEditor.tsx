@@ -15,10 +15,12 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import {
-  EDGE_ROT, MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
-  clamp, edgePoint, exteriorEdges, nearestEdge, r4, rotateOpeningCW, sharedEdges,
+  MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
+  absOutline, clamp, edgePointOnEdge, edgeSegment, exteriorEdges,
+  nearestPolygonEdge, normalizeOpeningEdge, outlineOf, r4, rotateOpeningCW,
+  sharedEdges,
 } from './planGeometry'
-import type { EdgeLetter, RectRoom } from './planGeometry'
+import type { EdgeLetter, PolyRoom } from './planGeometry'
 import { getBuildingDims, getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { Map3D, Room, RoomLayout, RoomOpening } from './worldTypes'
 
@@ -46,7 +48,7 @@ interface RoomLayoutEditorProps {
 type DragState =
   | { kind: 'move'; roomId: string; startX: number; startY: number; origX: number; origY: number }
   | { kind: 'resize'; roomId: string; startX: number; startY: number; origW: number; origD: number }
-  | { kind: 'opening'; roomId: string; index: number; edge: EdgeLetter }
+  | { kind: 'opening'; roomId: string; index: number; edge: number }
   | null
 
 export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
@@ -268,18 +270,24 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           d: r4(clamp(drag.origD + dy, MIN_FRAC, 1 - lay.y)),
         })
       } else {
-        // Opening drag: slide it along its edge — project the cursor onto the
-        // edge as a fraction of the ROOM rectangle.
+        // Opening drag: slide it along its polygon edge — project the cursor
+        // onto the edge in PLAN fractions. The write normalizes a legacy
+        // letter opening to the index vocabulary (the editor only writes
+        // indices).
         const rect = canvas.getBoundingClientRect()
         const fx = (e.clientX - rect.left) / rect.width
         const fy = (e.clientY - rect.top) / rect.height
-        const along = (drag.edge === 'N' || drag.edge === 'S')
-          ? (fx - lay.x) / (lay.w || 1)
-          : (fy - lay.y) / (lay.d || 1)
+        const seg = edgeSegment(absOutline(lay), drag.edge)
+        const dx = seg.b[0] - seg.a[0]
+        const dy = seg.b[1] - seg.a[1]
+        const len2 = dx * dx + dy * dy
+        const along = len2 > 0
+          ? ((fx - seg.a[0]) * dx + (fy - seg.a[1]) * dy) / len2
+          : 0.5
         const at = r4(clamp(along, 0, 1))
         updateLayout(drag.roomId, {
           openings: (lay.openings || []).map((o, idx) =>
-            idx === drag.index ? { ...o, at } : o),
+            idx === drag.index ? { ...o, edge: drag.edge, at } : o),
         })
       }
     }
@@ -304,9 +312,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       : { kind, roomId: room.id, startX: e.clientX, startY: e.clientY, origW: lay.w, origD: lay.d }
   }, [clickMode, setSelected])
 
-  // Drag a placed opening along its edge (no drag while placing).
+  // Drag a placed opening along its edge (no drag while placing). `edge` is
+  // the NORMALIZED polygon edge index.
   const startOpeningDrag = useCallback(
-    (e: React.PointerEvent, room: Room, index: number, edge: EdgeLetter) => {
+    (e: React.PointerEvent, room: Room, index: number, edge: number) => {
       if (clickMode || !room.id) return
       e.preventDefault()
       e.stopPropagation()
@@ -341,10 +350,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       })
       setMarkerSel((room.layout.markers || []).length)
     } else if (clickMode === 'opening') {
-      // Place a door on the nearest edge at the clicked position.
-      const { edge, at } = nearestEdge(px, py)
+      // Place a door on the nearest hull edge at the clicked position.
+      const { edge, at } = nearestPolygonEdge(outlineOf(room.layout), [px, py])
       const openings: RoomOpening[] = [...(room.layout.openings || []),
-        { edge, at: r4(at), ...OPENING_DEFAULT }]
+        { edge, at, ...OPENING_DEFAULT }]
       updateLayout(room.id, { openings })
       setOpeningSel(openings.length - 1)
     }
@@ -377,10 +386,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             ...(m.rotation !== undefined ? { rotation: (m.rotation + 90) % 360 } : {}),
           })) }
         : {}),
+      // Openings turn with the room. A drawn outline rotates by baking the
+      // point transform, so its edge indices stay put; on the implicit unit
+      // square an index steps one edge clockwise (at is measured along the
+      // clockwise direction and stays); legacy letters keep their own rule.
+      ...(lay.outline?.length
+        ? { outline: lay.outline.map(
+            ([u, v]) => [r4(1 - v), r4(u)] as [number, number]) }
+        : {}),
       ...(lay.openings?.length
         ? { openings: lay.openings.map((o) => (typeof o.edge === 'string'
             ? { ...o, ...rotateOpeningCW(o.edge as EdgeLetter, o.at) }
-            : o)) }
+            : lay.outline?.length ? o : { ...o, edge: (o.edge + 1) % 4 })) }
         : {}),
     })
   }
@@ -391,13 +408,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // overwrites — it skips any edge that already carries an opening.
   const suggestOpenings = () => {
     const onLevel = rooms.filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
-    const rects: RectRoom[] = onLevel.map((r) => ({
+    const hulls: PolyRoom[] = onLevel.map((r) => ({
       id: r.id!, x: r.layout!.x, y: r.layout!.y, w: r.layout!.w, d: r.layout!.d,
+      outline: r.layout!.outline,
     }))
     const additions = new Map<string, RoomOpening[]>()
     const layoutOf = (id: string) => onLevel.find((r) => r.id === id)!.layout!
-    const edgeTaken = (id: string, edge: EdgeLetter) =>
-      (layoutOf(id).openings || []).some((o) => o.edge === edge)
+    const edgeTaken = (id: string, edge: number) =>
+      (layoutOf(id).openings || []).some((o) => normalizeOpeningEdge(o).edge === edge)
       || (additions.get(id) || []).some((o) => o.edge === edge)
     const add = (id: string, op: RoomOpening) => {
       const list = additions.get(id) || []
@@ -406,20 +424,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     }
 
     // Doors on shared edges — once per pair (i < j = the trigger room).
-    for (let i = 0; i < rects.length; i++) {
-      for (let j = i + 1; j < rects.length; j++) {
-        for (const s of sharedEdges(rects[i], [rects[j]], planW)) {
-          if (edgeTaken(rects[i].id, s.edge)) continue
-          add(rects[i].id, { edge: s.edge, at: r4(s.at), type: 'door',
+    for (let i = 0; i < hulls.length; i++) {
+      for (let j = i + 1; j < hulls.length; j++) {
+        for (const s of sharedEdges(hulls[i], [hulls[j]], planW)) {
+          if (edgeTaken(hulls[i].id, s.edge)) continue
+          add(hulls[i].id, { edge: s.edge, at: s.at, type: 'door',
             width_m: 1.0, height_m: 2.1, sill_m: 0, to: s.neighborId })
         }
       }
     }
     // Windows on exterior edges ≥ 2.5 m (needs planW to know the edge length).
     if (planW > 0) {
-      for (const a of rects) {
-        for (const e of exteriorEdges(a, rects.filter((r) => r.id !== a.id), planW)) {
-          const edgeLenM = (e === 'N' || e === 'S') ? a.w * planW : a.d * planW
+      for (const a of hulls) {
+        const oa = absOutline(a)
+        for (const e of exteriorEdges(a, hulls.filter((r) => r.id !== a.id), planW)) {
+          const seg = edgeSegment(oa, e)
+          const edgeLenM = Math.hypot(seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]) * planW
           if (edgeLenM < MIN_WINDOW_EDGE_M || edgeTaken(a.id, e)) continue
           add(a.id, { edge: e, at: 0.5, type: 'window',
             width_m: 1.2, height_m: 1.2, sill_m: 0.9 })
@@ -642,14 +662,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   }}
                 />
               ))}
-              {/* Wall openings on the room edges: door = gap + swing arc,
+              {/* Wall openings on the hull edges: door = gap + swing arc,
                   window = double line, passage = dashed gap. Fixed-size SVG
-                  rotated so the interior side faces into the room; drag it
-                  along its edge. */}
+                  rotated to the edge's SCREEN direction — with clockwise
+                  winding the symbol's interior side (its local +y) then faces
+                  into the room; drag it along its edge. */}
               {(lay.openings || []).map((op, i) => {
-                if (typeof op.edge !== 'string') return null
-                const edge = op.edge as EdgeLetter
-                const pt = edgePoint(edge, op.at)
+                const outline = outlineOf(lay)
+                const { edge, at } = normalizeOpeningEdge(op)
+                if (edge >= outline.length) return null
+                const pt = edgePointOnEdge(outline, edge, at)
+                const seg = edgeSegment(outline, edge)
+                // Screen angle needs the room's pixel aspect (w vs d — the
+                // canvas itself is square), or diagonals of non-square rooms
+                // would skew.
+                const deg = Math.atan2((seg.b[1] - seg.a[1]) * lay.d,
+                                       (seg.b[0] - seg.a[0]) * lay.w) * 180 / Math.PI
                 const sel = room.id === selected && openingSel === i
                 const col = sel ? '#fff' : (OPENING_COLOR[op.type] || '#e0a356')
                 return (
@@ -670,7 +698,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                       position: 'absolute',
                       left: `${pt.x * 100}%`, top: `${pt.y * 100}%`,
                       width: 24, height: 24,
-                      transform: `translate(-50%, -50%) rotate(${EDGE_ROT[edge]}deg)`,
+                      transform: `translate(-50%, -50%) rotate(${deg}deg)`,
                       cursor: clickMode ? 'crosshair' : 'grab',
                     }}
                   >
