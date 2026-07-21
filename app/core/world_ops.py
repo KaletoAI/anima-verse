@@ -9,7 +9,7 @@ import os
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from app.core.log import get_logger
 from app.imagegen.base import BackendBusyError
 
@@ -351,9 +351,16 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     building footprint, top-left corner + size); ``level`` defaults to 0,
     ``rotation`` (degrees yaw) and ``exit`` ([x, y] as fractions of the ROOM
     rectangle) are optional. Optional too: ``markers`` (figure snap spots),
-    ``surfaces`` ({floor?, wall?} surface-texture kinds) and ``openings``
-    (doors / windows / passages, see _sanitize_opening). Empty result means
-    "unset" → client auto-grid.
+    ``surfaces`` ({floor?, wall?} surface-texture kinds), ``openings``
+    (doors / windows / passages, see _sanitize_opening) and ``outline``
+    (drawn room hull). Empty result means "unset" → client auto-grid.
+
+    ``outline`` = polygon points as fractions of the room BBOX, auto-closed
+    (no repeated closing point), winding clockwise in screen coordinates
+    (y down), bbox spanning [0,1]². Absent = the rectangle itself, i.e. the
+    implicit unit square with edge indices 0=N, 1=E, 2=S, 3=W. x/y/w/d ALWAYS
+    carry the derived bbox, so a client that only knows rectangles keeps
+    working.
     """
     if not isinstance(raw, dict):
         return {}
@@ -371,6 +378,63 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     out["y"] = round(min(max(y, 0.0), 1.0), 4)
     out["w"] = round(w, 4)
     out["d"] = round(d, 4)
+    # Drawn room hull (plan-room-props.md): a polygon that replaces the plain
+    # rectangle. The points are BBOX-local fractions and the bbox is x/y/w/d —
+    # a hand-posted payload whose points do not span [0,1]² is renormalized
+    # here and the difference folded into x/y/w/d, so those ALWAYS describe the
+    # real bounding box.
+    ol = raw.get("outline")
+    if isinstance(ol, list) and 3 <= len(ol) <= 32:
+        pts: List[List[float]] = []
+        ok = True
+        for pt in ol:
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                ok = False
+                break
+            try:
+                p = [float(pt[0]), float(pt[1])]
+            except (TypeError, ValueError):
+                ok = False
+                break
+            prev = pts[-1] if pts else None
+            if prev and abs(p[0] - prev[0]) < 1e-6 and abs(p[1] - prev[1]) < 1e-6:
+                continue
+            pts.append(p)
+        # The hull is auto-closed — an explicit closing point is redundant.
+        while len(pts) > 1 and abs(pts[-1][0] - pts[0][0]) < 1e-6 \
+                and abs(pts[-1][1] - pts[0][1]) < 1e-6:
+            pts.pop()
+        if ok and len(pts) >= 3:
+            shoelace = sum(pts[i][0] * pts[(i + 1) % len(pts)][1]
+                           - pts[(i + 1) % len(pts)][0] * pts[i][1]
+                           for i in range(len(pts)))
+            if abs(shoelace) / 2 >= 1e-4:
+                min_u = min(p[0] for p in pts)
+                max_u = max(p[0] for p in pts)
+                min_v = min(p[1] for p in pts)
+                max_v = max(p[1] for p in pts)
+                span_u = max_u - min_u
+                span_v = max_v - min_v
+                folded = True
+                if (abs(min_u) > 1e-6 or abs(max_u - 1) > 1e-6
+                        or abs(min_v) > 1e-6 or abs(max_v - 1) > 1e-6):
+                    new_w = round(out["w"] * span_u, 4)
+                    new_d = round(out["d"] * span_v, 4)
+                    if span_u > 0 and span_v > 0 and new_w > 0 and new_d > 0:
+                        out["x"] = round(min(max(out["x"] + min_u * out["w"], 0.0), 1.0), 4)
+                        out["y"] = round(min(max(out["y"] + min_v * out["d"], 0.0), 1.0), 4)
+                        out["w"] = new_w
+                        out["d"] = new_d
+                        pts = [[(p[0] - min_u) / span_u, (p[1] - min_v) / span_v]
+                               for p in pts]
+                    else:
+                        folded = False
+                if folded:
+                    # Clockwise in screen coordinates (y down) = positive
+                    # shoelace sum.
+                    if shoelace < 0:
+                        pts.reverse()
+                    out["outline"] = [[round(p[0], 4), round(p[1], 4)] for p in pts]
     try:
         out["level"] = int(raw.get("level") or 0)
     except (TypeError, ValueError):
@@ -455,6 +519,17 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                 openings.append(clean)
         if openings:
             out["openings"] = openings[:50]
+    # An integer edge is a polygon edge INDEX — it only exists if the hull has
+    # that many edges (n points = n edges; without an outline the implicit unit
+    # square has 4). Letter edges ('N'|'S'|'E'|'W') are untouched.
+    if out.get("openings"):
+        edge_count = len(out["outline"]) if out.get("outline") else 4
+        kept = [o for o in out["openings"]
+                if not (isinstance(o.get("edge"), int) and o["edge"] >= edge_count)]
+        if kept:
+            out["openings"] = kept
+        else:
+            out.pop("openings")
     return out
 
 

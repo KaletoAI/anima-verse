@@ -27,6 +27,12 @@ export interface RoomLayout {
   /** Wall openings — doors / windows / passages. Deterministic + admin-edited;
    *  the client splits the wall edge into segments around them (no CSG). */
   openings?: RoomOpening[]
+  /** Drawn room hull: polygon points as fractions of the room BBOX (x/y/w/d),
+   *  auto-closed, winding clockwise in screen coords, bbox spans [0,1]².
+   *  Absent = the rectangle itself (implicit unit square, edges 0=N 1=E 2=S
+   *  3=W). x/y/w/d ALWAYS carry the derived bbox — legacy clients keep
+   *  reading only those. */
+  outline?: Array<[number, number]>
 }
 
 export interface RoomOpening {
