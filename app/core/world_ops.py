@@ -352,8 +352,9 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     ``rotation`` (degrees yaw) and ``exit`` ([x, y] as fractions of the ROOM
     rectangle) are optional. Optional too: ``markers`` (figure snap spots),
     ``surfaces`` ({floor?, wall?} surface-texture kinds), ``openings``
-    (doors / windows / passages, see _sanitize_opening) and ``outline``
-    (drawn room hull). Empty result means "unset" → client auto-grid.
+    (doors / windows / passages, see _sanitize_opening), ``outline``
+    (drawn room hull) and ``props`` (prop-library placements). Empty result
+    means "unset" → client auto-grid.
 
     ``outline`` = polygon points as fractions of the room BBOX, auto-closed
     (no repeated closing point), winding clockwise in screen coordinates
@@ -530,6 +531,48 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             out["openings"] = kept
         else:
             out.pop("openings")
+    # Prop placements (plan-room-props.md): the room's furnishing as single
+    # objects from the prop library. REAL-SIZE RULE — a placement never
+    # scales the prop; the client sizes it from the PROP's own dims × the
+    # plan's scale factor, so only position/yaw/height live here.
+    pr = raw.get("props")
+    if isinstance(pr, list):
+        from app.core.props import safe_prop_id
+        placements = []
+        for p in pr:
+            if not isinstance(p, dict):
+                continue
+            # Format check only, NEVER an existence check: the world lives in
+            # the DB, props are files — a dangling id renders as a placeholder
+            # on the client instead of silently losing the placement.
+            pid = safe_prop_id(str(p.get("prop_id") or ""))
+            at = p.get("at")
+            if not pid or not isinstance(at, (list, tuple)) or len(at) != 2:
+                continue
+            try:
+                entry: Dict[str, Any] = {
+                    "prop_id": pid,
+                    "at": [round(min(max(float(at[0]), 0.0), 1.0), 4),
+                           round(min(max(float(at[1]), 0.0), 1.0), 4)],
+                }
+            except (TypeError, ValueError):
+                continue
+            yaw = p.get("yaw")
+            if yaw is not None and f"{yaw}".strip() != "":
+                try:
+                    v = round(float(yaw) % 360, 1)
+                    entry["yaw"] = int(v) if float(v).is_integer() else v
+                except (TypeError, ValueError):
+                    pass
+            off = p.get("offset_y")
+            if off is not None and f"{off}".strip() != "":
+                try:
+                    entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
+                except (TypeError, ValueError):
+                    pass
+            placements.append(entry)
+        if placements:
+            out["props"] = placements[:100]
     return out
 
 

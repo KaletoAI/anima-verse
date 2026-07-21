@@ -33,6 +33,20 @@ export interface RoomLayout {
    *  3=W). x/y/w/d ALWAYS carry the derived bbox — legacy clients keep
    *  reading only those. */
   outline?: Array<[number, number]>
+  /** Furnishing: placements from the prop library. A placement NEVER scales
+   *  the prop — the client sizes it from the prop's own dims × the plan's
+   *  scale factor. A dangling prop_id renders as a placeholder. */
+  props?: RoomPropPlacement[]
+}
+
+export interface RoomPropPlacement {
+  prop_id: string
+  /** Room-local position: fractions of the room rectangle (0..1). */
+  at: [number, number]
+  /** Yaw in degrees, free values at 0.1° resolution. Absent = 0. */
+  yaw?: number
+  /** Vertical offset in metres (clamped ±5), additive to the floor. */
+  offset_y?: number
 }
 
 export interface RoomOpening {
