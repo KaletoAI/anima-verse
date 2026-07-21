@@ -421,7 +421,11 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                         or abs(min_v) > 1e-6 or abs(max_v - 1) > 1e-6):
                     new_w = round(out["w"] * span_u, 4)
                     new_d = round(out["d"] * span_v, 4)
-                    if span_u > 0 and span_v > 0 and new_w > 0 and new_d > 0:
+                    # Folding must keep the layout invariant 0 < w/d <= 1 —
+                    # points far outside the bbox would inflate it past the
+                    # footprint, so such an outline is dropped, not clamped.
+                    if (span_u > 0 and span_v > 0
+                            and 0 < new_w <= 1 and 0 < new_d <= 1):
                         out["x"] = round(min(max(out["x"] + min_u * out["w"], 0.0), 1.0), 4)
                         out["y"] = round(min(max(out["y"] + min_v * out["d"], 0.0), 1.0), 4)
                         out["w"] = new_w
