@@ -189,7 +189,7 @@ export function PlanToolbar({
         disabled={!canSuggest || noAnchor}
         onClick={onSuggest}
         title={noAnchor ? anchorTip
-          : t('Add a door on every shared wall (once, linked to the neighbour) and a window on every exterior wall ≥ 2.5 m. Existing openings are kept — needs the plan width for windows.')}
+          : t('Doors on shared walls, an entrance for otherwise closed rooms, windows on exterior walls ≥ 2.5 m — never overwrites existing openings.')}
       />
       <Tool
         icon="🪑"

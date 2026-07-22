@@ -750,10 +750,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   }
 
   // "Suggest openings": a door on every shared wall (once per pair, on the
-  // room that triggers it, `to` = the neighbour) + a window on every exterior
+  // room that triggers it, `to` = the neighbour), an ENTRANCE door for every
+  // room that would otherwise stay sealed, and a window on every exterior
   // edge ≥ 2.5 m. Suggestions are normal, editable openings; the button never
   // overwrites — it skips any edge that already carries an opening.
   const suggestOpenings = () => {
+    // planW is guaranteed by the anchor gate; the fallback only keeps the
+    // helpers' tolerances sane if it ever slips through as 0.
+    const planWEff = planW || 8
     const onLevel = rooms.filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
     const hulls: PolyRoom[] = onLevel.map((r) => ({
       id: r.id!, x: r.layout!.x, y: r.layout!.y, w: r.layout!.w, d: r.layout!.d,
@@ -773,24 +777,46 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     // Doors on shared edges — once per pair (i < j = the trigger room).
     for (let i = 0; i < hulls.length; i++) {
       for (let j = i + 1; j < hulls.length; j++) {
-        for (const s of sharedEdges(hulls[i], [hulls[j]], planW)) {
+        for (const s of sharedEdges(hulls[i], [hulls[j]], planWEff)) {
           if (edgeTaken(hulls[i].id, s.edge)) continue
           add(hulls[i].id, { edge: s.edge, at: s.at, type: 'door',
             width_m: 1.0, height_m: 2.1, sill_m: 0, to: s.neighborId })
         }
       }
     }
-    // Windows on exterior edges ≥ 2.5 m (needs planW to know the edge length).
-    if (planW > 0) {
-      for (const a of hulls) {
-        const oa = absOutline(a)
-        for (const e of exteriorEdges(a, hulls.filter((r) => r.id !== a.id), planW)) {
+    // Entrance guarantee: a room the shared-wall pass left without ANY door
+    // would be sealed (a single-room location got nothing at all before).
+    // It gets an outside door on its longest exterior edge — no `to`.
+    for (const a of hulls) {
+      const hasDoor = (layoutOf(a.id).openings || []).some((o) => o.type === 'door')
+        || (additions.get(a.id) || []).some((o) => o.type === 'door')
+      if (hasDoor) continue
+      const oa = absOutline(a)
+      const candidates = exteriorEdges(a, hulls.filter((r) => r.id !== a.id), planWEff)
+        .map((e) => {
           const seg = edgeSegment(oa, e)
-          const edgeLenM = Math.hypot(seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]) * planW
-          if (edgeLenM < MIN_WINDOW_EDGE_M || edgeTaken(a.id, e)) continue
-          add(a.id, { edge: e, at: 0.5, type: 'window',
-            width_m: 1.2, height_m: 1.2, sill_m: 0.9 })
-        }
+          return { edge: e,
+            len: Math.hypot(seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]) * planWEff }
+        })
+        .sort((x, y) => y.len - x.len)
+      if (!candidates.length) continue
+      // Prefer a free edge; if every exterior edge already carries something
+      // (windows all round), share the longest one — several openings per
+      // edge are legal, so the door sits next to the window.
+      const free = candidates.find((c) => !edgeTaken(a.id, c.edge))
+      const target = free || candidates[0]
+      add(a.id, { edge: target.edge, at: free ? 0.5 : 0.35, type: 'door',
+        width_m: 1.0, height_m: 2.1, sill_m: 0 })
+    }
+    // Windows on exterior edges ≥ 2.5 m (needs the plan width for the length).
+    for (const a of hulls) {
+      const oa = absOutline(a)
+      for (const e of exteriorEdges(a, hulls.filter((r) => r.id !== a.id), planWEff)) {
+        const seg = edgeSegment(oa, e)
+        const edgeLenM = Math.hypot(seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]) * planWEff
+        if (edgeLenM < MIN_WINDOW_EDGE_M || edgeTaken(a.id, e)) continue
+        add(a.id, { edge: e, at: 0.5, type: 'window',
+          width_m: 1.2, height_m: 1.2, sill_m: 0.9 })
       }
     }
 
