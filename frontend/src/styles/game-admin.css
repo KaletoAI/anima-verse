@@ -2180,8 +2180,71 @@ html, * {
   grid-template-columns: 2fr 3fr;
 }
 
+/* Even split — the floor-plan editor needs it: its pane is
+   [toolbar 44px][canvas 420px][side panel]. */
+.ga-loc-twocol--5050 {
+  grid-template-columns: 1fr 1fr;
+}
+
 @media (max-width: 900px) {
   .ga-loc-twocol { grid-template-columns: 1fr; }
+}
+
+/* Floor-plan editor panes: icon toolbar left of the canvas, context panel
+   right of it. */
+.ga-plan-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 44px;
+  flex: 0 0 auto;
+}
+
+.ga-plan-toolbar .ga-btn {
+  padding: 4px 0;
+  font-size: 15px;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.ga-plan-toolbar-group {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #8b949e);
+  text-align: center;
+  overflow: hidden;
+  border-top: 1px solid var(--border, #30363d);
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+.ga-plan-toolbar-group:first-child {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.ga-plan-panel {
+  flex: 1 1 220px;
+  min-width: 160px;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.ga-plan-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #8b949e);
+  border-bottom: 1px solid var(--border, #30363d);
+  padding-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ============================================================

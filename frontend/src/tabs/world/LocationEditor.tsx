@@ -41,6 +41,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const [modelGenSrc, setModelGenSrc] = useState<string | null>(null)
   // Floor-plan tab: selected room, for the model adjustment strip.
   const [floorRoomSel, setFloorRoomSel] = useState('')
+  // Inline "+ Room" input — no browser prompt dialogs in this UI.
+  const [newRoomName, setNewRoomName] = useState('')
 
   useEffect(() => {
     setDraft({ ...location })
@@ -123,14 +125,15 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   }, [location.name, onDeleted, t, toast])
 
   const addRoom = useCallback(() => {
-    const name = window.prompt(t('Room name:'))
-    if (!name?.trim()) return
-    const id = name.trim().toLowerCase().replace(/\s+/g, '_')
+    const name = newRoomName.trim()
+    if (!name) return
+    const id = name.toLowerCase().replace(/\s+/g, '_')
     setDraft((prev) => {
-      const rooms = [...(prev.rooms || []), { id, name: name.trim(), description: '' }]
+      const rooms = [...(prev.rooms || []), { id, name, description: '' }]
       return { ...prev, rooms }
     })
-  }, [t])
+    setNewRoomName('')
+  }, [newRoomName])
 
   // Ground texture for the placement viewer: the location's chosen 2D map
   // icon (when set). Without it the tile renders as a plain square.
@@ -279,9 +282,23 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           left already shows the rooms below the location, no need to
           duplicate them here. The "+ Room" action stays so new rooms
           can be added from the location editor. */}
-      <button className="ga-btn ga-btn-sm" onClick={addRoom}>
-        + {t('Room')}
-      </button>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input
+          className="ga-input"
+          style={{ maxWidth: 220 }}
+          value={newRoomName}
+          placeholder={t('Room name')}
+          onChange={(e) => setNewRoomName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') addRoom() }}
+        />
+        <button
+          className="ga-btn ga-btn-sm"
+          disabled={!newRoomName.trim()}
+          onClick={addRoom}
+        >
+          + {t('Room')}
+        </button>
+      </div>
     </div>
   )
 
@@ -478,7 +495,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const floorSelRoom = (draft.rooms || []).find((r) => r.id === floorRoomSel)
   const tabFloor = (
     <div className="ga-form">
-      <div className="ga-loc-twocol ga-loc-twocol--4060">
+      <div className="ga-loc-twocol ga-loc-twocol--5050">
         <RoomLayoutEditor
           rooms={draft.rooms || []}
           onChange={(rooms) => upd('rooms', rooms)}

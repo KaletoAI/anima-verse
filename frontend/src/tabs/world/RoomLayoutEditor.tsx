@@ -1,15 +1,16 @@
 /**
  * RoomLayoutEditor — the floor plan of a location (AV3D-2), embedded in the
- * location editor's "Floor plan" tab. Rooms are placed as rectangles on the
- * building footprint: drag to move, corner handle to resize; the toolbar at
- * the right of the plan rotates in 90° steps, places the exit and animation
- * markers (spots a figure with a matching animation snaps to — kinds from
- * the OPEN clip vocabulary, nothing hardcoded) with one click inside the
- * room, and draws the building outline / places the elevator (AV3D-12).
- * Everything edits the LOCATION draft (rooms[].layout)
- * and is persisted by the location's Save button — the external 3D client
- * reads the layout from /world/locations; rooms without a layout fall back
- * to its auto-grid.
+ * location editor's "Floor plan" tab. The pane is three columns:
+ * [PlanToolbar 44px] [canvas 420px] [PlanSidePanel]. Rooms are drawn as
+ * polygon hulls on the building footprint: drag to move, corner handle to
+ * resize; the icon toolbar rotates in 90° steps, places the exit and
+ * animation markers (spots a figure with a matching animation snaps to —
+ * kinds from the OPEN clip vocabulary, nothing hardcoded) with one click
+ * inside the room, and draws the building outline / places the elevator
+ * (AV3D-12). Everything edits the LOCATION draft (rooms[].layout) and is
+ * persisted by the location's Save button — the external 3D client reads the
+ * layout from /world/locations; rooms without a layout fall back to its
+ * auto-grid.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -22,6 +23,9 @@ import {
   outlineOf, r4, rotateOpeningCW, sharedEdges, snapDrawPoint,
 } from './planGeometry'
 import type { EdgeLetter, PolyRoom, SnapResult } from './planGeometry'
+import { PlanSidePanel } from './PlanSidePanel'
+import { PlanToolbar } from './PlanToolbar'
+import type { PlanMode } from './PlanToolbar'
 import { getBuildingDims, getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { Map3D, Room, RoomLayout, RoomOpening } from './worldTypes'
 
@@ -67,7 +71,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // Click-to-place modes: the next click inside the room sets the exit point,
   // drops an animation marker of the chosen kind, or places a wall opening on
   // the nearest edge.
-  const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker' | 'marker-move' | 'outline' | 'elevator' | 'opening' | 'draw-room'>('')
+  const [clickMode, setClickMode] = useState<PlanMode>('')
+  // Prop palette open in the side panel (🪑 tool) — presentation only, the
+  // placement logic is not part of this editor yet.
+  const [propsOpen, setPropsOpen] = useState(false)
   // The room whose hull is being drawn ('draw-room' mode) — set by the
   // "Not on the plan" chips (first placement) and the redraw tool.
   const [drawTarget, setDrawTarget] = useState('')
@@ -248,18 +255,23 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     setClickMode('')
   }, [outlineDraft, onMap3d])
 
+  // Drops any armed mode plus the running draft — Esc, the ✕ tool and every
+  // mode toggle go through here.
+  const cancelDraw = useCallback(() => {
+    setClickMode('')
+    setOutlineDraft([])
+    setHoverSnap(null)
+    setDrawTarget('')
+  }, [])
+
   // Esc cancels any armed mode and the current draft.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      setClickMode('')
-      setOutlineDraft([])
-      setHoverSnap(null)
-      setDrawTarget('')
+      if (e.key === 'Escape') cancelDraw()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [cancelDraw])
 
   const derivedSize = useCallback((roomId: string):
       { w: number; d: number } | null => {
@@ -475,6 +487,23 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
 
+  // Arm a click mode from the toolbar (clicking the armed tool disarms it).
+  // Drawing modes start with an empty draft; redrawing targets the selected
+  // room — the "Not on the plan" chips arm the same mode for a new room.
+  const armMode = useCallback((m: PlanMode) => {
+    if (clickMode === m || !m) {
+      cancelDraw()
+      return
+    }
+    if (m === 'draw-room') {
+      if (!selectedRoom?.id) return
+      setDrawTarget(selectedRoom.id)
+    }
+    setOutlineDraft([])
+    setHoverSnap(null)
+    setClickMode(m)
+  }, [clickMode, selectedRoom, cancelDraw])
+
   // Rotate the room AS A UNIT (clockwise on the plan): the rectangle swaps
   // w/d around its centre, exit and markers turn with the content
   // ((x,y) -> (1-y, x)), rotation yaws the room MODEL inside the rectangle.
@@ -570,7 +599,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     <div className="ga-form" style={{ gap: 6 }}>
       <div className="ga-form-section-label">{t('Room layout (floor plan)')}</div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
+        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+          title={t('0 = ground floor, negative = basement. Saved with the location.')}>
           {t('Level')}
           <input
             className="ga-input"
@@ -601,32 +631,37 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             ))}
           </span>
         ) : null}
-        <label className="ga-check-row" style={{ fontSize: '0.82em' }}>
-          <input type="checkbox" checked={underlay}
-            onChange={(e) => setUnderlay(e.target.checked)} />
-          <span>{t('Models behind the plan')}</span>
-        </label>
-        <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-          title={t('Lay the building model (roof view = real footprint) behind the plan — for tracing the outline polygon.')}>
-          <input type="checkbox" checked={bUnderlay}
-            onChange={(e) => setBUnderlay(e.target.checked)} />
-          <span>{t('Building behind the plan')}</span>
-        </label>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={placed.length < 1}
-          onClick={suggestOpenings}
-          title={t('Add a door on every shared wall (once, linked to the neighbour) and a window on every exterior wall ≥ 2.5 m. Existing openings are kept — needs the plan width for windows.')}
-        >
-          ✨ {t('Suggest openings')}
-        </button>
-        <span className="ga-hint">
-          {t('0 = ground floor, negative = basement. Saved with the location.')}
-        </span>
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+      <PlanToolbar
+        mode={clickMode}
+        hasSelection={!!selectedRoom}
+        selectionRotation={selectedRoom?.layout?.rotation || 0}
+        hasExit={!!selectedRoom?.layout?.exit}
+        canMarker={clipKinds.length > 0}
+        hasOutline={!!map3d?.outline?.length}
+        outlineDraftLen={outlineDraft.length}
+        hasElevator={!!map3d?.elevator}
+        building={!!onMap3d}
+        canSuggest={placed.length > 0}
+        showModels={underlay}
+        showBuilding={bUnderlay}
+        propsOpen={propsOpen}
+        onMode={armMode}
+        onRotate={rotateSelected}
+        onUnplace={() => { updateLayout(selectedRoom?.id || '', null); setSelected('') }}
+        onRemoveExit={() => updateLayout(selectedRoom?.id || '', { exit: undefined })}
+        onRemoveOutline={() => onMap3d?.('outline', undefined)}
+        onRemoveElevator={() => onMap3d?.('elevator', undefined)}
+        onCommitOutline={commitOutline}
+        onCommitRoom={commitRoomDraft}
+        onCancelDraw={cancelDraw}
+        onSuggest={suggestOpenings}
+        onToggleModels={() => setUnderlay((v) => !v)}
+        onToggleBuilding={() => setBUnderlay((v) => !v)}
+        onProps={() => setPropsOpen((v) => !v)}
+      />
       <div
         ref={canvasRef}
         style={{
@@ -947,223 +982,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         ) : null}
       </div>
 
-      {/* Toolbar at the right side of the plan — room tools on top,
-          building tools (outline/elevator) below. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 118, flex: '0 0 auto' }}>
-        <span className="ga-hint">{t('Room')}</span>
-        {clickMode === 'draw-room' ? (
-          <>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-primary"
-              disabled={outlineDraft.length < 3}
-              onClick={commitRoomDraft}
-              title={t('Finish the room hull — clicking the first vertex closes too')}
-            >
-              ✓ ({outlineDraft.length})
-            </button>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              onClick={() => {
-                setOutlineDraft([])
-                setHoverSnap(null)
-                setDrawTarget('')
-                setClickMode('')
-              }}
-            >
-              {t('Cancel')}
-            </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={!selectedRoom}
-            onClick={() => {
-              if (!selectedRoom?.id) return
-              setDrawTarget(selectedRoom.id)
-              setOutlineDraft([])
-              setHoverSnap(null)
-              setClickMode('draw-room')
-            }}
-            title={t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, exit and markers stay.')}
-          >
-            ⬠ {t('Redraw')}
-          </button>
-        )}
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={!selectedRoom}
-          onClick={rotateSelected}
-          title={t('Rotate the room 90° clockwise — rectangle, exit point and 3D model turn together.')}
-        >
-          ↻ 90° ({selectedRoom?.layout?.rotation || 0}°)
-        </button>
-        <button
-          type="button"
-          className={`ga-btn ga-btn-sm${clickMode === 'exit' ? ' ga-btn-primary' : ''}`}
-          disabled={!selectedRoom}
-          onClick={() => setClickMode((m) => (m === 'exit' ? '' : 'exit'))}
-          title={t('Then click inside the room to place the walk-in/out point.')}
-        >
-          🚪 {clickMode === 'exit' ? '…' : t('Exit')}
-        </button>
-        {selectedRoom?.layout?.exit ? (
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            onClick={() => updateLayout(selectedRoom.id || '', { exit: undefined })}
-            title={t('Remove the exit point — the client falls back to the edge facing the building centre.')}
-          >
-            🗑 {t('Exit')}
-          </button>
-        ) : null}
-        {clipKinds.length ? (
-          <>
-            <select
-              className="ga-input"
-              style={{ width: '100%' }}
-              value={markerKind}
-              disabled={!selectedRoom}
-              onChange={(e) => setMarkerKind(e.target.value)}
-              title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
-            >
-              {clipKinds.map((k) => (
-                <option key={k} value={k}>{k}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className={`ga-btn ga-btn-sm${clickMode === 'marker' ? ' ga-btn-primary' : ''}`}
-              disabled={!selectedRoom}
-              onClick={() => setClickMode((m) => (m === 'marker' ? '' : 'marker'))}
-              title={t('Then click inside the room to drop the marker — figures with this animation snap to it.')}
-            >
-              🎯 {clickMode === 'marker' ? '…' : t('Marker')}
-            </button>
-          </>
-        ) : null}
-        <button
-          type="button"
-          className={`ga-btn ga-btn-sm${clickMode === 'opening' ? ' ga-btn-primary' : ''}`}
-          disabled={!selectedRoom}
-          onClick={() => setClickMode((m) => (m === 'opening' ? '' : 'opening'))}
-          title={t('Then click a room edge to place a door — drag it along the edge, edit it below.')}
-        >
-          🚪 {clickMode === 'opening' ? '…' : t('Opening')}
-        </button>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm ga-btn-danger"
-          disabled={!selectedRoom}
-          onClick={() => { updateLayout(selectedRoom?.id || '', null); setSelected('') }}
-          title={t('Remove from the floor plan — the 3D client auto-grids this room again.')}
-        >
-          ✕ {t('Unplace')}
-        </button>
-        {onMap3d ? (
-          <>
-            <span className="ga-hint" style={{ marginTop: 6 }}>{t('Building')}</span>
-            {clickMode === 'outline' ? (
-              <>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm ga-btn-primary"
-                  disabled={outlineDraft.length < 3}
-                  onClick={commitOutline}
-                  title={t('Finish outline — clicking the first vertex closes too')}
-                >
-                  ✓ ({outlineDraft.length})
-                </button>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm"
-                  onClick={() => { setOutlineDraft([]); setHoverSnap(null); setClickMode('') }}
-                >
-                  {t('Cancel')}
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                onClick={() => { setOutlineDraft([]); setClickMode('outline') }}
-                title={t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
-              >
-                🏗 {t('Outline')}
-              </button>
-            )}
-            {map3d?.outline?.length && clickMode !== 'outline' ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm ga-btn-danger"
-                onClick={() => onMap3d('outline', undefined)}
-                title={t('Remove the outline — the client falls back to the rectangle.')}
-              >
-                🗑 {t('Outline')}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className={`ga-btn ga-btn-sm${clickMode === 'elevator' ? ' ga-btn-primary' : ''}`}
-              onClick={() => setClickMode((m) => (m === 'elevator' ? '' : 'elevator'))}
-              title={t('Place the elevator with one click — it serves ALL levels (the client builds the shaft).')}
-            >
-              🛗 {clickMode === 'elevator' ? '…' : t('Elevator')}
-            </button>
-            {map3d?.elevator && clickMode !== 'elevator' ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm ga-btn-danger"
-                onClick={() => onMap3d('elevator', undefined)}
-                title={t('Remove the elevator')}
-              >
-                🗑 {t('Elevator')}
-              </button>
-            ) : null}
-          </>
-        ) : null}
-        {/* Markers of the selected room — appended dynamically; the
-            adjustment sliders stay below the plan. */}
-        {selectedRoom?.layout?.markers?.length ? (
-          <>
-            <span className="ga-hint" style={{ marginTop: 6 }}>{t('Markers')}</span>
-            {selectedRoom.layout.markers.map((m, i) => (
-              <button
-                key={`${m.animation}-${i}`}
-                type="button"
-                className={`ga-btn ga-btn-sm${markerSel === i ? ' ga-btn-primary' : ''}`}
-                style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                onClick={() => setMarkerSel(markerSel === i ? null : i)}
-                title={t('Select this marker to adjust facing/height or remove it.')}
-              >
-                🎯 {i + 1} · {m.animation}
-              </button>
-            ))}
-          </>
-        ) : null}
-      </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        {selectedRoom ? (
-          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-            title={t('Show this room permanently in the 3D client, independent of the interior view — for outdoor rooms the building model does not cover.')}>
-            <input
-              type="checkbox"
-              checked={!!selectedRoom.layout?.always_visible}
-              onChange={(e) => updateLayout(selectedRoom.id || '', {
-                always_visible: e.target.checked || undefined,
-              })}
-            />
-            <span>{t('Always visible')}</span>
-          </label>
-        ) : null}
-        {!selectedRoom ? (
-          <span className="ga-hint">{t('Select a room rectangle — the toolbar next to the plan works on it.')}</span>
-        ) : null}
+      <PlanSidePanel
+        room={selectedRoom || null}
+        clipKinds={clipKinds}
+        markerKind={markerKind}
+        onMarkerKind={setMarkerKind}
+        markerSel={markerSel}
+        onSelectMarker={setMarkerSel}
+        onAlwaysVisible={(v) => updateLayout(selectedRoom?.id || '', {
+          always_visible: v || undefined,
+        })}
+      />
       </div>
 
       {selectedRoom && markerSel !== null && selectedRoom.layout?.markers?.[markerSel] ? (() => {
