@@ -325,15 +325,23 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
                 break
 
     if not candidates:
-        # Fallback fuer Sub-Tasks: wenn der spezifische Task nicht geroutet ist,
-        # versuche den generischen Parent-Task. Pattern: "<parent>_<sub>" faellt
-        # auf "<parent>" zurueck. So kann der User Sub-Tasks per Admin-UI
-        # nachtraeglich differenziert zuweisen, ohne dass die Funktion ausfaellt.
+        # Sub-task fallback: an unrouted specific task tries its generic
+        # parent. Pattern: "<parent>_<sub>" falls back to "<parent>", so the
+        # admin can assign sub-tasks individually later without the feature
+        # failing until then.
         for _parent in ("intent", "thought", "extraction"):
             if task.startswith(_parent + "_") and task != _parent:
-                logger.debug("resolve_llm(%s): kein Routing, Fallback auf '%s'",
+                logger.debug("resolve_llm(%s): no routing, falling back to '%s'",
                              task, _parent)
                 return resolve_llm(_parent, agent_name=agent_name)
+        # Task FAMILIES without a parent task of their own fall back to a
+        # generic anchor of their class: furnish_* is strict-JSON tool work →
+        # "intent" (the tool-class fallback). An explicit routing entry in
+        # /admin/settings always wins over this.
+        if task.startswith("furnish_"):
+            logger.debug("resolve_llm(%s): no routing, falling back to 'intent'",
+                         task)
+            return resolve_llm("intent", agent_name=agent_name)
         return None
 
     candidates.sort(key=lambda x: x[0])
