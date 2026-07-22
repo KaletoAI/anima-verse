@@ -524,11 +524,18 @@ def _phase_generate(room_id: str) -> None:
             if not _update_row(room_id, proposal=proposal):
                 return
         pid = str(item["prop_id"])
+        from app.core.props import is_pending
         trigger_generation(pid)
         deadline = time.monotonic() + MODEL_TIMEOUT_SECONDS
         while not _prop_ready(pid):
             if not _get_row(room_id):
                 return  # job discarded mid-generation
+            if not is_pending(pid):
+                # The chain ended WITHOUT a model (source render or mesh
+                # failed) — fail fast instead of burning the full timeout.
+                raise FurnishError(
+                    f"Model generation for '{item['name']}' failed — see the "
+                    "queue panel / server log, then Retry.")
             if time.monotonic() > deadline:
                 raise FurnishError(
                     f"Model generation for '{item['name']}' timed out.")
