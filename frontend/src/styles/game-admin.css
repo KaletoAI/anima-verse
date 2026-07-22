@@ -630,6 +630,28 @@ html, * {
   background: var(--bg-container, #161b22);
 }
 
+/* Detail panel split into an input column and a preview column (e.g. the
+   prop detail: fields left, 3D viewer right). Collapses to one column on
+   narrow viewports, like the other two-column layouts. */
+.ga-detail-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+/* Keeps the preview in view while the input column scrolls — offset by the
+   sticky detail toolbar above it. */
+.ga-detail-cols-sticky {
+  position: sticky;
+  top: 48px;
+}
+
+@media (max-width: 900px) {
+  .ga-detail-cols { grid-template-columns: 1fr; }
+  .ga-detail-cols-sticky { position: static; }
+}
+
 .ga-form-row {
   display: flex;
   gap: 12px;

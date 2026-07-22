@@ -229,177 +229,184 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
           </>
         }
       />
-      <div className="ga-form">
-        {pending ? (
-          <span className="ga-hint">{t('Generating the model — this takes a few minutes.')}</span>
-        ) : null}
-        {prop.has_model ? (
-          <Model3DViewer
-            url={`/assets/props/${enc}/model?v=${encodeURIComponent(prop.created_at || '')}-${cacheBump}`}
-            format="glb"
-            height={340}
-            rotation={prop.rotation}
-            onBounds={(b) => setLiveBbox(b.size)}
-          />
-        ) : (
-          <div className="ga-empty">
-            {t('No model yet — generate it or upload a GLB below.')}
-          </div>
-        )}
-
-        {/* Orientation fix — ↻ adds +90°, the field sets a free exact angle. */}
-        {prop.has_model ? (
-          <>
-            <div className="ga-form-section-label">{t('Orientation fix')}</div>
-            <div className="ga-form-row">
-              {(['x', 'y', 'z'] as const).map((axis) => (
-                <span key={axis} style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
-                  <button type="button" className="ga-btn ga-btn-sm"
-                    onClick={() => { void rotate(axis) }} title={t('+90°')}>
-                    ↻ {axis.toUpperCase()}
-                  </button>
-                  <input
-                    key={`${axis}-${prop.rotation?.[axis] || 0}`}
-                    className="ga-input" type="number" min={-360} max={720} step={0.1}
-                    style={{ width: 64 }}
-                    defaultValue={prop.rotation?.[axis] || 0}
-                    title={t('Exact angle in degrees — free rotation for meshes that came out tilted.')}
-                    onBlur={(e) => { void setRotationAxis(axis, e.target.value) }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                  />
-                </span>
-              ))}
-            </div>
-            <span className="ga-hint">{t('Orientation fix — persisted; the 3D client applies it on load.')}</span>
-          </>
-        ) : null}
-
-        {/* Editable sidecar fields. */}
-        <div className="ga-form-section-label">{t('Properties')}</div>
-        <div className="ga-form-row">
-          <Field label={t('Category')}>
-            <input className="ga-input" list={CATEGORY_DATALIST_ID} value={categoryDraft}
-              onChange={(e) => setCategoryDraft(e.target.value)}
-              onBlur={() => { if (categoryDraft !== prop.category) void patch({ category: categoryDraft }) }} />
-          </Field>
-          <Field label={t('Tags (comma-separated)')}>
-            <input className="ga-input" value={tagsDraft}
-              onChange={(e) => setTagsDraft(e.target.value)}
-              onBlur={() => {
-                if (tagsDraft !== prop.tags.join(', ')) void patch({ tags: tagsDraft })
-              }} />
-          </Field>
-        </div>
-
-        {/* Real size in metres — the mesh loses its scale, so the client sizes
-            the object by these three values (after the orientation fix). */}
-        <div className="ga-form-row">
-          {DIM_FIELDS.map((field) => (
-            <Field key={field.key} label={t(field.label)} compact>
-              <input className="ga-input" type="number" min={0.01} step={0.05}
-                style={{ width: 90 }} value={dims[field.key]}
-                onChange={(e) => editDim(field, e.target.value)}
-                onBlur={commitDims}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+      <div className="ga-detail-cols">
+        {/* Inputs: everything the sidecar stores. */}
+        <div className="ga-form">
+          {/* Editable sidecar fields. */}
+          <div className="ga-form-section-label">{t('Properties')}</div>
+          <div className="ga-form-row">
+            <Field label={t('Category')}>
+              <input className="ga-input" list={CATEGORY_DATALIST_ID} value={categoryDraft}
+                onChange={(e) => setCategoryDraft(e.target.value)}
+                onBlur={() => { if (categoryDraft !== prop.category) void patch({ category: categoryDraft }) }} />
             </Field>
-          ))}
-        </div>
-        <span className="ga-hint">
-          {ratios
-            ? t('Linked to the model’s proportions — edit one value, the other two follow; a field you edited stays pinned until you switch props.')
-            : t('No model box yet — enter all three by hand.')}
-        </span>
-        {prop.dims_estimated ? (
+            <Field label={t('Tags (comma-separated)')}>
+              <input className="ga-input" value={tagsDraft}
+                onChange={(e) => setTagsDraft(e.target.value)}
+                onBlur={() => {
+                  if (tagsDraft !== prop.tags.join(', ')) void patch({ tags: tagsDraft })
+                }} />
+            </Field>
+          </div>
+
+          {/* Real size in metres — the mesh loses its scale, so the client sizes
+              the object by these three values (after the orientation fix). */}
+          <div className="ga-form-row">
+            {DIM_FIELDS.map((field) => (
+              <Field key={field.key} label={t(field.label)} compact>
+                <input className="ga-input" type="number" min={0.01} step={0.05}
+                  style={{ width: 90 }} value={dims[field.key]}
+                  onChange={(e) => editDim(field, e.target.value)}
+                  onBlur={commitDims}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+              </Field>
+            ))}
+          </div>
           <span className="ga-hint">
-            {t('Estimated — refined automatically when the model arrives.')}
+            {ratios
+              ? t('Linked to the model’s proportions — edit one value, the other two follow; a field you edited stays pinned until you switch props.')
+              : t('No model box yet — enter all three by hand.')}
           </span>
-        ) : null}
+          {prop.dims_estimated ? (
+            <span className="ga-hint">
+              {t('Estimated — refined automatically when the model arrives.')}
+            </span>
+          ) : null}
 
-        {prop.prompt ? (
-          <span className="ga-hint" style={{ fontSize: '0.78em' }} title={prop.prompt}>
-            {prop.source === 'generated' ? t('Generated') : t('Source')}
-            {prop.backend ? ` · ${prop.backend}` : ''} · {prop.prompt}
+          {prop.prompt ? (
+            <span className="ga-hint" style={{ fontSize: '0.78em' }} title={prop.prompt}>
+              {prop.source === 'generated' ? t('Generated') : t('Source')}
+              {prop.backend ? ` · ${prop.backend}` : ''} · {prop.prompt}
+            </span>
+          ) : null}
+
+          {/* Object-local markers — a figure with a matching activity snaps to the
+              spot in the object's own frame, so the marker travels with the prop
+              into any room. `at` = [u, v, w] fractions of the model bounding box. */}
+          <div className="ga-form-section-label">{t('Markers')}</div>
+          <span className="ga-hint">
+            {t('Object-local spots a figure with a matching animation snaps to — they travel with the prop into any room. at = fraction of the model bounding box (u = width, v = height, w = depth, 0..1); facing in degrees (0 south, 90 east, 180 north, 270 west; empty = client default). Click placement in the viewer comes later.')}
           </span>
-        ) : null}
-
-        {/* Object-local markers — a figure with a matching activity snaps to the
-            spot in the object's own frame, so the marker travels with the prop
-            into any room. `at` = [u, v, w] fractions of the model bounding box. */}
-        <div className="ga-form-section-label">{t('Markers')}</div>
-        <span className="ga-hint">
-          {t('Object-local spots a figure with a matching animation snaps to — they travel with the prop into any room. at = fraction of the model bounding box (u = width, v = height, w = depth, 0..1); facing in degrees (0 south, 90 east, 180 north, 270 west; empty = client default). Click placement in the viewer comes later.')}
-        </span>
-        {markers.length === 0 ? (
-          <div className="ga-empty" style={{ fontSize: '0.85em' }}>{t('No markers yet.')}</div>
-        ) : (
-          markers.map((m, i) => (
-            <div key={i} className="ga-form-row">
-              <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {i + 1}</span>
-              <select
-                className="ga-input"
-                style={{ width: 130 }}
-                value={m.animation}
-                title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
-                onChange={(e) => patchMarker(i, { animation: e.target.value })}
-              >
-                {kindOptions.map((k) => <option key={k} value={k}>{k}</option>)}
-              </select>
-              {(['u', 'v', 'w'] as const).map((axisLabel, ax) => (
-                <label key={axisLabel} style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: '0.8em' }}>
-                  {axisLabel}
+          {markers.length === 0 ? (
+            <div className="ga-empty" style={{ fontSize: '0.85em' }}>{t('No markers yet.')}</div>
+          ) : (
+            markers.map((m, i) => (
+              <div key={i} className="ga-form-row">
+                <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {i + 1}</span>
+                <select
+                  className="ga-input"
+                  style={{ width: 130 }}
+                  value={m.animation}
+                  title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
+                  onChange={(e) => patchMarker(i, { animation: e.target.value })}
+                >
+                  {kindOptions.map((k) => <option key={k} value={k}>{k}</option>)}
+                </select>
+                {(['u', 'v', 'w'] as const).map((axisLabel, ax) => (
+                  <label key={axisLabel} style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: '0.8em' }}>
+                    {axisLabel}
+                    <input
+                      key={`${axisLabel}-${m.at[ax]}`}
+                      className="ga-input"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      style={{ width: 62 }}
+                      defaultValue={m.at[ax]}
+                      onBlur={(e) => setMarkerAt(i, ax as 0 | 1 | 2, e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                    />
+                  </label>
+                ))}
+                <label style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: '0.8em' }}
+                  title={t('Facing in degrees — empty for the client default.')}>
+                  🧭
                   <input
-                    key={`${axisLabel}-${m.at[ax]}`}
+                    key={`facing-${m.facing ?? ''}`}
                     className="ga-input"
                     type="number"
                     min={0}
-                    max={1}
-                    step={0.05}
-                    style={{ width: 62 }}
-                    defaultValue={m.at[ax]}
-                    onBlur={(e) => setMarkerAt(i, ax as 0 | 1 | 2, e.target.value)}
+                    max={359}
+                    step={1}
+                    style={{ width: 66 }}
+                    defaultValue={m.facing ?? ''}
+                    placeholder="—"
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim()
+                      if (raw === '') { if (m.facing !== undefined) patchMarker(i, { facing: undefined }) }
+                      else {
+                        const n = parseInt(raw, 10)
+                        patchMarker(i, { facing: Number.isFinite(n) ? ((n % 360) + 360) % 360 : undefined })
+                      }
+                    }}
                     onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
                   />
                 </label>
-              ))}
-              <label style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: '0.8em' }}
-                title={t('Facing in degrees — empty for the client default.')}>
-                🧭
-                <input
-                  key={`facing-${m.facing ?? ''}`}
-                  className="ga-input"
-                  type="number"
-                  min={0}
-                  max={359}
-                  step={1}
-                  style={{ width: 66 }}
-                  defaultValue={m.facing ?? ''}
-                  placeholder="—"
-                  onBlur={(e) => {
-                    const raw = e.target.value.trim()
-                    if (raw === '') { if (m.facing !== undefined) patchMarker(i, { facing: undefined }) }
-                    else {
-                      const n = parseInt(raw, 10)
-                      patchMarker(i, { facing: Number.isFinite(n) ? ((n % 360) + 360) % 360 : undefined })
-                    }
-                  }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                />
-              </label>
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm ga-btn-danger"
-                onClick={() => removeMarker(i)}
-                title={t('Remove this marker')}
-              >
-                ×
-              </button>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm ga-btn-danger"
+                  onClick={() => removeMarker(i)}
+                  title={t('Remove this marker')}
+                >
+                  ×
+                </button>
+              </div>
+            ))
+          )}
+          <div>
+            <button type="button" className="ga-btn ga-btn-sm" onClick={addMarker}>
+              + {t('Marker')}
+            </button>
+          </div>
+        </div>
+
+        {/* Preview: the viewer plus the orientation fix that steers it —
+            sticky, so it stays in view while a long marker list scrolls. */}
+        <div className="ga-form ga-detail-cols-sticky">
+          {pending ? (
+            <span className="ga-hint">{t('Generating the model — this takes a few minutes.')}</span>
+          ) : null}
+          {prop.has_model ? (
+            <Model3DViewer
+              url={`/assets/props/${enc}/model?v=${encodeURIComponent(prop.created_at || '')}-${cacheBump}`}
+              format="glb"
+              height={340}
+              rotation={prop.rotation}
+              onBounds={(b) => setLiveBbox(b.size)}
+            />
+          ) : (
+            <div className="ga-empty">
+              {t('No model yet — generate it or upload a GLB below.')}
             </div>
-          ))
-        )}
-        <div>
-          <button type="button" className="ga-btn ga-btn-sm" onClick={addMarker}>
-            + {t('Marker')}
-          </button>
+          )}
+
+          {/* Orientation fix — ↻ adds +90°, the field sets a free exact angle. */}
+          {prop.has_model ? (
+            <>
+              <div className="ga-form-section-label">{t('Orientation fix')}</div>
+              <div className="ga-form-row">
+                {(['x', 'y', 'z'] as const).map((axis) => (
+                  <span key={axis} style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+                    <button type="button" className="ga-btn ga-btn-sm"
+                      onClick={() => { void rotate(axis) }} title={t('+90°')}>
+                      ↻ {axis.toUpperCase()}
+                    </button>
+                    <input
+                      key={`${axis}-${prop.rotation?.[axis] || 0}`}
+                      className="ga-input" type="number" min={-360} max={720} step={0.1}
+                      style={{ width: 64 }}
+                      defaultValue={prop.rotation?.[axis] || 0}
+                      title={t('Exact angle in degrees — free rotation for meshes that came out tilted.')}
+                      onBlur={(e) => { void setRotationAxis(axis, e.target.value) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                    />
+                  </span>
+                ))}
+              </div>
+              <span className="ga-hint">{t('Orientation fix — persisted; the 3D client applies it on load.')}</span>
+            </>
+          ) : null}
         </div>
       </div>
     </>
