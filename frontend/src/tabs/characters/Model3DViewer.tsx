@@ -9,10 +9,84 @@
  * FBX), so the loader is picked by extension.
  */
 import { useEffect, useRef, useState } from 'react'
-import type { Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
+import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
+import { apiGet } from '../../lib/api'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
+
+// ── Shared marker-figure sources (module cache — one fetch per session,
+// every viewer instance clones from these) ──
+let _figPromise: Promise<Object3D | null> | null = null
+const loadTestFigure = (): Promise<Object3D | null> => {
+  if (!_figPromise) {
+    _figPromise = (async () => {
+      try {
+        const meta = await apiGet<{ format?: string }>('/play/test-figure/meta')
+        let obj: Object3D
+        if ((meta.format || 'glb') === 'fbx') {
+          const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
+          obj = await new FBXLoader().loadAsync('/play/test-figure/model')
+        } else {
+          const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
+          obj = (await new GLTFLoader().loadAsync('/play/test-figure/model')).scene
+        }
+        // Neutral clay figure — placement and scale are judged, not a look.
+        const THREE = await import('three')
+        const clay = new THREE.MeshStandardMaterial({
+          color: 0x9aa4af, roughness: 0.85, metalness: 0,
+        })
+        obj.traverse((o: Object3D) => {
+          const mesh = o as Mesh
+          if (!mesh.isMesh) return
+          const old = mesh.material
+          mesh.material = clay
+          if (Array.isArray(old)) old.forEach((m) => m.dispose?.())
+          else old?.dispose?.()
+        })
+        return obj
+      } catch {
+        return null
+      }
+    })()
+  }
+  return _figPromise
+}
+let _clipsPromise: Promise<Array<{ kind: string; set: string; url: string }>> | null = null
+const _clipCache = new Map<string, Promise<{ clip: AnimationClip; restObj: Object3D } | null>>()
+const loadClip = (kind: string) => {
+  if (!_clipsPromise) {
+    _clipsPromise = apiGet<{ clips?: Array<{ kind: string; set: string; url: string }> }>(
+      '/assets/animation-clips')
+      .then((d) => d.clips || [])
+      .catch(() => [])
+  }
+  let cached = _clipCache.get(kind)
+  if (!cached) {
+    cached = (async () => {
+      const clips = await _clipsPromise!
+      // Prefer a set-less clip, then female, then anything of the kind —
+      // same pick as the floor-plan preview.
+      const of = clips.filter((c) => c.kind === kind)
+      const pick = of.find((c) => !c.set) || of.find((c) => c.set === 'female') || of[0]
+      if (!pick) return null
+      try {
+        const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
+        const clipObj = await new FBXLoader().loadAsync(pick.url)
+        const clip = clipObj.animations?.[0]
+        if (!clip) return null
+        // Play in place — the hips position track is in Mixamo centimetres.
+        clip.tracks = clip.tracks.filter(
+          (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
+        return { clip, restObj: clipObj }
+      } catch {
+        return null
+      }
+    })()
+    _clipCache.set(kind, cached)
+  }
+  return cached
+}
 
 /** Placement of a building model on its map tile — mirrors the worldmap
  *  contract (map3d.rotation / map3d.size in schnittstellen-3d.md). */
@@ -32,7 +106,7 @@ export interface TilePlacement {
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, groundTextureUrl, placement, onBounds, markers, dimsOverlay,
-  picking = false, onPickPoint }:
+  figureHeight = 0, picking = false, onPickPoint }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
@@ -51,9 +125,15 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  it — centred, yawed and scaled per `placement`, feet on the ground. */
     groundTextureUrl?: string
     placement?: TilePlacement
-    /** Object-local marker dots (numbered) — `at` = fractions of the RAW
-     *  model bounding box. Model mode only; refreshed live. */
-    markers?: Array<{ at: [number, number, number] }>
+    /** Object-local markers (numbered dots) — `at` = fractions of the RAW
+     *  model bounding box; `animation` poses the preview figure, `facing`
+     *  turns it. Model mode only; refreshed live. */
+    markers?: Array<{ at: [number, number, number]
+      animation?: string; facing?: number }>
+    /** Height of a 1.7 m preview figure in MESH units (the caller derives
+     *  it from bbox ÷ dims). > 0 shows a posed test figure at every marker
+     *  — a sit marker is only judgeable with someone sitting there. */
+    figureHeight?: number
     /** Draw the oriented bounding box with W/D/H edges + labels (real
      *  metres) around the model — makes the three dims readable in 3D.
      *  Model mode only; follows the orientation fix live. */
@@ -84,6 +164,10 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   markersRef.current = markers
   const dimsOverlayRef = useRef(dimsOverlay)
   dimsOverlayRef.current = dimsOverlay
+  const figureHeightRef = useRef(figureHeight)
+  figureHeightRef.current = figureHeight
+  // Stale-guard for the async figure loads of an overlay rebuild.
+  const figTokenRef = useRef(0)
   const pickingRef = useRef(picking)
   pickingRef.current = picking
   const onPickPointRef = useRef(onPickPoint)
@@ -92,7 +176,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   // Live overlay refresh (markers moved/added, dims typed) without reload.
-  useEffect(() => { overlayFnRef.current?.() }, [markers, dimsOverlay])
+  useEffect(() => { overlayFnRef.current?.() }, [markers, dimsOverlay, figureHeight])
   // The armed pick tool reads as a crosshair on the canvas.
   useEffect(() => {
     if (canvasRef.current) canvasRef.current.style.cursor = picking ? 'crosshair' : ''
@@ -467,9 +551,16 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           pivot.add(markerGroup)
           const dimsGroup = new THREE.Group()
           scene.add(dimsGroup)
+          // Preview figures anchor in WORLD space (they stand upright while
+          // the marker point rides the object through the orientation fix).
+          const figGroup = new THREE.Group()
+          scene.add(figGroup)
           const clearGroup = (g: Object3D) => {
             for (const c of [...g.children]) {
               g.remove(c)
+              // Figure clones share skeleton/geometry with the module cache —
+              // remove them, never dispose through them.
+              if (c.userData.__shared) continue
               c.traverse((o: Object3D) => {
                 const mesh = o as Mesh
                 mesh.geometry?.dispose?.()
@@ -502,22 +593,93 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           const rebuildOverlay = () => {
             clearGroup(markerGroup)
             clearGroup(dimsGroup)
+            clearGroup(figGroup)
+            const figToken = ++figTokenRef.current
             // Numbered marker dots at their raw-box fractions.
             const r = rawMaxDim * 0.025
             ;(markersRef.current || []).forEach((m, i) => {
+              const local = new THREE.Vector3(
+                rawBox.min.x + m.at[0] * rawSize.x,
+                rawBox.min.y + m.at[1] * rawSize.y,
+                rawBox.min.z + m.at[2] * rawSize.z)
               const dot = new THREE.Mesh(
                 new THREE.SphereGeometry(r, 10, 10),
                 new THREE.MeshBasicMaterial({ color: 0x3fb950, depthTest: false }))
               dot.renderOrder = 2
-              dot.position.set(
-                rawBox.min.x + m.at[0] * rawSize.x,
-                rawBox.min.y + m.at[1] * rawSize.y,
-                rawBox.min.z + m.at[2] * rawSize.z)
+              dot.position.copy(local)
               markerGroup.add(dot)
               const num = textSprite(String(i + 1), '#3fb950', rawMaxDim * 0.09)
-              num.position.copy(dot.position)
+              num.position.copy(local)
               num.position.y += r * 2.4
               markerGroup.add(num)
+              // Posed preview figure (1.7 m at the caller's mesh scale) —
+              // a sit marker is only judgeable with someone sitting there.
+              const figH = figureHeightRef.current
+              if (!(figH > 0)) return
+              void (async () => {
+                const src = await loadTestFigure()
+                if (!src || disposed || figTokenRef.current !== figToken) return
+                const anim = m.animation ? await loadClip(m.animation) : null
+                const { clone: skclone } =
+                  await import('three/examples/jsm/utils/SkeletonUtils.js')
+                if (disposed || figTokenRef.current !== figToken) return
+                const inst = skclone(src) as Object3D
+                const fpivot = new THREE.Group()
+                fpivot.add(inst)
+                // Up-axis fix measured on the REST skeletons — same logic as
+                // the floor-plan preview / the main clip path above.
+                if (anim) {
+                  const hipsOf = (root: Object3D): Object3D | null => {
+                    let found: Object3D | null = null
+                    root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
+                    return found
+                  }
+                  const instHips = hipsOf(inst)
+                  const clipHips = hipsOf(anim.restObj)
+                  if (instHips?.parent && clipHips?.parent) {
+                    inst.updateMatrixWorld(true)
+                    anim.restObj.updateMatrixWorld(true)
+                    const restModel = instHips.parent.getWorldQuaternion(new THREE.Quaternion())
+                    const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
+                    let bestRx = 0
+                    let bestAngle = Infinity
+                    for (const rx of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+                      const cand = new THREE.Quaternion()
+                        .setFromEuler(new THREE.Euler(rx, 0, 0)).multiply(restModel)
+                      const angle = cand.angleTo(restClip)
+                      if (angle < bestAngle) { bestAngle = angle; bestRx = rx }
+                    }
+                    fpivot.rotation.x = bestRx
+                  }
+                }
+                // Body size from the REST pose (a posed sitting box is far
+                // shorter and would blow the figure up).
+                fpivot.updateMatrixWorld(true)
+                const fb = new THREE.Box3().setFromObject(fpivot)
+                const fs = fb.getSize(new THREE.Vector3())
+                const k = figH / (fs.y || 1)
+                if (anim) {
+                  const mixer = new THREE.AnimationMixer(inst)
+                  mixer.clipAction(anim.clip).play()
+                  mixer.update(0)  // static frame-0 pose — no per-frame cost
+                }
+                fpivot.scale.setScalar(k)
+                // Grounding uses the POSED bounds; anchor bottom-centre at
+                // the marker's WORLD point so the figure stands upright even
+                // when the orientation fix tilts the mesh axes.
+                fpivot.updateMatrixWorld(true)
+                const fb2 = new THREE.Box3().setFromObject(fpivot)
+                const fc2 = fb2.getCenter(new THREE.Vector3())
+                place.updateMatrixWorld(true)
+                const world = pivot.localToWorld(local.clone())
+                const fig = new THREE.Group()
+                fig.position.copy(world)
+                fig.rotation.y = _deg(m.facing)
+                fpivot.position.set(-fc2.x, -fb2.min.y, -fc2.z)
+                fig.add(fpivot)
+                fig.userData.__shared = true
+                figGroup.add(fig)
+              })()
             })
             // Oriented bounding box + coloured W/D/H edges with the REAL
             // metre values — which field means which direction.
@@ -558,8 +720,10 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           rebuildOverlay()
           disposers.push(() => {
             overlayFnRef.current = null
+            figTokenRef.current++
             clearGroup(markerGroup)
             clearGroup(dimsGroup)
+            clearGroup(figGroup)
           })
 
           // ── Pick mode: a plain click (no orbit drag) on the mesh reports

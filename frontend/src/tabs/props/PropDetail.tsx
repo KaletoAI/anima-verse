@@ -448,12 +448,26 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               height={340}
               rotation={prop.rotation}
               onBounds={(b) => setLiveBbox(b.size)}
-              markers={markers}
+              markers={markers.map((m) => ({
+                at: m.at, animation: m.animation, facing: m.facing,
+              }))}
               dimsOverlay={{
                 width_m: parseFloat(dims.width_m) || prop.width_m,
                 depth_m: parseFloat(dims.depth_m) || prop.depth_m,
                 height_m: parseFloat(dims.height_m) || prop.height_m,
               }}
+              // 1.7 m in MESH units — real prop scale = max dim over the raw
+              // box's largest edge; the preview figure sizes itself to that.
+              figureHeight={(() => {
+                const bb = liveBbox ?? prop.bbox
+                if (!bb) return 0
+                const maxExtent = Math.max(bb[0], bb[1], bb[2])
+                const maxDim = Math.max(
+                  parseFloat(dims.width_m) || prop.width_m,
+                  parseFloat(dims.depth_m) || prop.depth_m,
+                  parseFloat(dims.height_m) || prop.height_m) || 1
+                return 1.7 * (maxExtent / maxDim)
+              })()}
               picking={placing !== null}
               onPickPoint={onPickPoint}
             />
