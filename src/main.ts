@@ -5,6 +5,8 @@ import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
 import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, setTerrainGrid, storeyHeight, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary, setModelEnvironment } from './scene/buildings';
+import { setPropLibrary } from './scene/propAssets';
+import { mountRoomRecipe, RecipeLibrary, unmountRoomRecipe } from './scene/roomRecipe';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { createHud, InfoPanel, showLogin } from './ui';
@@ -33,13 +35,15 @@ async function startApp(username: string) {
   setModelEnvironment(engine.modelEnv);
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
   const figures = new FigureLibrary();
-  const [allLocs, firstMap, surfaces] = await Promise.all([
+  const [allLocs, firstMap, surfaces, props] = await Promise.all([
     api.getLocations(),
     api.getWorldMap(),
     api.getSurfaceTextures(),
+    api.getProps(),
     figures.load(),
   ]);
   setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
+  setPropLibrary(props);          // Prop-Bibliothek (Maße + Orientierungs-Fix)
   const npcs = new NpcManager(figures);
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
@@ -144,7 +148,26 @@ async function startApp(username: string) {
   for (const tile of tiles.values()) {
     for (const r of tile.loc.rooms) if (r.layout) tileByRoom.set(r.id, tile);
   }
+  // Raum-Rezepte (Raum-Props): die Datenlage entscheidet die Weiche — Rezept
+  // MIT placements -> Szenengraph aus Hülle + Einzel-Props; ohne (oder 404)
+  // -> Diorama-Pfad unverändert. signature-Polling über den 60-s-Zyklus.
+  const recipes = new RecipeLibrary();
+  const isRecipeRoom = (roomId: string) => !!recipes.get(roomId)?.placements?.length;
+  recipes.onRecipe = (roomId, recipe) => {
+    const tile = tileByRoom.get(roomId);
+    if (!tile) return;
+    if (recipe?.placements?.length) {
+      void mountRoomRecipe(tile, roomId, recipe);
+    } else {
+      // kein/leeres Rezept: evtl. vorhandenen Rezept-Aufbau abbauen, Diorama
+      unmountRoomRecipe(tile, roomId);
+      roomModels.request(roomId);
+      const model = roomModels.get(roomId);
+      if (model) applyRoomModel(tile, roomId, model);
+    }
+  };
   roomModels.onModelReady = (roomId) => {
+    if (isRecipeRoom(roomId)) return;   // verspätetes Diorama nicht über die Rezept-Szene legen
     const tile = tileByRoom.get(roomId);
     const model = roomModels.get(roomId);
     if (tile && model) applyRoomModel(tile, roomId, model);
@@ -153,8 +176,10 @@ async function startApp(username: string) {
     for (const tile of tiles.values()) {
       if (!tile.serverModel) buildings.request(modelKeyOf(tile.loc));
     }
-    for (const roomId of tileByRoom.keys()) roomModels.request(roomId);
-    // neu generierte Modelle ohne Reload erkennen (signature im Meta)
+    // Rezept zuerst (Weiche); Diorama-Anfragen stößt onRecipe an
+    for (const roomId of tileByRoom.keys()) recipes.request(roomId);
+    // neu generierte Modelle/Rezepte ohne Reload erkennen (signature)
+    void recipes.sweep();
     void buildings.sweepSignatures();
     void roomModels.sweepSignatures();
   };
@@ -184,8 +209,14 @@ async function startApp(username: string) {
     for (const r of loc.rooms) {
       if (!r.layout) continue;
       tileByRoom.set(r.id, tile);
-      roomModels.invalidate(r.id);   // rotation/offset_y evtl. geändert
-      roomModels.request(r.id);
+      const recipe = recipes.get(r.id);
+      if (recipe?.placements?.length) {
+        void mountRoomRecipe(tile, r.id, recipe);   // frische Kachel: Rezept-Szene neu montieren
+      } else {
+        recipes.request(r.id);         // unbekannt: Weiche entscheidet in onRecipe
+        roomModels.invalidate(r.id);   // rotation/offset_y evtl. geändert
+        roomModels.request(r.id);
+      }
     }
     engine.setPickables([...tiles.values()].map((t) => t.group));
   }

@@ -8,9 +8,12 @@ import * as THREE from 'three';
 import { Engine } from './scene/engine';
 import { applyRoomModel, applyTileFade, buildTile, type Tile } from './scene/tiles';
 import { roomModelLibrary, setModelEnvironment } from './scene/buildings';
-import { getLocationModel, getRoomModel, getSurfaceTextures } from './api';
+import { getLocationModel, getProps, getRoomModel, getRoomRecipe, getSurfaceTextures, type ApiRoomRecipe } from './api';
 import { setLocationAnchor, setSurfaceTextures, storeyHeight } from './scene/tiles';
+import { setPropLibrary } from './scene/propAssets';
+import { mountRoomRecipe } from './scene/roomRecipe';
 void getSurfaceTextures().then(setSurfaceTextures);
+void getProps().then(setPropLibrary);
 import { grassTexture } from './scene/textures';
 import type { WorldLocation } from './types';
 
@@ -47,6 +50,8 @@ ground.receiveShadow = true;
 engine.scene.add(ground);
 
 const roomModels = roomModelLibrary();
+// Raum-Rezepte (Raum-Props): placements vorhanden -> Rezept-Szene statt Diorama
+const recipeByRoom = new Map<string, ApiRoomRecipe | null>();
 let tile: Tile | null = null;
 let lastSig = '';
 
@@ -79,6 +84,11 @@ function rebuild(loc: WorldLocation) {
   engine.scene.add(tile.group);
   for (const room of shown.rooms) {
     if (!room.layout) continue;
+    const recipe = recipeByRoom.get(room.id);
+    if (recipe?.placements?.length) {
+      void mountRoomRecipe(tile, room.id, recipe);
+      continue;
+    }
     const model = roomModels.get(room.id);
     if (model) applyRoomModel(tile, room.id, model);
     else roomModels.request(room.id);
@@ -86,7 +96,7 @@ function rebuild(loc: WorldLocation) {
 }
 
 roomModels.onModelReady = (roomId) => {
-  if (!tile) return;
+  if (!tile || recipeByRoom.get(roomId)?.placements?.length) return;
   const model = roomModels.get(roomId);
   if (model) applyRoomModel(tile, roomId, model);
 };
@@ -102,6 +112,12 @@ async function poll() {
     try {
       const meta = await getRoomModel(r.id);
       metas.push([r.id, meta?.rotation, meta?.offset_y, meta?.width_m, meta?.signature]);
+    } catch { /* Server kurz weg -> nächster Poll */ }
+    // Rezept mitpollen — signature bewegt sich bei Layout- UND Prop-Änderungen
+    try {
+      const recipe = await getRoomRecipe(r.id);
+      recipeByRoom.set(r.id, recipe);
+      metas.push([r.id, 'recipe', recipe?.signature]);
     } catch { /* Server kurz weg -> nächster Poll */ }
   }
   // v3-Anker (explizit): plan_width_m + Gebäude-Meta -> Etagen/Figuren-Maßstab
