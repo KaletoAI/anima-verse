@@ -1584,28 +1584,38 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
-      <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+      {/* Icon toolbar — the toggles/anchors read via tooltip, not label text
+          (the plan pane is the busy one, this row stays quiet). */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <div className="ga-form-section-label" style={{ margin: 0, flex: 1 }}>{t('3D preview')}</div>
-        <label className="ga-check-row">
-          <input type="checkbox" checked={showModels}
-            onChange={(e) => setShowModels(e.target.checked)} />
-          <span>{t('Real room models')}</span>
-        </label>
-        <label className="ga-check-row">
-          <input type="checkbox" checked={showBuilding}
-            onChange={(e) => setShowBuilding(e.target.checked)} />
-          <span>{t('Building model overlay')}</span>
-        </label>
-        <label className="ga-check-row"
-          title={t('Render the outline floor plates and outer walls exactly like the game client (doors at the ground-floor exits; walls facing the camera hide). Needs a drawn outline.')}>
-          <input type="checkbox" checked={showWalls}
-            onChange={(e) => setShowWalls(e.target.checked)} />
-          <span>{t('Walls & floor')}</span>
-        </label>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${showModels ? ' ga-btn-primary' : ''}`}
+          onClick={() => setShowModels((v) => !v)}
+          title={t('Real room models — swap the level boxes for the generated room meshes (contract placement).')}
+        >
+          🛋
+        </button>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${showBuilding ? ' ga-btn-primary' : ''}`}
+          onClick={() => setShowBuilding((v) => !v)}
+          title={t('Building model overlay — ghost the building mesh over the plan (tile fit, metre ruler matches).')}
+        >
+          🏢
+        </button>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${showWalls ? ' ga-btn-primary' : ''}`}
+          onClick={() => setShowWalls((v) => !v)}
+          title={t('Walls & floor — render the outline floor plates and outer walls exactly like the game client (doors at the ground-floor exits; walls facing the camera hide). Needs a drawn outline.')}
+        >
+          🧱
+        </button>
         {onPlanWidth ? (
           <label className="ga-check-row"
-            title={t('Real-world width the floor-plan square represents. Empty = auto-derived from the building model (height × mesh proportions) — set a value only to correct it. THE scale anchor: room sizes derive from their declared widths, figures and storeys from real size × 8/plan width.')}>
-            <span>{t('Plan width (m)')}</span>
+            title={t('Plan width (m): real-world width the floor-plan square represents. Empty = auto-derived from the building model (height × mesh proportions) — set a value only to correct it. THE scale anchor: room sizes derive from their declared widths, figures and storeys from real size × 8/plan width.')}>
+            <span>📐</span>
             <input
               className="ga-input"
               type="number"
@@ -1626,8 +1636,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         ) : null}
         {onLevelHeight ? (
           <label className="ga-check-row"
-            title={t('Storey height in WORLD metres — stacks the floor-plan levels and sets the figure scale in rooms (level_height / 3). Realistic interiors are ≈ 1–1.5; the default 3 reads as a triple-height storey.')}>
-            <span>{t('Level height (m)')}</span>
+            title={t('Level height (m): storey height in WORLD metres — stacks the floor-plan levels and sets the figure scale in rooms (level_height / 3). Realistic interiors are ≈ 1–1.5; the default 3 reads as a triple-height storey.')}>
+            <span>↕</span>
             <input
               className="ga-input"
               type="number"
@@ -1649,8 +1659,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         ) : null}
         {buildingEntry ? (
           <label className="ga-check-row"
-            title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The footprint keeps following the floor plan (tile fit); only the height is scaled to this value, so a too-flat mesh gets repaired. Storey height derives as height ÷ storeys; empty = natural proportions.')}>
-            <span>{t('Model height (m)')}</span>
+            title={t('Model height (m): estimated height of the building MODEL in world metres — dial it at the metre ruler. The footprint keeps following the floor plan (tile fit); only the height is scaled to this value, so a too-flat mesh gets repaired. Storey height derives as height ÷ storeys; empty = natural proportions.')}>
+            <span>📏</span>
             <input
               key={`bh-${buildingEntry.heightM}`}
               className="ga-input"
@@ -1668,8 +1678,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         ) : null}
         {buildingEntry ? (
           <label className="ga-check-row"
-            title={t('Storeys the building MODEL depicts — together with the model height this derives the storey height (height ÷ storeys) for stacking the levels.')}>
-            <span>{t('Model storeys')}</span>
+            title={t('Model storeys: storeys the building MODEL depicts — together with the model height this derives the storey height (height ÷ storeys) for stacking the levels.')}>
+            <span>🏬</span>
             <input
               key={`bf-${buildingEntry.floors}`}
               className="ga-input"
