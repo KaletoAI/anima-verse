@@ -2369,6 +2369,24 @@ html, * {
   font-size: 9px;
 }
 
+/* One object-local prop marker: header row + one slider row per axis
+   (X/Y/Z fraction, metre readout) + the facing row. */
+.ga-marker-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+}
+
+.ga-marker-axis {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8em;
+}
+
 /* Missing scale anchor over the floor plan — a warning, not an error: the
    data stays readable, only the geometry tools are locked. */
 .ga-anchor-banner {

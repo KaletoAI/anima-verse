@@ -27,6 +27,18 @@ const DIM_FIELDS: Array<{ key: DimKey; label: string; axis: number }> = [
   { key: 'height_m', label: 'Height (m)', axis: 1 },
 ]
 
+// Marker `at` = fractions of the RAW box in the order [X, Y, Z] — mirrors
+// props.MARKER_AT_MIN/MAX: half a box of slack per axis, because seats and
+// lying surfaces sit ON the hull or just outside it.
+const AT_MIN = -0.5
+const AT_MAX = 1.5
+const AT_AXES: Array<{ label: string; dim: DimKey }> = [
+  { label: 'X (width)', dim: 'width_m' },
+  { label: 'Y (height)', dim: 'height_m' },
+  { label: 'Z (depth)', dim: 'depth_m' },
+]
+const MARKER_SAVE_DEBOUNCE_MS = 400
+
 export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   armedDelete, onRegenerate }: {
   prop: PropFull
@@ -177,9 +189,10 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   }, [enc, onChanged, t, toast])
 
   // Object-local markers (A4) — same vocabulary as room markers, but the
-  // frame is the object's own bounding box: `at` = [u, v, w] fractions
-  // (0..1), `facing` = degrees. No click placement yet (deliberate) — the
-  // fields are edited by hand. The clip vocabulary is the open one.
+  // frame is the object's own bounding box: `at` = [u, v, w] fractions,
+  // `facing` = degrees. The fractions may leave the box by half a box per
+  // axis (seats sit ON the hull, see props.sanitize_markers). The clip
+  // vocabulary is the open one.
   const [clipKinds, setClipKinds] = useState<string[]>([])
   useEffect(() => {
     apiGet<{ kinds?: string[] }>('/assets/animation-clips')
@@ -191,8 +204,21 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   const [markers, setMarkers] = useState<PropMarker[]>(prop.markers || [])
   useEffect(() => { setMarkers(prop.markers || []) }, [prop.id])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveMarkers = useCallback(async (next: PropMarker[]) => {
-    setMarkers(next)
+  // Saving is DEBOUNCED (trailing): dragging a slider changes the state on
+  // every frame, and one POST per frame would flood the route. The UI (and
+  // the viewer, which reads `markers` live) stays immediate; the write
+  // follows once the drag rests. Discrete edits (add/remove/click placement)
+  // skip the wait.
+  const markerTimer = useRef<number | null>(null)
+  const markerPending = useRef<PropMarker[] | null>(null)
+  const flushMarkers = useCallback(async () => {
+    if (markerTimer.current !== null) {
+      window.clearTimeout(markerTimer.current)
+      markerTimer.current = null
+    }
+    const next = markerPending.current
+    markerPending.current = null
+    if (!next) return
     try {
       await apiPost(`/world/props/${enc}/markers`, { markers: next })
       await onChanged()
@@ -200,19 +226,42 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [enc, onChanged, t, toast])
+  const flushRef = useRef(flushMarkers)
+  flushRef.current = flushMarkers
+  // Unmount or a prop switch flushes what is still pending — with the flush
+  // captured at SETUP time, so it posts to the prop the markers belong to.
+  useEffect(() => {
+    const flush = flushRef.current
+    return () => { void flush() }
+  }, [prop.id])
 
-  const patchMarker = (i: number, patch: Partial<PropMarker>) =>
-    saveMarkers(markers.map((m, idx) => (idx === i ? { ...m, ...patch } : m)))
-  const setMarkerAt = (i: number, axis: 0 | 1 | 2, raw: string) => {
-    const n = parseFloat(raw)
-    const v = Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 0
+  const saveMarkers = useCallback((next: PropMarker[], immediate = false) => {
+    setMarkers(next)
+    markerPending.current = next
+    if (immediate) {
+      void flushMarkers()
+      return
+    }
+    if (markerTimer.current !== null) window.clearTimeout(markerTimer.current)
+    markerTimer.current = window.setTimeout(() => { void flushMarkers() },
+                                            MARKER_SAVE_DEBOUNCE_MS)
+  }, [flushMarkers])
+
+  const patchMarker = (i: number, patch: Partial<PropMarker>, immediate = false) =>
+    saveMarkers(markers.map((m, idx) => (idx === i ? { ...m, ...patch } : m)),
+                immediate)
+  const setMarkerAt = (i: number, axis: 0 | 1 | 2, raw: number | string) => {
+    const n = typeof raw === 'number' ? raw : parseFloat(raw)
+    const v = Number.isFinite(n) ? Math.min(Math.max(n, AT_MIN), AT_MAX) : 0
     const at = [...markers[i].at] as [number, number, number]
     at[axis] = Math.round(v * 10000) / 10000
     patchMarker(i, { at })
   }
   const addMarker = () =>
-    saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at: [0.5, 0, 0.5] }])
-  const removeMarker = (i: number) => saveMarkers(markers.filter((_, idx) => idx !== i))
+    saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at: [0.5, 0, 0.5] }],
+                true)
+  const removeMarker = (i: number) =>
+    saveMarkers(markers.filter((_, idx) => idx !== i), true)
 
   // Floor-plan-style placement: arm ('add' or a marker index), then click the
   // mesh in the viewer — the hit lands as raw-box fractions. Esc disarms.
@@ -226,9 +275,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   const onPickPoint = useCallback((at: [number, number, number]) => {
     setPlacing((cur) => {
       if (cur === 'add') {
-        void saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at }])
+        saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at }], true)
       } else if (cur !== null && markers[cur]) {
-        void saveMarkers(markers.map((m, idx) => (idx === cur ? { ...m, at } : m)))
+        saveMarkers(markers.map((m, idx) => (idx === cur ? { ...m, at } : m)), true)
       }
       return null
     })
@@ -341,80 +390,119 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               into any room. `at` = [u, v, w] fractions of the model bounding box. */}
           <div className="ga-form-section-label">{t('Markers')}</div>
           <span className="ga-hint">
-            {t('Object-local spots a figure with a matching animation snaps to — they travel with the prop into any room. at = fraction of the model bounding box (u = width, v = height, w = depth, 0..1); facing in degrees (0 south, 90 east, 180 north, 270 west; empty = client default). Click placement in the viewer comes later.')}
+            {t('Object-local spots a figure with a matching animation snaps to — they travel with the prop into any room. at = fraction of the model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 1.5, because seats and lying surfaces sit on the hull or just outside it. Place roughly with ✥, fine-tune with the sliders — the figure in the preview follows live.')}
           </span>
           {markers.length === 0 ? (
             <div className="ga-empty" style={{ fontSize: '0.85em' }}>{t('No markers yet.')}</div>
           ) : (
             markers.map((m, i) => (
-              <div key={i} className="ga-form-row">
-                <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {i + 1}</span>
-                <select
-                  className="ga-input"
-                  style={{ width: 130 }}
-                  value={m.animation}
-                  title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
-                  onChange={(e) => patchMarker(i, { animation: e.target.value })}
-                >
-                  {kindOptions.map((k) => <option key={k} value={k}>{k}</option>)}
-                </select>
-                {(['u', 'v', 'w'] as const).map((axisLabel, ax) => (
-                  <label key={axisLabel} style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: '0.8em' }}>
-                    {axisLabel}
-                    <input
-                      key={`${axisLabel}-${m.at[ax]}`}
-                      className="ga-input"
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      style={{ width: 62 }}
-                      defaultValue={m.at[ax]}
-                      onBlur={(e) => setMarkerAt(i, ax as 0 | 1 | 2, e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                    />
-                  </label>
-                ))}
-                <label style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: '0.8em' }}
-                  title={t('Facing in degrees — empty for the client default.')}>
-                  🧭
+              <div key={i} className="ga-marker-card">
+                <div className="ga-form-row">
+                  <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {i + 1}</span>
+                  <select
+                    className="ga-input"
+                    style={{ flex: 1, minWidth: 0 }}
+                    value={m.animation}
+                    title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
+                    onChange={(e) => patchMarker(i, { animation: e.target.value }, true)}
+                  >
+                    {kindOptions.map((k) => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                  <button
+                    type="button"
+                    className={`ga-btn ga-btn-sm${placing === i ? ' ga-btn-primary' : ''}`}
+                    onClick={() => setPlacing((cur) => (cur === i ? null : i))}
+                    title={t('Then click the spot on the model in the viewer to move this marker there (Esc cancels).')}
+                  >
+                    ✥
+                  </button>
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm ga-btn-danger"
+                    onClick={() => removeMarker(i)}
+                    title={t('Remove this marker')}
+                  >
+                    ×
+                  </button>
+                </div>
+                {AT_AXES.map((axis, ax) => {
+                  // Metres = fraction × the TYPED dim, so the seat height is
+                  // directly dialable in real units.
+                  const dimM = parseFloat(dims[axis.dim]) || prop[axis.dim]
+                  return (
+                    <div key={axis.label} className="ga-marker-axis">
+                      <span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>
+                        {t(axis.label)}
+                      </span>
+                      <input
+                        type="range"
+                        min={AT_MIN}
+                        max={AT_MAX}
+                        step={0.005}
+                        value={m.at[ax]}
+                        style={{ flex: 1, minWidth: 60 }}
+                        onChange={(e) => setMarkerAt(i, ax as 0 | 1 | 2, e.target.valueAsNumber)}
+                      />
+                      <input
+                        className="ga-input"
+                        type="number"
+                        min={AT_MIN}
+                        max={AT_MAX}
+                        step={0.005}
+                        style={{ width: 72, flex: '0 0 auto' }}
+                        value={m.at[ax]}
+                        onChange={(e) => setMarkerAt(i, ax as 0 | 1 | 2, e.target.value)}
+                      />
+                      <span className="ga-hint" style={{ width: 58, flex: '0 0 auto', textAlign: 'right' }}
+                        title={t('Fraction × the dimension typed above.')}>
+                        {(m.at[ax] * dimM).toFixed(2)} m
+                      </span>
+                    </div>
+                  )
+                })}
+                <div className="ga-marker-axis"
+                  title={t('Facing in degrees: 0 south, 90 east, 180 north, 270 west. Unset = the client default (face the neighbours).')}>
+                  <span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>🧭 {t('Facing')}</span>
                   <input
-                    key={`facing-${m.facing ?? ''}`}
+                    type="range"
+                    min={0}
+                    max={360}
+                    step={5}
+                    value={m.facing ?? 0}
+                    style={{ flex: 1, minWidth: 60 }}
+                    onChange={(e) => patchMarker(i, {
+                      facing: ((e.target.valueAsNumber % 360) + 360) % 360,
+                    })}
+                  />
+                  <input
                     className="ga-input"
                     type="number"
                     min={0}
                     max={359}
                     step={1}
-                    style={{ width: 66 }}
-                    defaultValue={m.facing ?? ''}
+                    style={{ width: 72, flex: '0 0 auto' }}
+                    value={m.facing ?? ''}
                     placeholder="—"
-                    onBlur={(e) => {
+                    onChange={(e) => {
                       const raw = e.target.value.trim()
-                      if (raw === '') { if (m.facing !== undefined) patchMarker(i, { facing: undefined }) }
-                      else {
-                        const n = parseInt(raw, 10)
-                        patchMarker(i, { facing: Number.isFinite(n) ? ((n % 360) + 360) % 360 : undefined })
-                      }
+                      if (raw === '') { patchMarker(i, { facing: undefined }); return }
+                      const n = parseInt(raw, 10)
+                      patchMarker(i, {
+                        facing: Number.isFinite(n) ? ((n % 360) + 360) % 360 : undefined,
+                      })
                     }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
                   />
-                </label>
-                <button
-                  type="button"
-                  className={`ga-btn ga-btn-sm${placing === i ? ' ga-btn-primary' : ''}`}
-                  onClick={() => setPlacing((cur) => (cur === i ? null : i))}
-                  title={t('Then click the spot on the model in the viewer to move this marker there (Esc cancels).')}
-                >
-                  ✥
-                </button>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm ga-btn-danger"
-                  onClick={() => removeMarker(i)}
-                  title={t('Remove this marker')}
-                >
-                  ×
-                </button>
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm"
+                    style={{ width: 58, flex: '0 0 auto' }}
+                    disabled={m.facing === undefined}
+                    onClick={() => patchMarker(i, { facing: undefined }, true)}
+                    title={t('Unset the facing — the client decides.')}
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
             ))
           )}
@@ -429,7 +517,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               🎯 {placing === 'add' ? t('Click the model…') : t('Place marker')}
             </button>
             <button type="button" className="ga-btn ga-btn-sm" onClick={addMarker}
-              title={t('Add a marker at the box centre — position it with ✥ or the u/v/w fields.')}>
+              title={t('Add a marker at the box centre — position it with ✥ or the X/Y/Z sliders.')}>
               + {t('Marker')}
             </button>
           </div>

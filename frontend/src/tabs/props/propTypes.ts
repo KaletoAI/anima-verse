@@ -6,7 +6,9 @@
 
 export interface PropMarker {
   animation: string
-  /** Object-local position: fractions of the model bounding box (0..1). */
+  /** Object-local position: fractions [X, Y, Z] of the RAW model bounding
+   *  box. Range -0.5..1.5 — seats and lying surfaces sit on the hull or
+   *  just outside it (mirrors props.MARKER_AT_MIN/MAX). */
   at: [number, number, number]
   /** Facing in degrees (0 south / 90 east / 180 north / 270 west). */
   facing?: number
