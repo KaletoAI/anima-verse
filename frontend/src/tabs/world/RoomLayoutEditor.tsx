@@ -1406,8 +1406,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           roomId={selectedRoom.id || ''}
           roomName={selectedRoom.name || selectedRoom.id || ''}
           job={furnish}
-          propNames={Object.fromEntries(
-            Object.entries(propDims).map(([id, d]) => [id, d.name]))}
+          propInfo={propDims}
           placements={selectedRoom.layout?.props || []}
           onClearRoom={() => {
             updateLayout(selectedRoom.id || '', { props: undefined })

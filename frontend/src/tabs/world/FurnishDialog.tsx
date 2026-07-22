@@ -145,8 +145,11 @@ interface FurnishDialogProps {
   roomId: string
   roomName: string
   job: FurnishJob
-  /** Prop names/dims for the "currently in the room" list (id → record). */
-  propNames: Record<string, string>
+  /** Prop library records (id → name + real dims) — names everywhere,
+   *  dims as a hint on the library picks (they carry no editable fields,
+   *  which otherwise makes them look broken next to the new pieces). */
+  propInfo: Record<string, { name: string
+    width_m?: number; depth_m?: number; height_m?: number }>
   /** The room's CURRENT placements (editor draft). */
   placements: RoomPropPlacement[]
   /** Empties layout.props in the editor draft — Save stays with the admin. */
@@ -157,7 +160,7 @@ interface FurnishDialogProps {
   onClose: () => void
 }
 
-export function FurnishDialog({ roomId, roomName, job, propNames, placements,
+export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
   onClearRoom, onAccept, onClose }: FurnishDialogProps) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -198,7 +201,7 @@ export function FurnishDialog({ roomId, roomName, job, propNames, placements,
   // Aggregated "what stands in the room right now" (name × count).
   const current = new Map<string, number>()
   for (const p of placements) {
-    const name = propNames[p.prop_id] || p.prop_id
+    const name = propInfo[p.prop_id]?.name || p.prop_id
     current.set(name, (current.get(name) || 0) + 1)
   }
 
@@ -297,7 +300,15 @@ export function FurnishDialog({ roomId, roomName, job, propNames, placements,
           <div key={e.prop_id} className="ga-furnish-row">
             <input type="checkbox" checked={!!picked[`e:${e.prop_id}`]}
               onChange={(ev) => setPicked((p) => ({ ...p, [`e:${e.prop_id}`]: ev.target.checked }))} />
-            <span style={{ flex: 1 }}>{propNames[e.prop_id] || e.prop_id}</span>
+            <span style={{ flex: 1 }}>
+              {propInfo[e.prop_id]?.name || e.prop_id}
+              {propInfo[e.prop_id]?.width_m ? (
+                <span className="ga-hint" style={{ marginLeft: 8 }}>
+                  {propInfo[e.prop_id]!.width_m}×{propInfo[e.prop_id]!.depth_m}×{propInfo[e.prop_id]!.height_m} m
+                  {' · '}{t('from the library — placed as-is')}
+                </span>
+              ) : null}
+            </span>
             <input className="ga-input" type="number" min={1} max={12} value={e.count}
               style={{ width: 56 }}
               onChange={(ev) => setDraft((prev) => prev && ({
@@ -395,7 +406,7 @@ export function FurnishDialog({ roomId, roomName, job, propNames, placements,
         {unplaced.length ? (
           <ul className="ga-furnish-list">
             {unplaced.map((u, i) => (
-              <li key={i}>{propNames[u.name] || u.name} — {u.reason}</li>
+              <li key={i}>{propInfo[u.name]?.name || u.name} — {u.reason}</li>
             ))}
           </ul>
         ) : null}
