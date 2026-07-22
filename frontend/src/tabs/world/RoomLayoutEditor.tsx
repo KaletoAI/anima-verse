@@ -54,7 +54,11 @@ type DragState =
   | { kind: 'move'; roomId: string; startX: number; startY: number; origX: number; origY: number }
   | { kind: 'resize'; roomId: string; startX: number; startY: number; origW: number; origD: number }
   | { kind: 'opening'; roomId: string; index: number; edge: number }
+  | { kind: 'prop'; roomId: string; index: number }
   | null
+
+/** Real prop dims for true-size footprints — lean mirror of /world/props. */
+interface PropDims { name: string; width_m: number; depth_m: number; height_m: number }
 
 export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
@@ -65,6 +69,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     setSelectedRaw(id)
     setMarkerSel(null)
     setOpeningSel(null)
+    setPropSel(null)
     setElevatorSel(false)
     onSelectRoom?.(id)
   }, [onSelectRoom])
@@ -77,6 +82,30 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // the highlighted palette card; nothing on the plan reads it so far.
   const [propsOpen, setPropsOpen] = useState(false)
   const [armedProp, setArmedProp] = useState('')
+  // Selected placement (index into the selected room's layout.props) for the
+  // adjustment strip below the plan.
+  const [propSel, setPropSel] = useState<number | null>(null)
+  // Ghost while placing: snapped-to-nothing cursor in PLAN fractions + the
+  // yaw the R key steps in 90° increments (fine yaw lives in the strip).
+  const [propGhost, setPropGhost] = useState<[number, number] | null>(null)
+  const [ghostYaw, setGhostYaw] = useState(0)
+  // Real dims per prop id — true-size footprints/ghost need them. One fetch;
+  // refreshed when the palette opens (it may have gained props meanwhile).
+  const [propDims, setPropDims] = useState<Record<string, PropDims>>({})
+  useEffect(() => {
+    if (!propsOpen && Object.keys(propDims).length) return
+    apiGet<{ props?: Array<{ id: string } & PropDims> }>('/world/props')
+      .then((d) => {
+        const map: Record<string, PropDims> = {}
+        for (const p of d.props || []) {
+          map[p.id] = { name: p.name, width_m: p.width_m,
+            depth_m: p.depth_m, height_m: p.height_m }
+        }
+        setPropDims(map)
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [propsOpen])
   // The room whose hull is being drawn ('draw-room' mode) — set by the
   // "Not on the plan" chips (first placement) and the redraw tool.
   const [drawTarget, setDrawTarget] = useState('')
@@ -277,18 +306,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   }, [outlineDraft, onMap3d])
 
   // Drops any armed mode plus the running draft — Esc, the ✕ tool and every
-  // mode toggle go through here.
+  // mode toggle go through here. Disarms the prop tool too (the palette
+  // stays open — re-picking is one click).
   const cancelDraw = useCallback(() => {
     setClickMode('')
     setOutlineDraft([])
     setHoverSnap(null)
     setDrawTarget('')
+    setArmedProp('')
+    setPropGhost(null)
   }, [])
 
-  // Esc cancels any armed mode and the current draft.
+  // Esc cancels any armed mode and the current draft; R steps the placement
+  // ghost's yaw by 90° (never while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName || ''
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (e.key === 'Escape') cancelDraw()
+      else if ((e.key === 'r' || e.key === 'R')) setGhostYaw((y) => (y + 90) % 360)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -415,7 +451,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           w: r4(clamp(drag.origW + dx, MIN_FRAC, 1 - lay.x)),
           d: r4(clamp(drag.origD + dy, MIN_FRAC, 1 - lay.y)),
         })
-      } else {
+      } else if (drag.kind === 'opening') {
         // Opening drag: slide it along its polygon edge — project the cursor
         // onto the edge in PLAN fractions. The write normalizes a legacy
         // letter opening to the index vocabulary (the editor only writes
@@ -434,6 +470,20 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         updateLayout(drag.roomId, {
           openings: (lay.openings || []).map((o, idx) =>
             idx === drag.index ? { ...o, edge: drag.edge, at } : o),
+        })
+      } else {
+        // Prop drag: reposition inside the room (room-local fractions). The
+        // prop keeps its real size — only `at` moves.
+        const rect = canvas.getBoundingClientRect()
+        const fx = (e.clientX - rect.left) / rect.width
+        const fy = (e.clientY - rect.top) / rect.height
+        const at: [number, number] = [
+          r4(clamp((fx - lay.x) / (lay.w || 1), 0, 1)),
+          r4(clamp((fy - lay.y) / (lay.d || 1), 0, 1)),
+        ]
+        updateLayout(drag.roomId, {
+          props: (lay.props || []).map((p, idx) =>
+            idx === drag.index ? { ...p, at } : p),
         })
       }
     }
@@ -470,15 +520,39 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       dragRef.current = { kind: 'opening', roomId: room.id, index, edge }
     }, [clickMode, setSelected])
 
-  // Click-to-place: one click inside a room sets the exit point or drops an
-  // animation marker — both as fractions of the ROOM rectangle (contract).
+  // Drag a placed prop within its room (no drag while a tool is armed).
+  const startPropDrag = useCallback(
+    (e: React.PointerEvent, room: Room, index: number) => {
+      if (clickMode || armedProp || !room.id) return
+      e.preventDefault()
+      e.stopPropagation()
+      setSelected(room.id)
+      setPropSel(index)
+      dragRef.current = { kind: 'prop', roomId: room.id, index }
+    }, [clickMode, armedProp, setSelected])
+
+  // Click-to-place: one click inside a room sets the exit point, drops an
+  // animation marker or a prop placement — all as fractions of the ROOM
+  // rectangle (contract).
   const onRoomClick = useCallback((e: React.MouseEvent, room: Room) => {
-    if (!clickMode || !room.id || !room.layout) return
+    if ((!clickMode && !armedProp) || !room.id || !room.layout) return
     e.stopPropagation()
     const target = e.currentTarget as HTMLDivElement
     const rect = target.getBoundingClientRect()
     const px = r4(clamp((e.clientX - rect.left) / rect.width, 0, 1))
     const py = r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))
+    if (armedProp) {
+      // Place the armed prop at the clicked spot. REAL-size rule: only
+      // position + yaw are stored — the prop's own dims scale it. The tool
+      // stays armed for multiple placements; Esc or re-picking ends it.
+      const placements = [...(room.layout.props || []),
+        { prop_id: armedProp, at: [px, py] as [number, number],
+          ...(ghostYaw ? { yaw: ghostYaw } : {}) }]
+      updateLayout(room.id, { props: placements })
+      setSelected(room.id)
+      setPropSel(placements.length - 1)
+      return
+    }
     if (clickMode === 'exit') {
       updateLayout(room.id, { exit: [px, py] })
     } else if (clickMode === 'marker-move') {
@@ -504,7 +578,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       setOpeningSel(openings.length - 1)
     }
     setClickMode('')
-  }, [clickMode, markerKind, markerSel, selected, updateLayout])
+  }, [clickMode, armedProp, ghostYaw, markerKind, markerSel, selected,
+    setSelected, updateLayout])
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
 
@@ -704,14 +779,21 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           position: 'relative', width: CANVAS_W, height: canvasH, maxWidth: '100%',
           border: '1px solid var(--border, #30363d)', borderRadius: 6,
           background: 'rgba(255,255,255,0.03)', overflow: 'hidden', touchAction: 'none',
-          cursor: clickMode ? 'crosshair' : undefined,
+          cursor: clickMode || armedProp ? 'crosshair' : undefined,
         }}
         onClick={() => { if (!clickMode) setSelected('') }}
         onPointerMove={(e) => {
+          if (armedProp) {
+            // Placement ghost — raw cursor, no snapping (v1).
+            const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
+            setPropGhost([clamp((e.clientX - rect.left) / rect.width, 0, 1),
+                          clamp((e.clientY - rect.top) / rect.height, 0, 1)])
+            return
+          }
           if (clickMode !== 'outline' && clickMode !== 'draw-room') return
           setHoverSnap(computeSnap(e.clientX, e.clientY, e.altKey))
         }}
-        onPointerLeave={() => setHoverSnap(null)}
+        onPointerLeave={() => { setHoverSnap(null); setPropGhost(null) }}
         onClickCapture={(e) => {
           // Canvas-level drawing/placement (outline or room hull points,
           // elevator) applies at CANVAS coordinates, also when the click
@@ -742,7 +824,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         {/* Building outline (existing + draft) + snap feedback as an SVG
             overlay. */}
         {(map3d?.outline?.length || outlineDraft.length
-          || (hoverSnap && (clickMode === 'outline' || clickMode === 'draw-room'))) ? (
+          || (hoverSnap && (clickMode === 'outline' || clickMode === 'draw-room'))
+          || (armedProp && propGhost)) ? (
           <svg viewBox="0 0 100 100" preserveAspectRatio="none"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
             {map3d?.outline?.length ? (
@@ -806,6 +889,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             {outlineDraft.map(([x, y], i) => (
               <circle key={i} cx={x * 100} cy={y * 100} r={1.1} fill="#e0a356" />
             ))}
+            {/* Placement ghost: the armed prop's TRUE footprint (dims / plan
+                width) under the cursor, rotated by the R-key yaw. */}
+            {armedProp && propGhost ? (() => {
+              const dims = propDims[armedProp]
+              const planWEff = planW || 8
+              const gw = ((dims?.width_m || 1) / planWEff) * 100
+              const gd = ((dims?.depth_m || 1) / planWEff) * 100
+              return (
+                <g transform={`translate(${propGhost[0] * 100} ${propGhost[1] * 100}) rotate(${ghostYaw})`}
+                  pointerEvents="none">
+                  <rect x={-gw / 2} y={-gd / 2} width={gw} height={gd}
+                    fill="rgba(210,153,34,0.25)" stroke="#d29922"
+                    strokeWidth={0.5} strokeDasharray="1.4 1" />
+                  {/* Facing tick: the ghost's local -y edge (front). */}
+                  <line x1={0} y1={-gd / 2} x2={0} y2={-gd / 2 - 1.6}
+                    stroke="#d29922" strokeWidth={0.5} />
+                </g>
+              )
+            })() : null}
           </svg>
         ) : null}
         {(underlay || bUnderlay) && underlayUrl ? (
@@ -823,7 +925,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               onPointerDown={(e) => startDrag(e, room, 'move')}
               onClick={(e) => {
                 e.stopPropagation()
-                if (clickMode) onRoomClick(e, room)
+                if (clickMode || armedProp) onRoomClick(e, room)
                 else setSelected(room.id || '')
               }}
               title={room.name || room.id}
@@ -896,6 +998,39 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   }}
                 />
               ))}
+              {/* Placed props: TRUE-size footprints (dims / plan width, never
+                  fit-scaled) at their room-local spot, rotated by yaw. Click
+                  selects, drag moves; fine-tuning in the strip below. */}
+              {(lay.props || []).map((p, i) => {
+                const dims = propDims[p.prop_id]
+                const planWEff = planW || 8
+                const fw = ((dims?.width_m || 1) / planWEff) / (lay.w || 1) * 100
+                const fd = ((dims?.depth_m || 1) / planWEff) / (lay.d || 1) * 100
+                const sel = room.id === selected && propSel === i
+                return (
+                  <div
+                    key={`prop-${i}`}
+                    title={`${dims?.name || p.prop_id}${dims ? `\n${dims.width_m}×${dims.depth_m}×${dims.height_m} m` : ` · ${t('unknown prop')}`}`}
+                    onPointerDown={(e) => startPropDrag(e, room, i)}
+                    onClick={(e) => {
+                      if (clickMode || armedProp) return
+                      e.stopPropagation()
+                      setSelected(room.id || '')
+                      setPropSel(i)
+                    }}
+                    style={{
+                      position: 'absolute',
+                      left: `${p.at[0] * 100}%`, top: `${p.at[1] * 100}%`,
+                      width: `${fw}%`, height: `${fd}%`,
+                      transform: `translate(-50%, -50%) rotate(${p.yaw || 0}deg)`,
+                      border: `1.5px ${dims ? 'solid' : 'dashed'} ${sel ? '#fff' : '#d29922'}`,
+                      background: 'rgba(210,153,34,0.22)', borderRadius: 2,
+                      boxSizing: 'border-box',
+                      cursor: clickMode || armedProp ? 'crosshair' : 'grab',
+                    }}
+                  />
+                )
+              })}
               {/* Wall openings on the hull edges: door = gap + swing arc,
                   window = double line, passage = dashed gap. Fixed-size SVG
                   rotated to the edge's SCREEN direction — with clockwise
@@ -1032,9 +1167,97 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         onSurface={setSurface}
         propsOpen={propsOpen}
         armedPropId={armedProp}
-        onPickProp={(p) => setArmedProp((cur) => (cur === p.id ? '' : p.id))}
+        onPickProp={(p) => {
+          // Arming the prop tool drops any other armed mode/draft; picking
+          // the armed prop again disarms.
+          setClickMode('')
+          setOutlineDraft([])
+          setHoverSnap(null)
+          setDrawTarget('')
+          setArmedProp((cur) => (cur === p.id ? '' : p.id))
+        }}
       />
       </div>
+
+      {selectedRoom && propSel !== null && selectedRoom.layout?.props?.[propSel] ? (() => {
+        const placement = selectedRoom.layout!.props![propSel]
+        const dims = propDims[placement.prop_id]
+        const patchProp = (patch: Partial<typeof placement> | null) => {
+          const list = (selectedRoom.layout?.props || [])
+            .map((p, idx) => (idx === propSel ? { ...p, ...patch } : p))
+            .filter((_, idx) => !(patch === null && idx === propSel))
+          if (patch === null) setPropSel(null)
+          updateLayout(selectedRoom.id || '', { props: list.length ? list : undefined })
+        }
+        return (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="ga-hint" style={{ fontWeight: 600 }}>
+              🪑 {dims?.name || placement.prop_id}:
+            </span>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Fine-tune the position (fraction of the room rectangle).')}>
+              X
+              <input
+                type="range" min={0} max={1} step={0.005}
+                value={placement.at[0]}
+                onChange={(e) => patchProp({
+                  at: [r4(parseFloat(e.target.value) || 0), placement.at[1]] as [number, number],
+                })}
+                style={{ width: 100 }}
+              />
+              <span style={{ minWidth: 40 }}>{placement.at[0].toFixed(3)}</span>
+            </label>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Fine-tune the position (fraction of the room rectangle).')}>
+              Y
+              <input
+                type="range" min={0} max={1} step={0.005}
+                value={placement.at[1]}
+                onChange={(e) => patchProp({
+                  at: [placement.at[0], r4(parseFloat(e.target.value) || 0)] as [number, number],
+                })}
+                style={{ width: 100 }}
+              />
+              <span style={{ minWidth: 40 }}>{placement.at[1].toFixed(3)}</span>
+            </label>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Yaw in degrees — free values; R while placing steps 90°.')}>
+              ↻
+              <input
+                type="range" min={0} max={359.5} step={0.5}
+                value={placement.yaw || 0}
+                onChange={(e) => {
+                  const v = Math.round((parseFloat(e.target.value) || 0) * 10) / 10
+                  patchProp({ yaw: v || undefined })
+                }}
+                style={{ width: 120 }}
+              />
+              <span style={{ minWidth: 44 }}>{(placement.yaw || 0).toFixed(1)}°</span>
+            </label>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Vertical offset in metres, additive to the floor (e.g. a picture on the wall).')}>
+              ↕ m
+              <input
+                type="number" min={-5} max={5} step={0.05}
+                value={placement.offset_y ?? 0}
+                onChange={(e) => {
+                  const v = Math.round((parseFloat(e.target.value) || 0) * 1000) / 1000
+                  patchProp({ offset_y: v || undefined })
+                }}
+                style={{ width: 70 }}
+                className="ga-input"
+              />
+            </label>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              onClick={() => patchProp(null)}
+            >
+              × {t('Remove')}
+            </button>
+          </div>
+        )
+      })() : null}
 
       {selectedRoom && markerSel !== null && selectedRoom.layout?.markers?.[markerSel] ? (() => {
         const marker = selectedRoom.layout!.markers![markerSel]
