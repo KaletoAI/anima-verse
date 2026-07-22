@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { ApiProp } from '../api';
 import { propModelUrl } from '../api';
+import { neutralizeGltfMaterials } from './buildings';
 
 // Prop-Assets (Raum-Rezept, Abschnitt 2b/2c): Bibliotheks-Cache, GLB-Loading,
 // Platzhalter. KEIN Orientierungs-Fix, NICHT skalieren, NICHT positionieren —
@@ -32,6 +33,8 @@ export async function loadPropModel(id: string): Promise<THREE.Group | null> {
   const pending = (async () => {
     try {
       const gltf = await loader.loadAsync(propModelUrl(id));
+      // gleiche Material-Behandlung wie Gebäude-/Raum-GLBs (Metalness/Env)
+      neutralizeGltfMaterials(gltf.scene);
       return gltf.scene;
     } catch {
       // 404/Fehler nicht dauerhaft festhalten -> Eintrag löschen, Retry möglich

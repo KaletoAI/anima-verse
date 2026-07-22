@@ -12,6 +12,31 @@ export function setModelEnvironment(tex: THREE.Texture) {
   modelEnv = tex;
 }
 
+/** Generierte GLBs lassen metallicFactor oft unbelegt — der glTF-Default ist
+ *  1.0 (voll metallisch), und ohne Environment-Map rendert das fast schwarz.
+ *  Gemeint ist kein Metall: neutralisieren. Liefert das GLB dagegen eine
+ *  echte Metal-Roughness-Textur (AV3D-14), bleibt sie unangetastet — dann
+ *  bekommt das Material die neutrale Environment-Map, damit Metall-Pixel
+ *  reflektieren. Gilt für Gebäude-/Raum-Modelle UND Prop-GLBs. */
+export function neutralizeGltfMaterials(root: THREE.Object3D) {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      const std = m as THREE.MeshStandardMaterial;
+      if (!std.isMeshStandardMaterial) continue;
+      if (std.metalnessMap) {
+        if (modelEnv) {
+          std.envMap = modelEnv;
+          std.envMapIntensity = 0.7;
+        }
+      } else if (std.metalness > 0.5) {
+        std.metalness = 0;
+      }
+    }
+  });
+}
+
 /** Vergleichs-Kennung über alle darstellungsrelevanten Meta-Felder. */
 function metaSig(meta: ModelMeta): string {
   return JSON.stringify([
@@ -98,28 +123,7 @@ export class ModelLibrary {
           return;
         }
         const gltf = await new GLTFLoader().loadAsync(meta.url);
-        // Generierte GLBs lassen metallicFactor oft unbelegt — der glTF-
-        // Default ist 1.0 (voll metallisch), und ohne Environment-Map
-        // rendert das fast schwarz. Gemeint ist kein Metall: neutralisieren.
-        // Liefert das GLB dagegen eine echte Metal-Roughness-Textur
-        // (AV3D-14), bleibt sie unangetastet — dann bekommt das Material
-        // eine neutrale Environment-Map, damit Metall-Pixel reflektieren.
-        gltf.scene.traverse((o) => {
-          const mesh = o as THREE.Mesh;
-          if (!mesh.isMesh) return;
-          for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-            const std = m as THREE.MeshStandardMaterial;
-            if (!std.isMeshStandardMaterial) continue;
-            if (std.metalnessMap) {
-              if (modelEnv) {
-                std.envMap = modelEnv;
-                std.envMapIntensity = 0.7;
-              }
-            } else if (std.metalness > 0.5) {
-              std.metalness = 0;
-            }
-          }
-        });
+        neutralizeGltfMaterials(gltf.scene);
         const model = this.normalize(gltf.scene, meta);
         model.userData.meta = {
           height_m: meta.height_m || 0, floors: meta.floors || 0,
