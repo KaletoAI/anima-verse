@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
+import { useToast } from '../../lib/Toast'
 import {
   CLOSE_TOL_PX, MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
   SNAP_TOL_PX, absOutline, buildSnapTargets, clamp, edgePointOnEdge,
@@ -53,6 +54,7 @@ type DragState =
 
 export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
+  const { toast } = useToast()
   const [level, setLevel] = useState(0)
   const [selected, setSelectedRaw] = useState<string>('')
   const setSelected = useCallback((id: string) => {
@@ -65,7 +67,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // Click-to-place modes: the next click inside the room sets the exit point,
   // drops an animation marker of the chosen kind, or places a wall opening on
   // the nearest edge.
-  const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker' | 'marker-move' | 'outline' | 'elevator' | 'opening'>('')
+  const [clickMode, setClickMode] = useState<'' | 'exit' | 'marker' | 'marker-move' | 'outline' | 'elevator' | 'opening' | 'draw-room'>('')
+  // The room whose hull is being drawn ('draw-room' mode) — set by the
+  // "Not on the plan" chips (first placement) and the redraw tool.
+  const [drawTarget, setDrawTarget] = useState('')
   // Selected opening (index into the selected room's openings) for the
   // per-opening controls below the plan.
   const [openingSel, setOpeningSel] = useState<number | null>(null)
@@ -200,13 +205,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // hulls of the placed rooms on the current level plus the draft's own
   // vertices; tolerances blend a pixel radius with a 0.15 m floor.
   const snapTargets = useMemo(() => {
-    if (clickMode !== 'outline') return null
+    if (clickMode !== 'outline' && clickMode !== 'draw-room') return null
     const hulls: PolyRoom[] = rooms
-      .filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
+      .filter((r) => r.id && r.layout && (r.layout.level || 0) === level
+        && !(clickMode === 'draw-room' && r.id === drawTarget))
       .map((r) => ({ id: r.id!, x: r.layout!.x, y: r.layout!.y,
         w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline }))
-    return buildSnapTargets(hulls, { extraPoints: outlineDraft })
-  }, [clickMode, rooms, level, outlineDraft])
+    return buildSnapTargets(hulls, {
+      // Rooms snap onto the building outline; while the OUTLINE itself is
+      // being redrawn it is not a target.
+      buildingOutline: clickMode === 'draw-room' ? map3d?.outline : undefined,
+      extraPoints: outlineDraft,
+    })
+  }, [clickMode, rooms, level, outlineDraft, drawTarget, map3d?.outline])
 
   const computeSnap = useCallback((clientX: number, clientY: number,
       alt: boolean): SnapResult => {
@@ -244,6 +255,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       setClickMode('')
       setOutlineDraft([])
       setHoverSnap(null)
+      setDrawTarget('')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -269,7 +281,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     let changed = false
     const next = roomsRef.current.map((r) => {
       const lay = r.layout
-      const ds = r.id ? derivedSize(r.id) : null
+      // A drawn hull is authoritative — width_m-derived sizing only applies
+      // to legacy diorama-model rooms without an outline (D4).
+      const ds = r.id && !r.layout?.outline?.length ? derivedSize(r.id) : null
       if (!lay || !ds) return r
       const swap = ((lay.rotation || 0) % 180) === 90
       const wantW = r4(swap ? ds.d : ds.w)
@@ -297,6 +311,50 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     })
     onChange(next)
   }, [onChange, level])
+
+  // Close a drawn room hull: bbox becomes x/y/w/d (the legacy client keeps
+  // reading only those), the points renormalize to bbox-local [0,1]² with
+  // clockwise winding — mirroring the server sanitizer. Redrawing clears the
+  // openings (their edge indices point into the OLD hull); exit and markers
+  // stay (still valid room fractions, one click to adjust).
+  const commitRoomDraft = useCallback(() => {
+    if (!drawTarget || outlineDraft.length < 3) return
+    const xs = outlineDraft.map((p) => p[0])
+    const ys = outlineDraft.map((p) => p[1])
+    const minX = Math.min(...xs)
+    const minY = Math.min(...ys)
+    const w = Math.max(...xs) - minX
+    const d = Math.max(...ys) - minY
+    if (w < MIN_FRAC || d < MIN_FRAC) {
+      toast(t('The shape is too small — keep drawing or press Esc.'), 'error')
+      return
+    }
+    let pts = outlineDraft.map(([x, y]) =>
+      [(x - minX) / w, (y - minY) / d] as [number, number])
+    const shoelace = pts.reduce((sum, p, i) => {
+      const q = pts[(i + 1) % pts.length]
+      return sum + p[0] * q[1] - q[0] * p[1]
+    }, 0)
+    if (Math.abs(shoelace) / 2 < 1e-4) {
+      toast(t('The shape has no area — keep drawing or press Esc.'), 'error')
+      return
+    }
+    if (shoelace < 0) pts = [...pts].reverse()
+    const target = roomsRef.current.find((r) => r.id === drawTarget)
+    if (target?.layout?.openings?.length)
+      toast(t('Openings were cleared — they sat on the old hull.'), 'info')
+    updateLayout(drawTarget, {
+      level,
+      x: r4(minX), y: r4(minY), w: r4(w), d: r4(d),
+      outline: pts.map(([u, v]) => [r4(u), r4(v)] as [number, number]),
+      openings: [],
+    })
+    setSelected(drawTarget)
+    setDrawTarget('')
+    setOutlineDraft([])
+    setHoverSnap(null)
+    setClickMode('')
+  }, [drawTarget, outlineDraft, level, updateLayout, setSelected, t, toast])
 
   // Pointer interactions: move on the rect body, resize on the corner handle.
   // Window listeners so a drag survives leaving the canvas; fractions clamped
@@ -579,22 +637,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         }}
         onClick={() => { if (!clickMode) setSelected('') }}
         onPointerMove={(e) => {
-          if (clickMode !== 'outline') return
+          if (clickMode !== 'outline' && clickMode !== 'draw-room') return
           setHoverSnap(computeSnap(e.clientX, e.clientY, e.altKey))
         }}
         onPointerLeave={() => setHoverSnap(null)}
         onClickCapture={(e) => {
-          // Building-level placement (outline points / elevator) applies at
-          // CANVAS coordinates, also when the click lands inside a room —
-          // capture phase keeps the room handlers out of the way.
-          if (clickMode !== 'outline' && clickMode !== 'elevator') return
+          // Canvas-level drawing/placement (outline or room hull points,
+          // elevator) applies at CANVAS coordinates, also when the click
+          // lands inside a room — capture phase keeps the room handlers out
+          // of the way.
+          if (clickMode !== 'outline' && clickMode !== 'draw-room'
+              && clickMode !== 'elevator') return
           e.stopPropagation()
-          if (clickMode === 'outline') {
+          if (clickMode === 'outline' || clickMode === 'draw-room') {
             // Clicks go through the snap engine (Alt = free-hand); landing on
             // the first vertex closes the polygon.
             const res = computeSnap(e.clientX, e.clientY, e.altKey)
             if (res.kind === 'close') {
-              commitOutline()
+              if (clickMode === 'outline') commitOutline()
+              else commitRoomDraft()
             } else {
               setOutlineDraft((prev) => [...prev, res.p])
             }
@@ -607,8 +668,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           }
         }}
       >
-        {/* Building outline (existing + draft) as an SVG overlay. */}
-        {(map3d?.outline?.length || outlineDraft.length) ? (
+        {/* Building outline (existing + draft) + snap feedback as an SVG
+            overlay. */}
+        {(map3d?.outline?.length || outlineDraft.length
+          || (hoverSnap && (clickMode === 'outline' || clickMode === 'draw-room'))) ? (
           <svg viewBox="0 0 100 100" preserveAspectRatio="none"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
             {map3d?.outline?.length ? (
@@ -626,7 +689,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             {/* Rubber band: the running segment ends at the SNAPPED cursor,
                 and the closing line back to the start point is always
                 visible. */}
-            {clickMode === 'outline' && outlineDraft.length ? (() => {
+            {(clickMode === 'outline' || clickMode === 'draw-room') && outlineDraft.length ? (() => {
               const first = outlineDraft[0]
               const last = outlineDraft[outlineDraft.length - 1]
               const cur = hoverSnap?.p || last
@@ -649,7 +712,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             {/* Snap feedback: guide ray (angle), highlighted target segment
                 (edge), ring on the snapped vertex; closing rings the first
                 vertex. */}
-            {clickMode === 'outline' && hoverSnap ? (
+            {(clickMode === 'outline' || clickMode === 'draw-room') && hoverSnap ? (
               <>
                 {hoverSnap.guide ? (
                   <line x1={hoverSnap.guide.a[0] * 100} y1={hoverSnap.guide.a[1] * 100}
@@ -697,12 +760,28 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                 position: 'absolute',
                 left: `${lay.x * 100}%`, top: `${lay.y * 100}%`,
                 width: `${lay.w * 100}%`, height: `${lay.d * 100}%`,
-                border: `2px solid ${isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)'}`,
-                background: isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)',
+                // A drawn hull renders as its polygon (SVG below) — the div
+                // stays the bbox for selection/drag but hides its rectangle.
+                border: lay.outline?.length ? 'none'
+                  : `2px solid ${isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)'}`,
+                background: lay.outline?.length ? 'transparent'
+                  : isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)',
                 borderRadius: 4, boxSizing: 'border-box',
                 cursor: clickMode ? 'crosshair' : 'move', userSelect: 'none',
               }}
             >
+              {lay.outline?.length ? (
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+                  style={{ position: 'absolute', inset: 0, width: '100%',
+                    height: '100%', pointerEvents: 'none', overflow: 'visible' }}>
+                  <polygon
+                    points={lay.outline.map(([u, v]) => `${u * 100},${v * 100}`).join(' ')}
+                    fill={isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)'}
+                    stroke={isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)'}
+                    strokeWidth={2} vectorEffect="non-scaling-stroke"
+                  />
+                </svg>
+              ) : null}
               <span style={{
                 position: 'absolute', left: 3, top: 2, right: 3, fontSize: 10,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -810,8 +889,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               })}
               {/* Resize handle (bottom-right) — hidden in anchored mode for
                   rooms whose size DERIVES from the model's declared width
-                  (there is nothing to resize then, only to position). */}
-              {room.id && derivedSize(room.id) ? null : (
+                  (there is nothing to resize then, only to position). Rooms
+                  with a drawn hull always resize — the handle scales the
+                  whole polygon (points are bbox-local). */}
+              {room.id && !lay.outline?.length && derivedSize(room.id) ? null : (
                 <span
                   onPointerDown={(e) => startDrag(e, room, 'resize')}
                   style={{
@@ -870,6 +951,47 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           building tools (outline/elevator) below. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 118, flex: '0 0 auto' }}>
         <span className="ga-hint">{t('Room')}</span>
+        {clickMode === 'draw-room' ? (
+          <>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-primary"
+              disabled={outlineDraft.length < 3}
+              onClick={commitRoomDraft}
+              title={t('Finish the room hull — clicking the first vertex closes too')}
+            >
+              ✓ ({outlineDraft.length})
+            </button>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              onClick={() => {
+                setOutlineDraft([])
+                setHoverSnap(null)
+                setDrawTarget('')
+                setClickMode('')
+              }}
+            >
+              {t('Cancel')}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={!selectedRoom}
+            onClick={() => {
+              if (!selectedRoom?.id) return
+              setDrawTarget(selectedRoom.id)
+              setOutlineDraft([])
+              setHoverSnap(null)
+              setClickMode('draw-room')
+            }}
+            title={t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, exit and markers stay.')}
+          >
+            ⬠ {t('Redraw')}
+          </button>
+        )}
         <button
           type="button"
           className="ga-btn ga-btn-sm"
@@ -1285,24 +1407,21 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       {unplaced.length ? (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="ga-hint">{t('Not on the plan:')}</span>
-          {unplaced.map((room, i) => (
+          {unplaced.map((room) => (
             <button
               key={room.id || room.name}
               type="button"
-              className="ga-btn ga-btn-sm"
+              className={`ga-btn ga-btn-sm${clickMode === 'draw-room' && drawTarget === room.id ? ' ga-btn-primary' : ''}`}
               onClick={() => {
-                updateLayout(room.id || '', {
-                  level,
-                  x: r4(clamp(0.05 + (i % 3) * 0.32, 0, 0.7)),
-                  y: r4(clamp(0.05 + Math.floor(i / 3) * 0.32, 0, 0.7)),
-                  w: 0.3,
-                  d: 0.3,
-                })
                 setSelected(room.id || '')
+                setDrawTarget(room.id || '')
+                setOutlineDraft([])
+                setHoverSnap(null)
+                setClickMode('draw-room')
               }}
-              title={t('Place this room on the current level.')}
+              title={t('Draw this room on the current level — click to place points, click the first point to close, Alt = free-hand, Esc = cancel.')}
             >
-              + {room.name || room.id}
+              ⬠ {room.name || room.id}
             </button>
           ))}
         </div>

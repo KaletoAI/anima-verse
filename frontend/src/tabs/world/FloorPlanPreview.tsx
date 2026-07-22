@@ -434,16 +434,36 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             : lhEff / 3)
 
       // Label + exit/marker dots always; the box only when no model stands in.
+      // A drawn hull renders as its extruded polygon prism instead of the box.
       const roomGroup = new THREE.Group()
       if (!model) {
-        const box = new THREE.Mesh(
-          new THREE.BoxGeometry(w, lhEff * 0.94, d),
-          new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.5 }),
-        )
+        const boxH = lhEff * 0.94
+        const mat = new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.5 })
+        let box: Mesh
+        if (lay.outline?.length) {
+          // Shape plane XY maps to world XZ after rotation.x = -π/2
+          // (shape y → -z, extrusion +z → +y), so points go in as (x, -z).
+          const shape = new THREE.Shape()
+          lay.outline.forEach(([u, v], i) => {
+            const px = (u - 0.5) * w
+            const pz = (v - 0.5) * d
+            if (i === 0) shape.moveTo(px, -pz)
+            else shape.lineTo(px, -pz)
+          })
+          shape.closePath()
+          box = new THREE.Mesh(
+            new THREE.ExtrudeGeometry(shape, { depth: boxH, bevelEnabled: false }), mat)
+          box.rotation.x = -Math.PI / 2
+          box.position.y = -boxH / 2
+        } else {
+          box = new THREE.Mesh(new THREE.BoxGeometry(w, boxH, d), mat)
+        }
         const edges = new THREE.LineSegments(
           new THREE.EdgesGeometry(box.geometry),
           new THREE.LineBasicMaterial({ color }),
         )
+        edges.rotation.copy(box.rotation)
+        edges.position.copy(box.position)
         roomGroup.add(box)
         roomGroup.add(edges)
       }
