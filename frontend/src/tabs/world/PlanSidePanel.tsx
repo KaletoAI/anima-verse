@@ -2,11 +2,17 @@
  * PlanSidePanel — the context column right of the floor plan. Everything that
  * belongs to the SELECTED room and is not a click tool lives here: room info
  * (name, rotation, always-visible), the animation-marker vocabulary + the
- * room's marker list. Purely presentational — RoomLayoutEditor owns the state
- * and hands in the callbacks.
+ * room's marker list, and the room shell's surface kinds. Purely
+ * presentational — RoomLayoutEditor owns the state and hands in the callbacks.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import type { Room } from './worldTypes'
+
+/** The two shell surfaces a room may skin — mirrors layout.surfaces. */
+const SURFACE_SLOTS: Array<{ key: 'floor' | 'wall'; label: string }> = [
+  { key: 'floor', label: 'Floor' },
+  { key: 'wall', label: 'Wall' },
+]
 
 interface PlanSidePanelProps {
   /** Selected room WITH a layout, or null. */
@@ -18,11 +24,14 @@ interface PlanSidePanelProps {
   markerSel: number | null
   onSelectMarker: (index: number | null) => void
   onAlwaysVisible: (value: boolean) => void
+  /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
+  surfaceKinds: Array<{ kind: string; url: string }>
+  onSurface: (key: 'floor' | 'wall', kind: string) => void
 }
 
 export function PlanSidePanel({
   room, clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
-  onAlwaysVisible,
+  onAlwaysVisible, surfaceKinds, onSurface,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
   const layout = room?.layout
@@ -54,6 +63,43 @@ export function PlanSidePanel({
         />
         <span>{t('Always visible')}</span>
       </label>
+
+      <div className="ga-plan-panel-title"
+        title={t('Surface-texture kinds for this room shell — the client skins floor and walls with them. Default = the global kind / the client fallback.')}>
+        {t('Surfaces')}
+      </div>
+      {surfaceKinds.length || layout.surfaces ? SURFACE_SLOTS.map(({ key, label }) => {
+        const cur = layout.surfaces?.[key] || ''
+        const thumb = surfaceKinds.find((s) => s.kind === cur)?.url
+        return (
+          <label key={key} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}>
+            <span style={{ width: 32, flex: '0 0 auto' }}>{t(label)}</span>
+            {thumb ? (
+              <img className="ga-list-thumb" alt="" src={thumb}
+                style={{ width: 20, height: 20 }} />
+            ) : null}
+            <select
+              className="ga-input"
+              style={{ flex: 1, minWidth: 0 }}
+              value={cur}
+              onChange={(e) => onSurface(key, e.target.value)}
+            >
+              <option value="">{t('— default —')}</option>
+              {surfaceKinds.map((s) => (
+                <option key={s.kind} value={s.kind}>{s.kind}</option>
+              ))}
+              {/* A stored kind the library no longer offers stays selectable. */}
+              {cur && !surfaceKinds.some((s) => s.kind === cur) ? (
+                <option value={cur}>{cur}</option>
+              ) : null}
+            </select>
+          </label>
+        )
+      }) : (
+        <span className="ga-hint">
+          {t('No surface textures yet — the Surface textures tab creates them.')}
+        </span>
+      )}
 
       {clipKinds.length ? (
         <>

@@ -104,6 +104,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       })
       .catch(() => setClipKinds([]))
   }, [])
+  // Surface-texture kinds for the room shell (floor/wall). The route answers
+  // a BARE array mixing texture entries ({kind, url, size_m}) and blend
+  // entries ({kind, blend}) — the picker wants the deduplicated kinds, with a
+  // thumbnail wherever one exists.
+  const [surfaceKinds, setSurfaceKinds] = useState<Array<{ kind: string; url: string }>>([])
+  useEffect(() => {
+    apiGet<Array<{ kind?: string; url?: string }>>('/assets/surface-textures')
+      .then((list) => {
+        const byKind = new Map<string, string>()
+        for (const entry of Array.isArray(list) ? list : []) {
+          const kind = (entry?.kind || '').trim()
+          if (!kind) continue
+          if (!byKind.get(kind)) byKind.set(kind, entry.url || '')
+        }
+        setSurfaceKinds(Array.from(byKind, ([kind, url]) => ({ kind, url }))
+          .sort((a, b) => a.kind.localeCompare(b.kind)))
+      })
+      .catch(() => setSurfaceKinds([]))
+  }, [])
   // Top-down underlay: the placed room models rendered straight from above,
   // laid behind the rectangles — markers can be dropped on real furniture.
   const [underlay, setUnderlay] = useState(false)
@@ -503,6 +522,21 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     setHoverSnap(null)
     setClickMode(m)
   }, [clickMode, selectedRoom, cancelDraw])
+
+  // Room shell: pick the surface-texture kind for floor or wall. Empty keys
+  // are pruned, an all-empty map drops the field — the client then falls back
+  // to the global kind / its own default.
+  const setSurface = useCallback((key: 'floor' | 'wall', kind: string) => {
+    const lay = roomsRef.current.find((r) => r.id === selected)?.layout
+    if (!lay) return
+    const merged = { ...(lay.surfaces || {}), [key]: kind.trim() }
+    const surfaces: { floor?: string; wall?: string } = {}
+    if (merged.floor) surfaces.floor = merged.floor
+    if (merged.wall) surfaces.wall = merged.wall
+    updateLayout(selected, {
+      surfaces: Object.keys(surfaces).length ? surfaces : undefined,
+    })
+  }, [selected, updateLayout])
 
   // Rotate the room AS A UNIT (clockwise on the plan): the rectangle swaps
   // w/d around its centre, exit and markers turn with the content
@@ -992,6 +1026,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         onAlwaysVisible={(v) => updateLayout(selectedRoom?.id || '', {
           always_visible: v || undefined,
         })}
+        surfaceKinds={surfaceKinds}
+        onSurface={setSurface}
       />
       </div>
 
