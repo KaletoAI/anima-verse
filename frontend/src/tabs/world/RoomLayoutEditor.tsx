@@ -253,6 +253,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // (declared height × the mesh's width-per-height ratio).
   const planW = map3d?.plan_width_m
     || (bDims && bDims.heightM > 0 ? bDims.heightM * bDims.widthPerHeight : 0)
+  // The scale anchor is MANDATORY for floor-plan work (Abnahme round 4): a
+  // layout without it has no real size — the 3D client would fall back to its
+  // legacy 24 m plan width, which does not match the storey height. Existing
+  // data stays readable and selectable; only the geometry tools are locked.
+  const anchorMissing = planW <= 0 && (
+    rooms.some((r) => r.layout) || !!map3d?.outline?.length)
   // Refs for the window-level drag handler (its effect closure would go
   // stale on level/anchor changes otherwise).
   const map3dRef = useRef(map3d)
@@ -676,6 +682,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       cancelDraw()
       return
     }
+    // Geometry that carries a real size stays locked without a scale anchor
+    // (the toolbar disables these too — this is the second lock).
+    if (planW <= 0 && (m === 'draw-room' || m === 'outline' || m === 'marker')) return
     if (m === 'draw-room') {
       if (!selectedRoom?.id) return
       setDrawTarget(selectedRoom.id)
@@ -683,7 +692,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     setOutlineDraft([])
     setHoverSnap(null)
     setClickMode(m)
-  }, [clickMode, selectedRoom, cancelDraw])
+  }, [clickMode, selectedRoom, cancelDraw, planW])
 
   // Room shell: pick the surface-texture kind for floor or wall. Empty keys
   // are pruned, an all-empty map drops the field — the client then falls back
@@ -829,6 +838,37 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         ) : null}
       </div>
 
+      {/* Scale anchor missing: floor-plan geometry has no real size without
+          it, so the tools are locked until the plan width is set here (or a
+          building model declares its height). Pure viewing stays free. */}
+      {planW <= 0 && onMap3d ? (
+        <div className="ga-anchor-banner">
+          <span style={{ flex: 1, minWidth: 200 }}>
+            ⚠ {t('No scale anchor — the 3D client falls back to a legacy scale (24 m plan width) that does not match the storey height.')}
+            {anchorMissing
+              ? ' ' + t('The layouts already drawn here are affected.')
+              : ''}
+          </span>
+          <label className="ga-check-row"
+            title={t('Real-world width the floor-plan square represents. With a building model that declares a height the value is derived automatically — set one here only when there is no model.')}>
+            <span>📐 {t('Plan width (m)')}</span>
+            <input
+              className="ga-input"
+              type="number"
+              min={0.5}
+              max={500}
+              step={0.5}
+              style={{ width: 80 }}
+              value={map3d?.plan_width_m ?? ''}
+              onChange={(e) => {
+                const n = parseFloat(e.target.value)
+                onMap3d('plan_width_m', Number.isFinite(n) && n > 0 ? n : undefined)
+              }}
+            />
+          </label>
+        </div>
+      ) : null}
+
       {/* Review banner: a furnishing proposal is waiting for the selected
           room — the ghosts on the plan are exactly what Accept stores. */}
       {reviewing ? (
@@ -865,6 +905,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         outlineDraftLen={outlineDraft.length}
         hasElevator={!!map3d?.elevator}
         building={!!onMap3d}
+        noAnchor={planW <= 0}
         canSuggest={placed.length > 0}
         showModels={underlay}
         showBuilding={bUnderlay}
@@ -1319,6 +1360,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             ? t('Set the plan width (m) first — without a scale anchor the room has no real size.')
             : t('Let the LLM furnish this room: it picks library props, proposes the missing pieces and a solver places them.')}
         onFurnish={() => setFurnishOpen(true)}
+        noAnchor={planW <= 0}
         propsOpen={propsOpen}
         armedPropId={armedProp}
         onPickProp={(p) => {
@@ -1676,6 +1718,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               key={room.id || room.name}
               type="button"
               className={`ga-btn ga-btn-sm${clickMode === 'draw-room' && drawTarget === room.id ? ' ga-btn-primary' : ''}`}
+              disabled={planW <= 0}
               onClick={() => {
                 setSelected(room.id || '')
                 setDrawTarget(room.id || '')
@@ -1683,7 +1726,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                 setHoverSnap(null)
                 setClickMode('draw-room')
               }}
-              title={t('Draw this room on the current level — click to place points, click the first point to close, Shift = free-hand, Esc = cancel.')}
+              title={planW <= 0
+                ? t('Set the plan width (m) first')
+                : t('Draw this room on the current level — click to place points, click the first point to close, Shift = free-hand, Esc = cancel.')}
             >
               ⬠ {room.name || room.id}
             </button>

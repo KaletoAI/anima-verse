@@ -205,6 +205,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   const lhDerived = buildingEntry && buildingEntry.heightM > 0 && buildingEntry.floors > 0
     ? buildingEntry.heightM / buildingEntry.floors
     : 0
+  // Plan width auto-derived from the building model (declared height × the
+  // mesh's width-per-height ratio) — the placeholder AND the anchor check.
+  const pwDerived = buildingEntry && buildingEntry.heightM > 0 && wphRef.current > 0
+    ? buildingEntry.heightM * wphRef.current
+    : 0
+  // No anchor at all: neither an explicit value nor a model to derive one
+  // from. The field is mandatory then (Abnahme round 4) — a silent 0 sends
+  // the 3D client into its legacy 24 m fallback.
+  const anchorMissing = !(map3d?.plan_width_m && map3d.plan_width_m > 0) && pwDerived <= 0
 
   // Fetch a model (meta + GLB) into the cache; returns it when ready. A miss
   // is cached too — no retry storm per drag frame.
@@ -1614,19 +1623,21 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         </button>
         {onPlanWidth ? (
           <label className="ga-check-row"
-            title={t('Plan width (m): real-world width the floor-plan square represents. Empty = auto-derived from the building model (height × mesh proportions) — set a value only to correct it. THE scale anchor: room sizes derive from their declared widths, figures and storeys from real size × 8/plan width.')}>
-            <span>📐</span>
+            title={anchorMissing
+              ? t('Plan width (m) is REQUIRED here: no building model declares a height, so nothing can be derived. Without it the 3D client falls back to a legacy scale (24 m plan width) that does not match the storey height.')
+              : t('Plan width (m): real-world width the floor-plan square represents. Empty = auto-derived from the building model (height × mesh proportions) — set a value only to correct it. THE scale anchor: room sizes derive from their declared widths, figures and storeys from real size × 8/plan width.')}>
+            <span>{anchorMissing ? '⚠' : '📐'}</span>
             <input
               className="ga-input"
               type="number"
               min={0.5}
               max={500}
               step={0.5}
-              style={{ width: 70 }}
+              style={anchorMissing
+                ? { width: 70, borderColor: '#d29922' }
+                : { width: 70 }}
               value={map3d?.plan_width_m ?? ''}
-              placeholder={buildingEntry && buildingEntry.heightM > 0 && wphRef.current > 0
-                ? `${t('auto')} (${(buildingEntry.heightM * wphRef.current).toFixed(1)})`
-                : '—'}
+              placeholder={pwDerived > 0 ? `${t('auto')} (${pwDerived.toFixed(1)})` : '—'}
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
                 onPlanWidth(Number.isFinite(n) && n > 0 ? n : undefined)

@@ -51,6 +51,9 @@ interface PlanToolbarProps {
   hasElevator: boolean
   /** Show the building group at all (the editor got an onMap3d writer). */
   building: boolean
+  /** No scale anchor (plan width) — every tool that produces or consumes
+   *  real-world size is locked until one is set. */
+  noAnchor: boolean
   canSuggest: boolean
   showModels: boolean
   showBuilding: boolean
@@ -72,14 +75,16 @@ interface PlanToolbarProps {
 
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasExit, hasOutline,
-  outlineDraftLen, hasElevator, building, canSuggest, showModels, showBuilding,
-  propsOpen, onMode, onRotate, onUnplace, onRemoveExit, onRemoveOutline,
-  onRemoveElevator, onCommitOutline, onCommitRoom, onCancelDraw, onSuggest,
-  onToggleModels, onToggleBuilding, onProps,
+  outlineDraftLen, hasElevator, building, noAnchor, canSuggest, showModels,
+  showBuilding, propsOpen, onMode, onRotate, onUnplace, onRemoveExit,
+  onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
+  onCancelDraw, onSuggest, onToggleModels, onToggleBuilding, onProps,
 }: PlanToolbarProps) {
   const { t } = useI18n()
   const drawing = mode === 'draw-room'
   const outlining = mode === 'outline'
+  // One tooltip for every tool the missing scale anchor locks.
+  const anchorTip = t('Set the plan width (m) first')
 
   return (
     <div className="ga-plan-toolbar">
@@ -101,8 +106,10 @@ export function PlanToolbar({
           ) : (
             <Tool
               icon="🏗"
+              disabled={noAnchor}
               onClick={() => onMode('outline')}
-              title={t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
+              title={noAnchor ? anchorTip
+                : t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
             />
           )}
           {hasOutline && !outlining ? (
@@ -142,9 +149,10 @@ export function PlanToolbar({
       ) : (
         <Tool
           icon="⬠"
-          disabled={!hasSelection}
+          disabled={!hasSelection || noAnchor}
           onClick={() => onMode('draw-room')}
-          title={t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, exit and markers stay.')}
+          title={noAnchor ? anchorTip
+            : t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, exit and markers stay.')}
         />
       )}
       <Tool
@@ -178,15 +186,18 @@ export function PlanToolbar({
       />
       <Tool
         icon="✨"
-        disabled={!canSuggest}
+        disabled={!canSuggest || noAnchor}
         onClick={onSuggest}
-        title={t('Add a door on every shared wall (once, linked to the neighbour) and a window on every exterior wall ≥ 2.5 m. Existing openings are kept — needs the plan width for windows.')}
+        title={noAnchor ? anchorTip
+          : t('Add a door on every shared wall (once, linked to the neighbour) and a window on every exterior wall ≥ 2.5 m. Existing openings are kept — needs the plan width for windows.')}
       />
       <Tool
         icon="🪑"
         active={propsOpen}
+        disabled={noAnchor}
         onClick={onProps}
-        title={t('Show the prop library in the panel next to the plan.')}
+        title={noAnchor ? anchorTip
+          : t('Show the prop library in the panel next to the plan.')}
       />
       <Tool
         icon="✕"
