@@ -224,9 +224,11 @@ export function FurnishDialog({ roomId, roomName, job, propNames, placements,
 
   const numField = (label: string, value: number,
     onValue: (v: number) => void) => (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+      title={label}>
       <span className="ga-hint">{label}</span>
       <input className="ga-input" type="number" step={0.05} min={0.05} max={5}
+        style={{ width: 74 }}
         value={value} onChange={(e) => onValue(Number(e.target.value))} />
     </label>
   )
@@ -310,23 +312,30 @@ export function FurnishDialog({ roomId, roomName, job, propNames, placements,
         <div className="ga-plan-panel-title">{t('New pieces (will be generated)')}</div>
         {draft.new.length ? draft.new.map((n, i) => (
           <div key={i} className="ga-furnish-new">
-            <div className="ga-furnish-row">
+            {/* Row 1: everything scalar — name, count, the three dims. The
+                generation subject gets the full second row (it is the field
+                that actually needs width). */}
+            <div className="ga-furnish-row" style={{ flexWrap: 'wrap' }}>
               <input type="checkbox" checked={!!picked[`n:${i}`]}
                 onChange={(ev) => setPicked((p) => ({ ...p, [`n:${i}`]: ev.target.checked }))} />
-              <input className="ga-input" style={{ flex: 1 }} value={n.name}
+              <input className="ga-input" style={{ flex: '2 1 160px' }} value={n.name}
+                title={t('Name')}
                 onChange={(ev) => setNew(i, { name: ev.target.value })} />
-              <input className="ga-input" type="number" min={1} max={12} value={n.count}
-                style={{ width: 56 }}
-                onChange={(ev) => setNew(i, { count: Math.max(1, Math.min(12, Number(ev.target.value) || 1)) })} />
-            </div>
-            <textarea className="ga-input" rows={2} value={n.description}
-              title={t('The generation subject — describe the isolated object, never a scene.')}
-              onChange={(ev) => setNew(i, { description: ev.target.value })} />
-            <div style={{ display: 'flex', gap: 6 }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                title={t('Count')}>
+                <span className="ga-hint">×</span>
+                <input className="ga-input" type="number" min={1} max={12} value={n.count}
+                  style={{ width: 56 }}
+                  onChange={(ev) => setNew(i, { count: Math.max(1, Math.min(12, Number(ev.target.value) || 1)) })} />
+              </label>
               {numField(t('W (m)'), n.width_m, (v) => setNew(i, { width_m: v }))}
               {numField(t('D (m)'), n.depth_m, (v) => setNew(i, { depth_m: v }))}
               {numField(t('H (m)'), n.height_m, (v) => setNew(i, { height_m: v }))}
             </div>
+            <textarea className="ga-input" rows={3} style={{ width: '100%' }}
+              value={n.description}
+              title={t('The generation subject — describe the isolated object, never a scene.')}
+              onChange={(ev) => setNew(i, { description: ev.target.value })} />
             <span className="ga-hint">
               {n.marker
                 ? t('Marker: {kind} (adjust it by hand on the prop later)')
@@ -429,7 +438,8 @@ export function FurnishDialog({ roomId, roomName, job, propNames, placements,
     <div className="ga-modal-backdrop"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div className="ga-modal" role="dialog"
-        aria-label={t('Furnish room')} style={{ maxWidth: 560 }}>
+        aria-label={t('Furnish room')}
+        style={{ maxWidth: 1080, width: 'min(1080px, 94vw)' }}>
         <div className="ga-modal-header">
           <span>✨ {t('Furnish')} — {roomName || roomId}</span>
           <button className="ga-modal-close" onClick={onClose} aria-label={t('Close')}>×</button>

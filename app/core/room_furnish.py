@@ -376,6 +376,7 @@ def _valid_existing(raw: Any, library: Dict[str, Dict[str, Any]],
 
 
 def _valid_marker(raw: Any, kinds: List[str]) -> Optional[Dict[str, Any]]:
+    from app.core.props import MARKER_AT_MAX, MARKER_AT_MIN
     if not isinstance(raw, dict):
         return None
     anim = str(raw.get("animation") or "").strip()
@@ -385,7 +386,9 @@ def _valid_marker(raw: Any, kinds: List[str]) -> Optional[Dict[str, Any]]:
     if not isinstance(at, (list, tuple)) or len(at) != 3:
         at = [0.5, 0.5, 0.5]
     try:
-        at3 = [round(min(max(float(at[i]), 0.0), 1.0), 4) for i in range(3)]
+        # Same range as props.sanitize_markers — fractions may leave the box.
+        at3 = [round(min(max(float(at[i]), MARKER_AT_MIN), MARKER_AT_MAX), 4)
+               for i in range(3)]
     except (TypeError, ValueError):
         at3 = [0.5, 0.5, 0.5]
     return {"animation": anim, "at": at3}
