@@ -214,14 +214,16 @@ def _dims_from_size(size_m: Any, bbox: Any = None,
                     rotation: Any = None) -> Dict[str, float]:
     """Spread ONE real size (the largest edge in metres) over the three dims
     using the model's proportions. Without a bbox every dim becomes that size
-    (a placeholder cube)."""
+    (a placeholder cube). ESTIMATES round to 2 decimals — centimetres are
+    plenty for furniture, longer tails just look like precision that is not
+    there (admin-typed values keep the 3-decimal coercion)."""
     size = _coerce_dim_m(size_m, DEFAULT_DIM_M)
     od = oriented_dims(bbox, rotation) if bbox else []
     if od and max(od) > 0:
         f = size / max(od)
-        return {"width_m": max(round(od[0] * f, 3), 0.001),
-                "height_m": max(round(od[1] * f, 3), 0.001),
-                "depth_m": max(round(od[2] * f, 3), 0.001)}
+        return {"width_m": max(round(od[0] * f, 2), 0.01),
+                "height_m": max(round(od[1] * f, 2), 0.01),
+                "depth_m": max(round(od[2] * f, 2), 0.01)}
     return {"width_m": size, "depth_m": size, "height_m": size}
 
 

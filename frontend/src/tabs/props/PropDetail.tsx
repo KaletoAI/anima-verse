@@ -85,7 +85,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
         for (const other of DIM_FIELDS) {
           if (other.key === field.key || pinned[other.key]) continue
           const v = (n * ratios[other.axis]) / ratios[field.axis]
-          next[other.key] = String(Math.round(v * 1000) / 1000)
+          // Suggestions round to 2 decimals — centimetre precision reads
+          // honestly; the admin may still type finer values.
+          next[other.key] = String(Math.round(v * 100) / 100)
         }
       }
       return next
@@ -205,6 +207,26 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
   const addMarker = () =>
     saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at: [0.5, 0, 0.5] }])
   const removeMarker = (i: number) => saveMarkers(markers.filter((_, idx) => idx !== i))
+
+  // Floor-plan-style placement: arm ('add' or a marker index), then click the
+  // mesh in the viewer — the hit lands as raw-box fractions. Esc disarms.
+  const [placing, setPlacing] = useState<'add' | number | null>(null)
+  useEffect(() => { setPlacing(null) }, [prop.id])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlacing(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  const onPickPoint = useCallback((at: [number, number, number]) => {
+    setPlacing((cur) => {
+      if (cur === 'add') {
+        void saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at }])
+      } else if (cur !== null && markers[cur]) {
+        void saveMarkers(markers.map((m, idx) => (idx === cur ? { ...m, at } : m)))
+      }
+      return null
+    })
+  }, [markers, clipKinds, saveMarkers])
 
   const kindOptions = useMemo(() => {
     // Offer the open clip vocabulary plus any kind already used on this prop.
@@ -357,6 +379,14 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
                 </label>
                 <button
                   type="button"
+                  className={`ga-btn ga-btn-sm${placing === i ? ' ga-btn-primary' : ''}`}
+                  onClick={() => setPlacing((cur) => (cur === i ? null : i))}
+                  title={t('Then click the spot on the model in the viewer to move this marker there (Esc cancels).')}
+                >
+                  ✥
+                </button>
+                <button
+                  type="button"
                   className="ga-btn ga-btn-sm ga-btn-danger"
                   onClick={() => removeMarker(i)}
                   title={t('Remove this marker')}
@@ -366,8 +396,18 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
               </div>
             ))
           )}
-          <div>
-            <button type="button" className="ga-btn ga-btn-sm" onClick={addMarker}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              className={`ga-btn ga-btn-sm${placing === 'add' ? ' ga-btn-primary' : ''}`}
+              disabled={!prop.has_model}
+              onClick={() => setPlacing((cur) => (cur === 'add' ? null : 'add'))}
+              title={t('Then click the spot on the model in the viewer to drop a marker there (Esc cancels) — like placing markers on the floor plan.')}
+            >
+              🎯 {placing === 'add' ? t('Click the model…') : t('Place marker')}
+            </button>
+            <button type="button" className="ga-btn ga-btn-sm" onClick={addMarker}
+              title={t('Add a marker at the box centre — position it with ✥ or the u/v/w fields.')}>
               + {t('Marker')}
             </button>
           </div>
@@ -386,6 +426,14 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
               height={340}
               rotation={prop.rotation}
               onBounds={(b) => setLiveBbox(b.size)}
+              markers={markers}
+              dimsOverlay={{
+                width_m: parseFloat(dims.width_m) || prop.width_m,
+                depth_m: parseFloat(dims.depth_m) || prop.depth_m,
+                height_m: parseFloat(dims.height_m) || prop.height_m,
+              }}
+              picking={placing !== null}
+              onPickPoint={onPickPoint}
             />
           ) : (
             <div className="ga-empty">

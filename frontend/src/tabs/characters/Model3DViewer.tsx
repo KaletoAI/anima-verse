@@ -31,7 +31,8 @@ export interface TilePlacement {
 }
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
-  offsetY = 0, groundTextureUrl, placement, onBounds }:
+  offsetY = 0, groundTextureUrl, placement, onBounds, markers, dimsOverlay,
+  picking = false, onPickPoint }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
@@ -49,7 +50,18 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  square, textured with this image when given) and places the model on
      *  it — centred, yawed and scaled per `placement`, feet on the ground. */
     groundTextureUrl?: string
-    placement?: TilePlacement }) {
+    placement?: TilePlacement
+    /** Object-local marker dots (numbered) — `at` = fractions of the RAW
+     *  model bounding box. Model mode only; refreshed live. */
+    markers?: Array<{ at: [number, number, number] }>
+    /** Draw the oriented bounding box with W/D/H edges + labels (real
+     *  metres) around the model — makes the three dims readable in 3D.
+     *  Model mode only; follows the orientation fix live. */
+    dimsOverlay?: { width_m: number; depth_m: number; height_m: number } | null
+    /** Armed pick mode: a plain click on the mesh reports the hit as RAW-box
+     *  fractions — the floor-plan-style marker placement. */
+    picking?: boolean
+    onPickPoint?: (at: [number, number, number]) => void }) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -66,6 +78,25 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   // re-download the model.
   const onBoundsRef = useRef(onBounds)
   onBoundsRef.current = onBounds
+  // Marker/dims overlay + pick mode — all live-applied via refs so none of
+  // them re-runs the loader effect.
+  const markersRef = useRef(markers)
+  markersRef.current = markers
+  const dimsOverlayRef = useRef(dimsOverlay)
+  dimsOverlayRef.current = dimsOverlay
+  const pickingRef = useRef(picking)
+  pickingRef.current = picking
+  const onPickPointRef = useRef(onPickPoint)
+  onPickPointRef.current = onPickPoint
+  const overlayFnRef = useRef<(() => void) | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  // Live overlay refresh (markers moved/added, dims typed) without reload.
+  useEffect(() => { overlayFnRef.current?.() }, [markers, dimsOverlay])
+  // The armed pick tool reads as a crosshair on the canvas.
+  useEffect(() => {
+    if (canvasRef.current) canvasRef.current.style.cursor = picking ? 'crosshair' : ''
+  }, [picking])
 
   // Live-apply an offset change (the placement fn reads the ref).
   useEffect(() => {
@@ -80,6 +111,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     orientRef.current?.rotation.set(
       _deg(rotation?.x), _deg(rotation?.y), _deg(rotation?.z))
     if (placementRef.current) placeFnRef.current?.(placementRef.current)
+    // The oriented dims box follows the fix.
+    overlayFnRef.current?.()
   }, [rotation?.x, rotation?.y, rotation?.z])
 
   // Live-apply placement changes (yaw slider / size slider) without reload.
@@ -168,15 +201,17 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         }
         if (disposed) return
 
-        // Report the RAW model box — measured before pivot / orientation fix /
-        // placement, so the caller sees the mesh's own axes and proportions.
-        // (setFromObject updates the matrices itself.)
+        // The RAW model box — measured before pivot / orientation fix /
+        // placement, so it describes the mesh's own axes and proportions.
+        // (setFromObject updates the matrices itself.) This is also the frame
+        // object-local markers live in: measured while the object is still
+        // unparented, its coordinates equal the later PIVOT-local space.
+        const rawBox = new THREE.Box3().setFromObject(object)
+        const rawSize = rawBox.getSize(new THREE.Vector3())
         if (onBoundsRef.current) {
-          const raw = new THREE.Box3().setFromObject(object)
-          const rawSize = raw.getSize(new THREE.Vector3())
           onBoundsRef.current({
-            min: [raw.min.x, raw.min.y, raw.min.z],
-            max: [raw.max.x, raw.max.y, raw.max.z],
+            min: [rawBox.min.x, rawBox.min.y, rawBox.min.z],
+            max: [rawBox.max.x, rawBox.max.y, rawBox.max.z],
             size: [rawSize.x, rawSize.y, rawSize.z],
           })
         }
@@ -420,6 +455,148 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           camera.updateProjectionMatrix()
           controls.target.set(0, 0, 0)
           controls.update()
+
+          // ── Marker + dims overlay (model mode) ──
+          // Markers live in the pivot frame (raw-box fractions → local
+          // coordinates, they turn with the orientation fix); the dims box is
+          // measured in WORLD space around the oriented model. Both rebuild
+          // live through overlayFnRef — dims typing, marker edits and every
+          // ↻ click refresh without a reload.
+          const rawMaxDim = Math.max(rawSize.x, rawSize.y, rawSize.z) || 1
+          const markerGroup = new THREE.Group()
+          pivot.add(markerGroup)
+          const dimsGroup = new THREE.Group()
+          scene.add(dimsGroup)
+          const clearGroup = (g: Object3D) => {
+            for (const c of [...g.children]) {
+              g.remove(c)
+              c.traverse((o: Object3D) => {
+                const mesh = o as Mesh
+                mesh.geometry?.dispose?.()
+                const m = mesh.material as
+                  (MeshStandardMaterial & { map?: { dispose?: () => void } }) | undefined
+                m?.map?.dispose?.()
+                m?.dispose?.()
+              })
+            }
+          }
+          const textSprite = (text: string, color: string, h: number) => {
+            const c = document.createElement('canvas')
+            const ctx = c.getContext('2d')!
+            ctx.font = '600 26px system-ui, sans-serif'
+            c.width = Math.ceil(ctx.measureText(text).width) + 14
+            c.height = 34
+            const ctx2 = c.getContext('2d')!
+            ctx2.font = '600 26px system-ui, sans-serif'
+            ctx2.fillStyle = 'rgba(13,17,23,0.72)'
+            ctx2.fillRect(0, 0, c.width, c.height)
+            ctx2.fillStyle = color
+            ctx2.fillText(text, 7, 26)
+            const tex = new THREE.CanvasTexture(c)
+            const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+              map: tex, depthTest: false }))
+            spr.renderOrder = 3
+            spr.scale.set(h * (c.width / c.height), h, 1)
+            return spr
+          }
+          const rebuildOverlay = () => {
+            clearGroup(markerGroup)
+            clearGroup(dimsGroup)
+            // Numbered marker dots at their raw-box fractions.
+            const r = rawMaxDim * 0.025
+            ;(markersRef.current || []).forEach((m, i) => {
+              const dot = new THREE.Mesh(
+                new THREE.SphereGeometry(r, 10, 10),
+                new THREE.MeshBasicMaterial({ color: 0x3fb950, depthTest: false }))
+              dot.renderOrder = 2
+              dot.position.set(
+                rawBox.min.x + m.at[0] * rawSize.x,
+                rawBox.min.y + m.at[1] * rawSize.y,
+                rawBox.min.z + m.at[2] * rawSize.z)
+              markerGroup.add(dot)
+              const num = textSprite(String(i + 1), '#3fb950', rawMaxDim * 0.09)
+              num.position.copy(dot.position)
+              num.position.y += r * 2.4
+              markerGroup.add(num)
+            })
+            // Oriented bounding box + coloured W/D/H edges with the REAL
+            // metre values — which field means which direction.
+            const dims = dimsOverlayRef.current
+            if (!dims) return
+            const ob = new THREE.Box3().setFromObject(object)
+            dimsGroup.add(new THREE.Box3Helper(ob, 0x6e7681))
+            const edge = (a: [number, number, number],
+                          b: [number, number, number], color: number) => {
+              const g = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(...a), new THREE.Vector3(...b)])
+              const line = new THREE.Line(g,
+                new THREE.LineBasicMaterial({ color, depthTest: false }))
+              line.renderOrder = 2
+              dimsGroup.add(line)
+            }
+            const lbl = (text: string, color: string,
+                         p: [number, number, number]) => {
+              const s = textSprite(text, color, rawMaxDim * 0.085)
+              s.position.set(...p)
+              dimsGroup.add(s)
+            }
+            const out = rawMaxDim * 0.045
+            // W along X (front bottom edge), D along Z (right bottom edge),
+            // H along Y (front right vertical) — axis colours match nothing
+            // else in the UI on purpose, they only mean "these three".
+            edge([ob.min.x, ob.min.y, ob.max.z], [ob.max.x, ob.min.y, ob.max.z], 0xff7b72)
+            lbl(`W ${dims.width_m.toFixed(2)} m`, '#ff7b72',
+              [(ob.min.x + ob.max.x) / 2, ob.min.y - out, ob.max.z + out])
+            edge([ob.max.x, ob.min.y, ob.min.z], [ob.max.x, ob.min.y, ob.max.z], 0x79c0ff)
+            lbl(`D ${dims.depth_m.toFixed(2)} m`, '#79c0ff',
+              [ob.max.x + out, ob.min.y - out, (ob.min.z + ob.max.z) / 2])
+            edge([ob.max.x, ob.min.y, ob.max.z], [ob.max.x, ob.max.y, ob.max.z], 0x3fb950)
+            lbl(`H ${dims.height_m.toFixed(2)} m`, '#3fb950',
+              [ob.max.x + out, (ob.min.y + ob.max.y) / 2, ob.max.z + out])
+          }
+          overlayFnRef.current = rebuildOverlay
+          rebuildOverlay()
+          disposers.push(() => {
+            overlayFnRef.current = null
+            clearGroup(markerGroup)
+            clearGroup(dimsGroup)
+          })
+
+          // ── Pick mode: a plain click (no orbit drag) on the mesh reports
+          // the hit as raw-box fractions — floor-plan-style placement. ──
+          canvasRef.current = renderer.domElement
+          renderer.domElement.style.cursor = pickingRef.current ? 'crosshair' : ''
+          let downAt: [number, number] | null = null
+          const onDown = (e: PointerEvent) => { downAt = [e.clientX, e.clientY] }
+          const onUp = (e: PointerEvent) => {
+            const start = downAt
+            downAt = null
+            if (!start || !pickingRef.current || !onPickPointRef.current) return
+            if (Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 5) return
+            const rect = renderer.domElement.getBoundingClientRect()
+            const ndc = new THREE.Vector2(
+              ((e.clientX - rect.left) / rect.width) * 2 - 1,
+              -(((e.clientY - rect.top) / rect.height) * 2 - 1))
+            const ray = new THREE.Raycaster()
+            ray.setFromCamera(ndc, camera)
+            const hit = ray.intersectObject(object, true)[0]
+            if (!hit) return
+            const local = pivot.worldToLocal(hit.point.clone())
+            const frac = (v: number, lo: number, span: number) =>
+              Math.round(Math.min(Math.max((v - lo) / (span || 1), 0), 1) * 1000) / 1000
+            onPickPointRef.current([
+              frac(local.x, rawBox.min.x, rawSize.x),
+              frac(local.y, rawBox.min.y, rawSize.y),
+              frac(local.z, rawBox.min.z, rawSize.z),
+            ])
+          }
+          renderer.domElement.addEventListener('pointerdown', onDown)
+          renderer.domElement.addEventListener('pointerup', onUp)
+          disposers.push(() => {
+            renderer.domElement.removeEventListener('pointerdown', onDown)
+            renderer.domElement.removeEventListener('pointerup', onUp)
+            if (canvasRef.current === renderer.domElement) canvasRef.current = null
+          })
         }
 
         setLoading(false)
