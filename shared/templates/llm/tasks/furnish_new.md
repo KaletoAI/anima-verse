@@ -1,0 +1,54 @@
+---
+task: furnish_new
+purpose: Propose MISSING furniture pieces (not in the library) with dims, generation subject and a marker suggestion (room_furnish stage 1b, plan-room-furnish.md)
+placeholders:
+  room_name: Room name
+  room_description: Room description (may be empty)
+  activity_hint: Activity hint of the room/location (may be empty)
+  style_hint: Style hint of the location (may be empty)
+  room_w_m: Room bounding-box width in metres (number)
+  room_d_m: Room bounding-box depth in metres (number)
+  area_m2: Room floor area in square metres (number)
+  budget_m2: Remaining footprint budget in square metres AFTER stage-1a picks (number)
+  max_new: Hard cap for the number of NEW piece kinds (number)
+  existing: List of {name, count} — already placed plus the stage-1a picks
+  catalog_names: List of ALL library item names (to avoid duplicates)
+  marker_kinds: List of allowed animation kinds for markers (open clip vocabulary, e.g. sit, lie)
+---
+## system
+You complete the furnishing of a room for a life-simulation game. The library picks are already made; you propose the pieces that are still MISSING and do not exist in the library yet. Each proposal must be complete enough to auto-generate a 3D model — nothing may require manual data entry.
+
+Per proposed piece deliver:
+- "name": short display name (English, singular, e.g. "Rowing machine").
+- "description": the GENERATION SUBJECT for the image pipeline — describe only the isolated object itself (materials, colors, shape, style matching the room), never a scene, never a room, never people.
+- "category": one word (chair, table, bed, shelf, machine, plant, lamp, decor, ...).
+- "width_m", "depth_m", "height_m": realistic real-world dimensions in metres.
+- "marker": where a character interacts with the piece, or null. Only for pieces a character sits or lies on. {"animation": one of the allowed kinds, "at": [x, y, z] fractions of the object's bounding box (x = along width, y = along height, z = along depth); a chair seat is roughly [0.5, 0.45, 0.5], a bed's lying surface roughly [0.5, 0.55, 0.5]}. The position is a rough default — it gets fine-tuned by hand.
+- "count": how many of this piece the room needs.
+
+Hard rules:
+- Never propose something whose name (or an obvious synonym) is already in the library list or in the room.
+- Respect the footprint budget (width_m × depth_m × count summed over all proposals) and the cap on new kinds. Proposing nothing is a valid answer.
+- Dimensions between 0.05 and 5 metres per axis.
+
+Respond with a SINGLE JSON object, no markdown, no explanations:
+{"new": [{"name": "...", "description": "...", "category": "...", "width_m": 0.0, "depth_m": 0.0, "height_m": 0.0, "marker": {"animation": "...", "at": [0.5, 0.45, 0.5]} , "count": 1}, ...]}
+
+## user
+Room: {{ room_name }}
+{% if room_description %}Description: {{ room_description }}
+{% endif %}{% if activity_hint %}Typical activity: {{ activity_hint }}
+{% endif %}{% if style_hint %}Style: {{ style_hint }}
+{% endif %}Size: {{ room_w_m }} × {{ room_d_m }} m ({{ area_m2 }} m² floor area)
+Footprint budget for new pieces: {{ budget_m2 }} m² · at most {{ max_new }} new piece kinds
+
+Already covered (do not propose again):
+{% for e in existing %}- {{ e.count }}× {{ e.name }}
+{% else %}- nothing
+{% endfor %}
+Library names (do not duplicate these):
+{% for n in catalog_names %}- {{ n }}
+{% endfor %}
+Allowed marker animation kinds: {{ marker_kinds | join(', ') }}
+
+Propose the missing pieces this room still needs.
