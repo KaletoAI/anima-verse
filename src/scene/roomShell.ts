@@ -52,7 +52,10 @@ export function buildRoomShell(recipe: ApiRoomRecipe, ctx: ShellCtx): RoomShell 
   if (pts.length < 3) return { group, walls };
 
   const WALL_H = Math.max(0.6, ctx.storey - 0.15);
-  const baseY = floorY + 0.08;
+  // +0.10 statt +0.08: die Etagen-Platten des Gebäude-Grundrisses
+  // (map3d.outline) liegen bei +0.08 — koplanar würde die Raum-Platte
+  // dagegen z-fighten; +0.10 bleibt unter der Inhalts-Basis +0.12
+  const baseY = floorY + 0.10;
 
   // Umlaufrichtung per Flächenvorzeichen (robust, auch wenn der Vertrag im
   // Uhrzeigersinn liefert) -> Außennormale der Wandstücke fürs Culling

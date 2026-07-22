@@ -89,8 +89,8 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
   const storey = storeyHeight(tile.loc);
   const level = recipe.level ?? 0;
   const floorY = level * storey;
-  // Props/Marker stehen AUF der Bodenplatte der Hülle (Oberkante +0.08)
-  const floorTop = floorY + 0.09;
+  // Props/Marker stehen AUF der Bodenplatte der Hülle (Oberkante +0.10)
+  const floorTop = floorY + 0.11;
 
   // Surface-Bilder fertig laden, BEVOR die Hülle sie klont (Klone eines noch
   // ladenden Bildes blieben leer); "floor" ist der globale Boden-Fallback
