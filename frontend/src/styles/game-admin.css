@@ -630,6 +630,51 @@ html, * {
   background: var(--bg-container, #161b22);
 }
 
+/* Stacked form panels in a detail column keep a gap between them. */
+.ga-twocol-right > .ga-form + .ga-form { margin-top: 8px; }
+
+/* Surface-texture versions: one card per stored version of a kind, the
+   ACTIVE one outlined (that is what the 3D client gets). */
+.ga-tex-versions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ga-tex-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 128px;
+  padding: 6px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+}
+
+.ga-tex-card.is-active {
+  border-color: var(--accent, #58a6ff);
+  box-shadow: 0 0 0 1px var(--accent, #58a6ff);
+}
+
+.ga-tex-card img {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: zoom-in;
+}
+
+.ga-tex-card-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.ga-tex-card-meta {
+  font-size: 0.75em;
+  line-height: 1.25;
+}
+
 /* Detail panel split into an input column and a preview column (e.g. the
    prop detail: fields left, 3D viewer right). Collapses to one column on
    narrow viewports, like the other two-column layouts. */

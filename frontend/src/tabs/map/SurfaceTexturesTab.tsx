@@ -8,46 +8,22 @@
  * through the normal image pipeline (use case "surface_texture"); the
  * COMPLETE final prompt is shown and editable before generating. An empty
  * library is fine — the client falls back to its procedural materials.
+ *
+ * Shell: the standard list-detail layout (`ga-twocol`) of the other tabs —
+ * texture kinds and compositions on the left, the generator / the selected
+ * kind's versions / the blend editor on the right.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { DetailToolbar } from '../../components/DetailToolbar'
+import { ListHeader } from '../../components/ListHeader'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { TERRAIN_TYPES } from '../world/worldTypes'
-
-interface TexVersion {
-  filename: string
-  url: string
-  size_m: number
-  created_at: string
-  source: string
-  backend: string
-  prompt: string
-  negative: string
-  active: boolean
-}
-
-interface TexGroup {
-  kind: string
-  versions: TexVersion[]
-}
-
-interface BackendInfo {
-  name: string
-  prompt_style: string
-  prompt_negative: string
-}
-
-interface BlendZone {
-  kind: string
-  until?: number
-}
-
-interface Blend {
-  toward: string
-  zones: BlendZone[]
-  noise?: number
-}
+import { SurfaceBlendEditor } from './SurfaceBlendEditor'
+import { SurfaceGenerateForm } from './SurfaceGenerateForm'
+import { SurfaceKindDetail } from './SurfaceKindDetail'
+import { KIND_DATALIST_ID, KNOWN_KINDS, dateShort, madeWith } from './surfaceTypes'
+import type { BackendInfo, Blend, TexGroup, TexVersion } from './surfaceTypes'
 
 export function SurfaceTexturesTab() {
   const { t } = useI18n()
@@ -63,6 +39,9 @@ export function SurfaceTexturesTab() {
   const [blends, setBlends] = useState<Record<string, Blend>>({})
   const [blendEdit, setBlendEdit] = useState<{ kind: string; blend: Blend } | null>(null)
   const [loaded, setLoaded] = useState(false)
+  // Selected list row: a texture kind, `blend:<kind>` or '' (nothing).
+  const [sel, setSel] = useState('')
+  const [creating, setCreating] = useState(false)
   const [kind, setKind] = useState('')
   const [backend, setBackend] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -140,14 +119,23 @@ export function SurfaceTexturesTab() {
           ? t('This kind is already generating on that backend.')
           : t('Generating the texture…'))
         startPoll()
+        setCreating(false)
+        setSel(k)
         void load()
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [kind, backendInfo, prompt, negative, load, startPoll, t, toast])
 
+  const pickUpload = useCallback((k: string) => {
+    const clean = k.trim().toLowerCase()
+    if (!clean) return
+    uploadKindRef.current = clean
+    uploadRef.current?.click()
+  }, [])
+
   const upload = useCallback((k: string, file: File) => {
     void apiUpload(`/world/surface-textures/${encodeURIComponent(k)}/upload`, file)
-      .then(() => { setCacheBump((b) => b + 1); void load() })
+      .then(() => { setCacheBump((b) => b + 1); setCreating(false); setSel(k); void load() })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [load, t, toast])
 
@@ -180,10 +168,18 @@ export function SurfaceTexturesTab() {
   const saveBlend = useCallback(() => {
     if (!blendEdit) return
     const k = blendEdit.kind.trim().toLowerCase()
-    if (!k) return
+    if (!k || !blendEdit.blend.toward.trim()) {
+      toast(t('A composition needs a kind and a "toward" kind.'), 'error')
+      return
+    }
     void apiPost(`/world/surface-textures/blends/${encodeURIComponent(k)}`,
       { blend: blendEdit.blend })
-      .then(() => { setBlendEdit(null); void load() })
+      .then(() => {
+        setBlendEdit({ kind: k, blend: blendEdit.blend })
+        setSel(`blend:${k}`)
+        toast(t('Saved'))
+        void load()
+      })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [blendEdit, load, t, toast])
 
@@ -194,358 +190,198 @@ export function SurfaceTexturesTab() {
     }
     setArmedDel('')
     void apiDelete(`/world/surface-textures/blends/${encodeURIComponent(k)}`)
-      .then(() => load())
+      .then(() => { setBlendEdit(null); setSel(''); void load() })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [armedDel, load, t, toast])
 
-  // Compact "how was this made" label: backend for generated versions,
-  // upload marker for uploads, em dash for legacy files without meta.
-  const madeWith = (v: TexVersion) =>
-    v.source === 'generated' ? (v.backend || t('generated'))
-      : v.source === 'uploaded' ? t('uploaded') : '—'
+  // ── List selection ──
+  const pickKind = useCallback((k: string) => {
+    setBlendEdit(null)
+    setCreating(false)
+    setSel(k)
+    // The embedded generator produces a NEW VERSION of this kind — prefill it
+    // and recompose the final prompt for it.
+    setKind(k)
+    setPromptTouched(false)
+  }, [])
 
-  const dateShort = (iso: string) => {
-    if (!iso) return ''
-    const d = new Date(iso)
-    return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, {
-      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-    })
-  }
+  const pickBlend = useCallback((k: string, blend: Blend) => {
+    setCreating(false)
+    setSel(`blend:${k}`)
+    setBlendEdit({ kind: k, blend: JSON.parse(JSON.stringify(blend)) as Blend })
+  }, [])
 
-  const knownKinds = Array.from(new Set([...TERRAIN_TYPES, 'gravel', 'dirt', 'snow']))
+  const startCreate = useCallback(() => {
+    setBlendEdit(null)
+    setSel('')
+    setCreating(true)
+    setKind('')
+    setPromptTouched(false)
+  }, [])
+
+  const selectedGroup = textures.find((tx) => tx.kind === sel) || null
+  const blendNames = Object.keys(blends).sort()
+  const isEmpty = !textures.length && !blendNames.length
+
+  const generateForm = (
+    <SurfaceGenerateForm
+      kind={kind}
+      onKind={setKind}
+      lockKind={!!selectedGroup && !creating}
+      backends={backends}
+      backendName={backendInfo?.name || ''}
+      onBackend={(name) => { setBackend(name); setPromptTouched(false) }}
+      prompt={prompt}
+      onPrompt={(v) => { setPrompt(v); setPromptTouched(true) }}
+      negative={negative}
+      onNegative={(v) => { setNegative(v); setPromptTouched(true) }}
+      onGenerate={generate}
+      onUpload={() => pickUpload(kind)}
+    />
+  )
 
   return (
-    <div style={{ padding: 16, height: '100%', overflow: 'auto' }}>
-      <div className="ga-form" style={{ maxWidth: 860, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div className="ga-form-section-label">{t('Surface textures (3D terrain)')}</div>
-        <span className="ga-hint">
-          {t('Seamless top-down ground materials for terrain tiles in the 3D client — one texture per kind, matching the terrain field (road, water, …). Without a texture the client uses its built-in materials.')}
-          {' '}
-          {t('Several versions per kind can be stored — the ⭐ active one is what the client gets; click a thumbnail to enlarge.')}
-        </span>
+    <div className="ga-twocol">
+      <aside className="ga-twocol-left">
+        <ListHeader title={t('Surface textures')} onNew={startCreate} />
+        <ul className="ga-list">
+          {!loaded ? (
+            <li className="ga-list-empty">{t('Loading…')}</li>
+          ) : isEmpty ? (
+            <li className="ga-list-empty">{t('No textures yet.')}</li>
+          ) : (
+            <>
+              {textures.map((tx) => {
+                const active = tx.versions.find((v) => v.active) || tx.versions[0]
+                return (
+                  <li key={tx.kind}>
+                    <button
+                      type="button"
+                      className={`ga-list-row${sel === tx.kind ? ' is-active' : ''}`}
+                      onClick={() => pickKind(tx.kind)}
+                    >
+                      <span className="ga-list-row-main">
+                        {active ? (
+                          <img className="ga-list-thumb" alt=""
+                            src={`${active.url}?v=${cacheBump}`} />
+                        ) : (
+                          <span style={{ fontSize: 18 }}>🧱</span>
+                        )}
+                        <span>{tx.kind}</span>
+                        <span className="ga-list-row-sub">
+                          {active ? `${active.size_m} m` : ''}
+                          {tx.versions.length > 1
+                            ? ` · ${t('{n} versions').replace('{n}', String(tx.versions.length))}`
+                            : ''}
+                        </span>
+                      </span>
+                      {pending.includes(tx.kind) ? (
+                        <span className="ga-source">{t('generating…')}</span>
+                      ) : null}
+                    </button>
+                  </li>
+                )
+              })}
+              {blendNames.map((bk) => (
+                <li key={`blend:${bk}`}>
+                  <button
+                    type="button"
+                    className={`ga-list-row${sel === `blend:${bk}` ? ' is-active' : ''}`}
+                    onClick={() => pickBlend(bk, blends[bk])}
+                  >
+                    <span className="ga-list-row-main">
+                      <span style={{ fontSize: 18 }}>🧬</span>
+                      <span>{bk}</span>
+                      <span className="ga-list-row-sub">{t('composition')}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </>
+          )}
+        </ul>
+      </aside>
 
-        {!loaded ? (
-          <div className="ga-empty">{t('Loading…')}</div>
-        ) : textures.length === 0 ? (
-          <div className="ga-empty">{t('No textures yet.')}</div>
-        ) : (
-          textures.map((tx) => (
-            <div key={tx.kind} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{ fontWeight: 600 }}>{tx.kind}</span>
-                {pending.includes(tx.kind) ? (
-                  <span className="ga-hint">{t('Generating…')}</span>
-                ) : null}
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm"
-                  onClick={() => { setKind(tx.kind); setPromptTouched(false) }}
-                  title={t('Prefill the generator with this kind')}
-                >
-                  ↻ {t('Regenerate')}
-                </button>
+      <section className="ga-twocol-right">
+        {blendEdit ? (
+          <SurfaceBlendEditor
+            value={blendEdit}
+            onChange={setBlendEdit}
+            onSave={saveBlend}
+            onCancel={() => { setBlendEdit(null); setSel('') }}
+            onDelete={blends[blendEdit.kind]
+              ? () => removeBlend(blendEdit.kind) : undefined}
+            armedDelete={armedDel === `blend:${blendEdit.kind}`}
+          />
+        ) : creating ? (
+          <>
+            <DetailToolbar
+              title={t('New surface texture')}
+              onCancel={() => setCreating(false)}
+            />
+            {generateForm}
+            <div className="ga-form">
+              <div className="ga-form-section-label">{t('Compositions (blends)')}</div>
+              <span className="ga-hint">
+                {t('A composition is a zone gradient toward a neighbor kind instead of a texture — e.g. coast: water → sand → whatever the other neighbors are. A composition wins over textures of the same kind.')}
+              </span>
+              <div>
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm"
                   onClick={() => {
-                    uploadKindRef.current = tx.kind
-                    uploadRef.current?.click()
+                    setCreating(false)
+                    setSel('')
+                    setBlendEdit({ kind: 'coast', blend: {
+                      toward: 'water',
+                      zones: [{ kind: 'water', until: 0.42 },
+                              { kind: 'sand', until: 0.62 },
+                              { kind: 'neighbor' }],
+                      noise: 0.08,
+                    } })
                   }}
-                  title={t('Upload a new version for this kind (JPEG/PNG/WebP, seamless, top-down)')}
+                  title={t('Prefilled with the contract example (coast: water → sand → neighbor).')}
                 >
-                  ⬆
+                  + {t('New composition')}
                 </button>
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {tx.versions.map((v) => (
-                  <div
-                    key={v.filename}
-                    style={{
-                      display: 'flex', flexDirection: 'column', gap: 4, width: 128,
-                      padding: 6, borderRadius: 6,
-                      border: v.active
-                        ? '2px solid var(--accent, #58a6ff)'
-                        : '1px solid var(--border, #30363d)',
-                    }}
-                  >
-                    <img
-                      src={`${v.url}?v=${cacheBump}`}
-                      alt={`${tx.kind} ${v.filename}`}
-                      style={{ width: '100%', height: 96, objectFit: 'cover',
-                               borderRadius: 4, cursor: 'zoom-in' }}
-                      title={t('Click to enlarge')}
-                      onClick={() => setZoom({ kind: tx.kind, v })}
-                    />
-                    <span className="ga-hint" style={{ fontSize: '0.75em', lineHeight: 1.25 }}
-                      title={v.prompt || undefined}>
-                      {madeWith(v)}
-                      {dateShort(v.created_at) ? ` · ${dateShort(v.created_at)}` : ''}
-                    </span>
-                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                      <input
-                        className="ga-input"
-                        type="number"
-                        min={0.1}
-                        step={0.5}
-                        style={{ width: 52 }}
-                        defaultValue={v.size_m}
-                        title={t('Physical edge length in metres — the client tiles in world scale (10 m cell = 10/size repetitions).')}
-                        onBlur={(e) => setSize(tx.kind, v.filename, e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                      />
-                      {v.active ? (
-                        <span title={t('Active — this version is what the 3D client gets.')}>⭐</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="ga-btn ga-btn-sm"
-                          onClick={() => select(tx.kind, v.filename)}
-                          title={t('Make this version the active one (what the 3D client gets)')}
-                        >
-                          {t('Select')}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="ga-btn ga-btn-sm ga-btn-danger"
-                        style={{ marginLeft: 'auto' }}
-                        onClick={() => remove(tx.kind, v.filename)}
-                      >
-                        {armedDel === v.filename ? t('Really delete?') : '🗑'}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
             </div>
-          ))
-        )}
-
-        <div className="ga-form-section-label">{t('Compositions (blends)')}</div>
-        <span className="ga-hint">
-          {t('A composition is a zone gradient toward a neighbor kind instead of a texture — e.g. coast: water → sand → whatever the other neighbors are. The tiles involved need their terrain set (sea: water, coast: coast). A composition wins over textures of the same kind.')}
-        </span>
-        {Object.keys(blends).length === 0 && !blendEdit ? (
-          <div className="ga-empty">{t('No compositions yet.')}</div>
-        ) : null}
-        {Object.entries(blends).map(([bk, b]) => (
-          <div key={bk} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 600, minWidth: 70 }}>{bk}</span>
-            <span className="ga-hint">
-              → {b.toward} · {b.zones.map((z) =>
-                z.until != null ? `${z.kind} ${Math.round(z.until * 100)}%` : z.kind).join(' · ')}
-              {b.noise != null ? ` · ${t('noise')} ${b.noise}` : ''}
-            </span>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              style={{ marginLeft: 'auto' }}
-              onClick={() => setBlendEdit({ kind: bk, blend: JSON.parse(JSON.stringify(b)) })}
-            >
-              {t('Edit')}
-            </button>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => removeBlend(bk)}
-            >
-              {armedDel === `blend:${bk}` ? t('Really delete?') : '🗑'}
-            </button>
-          </div>
-        ))}
-        {blendEdit ? (
-          <div className="ga-form" style={{ gap: 6 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                className="ga-input"
-                style={{ width: 120 }}
-                placeholder={t('kind (coast, …)')}
-                value={blendEdit.kind}
-                onChange={(e) => setBlendEdit({ ...blendEdit, kind: e.target.value })}
-              />
-              <span className="ga-hint">{t('toward')}</span>
-              <input
-                className="ga-input"
-                list="surface-kind-options"
-                style={{ width: 110 }}
-                value={blendEdit.blend.toward}
-                title={t('The neighbor kind the gradient runs to (from the map grid).')}
-                onChange={(e) => setBlendEdit({ ...blendEdit,
-                  blend: { ...blendEdit.blend, toward: e.target.value } })}
-              />
-              <span className="ga-hint">{t('noise')}</span>
-              <input
-                className="ga-input"
-                type="number"
-                min={0}
-                max={0.5}
-                step={0.01}
-                style={{ width: 64 }}
-                value={blendEdit.blend.noise ?? ''}
-                placeholder="0.06"
-                title={t('Border fraying (0..0.5).')}
-                onChange={(e) => {
-                  const n = parseFloat(e.target.value)
-                  setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend,
-                    noise: Number.isFinite(n) ? n : undefined } })
-                }}
-              />
-            </div>
-            {blendEdit.blend.zones.map((z, i) => (
-              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span className="ga-hint" style={{ width: 52 }}>{t('Zone')} {i + 1}</span>
-                <input
-                  className="ga-input"
-                  list="surface-zone-options"
-                  style={{ width: 120 }}
-                  value={z.kind}
-                  title={t('A library kind — or "neighbor" for the dominant non-toward neighbor kind.')}
-                  onChange={(e) => {
-                    const zones = blendEdit.blend.zones.map((zz, j) =>
-                      j === i ? { ...zz, kind: e.target.value } : zz)
-                    setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend, zones } })
-                  }}
-                />
-                <input
-                  className="ga-input"
-                  type="number"
-                  min={0.01}
-                  max={1}
-                  step={0.01}
-                  style={{ width: 72 }}
-                  value={z.until ?? ''}
-                  placeholder={i === blendEdit.blend.zones.length - 1 ? t('rest') : '0.5'}
-                  title={t('Share of the transition path (0..1, ascending) — the last zone may stay empty (= rest).')}
-                  onChange={(e) => {
-                    const n = parseFloat(e.target.value)
-                    const zones = blendEdit.blend.zones.map((zz, j) =>
-                      j === i ? { ...zz, until: Number.isFinite(n) ? n : undefined } : zz)
-                    setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend, zones } })
-                  }}
-                />
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm"
-                  disabled={blendEdit.blend.zones.length <= 1}
-                  onClick={() => setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend,
-                    zones: blendEdit.blend.zones.filter((_, j) => j !== i) } })}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                disabled={blendEdit.blend.zones.length >= 8}
-                onClick={() => setBlendEdit({ ...blendEdit, blend: { ...blendEdit.blend,
-                  zones: [...blendEdit.blend.zones, { kind: 'neighbor' }] } })}
-              >
-                + {t('Zone')}
-              </button>
-              <button type="button" className="ga-btn ga-btn-primary" onClick={saveBlend}
-                disabled={!blendEdit.kind.trim() || !blendEdit.blend.toward.trim()}>
-                {t('Save')}
-              </button>
-              <button type="button" className="ga-btn" onClick={() => setBlendEdit(null)}>
-                {t('Cancel')}
-              </button>
-            </div>
-            <datalist id="surface-zone-options">
-              {['neighbor', ...knownKinds].map((k) => <option key={k} value={k} />)}
-            </datalist>
-          </div>
+          </>
+        ) : selectedGroup ? (
+          <SurfaceKindDetail
+            group={selectedGroup}
+            pending={pending.includes(selectedGroup.kind)}
+            cacheBump={cacheBump}
+            armedDel={armedDel}
+            onSize={(filename, raw) => setSize(selectedGroup.kind, filename, raw)}
+            onSelect={(filename) => select(selectedGroup.kind, filename)}
+            onRemove={(filename) => remove(selectedGroup.kind, filename)}
+            onZoom={(v) => setZoom({ kind: selectedGroup.kind, v })}
+            onUpload={() => pickUpload(selectedGroup.kind)}
+            generateForm={generateForm}
+          />
         ) : (
-          <div>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              onClick={() => setBlendEdit({ kind: 'coast', blend: {
-                toward: 'water',
-                zones: [{ kind: 'water', until: 0.42 }, { kind: 'sand', until: 0.62 }, { kind: 'neighbor' }],
-                noise: 0.08,
-              } })}
-              title={t('Prefilled with the contract example (coast: water → sand → neighbor).')}
-            >
-              + {t('New composition')}
-            </button>
+          <div className="ga-placeholder">
+            {t('Seamless top-down ground materials for terrain tiles in the 3D client — one texture per kind, matching the terrain field (road, water, …). Without a texture the client uses its built-in materials.')}
           </div>
         )}
+      </section>
 
-        <div className="ga-form-section-label">{t('Generate texture')}</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input
-            className="ga-input"
-            list="surface-kind-options"
-            style={{ width: 130 }}
-            placeholder={t('kind (road, …)')}
-            value={kind}
-            onChange={(e) => setKind(e.target.value)}
-            title={t('Open vocabulary — must match the terrain field of the tiles it should cover.')}
-          />
-          <datalist id="surface-kind-options">
-            {knownKinds.map((k) => <option key={k} value={k} />)}
-          </datalist>
-          <select
-            className="ga-input"
-            style={{ flex: 1, minWidth: 160 }}
-            value={backendInfo?.name || ''}
-            onChange={(e) => { setBackend(e.target.value); setPromptTouched(false) }}
-          >
-            {backends.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
-          </select>
-          <button
-            type="button"
-            className="ga-btn ga-btn-primary"
-            disabled={!kind.trim() || !backends.length}
-            onClick={generate}
-          >
-            {t('Generate')}
-          </button>
-          <button
-            type="button"
-            className="ga-btn"
-            disabled={!kind.trim()}
-            onClick={() => {
-              uploadKindRef.current = kind.trim().toLowerCase()
-              uploadRef.current?.click()
-            }}
-            title={t('Upload an image for this kind instead of generating')}
-          >
-            ⬆ {t('Upload')}
-          </button>
-        </div>
-        <label className="ga-field">
-          <span className="ga-field-caption">{t('Final prompt')}</span>
-          <textarea
-            className="ga-textarea"
-            rows={3}
-            value={prompt}
-            onChange={(e) => { setPrompt(e.target.value); setPromptTouched(true) }}
-          />
-        </label>
-        <label className="ga-field">
-          <span className="ga-field-caption">{t('Negative prompt')}</span>
-          <textarea
-            className="ga-textarea"
-            rows={2}
-            value={negative}
-            onChange={(e) => { setNegative(e.target.value); setPromptTouched(true) }}
-          />
-        </label>
-        <input
-          ref={uploadRef}
-          type="file"
-          accept=".jpg,.jpeg,.png,.webp"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f && uploadKindRef.current) upload(uploadKindRef.current, f)
-            e.target.value = ''
-          }}
-        />
-      </div>
+      {/* One shared kind vocabulary for the generator and the blend editor. */}
+      <datalist id={KIND_DATALIST_ID}>
+        {KNOWN_KINDS.map((k) => <option key={k} value={k} />)}
+      </datalist>
+      <input
+        ref={uploadRef}
+        type="file"
+        accept=".jpg,.jpeg,.png,.webp"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f && uploadKindRef.current) upload(uploadKindRef.current, f)
+          e.target.value = ''
+        }}
+      />
 
       {zoom ? (
         <div className="ga-gallery-lightbox" onClick={() => setZoom(null)} role="dialog">
@@ -561,7 +397,7 @@ export function SurfaceTexturesTab() {
             }}
           >
             <div style={{ fontWeight: 600 }}>
-              {zoom.kind} · {madeWith(zoom.v)}
+              {zoom.kind} · {madeWith(zoom.v, t)}
               {dateShort(zoom.v.created_at) ? ` · ${dateShort(zoom.v.created_at)}` : ''}
               {` · ${zoom.v.size_m} m`}
             </div>
