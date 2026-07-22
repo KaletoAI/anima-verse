@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -19,6 +19,22 @@ export function WorldTab() {
   // count in the gallery (clones carry map_image_2d + grid).
   const [placements, setPlacements] = useState<Location[]>([])
   const [selection, setSelection] = useState<Selection>(null)
+  // Unsaved-changes guard: the open LocationEditor reports its dirty state;
+  // switching the tree selection then needs a SECOND click (armed pattern —
+  // no browser dialogs in this UI) before the draft is discarded.
+  const editorDirtyRef = useRef(false)
+  const [armedNav, setArmedNav] = useState('')
+  const guardedSelect = useCallback((s: Selection) => {
+    const key = JSON.stringify(s)
+    if (editorDirtyRef.current && JSON.stringify(selection) !== key
+        && armedNav !== key) {
+      setArmedNav(key)
+      toast(t('Unsaved changes — click again to discard them.'), 'error')
+      return
+    }
+    setArmedNav('')
+    setSelection(s)
+  }, [selection, armedNav, toast, t])
   const [items, setItems] = useState<ItemRef[]>([])
   // Room-model source image (🧊 in the room gallery) — wired into the
   // RoomEditor's model panel; reset whenever the selection changes.
@@ -80,7 +96,7 @@ export function WorldTab() {
         // Drop each room's id so the backend assigns FRESH ones — otherwise the
         // copy keeps the source's room IDs and everything keyed by room id
         // (gallery image_rooms, room items, image gen with room_id) collides.
-        rooms: (src.rooms || []).map(({ id: _id, ...rest }) => rest),
+        rooms: (src.rooms || []).map((r) => { const rest = { ...r }; delete rest.id; return rest }),
         image_prompt_day: src.image_prompt_day || '',
         image_prompt_night: src.image_prompt_night || '',
         image_prompt_map_2d: src.image_prompt_map_2d || '',
@@ -151,7 +167,7 @@ export function WorldTab() {
               if (!rows.length) return
               if (both) out.push(<li key={key} style={headStyle}>{label}</li>)
               rows.forEach((l) => out.push(
-                <LocationTreeRow key={l.id} location={l} selection={selection} onSelect={setSelection} />))
+                <LocationTreeRow key={l.id} location={l} selection={selection} onSelect={guardedSelect} />))
             }
             push(unique, 'h-unique', t('Unique'))
             push(passages, 'h-passages', t('Passages'))
@@ -169,6 +185,10 @@ export function WorldTab() {
             allLocations={locations}
             placements={placements}
             onChanged={reload}
+            onDirty={(d) => {
+              editorDirtyRef.current = d
+              if (!d) setArmedNav('')
+            }}
             onDeleted={() => {
               setSelection(null)
               reload()

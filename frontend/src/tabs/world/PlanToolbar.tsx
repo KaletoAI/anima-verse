@@ -2,9 +2,10 @@
  * PlanToolbar — the vertical 44 px icon strip left of the floor plan. Purely
  * presentational: every handler and all state live in RoomLayoutEditor, the
  * toolbar only decides which icon is armed, disabled or contextual. Three
- * groups: room tools, building tools (only when the editor may write map3d)
- * and the underlay view toggles. Tooltips carry the explanations that used to
- * sit as hint texts and checkbox labels next to the plan.
+ * groups top-down: building tools (only when the editor may write map3d),
+ * room tools and the underlay view toggles; the marker tool lives in the
+ * side panel next to the marker list. Tooltips carry the explanations that
+ * used to sit as hint texts and checkbox labels next to the plan.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 
@@ -43,8 +44,6 @@ interface PlanToolbarProps {
   hasSelection: boolean
   selectionRotation: number
   hasExit: boolean
-  /** Marker tool usable at all (the clip vocabulary is non-empty). */
-  canMarker: boolean
   /** The building outline exists in the map3d draft. */
   hasOutline: boolean
   /** Points collected in the running draft (room hull or building outline). */
@@ -72,7 +71,7 @@ interface PlanToolbarProps {
 }
 
 export function PlanToolbar({
-  mode, hasSelection, selectionRotation, hasExit, canMarker, hasOutline,
+  mode, hasSelection, selectionRotation, hasExit, hasOutline,
   outlineDraftLen, hasElevator, building, canSuggest, showModels, showBuilding,
   propsOpen, onMode, onRotate, onUnplace, onRemoveExit, onRemoveOutline,
   onRemoveElevator, onCommitOutline, onCommitRoom, onCancelDraw, onSuggest,
@@ -84,6 +83,49 @@ export function PlanToolbar({
 
   return (
     <div className="ga-plan-toolbar">
+      {building ? (
+        <>
+          <span className="ga-plan-toolbar-group">{t('Build')}</span>
+          {outlining ? (
+            <>
+              <Tool
+                icon={`✓ (${outlineDraftLen})`}
+                small
+                active
+                disabled={outlineDraftLen < 3}
+                onClick={onCommitOutline}
+                title={t('Finish outline — clicking the first vertex closes too')}
+              />
+              <Tool icon="✕" onClick={onCancelDraw} title={t('Cancel drawing (Esc)')} />
+            </>
+          ) : (
+            <Tool
+              icon="🏗"
+              onClick={() => onMode('outline')}
+              title={t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
+            />
+          )}
+          {hasOutline && !outlining ? (
+            <Tool
+              icon="🗑"
+              danger
+              onClick={onRemoveOutline}
+              title={t('Remove the outline — the client falls back to the rectangle.')}
+            />
+          ) : null}
+          <Tool
+            icon="🛗"
+            active={mode === 'elevator'}
+            onClick={() => onMode('elevator')}
+            title={t('Place the elevator with one click — it serves ALL levels (the client builds the shaft).')}
+          />
+          {hasElevator && mode !== 'elevator' ? (
+            <Tool icon="🗑" danger onClick={onRemoveElevator}
+              title={t('Remove the elevator')} />
+          ) : null}
+        </>
+      ) : null}
+
       <span className="ga-plan-toolbar-group">{t('Room')}</span>
       {drawing ? (
         <>
@@ -127,21 +169,18 @@ export function PlanToolbar({
           title={t('Remove the exit point — the client falls back to the edge facing the building centre.')}
         />
       ) : null}
-      {canMarker ? (
-        <Tool
-          icon="🎯"
-          active={mode === 'marker'}
-          disabled={!hasSelection}
-          onClick={() => onMode('marker')}
-          title={t('Animation marker — then click inside the room to drop it; figures with this animation snap to it. The kind is picked in the panel.')}
-        />
-      ) : null}
       <Tool
         icon="▦"
         active={mode === 'opening'}
         disabled={!hasSelection}
         onClick={() => onMode('opening')}
         title={t('Opening — then click a room edge to place a door; drag it along the edge, edit it below.')}
+      />
+      <Tool
+        icon="✨"
+        disabled={!canSuggest}
+        onClick={onSuggest}
+        title={t('Add a door on every shared wall (once, linked to the neighbour) and a window on every exterior wall ≥ 2.5 m. Existing openings are kept — needs the plan width for windows.')}
       />
       <Tool
         icon="🪑"
@@ -156,55 +195,6 @@ export function PlanToolbar({
         onClick={onUnplace}
         title={t('Remove from the floor plan — the 3D client auto-grids this room again.')}
       />
-
-      {building ? (
-        <>
-          <span className="ga-plan-toolbar-group">{t('Build')}</span>
-          {outlining ? (
-            <>
-              <Tool
-                icon={`✓ (${outlineDraftLen})`}
-                small
-                active
-                disabled={outlineDraftLen < 3}
-                onClick={onCommitOutline}
-                title={t('Finish outline — clicking the first vertex closes too')}
-              />
-              <Tool icon="✕" onClick={onCancelDraw} title={t('Cancel drawing (Esc)')} />
-            </>
-          ) : (
-            <Tool
-              icon="🏗"
-              onClick={() => onMode('outline')}
-              title={t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
-            />
-          )}
-          {hasOutline && !outlining ? (
-            <Tool
-              icon="🗑"
-              danger
-              onClick={onRemoveOutline}
-              title={t('Remove the outline — the client falls back to the rectangle.')}
-            />
-          ) : null}
-          <Tool
-            icon="🛗"
-            active={mode === 'elevator'}
-            onClick={() => onMode('elevator')}
-            title={t('Place the elevator with one click — it serves ALL levels (the client builds the shaft).')}
-          />
-          {hasElevator && mode !== 'elevator' ? (
-            <Tool icon="🗑" danger onClick={onRemoveElevator}
-              title={t('Remove the elevator')} />
-          ) : null}
-          <Tool
-            icon="✨"
-            disabled={!canSuggest}
-            onClick={onSuggest}
-            title={t('Add a door on every shared wall (once, linked to the neighbour) and a window on every exterior wall ≥ 2.5 m. Existing openings are kept — needs the plan width for windows.')}
-          />
-        </>
-      ) : null}
 
       <span className="ga-plan-toolbar-group">{t('View')}</span>
       <Tool

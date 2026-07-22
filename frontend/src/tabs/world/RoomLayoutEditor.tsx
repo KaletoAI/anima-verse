@@ -20,7 +20,7 @@ import {
   CLOSE_TOL_PX, MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
   SNAP_TOL_PX, absOutline, buildSnapTargets, clamp, edgePointOnEdge,
   edgeSegment, exteriorEdges, nearestPolygonEdge, normalizeOpeningEdge,
-  outlineOf, r4, rotateOpeningCW, sharedEdges, snapDrawPoint,
+  outlineOf, r4, rotateOpeningCW, sharedEdges, snapDrawPoint, snapMoveOffset,
 } from './planGeometry'
 import type { EdgeLetter, PolyRoom, SnapResult } from './planGeometry'
 import { PlanSidePanel } from './PlanSidePanel'
@@ -242,6 +242,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // (declared height × the mesh's width-per-height ratio).
   const planW = map3d?.plan_width_m
     || (bDims && bDims.heightM > 0 ? bDims.heightM * bDims.widthPerHeight : 0)
+  // Refs for the window-level drag handler (its effect closure would go
+  // stale on level/anchor changes otherwise).
+  const map3dRef = useRef(map3d)
+  map3dRef.current = map3d
+  const planWRef = useRef(planW)
+  planWRef.current = planW
   const [modelDims, setModelDims] = useState<Record<string,
     { widthM: number; fpX: number; fpZ: number } | null>>({})
   useEffect(() => {
@@ -258,7 +264,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planW, rooms.length])
 
-  // Snapping while drawing (always on, Alt = free-hand): targets are the
+  // Snapping while drawing (always on, Shift = free-hand): targets are the
   // hulls of the placed rooms on the current level plus the draft's own
   // vertices; tolerances blend a pixel radius with a 0.15 m floor.
   const snapTargets = useMemo(() => {
@@ -440,10 +446,28 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       if (drag.kind === 'move') {
         const dx = (e.clientX - drag.startX) / canvas.clientWidth
         const dy = (e.clientY - drag.startY) / canvas.clientHeight
-        updateLayout(drag.roomId, {
-          x: r4(clamp(drag.origX + dx, 0, 1 - lay.w)),
-          y: r4(clamp(drag.origY + dy, 0, 1 - lay.d)),
-        })
+        let nx = clamp(drag.origX + dx, 0, 1 - lay.w)
+        let ny = clamp(drag.origY + dy, 0, 1 - lay.d)
+        // Moving snaps like drawing does (Shift = free-hand): the moved
+        // hull's vertices align with neighbour/building-outline vertices —
+        // x and y independently, so gaps close one wall at a time.
+        if (!e.shiftKey) {
+          const hulls: PolyRoom[] = roomsRef.current
+            .filter((r) => r.id && r.id !== drag.roomId && r.layout
+              && (r.layout.level || 0) === (lay.level || 0))
+            .map((r) => ({ id: r.id!, x: r.layout!.x, y: r.layout!.y,
+              w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline }))
+          const targets = buildSnapTargets(hulls,
+            { buildingOutline: map3dRef.current?.outline })
+          const planWEff = planWRef.current || 8
+          const tol = Math.min(0.05,
+            Math.max(SNAP_TOL_PX / CANVAS_W, 0.15 / planWEff))
+          const [sx, sy] = snapMoveOffset(
+            absOutline({ ...lay, x: nx, y: ny }), targets, tol)
+          nx = clamp(nx + sx, 0, 1 - lay.w)
+          ny = clamp(ny + sy, 0, 1 - lay.d)
+        }
+        updateLayout(drag.roomId, { x: r4(nx), y: r4(ny) })
       } else if (drag.kind === 'resize') {
         const dx = (e.clientX - drag.startX) / canvas.clientWidth
         const dy = (e.clientY - drag.startY) / canvas.clientHeight
@@ -750,7 +774,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         hasSelection={!!selectedRoom}
         selectionRotation={selectedRoom?.layout?.rotation || 0}
         hasExit={!!selectedRoom?.layout?.exit}
-        canMarker={clipKinds.length > 0}
         hasOutline={!!map3d?.outline?.length}
         outlineDraftLen={outlineDraft.length}
         hasElevator={!!map3d?.elevator}
@@ -791,7 +814,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             return
           }
           if (clickMode !== 'outline' && clickMode !== 'draw-room') return
-          setHoverSnap(computeSnap(e.clientX, e.clientY, e.altKey))
+          setHoverSnap(computeSnap(e.clientX, e.clientY, e.shiftKey))
         }}
         onPointerLeave={() => { setHoverSnap(null); setPropGhost(null) }}
         onClickCapture={(e) => {
@@ -803,9 +826,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               && clickMode !== 'elevator') return
           e.stopPropagation()
           if (clickMode === 'outline' || clickMode === 'draw-room') {
-            // Clicks go through the snap engine (Alt = free-hand); landing on
+            // Clicks go through the snap engine (Shift = free-hand); landing on
             // the first vertex closes the polygon.
-            const res = computeSnap(e.clientX, e.clientY, e.altKey)
+            const res = computeSnap(e.clientX, e.clientY, e.shiftKey)
             if (res.kind === 'close') {
               if (clickMode === 'outline') commitOutline()
               else commitRoomDraft()
@@ -1160,6 +1183,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         onMarkerKind={setMarkerKind}
         markerSel={markerSel}
         onSelectMarker={setMarkerSel}
+        markerMode={clickMode === 'marker'}
+        onArmMarker={() => armMode('marker')}
         onAlwaysVisible={(v) => updateLayout(selectedRoom?.id || '', {
           always_visible: v || undefined,
         })}
@@ -1512,7 +1537,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                 setHoverSnap(null)
                 setClickMode('draw-room')
               }}
-              title={t('Draw this room on the current level — click to place points, click the first point to close, Alt = free-hand, Esc = cancel.')}
+              title={t('Draw this room on the current level — click to place points, click the first point to close, Shift = free-hand, Esc = cancel.')}
             >
               ⬠ {room.name || room.id}
             </button>

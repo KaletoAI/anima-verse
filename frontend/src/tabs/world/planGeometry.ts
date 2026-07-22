@@ -173,7 +173,7 @@ export function exteriorEdges(a: PolyRoom, others: PolyRoom[], planW: number): n
 }
 
 // ── Snapping engine (drawing aid) ──
-// Always on while drawing; the caller passes alt=true (Alt held) for
+// Always on while drawing; the caller passes alt=true (Shift held) for
 // free-hand. Priorities: close the polygon on its first vertex > snap to an
 // existing vertex (closing small gaps beats everything) > the 45°-angle ray
 // intersected with a target edge (right angles that also land on a wall) >
@@ -307,4 +307,32 @@ export function snapDrawPoint(raw: Pt, opts: {
   }
 
   return { p: _r4p(p), kind: 'free' }
+}
+
+/** Smart-guide offset for MOVING a hull (Shift = free-hand, handled by the
+ *  caller): aligns any vertex coordinate of the moved hull with any target
+ *  vertex coordinate within `tol` — x and y snap independently, so a corner
+ *  far away on the other axis still provides its guide line (typical
+ *  gap-closing between rooms). Returns the [dx, dy] to ADD to the candidate
+ *  position; 0 per axis when nothing is in range. */
+export function snapMoveOffset(hull: Pt[], targets: SnapTargets, tol: number): Pt {
+  let dx = 0
+  let ax = tol
+  let dy = 0
+  let ay = tol
+  for (const v of hull) {
+    for (const p of targets.points) {
+      const ddx = p[0] - v[0]
+      if (Math.abs(ddx) <= ax) {
+        ax = Math.abs(ddx)
+        dx = ddx
+      }
+      const ddy = p[1] - v[1]
+      if (Math.abs(ddy) <= ay) {
+        ay = Math.abs(ddy)
+        dy = ddy
+      }
+    }
+  }
+  return [dx, dy]
 }

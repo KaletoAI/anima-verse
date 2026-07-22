@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -29,10 +29,13 @@ interface LocationEditorProps {
   allLocations: Location[]
   placements: Location[]
   onChanged: () => void
+  /** Reports whether the draft differs from the saved location — the tree
+   *  guards selection changes against silently discarding it. */
+  onDirty?: (dirty: boolean) => void
   onDeleted: () => void
 }
 
-export function LocationEditor({ location, items, allLocations, placements, onChanged, onDeleted }: LocationEditorProps) {
+export function LocationEditor({ location, items, allLocations, placements, onChanged, onDirty, onDeleted }: LocationEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Location>(() => ({ ...location }))
@@ -47,6 +50,27 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   useEffect(() => {
     setDraft({ ...location })
   }, [location])
+
+  // Unsaved-changes guard: everything edits the ONE draft and only Save
+  // persists it — losing it silently (tree click, tab close) hurts,
+  // especially after floor-plan work.
+  const dirty = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(location),
+    [draft, location])
+  useEffect(() => { onDirty?.(dirty) }, [dirty, onDirty])
+  // Leaving the editor entirely never leaves a stale dirty flag behind.
+  useEffect(() => () => { onDirty?.(false) }, [onDirty])
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // The browser shows its own generic wording; the value only needs
+      // to be non-null for legacy engines.
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   useEffect(() => {
     // A picked source image / floor-plan selection belongs to the previous

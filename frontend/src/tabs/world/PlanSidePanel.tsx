@@ -26,6 +26,10 @@ interface PlanSidePanelProps {
   onMarkerKind: (kind: string) => void
   markerSel: number | null
   onSelectMarker: (index: number | null) => void
+  /** The 🎯 place tool — armed state + toggle (it lives HERE, next to the
+   *  marker list it feeds, not in the left toolbar). */
+  markerMode: boolean
+  onArmMarker: () => void
   onAlwaysVisible: (value: boolean) => void
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
   surfaceKinds: Array<{ kind: string; url: string }>
@@ -38,7 +42,8 @@ interface PlanSidePanelProps {
 
 export function PlanSidePanel({
   room, clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
-  onAlwaysVisible, surfaceKinds, onSurface, propsOpen, onPickProp, armedPropId,
+  markerMode, onArmMarker, onAlwaysVisible, surfaceKinds, onSurface,
+  propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
   const layout = room?.layout
@@ -107,17 +112,27 @@ export function PlanSidePanel({
       {clipKinds.length ? (
         <>
           <div className="ga-plan-panel-title">{t('Markers')}</div>
-          <select
-            className="ga-input"
-            style={{ width: '100%' }}
-            value={markerKind}
-            onChange={(e) => onMarkerKind(e.target.value)}
-            title={t('Animation kind the 🎯 tool drops — the open clip vocabulary, nothing hardcoded.')}
-          >
-            {clipKinds.map((k) => (
-              <option key={k} value={k}>{k}</option>
-            ))}
-          </select>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <select
+              className="ga-input"
+              style={{ flex: 1, minWidth: 0 }}
+              value={markerKind}
+              onChange={(e) => onMarkerKind(e.target.value)}
+              title={t('Animation kind the 🎯 tool drops — the open clip vocabulary, nothing hardcoded.')}
+            >
+              {clipKinds.map((k) => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={`ga-btn ga-btn-sm${markerMode ? ' ga-btn-primary' : ''}`}
+              onClick={onArmMarker}
+              title={t('Place a marker — then click inside the room; figures with this animation snap to it.')}
+            >
+              🎯
+            </button>
+          </div>
         </>
       ) : null}
       {markers.map((m, i) => (
