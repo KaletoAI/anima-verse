@@ -63,6 +63,15 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # dynamically in the World Dev UI right next to the chat model — no
     # separate task entry to maintain in /admin/settings → LLM Routing.
 
+    # Room furnishing ("✨ Furnish", plan-room-furnish.md): three strict-JSON
+    # steps of one job — pick library props, propose the missing pieces,
+    # arrange them relationally (the solver turns that into geometry).
+    # No thinking: the answers must be a bare JSON object — a reasoning pass
+    # only adds prose around it.
+    "furnish_select":     {"label": "Furnish: Pick Library Props", "priority": Priority.NORMAL, "category": "tool"},
+    "furnish_new":        {"label": "Furnish: Propose New Pieces", "priority": Priority.NORMAL, "category": "tool"},
+    "furnish_place":      {"label": "Furnish: Placement Plan",     "priority": Priority.NORMAL, "category": "tool"},
+
     # Summaries
     "memory_consolidation":  {"label": "Memory Consolidation",     "priority": Priority.LOW, "category": "helper"},
     "consolidation":         {"label": "Consolidation (3-Tier)",   "priority": Priority.LOW, "category": "helper"},

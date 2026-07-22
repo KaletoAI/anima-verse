@@ -964,6 +964,106 @@ def prop_delete(prop_id: str) -> Dict[str, Any]:
     return {"status": "deleted"}
 
 
+# ── Room furnishing job ("✨ Furnish", plan-room-furnish.md) ──
+# Thin adapters over app/core/room_furnish.py — the whole workflow is ONE
+# persisted job per room, so every route either reads its status or pushes it
+# through a transition. Job errors carry their own HTTP status.
+
+
+def _furnish_call(fn, *args) -> Dict[str, Any]:
+    from app.core.room_furnish import FurnishError
+    try:
+        return fn(*args)
+    except FurnishError as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
+
+
+async def _furnish_body(request: Request) -> Dict[str, Any]:
+    if (request.headers.get("content-length") or "0") == "0":
+        return {}
+    try:
+        data = await request.json()
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+@router.get("/rooms/{room_id}/furnish")
+def furnish_status(room_id: str,
+                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Status of the room's furnishing job: state, proposal, placements,
+    error, progress (n/m over the new pieces), running/stalled. 404 = no job."""
+    from app.core.room_furnish import get_status
+    status = get_status(room_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="No furnishing job for this room")
+    return status
+
+
+@router.post("/rooms/{room_id}/furnish/start")
+def furnish_start(room_id: str,
+                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Open a job and run stage 1 (furnish_select + furnish_new) in the
+    background. 409 when the room has no layout, the location no scale anchor
+    or a job is already open."""
+    from app.core.room_furnish import start
+    return _furnish_call(start, room_id)
+
+
+@router.post("/rooms/{room_id}/furnish/confirm")
+async def furnish_confirm(room_id: str, request: Request,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Confirm the (edited) proposal — body: {proposal: {existing: [...],
+    new: [...]}}, absent = the stored one. Starts generation + placement."""
+    body = await _furnish_body(request)
+    from app.core.room_furnish import confirm
+    return _furnish_call(confirm, room_id, body.get("proposal"))
+
+
+@router.post("/rooms/{room_id}/furnish/accept")
+async def furnish_accept(room_id: str, request: Request,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Accept the proposed furnishing — body: {placements: [...]} (the ghost
+    layer's CURRENT positions), absent = the solver's result. Appends to
+    layout.props and closes the job."""
+    body = await _furnish_body(request)
+    from app.core.room_furnish import accept
+    return _furnish_call(accept, room_id, body.get("placements"))
+
+
+@router.post("/rooms/{room_id}/furnish/discard")
+def furnish_discard(room_id: str,
+                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Drop the job. Generated props stay in the library."""
+    from app.core.room_furnish import discard
+    return _furnish_call(discard, room_id)
+
+
+@router.post("/rooms/{room_id}/furnish/reset")
+def furnish_reset(room_id: str,
+                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Throw away a stage-1 proposal so a new one can be requested."""
+    from app.core.room_furnish import reset
+    return _furnish_call(reset, room_id)
+
+
+@router.post("/rooms/{room_id}/furnish/retry")
+def furnish_retry(room_id: str,
+                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Re-enter a failed job at its persisted state."""
+    from app.core.room_furnish import retry
+    return _furnish_call(retry, room_id)
+
+
+@router.post("/rooms/{room_id}/furnish/continue")
+def furnish_continue(room_id: str,
+                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Continue a job whose orchestrator thread died with the server
+    (status ``stalled``)."""
+    from app.core.room_furnish import resume
+    return _furnish_call(resume, room_id)
+
+
 # ── Map Layout Import / Export ──
 
 @router.get("/map/export")
