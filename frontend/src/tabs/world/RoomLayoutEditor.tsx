@@ -23,6 +23,7 @@ import {
   outlineOf, r4, rotateOpeningCW, sharedEdges, snapDrawPoint, snapMoveOffset,
 } from './planGeometry'
 import type { EdgeLetter, PolyRoom, SnapResult } from './planGeometry'
+import { FurnishDialog, useFurnishJob } from './FurnishDialog'
 import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
@@ -55,6 +56,7 @@ type DragState =
   | { kind: 'resize'; roomId: string; startX: number; startY: number; origW: number; origD: number }
   | { kind: 'opening'; roomId: string; index: number; edge: number }
   | { kind: 'prop'; roomId: string; index: number }
+  | { kind: 'ghost'; roomId: string; index: number }
   | null
 
 /** Real prop dims for true-size footprints — lean mirror of /world/props. */
@@ -89,11 +91,20 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // yaw the R key steps in 90° increments (fine yaw lives in the strip).
   const [propGhost, setPropGhost] = useState<[number, number] | null>(null)
   const [ghostYaw, setGhostYaw] = useState(0)
+  // Furnishing job of the SELECTED room ("✨ Furnish", plan-room-furnish.md).
+  // One hook for dialog AND ghost layer — a single poll, one ghost list.
+  const [furnishOpen, setFurnishOpen] = useState(false)
+  const [ghostSel, setGhostSel] = useState<number | null>(null)
+  const furnish = useFurnishJob(selected, furnishOpen)
+  const furnishRef = useRef(furnish)
+  furnishRef.current = furnish
+  const reviewing = furnish.status?.state === 'review_ready'
   // Real dims per prop id — true-size footprints/ghost need them. One fetch;
-  // refreshed when the palette opens (it may have gained props meanwhile).
+  // refreshed when the palette opens or a furnishing proposal arrives (both
+  // may have gained props meanwhile — the job generates its own).
   const [propDims, setPropDims] = useState<Record<string, PropDims>>({})
   useEffect(() => {
-    if (!propsOpen && Object.keys(propDims).length) return
+    if (!propsOpen && !reviewing && Object.keys(propDims).length) return
     apiGet<{ props?: Array<{ id: string } & PropDims> }>('/world/props')
       .then((d) => {
         const map: Record<string, PropDims> = {}
@@ -105,7 +116,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [propsOpen])
+  }, [propsOpen, reviewing])
   // The room whose hull is being drawn ('draw-room' mode) — set by the
   // "Not on the plan" chips (first placement) and the redraw tool.
   const [drawTarget, setDrawTarget] = useState('')
@@ -324,17 +335,31 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   }, [])
 
   // Esc cancels any armed mode and the current draft; R steps the placement
-  // ghost's yaw by 90° (never while typing in a field).
+  // ghost's yaw by 90°; Del/Backspace drops the selected furnishing ghost
+  // (never while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (e.key === 'Escape') cancelDraw()
-      else if ((e.key === 'r' || e.key === 'R')) setGhostYaw((y) => (y + 90) % 360)
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        setGhostSel((sel) => {
+          if (sel === null) return sel
+          const job = furnishRef.current
+          job.setGhosts(job.ghosts.filter((_, i) => i !== sel))
+          return null
+        })
+      } else if ((e.key === 'r' || e.key === 'R')) setGhostYaw((y) => (y + 90) % 360)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [cancelDraw])
+
+  // Selecting another room closes the dialog and drops the ghost selection —
+  // both belong to the room that was selected before.
+  useEffect(() => { setGhostSel(null); setFurnishOpen(false) }, [selected])
+  // Leaving the review state invalidates the ghost indices.
+  useEffect(() => { if (!reviewing) setGhostSel(null) }, [reviewing])
 
   const derivedSize = useCallback((roomId: string):
       { w: number; d: number } | null => {
@@ -496,8 +521,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             idx === drag.index ? { ...o, edge: drag.edge, at } : o),
         })
       } else {
-        // Prop drag: reposition inside the room (room-local fractions). The
-        // prop keeps its real size — only `at` moves.
+        // Prop / ghost drag: reposition inside the room (room-local
+        // fractions). The piece keeps its real size — only `at` moves.
         const rect = canvas.getBoundingClientRect()
         const fx = (e.clientX - rect.left) / rect.width
         const fy = (e.clientY - rect.top) / rect.height
@@ -505,6 +530,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           r4(clamp((fx - lay.x) / (lay.w || 1), 0, 1)),
           r4(clamp((fy - lay.y) / (lay.d || 1), 0, 1)),
         ]
+        if (drag.kind === 'ghost') {
+          // Pending placements live in FE state only — nothing is stored
+          // until Accept.
+          const job = furnishRef.current
+          job.setGhosts(job.ghosts.map((p, idx) =>
+            idx === drag.index ? { ...p, at } : p))
+          return
+        }
         updateLayout(drag.roomId, {
           props: (lay.props || []).map((p, idx) =>
             idx === drag.index ? { ...p, at } : p),
@@ -554,6 +587,34 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       setPropSel(index)
       dragRef.current = { kind: 'prop', roomId: room.id, index }
     }, [clickMode, armedProp, setSelected])
+
+  // Drag a pending furnishing ghost within its room.
+  const startGhostDrag = useCallback(
+    (e: React.PointerEvent, room: Room, index: number) => {
+      if (clickMode || armedProp || !room.id) return
+      e.preventDefault()
+      e.stopPropagation()
+      setGhostSel(index)
+      dragRef.current = { kind: 'ghost', roomId: room.id, index }
+    }, [clickMode, armedProp])
+
+  // Accept: the server appends the CURRENT ghost positions to layout.props —
+  // the editor draft has to follow, or the next Save would write the room
+  // back without them.
+  const acceptFurnish = useCallback(async () => {
+    const job = furnishRef.current
+    const room = roomsRef.current.find((r) => r.id === selected)
+    const list = job.ghosts
+    if (!room?.layout || !list.length) return
+    try {
+      await job.act('accept', { placements: list })
+      updateLayout(room.id || '', { props: [...(room.layout.props || []), ...list] })
+      setGhostSel(null)
+      toast(t('{n} pieces added to the room').replace('{n}', String(list.length)))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [selected, updateLayout, t, toast])
 
   // Click-to-place: one click inside a room sets the exit point, drops an
   // animation marker or a prop placement — all as fractions of the ROOM
@@ -767,6 +828,32 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           </span>
         ) : null}
       </div>
+
+      {/* Review banner: a furnishing proposal is waiting for the selected
+          room — the ghosts on the plan are exactly what Accept stores. */}
+      {reviewing ? (
+        <div className="ga-furnish-banner">
+          <span>
+            ✨ {t('Proposed furnishing')} — {t('{n} ghosts on the plan')
+              .replace('{n}', String(furnish.ghosts.length))}
+            {furnish.status?.placements?.unplaced?.length
+              ? ` · ${t('{n} not placed').replace('{n}',
+                String(furnish.status.placements.unplaced.length))}`
+              : ''}
+          </span>
+          <span style={{ flex: 1 }} />
+          <button type="button" className="ga-btn ga-btn-sm"
+            disabled={furnish.busy}
+            onClick={() => { void furnish.act('discard') }}>
+            {t('Discard')}
+          </button>
+          <button type="button" className="ga-btn ga-btn-sm ga-btn-primary"
+            disabled={furnish.busy || !furnish.ghosts.length}
+            onClick={() => { void acceptFurnish() }}>
+            {t('Accept')}
+          </button>
+        </div>
+      ) : null}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
       <PlanToolbar
@@ -1054,6 +1141,40 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   />
                 )
               })}
+              {/* Pending furnishing (plan-room-furnish.md): the proposed
+                  placements as dashed, translucent TRUE-size footprints —
+                  same drawing as a placed prop, amber and see-through. Click
+                  selects, drag moves, Del removes; nothing is stored until
+                  Accept. */}
+              {reviewing && room.id === selected
+                ? furnish.ghosts.map((p, i) => {
+                  const dims = propDims[p.prop_id]
+                  const planWEff = planW || 8
+                  const fw = ((dims?.width_m || 1) / planWEff) / (lay.w || 1) * 100
+                  const fd = ((dims?.depth_m || 1) / planWEff) / (lay.d || 1) * 100
+                  return (
+                    <div
+                      key={`ghost-${i}`}
+                      title={`${t('Proposed')}: ${dims?.name || p.prop_id}`}
+                      onPointerDown={(e) => startGhostDrag(e, room, i)}
+                      onClick={(e) => {
+                        if (clickMode || armedProp) return
+                        e.stopPropagation()
+                        setGhostSel(i)
+                      }}
+                      style={{
+                        position: 'absolute',
+                        left: `${p.at[0] * 100}%`, top: `${p.at[1] * 100}%`,
+                        width: `${fw}%`, height: `${fd}%`,
+                        transform: `translate(-50%, -50%) rotate(${p.yaw || 0}deg)`,
+                        border: `1.5px dashed ${ghostSel === i ? '#fff' : '#d29922'}`,
+                        background: 'rgba(210,153,34,0.14)', borderRadius: 2,
+                        boxSizing: 'border-box', opacity: 0.75,
+                        cursor: clickMode || armedProp ? 'crosshair' : 'grab',
+                      }}
+                    />
+                  )
+                }) : null}
               {/* Wall openings on the hull edges: door = gap + swing arc,
                   window = double line, passage = dashed gap. Fixed-size SVG
                   rotated to the edge's SCREEN direction — with clockwise
@@ -1190,6 +1311,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         })}
         surfaceKinds={surfaceKinds}
         onSurface={setSurface}
+        furnishState={furnish.status?.state || ''}
+        furnishDisabled={!selectedRoom || planW <= 0}
+        furnishHint={!selectedRoom
+          ? t('Select a room with a floor plan first.')
+          : planW <= 0
+            ? t('Set the plan width (m) first — without a scale anchor the room has no real size.')
+            : t('Let the LLM furnish this room: it picks library props, proposes the missing pieces and a solver places them.')}
+        onFurnish={() => setFurnishOpen(true)}
         propsOpen={propsOpen}
         armedPropId={armedProp}
         onPickProp={(p) => {
@@ -1203,6 +1332,23 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         }}
       />
       </div>
+
+      {furnishOpen && selectedRoom ? (
+        <FurnishDialog
+          roomId={selectedRoom.id || ''}
+          roomName={selectedRoom.name || selectedRoom.id || ''}
+          job={furnish}
+          propNames={Object.fromEntries(
+            Object.entries(propDims).map(([id, d]) => [id, d.name]))}
+          placements={selectedRoom.layout?.props || []}
+          onClearRoom={() => {
+            updateLayout(selectedRoom.id || '', { props: undefined })
+            setPropSel(null)
+          }}
+          onAccept={acceptFurnish}
+          onClose={() => setFurnishOpen(false)}
+        />
+      ) : null}
 
       {selectedRoom && propSel !== null && selectedRoom.layout?.props?.[propSel] ? (() => {
         const placement = selectedRoom.layout!.props![propSel]

@@ -34,15 +34,33 @@ interface PlanSidePanelProps {
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
   surfaceKinds: Array<{ kind: string; url: string }>
   onSurface: (key: 'floor' | 'wall', kind: string) => void
+  /** "✨ Furnish" (plan-room-furnish.md): opens the job dialog. The state
+   *  string ('' = no job) is shown as a badge so a running job is visible
+   *  without opening it. */
+  furnishState: string
+  furnishDisabled: boolean
+  furnishHint: string
+  onFurnish: () => void
   /** Prop palette open (🪑 tool) — independent of the room selection. */
   propsOpen: boolean
   onPickProp: (prop: PropFull) => void
   armedPropId: string
 }
 
+/** Job state → the badge next to the Furnish button. */
+const FURNISH_BADGE: Record<string, string> = {
+  selecting: '…',
+  proposal_ready: '!',
+  generating: '⚙',
+  placing: '⚙',
+  review_ready: '✓',
+  error: '⚠',
+}
+
 export function PlanSidePanel({
   room, clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
   markerMode, onArmMarker, onAlwaysVisible, surfaceKinds, onSurface,
+  furnishState, furnishDisabled, furnishHint, onFurnish,
   propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
@@ -71,6 +89,17 @@ export function PlanSidePanel({
         />
         <span>{t('Always visible')}</span>
       </label>
+
+      <button
+        type="button"
+        className={`ga-btn ga-btn-sm${furnishState ? ' ga-btn-primary' : ''}`}
+        disabled={furnishDisabled}
+        onClick={onFurnish}
+        title={furnishHint}
+      >
+        ✨ {t('Furnish')}
+        {furnishState ? ` ${FURNISH_BADGE[furnishState] || ''}` : ''}
+      </button>
 
       <div className="ga-plan-panel-title"
         title={t('Surface-texture kinds for this room shell — the client skins floor and walls with them. Default = the global kind / the client fallback.')}>

@@ -2369,6 +2369,67 @@ html, * {
   font-size: 9px;
 }
 
+/* Room furnishing ("✨ Furnish", plan-room-furnish.md): the review banner
+   over the floor plan and the job dialog's lists. Amber = pending proposal,
+   the same hue the ghosts use on the canvas. */
+.ga-furnish-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 8px;
+  border: 1px solid #d29922;
+  border-radius: var(--radius, 6px);
+  background: rgba(210, 153, 34, 0.14);
+  font-size: 0.82em;
+}
+
+.ga-furnish-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ga-furnish-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.85em;
+  color: var(--text-muted, #8b949e);
+}
+
+.ga-furnish-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+}
+
+.ga-furnish-new {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+}
+
+.ga-furnish-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.ga-furnish-error {
+  padding: 6px 8px;
+  border: 1px solid var(--danger, #da3633);
+  border-radius: var(--radius, 6px);
+  background: rgba(218, 54, 51, 0.12);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+}
+
 /* ============================================================
    Soul editor (Characters → Soul) — file bar + markdown editor +
    structured preview with editable/locked section badges.

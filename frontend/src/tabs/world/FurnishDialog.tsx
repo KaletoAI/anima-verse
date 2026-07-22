@@ -1,0 +1,442 @@
+/**
+ * FurnishDialog — the "✨ Furnish" workflow of one room (plan-room-furnish.md).
+ *
+ * The dialog is only a VIEW on the persisted job behind
+ * /world/rooms/{id}/furnish: it may be closed and reopened at any time, the
+ * job keeps running. `useFurnishJob` owns the single poll and the ghost list
+ * (the pending placements the floor-plan editor renders as ghosts) so dialog
+ * and canvas never poll twice — the editor holds the hook and passes it in.
+ *
+ *   no job        → current furnishing + "Suggest furnishing" / "Clear room"
+ *   selecting     → spinner (the dialog may be closed)
+ *   proposal_ready→ two editable lists + "Generate & place" / "Reset"
+ *   generating    → n/m progress · placing → spinner
+ *   review_ready  → placed/unplaced summary + Accept / Discard
+ *   error         → message + Retry / Reset; stalled → Continue
+ */
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { useI18n } from '../../i18n/I18nProvider'
+import { ApiError, apiGet, apiPost } from '../../lib/api'
+import { useToast } from '../../lib/Toast'
+import type { RoomPropPlacement } from './worldTypes'
+
+export type FurnishState = 'selecting' | 'proposal_ready' | 'generating'
+  | 'placing' | 'review_ready' | 'error'
+
+export interface FurnishPick { prop_id: string; count: number }
+
+export interface FurnishNewPiece {
+  name: string
+  description: string
+  category?: string
+  width_m: number
+  depth_m: number
+  height_m: number
+  marker?: { animation: string; at: [number, number, number] } | null
+  count: number
+  prop_id?: string | null
+}
+
+export interface FurnishProposal {
+  existing: FurnishPick[]
+  new: FurnishNewPiece[]
+}
+
+export interface FurnishStatus {
+  room_id: string
+  location_id: string
+  state: FurnishState
+  proposal?: FurnishProposal | null
+  placements?: { placed: RoomPropPlacement[]
+    unplaced: Array<{ name: string; reason: string }> } | null
+  error?: string
+  progress?: { done: number; total: number }
+  running?: boolean
+  stalled?: boolean
+  updated_at?: string
+}
+
+export interface FurnishJob {
+  status: FurnishStatus | null
+  busy: boolean
+  /** Pending placements while the job waits for review — FE state only, the
+   *  ghost layer edits them and Accept sends them back. */
+  ghosts: RoomPropPlacement[]
+  setGhosts: (next: RoomPropPlacement[]) => void
+  refresh: () => Promise<void>
+  act: (action: string, body?: unknown) => Promise<void>
+}
+
+const POLL_OPEN_MS = 3000
+const POLL_IDLE_MS = 15000
+
+/**
+ * The single source of truth for one room's furnishing job. `open` = the
+ * dialog is visible (fast poll); a closed dialog still polls slowly so the
+ * ghost layer notices a job that finished in the background.
+ */
+export function useFurnishJob(roomId: string, open: boolean): FurnishJob {
+  const [status, setStatus] = useState<FurnishStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [ghosts, setGhosts] = useState<RoomPropPlacement[]>([])
+  // Which (room, job revision) the ghosts were seeded from — a fresh review
+  // seeds them, later polls must not overwrite the admin's adjustments.
+  const seededRef = useRef('')
+
+  const refresh = useCallback(async () => {
+    if (!roomId) {
+      setStatus(null)
+      return
+    }
+    try {
+      const data = await apiGet<FurnishStatus>(
+        `/world/rooms/${encodeURIComponent(roomId)}/furnish`)
+      setStatus(data)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) setStatus(null)
+    }
+  }, [roomId])
+
+  // Seed / clear the ghost layer from the job state.
+  useEffect(() => {
+    if (status?.state === 'review_ready') {
+      const key = `${status.room_id}:${status.updated_at || ''}`
+      if (seededRef.current !== key) {
+        seededRef.current = key
+        setGhosts(status.placements?.placed || [])
+      }
+      return
+    }
+    seededRef.current = ''
+    setGhosts((prev) => (prev.length ? [] : prev))
+  }, [status])
+
+  useEffect(() => {
+    setStatus(null)
+    seededRef.current = ''
+    setGhosts([])
+    void refresh()
+  }, [roomId, refresh])
+
+  useEffect(() => {
+    if (!roomId) return
+    const id = window.setInterval(() => { void refresh() },
+      open ? POLL_OPEN_MS : POLL_IDLE_MS)
+    return () => window.clearInterval(id)
+  }, [roomId, open, refresh])
+
+  const act = useCallback(async (action: string, body?: unknown) => {
+    if (!roomId) return
+    setBusy(true)
+    try {
+      await apiPost(
+        `/world/rooms/${encodeURIComponent(roomId)}/furnish/${action}`, body || {})
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }, [roomId, refresh])
+
+  return { status, busy, ghosts, setGhosts, refresh, act }
+}
+
+interface FurnishDialogProps {
+  roomId: string
+  roomName: string
+  job: FurnishJob
+  /** Prop names/dims for the "currently in the room" list (id → record). */
+  propNames: Record<string, string>
+  /** The room's CURRENT placements (editor draft). */
+  placements: RoomPropPlacement[]
+  /** Empties layout.props in the editor draft — Save stays with the admin. */
+  onClearRoom: () => void
+  /** Accept the CURRENT ghost positions (the editor owns the merge into the
+   *  draft, so the dialog does not call the route itself). */
+  onAccept: () => void | Promise<void>
+  onClose: () => void
+}
+
+export function FurnishDialog({ roomId, roomName, job, propNames, placements,
+  onClearRoom, onAccept, onClose }: FurnishDialogProps) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const { status, busy, ghosts, act } = job
+  const state = status?.state
+  // Editable copy of the proposal — seeded once per job revision.
+  const [draft, setDraft] = useState<FurnishProposal | null>(null)
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const seededRef = useRef('')
+  const [confirmClear, setConfirmClear] = useState(false)
+
+  useEffect(() => {
+    if (state !== 'proposal_ready' || !status?.proposal) {
+      seededRef.current = ''
+      return
+    }
+    const key = `${status.room_id}:${status.updated_at || ''}`
+    if (seededRef.current === key) return
+    seededRef.current = key
+    setDraft({
+      existing: status.proposal.existing.map((e) => ({ ...e })),
+      new: status.proposal.new.map((n) => ({ ...n })),
+    })
+    const on: Record<string, boolean> = {}
+    status.proposal.existing.forEach((e) => { on[`e:${e.prop_id}`] = true })
+    status.proposal.new.forEach((_, i) => { on[`n:${i}`] = true })
+    setPicked(on)
+  }, [state, status])
+
+  const run = useCallback(async (action: string, body?: unknown) => {
+    try {
+      await act(action, body)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [act, t, toast])
+
+  // Aggregated "what stands in the room right now" (name × count).
+  const current = new Map<string, number>()
+  for (const p of placements) {
+    const name = propNames[p.prop_id] || p.prop_id
+    current.set(name, (current.get(name) || 0) + 1)
+  }
+
+  const setNew = (index: number, patch: Partial<FurnishNewPiece>) => {
+    setDraft((prev) => prev && ({
+      ...prev,
+      new: prev.new.map((n, i) => (i === index ? { ...n, ...patch } : n)),
+    }))
+  }
+
+  const confirmProposal = () => {
+    if (!draft) return
+    const proposal: FurnishProposal = {
+      existing: draft.existing.filter((e) => picked[`e:${e.prop_id}`]),
+      new: draft.new.filter((_, i) => picked[`n:${i}`]),
+    }
+    if (!proposal.existing.length && !proposal.new.length) {
+      toast(t('Pick at least one piece.'), 'error')
+      return
+    }
+    void run('confirm', { proposal })
+  }
+
+  const numField = (label: string, value: number,
+    onValue: (v: number) => void) => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+      <span className="ga-hint">{label}</span>
+      <input className="ga-input" type="number" step={0.05} min={0.05} max={5}
+        value={value} onChange={(e) => onValue(Number(e.target.value))} />
+    </label>
+  )
+
+  let body: ReactNode
+  if (!status) {
+    body = (
+      <>
+        <div className="ga-plan-panel-title">{t('Currently in the room')}</div>
+        {current.size ? (
+          <ul className="ga-furnish-list">
+            {Array.from(current, ([name, count]) => (
+              <li key={name}>{count}× {name}</li>
+            ))}
+          </ul>
+        ) : (
+          <div className="ga-form-hint">{t('The room is empty.')}</div>
+        )}
+        <div className="ga-form-hint">
+          {t('The LLM picks library props and proposes the missing pieces; a solver places them. Nothing is removed — furnishing is additive.')}
+        </div>
+        <div className="ga-furnish-actions">
+          {confirmClear ? (
+            <>
+              <span className="ga-hint">
+                {t('Remove every placement from this room? This only changes the editor draft — nothing is stored until you save the location.')}
+              </span>
+              <button className="ga-btn ga-btn-sm" onClick={() => setConfirmClear(false)}>
+                {t('Cancel')}
+              </button>
+              <button className="ga-btn ga-btn-sm ga-btn-danger"
+                onClick={() => { onClearRoom(); setConfirmClear(false) }}>
+                {t('Yes, clear')}
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="ga-btn ga-btn-sm" disabled={!placements.length}
+                onClick={() => setConfirmClear(true)}
+                title={t('Empties the room in the editor draft — your Save decides.')}>
+                {t('Clear room')}
+              </button>
+              <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
+                onClick={() => { void run('start') }}>
+                ✨ {t('Suggest furnishing')}
+              </button>
+            </>
+          )}
+        </div>
+      </>
+    )
+  } else if (state === 'selecting') {
+    body = (
+      <>
+        <div className="ga-loading">{t('Asking the LLM…')}</div>
+        <div className="ga-form-hint">
+          {t('This runs in the background — you can close the dialog and come back later.')}
+        </div>
+      </>
+    )
+  } else if (state === 'proposal_ready' && draft) {
+    body = (
+      <>
+        <div className="ga-plan-panel-title">{t('From the library')}</div>
+        {draft.existing.length ? draft.existing.map((e, i) => (
+          <div key={e.prop_id} className="ga-furnish-row">
+            <input type="checkbox" checked={!!picked[`e:${e.prop_id}`]}
+              onChange={(ev) => setPicked((p) => ({ ...p, [`e:${e.prop_id}`]: ev.target.checked }))} />
+            <span style={{ flex: 1 }}>{propNames[e.prop_id] || e.prop_id}</span>
+            <input className="ga-input" type="number" min={1} max={12} value={e.count}
+              style={{ width: 56 }}
+              onChange={(ev) => setDraft((prev) => prev && ({
+                ...prev,
+                existing: prev.existing.map((x, j) => (j === i
+                  ? { ...x, count: Math.max(1, Math.min(12, Number(ev.target.value) || 1)) }
+                  : x)),
+              }))} />
+          </div>
+        )) : <div className="ga-form-hint">{t('Nothing suitable in the library.')}</div>}
+
+        <div className="ga-plan-panel-title">{t('New pieces (will be generated)')}</div>
+        {draft.new.length ? draft.new.map((n, i) => (
+          <div key={i} className="ga-furnish-new">
+            <div className="ga-furnish-row">
+              <input type="checkbox" checked={!!picked[`n:${i}`]}
+                onChange={(ev) => setPicked((p) => ({ ...p, [`n:${i}`]: ev.target.checked }))} />
+              <input className="ga-input" style={{ flex: 1 }} value={n.name}
+                onChange={(ev) => setNew(i, { name: ev.target.value })} />
+              <input className="ga-input" type="number" min={1} max={12} value={n.count}
+                style={{ width: 56 }}
+                onChange={(ev) => setNew(i, { count: Math.max(1, Math.min(12, Number(ev.target.value) || 1)) })} />
+            </div>
+            <textarea className="ga-input" rows={2} value={n.description}
+              title={t('The generation subject — describe the isolated object, never a scene.')}
+              onChange={(ev) => setNew(i, { description: ev.target.value })} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              {numField(t('W (m)'), n.width_m, (v) => setNew(i, { width_m: v }))}
+              {numField(t('D (m)'), n.depth_m, (v) => setNew(i, { depth_m: v }))}
+              {numField(t('H (m)'), n.height_m, (v) => setNew(i, { height_m: v }))}
+            </div>
+            <span className="ga-hint">
+              {n.marker
+                ? t('Marker: {kind} (adjust it by hand on the prop later)')
+                  .replace('{kind}', n.marker.animation)
+                : t('No marker')}
+              {n.prop_id ? ` · ${t('already generated')}` : ''}
+            </span>
+          </div>
+        )) : <div className="ga-form-hint">{t('No new pieces proposed.')}</div>}
+
+        <div className="ga-furnish-actions">
+          <button className="ga-btn ga-btn-sm" disabled={busy}
+            onClick={() => { void run('reset') }}>
+            {t('Reset')}
+          </button>
+          <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
+            onClick={confirmProposal}>
+            {t('Generate & place')}
+          </button>
+        </div>
+      </>
+    )
+  } else if (state === 'generating' || state === 'placing') {
+    const done = status.progress?.done || 0
+    const total = status.progress?.total || 0
+    body = (
+      <>
+        <div className="ga-loading">
+          {state === 'generating'
+            ? t('Generating pieces {done}/{total}…')
+              .replace('{done}', String(done)).replace('{total}', String(total))
+            : t('Placing the furniture…')}
+        </div>
+        <div className="ga-form-hint">
+          {t('Every new piece runs the normal image → mesh chain; this takes minutes. The dialog may be closed.')}
+        </div>
+        {status.stalled ? (
+          <div className="ga-furnish-actions">
+            <span className="ga-hint">{t('The job is not running — the server was restarted.')}</span>
+            <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
+              onClick={() => { void run('continue') }}>
+              {t('Continue')}
+            </button>
+          </div>
+        ) : null}
+      </>
+    )
+  } else if (state === 'review_ready') {
+    const unplaced = status.placements?.unplaced || []
+    const total = ghosts.length + unplaced.length
+    body = (
+      <>
+        <div className="ga-plan-panel-title">
+          {t('{done} of {total} placed').replace('{done}', String(ghosts.length))
+            .replace('{total}', String(total))}
+        </div>
+        {unplaced.length ? (
+          <ul className="ga-furnish-list">
+            {unplaced.map((u, i) => (
+              <li key={i}>{propNames[u.name] || u.name} — {u.reason}</li>
+            ))}
+          </ul>
+        ) : null}
+        <div className="ga-form-hint">
+          {t('The proposal is drawn as amber ghosts on the floor plan — drag or delete them there before accepting.')}
+        </div>
+        <div className="ga-furnish-actions">
+          <button className="ga-btn ga-btn-sm" disabled={busy}
+            onClick={() => { void run('discard') }}>
+            {t('Discard')}
+          </button>
+          <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy || !ghosts.length}
+            onClick={() => { void onAccept() }}>
+            {t('Accept {n} pieces').replace('{n}', String(ghosts.length))}
+          </button>
+        </div>
+      </>
+    )
+  } else if (state === 'error') {
+    body = (
+      <>
+        <div className="ga-furnish-error">{status.error || t('Unknown error')}</div>
+        <div className="ga-furnish-actions">
+          <button className="ga-btn ga-btn-sm" disabled={busy}
+            onClick={() => { void run('reset') }}>
+            {t('Reset')}
+          </button>
+          <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
+            onClick={() => { void run('retry') }}>
+            {t('Retry')}
+          </button>
+        </div>
+      </>
+    )
+  } else {
+    body = <div className="ga-loading">{t('Loading…')}</div>
+  }
+
+  return createPortal(
+    <div className="ga-modal-backdrop"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="ga-modal" role="dialog"
+        aria-label={t('Furnish room')} style={{ maxWidth: 560 }}>
+        <div className="ga-modal-header">
+          <span>✨ {t('Furnish')} — {roomName || roomId}</span>
+          <button className="ga-modal-close" onClick={onClose} aria-label={t('Close')}>×</button>
+        </div>
+        <div className="ga-modal-body ga-furnish-body">{body}</div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
