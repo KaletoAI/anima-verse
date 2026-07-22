@@ -502,6 +502,27 @@ def play_room_model(room_id: str, request: Request):
     return etag_file_response(p, request, media)
 
 
+@router.get("/play/rooms/{room_id}/recipe")
+def play_room_recipe(room_id: str):
+    """The furnished room in ONE payload (plan-room-props.md): hull outline
+    in absolute plate fractions, openings on polygon edge indices, prop
+    placements joined with their real dims (REAL-SIZE rule) and the
+    object-local markers composed into placement-relative world transforms.
+    404 = the room has no layout (client auto-grid as before). Contract:
+    shared/backend-note-room-recipe.md."""
+    from app.models.world import find_location_by_room
+    from app.core.room_recipe import compose_recipe
+    loc = find_location_by_room(room_id)
+    room = None
+    if loc:
+        room = next((r for r in (loc.get("rooms") or [])
+                     if r.get("id") == room_id), None)
+    recipe = compose_recipe(room) if room else None
+    if not recipe:
+        raise HTTPException(status_code=404, detail="No layout")
+    return recipe
+
+
 @router.get("/play/rooms/{room_id}/model/meta")
 def play_room_model_meta(room_id: str):
     """Meta of the room's 3D model ({format, rig, rotation, url}). 404 = none."""

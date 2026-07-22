@@ -590,6 +590,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         "width_m": dims["width_m"],
         "depth_m": dims["depth_m"],
         "height_m": dims["height_m"],
+        # The client applies the fix before measuring/scaling the mesh —
+        # same role as the room-model meta rotation.
+        "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
         "tags": meta.get("tags") or [],
         "marker_count": len(meta.get("markers") or []),
         "has_model": has_model,
