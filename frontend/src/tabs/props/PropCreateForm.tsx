@@ -65,6 +65,7 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
     if (!name.trim()) return
     void apiPost<{ status?: string; prop?: PropFull }>('/world/props/generate', {
       name: name.trim(), category: category.trim(), ...dimsPayload(),
+      description: description.trim(),
       prompt: finalPrompt, negative,
       image_backend: imageBackendInfo?.name || '', mesh_backend: meshBackend,
     })
@@ -75,13 +76,14 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, category, sizeM, finalPrompt, negative, imageBackendInfo, meshBackend,
-      onCreated, onGenerating, t, toast])
+  }, [name, category, sizeM, description, finalPrompt, negative, imageBackendInfo,
+      meshBackend, onCreated, onGenerating, t, toast])
 
   const createEmpty = useCallback(() => {
     if (!name.trim()) return
     void apiPost<{ status?: string; prop?: PropFull }>('/world/props', {
       name: name.trim(), category: category.trim(), ...dimsPayload(),
+      description: description.trim(),
     })
       .then((d) => {
         toast(t('Prop created — upload a GLB or generate its model.'))
@@ -89,7 +91,7 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, category, sizeM, onCreated, t, toast])
+  }, [name, category, sizeM, description, onCreated, t, toast])
 
   return (
     <>

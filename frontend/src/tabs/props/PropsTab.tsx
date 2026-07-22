@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListHeader } from '../../components/ListHeader'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet } from '../../lib/api'
+import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { PropCreateForm } from './PropCreateForm'
 import { PropDetail } from './PropDetail'
@@ -187,6 +187,17 @@ export function PropsTab() {
             onChanged={load}
             onDelete={() => remove(selectedProp.id)}
             armedDelete={armedDel === selectedProp.id}
+            onRegenerate={() => {
+              void apiPost<{ status?: string }>(
+                `/world/props/${encodeURIComponent(selectedProp.id)}/generate`, {})
+                .then((d) => {
+                  toast(d?.status === 'already_running'
+                    ? t('This prop is already generating.')
+                    : t('Regenerating the model…'))
+                  startPoll()
+                })
+                .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+            }}
           />
         ) : (
           <div className="ga-placeholder">{t('Pick a prop or create a new one.')}</div>

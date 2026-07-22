@@ -27,13 +27,16 @@ const DIM_FIELDS: Array<{ key: DimKey; label: string; axis: number }> = [
   { key: 'height_m', label: 'Height (m)', axis: 1 },
 ]
 
-export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, armedDelete }: {
+export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
+  armedDelete, onRegenerate }: {
   prop: PropFull
   pending: boolean
   cacheBump: number
   onChanged: () => Promise<unknown>
   onDelete: () => void
   armedDelete: boolean
+  /** Re-run the source→mesh chain with the stored description/name. */
+  onRegenerate: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -41,6 +44,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
   const uploadRef = useRef<HTMLInputElement>(null)
 
   const [nameDraft, setNameDraft] = useState(prop.name)
+  const [descDraft, setDescDraft] = useState(prop.description || '')
   const [categoryDraft, setCategoryDraft] = useState(prop.category)
   const [tagsDraft, setTagsDraft] = useState(prop.tags.join(', '))
   // The three real dims as string drafts — committed on blur/Enter, reverted
@@ -51,13 +55,15 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
   })
   useEffect(() => {
     setNameDraft(prop.name)
+    setDescDraft(prop.description || '')
     setCategoryDraft(prop.category)
     setTagsDraft(prop.tags.join(', '))
     setDims({
       width_m: String(prop.width_m), depth_m: String(prop.depth_m),
       height_m: String(prop.height_m),
     })
-  }, [prop.id, prop.name, prop.category, prop.tags, prop.width_m, prop.depth_m, prop.height_m])
+  }, [prop.id, prop.name, prop.description, prop.category, prop.tags,
+    prop.width_m, prop.depth_m, prop.height_m])
 
   // Proportional assist: editing one dim pulls the OTHER two along the model's
   // proportions — unless they were edited too ("pinned"). Pins and the live
@@ -244,6 +250,12 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
         extra={
           <>
             <button type="button" className="ga-btn ga-btn-sm"
+              disabled={pending}
+              onClick={onRegenerate}
+              title={t('Re-render the source image from the stored description (name as fallback) and mesh it again — replaces the model, dims and markers stay.')}>
+              🧊 {pending ? t('Generating…') : t('Regenerate')}
+            </button>
+            <button type="button" className="ga-btn ga-btn-sm"
               onClick={() => uploadRef.current?.click()}
               title={t('Upload a GLB as this prop’s 3D model.')}>
               ⬆ {t('Upload model')}
@@ -282,6 +294,16 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
                 }} />
             </Field>
           </div>
+
+          <Field label={t('Description (generation subject)')}
+            hint={t('Feeds the render prompt when (re)generating — materials, colour, style. Empty = the name is used.')}>
+            <textarea className="ga-textarea" rows={2} value={descDraft}
+              onChange={(e) => setDescDraft(e.target.value)}
+              onBlur={() => {
+                if (descDraft.trim() !== (prop.description || ''))
+                  void patch({ description: descDraft })
+              }} />
+          </Field>
 
           {/* Real size in metres — the mesh loses its scale, so the client sizes
               the object by these three values (after the orientation fix). */}

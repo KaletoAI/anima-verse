@@ -321,8 +321,8 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
 
 def create_prop(*, name: str, category: str = "", width_m: Any = None,
                 depth_m: Any = None, height_m: Any = None,
-                tags: Any = None, prompt: str = "", source: str = "manual",
-                backend: str = "") -> Dict[str, Any]:
+                tags: Any = None, description: str = "", prompt: str = "",
+                source: str = "manual", backend: str = "") -> Dict[str, Any]:
     """Create a new prop record (sidecar only — the model/source files are
     added by upload or the generation chain). Returns ``{id, **sidecar}``.
 
@@ -345,6 +345,9 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         dims.setdefault(key, base)
     meta = {
         "name": name,
+        # Generation subject — the name stays free display text, the
+        # description feeds the render prompt (surface-texture lesson).
+        "description": (description or "").strip(),
         "category": (category or "").strip(),
         "width_m": dims["width_m"],
         "depth_m": dims["depth_m"],
@@ -380,6 +383,8 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
             meta["name"] = nm
     if "category" in patch:
         meta["category"] = str(patch.get("category") or "").strip()
+    if "description" in patch:
+        meta["description"] = str(patch.get("description") or "").strip()
     touched = False
     for key in DIM_KEYS:
         if key in patch:
@@ -592,6 +597,7 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
     if full:
         has_source = source_path(prop_id) is not None
         rec.update({
+            "description": meta.get("description") or "",
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
             "markers": meta.get("markers") or [],
             "has_source": has_source,
@@ -690,7 +696,11 @@ def _render_source(prop_id: str, backend_glob: str,
         return False
 
     if not prompt.strip():
-        composed = compose_prompt(read_sidecar(prop_id).get("name", ""), backend)
+        # The stored description is the generation subject; the name is only
+        # the display fallback when no description was written.
+        meta0 = read_sidecar(prop_id)
+        composed = compose_prompt(
+            meta0.get("description") or meta0.get("name", ""), backend)
         prompt = composed["prompt"]
         if not negative.strip():
             negative = composed["negative"]

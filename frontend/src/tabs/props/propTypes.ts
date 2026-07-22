@@ -23,6 +23,9 @@ export interface PropFull {
   tags: string[]
   marker_count: number
   has_model: boolean
+  /** Generation subject — feeds the render prompt; the name stays free
+   *  display text (empty = the name is used). */
+  description?: string
   /** AABB edge lengths of the mesh on its RAW axes (before the fix) — the
    *  proportions the dims are derived from. Absent = no measurable model. */
   bbox?: [number, number, number]
