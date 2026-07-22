@@ -2,10 +2,13 @@
  * PlanSidePanel — the context column right of the floor plan. Everything that
  * belongs to the SELECTED room and is not a click tool lives here: room info
  * (name, rotation, always-visible), the animation-marker vocabulary + the
- * room's marker list, and the room shell's surface kinds. Purely
- * presentational — RoomLayoutEditor owns the state and hands in the callbacks.
+ * room's marker list, and the room shell's surface kinds. The 🪑 tool opens
+ * the prop palette below them. Purely presentational — RoomLayoutEditor owns
+ * the state and hands in the callbacks.
  */
 import { useI18n } from '../../i18n/I18nProvider'
+import { PropsPalette } from './PropsPalette'
+import type { PropFull } from '../props/propTypes'
 import type { Room } from './worldTypes'
 
 /** The two shell surfaces a room may skin — mirrors layout.surfaces. */
@@ -27,28 +30,28 @@ interface PlanSidePanelProps {
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
   surfaceKinds: Array<{ kind: string; url: string }>
   onSurface: (key: 'floor' | 'wall', kind: string) => void
+  /** Prop palette open (🪑 tool) — independent of the room selection. */
+  propsOpen: boolean
+  onPickProp: (prop: PropFull) => void
+  armedPropId: string
 }
 
 export function PlanSidePanel({
   room, clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
-  onAlwaysVisible, surfaceKinds, onSurface,
+  onAlwaysVisible, surfaceKinds, onSurface, propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
   const layout = room?.layout
+  const markers = layout?.markers || []
 
-  if (!room || !layout) {
-    return (
-      <div className="ga-plan-panel">
-        <span className="ga-hint">
-          {t('Select a room on the plan — the tools work on it.')}
-        </span>
-      </div>
-    )
-  }
-
-  const markers = layout.markers || []
-  return (
-    <div className="ga-plan-panel">
+  // Room-specific blocks — the palette below them is independent of the
+  // selection (the 🪑 tool may be open with nothing selected).
+  const roomBlock = !room || !layout ? (
+    <span className="ga-hint">
+      {t('Select a room on the plan — the tools work on it.')}
+    </span>
+  ) : (
+    <>
       <div className="ga-plan-panel-title">{room.name || room.id}</div>
       <span className="ga-hint">
         {t('Rotation')}: {layout.rotation || 0}°
@@ -129,6 +132,15 @@ export function PlanSidePanel({
           🎯 {i + 1} · {m.animation}
         </button>
       ))}
+    </>
+  )
+
+  return (
+    <div className="ga-plan-panel">
+      {roomBlock}
+      {propsOpen ? (
+        <PropsPalette onPick={onPickProp} armedPropId={armedPropId} />
+      ) : null}
     </div>
   )
 }

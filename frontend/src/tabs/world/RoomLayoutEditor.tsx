@@ -73,8 +73,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // the nearest edge.
   const [clickMode, setClickMode] = useState<PlanMode>('')
   // Prop palette open in the side panel (🪑 tool) — presentation only, the
-  // placement logic is not part of this editor yet.
+  // placement logic is not part of this editor yet. The armed prop is just
+  // the highlighted palette card; nothing on the plan reads it so far.
   const [propsOpen, setPropsOpen] = useState(false)
+  const [armedProp, setArmedProp] = useState('')
   // The room whose hull is being drawn ('draw-room' mode) — set by the
   // "Not on the plan" chips (first placement) and the redraw tool.
   const [drawTarget, setDrawTarget] = useState('')
@@ -1028,6 +1030,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         })}
         surfaceKinds={surfaceKinds}
         onSurface={setSurface}
+        propsOpen={propsOpen}
+        armedPropId={armedProp}
+        onPickProp={(p) => setArmedProp((cur) => (cur === p.id ? '' : p.id))}
       />
       </div>
 

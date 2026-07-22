@@ -2247,6 +2247,61 @@ html, * {
   white-space: nowrap;
 }
 
+/* Prop palette inside the side panel: compact thumbnail cards. */
+.ga-props-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
+  gap: 4px;
+}
+
+.ga-props-palette-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+  background: var(--bg-secondary, #21262d);
+  color: var(--text, #c9d1d9);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+}
+
+.ga-props-palette-card:hover { background: var(--border, #30363d); }
+
+.ga-props-palette-card.is-armed {
+  border-color: var(--accent, #58a6ff);
+  background: rgba(88, 166, 255, 0.18);
+}
+
+.ga-props-palette-card.is-modelless { opacity: 0.55; }
+
+.ga-props-palette-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ga-props-palette-name {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ga-props-palette-dims {
+  color: var(--text-muted, #8b949e);
+  font-size: 9px;
+}
+
 /* ============================================================
    Soul editor (Characters → Soul) — file bar + markdown editor +
    structured preview with editable/locked section badges.
