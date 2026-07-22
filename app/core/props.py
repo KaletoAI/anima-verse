@@ -33,9 +33,10 @@ it is what turns one real-world size into proportional dims
 (``oriented_dims`` / ``_dims_from_size``).
 
 ``markers[].at`` is an OBJECT-LOCAL ``[u, v, w]`` (fractions of the model
-bounding box, 0..1); the vocabulary is identical to ``layout.markers``
-(animation + facing), only the frame is the object instead of the room
-rectangle.
+bounding box, which MAY exceed 0..1 by half a box for seats and poses that
+sit on or outside the hull — range ``[-0.5, 1.5]``); the vocabulary is
+identical to ``layout.markers`` (animation + facing), only the frame is the
+object instead of the room rectangle.
 """
 
 import hashlib
@@ -61,6 +62,11 @@ SIDECAR_NAME = "sidecar.json"
 
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
+
+# Marker fractions may leave the raw bounding box by half a box per axis —
+# see ``sanitize_markers``.
+MARKER_AT_MIN = -0.5
+MARKER_AT_MAX = 1.5
 
 _PROP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -290,8 +296,16 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     ``layout.markers`` — ``animation`` = a clip kind from the OPEN clip
     vocabulary, ``facing`` = degrees (0 south / 90 east / 180 north / 270 west,
     absent = client default) — but ``at`` is an OBJECT-LOCAL ``[u, v, w]``
-    (three fractions of the model bounding box, 0..1) instead of a room
-    ``[x, y]``. Invalid entries are dropped individually; capped at 50."""
+    (three fractions of the model bounding box) instead of a room ``[x, y]``.
+
+    The fractions may exceed 0..1 by half a box in each direction
+    (``[-0.5, 1.5]``): a seat or lying surface often sits ON the hull edge or
+    slightly outside it, and the old hard 0..1 clamp made those markers
+    impossible to place (the Seated Row Machine finding). ``compose_prop_marker``
+    multiplies the fractions linearly, so out-of-range values compose
+    correctly without any change there.
+
+    Invalid entries are dropped individually; capped at 50."""
     if not isinstance(raw, list):
         return []
     out: List[Dict[str, Any]] = []
@@ -303,7 +317,8 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
         if not anim or not isinstance(at, (list, tuple)) or len(at) != 3:
             continue
         try:
-            at3 = [round(min(max(float(at[i]), 0.0), 1.0), 4) for i in range(3)]
+            at3 = [round(min(max(float(at[i]), MARKER_AT_MIN), MARKER_AT_MAX), 4)
+                   for i in range(3)]
         except (TypeError, ValueError):
             continue
         entry: Dict[str, Any] = {"animation": anim, "at": at3}
