@@ -20,7 +20,7 @@
  * dynamically — it stays in the shared chunk.
  */
 import { useEffect, useRef, useState } from 'react'
-import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D } from 'three'
+import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D, Texture } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { normalizeOpeningEdge, outlineOf } from './planGeometry'
@@ -115,6 +115,18 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // animation clips per kind — markers show a real animated figure; without
   // figure/clip the mannequin stays the fallback.
   const figRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'; obj?: Object3D }>({ status: 'idle' })
+  // Prop library meta (orientation fix + real dims per id) — one fetch feeds
+  // every placement; prop GLBs land in cacheRef under "prop:<id>".
+  const propsMetaRef = useRef<{ status: 'idle' | 'loading' | 'ready'
+    map: Map<string, { rotation: { x?: number; y?: number; z?: number }
+      dims: [number, number, number]; hasModel: boolean }> }>(
+    { status: 'idle', map: new Map() })
+  // Surface textures per kind: the /assets listing (url + real tiling size)
+  // plus lazily loaded THREE textures — walls/floors sample them real-scale.
+  const surfaceListRef = useRef<{ status: 'idle' | 'loading' | 'ready'
+    map: Map<string, { url: string; sizeM: number }> }>(
+    { status: 'idle', map: new Map() })
+  const surfaceTexRef = useRef<Map<string, unknown>>(new Map())
   const clipListRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'
     clips: Array<{ kind: string; set: string; url: string }> }>({ status: 'idle', clips: [] })
   const clipCacheRef = useRef<Map<string, { clip: AnimationClip; restObj: Object3D } | 'loading' | 'missing'>>(new Map())
@@ -343,8 +355,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       const mesh = o as Mesh
       mesh.geometry?.dispose?.()
       const m = mesh.material as Material | Material[] | undefined
-      if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
-      else m?.dispose?.()
+      // Per-mesh texture CLONES (tiled walls/floors) and the label
+      // CanvasTextures die with their material — the shared caches sit in
+      // __noDispose subtrees and are never visited.
+      const disposeMat = (x: Material) => {
+        (x as Material & { map?: Texture | null }).map?.dispose?.()
+        x.dispose?.()
+      }
+      if (Array.isArray(m)) m.forEach(disposeMat)
+      else if (m) disposeMat(m)
       for (const c of o.children) disposeSafe(c)
     }
     for (const child of [...boxes.children]) {
@@ -405,6 +424,115 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       return fitScale
     }
 
+    // ── Props (plan-room-props.md): meta, meshes, real-size placement ──
+    const ensurePropsMeta = (): boolean => {
+      const s = propsMetaRef.current
+      if (s.status !== 'idle') return s.status === 'ready'
+      s.status = 'loading'
+      apiGet<{ props?: Array<{ id: string; has_model?: boolean
+        rotation?: { x?: number; y?: number; z?: number }
+        width_m?: number; depth_m?: number; height_m?: number }> }>('/world/props')
+        .then((d) => {
+          for (const p of d.props || []) {
+            s.map.set(p.id, { rotation: p.rotation || {},
+              dims: [p.width_m || 1, p.depth_m || 1, p.height_m || 1],
+              hasModel: !!p.has_model })
+          }
+        })
+        .catch(() => {})
+        .finally(() => { s.status = 'ready'; setBump((b) => b + 1) })
+      return false
+    }
+    const ensurePropModel = (propId: string): CachedModel | null => {
+      const key = `prop:${propId}`
+      const cur = cacheRef.current.get(key)
+      if (cur === 'loading' || cur === 'missing') return null
+      if (cur) return cur
+      cacheRef.current.set(key, 'loading')
+      ;(async () => {
+        try {
+          const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
+          const gltf = await new GLTFLoader().loadAsync(
+            `/assets/props/${encodeURIComponent(propId)}/model`)
+          cacheRef.current.set(key, { obj: gltf.scene, rotation: {},
+            offsetY: 0, floors: 0, heightM: 0, widthM: 0 })
+        } catch {
+          cacheRef.current.set(key, 'missing')
+        }
+        setBump((b) => b + 1)
+      })()
+      return null
+    }
+    // REAL-size rule: the prop scales by ITS OWN dims × kFac — uniformly from
+    // the largest edge over the largest extent of the FIXED mesh (dims are
+    // post-fix by convention); the placement never fit-scales. Chain mirrors
+    // placeModel: fix (inner) → yaw (parent) → uniform world scale → re-ground
+    // the rotated bounds at the floor + offset.
+    const placePropModel = (entry: CachedModel,
+        rot: { x?: number; y?: number; z?: number },
+        dims: [number, number, number], px: number, pz: number,
+        floorY: number, yawDeg2: number, offY: number) => {
+      const clone = entry.obj.clone(true)
+      const holder = new THREE.Group()
+      holder.add(clone)
+      holder.rotation.set(deg(rot.x), deg(rot.y), deg(rot.z))
+      holder.updateMatrixWorld(true)
+      const b0 = new THREE.Box3().setFromObject(holder)
+      const s0 = b0.getSize(new THREE.Vector3())
+      const maxExtent = Math.max(s0.x, s0.y, s0.z) || 1
+      const s = (Math.max(dims[0], dims[1], dims[2]) * kFac) / maxExtent
+      const yawG = new THREE.Group()
+      yawG.add(holder)
+      yawG.rotation.y = -deg(yawDeg2)
+      const outer = new THREE.Group()
+      outer.add(yawG)
+      outer.scale.setScalar(s)
+      outer.updateMatrixWorld(true)
+      const b1 = new THREE.Box3().setFromObject(outer)
+      const c1 = b1.getCenter(new THREE.Vector3())
+      outer.position.set(px - c1.x, floorY + 0.05 + offY * kFac - b1.min.y, pz - c1.z)
+      outer.userData.__noDispose = true
+      boxes.add(outer)
+    }
+
+    // ── Surface textures: real-scale sampling for walls + room floors ──
+    const ensureSurfaceList = (): boolean => {
+      const s = surfaceListRef.current
+      if (s.status !== 'idle') return s.status === 'ready'
+      s.status = 'loading'
+      apiGet<Array<{ kind?: string; url?: string; size_m?: number }>>(
+        '/assets/surface-textures')
+        .then((list) => {
+          for (const entry of Array.isArray(list) ? list : []) {
+            if (entry?.kind && entry.url)
+              s.map.set(entry.kind, { url: entry.url, sizeM: entry.size_m || 1 })
+          }
+        })
+        .catch(() => {})
+        .finally(() => { s.status = 'ready'; setBump((b) => b + 1) })
+      return false
+    }
+    // Loaded texture (RepeatWrapping, sRGB) + its real-world tile size, or
+    // null while loading / when the kind has no texture (color hint stays).
+    const ensureSurfaceTex = (kind: string): { tex: unknown; sizeM: number } | null => {
+      if (!ensureSurfaceList()) return null
+      const info = surfaceListRef.current.map.get(kind)
+      if (!info) return null
+      const cache = surfaceTexRef.current
+      const cur = cache.get(kind) as { tex: unknown; sizeM: number } | 'loading' | undefined
+      if (cur === 'loading') return null
+      if (cur) return cur
+      cache.set(kind, 'loading')
+      new THREE.TextureLoader().load(info.url, (tex) => {
+        tex.wrapS = THREE.RepeatWrapping
+        tex.wrapT = THREE.RepeatWrapping
+        tex.colorSpace = THREE.SRGBColorSpace
+        cache.set(kind, { tex, sizeM: info.sizeM })
+        setBump((b) => b + 1)
+      }, undefined, () => cache.set(kind, { tex: null, sizeM: info.sizeM }))
+      return null
+    }
+
     current.forEach((room, idx) => {
       const lay = room.layout
       if (!lay) return
@@ -424,6 +552,29 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       if (model) {
         fitScale = placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0)
       }
+
+      // Prop placements: real-size furnishing meshes; a wireframe box of the
+      // prop's dims stands in while meta/mesh load and for dangling ids.
+      ;(lay.props || []).forEach((p) => {
+        ensurePropsMeta()
+        const pm = propsMetaRef.current.map.get(p.prop_id)
+        const dims: [number, number, number] = pm?.dims || [1, 1, 1]
+        const px = (lay.x + p.at[0] * lay.w - 0.5) * PLATE_M
+        const pz = (lay.y + p.at[1] * lay.d - 0.5) * PLATE_M
+        const entry = pm?.hasModel ? ensurePropModel(p.prop_id) : null
+        if (entry && pm) {
+          placePropModel(entry, pm.rotation, dims, px, pz, floorY,
+            p.yaw || 0, p.offset_y || 0)
+        } else {
+          const standIn = new THREE.Mesh(
+            new THREE.BoxGeometry(dims[0] * kFac, dims[2] * kFac, dims[1] * kFac),
+            new THREE.MeshBasicMaterial({ color: 0xd29922, wireframe: true }))
+          standIn.rotation.y = -deg(p.yaw || 0)
+          standIn.position.set(px,
+            floorY + 0.05 + (p.offset_y || 0) * kFac + (dims[2] * kFac) / 2, pz)
+          boxes.add(standIn)
+        }
+      })
       // Figure scale in THIS room. Anchored mode: the ONE location factor
       // k — rect sizes derive from width_m, so content and figures share
       // it automatically. Legacy: per-room rect/width_m, else storey/3.
@@ -785,12 +936,26 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         if (!lay) continue
         const lv = lay.level || 0
         const floorY = lv * lhEff
-        // Colour hint from the surfaces (B1): a warmer off-white when a wall
-        // kind is set, the neutral grey otherwise.
+        // Surfaces (B1/F7): a set wall kind samples its REAL texture — tiled
+        // at its true size_m — as soon as it is loaded; the warmer colour
+        // hint covers loading and texture-less kinds.
+        const wallTex = lay.surfaces?.wall ? ensureSurfaceTex(lay.surfaces.wall) : null
         const wallColor = lay.surfaces?.wall ? 0xe8e0d0 : 0xcfc4b2
         const wallMat = new THREE.MeshStandardMaterial({
           color: wallColor, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.5,
         })
+        // BoxGeometry UVs are per-face normalized, so a tiled wall needs a
+        // per-mesh texture clone with its own repeat.
+        const wallMatFor = (segLen: number, h: number): Material => {
+          if (!wallTex?.tex) return wallMat
+          const tile = wallTex.sizeM * kFac
+          const t = (wallTex.tex as Texture).clone()
+          t.needsUpdate = true
+          t.repeat.set(segLen / tile, h / tile)
+          return new THREE.MeshStandardMaterial({
+            map: t, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.5,
+          })
+        }
         const glassMat = new THREE.MeshStandardMaterial({
           color: 0x9fc2d8, transparent: true, opacity: 0.25,
         })
@@ -845,7 +1010,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             }
             solids = next.filter(([a, b]) => b - a > 0.02)
           }
-          for (const [s0, s1] of solids) placeBox(s0, s1 - s0, 0, WALL_H, WALL_T, wallMat)
+          for (const [s0, s1] of solids)
+            placeBox(s0, s1 - s0, 0, WALL_H, WALL_T, wallMatFor(s1 - s0, WALL_H))
           // Windows: sill wall + header wall + glass pane; doors/passages
           // stay a full gap.
           for (const sp of spans) {
@@ -853,10 +1019,36 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             const segLen = sp.s1 - sp.s0
             const sill = Math.min(sp.op.sill_m * kFac, WALL_H)
             const top = Math.min((sp.op.sill_m + sp.op.height_m) * kFac, WALL_H)
-            if (sill > 0.02) placeBox(sp.s0, segLen, 0, sill, WALL_T, wallMat)
-            if (WALL_H - top > 0.02) placeBox(sp.s0, segLen, top, WALL_H - top, WALL_T, wallMat)
+            if (sill > 0.02) placeBox(sp.s0, segLen, 0, sill, WALL_T, wallMatFor(segLen, sill))
+            if (WALL_H - top > 0.02) placeBox(sp.s0, segLen, top, WALL_H - top, WALL_T, wallMatFor(segLen, WALL_H - top))
             if (top - sill > 0.02) placeBox(sp.s0, segLen, sill, top - sill, WALL_T * 0.6, glassMat)
           }
+        }
+        // Room floor plate: only when a floor kind is set — textured at its
+        // real tile size (ShapeGeometry UVs are in shape units = metres), a
+        // plain warm hint while it loads / without a texture.
+        if (lay.surfaces?.floor) {
+          const floorTexInfo = ensureSurfaceTex(lay.surfaces.floor)
+          const shape = new THREE.Shape()
+          hull.forEach(([hx, hz], i) => {
+            if (i === 0) shape.moveTo(hx, -hz)
+            else shape.lineTo(hx, -hz)
+          })
+          shape.closePath()
+          let fmat: Material
+          if (floorTexInfo?.tex) {
+            const tile = floorTexInfo.sizeM * kFac
+            const t = (floorTexInfo.tex as Texture).clone()
+            t.needsUpdate = true
+            t.repeat.set(1 / tile, 1 / tile)
+            fmat = new THREE.MeshStandardMaterial({ map: t })
+          } else {
+            fmat = new THREE.MeshStandardMaterial({ color: 0xd8cfc0 })
+          }
+          const plate = new THREE.Mesh(new THREE.ShapeGeometry(shape), fmat)
+          plate.rotation.x = -Math.PI / 2
+          plate.position.y = floorY + 0.04
+          boxes.add(plate)
         }
       }
     }
