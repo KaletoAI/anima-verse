@@ -68,8 +68,10 @@ export interface Tile {
   /** erkannte Liegeflächen (Möbelhöhe, große zusammenhängende Flächen) */
   roomLieSpots: Map<string, THREE.Vector3[]>;
   /** kuratierte Animations-Marker (AV3D-11): Raum -> Clip-Kind -> Punkte
-   *  (rotation = Blickrichtung in Grad, offsetY additiv zur Auflagehöhe) */
-  roomMarkers: Map<string, Map<string, { p: THREE.Vector3; rotation?: number; offsetY: number }[]>>;
+   *  (rotation = Blickrichtung in Grad, offsetY additiv zur Auflagehöhe;
+   *  fixed = Höhe ist fertig komponiert (prop_markers) und wird von der
+   *  Abtastung nicht mehr verfeinert) */
+  roomMarkers: Map<string, Map<string, { p: THREE.Vector3; rotation?: number; offsetY: number; fixed?: boolean }[]>>;
   /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
   roomGroups: Map<string, THREE.Group>;
   /** Raum-Rechtecke in Welt-Koordinaten (Fokus-Erkennung) */
@@ -233,6 +235,49 @@ function floorSlabTexture(): THREE.Texture | null {
     serverSurfaceCache.set('floor@slab', tex);
   }
   return tex;
+}
+
+/** Surface-Texturen für den Rezept-Pfad (roomShell klont sie und setzt
+ *  eigene repeat-Werte): Klone eines noch ladenden Bildes blieben leer,
+ *  daher gibt surfaceFor nur FERTIG geladene Texturen heraus — der Mount
+ *  ruft vorher preloadSurfaceTexture für die benötigten Kinds. */
+const recipeSurfaceCache = new Map<string, THREE.Texture>();
+const recipeSurfacePending = new Map<string, Promise<void>>();
+export function preloadSurfaceTexture(kind: string | undefined): Promise<void> {
+  const key = (kind ?? '').toLowerCase();
+  const entry = serverSurfaces.get(key);
+  if (!entry?.url || recipeSurfaceCache.has(key)) return Promise.resolve();
+  let pending = recipeSurfacePending.get(key);
+  if (!pending) {
+    pending = loader
+      .loadAsync(entry.url)
+      .then((tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        recipeSurfaceCache.set(key, tex);
+      })
+      .catch(() => { /* Fallback-Farben der Hülle */ })
+      .finally(() => recipeSurfacePending.delete(key));
+    recipeSurfacePending.set(key, pending);
+  }
+  return pending;
+}
+
+/** Aktive Surface-Textur eines Kinds für die Raum-Hülle (ShellCtx.surface).
+ *  Ohne Raum-Eintrag fällt der Boden auf das globale "floor"-Kind zurück
+ *  (Vertrag: „ohne Eintrag/Textur wie bisher"); Wände haben kein globales
+ *  Kind -> null = Farb-Fallback der Hülle. */
+export function surfaceFor(
+  kind: string | undefined,
+  use: 'floor' | 'wall'
+): { texture: THREE.Texture; sizeM: number } | null {
+  const chain = use === 'floor' ? [kind, 'floor'] : [kind];
+  for (const c of chain) {
+    const key = (c ?? '').toLowerCase();
+    const entry = serverSurfaces.get(key);
+    const tex = recipeSurfaceCache.get(key);
+    if (entry && tex) return { texture: tex, sizeM: entry.sizeM };
+  }
+  return null;
 }
 
 /** Bild einer Art fürs Canvas-Compositing laden (Server-Bild oder das
@@ -1068,8 +1113,18 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   delta.applyQuaternion(slot.holder.getWorldQuaternion(new THREE.Quaternion()).invert());
   model.position.add(delta);
 
-  // Begehbarkeit abtasten: Raster von oben, 20. Perzentil = Bodenhöhe,
-  // deutlich höhere Treffer sind Möbel/Wände (dort keine Figuren).
+  sampleRoomWalkables(tile, roomId, model);
+}
+
+/** Begehbarkeit eines Raum-Aufbaus abtasten (Diorama-Modell ODER
+ *  Rezept-Szene aus Hülle + Props): Raster von oben, 20. Perzentil =
+ *  Bodenhöhe, deutlich höhere Treffer sind Möbel/Wände (dort keine
+ *  Figuren). Füllt roomSpots/-SitSpots/-LieSpots, hebt Mitte/Ausgang auf
+ *  die echte Bodenhöhe und verfeinert die Marker-Höhen (außer fertig
+ *  komponierte prop_markers, fixed). */
+export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Object3D) {
+  const slot = tile.roomSlots.get(roomId);
+  if (!slot) return;
   tile.group.updateMatrixWorld(true);
   const ray = new THREE.Raycaster();
   const down = new THREE.Vector3(0, -1, 0);
@@ -1081,7 +1136,7 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
       const ox = (ix / (N - 1) - 0.5) * slot.w * 0.78;
       const oz = (iz / (N - 1) - 0.5) * slot.d * 0.78;
       ray.set(new THREE.Vector3(base.x + ox, base.y + 20, base.z + oz), down);
-      const hit = ray.intersectObject(model, true)[0];
+      const hit = ray.intersectObject(root, true)[0];
       if (hit) samples.push({ p: hit.point.clone(), ix, iz, uv: hit.uv?.clone(), mesh: hit.object as THREE.Mesh });
     }
   }
@@ -1148,8 +1203,9 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
     const seatDrop = 0.44 * roomFigureScale(tile.loc);   // Mixamo-Sitzhöhe x Raum-Maßstab
     for (const [kind, entries] of markers) {
       for (const e of entries) {
+        if (e.fixed) continue;   // prop_markers: Höhe kommt fertig vom Server
         ray.set(new THREE.Vector3(e.p.x, base.y + 20, e.p.z), down);
-        const hit = ray.intersectObject(model, true)[0];
+        const hit = ray.intersectObject(root, true)[0];
         const surface = hit && hit.point.y < floor + 0.5 ? hit.point.y : floor;
         const anchor = kind === 'sit' ? Math.max(floor, surface - seatDrop) : surface;
         e.p.setY(anchor + 0.01 + e.offsetY);
