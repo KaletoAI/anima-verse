@@ -42,6 +42,7 @@ object instead of the room rectangle.
 import hashlib
 import json
 import math
+import os
 import random
 import re
 import shutil
@@ -708,6 +709,12 @@ def _render_source(prop_id: str, backend_glob: str,
     if backend_glob.strip():
         backend = svc.resolve_imagegen_target(backend_glob)
     if not backend:
+        # Admin default for prop product shots (/admin/settings → Media
+        # Generation → "Prop Default") — the ✨ Furnish job passes no glob.
+        default_glob = os.environ.get("PROP_IMAGEGEN_DEFAULT", "").strip()
+        if default_glob:
+            backend = svc.resolve_imagegen_target(default_glob)
+    if not backend:
         backend = svc._select_backend()
     if not backend:
         logger.warning("Prop %s: no image backend available", prop_id)
@@ -780,6 +787,13 @@ def _generate(prop_id: str, prompt: str, negative: str,
             return {"ok": False, "error": error}
 
         from app.imagegen.service import get_image_service
+        if not mesh_backend_glob.strip():
+            # Same admin default the character 3D tab uses — without it the
+            # pool picks the cheapest mesh backend, which is arbitrary when
+            # several share cost 0.
+            from app.core import config
+            mesh_backend_glob = str(config.get(
+                "image_generation.mesh_imagegen_default", "") or "").strip()
         d = _prop_dir(prop_id, create=True)
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
