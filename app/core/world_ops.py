@@ -656,6 +656,57 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
     return rooms
 
 
+# The layout fields that carry REAL-WORLD SIZE. Openings, markers and
+# surfaces ride along on whatever scale already applies, so editing them is
+# not "geometry work" and never trips the scale-anchor requirement.
+_LAYOUT_GEOMETRY_KEYS = ("level", "x", "y", "w", "d", "rotation", "outline", "props")
+
+
+def _layout_geometry(layout: Any) -> Optional[Dict[str, Any]]:
+    """The geometry part of a room layout, or None when the room has none."""
+    if not isinstance(layout, dict):
+        return None
+    return {key: layout.get(key) for key in _LAYOUT_GEOMETRY_KEYS}
+
+
+def _require_scale_anchor(location_id: str, rooms: Any, map3d: Any,
+                          stored: Optional[Dict[str, Any]]) -> None:
+    """Reject a save that ADDS or CHANGES floor-plan geometry while the
+    location has no scale anchor (Abnahme round 4).
+
+    Without ``map3d.plan_width_m`` — or a building model with a declared
+    height to derive it from — a layout has no real size and the 3D client
+    silently falls back to its legacy 24 m plan width. Existing data stays
+    saveable: only rooms whose geometry differs from the stored one count.
+    ``map3d`` is the INCOMING object (the same request may set the anchor);
+    None means "unchanged", so the stored one decides.
+    """
+    if not isinstance(rooms, list):
+        return
+    before = {}
+    for room in (stored or {}).get("rooms") or []:
+        if isinstance(room, dict) and room.get("id"):
+            before[room["id"]] = _layout_geometry(room.get("layout"))
+    changed = False
+    for room in rooms:
+        if not isinstance(room, dict):
+            continue
+        geometry = _layout_geometry(room.get("layout"))
+        if geometry is not None and geometry != before.get(room.get("id")):
+            changed = True
+            break
+    if not changed:
+        return
+    effective = _sanitize_map3d(map3d) if map3d is not None \
+        else (stored or {}).get("map3d")
+    from app.core.location_model3d import has_scale_anchor
+    if has_scale_anchor(location_id, effective):
+        return
+    raise HTTPException(status_code=400, detail=(
+        "Room layouts need a scale anchor: set map3d.plan_width_m or a "
+        "building model with a declared height"))
+
+
 def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     """Create or update a location from a parsed request body (incl. extra fields)."""
     user_id = data.get("user_id", "").strip()
@@ -685,6 +736,13 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(rooms, list):
         raise HTTPException(status_code=400, detail="rooms must be a list")
     _sanitize_rooms_layout(rooms)
+    # add_location updates an EXISTING location of the same name, so the
+    # anchor check has to look at that one (a genuinely new location has no
+    # building model — only an explicit plan width can anchor it).
+    _existing = next((l for l in list_locations()
+                      if (l.get("name") or "").lower() == location_name.lower()), None)
+    _require_scale_anchor(str((_existing or {}).get("id") or ""), rooms, map3d,
+                          _existing)
 
     location = add_location(location_name, description, rooms=rooms,
                             image_prompt_day=image_prompt_day,
@@ -784,6 +842,7 @@ def update_location_with_extras(location_id: str,
     # Update description, rooms and image prompts if provided
     if rooms is not None:
         _sanitize_rooms_layout(rooms)
+        _require_scale_anchor(location_id, rooms, map3d, loc)
     has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map, image_prompt_map_2d, image_prompt_building])
     if has_updates:
         loc = get_location_by_id(location_id)
