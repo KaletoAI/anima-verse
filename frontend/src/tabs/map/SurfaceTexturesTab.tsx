@@ -312,6 +312,11 @@ export function SurfaceTexturesTab() {
             onDelete={blends[blendEdit.kind]
               ? () => removeBlend(blendEdit.kind) : undefined}
             armedDelete={armedDel === `blend:${blendEdit.kind}`}
+            kindThumb={(k) => {
+              const g = textures.find((tx) => tx.kind === k)
+              const v = g?.versions.find((vv) => vv.active) || g?.versions[0]
+              return v ? `${v.url}?v=${cacheBump}` : ''
+            }}
           />
         ) : creating ? (
           <>

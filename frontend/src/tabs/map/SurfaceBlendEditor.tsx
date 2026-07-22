@@ -16,14 +16,23 @@ interface SurfaceBlendEditorProps {
   /** Absent for a composition that was never saved. */
   onDelete?: () => void
   armedDelete: boolean
+  /** Active-texture thumbnail url for a kind ('' = none) — shown next to
+   *  each zone so the gradient is readable at a glance. */
+  kindThumb?: (kind: string) => string
 }
 
 export function SurfaceBlendEditor({
-  value, onChange, onSave, onCancel, onDelete, armedDelete,
+  value, onChange, onSave, onCancel, onDelete, armedDelete, kindThumb,
 }: SurfaceBlendEditorProps) {
   const { t } = useI18n()
   const { kind, blend } = value
   const setBlend = (patch: Partial<Blend>) => onChange({ kind, blend: { ...blend, ...patch } })
+  // 'neighbor' is the special zone kind (no texture of its own).
+  const zoneThumb = (zoneKind: string) => {
+    if (zoneKind === 'neighbor') return null
+    const url = kindThumb?.(zoneKind) || ''
+    return url || null
+  }
 
   return (
     <>
@@ -74,6 +83,19 @@ export function SurfaceBlendEditor({
         </div>
         {blend.zones.map((z, i) => (
           <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {zoneThumb(z.kind) ? (
+              <img className="ga-list-thumb" alt="" src={zoneThumb(z.kind)!}
+                title={z.kind} />
+            ) : (
+              <span className="ga-list-thumb" style={{
+                display: 'inline-flex', alignItems: 'center',
+                justifyContent: 'center', fontSize: 14,
+              }} title={z.kind === 'neighbor'
+                ? t('Takes the dominant non-toward neighbor kind')
+                : t('No texture for this kind yet')}>
+                {z.kind === 'neighbor' ? '🧩' : '·'}
+              </span>
+            )}
             <span className="ga-hint" style={{ width: 52 }}>{t('Zone')} {i + 1}</span>
             <input
               className="ga-input"
