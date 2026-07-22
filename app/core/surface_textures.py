@@ -46,6 +46,10 @@ _KIND_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _TS_RE = re.compile(r"^(.+)_(\d{9,})$")
 _SEL_FILE = "selection.json"
 _BLENDS_FILE = "blends.json"
+# Per-kind display metadata: {kind: {name?, subject?}}. The KIND stays the
+# stable id (terrain field / client contract / file names); the free-text
+# name and the generation subject only decorate it for the admin.
+_KINDS_FILE = "kinds.json"
 
 _lock = threading.Lock()
 # Running job keys "<kind>|<backend glob>" — generations of the SAME kind on
@@ -343,10 +347,11 @@ def list_textures() -> List[Dict[str, Any]]:
 
 def admin_list() -> List[Dict[str, Any]]:
     """Admin listing — ALL versions per kind (newest first) incl. HOW each
-    was made: [{kind, versions: [{filename, url, size_m, created_at,
-    source, backend, prompt, negative, active}]}]."""
+    was made: [{kind, name, subject, versions: [{filename, url, size_m,
+    created_at, source, backend, prompt, negative, active}]}]."""
     out = []
     by_kind = _files_by_kind()
+    kmeta = _read_kind_meta()
     for kind in sorted(by_kind):
         active = texture_file(kind)
         versions = []
@@ -363,7 +368,9 @@ def admin_list() -> List[Dict[str, Any]]:
                 "negative": meta.get("negative", ""),
                 "active": bool(active and p.name == active.name),
             })
-        out.append({"kind": kind, "versions": versions})
+        entry = kmeta.get(kind) or {}
+        out.append({"kind": kind, "name": entry.get("name", ""),
+                    "subject": entry.get("subject", ""), "versions": versions})
     return out
 
 
@@ -451,11 +458,61 @@ SURFACE_SUBJECTS: Dict[str, str] = {
 }
 
 
+def _read_kind_meta() -> Dict[str, Dict[str, str]]:
+    p = _dir() / _KINDS_FILE
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {k: v for k, v in data.items() if isinstance(v, dict)}
+        except (OSError, ValueError):
+            pass
+    return {}
+
+
+def get_kind_meta() -> Dict[str, Dict[str, str]]:
+    """Per-kind display metadata (see _KINDS_FILE)."""
+    return _read_kind_meta()
+
+
+def set_kind_meta(kind: str, *, name: Any = None,
+                  subject: Any = None) -> Optional[Dict[str, Any]]:
+    """Set a kind's display name (free text, spaces welcome) and/or its
+    generation subject. None leaves a field untouched, '' clears it back to
+    the curated/generic wording. None result = invalid kind."""
+    k = safe_kind(kind)
+    if not k:
+        return None
+    data = _read_kind_meta()
+    entry = dict(data.get(k) or {})
+    for key, val in (("name", name), ("subject", subject)):
+        if val is None:
+            continue
+        v = str(val).strip()
+        if v:
+            entry[key] = v[:400]
+        else:
+            entry.pop(key, None)
+    if entry:
+        data[k] = entry
+    else:
+        data.pop(k, None)
+    d = _dir(create=True)
+    (d / _KINDS_FILE).write_text(
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"kind": k, **entry}
+
+
 def surface_subject(kind: str) -> str:
-    """The subject phrase for a kind (curated wording or generic fallback)."""
+    """The subject phrase for a kind — the admin-set subject wins over the
+    curated wording, the generic fallback closes the gap. The kind itself is
+    an ID and no longer needs to double as prompt text."""
     kind = (kind or "").strip().lower()
     if not kind:
         return "a natural ground surface"
+    custom = ((_read_kind_meta().get(kind) or {}).get("subject") or "").strip()
+    if custom:
+        return custom
     return SURFACE_SUBJECTS.get(kind, f"the surface of {kind} seen straight from above")
 
 

@@ -23,19 +23,21 @@ interface SurfaceKindDetailProps {
   onRemove: (filename: string) => void
   onZoom: (version: TexVersion) => void
   onUpload: () => void
+  /** Persist the display name / generation subject of this kind. */
+  onMeta: (meta: { name?: string; subject?: string }) => void
   generateForm: ReactNode
 }
 
 export function SurfaceKindDetail({
   group, pending, cacheBump, armedDel, onSize, onSelect, onRemove, onZoom,
-  onUpload, generateForm,
+  onUpload, onMeta, generateForm,
 }: SurfaceKindDetailProps) {
   const { t } = useI18n()
 
   return (
     <>
       <DetailToolbar
-        title={group.kind}
+        title={group.name || group.kind}
         extra={
           <button type="button" className="ga-btn ga-btn-sm" onClick={onUpload}
             title={t('Upload a new version for this kind (JPEG/PNG/WebP, seamless, top-down)')}>
@@ -44,6 +46,41 @@ export function SurfaceKindDetail({
         }
       />
       <div className="ga-form">
+        <div className="ga-form-section-label">{t('Properties')}</div>
+        <div className="ga-form-row">
+          <label className="ga-field" style={{ flex: 1 }}>
+            <span className="ga-field-caption">{t('Name')}</span>
+            <input
+              key={`name-${group.kind}-${group.name || ''}`}
+              className="ga-input"
+              defaultValue={group.name || ''}
+              placeholder={group.kind}
+              title={t('Display name for lists and pickers — free text, spaces welcome. The kind stays the stable id the terrain field matches.')}
+              onBlur={(e) => {
+                if (e.target.value.trim() !== (group.name || ''))
+                  onMeta({ name: e.target.value })
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          </label>
+          <span className="ga-hint" style={{ alignSelf: 'flex-end' }}>
+            {t('kind')}: {group.kind}
+          </span>
+        </div>
+        <label className="ga-field">
+          <span className="ga-field-caption">{t('Generation subject')}</span>
+          <textarea
+            key={`subject-${group.kind}-${group.subject || ''}`}
+            className="ga-textarea"
+            rows={2}
+            defaultValue={group.subject || ''}
+            placeholder={t('What the texture shows — used to compose the prompt of new versions. Empty = the curated/generic wording for this kind.')}
+            onBlur={(e) => {
+              if (e.target.value.trim() !== (group.subject || ''))
+                onMeta({ subject: e.target.value })
+            }}
+          />
+        </label>
         <div className="ga-form-section-label">{t('Versions')}</div>
         {pending ? (
           <span className="ga-hint">{t('Generating…')}</span>

@@ -19,6 +19,12 @@ export interface TexVersion {
 
 export interface TexGroup {
   kind: string
+  /** Free-text display name ('' = show the kind). The kind stays the stable
+   *  id the terrain field / client contract matches. */
+  name?: string
+  /** Generation subject — composed into new-version prompts; '' = the
+   *  curated/generic wording for this kind. */
+  subject?: string
   versions: TexVersion[]
 }
 

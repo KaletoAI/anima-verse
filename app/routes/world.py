@@ -641,7 +641,8 @@ def surface_textures_admin() -> Dict[str, Any]:
     resolved use-case style, so the dialog can show and edit the COMPLETE
     final prompt before generating (final-prompt rule)."""
     from app.core.surface_textures import (SURFACE_SUBJECTS, admin_list,
-                                            compose_prompt, is_pending)
+                                            compose_prompt, get_kind_meta,
+                                            is_pending)
     from app.imagegen.service import get_image_service
     svc = get_image_service()
     backends = []
@@ -654,8 +655,14 @@ def surface_textures_admin() -> Dict[str, Any]:
     except Exception:
         pass
     from app.core.surface_textures import get_blends
+    # Admin-set subjects win over the curated wording — the dialog composes
+    # its prompt from this merged map, same as the server fallback would.
+    subjects = dict(SURFACE_SUBJECTS)
+    for k, entry in get_kind_meta().items():
+        if entry.get("subject"):
+            subjects[k] = entry["subject"]
     return {"textures": admin_list(), "pending": is_pending(),
-            "backends": backends, "subjects": SURFACE_SUBJECTS,
+            "backends": backends, "subjects": subjects,
             "blends": get_blends()}
 
 
@@ -678,6 +685,22 @@ async def surface_texture_generate(request: Request) -> Dict[str, Any]:
                               negative=str(data.get("negative") or "")):
         return {"status": "already_running"}
     return {"status": "generating"}
+
+
+@router.post("/surface-textures/{kind}/meta")
+async def surface_texture_meta(kind: str, request: Request) -> Dict[str, Any]:
+    """Display name (free text, spaces welcome) + generation subject of a
+    kind (body: {name?, subject?}; '' clears a field). The kind itself stays
+    the stable id the terrain field / client contract uses."""
+    from app.core.surface_textures import set_kind_meta
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    entry = set_kind_meta(kind, name=data.get("name"),
+                          subject=data.get("subject"))
+    if entry is None:
+        raise HTTPException(status_code=400, detail="invalid kind")
+    return {"status": "ok", "meta": entry}
 
 
 @router.post("/surface-textures/blends/{kind}")
@@ -800,6 +823,7 @@ async def prop_generate(request: Request) -> Dict[str, Any]:
     prop = create_prop(name=name, category=str(data.get("category") or ""),
                        width_m=data.get("width_m"), depth_m=data.get("depth_m"),
                        height_m=data.get("height_m"),
+                       description=str(data.get("description") or ""),
                        prompt=str(data.get("prompt") or ""),
                        source="generated")
     trigger_generation(prop["id"],
@@ -824,7 +848,8 @@ async def prop_create(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="name required")
     prop = create_prop(name=name, category=str(data.get("category") or ""),
                        width_m=data.get("width_m"), depth_m=data.get("depth_m"),
-                       height_m=data.get("height_m"), tags=data.get("tags"))
+                       height_m=data.get("height_m"), tags=data.get("tags"),
+                       description=str(data.get("description") or ""))
     return {"status": "ok", "prop": prop}
 
 
@@ -851,6 +876,27 @@ async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
     if not prop:
         raise HTTPException(status_code=404, detail="Prop not found")
     return {"status": "ok", "prop": prop}
+
+
+@router.post("/props/{prop_id}/generate")
+async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
+    """Re-run the source→mesh chain for an EXISTING prop (body:
+    {prompt?, negative?, image_backend?, mesh_backend?} — empty prompt =
+    composed from the stored description/name). Background job — poll
+    /world/props for pending."""
+    from app.core.props import get_prop, trigger_generation
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
+    if not isinstance(data, dict):
+        data = {}
+    if not trigger_generation(prop_id,
+                              prompt=str(data.get("prompt") or ""),
+                              negative=str(data.get("negative") or ""),
+                              image_backend_glob=str(data.get("image_backend") or "").strip(),
+                              mesh_backend_glob=str(data.get("mesh_backend") or "").strip()):
+        return {"status": "already_running"}
+    return {"status": "generating"}
 
 
 @router.post("/props/{prop_id}/rotation")

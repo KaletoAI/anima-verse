@@ -49,6 +49,11 @@ export function SurfaceTexturesTab() {
   const [promptTouched, setPromptTouched] = useState(false)
   const [armedDel, setArmedDel] = useState('')
   const [zoom, setZoom] = useState<{ kind: string; v: TexVersion } | null>(null)
+  // New-kind drafts: free-text display name + the generation subject — the
+  // KIND stays the stable id (terrain field), it no longer doubles as the
+  // prompt text.
+  const [nameDraft, setNameDraft] = useState('')
+  const [subjectDraft, setSubjectDraft] = useState('')
   const [cacheBump, setCacheBump] = useState(0)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -100,20 +105,36 @@ export function SurfaceTexturesTab() {
     if (promptTouched) return
     const style = backendInfo?.prompt_style || ''
     const k = kind.trim().toLowerCase()
-    // Same composition as the server: curated phrase, else the generic
-    // "surface of <kind>" fallback.
-    const subject = !k ? 'a natural ground surface'
-      : (subjects[k] || `the surface of ${k} seen straight from above`)
+    // Same composition as the server: the typed subject wins, then the
+    // stored/curated phrase, else the generic "surface of <kind>" fallback.
+    const subject = subjectDraft.trim()
+      || (!k ? 'a natural ground surface'
+        : (subjects[k] || `the surface of ${k} seen straight from above`))
     setPrompt(style ? `${style}, ${subject}` : subject)
     setNegative(backendInfo?.prompt_negative || '')
-  }, [kind, backendInfo, subjects, promptTouched])
+  }, [kind, backendInfo, subjects, subjectDraft, promptTouched])
+
+  const saveKindMeta = useCallback(async (k: string, meta: {
+    name?: string; subject?: string }) => {
+    try {
+      await apiPost(`/world/surface-textures/${encodeURIComponent(k)}/meta`, meta)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [t, toast])
 
   const generate = useCallback(() => {
     const k = kind.trim().toLowerCase()
     if (!k) return
-    void apiPost<{ status?: string }>('/world/surface-textures/generate', {
-      kind: k, backend: backendInfo?.name || '', prompt, negative,
-    })
+    // Persist name/subject first — regeneration and the server-side prompt
+    // fallback then compose from the same stored subject.
+    const metaFirst = (creating && (nameDraft.trim() || subjectDraft.trim()))
+      ? saveKindMeta(k, { name: nameDraft, subject: subjectDraft })
+      : Promise.resolve()
+    void metaFirst.then(() => apiPost<{ status?: string }>(
+      '/world/surface-textures/generate', {
+        kind: k, backend: backendInfo?.name || '', prompt, negative,
+      }))
       .then((d) => {
         toast(d?.status === 'already_running'
           ? t('This kind is already generating on that backend.')
@@ -124,7 +145,8 @@ export function SurfaceTexturesTab() {
         void load()
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
-  }, [kind, backendInfo, prompt, negative, load, startPoll, t, toast])
+  }, [kind, creating, nameDraft, subjectDraft, saveKindMeta, backendInfo,
+    prompt, negative, load, startPoll, t, toast])
 
   const pickUpload = useCallback((k: string) => {
     const clean = k.trim().toLowerCase()
@@ -216,6 +238,8 @@ export function SurfaceTexturesTab() {
     setSel('')
     setCreating(true)
     setKind('')
+    setNameDraft('')
+    setSubjectDraft('')
     setPromptTouched(false)
   }, [])
 
@@ -228,6 +252,10 @@ export function SurfaceTexturesTab() {
       kind={kind}
       onKind={setKind}
       lockKind={!!selectedGroup && !creating}
+      name={nameDraft}
+      onName={setNameDraft}
+      subject={subjectDraft}
+      onSubject={setSubjectDraft}
       backends={backends}
       backendName={backendInfo?.name || ''}
       onBackend={(name) => { setBackend(name); setPromptTouched(false) }}
@@ -267,8 +295,9 @@ export function SurfaceTexturesTab() {
                         ) : (
                           <span style={{ fontSize: 18 }}>🧱</span>
                         )}
-                        <span>{tx.kind}</span>
+                        <span>{tx.name || tx.kind}</span>
                         <span className="ga-list-row-sub">
+                          {tx.name ? `${tx.kind} · ` : ''}
                           {active ? `${active.size_m} m` : ''}
                           {tx.versions.length > 1
                             ? ` · ${t('{n} versions').replace('{n}', String(tx.versions.length))}`
@@ -363,6 +392,9 @@ export function SurfaceTexturesTab() {
             onRemove={(filename) => remove(selectedGroup.kind, filename)}
             onZoom={(v) => setZoom({ kind: selectedGroup.kind, v })}
             onUpload={() => pickUpload(selectedGroup.kind)}
+            onMeta={(meta) => {
+              void saveKindMeta(selectedGroup.kind, meta).then(() => load())
+            }}
             generateForm={generateForm}
           />
         ) : (

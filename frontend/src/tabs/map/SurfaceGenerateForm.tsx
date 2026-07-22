@@ -14,6 +14,12 @@ interface SurfaceGenerateFormProps {
   onKind: (kind: string) => void
   /** Detail context: the kind is fixed, only a new version is generated. */
   lockKind?: boolean
+  /** New-kind drafts (hidden when the kind is locked — the detail edits
+   *  name/subject itself): free-text display name + generation subject. */
+  name?: string
+  onName?: (value: string) => void
+  subject?: string
+  onSubject?: (value: string) => void
   backends: BackendInfo[]
   backendName: string
   onBackend: (name: string) => void
@@ -26,7 +32,8 @@ interface SurfaceGenerateFormProps {
 }
 
 export function SurfaceGenerateForm({
-  kind, onKind, lockKind = false, backends, backendName, onBackend, prompt,
+  kind, onKind, lockKind = false, name = '', onName, subject = '', onSubject,
+  backends, backendName, onBackend, prompt,
   onPrompt, negative, onNegative, onGenerate, onUpload,
 }: SurfaceGenerateFormProps) {
   const { t } = useI18n()
@@ -46,8 +53,18 @@ export function SurfaceGenerateForm({
           value={kind}
           disabled={lockKind}
           onChange={(e) => onKind(e.target.value)}
-          title={t('Open vocabulary — must match the terrain field of the tiles it should cover.')}
+          title={t('Stable id (lowercase) — must match the terrain field of the tiles it should cover. The display name and the generation text live in their own fields.')}
         />
+        {!lockKind && onName ? (
+          <input
+            className="ga-input"
+            style={{ flex: 1, minWidth: 140 }}
+            placeholder={t('Name (free text, e.g. Rubber flooring)')}
+            value={name}
+            onChange={(e) => onName(e.target.value)}
+            title={t('Display name for lists and pickers — spaces welcome; the kind stays the id.')}
+          />
+        ) : null}
         <select
           className="ga-input"
           style={{ flex: 1, minWidth: 160 }}
@@ -74,6 +91,18 @@ export function SurfaceGenerateForm({
           ⬆ {t('Upload')}
         </button>
       </div>
+      {!lockKind && onSubject ? (
+        <label className="ga-field">
+          <span className="ga-field-caption">{t('Generation subject')}</span>
+          <textarea
+            className="ga-textarea"
+            rows={2}
+            placeholder={t('What the texture shows, e.g. "seamless rubber flooring with a fine round-stud pattern" — flows into the final prompt below and is stored for regeneration.')}
+            value={subject}
+            onChange={(e) => onSubject(e.target.value)}
+          />
+        </label>
+      ) : null}
       <label className="ga-field">
         <span className="ga-field-caption">{t('Final prompt')}</span>
         <textarea
