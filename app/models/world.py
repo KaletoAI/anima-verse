@@ -644,6 +644,42 @@ def update_room_description(location_id: str, room_id: str,
     return False
 
 
+def append_room_props(location_id: str, room_id: str,
+                      placements: List[Dict[str, Any]]) -> bool:
+    """Append prop placements to a room's ``layout.props`` (room_furnish
+    accept, plan-room-furnish.md stage 4).
+
+    ADDITIVE only — existing placements are never touched. The merged layout
+    runs through the normal layout sanitizer, so accepted placements obey the
+    exact same whitelist/limits as hand-placed ones. False when the location,
+    the room or its layout does not exist.
+    """
+    if not placements:
+        return False
+    from app.core.world_ops import _sanitize_room_layout
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") != location_id:
+            continue
+        for room in loc.get("rooms", []):
+            if room.get("id") != room_id:
+                continue
+            layout = room.get("layout")
+            if not isinstance(layout, dict):
+                return False
+            merged = dict(layout)
+            merged["props"] = list(layout.get("props") or []) + list(placements)
+            clean = _sanitize_room_layout(merged)
+            if not clean:
+                return False
+            room["layout"] = clean
+            _save_world_data(data)
+            logger.info("Raum %s: %d Prop-Platzierungen uebernommen",
+                        room_id, len(placements))
+            return True
+    return False
+
+
 def clear_room_prompt_changed(location_id: str, room_id: str) -> bool:
     """Entfernt das prompt_changed Flag von einem Raum. Returns True bei Erfolg."""
     data = _load_world_data()

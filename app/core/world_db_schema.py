@@ -566,6 +566,22 @@ SCHEMA_STATEMENTS = [
         status     TEXT NOT NULL DEFAULT 'pending'
     )""",
     "CREATE INDEX IF NOT EXISTS idx_party_invites_invitee ON party_invites (invitee, status)",
+
+    # ── Room furnishing job (plan-room-furnish.md) ────────────────────────
+    # ONE active "✨ Furnish" job per room. The job is the persisted state
+    # machine behind the dialog (selecting -> proposal_ready -> generating ->
+    # placing -> review_ready | error); accept/discard/reset DELETE the row,
+    # so the table only ever holds jobs in flight. See app/core/room_furnish.py.
+    """CREATE TABLE IF NOT EXISTS room_furnish (
+        room_id     TEXT PRIMARY KEY,
+        location_id TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        proposal    TEXT,
+        placements  TEXT,
+        error       TEXT,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    )""",
 ]
 
 

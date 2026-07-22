@@ -196,6 +196,70 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
     return out
 
 
+# ── Scale anchor ────────────────────────────────────────────────────────
+# The detail view needs ONE real-world number: how many metres the 8×8
+# reference square of the floor plan spans. It comes either from the
+# explicit ``map3d.plan_width_m`` or — identically derived on client and
+# server — from the building model (declared height × the mesh's
+# width-per-height ratio, mirrors ``topDownSnapshot.getBuildingDims``).
+
+def _explicit_plan_width(map3d: Any) -> float:
+    try:
+        v = float((map3d or {}).get("plan_width_m") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+    return v if 0.5 <= v <= 500 else 0.0
+
+
+def has_scale_anchor(location_id: str, map3d: Any) -> bool:
+    """True when the location HAS a scale anchor — the explicit plan width or
+    a building model with a declared height. Deliberately cheap (no GLB
+    parsing): the width derivation is the consumer's job, see
+    ``derive_plan_width_m``."""
+    if _explicit_plan_width(map3d) > 0:
+        return True
+    p = find_building_model(location_id)
+    if not p:
+        return False
+    try:
+        return float(_read_sidecar(p).get("height_m") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def derive_plan_width_m(location_id: str, map3d: Any) -> float:
+    """The reference square's real width in METRES, or 0.0 when the location
+    has no usable anchor. Explicit value wins; otherwise the building model's
+    declared height × its width-per-height ratio (largest XZ side / Y after
+    the orientation fix) — the same formula the editor uses."""
+    pw = _explicit_plan_width(map3d)
+    if pw > 0:
+        return pw
+    p = find_building_model(location_id)
+    if not p or p.suffix.lower() != ".glb":
+        return 0.0
+    meta = _read_sidecar(p)
+    try:
+        height = float(meta.get("height_m") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if height <= 0:
+        return 0.0
+    from app.core.model_validate import glb_bounds
+    from app.core.props import oriented_dims
+    try:
+        bounds = glb_bounds(p.read_bytes())
+    except OSError:
+        return 0.0
+    if not bounds:
+        return 0.0
+    lo, hi = bounds
+    od = oriented_dims([hi[i] - lo[i] for i in range(3)], meta.get("rotation"))
+    if not od or od[1] <= 0:
+        return 0.0
+    return round(height * max(od[0], od[2]) / od[1], 3)
+
+
 def _gen_key(owner_id: str, room_id: str = "", source_image: str = "") -> str:
     """Job key: guards ONE generation per (target, source image) — several
     models from DIFFERENT images may run/queue concurrently (the backend
