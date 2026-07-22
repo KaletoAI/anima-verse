@@ -40,6 +40,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
   const enc = encodeURIComponent(prop.id)
   const uploadRef = useRef<HTMLInputElement>(null)
 
+  const [nameDraft, setNameDraft] = useState(prop.name)
   const [categoryDraft, setCategoryDraft] = useState(prop.category)
   const [tagsDraft, setTagsDraft] = useState(prop.tags.join(', '))
   // The three real dims as string drafts — committed on blur/Enter, reverted
@@ -49,13 +50,14 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
     height_m: String(prop.height_m),
   })
   useEffect(() => {
+    setNameDraft(prop.name)
     setCategoryDraft(prop.category)
     setTagsDraft(prop.tags.join(', '))
     setDims({
       width_m: String(prop.width_m), depth_m: String(prop.depth_m),
       height_m: String(prop.height_m),
     })
-  }, [prop.id, prop.category, prop.tags, prop.width_m, prop.depth_m, prop.height_m])
+  }, [prop.id, prop.name, prop.category, prop.tags, prop.width_m, prop.depth_m, prop.height_m])
 
   // Proportional assist: editing one dim pulls the OTHER two along the model's
   // proportions — unless they were edited too ("pinned"). Pins and the live
@@ -235,6 +237,16 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete, arme
           {/* Editable sidecar fields. */}
           <div className="ga-form-section-label">{t('Properties')}</div>
           <div className="ga-form-row">
+            <Field label={t('Name')}>
+              <input className="ga-input" value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onBlur={() => {
+                  const nm = nameDraft.trim()
+                  if (nm && nm !== prop.name) void patch({ name: nm })
+                  else setNameDraft(prop.name)
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+            </Field>
             <Field label={t('Category')}>
               <input className="ga-input" list={CATEGORY_DATALIST_ID} value={categoryDraft}
                 onChange={(e) => setCategoryDraft(e.target.value)}
