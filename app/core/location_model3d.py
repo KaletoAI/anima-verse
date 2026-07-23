@@ -188,6 +188,8 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "source_image": meta.get("source_image", ""),
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
             "offset_y": float(meta.get("offset_y") or 0.0),
+            "offset_x": float(meta.get("offset_x") or 0.0),
+            "offset_z": float(meta.get("offset_z") or 0.0),
             "floors": float(meta.get("floors") or 0.0),
             "height_m": float(meta.get("height_m") or 0.0),
             "width_m": float(meta.get("width_m") or 0.0),
@@ -317,6 +319,10 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
             # have different socket thicknesses; negative sinks the model
             # into the terrain, e.g. a park). Client applies it on load.
             "offset_y": float(meta.get("offset_y") or 0.0),
+            # Tile-plane shift in world metres (after the yaw): +x = east,
+            # +z = south — the building need not sit centred on its tile.
+            "offset_x": float(meta.get("offset_x") or 0.0),
+            "offset_z": float(meta.get("offset_z") or 0.0),
             # Detail-view scale anchors (0 = undeclared, see the shared
             # backend note): buildings — height_m (uniform scale so the
             # shell is exactly this tall) + floors (storeys the mesh
@@ -379,13 +385,17 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
     return meta
 
 
-def set_offset_y(location_id: str, offset_y: Any,
-                 room_id: str = "", filename: str = "") -> Dict[str, Any]:
+def set_offset_y(location_id: str, offset_y: Any = None,
+                 room_id: str = "", filename: str = "",
+                 offset_x: Any = None, offset_z: Any = None) -> Dict[str, Any]:
     """Persist the vertical placement offset (metres, ±, clamped to ±25) on
     ONE model's sidecar (default: the active model). A MODEL property like
     the orientation fix — generated reliefs come with different socket
-    thicknesses, and a negative value sinks e.g. a park into the terrain.
-    Every client applies it on load. Returns the updated sidecar meta."""
+    thicknesses, and a negative value sinks e.g. a park into the terrain —
+    and ``offset_x``/``offset_z`` shift the model on the TILE PLANE (world
+    axes, applied after the yaw: +x = east, +z = south; the building need
+    not sit centred on its tile). ``None`` leaves a field untouched. Every
+    client applies them on load. Returns the updated sidecar meta."""
     owner = _owner_id(location_id)
     if not owner:
         raise ValueError("no model")
@@ -394,11 +404,15 @@ def set_offset_y(location_id: str, offset_y: Any,
     if not p:
         raise ValueError("no model")
     meta = _read_sidecar(p)
-    try:
-        v = float(offset_y)
-    except (TypeError, ValueError):
-        v = float(meta.get("offset_y") or 0.0)
-    meta["offset_y"] = round(max(-25.0, min(25.0, v)), 3)
+    for key, raw in (("offset_y", offset_y), ("offset_x", offset_x),
+                     ("offset_z", offset_z)):
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            v = float(meta.get(key) or 0.0)
+        meta[key] = round(max(-25.0, min(25.0, v)), 3)
     _write_sidecar(p, meta)
     return meta
 

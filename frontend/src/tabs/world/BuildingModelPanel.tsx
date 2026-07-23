@@ -29,6 +29,8 @@ export interface ModelEntry {
   rotation?: { x?: number; y?: number; z?: number }
   /** Vertical placement offset in metres (± — negative sinks the model). */
   offset_y?: number
+  offset_x?: number
+  offset_z?: number
   /** Detail-view scale anchors (0 = undeclared): buildings — floors
    *  (storeys the mesh depicts) + height_m (world metres; uniform scale
    *  target, storey height derives as height_m / floors). Rooms —
@@ -225,34 +227,44 @@ export function BuildingModelPanel({
     [current, enc, locationId, roomId, t, toast],
   )
 
-  // Vertical placement offset of the PREVIEWED model — a model property like
-  // the orientation fix (socket thicknesses differ; negative sinks e.g. a
-  // park into the terrain). Draft in a local field, committed on blur/Enter.
-  const [offsetDraft, setOffsetDraft] = useState('0')
+  // Placement offsets of the PREVIEWED model — model properties like the
+  // orientation fix: Y sinks/raises (socket thicknesses differ), X/Z shift
+  // the model on the tile plane (world axes after the yaw: +x east,
+  // +z south). Drafts in local fields, committed on blur/Enter.
+  type OffsetKey = 'offset_y' | 'offset_x' | 'offset_z'
+  const [offsetDrafts, setOffsetDrafts] = useState<Record<OffsetKey, string>>(
+    { offset_y: '0', offset_x: '0', offset_z: '0' })
   useEffect(() => {
-    setOffsetDraft(String(current?.offset_y ?? 0))
-  }, [current?.filename, current?.offset_y])
-  const commitOffset = useCallback(async () => {
+    setOffsetDrafts({
+      offset_y: String(current?.offset_y ?? 0),
+      offset_x: String(current?.offset_x ?? 0),
+      offset_z: String(current?.offset_z ?? 0),
+    })
+  }, [current?.filename, current?.offset_y, current?.offset_x, current?.offset_z])
+  const commitOffset = useCallback(async (key: OffsetKey) => {
     if (!current) return
-    const v = parseFloat(offsetDraft)
-    if (!Number.isFinite(v) || v === (current.offset_y ?? 0)) {
-      setOffsetDraft(String(current.offset_y ?? 0))
+    const v = parseFloat(offsetDrafts[key])
+    if (!Number.isFinite(v) || v === (current[key] ?? 0)) {
+      setOffsetDrafts((d) => ({ ...d, [key]: String(current[key] ?? 0) }))
       return
     }
     try {
-      const d = await apiPost<{ meta: { offset_y?: number } }>(
+      const d = await apiPost<{ meta: Partial<Record<OffsetKey, number>> }>(
         `/world/locations/${enc}/model3d/offset`,
-        { offset_y: v, file: current.filename })
+        { [key]: v, file: current.filename })
       setModel3d((prev) => (prev ? {
         ...prev,
         models: (prev.models || []).map((m) =>
-          m.filename === current.filename ? { ...m, offset_y: d.meta?.offset_y || 0 } : m),
+          m.filename === current.filename ? { ...m,
+            offset_y: d.meta?.offset_y || 0,
+            offset_x: d.meta?.offset_x || 0,
+            offset_z: d.meta?.offset_z || 0 } : m),
       } : prev))
       notifyModel3dChanged(roomId ? { roomId } : { locationId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [current, offsetDraft, enc, locationId, roomId, t, toast])
+  }, [current, offsetDrafts, enc, locationId, roomId, t, toast])
 
   // Storeys the shown BUILDING model depicts — clients stretch the shell
   // to floors × level_height, so it stays aligned with the room levels
@@ -464,6 +476,8 @@ export function BuildingModelPanel({
         height={380}
         rotation={current.rotation}
         offsetY={current.offset_y || 0}
+        offsetX={current.offset_x || 0}
+        offsetZ={current.offset_z || 0}
         groundTextureUrl={roomId ? undefined : mapIconUrl}
         placement={roomId
           // Rooms get a neutral ground plate as the zero level — without it
@@ -504,19 +518,31 @@ export function BuildingModelPanel({
             />
           </span>
         ))}
-        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
-          {t('Height offset (m)')}
-          <input
-            className="ga-input"
-            type="number"
-            step={0.05}
-            style={{ width: 90 }}
-            value={offsetDraft}
-            onChange={(e) => setOffsetDraft(e.target.value)}
-            onBlur={() => { void commitOffset() }}
-            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-          />
-        </label>
+        {([
+          { key: 'offset_y' as const, label: t('Height offset (m)'),
+            hint: t('Vertical: negative sinks the model into the terrain.') },
+          ...(!roomId ? [
+            { key: 'offset_x' as const, label: t('Shift X (m)'),
+              hint: t('Tile plane, world axes after the yaw: + = east.') },
+            { key: 'offset_z' as const, label: t('Shift Z (m)'),
+              hint: t('Tile plane, world axes after the yaw: + = south.') },
+          ] : []),
+        ]).map(({ key, label, hint }) => (
+          <label key={key} title={hint}
+            style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
+            {label}
+            <input
+              className="ga-input"
+              type="number"
+              step={0.05}
+              style={{ width: 90 }}
+              value={offsetDrafts[key]}
+              onChange={(e) => setOffsetDrafts((d) => ({ ...d, [key]: e.target.value }))}
+              onBlur={() => { void commitOffset(key) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            />
+          </label>
+        ))}
         {!roomId ? (
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
             title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The footprint keeps following the floor plan (tile fit); only the height is scaled to this value, so a too-flat mesh gets repaired. Storey height derives as height ÷ storeys; empty = natural proportions.')}>

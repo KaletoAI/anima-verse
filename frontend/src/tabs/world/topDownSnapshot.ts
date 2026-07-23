@@ -20,6 +20,8 @@ interface CachedModel {
   obj: Object3D
   rotation: { x?: number; y?: number; z?: number }
   offsetY: number
+  offsetX: number
+  offsetZ: number
   /** Declared real-world width of the largest side (metres, 0 = unset). */
   widthM: number
 }
@@ -34,13 +36,16 @@ function loadRoomModel(roomId: string): Promise<CachedModel | null> {
         const base = `/play/rooms/${encodeURIComponent(roomId)}/model`
         const meta = await apiGet<{ format?: string; url?: string
           rotation?: { x?: number; y?: number; z?: number }
-          offset_y?: number; width_m?: number }>(`${base}/meta`)
+          offset_y?: number; offset_x?: number; offset_z?: number
+          width_m?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') return null
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
         const gltf = await new GLTFLoader().loadAsync(meta.url || base)
         return { obj: gltf.scene, rotation: meta.rotation || {},
-                 offsetY: meta.offset_y || 0, widthM: meta.width_m || 0 }
+                 offsetY: meta.offset_y || 0,
+                 offsetX: meta.offset_x || 0, offsetZ: meta.offset_z || 0,
+                 widthM: meta.width_m || 0 }
       } catch {
         return null  // 404 = no model — the room just has no underlay
       }
@@ -55,6 +60,9 @@ interface BuildingModel {
   rotation: { x?: number; y?: number; z?: number }
   heightM: number
   floors: number
+  /** Tile-plane shift in world metres (after the yaw): +x east, +z south. */
+  offsetX: number
+  offsetZ: number
 }
 
 const buildingCache = new Map<string, Promise<BuildingModel | null>>()
@@ -67,13 +75,15 @@ function loadBuildingModel(locationId: string): Promise<BuildingModel | null> {
         const base = `/play/locations/${encodeURIComponent(locationId)}/model`
         const meta = await apiGet<{ format?: string; url?: string
           rotation?: { x?: number; y?: number; z?: number }
-          height_m?: number; floors?: number }>(`${base}/meta`)
+          height_m?: number; floors?: number
+          offset_x?: number; offset_z?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') return null
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
         const gltf = await new GLTFLoader().loadAsync(meta.url || base)
         return { obj: gltf.scene, rotation: meta.rotation || {},
-                 heightM: meta.height_m || 0, floors: meta.floors || 0 }
+                 heightM: meta.height_m || 0, floors: meta.floors || 0,
+                 offsetX: meta.offset_x || 0, offsetZ: meta.offset_z || 0 }
       } catch {
         return null
       }
@@ -190,7 +200,9 @@ export async function renderTopDownSnapshot(opts: {
     holder.updateMatrixWorld(true)
     const b2 = new THREE.Box3().setFromObject(holder)
     const c2 = b2.getCenter(new THREE.Vector3())
-    holder.position.set(-c2.x, -b2.min.y - (b2.max.y - b2.min.y) - 0.5, -c2.z)
+    holder.position.set(-c2.x + (bModel.offsetX || 0),
+                        -b2.min.y - (b2.max.y - b2.min.y) - 0.5,
+                        -c2.z + (bModel.offsetZ || 0))
     scene.add(holder)
   }
 

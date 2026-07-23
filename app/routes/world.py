@@ -405,7 +405,7 @@ async def location_model3d_rotation(location_id: str, request: Request) -> Dict[
 @router.post("/locations/{location_id}/model3d/offset")
 async def location_model3d_offset(location_id: str, request: Request) -> Dict[str, Any]:
     """Persist a building model's vertical placement offset (body:
-    {offset_y} in metres, ±; optional {file} targets a stored model, default
+    {offset_y}/{offset_x}/{offset_z} in metres, ±, each optional; {file} targets a stored model, default
     the active one). Delivered via /model/meta — a model property (socket
     thickness varies); negative sinks the model into the terrain."""
     from app.core.location_model3d import set_offset_y
@@ -416,6 +416,8 @@ async def location_model3d_offset(location_id: str, request: Request) -> Dict[st
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
         meta = set_offset_y(location_id, data.get("offset_y"),
+                            offset_x=data.get("offset_x"),
+                            offset_z=data.get("offset_z"),
                             filename=str(data.get("file") or "").strip())
     except ValueError:
         raise HTTPException(status_code=404, detail="No model")

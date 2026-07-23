@@ -105,7 +105,8 @@ export interface TilePlacement {
 }
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
-  offsetY = 0, groundTextureUrl, placement, onBounds, markers, dimsOverlay,
+  offsetY = 0, offsetX = 0, offsetZ = 0,
+  groundTextureUrl, placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, picking = false, onPickPoint }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
@@ -120,6 +121,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     /** Vertical placement offset in model units/metres (tile mode only) —
      *  negative sinks the model below the tile, like the 3D client does. */
     offsetY?: number
+  /** Tile-plane shift in world metres (after the yaw): +x east, +z south. */
+  offsetX?: number
+  offsetZ?: number
     /** When `placement` is set, the viewer shows the world tile (a 1×1 ground
      *  square, textured with this image when given) and places the model on
      *  it — centred, yawed and scaled per `placement`, feet on the ground. */
@@ -154,6 +158,10 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   placementRef.current = placement
   const offsetYRef = useRef(offsetY)
   offsetYRef.current = offsetY
+  const offsetXRef = useRef(offsetX)
+  offsetXRef.current = offsetX
+  const offsetZRef = useRef(offsetZ)
+  offsetZRef.current = offsetZ
   // Ref, not a dependency: a fresh callback identity per render must not
   // re-download the model.
   const onBoundsRef = useRef(onBounds)
@@ -185,7 +193,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   // Live-apply an offset change (the placement fn reads the ref).
   useEffect(() => {
     if (placementRef.current) placeFnRef.current?.(placementRef.current)
-  }, [offsetY])
+  }, [offsetY, offsetX, offsetZ])
 
   // Live-apply a changed rotation to the mounted scene — a reload would
   // re-download a multi-MB model per 90° click. In tile mode the orientation
@@ -502,9 +510,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             const b2 = new THREE.Box3().setFromObject(place)
             const c2 = b2.getCenter(new THREE.Vector3())
             place.position.set(
-              -c2.x,
+              -c2.x + (offsetXRef.current || 0) / 10,
               -b2.min.y + (0.06 + (offsetYRef.current || 0)) / 10,
-              -c2.z)
+              -c2.z + (offsetZRef.current || 0) / 10)
           }
           placeFnRef.current = applyPlacement
           disposers.push(() => {

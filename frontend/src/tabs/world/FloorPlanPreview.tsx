@@ -39,6 +39,10 @@ interface CachedModel {
   rotation: { x?: number; y?: number; z?: number }
   /** Vertical placement offset in metres (negative sinks it). */
   offsetY: number
+  /** Tile-plane shift in world metres (after the yaw): +x east, +z south —
+   *  buildings only (rooms are positioned by their layout rect). */
+  offsetX?: number
+  offsetZ?: number
   /** Detail-view scale anchors (0 = undeclared): buildings carry
    *  floors (storeys the mesh depicts) + heightM (world metres, uniform
    *  scale target; storey height derives as heightM / floors), rooms
@@ -230,7 +234,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           : `/play/locations/${encodeURIComponent(locationId)}/model`
         const meta = await apiGet<{ format?: string; url?: string
           rotation?: { x?: number; y?: number; z?: number }
-          offset_y?: number; floors?: number
+          offset_y?: number; offset_x?: number; offset_z?: number
+          floors?: number
           height_m?: number; width_m?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') throw new Error(`format ${fmt}`)
@@ -238,6 +243,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         const gltf = await new GLTFLoader().loadAsync(meta.url || base)
         cache.set(key, { obj: gltf.scene, rotation: meta.rotation || {},
                          offsetY: meta.offset_y || 0,
+                         offsetX: meta.offset_x || 0,
+                         offsetZ: meta.offset_z || 0,
                          floors: meta.floors || 0,
                          heightM: meta.height_m || 0,
                          widthM: meta.width_m || 0 })
@@ -1212,7 +1219,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         outer.updateMatrixWorld(true)
         const b2 = new THREE.Box3().setFromObject(outer)
         const c2 = b2.getCenter(new THREE.Vector3())
-        outer.position.set(-c2.x, 0.06 - b2.min.y + building.offsetY, -c2.z)
+        outer.position.set(-c2.x + (building.offsetX || 0),
+                           0.06 - b2.min.y + building.offsetY,
+                           -c2.z + (building.offsetZ || 0))
         outer.userData.__noDispose = true
         boxes.add(outer)
         buildingTopY = 0.06 + building.offsetY + (b2.max.y - b2.min.y)
