@@ -336,14 +336,20 @@ def _char_lock(character_name: str) -> threading.Lock:
 
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
-                                prefer_cheapest: bool = False) -> Dict[str, Any]:
-    """Generates the mesh for the currently worn outfit from its T-pose render.
+                                prefer_cheapest: bool = False,
+                                signature: Optional[str] = None
+                                ) -> Dict[str, Any]:
+    """Generates the mesh for the currently worn outfit — or a given
+    combination — from its T-pose render.
 
     Backend: ``backend_glob`` → admin default (``image_generation.
     mesh_imagegen_default``) → cheapest available mesh backend.
     ``prefer_cheapest`` skips the admin default (the auto-generate hook
     always takes the cheapest matching backend). Cached per combination —
     an existing mesh is kept unless ``force``.
+    ``signature`` None = the worn combination; set = that combination drives
+    the cache check, the T-pose input and the target file (the outfit batch
+    pre-warms combinations without dressing the character).
     Blocking (minutes); call from a worker thread.
     """
     from app.core import config
@@ -354,7 +360,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         backend_glob = str(
             config.get("image_generation.mesh_imagegen_default", "") or "").strip()
 
-    _, _, signature = current_outfit_state(character_name)
+    if signature is None:
+        _, _, signature = current_outfit_state(character_name)
     if not force:
         cached = find_model3d(character_name, signature)
         if cached:

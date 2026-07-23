@@ -263,7 +263,11 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
 
 def generate_model_ref_images(character_name: str,
                               kinds: Optional[tuple] = None,
-                              force: bool = False) -> Dict[str, Optional[str]]:
+                              force: bool = False, *,
+                              pieces: Optional[Dict[str, str]] = None,
+                              items: Optional[list] = None,
+                              signature: Optional[str] = None
+                              ) -> Dict[str, Optional[str]]:
     """Render the reference images sequentially (the image queue serializes
     per backend anyway). Blocking — call from a worker thread.
 
@@ -271,9 +275,22 @@ def generate_model_ref_images(character_name: str,
     combination already exists are skipped unless ``force`` — switching
     back to a known outfit costs no GPU run. ``kinds`` None = exactly what
     the automatic outfit-change trigger would render (per-character
-    toggles)."""
+    toggles).
+
+    ``pieces``/``items``/``signature`` render a GIVEN combination instead of
+    the worn one (the outfit batch pre-warms combinations without dressing
+    the character). All three or none — a partial override would key the
+    cache on a signature that does not describe the rendered pieces.
+    Everything downstream (cache skip, output stem, prompt chain) is
+    identical, so an overridden run is indistinguishable from a worn one."""
     from app.core.expression_regen import generate_expression_image
     from app.core.expression_pose_maps import default_pose_prompt
+
+    override = (pieces, items, signature)
+    if any(o is not None for o in override) and any(o is None for o in override):
+        raise ValueError(
+            "generate_model_ref_images: pieces, items and signature must be "
+            "given together (or none of them)")
 
     if kinds is None:
         auto = get_auto_kinds(character_name)
@@ -283,7 +300,8 @@ def generate_model_ref_images(character_name: str,
     if not kinds:
         return {}
 
-    pieces, items, signature = current_outfit_state(character_name)
+    if signature is None:
+        pieces, items, signature = current_outfit_state(character_name)
     if not force:
         cached = tuple(k for k in kinds
                        if find_ref_image(character_name, k, signature))
