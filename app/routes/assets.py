@@ -9,17 +9,19 @@ ground materials, managed via /world/surface-textures, served here because
 the 3D client consumes them exactly like the clip library.
 
 ``kind`` (idle / walk / run / sit / dance / wave / …) is derived from the file
-name; the vocabulary is OPEN — no list of kinds exists in the code, a new kind
-is just a new file. Clips practically never change → served with an ETag and a
-long max-age.
+name, ``set`` from the subdirectory the clip lies in; both vocabularies are
+OPEN — no list exists in the code, a new kind is just a new file and a new set
+just a new directory. Clips practically never change → served with an ETag and
+a long max-age.
 """
 import mimetypes
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from app.core.animation_clips import CLIP_EXTS, clip_files, parse_clip_name
+from app.core.animation_clips import CLIP_EXTS, clip_entries
 from app.core.http_files import etag_file_response
 from app.core.log import get_logger
 from app.core.paths import get_animation_clips_dir
@@ -34,19 +36,24 @@ def list_animation_clips() -> Dict[str, Any]:
     """Lists the shared animation clips.
 
     Per clip: ``kind`` (the activity category), ``set`` (the figure it was made
-    for — empty = the default figure), plus name/url/size. ``kinds`` and
+    for — empty = the neutral figure), plus name/url/size. ``kinds`` and
     ``sets`` list the vocabularies actually present; both are OPEN — a new one
-    is just a new file name, nothing is hardcoded.
+    is just a new file or directory, nothing is hardcoded.
+
+    A set clip's ``url`` carries its directory segment. Clients take the URL
+    from this listing opaquely — they never build it from name + set.
     """
     clips = []
-    for p in clip_files():
-        kind, cset = parse_clip_name(p.name)
+    for entry in clip_entries():
+        p: Path = entry["path"]
+        cset = entry["set"]
         clips.append({
-            "kind": kind,
+            "kind": entry["kind"],
             "set": cset,
             "name": p.stem,
             "filename": p.name,
-            "url": f"/assets/animation-clips/{p.name}",
+            "url": "/assets/animation-clips/"
+                   + (f"{cset}/{p.name}" if cset else p.name),
             "size": p.stat().st_size,
         })
     from app.core.animation_sets import available_sets
@@ -60,14 +67,39 @@ def list_animation_clips() -> Dict[str, Any]:
             "sets": available_sets()}
 
 
-@router.get("/animation-clips/{filename}")
-def get_animation_clip(filename: str, request: Request):
-    """Serves a clip file. ETag + If-None-Match; clips are immutable in
-    practice, so they may be cached hard."""
-    if "/" in filename or "\\" in filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    path = get_animation_clips_dir() / filename
-    if not path.exists() or path.suffix.lower() not in CLIP_EXTS:
+def resolve_clip_path(rel: str) -> Optional[Path]:
+    """``<file>`` or ``<set>/<file>`` → the clip file, or None when the request
+    is not a legal clip reference.
+
+    Deliberately strict, because this is the one route taking a path from the
+    client: at most the two segments the layout allows, no empty/relative
+    segment, no backslash, a clip extension, and the resolved path must still
+    sit inside the clips directory (a symlinked set directory pointing out of
+    it is rejected too)."""
+    segments = rel.split("/")
+    if not 1 <= len(segments) <= 2:
+        return None
+    for seg in segments:
+        if not seg or seg in (".", "..") or "\\" in seg:
+            return None
+    base = get_animation_clips_dir().resolve()
+    path = base.joinpath(*segments).resolve()
+    if not path.is_relative_to(base):
+        return None
+    if path.suffix.lower() not in CLIP_EXTS:
+        return None
+    return path
+
+
+@router.get("/animation-clips/{rel:path}")
+def get_animation_clip(rel: str, request: Request):
+    """Serves a clip file — ``<file>`` for a neutral clip, ``<set>/<file>`` for
+    a set clip. ETag + If-None-Match; clips are immutable in practice, so they
+    may be cached hard."""
+    path = resolve_clip_path(rel)
+    if path is None:
+        raise HTTPException(status_code=400, detail="Invalid clip path")
+    if not path.is_file():
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _ = mimetypes.guess_type(str(path))
     return etag_file_response(path, request,
