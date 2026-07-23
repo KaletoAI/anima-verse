@@ -1,11 +1,11 @@
 /**
- * TemplateField — rendert EIN Character-Feld generisch nach seiner Template-
- * Definition (`type`/`options`/`source`/`allow_custom`/`multiline`/`readonly`).
- * Kein Hardcoding: alle Eigenschaften kommen aus dem Template-Feld.
+ * TemplateField — renders ONE character field generically from its template
+ * definition (`type`/`options`/`source`/`allow_custom`/`multiline`/`readonly`).
+ * No hardcoding: every property comes from the template field.
  *
- * Wert wird über `onCommit(value)` zurückgegeben — bei Selects sofort, bei
- * Text/Zahl onBlur. `allow_custom` zeigt einen „Custom…"-Eintrag, der auf ein
- * Freitext-Feld umschaltet (wie die alte UI).
+ * The value is handed back via `onCommit(value)` — immediately for selects,
+ * onBlur for text/number. `allow_custom` shows a "Custom…" entry that switches
+ * to a free-text field (like the old UI).
  */
 import { useEffect, useState } from 'react'
 
@@ -25,7 +25,7 @@ export interface TmplFieldDef {
   label_de?: string
   hint?: string
   hint_de?: string
-  help?: string  // Topic-Key fuers kontextsensitive Help-Panel
+  help?: string  // topic key for the context-sensitive help panel
   default?: unknown
   store?: string
   source_file?: string
@@ -79,7 +79,7 @@ export function TemplateField({
   const type = field.type || 'text'
   const placeholder = tmplText(field, 'placeholder', lang)
 
-  // Option-Quelle: dynamisch (source) oder statisch (options).
+  // Option source: dynamic (source) or static (options).
   const opts =
     type === 'character_select'
       ? dynamicData.characters || []
@@ -87,15 +87,19 @@ export function TemplateField({
         ? dynamicData[field.source] || []
         : normOpts(field.options)
   const inOpts = opts.some((o) => o.value === local)
+  // An option source may bring its OWN empty entry when "not set" needs a
+  // label (e.g. "Automatic (female)"). Then the built-in placeholder below
+  // would render a second, unlabelled empty row.
+  const hasEmptyOpt = opts.some((o) => o.value === '')
 
-  // Custom-Modus: aktiver Freitext bei allow_custom (Wert nicht in Optionen).
+  // Custom mode: free text active for allow_custom (value not among options).
   const [custom, setCustom] = useState<boolean>(!!field.allow_custom && local !== '' && !inOpts)
   useEffect(() => {
     if (field.allow_custom && local !== '' && !opts.some((o) => o.value === local)) setCustom(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
 
-  // ---- Text (mehrzeilig) ----
+  // ---- Text (multiline) ----
   if (type === 'text' && field.multiline) {
     return (
       <textarea
@@ -112,7 +116,7 @@ export function TemplateField({
     )
   }
 
-  // ---- Zahl ----
+  // ---- Number ----
   if (type === 'number') {
     return (
       <input
@@ -178,8 +182,8 @@ export function TemplateField({
           onCommit(v)
         }}
       >
-        <option value="">— —</option>
-        {/* Import-Wert erhalten, falls nicht in den Optionen */}
+        {hasEmptyOpt ? null : <option value="">— —</option>}
+        {/* Keep an imported value that is not among the options */}
         {local && !inOpts ? <option value={local}>{local}</option> : null}
         {opts.map((o) => (
           <option key={o.value} value={o.value}>
@@ -191,7 +195,7 @@ export function TemplateField({
     )
   }
 
-  // ---- Text (einzeilig, Default) ----
+  // ---- Text (single line, default) ----
   return (
     <input
       className="ga-input"

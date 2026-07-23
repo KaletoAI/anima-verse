@@ -133,8 +133,8 @@
           "allow_custom": true,
           "label": "Animation set",
           "label_de": "Animations-Set",
-          "hint": "Which figure's clips this character uses. Set once, it gets walk_<set>, sit_<set>, sleep_<set> … automatically. Empty = derived from the character (animal, or female/male by gender).",
-          "hint_de": "Welche Figuren-Clips dieser Character nutzt. Einmal gesetzt, bekommt er automatisch walk_<set>, sit_<set>, sleep_<set> … Leer = aus dem Character abgeleitet (animal, bzw. female/male nach Geschlecht).",
+          "hint": "Which figure's clips this character uses — the subdirectory in shared/models/clips. Set once, it gets <set>/walk, <set>/sit, <set>/sleep … automatically. Automatic = derived from the character (animal, or female/male by gender).",
+          "hint_de": "Welche Figuren-Clips dieser Character nutzt — das Unterverzeichnis in shared/models/clips. Einmal gesetzt, bekommt er automatisch <set>/walk, <set>/sit, <set>/sleep … Automatisch = aus dem Character abgeleitet (animal, bzw. female/male nach Geschlecht).",
           "placeholder": "auto (from gender / species)",
           "placeholder_de": "automatisch (aus Geschlecht / Art)"
         }

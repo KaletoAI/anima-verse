@@ -460,15 +460,42 @@ export function CharactersTab() {
       .catch(() => setAnimationSets([]))
   }, [])
 
-  // Dynamische Optionsquellen für Template-Selects.
+  // "Not set" is not "no set": the character still DERIVES one from its gender
+  // and the humanoid feature. Show which — a blank field otherwise looks like
+  // the figure animates neutrally when it does not.
+  const [derivedSet, setDerivedSet] = useState('')
+  useEffect(() => {
+    if (!selected) {
+      setDerivedSet('')
+      return
+    }
+    let cancelled = false
+    apiGet<{ animation_set_derived?: string }>(
+      `/characters/${encodeURIComponent(selected)}/model3d`)
+      .then((d) => { if (!cancelled) setDerivedSet(d.animation_set_derived || '') })
+      .catch(() => { if (!cancelled) setDerivedSet('') })
+    return () => { cancelled = true }
+  }, [selected])
+
+  // The empty option carries the derivation, so it belongs to the options, not
+  // to the generic select's built-in placeholder.
+  const animationSetOptions = useMemo(
+    () => [
+      { value: '', label: `${t('Automatic')} (${derivedSet || t('neutral')})` },
+      ...animationSets,
+    ],
+    [animationSets, derivedSet, t],
+  )
+
+  // Dynamic option sources for the template selects.
   const dynamicData: DynamicData = useMemo(
     () => ({
       tts_voices: ttsVoices,
       tts_speakers: ttsSpeakers,
       characters: sortedCharacters.map((c) => ({ value: c.name, label: c.display_name || c.name })),
-      animation_sets: animationSets,
+      animation_sets: animationSetOptions,
     }),
-    [ttsVoices, ttsSpeakers, sortedCharacters, animationSets],
+    [ttsVoices, ttsSpeakers, sortedCharacters, animationSetOptions],
   )
 
   // Editable "current state" placement — rendered as a special slot

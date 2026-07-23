@@ -356,8 +356,10 @@ export function FieldModel3D({ character }: { character: string }) {
                 onChange={(e) => pickClip(e.target.value)}
               >
                 <option value="">{t('— none (static) —')}</option>
+                {/* Keyed on the URL: since sets became directories the bare
+                    file name repeats (idle.fbx exists per set). */}
                 {myClips.map((c) => (
-                  <option key={c.filename} value={c.url}>
+                  <option key={c.url} value={c.url}>
                     {c.kind}
                     {c.set ? ` · ${c.set}` : ''}
                   </option>
