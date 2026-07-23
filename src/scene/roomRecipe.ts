@@ -178,7 +178,7 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
     if (!dims) return;
     let obj: THREE.Object3D | null = null;
     if (!p.missing && p.has_model !== false) {
-      const raw = await loadPropModel(p.prop_id);
+      const raw = await loadPropModel(p.prop_id, tile.center);
       if (raw) {
         obj = placeProp(raw.clone(true), {
           fix: info?.rotation, dims, k, yaw: p.yaw ?? 0,

@@ -5,7 +5,7 @@ import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
 import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, setTerrainGrid, storeyHeight, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary, setModelEnvironment } from './scene/buildings';
-import { setPropLibrary } from './scene/propAssets';
+import { setPropLibrary, setPropLoadFocus } from './scene/propAssets';
 import { mountRoomRecipe, RecipeLibrary, unmountRoomRecipe } from './scene/roomRecipe';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -44,6 +44,7 @@ async function startApp(username: string) {
   ]);
   setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
   setPropLibrary(props);          // Prop-Bibliothek (Maße + Orientierungs-Fix)
+  setPropLoadFocus(engine.target);   // GLB-Queue: Props nahe der Kamera zuerst
   const npcs = new NpcManager(figures);
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
