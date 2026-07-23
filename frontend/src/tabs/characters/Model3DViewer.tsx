@@ -149,6 +149,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
+  // Triangle/vertex count of the loaded mesh — every preview shows it, so
+  // oversized assets are visible at a glance (asset-sizing note).
+  const [meshStats, setMeshStats] = useState<{ tris: number; verts: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const orientRef = useRef<Object3D | null>(null)
   const rotationRef = useRef(rotation)
@@ -218,6 +221,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     let cleanup: (() => void) | undefined
     setLoading(true)
     setError('')
+    setMeshStats(null)
 
     ;(async () => {
       try {
@@ -300,6 +304,21 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         // unparented, its coordinates equal the later PIVOT-local space.
         const rawBox = new THREE.Box3().setFromObject(object)
         const rawSize = rawBox.getSize(new THREE.Vector3())
+        {
+          // Face/vertex count over all meshes (indexed: index/3, else pos/3).
+          let tris = 0
+          let verts = 0
+          object.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            if (!mesh.isMesh) return
+            const geo = mesh.geometry as { index?: { count: number } | null
+              attributes?: { position?: { count: number } } }
+            const pos = geo.attributes?.position?.count || 0
+            verts += pos
+            tris += Math.floor((geo.index ? geo.index.count : pos) / 3)
+          })
+          setMeshStats({ tris, verts })
+        }
         if (onBoundsRef.current) {
           onBoundsRef.current({
             min: [rawBox.min.x, rawBox.min.y, rawBox.min.z],
@@ -819,6 +838,19 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           overflow: 'hidden',
         }}
       />
+      {meshStats && !loading && !error ? (
+        <span
+          title={t('Triangles / vertices of the loaded mesh — dial the face count in the generate dialog.')}
+          style={{
+            position: 'absolute', left: 6, bottom: 6,
+            fontSize: '0.72em', opacity: 0.75, pointerEvents: 'none',
+            background: 'rgba(13,17,23,0.55)', color: '#e6edf3',
+            padding: '1px 6px', borderRadius: 4,
+          }}
+        >
+          {meshStats.tris.toLocaleString()} △ · {meshStats.verts.toLocaleString()} ●
+        </span>
+      ) : null}
       {loading || error ? (
         <div
           style={{
