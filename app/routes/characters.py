@@ -1583,6 +1583,57 @@ def delete_character_model3d(character_name: str) -> Dict[str, Any]:
     return {"status": "success"}
 
 
+# --- Outfit batch: pre-warm T-pose + mesh for every saved outfit ---
+
+@router.get("/{character_name}/outfit-batch")
+def get_character_outfit_batch(character_name: str) -> Dict[str, Any]:
+    """Plan (one row per saved outfit: signature, what already exists, why it
+    would be skipped) plus the progress of this character's batch. The status
+    stays readable after the run until the next start."""
+    from app.core import outfit_batch
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    return {"plan": outfit_batch.plan(character_name),
+            "status": outfit_batch.get_status(character_name)}
+
+
+@router.post("/{character_name}/outfit-batch/start")
+async def start_character_outfit_batch(character_name: str,
+                                       request: Request) -> Dict[str, Any]:
+    """Starts the batch for ``{"outfit_ids": [...], "force": false}``.
+    ``force`` re-renders reference and mesh of combinations that already have
+    one. 409 while a batch of this character is still running."""
+    from app.core import outfit_batch
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    outfit_ids = body.get("outfit_ids")
+    if not isinstance(outfit_ids, list) or not outfit_ids:
+        raise HTTPException(status_code=400, detail="outfit_ids must be a non-empty list")
+    res = outfit_batch.start(character_name, [str(i) for i in outfit_ids],
+                             force=bool(body.get("force")))
+    if not res.get("ok"):
+        error = str(res.get("error") or "")
+        raise HTTPException(status_code=409 if error == "already running" else 400,
+                            detail=error)
+    return {"status": "started", "count": res.get("count", 0)}
+
+
+@router.post("/{character_name}/outfit-batch/stop")
+def stop_character_outfit_batch(character_name: str) -> Dict[str, Any]:
+    """Asks the running batch to stop after the current outfit (the GPU jobs
+    themselves always run to completion)."""
+    from app.core import outfit_batch
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    return {"status": "stopping" if outfit_batch.stop(character_name) else "idle"}
+
+
 @router.post("/{character_name}/images/{image_filename}/comment")
 async def save_image_comment_endpoint(character_name: str, image_filename: str, request: Request) -> Dict[str, Any]:
     """Speichert einen Kommentar fuer ein Bild"""
