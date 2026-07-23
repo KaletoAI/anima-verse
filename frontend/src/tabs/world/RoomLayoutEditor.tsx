@@ -1472,15 +1472,23 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                 return (
                   <div
                     key={`mop-${i}`}
-                    title={`${op.type} · ${t('defined in {room}').replace('{room}', op.ownerName)}`}
+                    title={`${op.type} · ${t('defined in {room} — click to edit it there').replace('{room}', op.ownerName)}`}
                     onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      // A shared-wall opening is one hole seen from two
+                      // rooms — whichever side catches the click, EDITING
+                      // happens on the original in the owning room.
+                      e.stopPropagation()
+                      if (clickMode || armedProp) return
+                      setSelected(op.ownerId)
+                      setOpeningSel(op.ownerIndex)
+                    }}
                     style={{
                       position: 'absolute',
                       left: `${pt.x * 100}%`, top: `${pt.y * 100}%`,
                       width: `max(14px, ${mwPct}%)`, height: 24,
                       transform: `translate(-50%, -50%) rotate(${deg}deg)`,
-                      opacity: 0.4, cursor: 'default',
+                      opacity: 0.4, cursor: 'pointer',
                     }}
                   >
                     <OpeningGlyph type={op.type}

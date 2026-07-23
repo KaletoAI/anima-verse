@@ -185,6 +185,9 @@ export interface MirroredOpening {
   /** The OWNING room (where the opening is defined and edited). */
   ownerId: string
   ownerName: string
+  /** Index of the opening in the OWNER's stored openings array — clicking a
+   *  ghost selects the original for editing. */
+  ownerIndex: number
 }
 
 /** The neighbours' openings that physically pierce room A's wall — the
@@ -211,8 +214,8 @@ export function mirrorOpenings(
     if (!sib.id || sib.id === a.id) continue
     const ob = absOutline(sib.layout)
     if (ob.length < 3) continue
-    const openings = (sib.layout.openings || []).map((op) => ({
-      ...op, ...normalizeOpeningEdge(op) }))
+    const openings = (sib.layout.openings || []).map((op, idx) => ({
+      ...op, ...normalizeOpeningEdge(op), ownerIndex: idx }))
     if (!openings.length) continue
 
     for (let i = 0; i < oa.length; i++) {
@@ -256,6 +259,7 @@ export function mirrorOpenings(
             type: op.type || 'door',
             ownerId: sib.id,
             ownerName: sib.name || sib.id,
+            ownerIndex: op.ownerIndex,
           })
         }
       }
