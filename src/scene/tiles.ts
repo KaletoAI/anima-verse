@@ -785,6 +785,7 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
   // damit Client und Server-Vorschau identisch sind. Haltepunkte fürs
   // Etagen-Routing.
   const elev = loc.map3d?.elevator;
+  let elevSwitchPos: THREE.Vector3 | null = null;   // Ankerpunkt für den Etagen-Umschalter
   if (elev?.length === 2 && usedLevels.size) {
     const s = roomFigureScale(loc);            // Welt-Meter je Real-Meter
     const half = 0.9 * s;                      // Schacht außen = 1,8 m real
@@ -806,6 +807,7 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
     const cap = box(half * 2 + postT, 0.05, half * 2 + postT, frameMat);
     cap.position.set(exl, topY + 0.025, ezl);
     g.add(cap);
+    elevSwitchPos = new THREE.Vector3(exl, topY + 0.55, ezl);
     // Glas auf drei Seiten — offen Richtung Gebäudemitte
     const open = Math.abs(exl) > Math.abs(ezl) ? (exl > 0 ? 'nx' : 'px') : (ezl > 0 ? 'nz' : 'pz');
     const paneLen = half * 2 - postT;
@@ -856,8 +858,11 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
       el.appendChild(btn);
     }
     const sw = new CSS2DObject(el);
-    // knapp über der obersten Etage — skaliert mit der Etagenhöhe
-    sw.position.set(2.2, (Math.max(...usedLevels) + 1) * storey + 0.6, 0);
+    // am Fahrstuhl verankern — dort wechselt man die Etage, und der Punkt
+    // ist frei von Raum-Labels; ohne Fahrstuhl wie bisher über der
+    // obersten Etage nahe der Kachelmitte
+    if (elevSwitchPos) sw.position.copy(elevSwitchPos);
+    else sw.position.set(2.2, (Math.max(...usedLevels) + 1) * storey + 0.6, 0);
     g.add(sw);
   }
 
