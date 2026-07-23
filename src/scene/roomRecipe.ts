@@ -153,6 +153,19 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
     }
   }
 
+  // Exit aus dem Rezept (Raum-Rezept §6): fehlt layout.exit, leitet der
+  // Server ihn aus einer Tür/Passage ab (exit_derived) — absolute Platten-
+  // Fraktionen wie outline. Überschreibt den Kantenmitten-Fallback aus
+  // buildInterior; dieselbe Instanz unter ID und Name (sampling hebt Y an).
+  if (recipe.exit?.length === 2) {
+    const exitWorld = tile.center.clone().add(new THREE.Vector3(
+      recipe.exit[0] * LW - LW / 2, floorTop, recipe.exit[1] * LW - LW / 2,
+    ));
+    tile.roomExits.set(roomId, exitWorld);
+    const room = tile.loc.rooms.find((r) => r.id === roomId);
+    if (room) tile.roomExits.set(room.name, exitWorld);
+  }
+
   // Props platzieren — Real-Size-Regel (propPlace.ts, verifiziert gegen 2d).
   // missing / has_model:false -> Platzhalter in dims-Größe, Platzierung nie
   // verwerfen; das GLB kommt über /assets/props/{id}/model (ETag).

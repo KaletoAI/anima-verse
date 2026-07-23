@@ -197,6 +197,9 @@ export interface ApiOpening {
   type: string;            // "window" | "door" | "passage" (offen)
   to?: string;
   prop_id?: string;
+  /** vom Nachbarraum gespiegelte Öffnung (rein informativ; Kante/at sind
+   *  bereits auf diesen Raum umgerechnet -> exakt wie eigene behandeln) */
+  mirrored?: boolean;
 }
 
 export interface ApiPlacement {
@@ -226,6 +229,8 @@ export interface ApiRoomRecipe {
   surfaces?: { floor?: string; wall?: string };   // Surface-Texture-Kinds
   openings?: ApiOpening[];
   exit?: [number, number];
+  /** exit wurde aus einer Tür/Passage abgeleitet (layout.exit fehlt) */
+  exit_derived?: boolean;
   markers?: RoomMarker[];        // bestehendes Vokabular aus types.ts
   placements?: ApiPlacement[];
   prop_markers?: ApiPropMarker[];

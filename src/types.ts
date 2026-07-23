@@ -58,6 +58,9 @@ export interface Map3dMeta {
   /** v3-Maßstabs-Anker: reale Breite des Grundriss-Referenzquadrats in
    *  Metern („das Gebäude ist ≈ 12 m breit") -> k = 8 / plan_width_m */
   plan_width_m?: number;
+  /** Bodentextur-Kind je Etage für die Grundriss-Platten (Raum-Rezept §7),
+   *  Level-Schlüssel als String: {"0": "parquet", "-1": "stone"} */
+  level_floors?: Record<string, string>;
 }
 
 export interface WorldLocation {

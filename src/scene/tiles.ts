@@ -241,6 +241,26 @@ function floorSlabTexture(): THREE.Texture | null {
   return tex;
 }
 
+/** Etagenplatten-Textur je Level (map3d.level_floors, Raum-Rezept §7):
+ *  Extrude-UVs der Platten sind Welt-Meter -> Kachelmaß size_m x k.
+ *  Cache pro Kind UND Maßstab (k ist je Location verschieden). */
+function levelFloorTexture(kind: string | undefined, k: number): THREE.Texture | null {
+  if (!kind) return null;
+  const key = kind.toLowerCase();
+  const entry = serverSurfaces.get(key);
+  if (!entry?.url) return null;
+  const cacheKey = `${key}@slab@${k.toFixed(3)}`;
+  let tex = serverSurfaceCache.get(cacheKey);
+  if (!tex) {
+    tex = loader.load(entry.url);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1 / (entry.sizeM * k), 1 / (entry.sizeM * k));
+    serverSurfaceCache.set(cacheKey, tex);
+  }
+  return tex;
+}
+
 /** Surface-Texturen für den Rezept-Pfad (roomShell klont sie und setzt
  *  eigene repeat-Werte): Klone eines noch ladenden Bildes blieben leer,
  *  daher gibt surfaceFor nur FERTIG geladene Texturen heraus — der Mount
@@ -718,7 +738,11 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
       const upper = level > 0;
       const wallMat = std({ color: 0xcfc4b2, opacity: upper ? 0.45 : 1 });
       const slabMat = std({ color: 0xd8d0c2, opacity: upper ? 0.4 : 1 });
-      const floorTex = floorSlabTexture();
+      // Bodentextur der Etage: kuratiertes Kind je Level (map3d.level_floors)
+      // vor dem globalen "floor"-Kind; Raum-Böden aus dem Rezept liegen ÜBER
+      // der Platte und überschreiben ihre Raumfläche von selbst
+      const floorTex = levelFloorTexture(loc.map3d?.level_floors?.[String(level)], roomFigureScale(loc))
+        ?? floorSlabTexture();
       if (floorTex) {
         slabMat.map = floorTex;
         slabMat.color.set(0xffffff);
