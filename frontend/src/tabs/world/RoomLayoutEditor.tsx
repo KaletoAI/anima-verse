@@ -18,9 +18,10 @@ import { apiGet } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import {
   CLOSE_TOL_PX, MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
-  SNAP_TOL_PX, absOutline, buildSnapTargets, clamp, edgePointOnEdge,
-  edgeSegment, exteriorEdges, nearestPolygonEdge, normalizeOpeningEdge,
-  outlineOf, r4, rotateOpeningCW, sharedEdges, snapDrawPoint, snapMoveOffset,
+  SNAP_TOL_PX, absOutline, buildSnapTargets, clamp, deriveExit, edgePointOnEdge,
+  edgeSegment, exteriorEdges, mirrorOpenings, nearestPolygonEdge,
+  normalizeOpeningEdge, outlineOf, r4, rotateOpeningCW, sharedEdges,
+  snapDrawPoint, snapMoveOffset,
 } from './planGeometry'
 import type { EdgeLetter, PolyRoom, SnapResult } from './planGeometry'
 import { FurnishDialog, useFurnishJob } from './FurnishDialog'
@@ -31,6 +32,33 @@ import { getBuildingDims, getRoomModelDims, renderTopDownSnapshot } from './topD
 import type { Map3D, Room, RoomLayout, RoomOpening } from './worldTypes'
 
 const CANVAS_W = 420
+
+/** The 2D symbol of one wall opening (door swing arc, window double line,
+ *  dashed passage) — shared by the editable markers and the mirrored,
+ *  render-only ghosts of the neighbours' openings. */
+function OpeningGlyph({ type, col }: { type?: string; col: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width={24} height={24} style={{ overflow: 'visible' }}>
+      {type === 'door' ? (
+        <>
+          {/* Gap in the edge line + hinge leaf + swing arc. */}
+          <line x1={4} y1={12} x2={20} y2={12} stroke={col}
+            strokeWidth={1} strokeDasharray="1.5 2" opacity={0.5} />
+          <line x1={4} y1={12} x2={4} y2={22} stroke={col} strokeWidth={1.5} />
+          <path d="M4 22 A10 10 0 0 0 14 12" fill="none" stroke={col} strokeWidth={1.2} />
+        </>
+      ) : type === 'window' ? (
+        <>
+          <line x1={4} y1={11} x2={20} y2={11} stroke={col} strokeWidth={1.4} />
+          <line x1={4} y1={13} x2={20} y2={13} stroke={col} strokeWidth={1.4} />
+        </>
+      ) : (
+        <line x1={4} y1={12} x2={20} y2={12} stroke={col}
+          strokeWidth={2} strokeDasharray="3 2.5" />
+      )}
+    </svg>
+  )
+}
 
 interface RoomLayoutEditorProps {
   rooms: Room[]
@@ -312,6 +340,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       prev,
       prevDir: prev && prev2 ? [prev[0] - prev2[0], prev[1] - prev2[1]] : undefined,
       first: outlineDraft[0],
+      draft: outlineDraft,
       draftLen: outlineDraft.length,
       targets: snapTargets || { points: [], segments: [] },
       tol,
@@ -622,6 +651,29 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     }
   }, [selected, updateLayout, t, toast])
 
+  // All prop indices whose TRUE-size footprint covers a room-local point —
+  // in render order (the last entry draws topmost). Clicking stacked props
+  // cycles the selection through this list.
+  const propsAtPoint = useCallback((lay: NonNullable<Room['layout']>,
+      px: number, py: number): number[] => {
+    const planWEff = planWRef.current || 8
+    const hits: number[] = []
+    ;(lay.props || []).forEach((p, i) => {
+      const dims = propDims[p.prop_id]
+      // Canvas units (the plan square is 1×1; the room spans w×d of it).
+      const cx = (px - p.at[0]) * (lay.w || 1)
+      const cy = (py - p.at[1]) * (lay.d || 1)
+      const rad = ((p.yaw || 0) * Math.PI) / 180
+      const cos = Math.cos(rad)
+      const sin = Math.sin(rad)
+      const lx = cx * cos + cy * sin
+      const ly = -cx * sin + cy * cos
+      if (Math.abs(lx) <= ((dims?.width_m || 1) / planWEff) / 2
+          && Math.abs(ly) <= ((dims?.depth_m || 1) / planWEff) / 2) hits.push(i)
+    })
+    return hits
+  }, [propDims])
+
   // Click-to-place: one click inside a room sets the exit point, drops an
   // animation marker or a prop placement — all as fractions of the ROOM
   // rectangle (contract).
@@ -661,10 +713,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       })
       setMarkerSel((room.layout.markers || []).length)
     } else if (clickMode === 'opening') {
-      // Place a door on the nearest hull edge at the clicked position.
+      // Place a door on the nearest hull edge at the clicked position. `to`
+      // follows from where the edge leads: a shared wall points at the
+      // neighbour, an exterior wall at "outside" — editable in the panel.
       const { edge, at } = nearestPolygonEdge(outlineOf(room.layout), [px, py])
+      const lay0 = room.layout
+      const others: PolyRoom[] = roomsRef.current
+        .filter((r) => r.id && r.id !== room.id && r.layout
+          && (r.layout.level || 0) === (lay0.level || 0))
+        .map((r) => ({ id: r.id!, x: r.layout!.x, y: r.layout!.y,
+          w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline }))
+      const hull: PolyRoom = { id: room.id, x: lay0.x, y: lay0.y,
+        w: lay0.w, d: lay0.d, outline: lay0.outline }
+      const shared = sharedEdges(hull, others, planWRef.current || 8)
+        .find((sh) => sh.edge === edge)
       const openings: RoomOpening[] = [...(room.layout.openings || []),
-        { edge, at, ...OPENING_DEFAULT }]
+        { edge, at, ...OPENING_DEFAULT, to: shared ? shared.neighborId : 'outside' }]
       updateLayout(room.id, { openings })
       setOpeningSel(openings.length - 1)
     }
@@ -806,7 +870,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       const free = candidates.find((c) => !edgeTaken(a.id, c.edge))
       const target = free || candidates[0]
       add(a.id, { edge: target.edge, at: free ? 0.5 : 0.35, type: 'door',
-        width_m: 1.0, height_m: 2.1, sill_m: 0 })
+        width_m: 1.0, height_m: 2.1, sill_m: 0, to: 'outside' })
     }
     // Windows on exterior edges ≥ 2.5 m (needs the plan width for the length).
     for (const a of hulls) {
@@ -816,7 +880,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         const edgeLenM = Math.hypot(seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]) * planWEff
         if (edgeLenM < MIN_WINDOW_EDGE_M || edgeTaken(a.id, e)) continue
         add(a.id, { edge: e, at: 0.5, type: 'window',
-          width_m: 1.2, height_m: 1.2, sill_m: 0.9 })
+          width_m: 1.2, height_m: 1.2, sill_m: 0.9, to: 'outside' })
       }
     }
 
@@ -862,6 +926,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             ))}
           </span>
         ) : null}
+        <span style={{ flex: 1 }} />
+        {/* Underlay toggles — up here instead of the tool column, they are
+            view state, not tools. */}
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${underlay ? ' ga-btn-primary' : ''}`}
+          onClick={() => setUnderlay((v) => !v)}
+          title={t('Lay the placed room models (top-down view) behind the plan — markers can be dropped on real furniture.')}
+        >
+          🖼
+        </button>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${bUnderlay ? ' ga-btn-primary' : ''}`}
+          onClick={() => setBUnderlay((v) => !v)}
+          title={t('Lay the building model (roof view = real footprint) behind the plan — for tracing the outline polygon.')}
+        >
+          🏢
+        </button>
       </div>
 
       {/* Scale anchor missing: floor-plan geometry has no real size without
@@ -933,8 +1016,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         building={!!onMap3d}
         noAnchor={planW <= 0}
         canSuggest={placed.length > 0}
-        showModels={underlay}
-        showBuilding={bUnderlay}
         propsOpen={propsOpen}
         onMode={armMode}
         onRotate={rotateSelected}
@@ -946,8 +1027,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         onCommitRoom={commitRoomDraft}
         onCancelDraw={cancelDraw}
         onSuggest={suggestOpenings}
-        onToggleModels={() => setUnderlay((v) => !v)}
-        onToggleBuilding={() => setBUnderlay((v) => !v)}
         onProps={() => setPropsOpen((v) => !v)}
       />
       <div
@@ -1061,6 +1140,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                     r={hoverSnap.kind === 'close' ? 2.2 : 1.6} fill="none"
                     stroke="#58a6ff" strokeWidth={0.5} />
                 ) : null}
+                {hoverSnap.kind === 'length' && hoverSnap.matchLen && hoverSnap.guide ? (
+                  <text
+                    x={(hoverSnap.guide.a[0] + hoverSnap.guide.b[0]) / 2 * 100}
+                    y={(hoverSnap.guide.a[1] + hoverSnap.guide.b[1]) / 2 * 100 - 1.5}
+                    fontSize={3} fill="#3fb950" textAnchor="middle"
+                    style={{ paintOrder: 'stroke', stroke: '#0d1117', strokeWidth: 0.6 }}>
+                    {`= ${(hoverSnap.matchLen * (planW || 8)).toFixed(1)} m`}
+                  </text>
+                ) : null}
               </>
             ) : null}
             {outlineDraft.map(([x, y], i) => (
@@ -1096,6 +1184,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         {placed.map((room) => {
           const lay = room.layout!
           const isSel = room.id === selected
+          // Holes owned by a NEIGHBOUR that pierce this room's wall too —
+          // drawn as ghosts below and counted by the exit derivation.
+          const mirrored = room.id ? mirrorOpenings(
+            { id: room.id, x: lay.x, y: lay.y, w: lay.w, d: lay.d,
+              outline: lay.outline },
+            placed.filter((r) => r.id && r.id !== room.id).map((r) => ({
+              id: r.id!, name: r.name,
+              layout: { id: r.id!, x: r.layout!.x, y: r.layout!.y,
+                w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline,
+                openings: r.layout!.openings },
+            })),
+            planW || 8) : []
           return (
             <div
               key={room.id}
@@ -1142,7 +1242,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               </span>
               {lay.exit ? (
                 <span
-                  title={t('Exit point')}
+                  title={t('Exit point (override)')}
                   style={{
                     position: 'absolute',
                     left: `calc(${lay.exit[0] * 100}% - 5px)`,
@@ -1152,7 +1252,26 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                     pointerEvents: 'none',
                   }}
                 />
-              ) : null}
+              ) : (() => {
+                // No explicit exit: it DERIVES from the doors (own openings
+                // plus the mirrored ones) — same rule as the recipe.
+                const own = (lay.openings || [])
+                  .map((o) => ({ ...o, ...normalizeOpeningEdge(o) }))
+                const auto = deriveExit(lay, [...own, ...mirrored], planW || 8)
+                return auto ? (
+                  <span
+                    title={t('Exit (auto — derived from the door)')}
+                    style={{
+                      position: 'absolute',
+                      left: `calc(${auto[0] * 100}% - 5px)`,
+                      top: `calc(${auto[1] * 100}% - 5px)`,
+                      width: 10, height: 10, borderRadius: '50%',
+                      border: '2px dashed #e0a356', boxSizing: 'border-box',
+                      opacity: 0.8, pointerEvents: 'none',
+                    }}
+                  />
+                ) : null
+              })()}
               {(lay.markers || []).map((m, i) => (
                 <span
                   key={`${m.animation}-${i}`}
@@ -1193,7 +1312,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                       if (clickMode || armedProp) return
                       e.stopPropagation()
                       setSelected(room.id || '')
-                      setPropSel(i)
+                      // Stacked footprints: repeated clicks cycle through
+                      // everything under the cursor (topmost first).
+                      const host = e.currentTarget.parentElement as HTMLDivElement
+                      const rect = host.getBoundingClientRect()
+                      const hits = propsAtPoint(lay,
+                        (e.clientX - rect.left) / rect.width,
+                        (e.clientY - rect.top) / rect.height)
+                      if (hits.length < 2) {
+                        setPropSel(i)
+                        return
+                      }
+                      const pos = room.id === selected && propSel !== null
+                        ? hits.indexOf(propSel) : -1
+                      setPropSel(pos >= 0
+                        ? hits[(pos + 1) % hits.length]
+                        : hits[hits.length - 1])
                     }}
                     style={{
                       position: 'absolute',
@@ -1282,25 +1416,36 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                       cursor: clickMode ? 'crosshair' : 'grab',
                     }}
                   >
-                    <svg viewBox="0 0 24 24" width={24} height={24} style={{ overflow: 'visible' }}>
-                      {op.type === 'door' ? (
-                        <>
-                          {/* Gap in the edge line + hinge leaf + swing arc. */}
-                          <line x1={4} y1={12} x2={20} y2={12} stroke={col}
-                            strokeWidth={1} strokeDasharray="1.5 2" opacity={0.5} />
-                          <line x1={4} y1={12} x2={4} y2={22} stroke={col} strokeWidth={1.5} />
-                          <path d="M4 22 A10 10 0 0 0 14 12" fill="none" stroke={col} strokeWidth={1.2} />
-                        </>
-                      ) : op.type === 'window' ? (
-                        <>
-                          <line x1={4} y1={11} x2={20} y2={11} stroke={col} strokeWidth={1.4} />
-                          <line x1={4} y1={13} x2={20} y2={13} stroke={col} strokeWidth={1.4} />
-                        </>
-                      ) : (
-                        <line x1={4} y1={12} x2={20} y2={12} stroke={col}
-                          strokeWidth={2} strokeDasharray="3 2.5" />
-                      )}
-                    </svg>
+                    <OpeningGlyph type={op.type} col={col} />
+                  </div>
+                )
+              })}
+              {/* Mirrored openings: one physical hole, two walls — these are
+                  owned by a neighbour and only RENDERED here (edit them in
+                  the owning room). */}
+              {mirrored.map((op, i) => {
+                const outline = outlineOf(lay)
+                if (op.edge >= outline.length) return null
+                const pt = edgePointOnEdge(outline, op.edge, op.at)
+                const seg = edgeSegment(outline, op.edge)
+                const deg = Math.atan2((seg.b[1] - seg.a[1]) * lay.d,
+                                       (seg.b[0] - seg.a[0]) * lay.w) * 180 / Math.PI
+                return (
+                  <div
+                    key={`mop-${i}`}
+                    title={`${op.type} · ${t('defined in {room}').replace('{room}', op.ownerName)}`}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      position: 'absolute',
+                      left: `${pt.x * 100}%`, top: `${pt.y * 100}%`,
+                      width: 24, height: 24,
+                      transform: `translate(-50%, -50%) rotate(${deg}deg)`,
+                      opacity: 0.4, cursor: 'default',
+                    }}
+                  >
+                    <OpeningGlyph type={op.type}
+                      col={OPENING_COLOR[op.type] || '#e0a356'} />
                   </div>
                 )
               })}

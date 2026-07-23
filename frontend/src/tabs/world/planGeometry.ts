@@ -172,6 +172,141 @@ export function exteriorEdges(a: PolyRoom, others: PolyRoom[], planW: number): n
   return Array.from({ length: n }, (_, i) => i).filter((i) => !shared.has(i))
 }
 
+// ── Mirrored openings (one hole, two walls) ──
+
+export interface RoomOpeningLike {
+  edge: EdgeLetter | number; at: number; width_m?: number; height_m?: number
+  sill_m?: number; type?: string; to?: string
+}
+
+export interface MirroredOpening {
+  edge: number; at: number; width_m: number; height_m: number; sill_m: number
+  type: string
+  /** The OWNING room (where the opening is defined and edited). */
+  ownerId: string
+  ownerName: string
+}
+
+/** The neighbours' openings that physically pierce room A's wall — the
+ *  mirror image of ``room_recipe._mirrored_openings`` (backend): SAME
+ *  tolerances, SAME antiparallel test; change both or neither. The
+ *  translation is a projection, not a formula — both hulls are wound
+ *  clockwise, so a shared wall is traversed in OPPOSITE directions and
+ *  `at` flips by itself. Entries are render-only (edited in the owner). */
+export function mirrorOpenings(
+  a: PolyRoom,
+  siblings: Array<{ id: string; name?: string; layout: PolyRoom & {
+    openings?: RoomOpeningLike[] } }>,
+  planW: number,
+): MirroredOpening[] {
+  const oa = absOutline(a)
+  if (oa.length < 3) return []
+  const planwEff = planW > 0 ? planW : 8
+  const tol = SHARE_TOL_M / planwEff
+  const minOv = MIN_SHARE_M / planwEff
+  const out: MirroredOpening[] = []
+  const seen = new Set<string>()
+
+  for (const sib of siblings) {
+    if (!sib.id || sib.id === a.id) continue
+    const ob = absOutline(sib.layout)
+    if (ob.length < 3) continue
+    const openings = (sib.layout.openings || []).map((op) => ({
+      ...op, ...normalizeOpeningEdge(op) }))
+    if (!openings.length) continue
+
+    for (let i = 0; i < oa.length; i++) {
+      const seg = edgeSegment(oa, i)
+      const dx = seg.b[0] - seg.a[0]
+      const dy = seg.b[1] - seg.a[1]
+      const alen = Math.hypot(dx, dy)
+      if (alen < 1e-6) continue
+      const ux = dx / alen
+      const uy = dy / alen
+      for (let j = 0; j < ob.length; j++) {
+        const other = edgeSegment(ob, j)
+        const ex = other.b[0] - other.a[0]
+        const ey = other.b[1] - other.a[1]
+        const elen = Math.hypot(ex, ey)
+        if (elen < 1e-6) continue
+        const vx = ex / elen
+        const vy = ey / elen
+        if (Math.abs(ux * vy - uy * vx) > 0.02 || ux * vx + uy * vy > -0.98) continue
+        if (Math.abs((other.a[0] - seg.a[0]) * uy - (other.a[1] - seg.a[1]) * ux) > tol) continue
+        const t0 = (other.a[0] - seg.a[0]) * ux + (other.a[1] - seg.a[1]) * uy
+        const t1 = (other.b[0] - seg.a[0]) * ux + (other.b[1] - seg.a[1]) * uy
+        const start = Math.max(0, Math.min(t0, t1))
+        const end = Math.min(alen, Math.max(t0, t1))
+        if (end - start < minOv) continue
+
+        for (const op of openings) {
+          if (op.edge !== j) continue
+          const p = edgePointOnEdge(ob, j, op.at)
+          const t = (p.x - seg.a[0]) * ux + (p.y - seg.a[1]) * uy
+          if (t < start - 1e-9 || t > end + 1e-9) continue
+          const key = `${sib.id}:${j}:${op.at}:${i}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          out.push({
+            edge: i,
+            at: r4(clamp(t / alen, 0, 1)),
+            width_m: op.width_m ?? OPENING_DEFAULT.width_m,
+            height_m: op.height_m ?? OPENING_DEFAULT.height_m,
+            sill_m: op.sill_m ?? 0,
+            type: op.type || 'door',
+            ownerId: sib.id,
+            ownerName: sib.name || sib.id,
+          })
+        }
+      }
+    }
+  }
+  return out
+}
+
+// ── Derived exit (doors replace the manual exit point) ──
+
+export const EXIT_INSET_M = 0.3
+
+/** The exit that FOLLOWS from the doors when none is set explicitly —
+ *  mirror of the backend's derivation (room_recipe): an opening with
+ *  ``to == "outside"`` wins, otherwise the first walkable opening by edge
+ *  index / at; position = opening centre pushed ``EXIT_INSET_M`` into the
+ *  room (interior lies RIGHT of a clockwise edge). Room-local fractions;
+ *  null when no walkable opening exists. Mirrored openings count too —
+ *  pass them pre-translated onto this room's edges. */
+export function deriveExit(
+  lay: { x: number; y: number; w: number; d: number; outline?: Pt[] },
+  openings: Array<{ edge: number; at: number; type?: string; to?: string }>,
+  planW: number,
+): Pt | null {
+  const walkable = openings
+    .filter((o) => (o.type || 'door') === 'door' || o.type === 'passage')
+    .sort((x, y) => (x.edge - y.edge) || (x.at - y.at))
+  if (!walkable.length) return null
+  const pick = walkable.find((o) => o.to === 'outside') || walkable[0]
+  const outline = outlineOf(lay)
+  const { a, b } = edgeSegment(outline, pick.edge)
+  // Room-local fractions are anisotropic (w ≠ d) — do the inset in plan
+  // fractions and convert back, exactly like the backend.
+  const ax = lay.x + a[0] * lay.w
+  const ay = lay.y + a[1] * lay.d
+  const bx = lay.x + b[0] * lay.w
+  const by = lay.y + b[1] * lay.d
+  const len = Math.hypot(bx - ax, by - ay)
+  if (len < 1e-9) return null
+  const ux = (bx - ax) / len
+  const uy = (by - ay) / len
+  const px = ax + (bx - ax) * pick.at
+  const py = ay + (by - ay) * pick.at
+  const inset = EXIT_INSET_M / (planW > 0 ? planW : 8)
+  // Interior right of the directed edge (clockwise, y down): (-uy, ux).
+  const ex = px + -uy * inset
+  const ey = py + ux * inset
+  return [r4(clamp((ex - lay.x) / (lay.w || 1), 0, 1)),
+          r4(clamp((ey - lay.y) / (lay.d || 1), 0, 1))]
+}
+
 // ── Snapping engine (drawing aid) ──
 // Always on while drawing; the caller passes alt=true (Shift held) for
 // free-hand. Priorities: close the polygon on its first vertex > snap to an
@@ -207,11 +342,14 @@ export function buildSnapTargets(hulls: PolyRoom[], opts?: {
 
 export interface SnapResult {
   p: Pt
-  kind: 'free' | 'vertex' | 'edge' | 'angle' | 'angle+edge' | 'close'
+  kind: 'free' | 'vertex' | 'edge' | 'angle' | 'angle+edge' | 'length' | 'close'
   /** Constraint ray to visualize for the angle kinds. */
   guide?: { a: Pt; b: Pt }
   /** Target segment being snapped onto (edge kinds). */
   seg?: { a: Pt; b: Pt }
+  /** 'length' only: the matched segment length in plan fractions — the
+   *  editor labels it in metres ("= 4.0 m"). */
+  matchLen?: number
 }
 
 const _dist2 = (a: Pt, b: Pt) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
@@ -219,6 +357,10 @@ const _r4p = (p: Pt): Pt => [r4(p[0]), r4(p[1])]
 
 export function snapDrawPoint(raw: Pt, opts: {
   prev?: Pt; prevDir?: Pt; first?: Pt; draftLen?: number
+  /** The full draft polyline — the equal-length snap matches the current
+   *  segment against the draft's PARALLEL segments (drawing a square: the
+   *  third side snaps to the first side's length). */
+  draft?: Pt[]
   targets: SnapTargets; tol: number; closeTol: number; alt?: boolean
 }): SnapResult {
   const p: Pt = [clamp(raw[0], 0, 1), clamp(raw[1], 0, 1)]
@@ -278,6 +420,31 @@ export function snapDrawPoint(raw: Pt, opts: {
     if (bestX)
       return { p: _r4p(bestX.p), kind: 'angle+edge', seg: bestX.seg,
         guide: { a: opts.prev, b: bestX.p } }
+  }
+
+  // 3b) Equal length: on the constrained ray, the segment length snaps to
+  // the length of PARALLEL draft segments (±) — a square's third side gets
+  // the first side's length without pixel-hunting.
+  if (opts.prev && dir && opts.draft && opts.draft.length >= 2) {
+    let bestL: { p: Pt; len: number } | null = null
+    let bestLD = tol * tol
+    for (let i = 0; i + 1 < opts.draft.length; i++) {
+      const sx = opts.draft[i + 1][0] - opts.draft[i][0]
+      const sy = opts.draft[i + 1][1] - opts.draft[i][1]
+      const slen = Math.hypot(sx, sy)
+      if (slen < 1e-9) continue
+      // Parallel either way within ~1°.
+      if (Math.abs((sx / slen) * dir[1] - (sy / slen) * dir[0]) > 0.02) continue
+      const x: Pt = [opts.prev[0] + dir[0] * slen, opts.prev[1] + dir[1] * slen]
+      const d = _dist2(p, x)
+      if (d <= bestLD) {
+        bestLD = d
+        bestL = { p: x, len: slen }
+      }
+    }
+    if (bestL)
+      return { p: _r4p(bestL.p), kind: 'length', matchLen: bestL.len,
+        guide: { a: opts.prev, b: bestL.p } }
   }
 
   // 4) Plain edge projection of the raw point (gap closing without angle).

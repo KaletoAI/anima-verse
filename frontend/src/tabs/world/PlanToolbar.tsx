@@ -55,8 +55,6 @@ interface PlanToolbarProps {
    *  real-world size is locked until one is set. */
   noAnchor: boolean
   canSuggest: boolean
-  showModels: boolean
-  showBuilding: boolean
   propsOpen: boolean
   onMode: (m: PlanMode) => void
   onRotate: () => void
@@ -68,17 +66,15 @@ interface PlanToolbarProps {
   onCommitRoom: () => void
   onCancelDraw: () => void
   onSuggest: () => void
-  onToggleModels: () => void
-  onToggleBuilding: () => void
   onProps: () => void
 }
 
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasExit, hasOutline,
-  outlineDraftLen, hasElevator, building, noAnchor, canSuggest, showModels,
-  showBuilding, propsOpen, onMode, onRotate, onUnplace, onRemoveExit,
+  outlineDraftLen, hasElevator, building, noAnchor, canSuggest,
+  propsOpen, onMode, onRotate, onUnplace, onRemoveExit,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
-  onCancelDraw, onSuggest, onToggleModels, onToggleBuilding, onProps,
+  onCancelDraw, onSuggest, onProps,
 }: PlanToolbarProps) {
   const { t } = useI18n()
   const drawing = mode === 'draw-room'
@@ -167,14 +163,14 @@ export function PlanToolbar({
         active={mode === 'exit'}
         disabled={!hasSelection}
         onClick={() => onMode('exit')}
-        title={t('Exit point — then click inside the room to place the walk-in/out point.')}
+        title={t('Exit override — with doors the exit derives automatically (outside door first); set a point only to override it.')}
       />
       {hasExit ? (
         <Tool
           icon="🗑"
           danger
           onClick={onRemoveExit}
-          title={t('Remove the exit point — the client falls back to the edge facing the building centre.')}
+          title={t('Remove the exit override — the exit derives from the doors again (or the client falls back without any).')}
         />
       ) : null}
       <Tool
@@ -205,20 +201,6 @@ export function PlanToolbar({
         disabled={!hasSelection}
         onClick={onUnplace}
         title={t('Remove from the floor plan — the 3D client auto-grids this room again.')}
-      />
-
-      <span className="ga-plan-toolbar-group">{t('View')}</span>
-      <Tool
-        icon="🖼"
-        active={showModels}
-        onClick={onToggleModels}
-        title={t('Lay the placed room models (top-down view) behind the plan — markers can be dropped on real furniture.')}
-      />
-      <Tool
-        icon="🏢"
-        active={showBuilding}
-        onClick={onToggleBuilding}
-        title={t('Lay the building model (roof view = real footprint) behind the plan — for tracing the outline polygon.')}
       />
     </div>
   )

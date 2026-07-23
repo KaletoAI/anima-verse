@@ -23,7 +23,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D, Texture } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
-import { normalizeOpeningEdge, outlineOf } from './planGeometry'
+import { normalizeOpeningEdge, outlineOf, mirrorOpenings } from './planGeometry'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room } from './worldTypes'
@@ -974,6 +974,18 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           (lay.x + u * lay.w - 0.5) * PLATE_M,
           (lay.y + v * lay.d - 0.5) * PLATE_M,
         ])
+        // One physical hole, two walls: the neighbours' openings on shared
+        // edges cut this room's wall too (mirror of the recipe/editor).
+        const mirrored = room.id ? mirrorOpenings(
+          { id: room.id, x: lay.x, y: lay.y, w: lay.w, d: lay.d,
+            outline: lay.outline },
+          current.filter((r) => r.id && r.id !== room.id && r.layout
+              && (r.layout.level || 0) === lv)
+            .map((r) => ({ id: r.id!, name: r.name,
+              layout: { id: r.id!, x: r.layout!.x, y: r.layout!.y,
+                w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline,
+                openings: r.layout!.openings } })),
+          planW > 0 ? planW : 8) : []
         const edges = hull.map((a, i) => {
           const b = hull[(i + 1) % hull.length]
           const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
@@ -1001,8 +1013,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           }
           // Openings on this edge → along-edge spans (metres × kFac → world).
           // Letters and indices read through ONE normalization (planGeometry).
-          const spans = (lay.openings || [])
-            .map((o) => ({ op: o, norm: normalizeOpeningEdge(o) }))
+          const spans = [
+            ...(lay.openings || [])
+              .map((o) => ({ op: o, norm: normalizeOpeningEdge(o) })),
+            // Mirrored entries come pre-normalized onto this room's edges.
+            ...mirrored.map((o) => ({
+              op: o as unknown as NonNullable<typeof lay.openings>[number],
+              norm: { edge: o.edge, at: o.at } })),
+          ]
             .filter(({ norm }) => norm.edge === ed.i)
             .map(({ op: o, norm }) => {
               const halfW = Math.min((o.width_m * kFac) / 2, L / 2)
