@@ -37,24 +37,29 @@ const CANVAS_W = 420
  *  dashed passage) — shared by the editable markers and the mirrored,
  *  render-only ghosts of the neighbours' openings. */
 function OpeningGlyph({ type, col }: { type?: string; col: string }) {
+  // FULL-BLEED: the symbol spans the whole viewBox width — the container is
+  // sized to the opening's true width_m, so any inset here would draw the
+  // hole narrower than the 3D preview cuts it (the old 4..20 lines showed
+  // two thirds of the real width).
   return (
     <svg viewBox="0 0 24 24" width="100%" height={24}
       preserveAspectRatio="none" style={{ overflow: 'visible' }}>
       {type === 'door' ? (
         <>
-          {/* Gap in the edge line + hinge leaf + swing arc. */}
-          <line x1={4} y1={12} x2={20} y2={12} stroke={col}
+          {/* Gap in the edge line + hinge leaf + swing arc (fixed-size
+              swing hint at the hinge; the GAP carries the width). */}
+          <line x1={0} y1={12} x2={24} y2={12} stroke={col}
             strokeWidth={1} strokeDasharray="1.5 2" opacity={0.5} />
-          <line x1={4} y1={12} x2={4} y2={22} stroke={col} strokeWidth={1.5} />
-          <path d="M4 22 A10 10 0 0 0 14 12" fill="none" stroke={col} strokeWidth={1.2} />
+          <line x1={0} y1={12} x2={0} y2={22} stroke={col} strokeWidth={1.5} />
+          <path d="M0 22 A10 10 0 0 0 10 12" fill="none" stroke={col} strokeWidth={1.2} />
         </>
       ) : type === 'window' ? (
         <>
-          <line x1={4} y1={11} x2={20} y2={11} stroke={col} strokeWidth={1.4} />
-          <line x1={4} y1={13} x2={20} y2={13} stroke={col} strokeWidth={1.4} />
+          <line x1={0} y1={11} x2={24} y2={11} stroke={col} strokeWidth={1.4} />
+          <line x1={0} y1={13} x2={24} y2={13} stroke={col} strokeWidth={1.4} />
         </>
       ) : (
-        <line x1={4} y1={12} x2={20} y2={12} stroke={col}
+        <line x1={0} y1={12} x2={24} y2={12} stroke={col}
           strokeWidth={2} strokeDasharray="3 2.5" />
       )}
     </svg>
