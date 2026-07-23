@@ -91,6 +91,10 @@ export interface Tile {
   levelWallMats: Map<number, THREE.MeshStandardMaterial>;
   /** aktuell gewählte Etage der Innenansicht (Umschalter; Default EG) */
   levelFilter: number;
+  /** Zoom-Zugabe für die Innenansicht bei mehrgeschossigen Gebäuden:
+   *  Obergeschosse brauchen mehr Kameradistanz, sonst springt die Ansicht
+   *  beim Rauszoomen zurück auf die Hülle, bevor man sie sehen kann */
+  interiorLift: number;
   /** als outdoor markierte Räume (liefern keine Boden-Farbe fürs Gebäude) */
   roomOutdoor: Set<string>;
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
@@ -841,6 +845,9 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
     g.add(cab);
   }
 
+  // Obergeschosse: Innenansicht bis zu größerer Kameradistanz halten
+  tile.interiorLift = (usedLevels.size ? Math.max(...usedLevels) : 0) * storey * 1.5;
+
   // Etagen-Umschalter neben dem Label (nur bei mehreren Etagen; hängt an
   // der Innenansicht und erscheint damit erst beim Reinzoomen)
   if (usedLevels.size > 1) {
@@ -853,7 +860,7 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
     // beim Umschalten wandert er mit
     const swAt = (lv: number) => {
       const x = elevSwitchPos?.x ?? 2.2, z = elevSwitchPos?.z ?? 0;
-      sw.position.set(x, (lv + 1) * storey + 0.2, z);
+      sw.position.set(x, (lv + 2 / 3) * storey, z);
     };
     for (const lv of [...usedLevels].sort((a, b) => a - b)) {
       const btn = document.createElement('button');
@@ -905,7 +912,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
-    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), levelFilter: 0, roomOutdoor: new Set(),
+    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), levelFilter: 0, interiorLift: 0, roomOutdoor: new Set(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 

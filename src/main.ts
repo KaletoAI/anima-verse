@@ -523,7 +523,9 @@ async function startApp(username: string) {
     for (const tile of tiles.values()) {
       if (tile.isBuilding && tile.interior) {
         const d = Math.hypot(engine.target.x - tile.center.x, engine.target.z - tile.center.z);
-        tile.fadeTarget = engine.dist < INTERIOR_CAM_DIST && d < CELL * 0.75 ? 1 : 0;
+        // mehrgeschossig: Innenansicht bis zu größerer Distanz halten, sonst
+        // springt die Ansicht auf die Hülle, bevor man die Obergeschosse sieht
+        tile.fadeTarget = engine.dist < INTERIOR_CAM_DIST + tile.interiorLift && d < CELL * 0.75 ? 1 : 0;
         applyTileFade(tile, dt);
         if (tile.fade > 0.03) {
           applyLevelDisplay(tile);

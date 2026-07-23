@@ -34,10 +34,11 @@ export class RecipeLibrary {
     getRoomRecipe(roomId)
       .then((r) => {
         this.cache.set(roomId, r);
+        if (r?.placements?.length) console.info(`[recipe] ${roomId}: Rezept mit ${r.placements.length} Props`);
         this.onRecipe?.(roomId, r);
       })
       // Netzwerk/5xx: nicht als "kein Rezept" cachen, nächster Zyklus fragt neu
-      .catch(() => {})
+      .catch((e) => console.warn(`[recipe] ${roomId}: (noch) nicht ladbar — neuer Versuch folgt`, e))
       .finally(() => this.pending.delete(roomId));
   }
 
@@ -83,7 +84,10 @@ export function unmountRoomRecipe(tile: Tile, roomId: string): void {
 export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoomRecipe): Promise<void> {
   const rg = tile.roomGroups.get(roomId);
   const slot = tile.roomSlots.get(roomId);
-  if (!rg || !slot) return;
+  if (!rg || !slot) {
+    console.warn(`[recipe] ${roomId}: kein Raum-Slot auf der Kachel — Mount übersprungen`);
+    return;
+  }
 
   const k = roomFigureScale(tile.loc);
   const storey = storeyHeight(tile.loc);
@@ -179,6 +183,10 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
 
   // Rezept könnte während der Ladezeit ersetzt worden sein (Remount/Tile-
   // Rebuild): dann hängt g nicht mehr in der Szene -> nichts abtasten
-  if (g.parent !== rg || rg.getObjectByName(groupName(roomId)) !== g) return;
+  if (g.parent !== rg || rg.getObjectByName(groupName(roomId)) !== g) {
+    console.info(`[recipe] ${roomId}: Mount verworfen (Remount/Rebuild während des Ladens)`);
+    return;
+  }
+  console.info(`[recipe] ${roomId}: montiert — ${placements.length} Props, ${shell.walls.length} Wandsegmente`);
   sampleRoomWalkables(tile, roomId, g);
 }
