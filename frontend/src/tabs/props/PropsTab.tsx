@@ -38,7 +38,7 @@ export function PropsTab() {
   // Prop id whose 🧊 regenerate waits in the backend dialog (every 3D
   // generate button goes through the dialog — face count / texture size
   // are per-run overrides).
-  const [regenId, setRegenId] = useState<string | null>(null)
+  const [regen, setRegen] = useState<{ id: string; meshOnly: boolean } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
 
@@ -192,35 +192,41 @@ export function PropsTab() {
             onChanged={load}
             onDelete={() => remove(selectedProp.id)}
             armedDelete={armedDel === selectedProp.id}
-            onRegenerate={() => setRegenId(selectedProp.id)}
+            onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
+            onRegenerateMesh={() => setRegen({ id: selectedProp.id, meshOnly: true })}
           />
         ) : (
           <div className="ga-placeholder">{t('Pick a prop or create a new one.')}</div>
         )}
         <MeshBackendDialog
-          open={regenId !== null}
-          title={t('Regenerate prop model')}
+          open={regen !== null}
+          title={regen?.meshOnly
+            ? t('Re-mesh from the source image')
+            : t('Regenerate prop model')}
           backends={meshBackends}
           defaultBackend={meshBackends.length === 1 ? meshBackends[0].name : ''}
-          generateLabel={t('Regenerate')}
+          generateLabel={regen?.meshOnly ? t('Mesh') : t('Regenerate')}
           onGenerate={(backend, opts) => {
-            const id = regenId
-            setRegenId(null)
-            if (!id) return
+            const target = regen
+            setRegen(null)
+            if (!target) return
             void apiPost<{ status?: string }>(
-              `/world/props/${encodeURIComponent(id)}/generate`,
+              `/world/props/${encodeURIComponent(target.id)}/generate`,
               { mesh_backend: backend,
+                ...(target.meshOnly ? { mesh_only: true } : {}),
                 ...(opts.face_num ? { face_num: opts.face_num } : {}),
                 ...(opts.texture_size ? { texture_size: opts.texture_size } : {}) })
               .then((d) => {
                 toast(d?.status === 'already_running'
                   ? t('This prop is already generating.')
-                  : t('Regenerating the model…'))
+                  : target.meshOnly
+                    ? t('Meshing the source image…')
+                    : t('Regenerating the model…'))
                 startPoll()
               })
               .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
           }}
-          onClose={() => setRegenId(null)}
+          onClose={() => setRegen(null)}
         />
       </section>
       {/* One shared category vocabulary for the create form and the detail. */}

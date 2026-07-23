@@ -913,7 +913,8 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               image_backend_glob=str(data.get("image_backend") or "").strip(),
                               mesh_backend_glob=str(data.get("mesh_backend") or "").strip(),
                               face_num=_mesh_int(data.get("face_num")) or None,
-                              texture_size=_mesh_int(data.get("texture_size")) or None):
+                              texture_size=_mesh_int(data.get("texture_size")) or None,
+                              mesh_only=bool(data.get("mesh_only"))):
         return {"status": "already_running"}
     return {"status": "generating"}
 

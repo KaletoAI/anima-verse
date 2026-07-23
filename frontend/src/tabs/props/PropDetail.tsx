@@ -42,13 +42,15 @@ const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
 const MARKER_SAVE_DEBOUNCE_MS = 400
 
 export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
-  armedDelete, onRegenerate }: {
+  armedDelete, onRegenerate, onRegenerateMesh }: {
   prop: PropFull
   pending: boolean
   cacheBump: number
   onChanged: () => Promise<unknown>
   onDelete: () => void
   armedDelete: boolean
+  /** Re-mesh the EXISTING source image (skips the image render). */
+  onRegenerateMesh: () => void
   /** Re-run the source→mesh chain with the stored description/name. */
   onRegenerate: () => void
 }) {
@@ -103,10 +105,14 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
     width_m: false, depth_m: false, height_m: false,
   })
   const [liveBbox, setLiveBbox] = useState<[number, number, number] | null>(null)
+  // Source image beside the model (left pane of the split preview) — 404 =
+  // uploaded prop without a render, the pane then shows a placeholder.
+  const [srcOk, setSrcOk] = useState(true)
   useEffect(() => {
     setPinned({ width_m: false, depth_m: false, height_m: false })
     setLiveBbox(null)
   }, [prop.id])
+  useEffect(() => { setSrcOk(true) }, [prop.id, cacheBump])
 
   // Per render, so turning the orientation fix updates the suggestions live —
   // the viewer's measured box wins over the stored one.
@@ -556,6 +562,36 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
           {pending ? (
             <span className="ga-hint">{t('Generating the model — this takes a few minutes.')}</span>
           ) : null}
+          {/* Split preview: the SOURCE IMAGE the mesh came from on the left,
+              the model on the right — and the image can be re-meshed
+              directly (dialog picks backend / face count / texture size;
+              the image render is skipped). */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexWrap: 'wrap' }}>
+          <div style={{ flex: '0 1 220px', minWidth: 160, display: 'flex',
+            flexDirection: 'column', gap: 4 }}>
+            {srcOk ? (
+              <img
+                src={`/assets/props/${enc}/source?v=${encodeURIComponent(prop.created_at || '')}-${cacheBump}`}
+                alt={t('Source image')}
+                onError={() => setSrcOk(false)}
+                style={{ width: '100%', flex: 1, maxHeight: 340,
+                  objectFit: 'contain', borderRadius: 8,
+                  border: '1px solid var(--border, #30363d)',
+                  background: 'rgba(255,255,255,0.04)' }}
+              />
+            ) : (
+              <div className="ga-empty" style={{ flex: 1 }}>
+                {t('No source image (uploaded model).')}
+              </div>
+            )}
+            <button type="button" className="ga-btn ga-btn-sm"
+              disabled={pending || !srcOk}
+              onClick={onRegenerateMesh}
+              title={t('Mesh THIS image again — no new render; backend, face count and texture size come from the dialog. Dims and markers stay.')}>
+              ⚙ {t('3D from this image')}
+            </button>
+          </div>
+          <div style={{ flex: '1 1 260px', minWidth: 240 }}>
           {prop.has_model ? (
             <Model3DViewer
               url={`/assets/props/${enc}/model?v=${encodeURIComponent(prop.created_at || '')}-${cacheBump}`}
@@ -591,6 +627,8 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               {t('No model yet — generate it or upload a GLB below.')}
             </div>
           )}
+          </div>
+          </div>
 
           {/* Orientation fix — ↻ adds +90°, the field sets a free exact angle. */}
           {prop.has_model ? (

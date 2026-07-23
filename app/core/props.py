@@ -768,7 +768,8 @@ def _render_source(prop_id: str, backend_glob: str,
 
 def _generate(prop_id: str, prompt: str, negative: str,
               image_backend_glob: str, mesh_backend_glob: str,
-              face_num: Any = None, texture_size: Any = None) -> Dict[str, Any]:
+              face_num: Any = None, texture_size: Any = None,
+              mesh_only: bool = False) -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
     queue panel via their channel entries)."""
@@ -783,12 +784,16 @@ def _generate(prop_id: str, prompt: str, negative: str,
 
     error = ""
     try:
-        if not _render_source(prop_id, image_backend_glob, prompt, negative):
+        # mesh_only re-meshes the EXISTING source image (new backend / face
+        # count / texture size) without burning an image render.
+        if not mesh_only and not _render_source(prop_id, image_backend_glob,
+                                                prompt, negative):
             error = "source render failed"
             return {"ok": False, "error": error}
         src = source_path(prop_id)
         if not src:
-            error = "source image missing"
+            error = ("no source image to mesh from" if mesh_only
+                     else "source image missing")
             return {"ok": False, "error": error}
 
         from app.imagegen.service import get_image_service
@@ -849,7 +854,8 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        image_backend_glob: str = "",
                        mesh_backend_glob: str = "",
                        face_num: Any = None,
-                       texture_size: Any = None) -> bool:
+                       texture_size: Any = None,
+                       mesh_only: bool = False) -> bool:
     """Start the source→mesh chain in the background. Different mesh backends
     for the same prop run concurrently (each queues on its own GPU channel);
     False only while THIS prop+backend combination is already generating
@@ -867,7 +873,7 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
         try:
             _generate(pid, prompt, negative, image_backend_glob,
                       mesh_backend_glob, face_num=face_num,
-                      texture_size=texture_size)
+                      texture_size=texture_size, mesh_only=mesh_only)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:
