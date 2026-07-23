@@ -945,6 +945,29 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         >
           🏢
         </button>
+        {onMap3d ? (
+          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Floor texture of THIS storey: the client tiles the whole level plate with the kind; a room floor kind overrides only its own area. Empty = the global floor kind.')}>
+            🟫
+            <select
+              className="ga-input"
+              style={{ maxWidth: 130 }}
+              value={map3d?.level_floors?.[String(level)] || ''}
+              onChange={(e) => {
+                const merged = { ...(map3d?.level_floors || {}) }
+                if (e.target.value) merged[String(level)] = e.target.value
+                else delete merged[String(level)]
+                onMap3d('level_floors',
+                  Object.keys(merged).length ? merged : undefined)
+              }}
+            >
+              <option value="">{t('Level floor: global')}</option>
+              {surfaceKinds.map((k) => (
+                <option key={k.kind} value={k.kind}>{k.kind}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
 
       {/* Scale anchor missing: floor-plan geometry has no real size without

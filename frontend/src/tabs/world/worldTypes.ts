@@ -110,6 +110,9 @@ export interface Map3D {
    *  sizes (from width_m), figure size (1.7 × k), storey stacking and the
    *  shell height. Absent = legacy behavior. */
   plan_width_m?: number
+  /** Floor-texture KIND per storey ({"0": "parquet"}) — the client tiles the
+   *  level plate with it; a room's surfaces.floor overrides its own area. */
+  level_floors?: Record<string, string>
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
    *  8×8 reference square, auto-closed — the client renders floor plates
    *  and walls per used level from it. Absent = rectangle as before. */

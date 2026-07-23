@@ -875,9 +875,26 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       shape.closePath()
       const plateGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.14, bevelEnabled: false })
       for (const lv of lvls) {
-        const plate = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({
-          color: 0xd8d0c2, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.4,
-        }))
+        // Per-level floor kind (map3d.level_floors): the plate tiles with
+        // the kind's texture at its real size — rooms lay their own floor
+        // plates ABOVE this one, so a room floor overrides only its area.
+        const lvKind = m3?.level_floors?.[String(lv)] || ''
+        const lvTex = lvKind ? ensureSurfaceTex(lvKind) : null
+        let plateMat: Material
+        if (lvTex?.tex) {
+          const tile = lvTex.sizeM * kFac
+          const t = (lvTex.tex as Texture).clone()
+          t.needsUpdate = true
+          t.repeat.set(1 / tile, 1 / tile)
+          plateMat = new THREE.MeshStandardMaterial({
+            map: t, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.4,
+          })
+        } else {
+          plateMat = new THREE.MeshStandardMaterial({
+            color: 0xd8d0c2, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.4,
+          })
+        }
+        const plate = new THREE.Mesh(plateGeo, plateMat)
         plate.rotation.x = Math.PI / 2
         plate.position.y = lv * lhEff + 0.08
         boxes.add(plate)

@@ -340,6 +340,22 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                                round(min(max(float(ev[1]), 0.0), 1.0), 4)]
         except (TypeError, ValueError):
             pass
+    # Floor texture per LEVEL: surface-texture kind for each storey's floor
+    # plate ({"0": "parquet", "-1": "stone"}). A room's own surfaces.floor
+    # overrides it for the room area only — this fills the REST of the plate
+    # (rooms rarely cover a whole storey).
+    lf = raw.get("level_floors")
+    if isinstance(lf, dict):
+        floors: Dict[str, str] = {}
+        for key, val in list(lf.items())[:32]:
+            try:
+                lvl = int(float(key))
+            except (TypeError, ValueError):
+                continue
+            if isinstance(val, str) and val.strip():
+                floors[str(lvl)] = val.strip()[:60]
+        if floors:
+            out["level_floors"] = floors
     return out
 
 
