@@ -7,7 +7,11 @@ the COMPOSED conveniences so the client renders without re-deriving them:
 - ``outline`` in ABSOLUTE plate fractions (the drawn hull or the implicit
   rectangle — no bbox-local mechanics on the client side),
 - ``openings`` normalized to polygon edge INDICES (legacy letters converted,
-  S/W flip their ``at`` against the clockwise edge direction),
+  S/W flip their ``at`` against the clockwise edge direction) — INCLUDING the
+  neighbours' openings that sit on a shared wall: one physical door is edited
+  only in the room that owns it but has to be a hole in BOTH rooms' walls, so
+  the recipe mirrors it geometrically (see ``_mirrored_openings``),
+- ``exit`` derived from the doors when the room has no explicit one,
 - ``placements`` joined with each prop's real dims + model url (REAL-SIZE
   rule: a placement never scales a prop — its own dims × the plan factor k
   do), and
@@ -85,6 +89,197 @@ def _normalize_opening(op: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# ── Shared-wall geometry ────────────────────────────────────────────────
+# Mirror image of ``planGeometry.sharedEdges`` (frontend) — SAME tolerances,
+# SAME antiparallel test, so server and editor agree on what "one wall" is.
+# Change both or neither. All coordinates are absolute plate fractions; the
+# thresholds are metres, converted with the location's plan width. Without a
+# plan width the frontend falls back to 0.02 / 0.1 fractions, which is exactly
+# the 8 m reference plate — do the same here.
+SHARE_TOL_M = 0.15
+MIN_SHARE_M = 0.8
+_REFERENCE_PLATE_M = 8.0
+# How far the derived exit sits inside the room, measured from the opening.
+EXIT_INSET_M = 0.3
+# Opening types a character can walk through (a window is not a way out).
+_WALKABLE_TYPES = ("door", "passage")
+
+
+def _layout_rect(lay: Any) -> Optional[tuple]:
+    """(x, y, w, d) of a layout, or None when it is not a usable rectangle."""
+    if not isinstance(lay, dict):
+        return None
+    try:
+        return (float(lay["x"]), float(lay["y"]),
+                float(lay["w"]), float(lay["d"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _abs_outline(lay: Dict[str, Any]) -> List[List[float]]:
+    """A layout's hull in ABSOLUTE plate fractions (mirrors
+    ``planGeometry.absOutline``); [] when the layout has no usable rect."""
+    rect = _layout_rect(lay)
+    if not rect:
+        return []
+    x, y, w, d = rect
+    pts = lay.get("outline") or _UNIT_SQUARE
+    if not isinstance(pts, list) or len(pts) < 3:
+        pts = _UNIT_SQUARE
+    try:
+        return [[x + float(u) * w, y + float(v) * d] for u, v in pts]
+    except (TypeError, ValueError):
+        return []
+
+
+def _unit_edge(outline: List[List[float]], i: int) -> Optional[tuple]:
+    """Directed edge i as (ax, ay, ux, uy, length); None for a degenerate one."""
+    a = outline[i]
+    b = outline[(i + 1) % len(outline)]
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return None
+    return (a[0], a[1], dx / length, dy / length, length)
+
+
+def _point_on_edge(outline: List[List[float]], i: int,
+                   at: float) -> List[float]:
+    a = outline[i]
+    b = outline[(i + 1) % len(outline)]
+    return [a[0] + (b[0] - a[0]) * at, a[1] + (b[1] - a[1]) * at]
+
+
+def _mirrored_openings(lay: Dict[str, Any], siblings: List[Dict[str, Any]],
+                       plan_width_m: float) -> List[Dict[str, Any]]:
+    """The neighbours' openings that physically pierce THIS room's wall.
+
+    An opening is one hole in one wall. It is defined and edited in the room
+    that owns it, but a wall between two rooms belongs to both — so every
+    sibling opening whose centre falls on a shared edge of this room is
+    reported here as a normal opening entry, translated onto this room's own
+    edge index and ``at``.
+
+    The translation is a projection, not a formula: the two hulls are wound
+    clockwise, so a shared wall is traversed in OPPOSITE directions by the two
+    rooms — projecting the opening's world point onto this room's directed
+    edge flips ``at`` by itself. ``to`` becomes the owning room (that is where
+    the door leads from here) and ``mirrored`` marks the entry as
+    not-editable-here; everything else (type/width/height/sill) is carried
+    over unchanged.
+    """
+    outline = _abs_outline(lay)
+    if len(outline) < 3:
+        return []
+    planw = plan_width_m if plan_width_m > 0 else _REFERENCE_PLATE_M
+    tol = SHARE_TOL_M / planw
+    min_overlap = MIN_SHARE_M / planw
+    level = int(lay.get("level") or 0)
+
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for sibling in siblings:
+        slay = sibling.get("layout")
+        if not isinstance(slay, dict) or int(slay.get("level") or 0) != level:
+            continue
+        sib_id = str(sibling.get("id") or "")
+        sib_outline = _abs_outline(slay)
+        if len(sib_outline) < 3:
+            continue
+        sib_openings = [_normalize_opening(op)
+                        for op in (slay.get("openings") or [])
+                        if isinstance(op, dict)]
+        if not sib_openings:
+            continue
+
+        for i in range(len(outline)):
+            mine = _unit_edge(outline, i)
+            if not mine:
+                continue
+            ax, ay, ux, uy, alen = mine
+            for j in range(len(sib_outline)):
+                theirs = _unit_edge(sib_outline, j)
+                if not theirs:
+                    continue
+                bx, by, vx, vy, _ = theirs
+                # Antiparallel within ~1°: two rooms meeting at a wall face
+                # each other (both hulls wound clockwise).
+                if abs(ux * vy - uy * vx) > 0.02 or ux * vx + uy * vy > -0.98:
+                    continue
+                if abs((bx - ax) * uy - (by - ay) * ux) > tol:
+                    continue
+                t0 = (bx - ax) * ux + (by - ay) * uy
+                b_end = sib_outline[(j + 1) % len(sib_outline)]
+                t1 = ((b_end[0] - ax) * ux + (b_end[1] - ay) * uy)
+                start = max(0.0, min(t0, t1))
+                end = min(alen, max(t0, t1))
+                if end - start < min_overlap:
+                    continue
+
+                for op in sib_openings:
+                    try:
+                        if int(op.get("edge") or 0) != j:
+                            continue
+                        at = float(op.get("at") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    px, py = _point_on_edge(sib_outline, j, at)
+                    t = (px - ax) * ux + (py - ay) * uy
+                    if t < start - 1e-9 or t > end + 1e-9:
+                        continue  # the opening sits outside the shared stretch
+                    key = (sib_id, j, round(at, 6))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    entry = dict(op)
+                    entry["edge"] = i
+                    entry["at"] = _r(max(0.0, min(1.0, t / alen)))
+                    entry["to"] = sib_id
+                    entry["mirrored"] = True
+                    out.append(entry)
+    return out
+
+
+def _derive_exit(outline: List[List[float]], openings: List[Dict[str, Any]],
+                 plan_width_m: float) -> Optional[List[float]]:
+    """Where a character enters/leaves when the room has no explicit exit.
+
+    An opening to ``outside`` wins; otherwise the first door/passage in a
+    stable order (edge index, then ``at``) — so the derived exit does not
+    jump around as openings are added elsewhere. The point is the opening's
+    centre pushed EXIT_INSET_M into the room: with clockwise hulls the
+    interior lies to the right of every directed edge, i.e. along (-uy, ux).
+    """
+    walkable = [op for op in openings
+                if str(op.get("type") or "door").lower() in _WALKABLE_TYPES]
+    if not walkable:
+        return None
+
+    def _order(op: Dict[str, Any]) -> tuple:
+        try:
+            return (int(op.get("edge") or 0), float(op.get("at") or 0))
+        except (TypeError, ValueError):
+            return (0, 0.0)
+
+    walkable.sort(key=_order)
+    pick = next((op for op in walkable
+                 if str(op.get("to") or "").strip().lower() == "outside"),
+                walkable[0])
+    try:
+        i = int(pick.get("edge") or 0) % len(outline)
+        at = float(pick.get("at") or 0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    px, py = _point_on_edge(outline, i, at)
+    edge = _unit_edge(outline, i)
+    if not edge:
+        return [_r(px), _r(py)]
+    _, _, ux, uy, _ = edge
+    inset = EXIT_INSET_M / (plan_width_m if plan_width_m > 0 else _REFERENCE_PLATE_M)
+    return [_r(px - uy * inset), _r(py + ux * inset)]
+
+
 def compose_prop_marker(*, bbox: List[float], rotation: Any,
                         dims: List[float], frac: List[float],
                         facing: Optional[float], placement_yaw: float,
@@ -130,24 +325,33 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
     return out
 
 
-def compose_recipe(room: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The full recipe of ONE room, or None when it has no layout."""
+def compose_recipe(room: Dict[str, Any],
+                   siblings: Any = (),
+                   plan_width_m: float = 0.0) -> Optional[Dict[str, Any]]:
+    """The full recipe of ONE room, or None when it has no layout.
+
+    ``siblings`` are the OTHER rooms of the same location; those on the same
+    level contribute their openings on shared walls (see
+    ``_mirrored_openings``) and thereby also feed the exit derivation.
+    ``plan_width_m`` is the location's scale anchor — only the tolerances of
+    the shared-wall test and the exit inset use it; 0 means "assume the 8 m
+    reference plate", the same fallback the editor uses.
+    """
     lay = room.get("layout")
-    if not isinstance(lay, dict):
+    rect = _layout_rect(lay)
+    if not rect:
         return None
-    try:
-        x = float(lay["x"])
-        y = float(lay["y"])
-        w = float(lay["w"])
-        d = float(lay["d"])
-    except (KeyError, TypeError, ValueError):
-        return None
+    x, y, w, d = rect
 
     pts = lay.get("outline") or _UNIT_SQUARE
     outline = [[_r(x + float(u) * w), _r(y + float(v) * d)] for u, v in pts]
 
+    own_id = str(room.get("id") or "")
+    others = [s for s in (siblings or [])
+              if isinstance(s, dict) and str(s.get("id") or "") != own_id]
     openings = [_normalize_opening(op) for op in (lay.get("openings") or [])
                 if isinstance(op, dict)]
+    openings.extend(_mirrored_openings(lay, others, plan_width_m))
 
     from app.core import props as prop_store
     placements: List[Dict[str, Any]] = []
@@ -207,6 +411,14 @@ def compose_recipe(room: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         payload["surfaces"] = lay["surfaces"]
     if lay.get("exit"):
         payload["exit"] = lay["exit"]
+    else:
+        # No explicit exit: derive one from the doors so a room with a door is
+        # never "unreachable". An explicit exit always wins (it is the
+        # override), and ``exit_derived`` tells the client which it got.
+        derived = _derive_exit(outline, openings, plan_width_m)
+        if derived:
+            payload["exit"] = derived
+            payload["exit_derived"] = True
     if lay.get("markers"):
         payload["markers"] = lay["markers"]
     if lay.get("rotation") is not None:
