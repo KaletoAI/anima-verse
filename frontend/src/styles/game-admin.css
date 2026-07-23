@@ -2643,3 +2643,29 @@ html, * {
 .ga-mind-list li { font-size: 12px; line-height: 1.45; }
 .ga-mind-list .ts { opacity: 0.55; font-size: 11px; margin-right: 6px; }
 .ga-mind-empty { opacity: 0.5; font-size: 12px; }
+
+/* Outfit batch (3D tab): one row per saved outfit — checkbox, name, cache
+   state, per-run result. Scrolls once a wardrobe gets long. */
+.ga-outfit-batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 44vh;
+  overflow-y: auto;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+  padding: 6px;
+}
+.ga-outfit-batch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85em;
+}
+.ga-outfit-batch-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

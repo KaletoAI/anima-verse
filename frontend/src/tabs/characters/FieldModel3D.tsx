@@ -15,6 +15,7 @@ import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { Model3DViewer } from './Model3DViewer'
+import { OutfitBatchDialog } from './OutfitBatchDialog'
 
 interface Model3DInfo {
   filename?: string
@@ -77,6 +78,7 @@ export function FieldModel3D({ character }: { character: string }) {
   const [clips, setClips] = useState<AnimationClip[]>([])
   const [clipUrl, setClipUrl] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [batchOpen, setBatchOpen] = useState(false)
   const [pendingFbx, setPendingFbx] = useState<File | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -454,6 +456,16 @@ export function FieldModel3D({ character }: { character: string }) {
         >
           {pending ? t('Generating…') : model ? t('Regenerate') : t('Generate')}
         </button>
+        {/* Pre-warm the whole wardrobe: one T-pose render + mesh per saved
+            outfit, without dressing the character. */}
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          onClick={() => setBatchOpen(true)}
+          title={t('Renders the T-pose reference and the mesh for every saved outfit — the character keeps wearing what it wears.')}
+        >
+          ⚙ {t('All outfits…')}
+        </button>
         <button
           type="button"
           className="ga-btn ga-btn-sm"
@@ -512,6 +524,13 @@ export function FieldModel3D({ character }: { character: string }) {
         }
         onGenerate={(backend) => generate(!!model, backend)}
         onClose={() => setDialogOpen(false)}
+      />
+
+      <OutfitBatchDialog
+        open={batchOpen}
+        character={character}
+        onClose={() => setBatchOpen(false)}
+        onDone={load}
       />
     </div>
   )
