@@ -807,7 +807,7 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
     const cap = box(half * 2 + postT, 0.05, half * 2 + postT, frameMat);
     cap.position.set(exl, topY + 0.025, ezl);
     g.add(cap);
-    elevSwitchPos = new THREE.Vector3(exl, topY + 0.55, ezl);
+    elevSwitchPos = new THREE.Vector3(exl, 0, ezl);   // XZ-Anker, Höhe folgt der Etage
     // Glas auf drei Seiten — offen Richtung Gebäudemitte
     const open = Math.abs(exl) > Math.abs(ezl) ? (exl > 0 ? 'nx' : 'px') : (ezl > 0 ? 'nz' : 'pz');
     const paneLen = half * 2 - postT;
@@ -846,6 +846,15 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
   if (usedLevels.size > 1) {
     const el = document.createElement('div');
     el.className = 'level-switch';
+    const sw = new CSS2DObject(el);
+    // am Fahrstuhl verankern (dort wechselt man die Etage; ohne Fahrstuhl
+    // nahe der Kachelmitte) — auf DECKENHÖHE der gewählten Etage, damit er
+    // beim Blick in die Etage im Bild bleibt statt über dem Dach zu schweben;
+    // beim Umschalten wandert er mit
+    const swAt = (lv: number) => {
+      const x = elevSwitchPos?.x ?? 2.2, z = elevSwitchPos?.z ?? 0;
+      sw.position.set(x, (lv + 1) * storey + 0.2, z);
+    };
     for (const lv of [...usedLevels].sort((a, b) => a - b)) {
       const btn = document.createElement('button');
       btn.textContent = lv === 0 ? 'EG' : `${lv}.`;
@@ -853,16 +862,12 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
       btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         tile.levelFilter = lv;
+        swAt(lv);
         el.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
       });
       el.appendChild(btn);
     }
-    const sw = new CSS2DObject(el);
-    // am Fahrstuhl verankern — dort wechselt man die Etage, und der Punkt
-    // ist frei von Raum-Labels; ohne Fahrstuhl wie bisher über der
-    // obersten Etage nahe der Kachelmitte
-    if (elevSwitchPos) sw.position.copy(elevSwitchPos);
-    else sw.position.set(2.2, (Math.max(...usedLevels) + 1) * storey + 0.6, 0);
+    swAt(tile.levelFilter);
     g.add(sw);
   }
 
