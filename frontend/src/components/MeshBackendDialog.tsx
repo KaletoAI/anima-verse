@@ -47,15 +47,20 @@ export function MeshBackendDialog({
   const [picked, setPicked] = useState(defaultBackend)
   const [faceDraft, setFaceDraft] = useState('')
   const [texSize, setTexSize] = useState('')
-  // Reset the selection to the default each time the dialog opens (the backends
-  // and default may have loaded/changed between opens).
+  // Reset the selection to the default each time the dialog opens (the
+  // backends and default may have loaded/changed between opens). Keyed on
+  // the backends' CONTENT, not the array identity — the callers refresh
+  // their lists on every job poll, and a fresh (but identical) array must
+  // not wipe a selection the admin just made.
+  const backendsKey = backends.map((b) => `${b.name}:${b.face_num || 0}`).join('|')
   useEffect(() => {
     if (!open) return
     setPicked(defaultBackend)
     const b = backends.find((x) => x.name === defaultBackend)
     setFaceDraft(b?.face_num ? String(b.face_num) : '')
     setTexSize('')
-  }, [open, defaultBackend, backends])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaultBackend, backendsKey])
 
   if (!open) return null
   const none = backends.length === 0
