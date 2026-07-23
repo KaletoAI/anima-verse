@@ -1,13 +1,13 @@
 """Animation sets — which figure's clips a character uses.
 
-A clip file is ``<kind>[_<set>].fbx``: the KIND comes from what the character
+A clip lives at ``[<set>/]<kind>.fbx``: the KIND comes from what the character
 is doing (the pose preset's ``animation``), the SET from WHO it is. Setting a
-character's set once to ``female`` gives it walk_female, sit_female,
-sleep_female … automatically — no per-character clip assignment anywhere.
+character's set once to ``female`` gives it female/walk, female/sit,
+female/sleep … automatically — no per-character clip assignment anywhere.
 
 The three BASE sets are always offered because they follow from data the
 characters already carry: gender (female/male) and the template's ``humanoid``
-feature (animal). Any further set is simply a new file-name suffix in
+feature (animal). Any further set is simply a new subdirectory in
 shared/models/clips — discovered, never hardcoded.
 
 A character with no explicit set is NOT setless: its set is DERIVED, so the
@@ -82,7 +82,7 @@ def resolve_sets(character_name: str,
     """The character's set chain, most specific first.
 
     An explicit set need NOT be complete: a character on ``lady`` that has no
-    ``sit_lady`` clip should sit like the figure it derives from (``female``),
+    ``lady/sit`` clip should sit like the figure it derives from (``female``),
     not like the neutral default. So the chain is
 
         explicit set  ->  derived set (animal / female / male)
