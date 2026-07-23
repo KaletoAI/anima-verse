@@ -13,7 +13,7 @@ export interface MeshGenerateOpts {
   texture_size?: number
 }
 
-const TEXTURE_SIZES = [512, 1024, 2048, 4096]
+const TEXTURE_SIZES = [512, 1024, 2048]
 
 /**
  * Backend picker for a mesh generation — shared by EVERY 3D generate button

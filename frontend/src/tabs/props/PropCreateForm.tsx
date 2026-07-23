@@ -170,7 +170,7 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
               title={t('Passed to the gateway as soon as the alias declares a "texture size" parameter; until then it is ignored there.')}
               onChange={(e) => setTexSize(e.target.value)}>
               <option value="">{t('— backend default —')}</option>
-              {[512, 1024, 2048, 4096].map((v) => (
+              {[512, 1024, 2048].map((v) => (
                 <option key={v} value={String(v)}>{v} × {v}</option>
               ))}
             </select>
