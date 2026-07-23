@@ -171,6 +171,37 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const seededRef = useRef('')
   const [confirmClear, setConfirmClear] = useState(false)
+  // Direct mode (skip LLM proposal + generation, user requirement
+  // 2026-07-23): pick library props by hand, the job enters at placement.
+  const [pickMode, setPickMode] = useState(false)
+  const [libProps, setLibProps] = useState<Array<{ id: string; name: string
+    width_m?: number; depth_m?: number; height_m?: number
+    has_model?: boolean }> | null>(null)
+  const [pickCounts, setPickCounts] = useState<Record<string, number>>({})
+
+  useEffect(() => {
+    if (!pickMode || libProps !== null) return
+    let stale = false
+    apiGet<{ props?: Array<{ id: string; name?: string; width_m?: number
+      depth_m?: number; height_m?: number; has_model?: boolean }> }>('/world/props')
+      .then((d) => {
+        if (stale) return
+        setLibProps((d.props || []).map((p) => ({
+          id: p.id, name: p.name || p.id, width_m: p.width_m,
+          depth_m: p.depth_m, height_m: p.height_m, has_model: p.has_model })))
+      })
+      .catch(() => { if (!stale) setLibProps([]) })
+    return () => { stale = true }
+  }, [pickMode, libProps])
+
+  const startDirect = () => {
+    const existing = Object.entries(pickCounts)
+      .filter(([, c]) => c > 0)
+      .map(([prop_id, count]) => ({ prop_id, count }))
+    if (!existing.length) return
+    setPickMode(false)
+    void run('direct', { proposal: { existing } })
+  }
 
   useEffect(() => {
     if (state !== 'proposal_ready' || !status?.proposal) {
@@ -237,7 +268,52 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
   )
 
   let body: ReactNode
-  if (!status) {
+  if (!status && pickMode) {
+    const total = Object.values(pickCounts).reduce((a, c) => a + (c > 0 ? c : 0), 0)
+    body = (
+      <>
+        <div className="ga-plan-panel-title">{t('Place from library')}</div>
+        <div className="ga-form-hint">
+          {t('Pick the pieces by hand — no LLM proposal, nothing is generated. The solver places them automatically; you review the ghosts as usual.')}
+        </div>
+        {libProps === null ? (
+          <div className="ga-loading">{t('Loading…')}</div>
+        ) : libProps.length ? (
+          <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+            {libProps.map((p) => (
+              <div key={p.id} className="ga-furnish-row">
+                <span style={{ flex: 1 }}>
+                  {p.name}
+                  <span className="ga-hint" style={{ marginLeft: 8 }}>
+                    {p.width_m}×{p.depth_m}×{p.height_m} m
+                    {p.has_model ? '' : ` · ${t('no model yet — placeholder')}`}
+                  </span>
+                </span>
+                <input className="ga-input" type="number" min={0} max={12}
+                  style={{ width: 56 }}
+                  value={pickCounts[p.id] || 0}
+                  onChange={(ev) => setPickCounts((prev) => ({
+                    ...prev,
+                    [p.id]: Math.max(0, Math.min(12, Number(ev.target.value) || 0)),
+                  }))} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="ga-form-hint">{t('The library is empty.')}</div>
+        )}
+        <div className="ga-furnish-actions">
+          <button className="ga-btn ga-btn-sm" onClick={() => setPickMode(false)}>
+            {t('Back')}
+          </button>
+          <button className="ga-btn ga-btn-sm ga-btn-primary"
+            disabled={busy || total === 0} onClick={startDirect}>
+            {t('Place {n} pieces').replace('{n}', String(total))}
+          </button>
+        </div>
+      </>
+    )
+  } else if (!status) {
     body = (
       <>
         <div className="ga-plan-panel-title">{t('Currently in the room')}</div>
@@ -273,6 +349,11 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
                 onClick={() => setConfirmClear(true)}
                 title={t('Empties the room in the editor draft — your Save decides.')}>
                 {t('Clear room')}
+              </button>
+              <button className="ga-btn ga-btn-sm" disabled={busy}
+                onClick={() => setPickMode(true)}
+                title={t('Skip the LLM proposal and the generation — pick library props by hand, only the placement runs.')}>
+                📦 {t('Place from library')}
               </button>
               <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
                 onClick={() => { void run('start') }}>

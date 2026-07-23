@@ -1010,6 +1010,17 @@ def furnish_start(room_id: str,
     return _furnish_call(start, room_id)
 
 
+@router.post("/rooms/{room_id}/furnish/direct")
+async def furnish_direct(room_id: str, request: Request,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Skip the LLM proposal and the generation: place ONLY admin-picked
+    library props — body: {proposal: {existing: [{prop_id, count}]}}. The
+    job enters at placement; review/accept as usual."""
+    body = await _furnish_body(request)
+    from app.core.room_furnish import start_direct
+    return _furnish_call(start_direct, room_id, body.get("proposal") or body)
+
+
 @router.post("/rooms/{room_id}/furnish/confirm")
 async def furnish_confirm(room_id: str, request: Request,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

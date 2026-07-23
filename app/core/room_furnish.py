@@ -778,6 +778,25 @@ def start(room_id: str) -> Dict[str, Any]:
     return get_status(room_id) or {}
 
 
+def start_direct(room_id: str, proposal: Any) -> Dict[str, Any]:
+    """Skip stage 1 and 2 entirely: place ONLY admin-picked library props
+    (user requirement 2026-07-23). The job enters at the generation phase
+    with nothing to generate and falls straight through to placement —
+    review/accept work exactly like the LLM path."""
+    loc, room = _load_room(room_id)
+    _geometry(loc, room)  # layout + scale anchor are start conditions here too
+    if _get_row(room_id):
+        raise FurnishError("A furnishing job for this room is already open.", 409)
+    raw = proposal.get("existing") if isinstance(proposal, dict) else None
+    clean = {"existing": _valid_existing(raw, _library()), "new": []}
+    if not clean["existing"]:
+        raise FurnishError("Pick at least one library prop.", 400)
+    _insert_row(room_id, str(loc.get("id") or ""))
+    _update_row(room_id, state=STATE_GENERATING, proposal=clean)
+    _spawn(room_id, "generate", str(room.get("name") or room_id))
+    return get_status(room_id) or {}
+
+
 def confirm(room_id: str, proposal: Any) -> Dict[str, Any]:
     """Persist the admin-edited proposal and start generation + placement."""
     row = _get_row(room_id)
