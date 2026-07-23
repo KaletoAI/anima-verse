@@ -33,6 +33,10 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
   const [sizeM, setSizeM] = useState('1')
   const [imageBackend, setImageBackend] = useState('')
   const [meshBackend, setMeshBackend] = useState('')
+  // Per-run mesh overrides (empty = the picked backend's defaults) — the
+  // same pair every 3D generate dialog offers.
+  const [faceDraft, setFaceDraft] = useState('')
+  const [texSize, setTexSize] = useState('')
   const [style, setStyle] = useState('')
   const [negative, setNegative] = useState('')
   const [styleTouched, setStyleTouched] = useState(false)
@@ -68,6 +72,17 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
       description: description.trim(),
       prompt: finalPrompt, negative,
       image_backend: imageBackendInfo?.name || '', mesh_backend: meshBackend,
+      ...((): Record<string, number> => {
+        const out: Record<string, number> = {}
+        const f = parseInt(faceDraft, 10)
+        const selected = meshBackends.find((x) => x.name === meshBackend)
+        // Untouched prefill = the backend default — only a changed value is
+        // a real per-run override.
+        if (Number.isFinite(f) && f > 0 && f !== (selected?.face_num || 0)) out.face_num = f
+        const tex = parseInt(texSize, 10)
+        if (Number.isFinite(tex) && tex > 0) out.texture_size = tex
+        return out
+      })(),
     })
       .then((d) => {
         toast(t('Generating the prop…'))
@@ -77,7 +92,7 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, category, sizeM, description, finalPrompt, negative, imageBackendInfo,
-      meshBackend, onCreated, onGenerating, t, toast])
+      meshBackend, meshBackends, faceDraft, texSize, onCreated, onGenerating, t, toast])
 
   const createEmpty = useCallback(() => {
     if (!name.trim()) return
@@ -131,12 +146,32 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
           </Field>
           <Field label={t('Mesh backend (img2mesh)')}>
             <select className="ga-input" value={meshBackend}
-              onChange={(e) => setMeshBackend(e.target.value)}>
+              onChange={(e) => {
+                setMeshBackend(e.target.value)
+                const b = meshBackends.find((x) => x.name === e.target.value)
+                setFaceDraft(b?.face_num ? String(b.face_num) : '')
+              }}>
               <option value="">{t('— default (cheapest available) —')}</option>
               {meshBackends.map((b) => (
                 <option key={b.name} value={b.name}>
                   {b.name}{b.face_num ? ` · ${b.face_num.toLocaleString()} ${t('faces')}` : ''}
                 </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t('Face count')}>
+            <input className="ga-input" type="number" min={500} max={100000}
+              step={500} value={faceDraft} placeholder={t('backend default')}
+              title={t('Target triangle count for THIS run — small deco needs far fewer faces than a character (2,000–20,000).')}
+              onChange={(e) => setFaceDraft(e.target.value)} />
+          </Field>
+          <Field label={t('Texture size')}>
+            <select className="ga-input" value={texSize}
+              title={t('Passed to the gateway as soon as the alias declares a "texture size" parameter; until then it is ignored there.')}
+              onChange={(e) => setTexSize(e.target.value)}>
+              <option value="">{t('— backend default —')}</option>
+              {[512, 1024, 2048, 4096].map((v) => (
+                <option key={v} value={String(v)}>{v} × {v}</option>
               ))}
             </select>
           </Field>

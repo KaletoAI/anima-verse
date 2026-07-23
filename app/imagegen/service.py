@@ -388,7 +388,7 @@ class ImageService:
 
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
-                      mesh_name: str = "", face_num=None,
+                      mesh_name: str = "", face_num=None, texture_size=None,
                       no_fingers=None, rig: str = "") -> Dict[str, Any]:
         """Generates a 3D model from ONE image via a MEDIA_TYPE=="mesh" backend.
 
@@ -413,6 +413,11 @@ class ImageService:
         }
         if face_num:
             params["face_num"] = int(face_num)
+        # Forwarded to the alias ONLY when it declares a texture-size param
+        # (see openai_mesh) — plumbed through now, live once the gateway
+        # chains expose it.
+        if texture_size:
+            params["texture_size"] = int(texture_size)
         # None = keep the backend's configured default (per-character override).
         if no_fingers is not None:
             params["no_fingers"] = bool(no_fingers)

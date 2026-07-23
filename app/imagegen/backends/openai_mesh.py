@@ -77,8 +77,10 @@ class OpenAIMeshBackend(ImageBackend):
             os.environ.get(f"{env_prefix}NO_FINGERS", "true")).strip().lower() \
             not in ("0", "false", "no", "off")
         self.face_num = int(os.environ.get(f"{env_prefix}FACE_NUM", "20000") or 20000)
-        # Alias self-discovery (image slot name); safe fallback without schema.
+        # Alias self-discovery (image slot name + declared param names);
+        # safe fallback without schema.
         self._image_slot: str = ""
+        self._alias_param_names: set = set()
         self._tls = threading.local()
 
     # -- result naming ------------------------------------------------------
@@ -131,8 +133,21 @@ class OpenAIMeshBackend(ImageBackend):
                     self._image_slot = slot
             elif isinstance(images, dict) and images:
                 self._image_slot = next(iter(images))
-            logger.info("%s: Alias-Schema gelesen (image_slot=%s)",
-                        self.name, self._image_slot or "input_image")
+            # Declared param names — optional params (e.g. "texture size")
+            # are only sent when the alias really declares them.
+            raw_params = sd.get("params") or []
+            names = set()
+            if isinstance(raw_params, dict):
+                names = {str(k).strip().lower() for k in raw_params}
+            elif isinstance(raw_params, list):
+                for entry in raw_params:
+                    n = (entry.get("name") if isinstance(entry, dict) else entry) or ""
+                    if n:
+                        names.add(str(n).strip().lower())
+            self._alias_param_names = names
+            logger.info("%s: Alias-Schema gelesen (image_slot=%s, params=%s)",
+                        self.name, self._image_slot or "input_image",
+                        sorted(names) or "?")
         except Exception as e:
             logger.debug("%s: Alias-Schema nicht lesbar: %s", self.name, e)
 
@@ -182,6 +197,17 @@ class OpenAIMeshBackend(ImageBackend):
         if self.mesh_rig == "mixamo":
             alias_params["no fingers"] = bool(
                 params.get("no_fingers", self.no_fingers))
+        # Texture size: plumbed through the whole chain, but sent ONLY when
+        # the alias declares the param — the gateway chains grow it
+        # independently; an undeclared param would fail the job.
+        tex = params.get("texture_size")
+        if tex:
+            if "texture size" in self._alias_param_names:
+                alias_params["texture size"] = int(tex)
+            else:
+                logger.info("%s: texture_size=%s requested but the alias does "
+                            "not (yet) declare 'texture size' — param dropped",
+                            self.name, tex)
         payload: Dict[str, Any] = {
             "model": params.get("model") or self.model,
             "images": {self._image_slot or "input_image": image_val},

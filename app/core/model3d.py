@@ -337,8 +337,9 @@ def _char_lock(character_name: str) -> threading.Lock:
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
                                 prefer_cheapest: bool = False,
-                                signature: Optional[str] = None
-                                ) -> Dict[str, Any]:
+                                signature: Optional[str] = None,
+                                face_num: Any = None,
+                                texture_size: Any = None) -> Dict[str, Any]:
     """Generates the mesh for the currently worn outfit — or a given
     combination — from its T-pose render.
 
@@ -397,6 +398,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             character_name=character_name,
             mesh_name=character_name,
             rig=rig,
+            face_num=face_num,
+            texture_size=texture_size,
             no_fingers=no_fingers)
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
@@ -442,12 +445,15 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 
 
 def _run(character_name: str, force: bool, backend_glob: str = "",
-         prefer_cheapest: bool = False) -> None:
+         prefer_cheapest: bool = False, face_num: Any = None,
+         texture_size: Any = None) -> None:
     with _char_lock(character_name):
         try:
             generate_for_current_outfit(character_name, force=force,
                                         backend_glob=backend_glob,
-                                        prefer_cheapest=prefer_cheapest)
+                                        prefer_cheapest=prefer_cheapest,
+                                        face_num=face_num,
+                                        texture_size=texture_size)
         except Exception as e:
             logger.error("Model3D-Generierung fuer %s fehlgeschlagen: %s",
                          character_name, e)
@@ -458,7 +464,9 @@ def _run(character_name: str, force: bool, backend_glob: str = "",
 
 def trigger_generation(character_name: str, *, force: bool = False,
                        backend_glob: str = "",
-                       prefer_cheapest: bool = False) -> bool:
+                       prefer_cheapest: bool = False,
+                       face_num: Any = None,
+                       texture_size: Any = None) -> bool:
     """Starts the mesh generation in the background.
     ``backend_glob`` picks the mesh backend (empty = admin default →
     cheapest; ``prefer_cheapest`` always cheapest — the auto hook).
@@ -468,7 +476,8 @@ def trigger_generation(character_name: str, *, force: bool = False,
             return False
         _generating.add(character_name)
     threading.Thread(target=_run,
-                     args=[character_name, force, backend_glob, prefer_cheapest],
+                     args=[character_name, force, backend_glob, prefer_cheapest,
+                           face_num, texture_size],
                      daemon=True).start()
     return True
 

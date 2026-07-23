@@ -291,6 +291,14 @@ def location_model3d_status(location_id: str) -> Dict[str, Any]:
     return get_building_info(location_id)
 
 
+def _mesh_int(val) -> int:
+    """Optional per-run mesh override from a JSON body (0/invalid = unset)."""
+    try:
+        return max(0, int(float(val)))
+    except (TypeError, ValueError):
+        return 0
+
+
 @router.post("/locations/{location_id}/model3d/generate")
 async def location_model3d_generate(location_id: str, request: Request) -> Dict[str, Any]:
     """Generate the location's 3D building model from a gallery image
@@ -306,7 +314,10 @@ async def location_model3d_generate(location_id: str, request: Request) -> Dict[
         raise HTTPException(status_code=400,
                             detail="source_image required (a building gallery image of the location)")
     backend = str(data.get("backend") or "").strip()
-    if not trigger_generation(location_id, source_image=source_image, backend_glob=backend):
+    if not trigger_generation(location_id, source_image=source_image,
+                              backend_glob=backend,
+                              face_num=_mesh_int(data.get("face_num")) or None,
+                              texture_size=_mesh_int(data.get("texture_size")) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -501,7 +512,9 @@ async def room_model3d_generate(location_id: str, room_id: str,
                             detail="source_image required (a gallery image assigned to the room)")
     backend = str(data.get("backend") or "").strip()
     if not trigger_generation(location_id, source_image=source_image,
-                              backend_glob=backend, room_id=room_id):
+                              backend_glob=backend, room_id=room_id,
+                              face_num=_mesh_int(data.get("face_num")) or None,
+                              texture_size=_mesh_int(data.get("texture_size")) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -832,7 +845,9 @@ async def prop_generate(request: Request) -> Dict[str, Any]:
                         prompt=str(data.get("prompt") or ""),
                         negative=str(data.get("negative") or ""),
                         image_backend_glob=str(data.get("image_backend") or "").strip(),
-                        mesh_backend_glob=str(data.get("mesh_backend") or "").strip())
+                        mesh_backend_glob=str(data.get("mesh_backend") or "").strip(),
+                        face_num=_mesh_int(data.get("face_num")) or None,
+                        texture_size=_mesh_int(data.get("texture_size")) or None)
     return {"status": "generating", "prop": prop}
 
 
@@ -896,7 +911,9 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               prompt=str(data.get("prompt") or ""),
                               negative=str(data.get("negative") or ""),
                               image_backend_glob=str(data.get("image_backend") or "").strip(),
-                              mesh_backend_glob=str(data.get("mesh_backend") or "").strip()):
+                              mesh_backend_glob=str(data.get("mesh_backend") or "").strip(),
+                              face_num=_mesh_int(data.get("face_num")) or None,
+                              texture_size=_mesh_int(data.get("texture_size")) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
 

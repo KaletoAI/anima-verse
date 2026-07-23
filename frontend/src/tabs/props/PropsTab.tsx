@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListHeader } from '../../components/ListHeader'
+import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -34,6 +35,10 @@ export function PropsTab() {
   const [armedDel, setArmedDel] = useState('')
   const [cacheBump, setCacheBump] = useState(0)
   const [creating, setCreating] = useState(false)
+  // Prop id whose 🧊 regenerate waits in the backend dialog (every 3D
+  // generate button goes through the dialog — face count / texture size
+  // are per-run overrides).
+  const [regenId, setRegenId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
 
@@ -187,21 +192,36 @@ export function PropsTab() {
             onChanged={load}
             onDelete={() => remove(selectedProp.id)}
             armedDelete={armedDel === selectedProp.id}
-            onRegenerate={() => {
-              void apiPost<{ status?: string }>(
-                `/world/props/${encodeURIComponent(selectedProp.id)}/generate`, {})
-                .then((d) => {
-                  toast(d?.status === 'already_running'
-                    ? t('This prop is already generating.')
-                    : t('Regenerating the model…'))
-                  startPoll()
-                })
-                .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
-            }}
+            onRegenerate={() => setRegenId(selectedProp.id)}
           />
         ) : (
           <div className="ga-placeholder">{t('Pick a prop or create a new one.')}</div>
         )}
+        <MeshBackendDialog
+          open={regenId !== null}
+          title={t('Regenerate prop model')}
+          backends={meshBackends}
+          defaultBackend={meshBackends.length === 1 ? meshBackends[0].name : ''}
+          generateLabel={t('Regenerate')}
+          onGenerate={(backend, opts) => {
+            const id = regenId
+            setRegenId(null)
+            if (!id) return
+            void apiPost<{ status?: string }>(
+              `/world/props/${encodeURIComponent(id)}/generate`,
+              { mesh_backend: backend,
+                ...(opts.face_num ? { face_num: opts.face_num } : {}),
+                ...(opts.texture_size ? { texture_size: opts.texture_size } : {}) })
+              .then((d) => {
+                toast(d?.status === 'already_running'
+                  ? t('This prop is already generating.')
+                  : t('Regenerating the model…'))
+                startPoll()
+              })
+              .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+          }}
+          onClose={() => setRegenId(null)}
+        />
       </section>
       {/* One shared category vocabulary for the create form and the detail. */}
       <datalist id={CATEGORY_DATALIST_ID}>

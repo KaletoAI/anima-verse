@@ -527,7 +527,8 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
 
 
 def _generate(location_id: str, source_image: str, backend_glob: str,
-              room_id: str = "") -> Dict[str, Any]:
+              room_id: str = "", face_num: Any = None,
+              texture_size: Any = None) -> Dict[str, Any]:
     """Blocking mesh generation from a gallery image of the location. Runs on a
     worker thread (see trigger_generation). Adds a NEW model and selects it —
     existing models stay (pick any of them in the admin panel)."""
@@ -576,7 +577,9 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
             output_path=str(_new_model_path(d, _stem(room_id))),
             backend_glob=backend_glob,
             mesh_name=_stem(room_id) if room_id else owner,
-            rig="none")
+            rig="none",
+            face_num=face_num,
+            texture_size=texture_size)
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
             logger.error("Location model %s failed: %s", owner, error)
@@ -608,10 +611,12 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
 
 
 def _run(location_id: str, source_image: str, backend_glob: str,
-         room_id: str = "") -> None:
+         room_id: str = "", face_num: Any = None,
+         texture_size: Any = None) -> None:
     owner = _owner_id(location_id)
     try:
-        _generate(location_id, source_image, backend_glob, room_id)
+        _generate(location_id, source_image, backend_glob, room_id,
+                  face_num=face_num, texture_size=texture_size)
     except Exception as e:
         logger.error("Location model generation for %s failed: %s", owner, e)
     finally:
@@ -620,7 +625,8 @@ def _run(location_id: str, source_image: str, backend_glob: str,
 
 
 def trigger_generation(location_id: str, *, source_image: str,
-                       backend_glob: str = "", room_id: str = "") -> bool:
+                       backend_glob: str = "", room_id: str = "",
+                       face_num: Any = None, texture_size: Any = None) -> bool:
     """Start a building/room-model generation in the background. Generations
     from different source images run concurrently as far as the backend GPU
     channel allows (it serializes per backend); False only when THIS image
@@ -633,7 +639,8 @@ def trigger_generation(location_id: str, *, source_image: str,
             return False
         _generating.add(_gen_key(owner, room_id, source_image))
     threading.Thread(target=_run,
-                     args=[location_id, source_image, backend_glob, room_id],
+                     args=[location_id, source_image, backend_glob, room_id,
+                           face_num, texture_size],
                      daemon=True).start()
     return True
 

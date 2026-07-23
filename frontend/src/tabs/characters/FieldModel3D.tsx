@@ -146,7 +146,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const openDialog = useCallback(() => setDialogOpen(true), [])
 
   const generate = useCallback(
-    async (force: boolean, backend: string) => {
+    async (force: boolean, backend: string,
+           opts?: { face_num?: number; texture_size?: number }) => {
       if (busy) return
       setDialogOpen(false)
       setBusy(true)
@@ -154,6 +155,8 @@ export function FieldModel3D({ character }: { character: string }) {
         const q = new URLSearchParams()
         if (force) q.set('force', '1')
         if (backend) q.set('backend', backend)
+        if (opts?.face_num) q.set('face_num', String(opts.face_num))
+        if (opts?.texture_size) q.set('texture_size', String(opts.texture_size))
         const qs = q.toString()
         await apiPost(`/characters/${enc}/model3d/generate${qs ? `?${qs}` : ''}`, {})
         toast(t('Generating…'))
@@ -524,7 +527,7 @@ export function FieldModel3D({ character }: { character: string }) {
         defaultBackend={
           st.default || ((st.backends || []).length === 1 ? (st.backends || [])[0].name : '')
         }
-        onGenerate={(backend) => generate(!!model, backend)}
+        onGenerate={(backend, opts) => generate(!!model, backend, opts)}
         onClose={() => setDialogOpen(false)}
       />
 

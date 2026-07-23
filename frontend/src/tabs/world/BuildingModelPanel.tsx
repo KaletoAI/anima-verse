@@ -149,11 +149,14 @@ export function BuildingModelPanel({
 
   // Fire the generation from the chosen backend + the gallery image picked via 🧊.
   const generate = useCallback(
-    (backend: string) => {
+    (backend: string, opts?: { face_num?: number; texture_size?: number }) => {
       const src = generateSource
       onGenerateSourceConsumed()
       if (!src) return
-      void apiPost<{ status?: string }>(`/world/locations/${enc}/model3d/generate`, { source_image: src, backend })
+      void apiPost<{ status?: string }>(`/world/locations/${enc}/model3d/generate`,
+        { source_image: src, backend,
+          ...(opts?.face_num ? { face_num: opts.face_num } : {}),
+          ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}) })
         .then((d) => {
           // already_running = double-click guard for the SAME image; jobs
           // from different images queue up on the backend channel.

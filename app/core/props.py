@@ -767,7 +767,8 @@ def _render_source(prop_id: str, backend_glob: str,
 
 
 def _generate(prop_id: str, prompt: str, negative: str,
-              image_backend_glob: str, mesh_backend_glob: str) -> Dict[str, Any]:
+              image_backend_glob: str, mesh_backend_glob: str,
+              face_num: Any = None, texture_size: Any = None) -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
     queue panel via their channel entries)."""
@@ -804,7 +805,9 @@ def _generate(prop_id: str, prompt: str, negative: str,
             output_path=str(d / MODEL_NAME),
             backend_glob=mesh_backend_glob,
             mesh_name=prop_id,
-            rig="none")
+            rig="none",
+            face_num=face_num,
+            texture_size=texture_size)
         if not res.get("ok"):
             error = str(res.get("error") or "mesh generation failed")
             logger.error("Prop %s mesh failed: %s", prop_id, error)
@@ -821,6 +824,11 @@ def _generate(prop_id: str, prompt: str, negative: str,
         meta = _materialize_dims(prop_id, read_sidecar(prop_id))
         meta["source"] = "generated"
         meta["backend"] = res.get("backend", "") or meta.get("backend", "")
+        # Per-run overrides, recorded for transparency (None = backend default).
+        if face_num:
+            meta["face_num"] = int(face_num)
+        if texture_size:
+            meta["texture_size"] = int(texture_size)
         bbox = _extract_bbox(prop_id)
         if bbox:
             meta["bbox"] = bbox
@@ -839,7 +847,9 @@ def _generate(prop_id: str, prompt: str, negative: str,
 
 def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        image_backend_glob: str = "",
-                       mesh_backend_glob: str = "") -> bool:
+                       mesh_backend_glob: str = "",
+                       face_num: Any = None,
+                       texture_size: Any = None) -> bool:
     """Start the source→mesh chain in the background. Different mesh backends
     for the same prop run concurrently (each queues on its own GPU channel);
     False only while THIS prop+backend combination is already generating
@@ -855,7 +865,9 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
 
     def _run() -> None:
         try:
-            _generate(pid, prompt, negative, image_backend_glob, mesh_backend_glob)
+            _generate(pid, prompt, negative, image_backend_glob,
+                      mesh_backend_glob, face_num=face_num,
+                      texture_size=texture_size)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:
