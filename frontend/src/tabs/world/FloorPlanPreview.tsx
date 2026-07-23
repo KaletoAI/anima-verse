@@ -19,7 +19,7 @@
  * editor (the three.js scene itself is created once). three.js is imported
  * dynamically — it stays in the shared chunk.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D, Texture } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
@@ -88,6 +88,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // → "Render-Rezept Wände & Boden"): outline floor plates + outer walls
   // with door gaps at the ground-floor exits.
   const [showWalls, setShowWalls] = useState(false)
+  // Exclusive level view: null = all levels, a number renders ONLY that
+  // storey (rooms, plates, walls, figures) — the ruler and the building
+  // overlay stay, the elevator shaft only shows with all levels visible.
+  const [soloLevel, setSoloLevel] = useState<number | null>(null)
   // Model-load completion re-triggers the rebuild (loads are async, the
   // rebuild itself is synchronous against the cache).
   const [bump, setBump] = useState(0)
@@ -106,6 +110,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   showBuildingRef.current = showBuilding
   const showWallsRef = useRef(showWalls)
   showWallsRef.current = showWalls
+  const soloLevelRef = useRef(soloLevel)
+  soloLevelRef.current = soloLevel
   // Wall pieces for the per-frame camera culling (a wall whose OUTSIDE
   // faces the camera hides, so the interior stays visible — recipe rule).
   const wallCullRef = useRef<Array<{
@@ -347,6 +353,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // toggle change and once after scene init).
   const rebuild = (h: NonNullable<typeof handleRef.current>, current: Room[]) => {
     const { THREE, boxes } = h
+    // Exclusive level view: everything level-bound derives from the
+    // filtered list (plates and walls follow via usedLevels).
+    const solo = soloLevelRef.current
+    if (solo !== null) {
+      current = current.filter((r) => (r.layout?.level || 0) === solo)
+    }
     // ONE compression factor per location (anchored mode): the reference
     // square (8 world-m) represents plan_width_m real metres → k = 8 /
     // plan_width_m. EVERYTHING derives from real size × k — storeys,
@@ -1104,7 +1116,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       }
     }
 
-    if (m3?.elevator) {
+    if (m3?.elevator && solo === null) {
       // Elevator per the client's render recipe (schnittstellen →
       // "Render-Rezept Fahrstuhl"): all sizes are real metres × the figure
       // scale k (anchored 8/plan_width, legacy storey/3). Shaft 1.8 m
@@ -1628,12 +1640,18 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     }
   }, [])
 
+  // Levels that exist in the layout — feeds the exclusive-level buttons.
+  const previewLevels = useMemo<number[]>(() => Array.from(new Set(
+    rooms.filter((r) => r.layout)
+      .map((r) => r.layout!.level || 0))).sort((a, b) => a - b), [rooms])
+
   // Live-apply layout edits (drag/resize/rotate in the editor) and toggle/
   // load-completion changes — content rebuild only, the scene/renderer stay.
   useEffect(() => {
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms, map3d, showModels, showBuilding, showWalls, bump, lh, fallbackYawDeg])
+  }, [rooms, map3d, showModels, showBuilding, showWalls, soloLevel, bump, lh,
+      fallbackYawDeg])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
@@ -1641,6 +1659,30 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           (the plan pane is the busy one, this row stays quiet). */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <div className="ga-form-section-label" style={{ margin: 0, flex: 1 }}>{t('3D preview')}</div>
+        {previewLevels.length > 1 ? (
+          <span style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+            <button
+              type="button"
+              className={`ga-btn ga-btn-sm${soloLevel === null ? ' ga-btn-primary' : ''}`}
+              onClick={() => setSoloLevel(null)}
+              title={t('Show all levels.')}
+            >
+              ∀
+            </button>
+            {previewLevels.map((lv) => (
+              <button
+                key={lv}
+                type="button"
+                className={`ga-btn ga-btn-sm${soloLevel === lv ? ' ga-btn-primary' : ''}`}
+                onClick={() => setSoloLevel((cur) => (cur === lv ? null : lv))}
+                title={t('Show ONLY level {n} — rooms, plates and walls of the other storeys hide (click again for all).')
+                  .replace('{n}', String(lv))}
+              >
+                {lv}
+              </button>
+            ))}
+          </span>
+        ) : null}
         <button
           type="button"
           className={`ga-btn ga-btn-sm${showModels ? ' ga-btn-primary' : ''}`}
