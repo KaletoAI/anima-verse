@@ -202,12 +202,15 @@ class OpenAIMeshBackend(ImageBackend):
         # independently; an undeclared param would fail the job.
         tex = params.get("texture_size")
         if tex:
-            if "texture size" in self._alias_param_names:
-                alias_params["texture size"] = int(tex)
+            # The gateway chains named the param "texture resolution"; accept
+            # both spellings and send under whichever the alias declares.
+            tex_param = next((n for n in ("texture resolution", "texture size")
+                              if n in self._alias_param_names), "")
+            if tex_param:
+                alias_params[tex_param] = int(tex)
             else:
-                logger.info("%s: texture_size=%s requested but the alias does "
-                            "not (yet) declare 'texture size' — param dropped",
-                            self.name, tex)
+                logger.info("%s: texture_size=%s requested but the alias "
+                            "declares no texture param — dropped", self.name, tex)
         payload: Dict[str, Any] = {
             "model": params.get("model") or self.model,
             "images": {self._image_slot or "input_image": image_val},

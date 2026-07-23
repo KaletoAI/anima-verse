@@ -286,16 +286,19 @@ def _check_embedded_textures(info: Dict[str, Any], subject: str,
     elif not embedded:
         errors.append("textures are referenced externally, not embedded")
     else:
-        real = []
-        for img in embedded:
-            size = img.get("size")
-            if size and max(size) < MIN_TEXTURE_DIM:
-                errors.append(
-                    f"texture is {size[0]}x{size[1]} px — that is the known "
-                    "empty-texture artefact of a failed generation, not a result")
-            elif size:
-                real.append(size)
-        if embedded and not real and not errors:
+        # At least ONE real-sized image must exist. Additional SMALL maps are
+        # legitimate (a uniform 4x4 metallic-roughness map is valid glTF —
+        # AV3D-14 GLBs ship one); the failed-bake artefact is a file whose
+        # ONLY embedded texture is tiny.
+        sizes = [img.get("size") for img in embedded]
+        known = [sz for sz in sizes if sz]
+        real = [sz for sz in known if max(sz) >= MIN_TEXTURE_DIM]
+        if known and not real:
+            sz = known[0]
+            errors.append(
+                f"texture is {sz[0]}x{sz[1]} px — that is the known "
+                "empty-texture artefact of a failed generation, not a result")
+        elif not known:
             warnings.append("embedded texture size could not be read")
 
 
