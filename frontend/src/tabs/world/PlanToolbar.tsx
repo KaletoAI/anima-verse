@@ -10,8 +10,8 @@
 import { useI18n } from '../../i18n/I18nProvider'
 
 /** Click-to-place modes of the floor-plan editor ('' = plain selection). */
-export type PlanMode = '' | 'exit' | 'marker' | 'marker-move' | 'outline'
-  | 'elevator' | 'opening' | 'draw-room'
+export type PlanMode = '' | 'marker' | 'marker-move' | 'outline'
+  | 'elevator' | 'door' | 'window' | 'draw-room'
 
 function Tool({ icon, title, onClick, active = false, danger = false,
   disabled = false, small = false }: {
@@ -160,10 +160,17 @@ export function PlanToolbar({
       />
       <Tool
         icon="🚪"
-        active={mode === 'exit'}
+        active={mode === 'door'}
         disabled={!hasSelection}
-        onClick={() => onMode('exit')}
-        title={t('Exit override — with doors the exit derives automatically (outside door first); set a point only to override it.')}
+        onClick={() => onMode('door')}
+        title={t('Door — then click a room edge; on a shared wall it opens BOTH rooms, and the exit derives from it automatically. Drag it along the edge, edit it below.')}
+      />
+      <Tool
+        icon="🪟"
+        active={mode === 'window'}
+        disabled={!hasSelection}
+        onClick={() => onMode('window')}
+        title={t('Window — then click a room edge (sill 0.9 m, edit below). Exterior walls open to the outside.')}
       />
       {hasExit ? (
         <Tool
@@ -173,13 +180,6 @@ export function PlanToolbar({
           title={t('Remove the exit override — the exit derives from the doors again (or the client falls back without any).')}
         />
       ) : null}
-      <Tool
-        icon="▦"
-        active={mode === 'opening'}
-        disabled={!hasSelection}
-        onClick={() => onMode('opening')}
-        title={t('Opening — then click a room edge to place a door; drag it along the edge, edit it below.')}
-      />
       <Tool
         icon="✨"
         disabled={!canSuggest || noAnchor}

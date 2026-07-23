@@ -32,10 +32,12 @@ const DIM_FIELDS: Array<{ key: DimKey; label: string; axis: number }> = [
 // lying surfaces sit ON the hull or just outside it.
 const AT_MIN = -0.5
 const AT_MAX = 1.5
-const AT_AXES: Array<{ label: string; dim: DimKey }> = [
-  { label: 'X (width)', dim: 'width_m' },
-  { label: 'Y (height)', dim: 'height_m' },
-  { label: 'Z (depth)', dim: 'depth_m' },
+// The height axis reaches a FULL box below (props.MARKER_AT_Y_MIN) — deep
+// seat positions in tall machines sit far under the box top.
+const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
+  { label: 'X (width)', dim: 'width_m', min: AT_MIN },
+  { label: 'Y (height)', dim: 'height_m', min: -1 },
+  { label: 'Z (depth)', dim: 'depth_m', min: AT_MIN },
 ]
 const MARKER_SAVE_DEBOUNCE_MS = 400
 
@@ -70,12 +72,29 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
     setDescDraft(prop.description || '')
     setCategoryDraft(prop.category)
     setTagsDraft(prop.tags.join(', '))
-    setDims({
+  }, [prop.id, prop.name, prop.description, prop.category, prop.tags])
+  // The dims drafts sync separately WITH guards: after a commit the server
+  // echoes the values back through onChanged(), and blindly resetting here
+  // stomped whatever the admin was already typing in the next field (fast
+  // edits scrambled the trio). Skip the reset while a dims input is focused
+  // and when the incoming values are just our own commit coming back.
+  const dimsEditingRef = useRef(false)
+  const sentDimsRef = useRef('')
+  const propIdRef = useRef(prop.id)
+  useEffect(() => {
+    const incoming = {
       width_m: String(prop.width_m), depth_m: String(prop.depth_m),
       height_m: String(prop.height_m),
-    })
-  }, [prop.id, prop.name, prop.description, prop.category, prop.tags,
-    prop.width_m, prop.depth_m, prop.height_m])
+    }
+    const idChanged = propIdRef.current !== prop.id
+    propIdRef.current = prop.id
+    if (!idChanged) {
+      if (dimsEditingRef.current) return
+      if (JSON.stringify(incoming) === sentDimsRef.current) return
+    }
+    sentDimsRef.current = ''
+    setDims(incoming)
+  }, [prop.id, prop.width_m, prop.depth_m, prop.height_m])
 
   // Proportional assist: editing one dim pulls the OTHER two along the model's
   // proportions — unless they were edited too ("pinned"). Pins and the live
@@ -136,7 +155,13 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
         setDims((d) => ({ ...d, [key]: String(prop[key]) }))
       }
     }
-    if (changed) void patch(next)
+    if (changed) {
+      sentDimsRef.current = JSON.stringify({
+        width_m: String(next.width_m), depth_m: String(next.depth_m),
+        height_m: String(next.height_m),
+      })
+      void patch(next)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dims, prop.width_m, prop.depth_m, prop.height_m, patch])
 
@@ -252,7 +277,8 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                 immediate)
   const setMarkerAt = (i: number, axis: 0 | 1 | 2, raw: number | string) => {
     const n = typeof raw === 'number' ? raw : parseFloat(raw)
-    const v = Number.isFinite(n) ? Math.min(Math.max(n, AT_MIN), AT_MAX) : 0
+    const lo = AT_AXES[axis].min
+    const v = Number.isFinite(n) ? Math.min(Math.max(n, lo), AT_MAX) : 0
     const at = [...markers[i].at] as [number, number, number]
     at[axis] = Math.round(v * 10000) / 10000
     patchMarker(i, { at })
@@ -361,8 +387,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               <Field key={field.key} label={t(field.label)} compact>
                 <input className="ga-input" type="number" min={0.01} step={0.05}
                   style={{ width: 90 }} value={dims[field.key]}
+                  onFocus={() => { dimsEditingRef.current = true }}
                   onChange={(e) => editDim(field, e.target.value)}
-                  onBlur={commitDims}
+                  onBlur={() => { dimsEditingRef.current = false; commitDims() }}
                   onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
               </Field>
             ))}
@@ -436,7 +463,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                       </span>
                       <input
                         type="range"
-                        min={AT_MIN}
+                        min={axis.min}
                         max={AT_MAX}
                         step={0.005}
                         value={m.at[ax]}
@@ -446,7 +473,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                       <input
                         className="ga-input"
                         type="number"
-                        min={AT_MIN}
+                        min={axis.min}
                         max={AT_MAX}
                         step={0.005}
                         style={{ width: 72, flex: '0 0 auto' }}

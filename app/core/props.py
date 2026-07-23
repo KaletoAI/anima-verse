@@ -65,9 +65,11 @@ DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
 
 # Marker fractions may leave the raw bounding box by half a box per axis —
+# the HEIGHT axis reaches a full box below (deep seats in tall machines);
 # see ``sanitize_markers``.
 MARKER_AT_MIN = -0.5
 MARKER_AT_MAX = 1.5
+MARKER_AT_Y_MIN = -1.0
 
 _PROP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -318,7 +320,9 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
         if not anim or not isinstance(at, (list, tuple)) or len(at) != 3:
             continue
         try:
-            at3 = [round(min(max(float(at[i]), MARKER_AT_MIN), MARKER_AT_MAX), 4)
+            at3 = [round(min(max(float(at[i]),
+                                 MARKER_AT_Y_MIN if i == 1 else MARKER_AT_MIN),
+                             MARKER_AT_MAX), 4)
                    for i in range(3)]
         except (TypeError, ValueError):
             continue

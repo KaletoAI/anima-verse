@@ -38,7 +38,8 @@ const CANVAS_W = 420
  *  render-only ghosts of the neighbours' openings. */
 function OpeningGlyph({ type, col }: { type?: string; col: string }) {
   return (
-    <svg viewBox="0 0 24 24" width={24} height={24} style={{ overflow: 'visible' }}>
+    <svg viewBox="0 0 24 24" width="100%" height={24}
+      preserveAspectRatio="none" style={{ overflow: 'visible' }}>
       {type === 'door' ? (
         <>
           {/* Gap in the edge line + hinge leaf + swing arc. */}
@@ -696,9 +697,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       setPropSel(placements.length - 1)
       return
     }
-    if (clickMode === 'exit') {
-      updateLayout(room.id, { exit: [px, py] })
-    } else if (clickMode === 'marker-move') {
+    if (clickMode === 'marker-move') {
       // Reposition the SELECTED marker — only inside its own room.
       if (room.id === selected && markerSel !== null) {
         updateLayout(room.id, {
@@ -712,10 +711,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   { at: [px, py] as [number, number], animation: markerKind }],
       })
       setMarkerSel((room.layout.markers || []).length)
-    } else if (clickMode === 'opening') {
-      // Place a door on the nearest hull edge at the clicked position. `to`
-      // follows from where the edge leads: a shared wall points at the
-      // neighbour, an exterior wall at "outside" — editable in the panel.
+    } else if (clickMode === 'door' || clickMode === 'window') {
+      // Place a door/window on the nearest hull edge at the clicked
+      // position. `to` follows from where the edge leads: a shared wall
+      // points at the neighbour, an exterior wall at "outside" — editable
+      // in the panel.
       const { edge, at } = nearestPolygonEdge(outlineOf(room.layout), [px, py])
       const lay0 = room.layout
       const others: PolyRoom[] = roomsRef.current
@@ -728,9 +728,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       const shared = sharedEdges(hull, others, planWRef.current || 8)
         .find((sh) => sh.edge === edge)
       const openings: RoomOpening[] = [...(room.layout.openings || []),
-        { edge, at, ...OPENING_DEFAULT, to: shared ? shared.neighborId : 'outside' }]
+        clickMode === 'window'
+          ? { edge, at, type: 'window', width_m: 1.2, height_m: 1.2,
+              sill_m: 0.9, to: shared ? shared.neighborId : 'outside' }
+          : { edge, at, ...OPENING_DEFAULT,
+              to: shared ? shared.neighborId : 'outside' }]
       updateLayout(room.id, { openings })
       setOpeningSel(openings.length - 1)
+      return  // stays armed — placing several doors/windows in a row
     }
     setClickMode('')
   }, [clickMode, armedProp, ghostYaw, markerKind, markerSel, selected,
@@ -926,7 +931,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             ))}
           </span>
         ) : null}
-        <span style={{ flex: 1 }} />
+        <span aria-hidden style={{ width: 1, alignSelf: 'stretch',
+          background: 'var(--border, #30363d)', margin: '0 2px' }} />
         {/* Underlay toggles — up here instead of the tool column, they are
             view state, not tools. */}
         <button
@@ -1417,6 +1423,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                                        (seg.b[0] - seg.a[0]) * lay.w) * 180 / Math.PI
                 const sel = room.id === selected && openingSel === i
                 const col = sel ? '#fff' : (OPENING_COLOR[op.type] || '#e0a356')
+                // TRUE width: the symbol spans the opening's real width_m
+                // (isotropic — px lengths survive the rotation), floor 14px
+                // so tiny openings stay clickable.
+                const wPct = ((op.width_m || 1) / (planW || 8)) / (lay.w || 1) * 100
                 return (
                   <div
                     key={`op-${i}`}
@@ -1434,7 +1444,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                     style={{
                       position: 'absolute',
                       left: `${pt.x * 100}%`, top: `${pt.y * 100}%`,
-                      width: 24, height: 24,
+                      width: `max(14px, ${wPct}%)`, height: 24,
                       transform: `translate(-50%, -50%) rotate(${deg}deg)`,
                       cursor: clickMode ? 'crosshair' : 'grab',
                     }}
@@ -1453,6 +1463,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                 const seg = edgeSegment(outline, op.edge)
                 const deg = Math.atan2((seg.b[1] - seg.a[1]) * lay.d,
                                        (seg.b[0] - seg.a[0]) * lay.w) * 180 / Math.PI
+                const mwPct = ((op.width_m || 1) / (planW || 8)) / (lay.w || 1) * 100
                 return (
                   <div
                     key={`mop-${i}`}
@@ -1462,7 +1473,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                     style={{
                       position: 'absolute',
                       left: `${pt.x * 100}%`, top: `${pt.y * 100}%`,
-                      width: 24, height: 24,
+                      width: `max(14px, ${mwPct}%)`, height: 24,
                       transform: `translate(-50%, -50%) rotate(${deg}deg)`,
                       opacity: 0.4, cursor: 'default',
                     }}
