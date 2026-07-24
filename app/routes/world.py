@@ -1021,13 +1021,15 @@ def furnish_status(room_id: str,
 
 
 @router.post("/rooms/{room_id}/furnish/start")
-def furnish_start(room_id: str,
-                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+async def furnish_start(room_id: str, request: Request,
+                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Open a job and run stage 1 (furnish_select + furnish_new) in the
-    background. 409 when the room has no layout, the location no scale anchor
-    or a job is already open."""
+    background — body (optional): {exclude: {prop_ids, categories, keywords}}
+    pre-filters what the LLM gets offered as available. 409 when the room has
+    no layout, the location no scale anchor or a job is already open."""
+    body = await _furnish_body(request)
     from app.core.room_furnish import start
-    return _furnish_call(start, room_id)
+    return _furnish_call(start, room_id, body.get("exclude"))
 
 
 @router.post("/rooms/{room_id}/furnish/direct")

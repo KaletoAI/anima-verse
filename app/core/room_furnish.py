@@ -437,6 +437,48 @@ def _validate_proposal(raw: Any, library: Dict[str, Dict[str, Any]],
             "new": _valid_new(raw.get("new"), kinds)}
 
 
+def _valid_exclude(raw: Any) -> Dict[str, List[str]]:
+    """Library pre-filter for stage 1: excluded props/categories/keywords
+    are NOT offered to the LLM as available — so a room does not always get
+    THE one bed the library has; furnish_new proposes a fresh one instead.
+    Kept small: exact ids, exact categories, substring keywords."""
+    out: Dict[str, List[str]] = {"prop_ids": [], "categories": [], "keywords": []}
+    if not isinstance(raw, dict):
+        return out
+    for key in out:
+        vals = raw.get(key)
+        if not isinstance(vals, list):
+            continue
+        seen: set = set()
+        for v in vals[:64]:
+            txt = str(v or "").strip().lower()[:60]
+            if txt and txt not in seen:
+                seen.add(txt)
+                out[key].append(txt)
+    return out
+
+
+def _apply_exclude(library: Dict[str, Dict[str, Any]],
+                   exclude: Any) -> Dict[str, Dict[str, Any]]:
+    """The catalog the LLM may see. Matching: id exact, category exact,
+    keyword as substring over name + tags. Empty filter = full library."""
+    ex = _valid_exclude(exclude)
+    if not (ex["prop_ids"] or ex["categories"] or ex["keywords"]):
+        return library
+    out: Dict[str, Dict[str, Any]] = {}
+    for pid, prop in library.items():
+        if pid.lower() in ex["prop_ids"]:
+            continue
+        if str(prop.get("category") or "").strip().lower() in ex["categories"]:
+            continue
+        hay = " ".join([str(prop.get("name") or "")]
+                       + [str(t) for t in (prop.get("tags") or [])]).lower()
+        if any(kw in hay for kw in ex["keywords"]):
+            continue
+        out[pid] = prop
+    return out
+
+
 # ── Phase 1: selecting ──────────────────────────────────────────────────
 
 def _phase_select(room_id: str) -> None:
@@ -447,6 +489,10 @@ def _phase_select(room_id: str) -> None:
     loc, room = _load_room(room_id)
     geom = _geometry(loc, room)
     library = _library()
+    # The LLM only sees the FILTERED catalog (job's exclude filter) — full
+    # library stays in use for resolving what already stands in the room.
+    exclude = ((_get_row(room_id) or {}).get("proposal") or {}).get("exclude")
+    catalog_lib = _apply_exclude(library, exclude)
     placed = _placements(geom["layout"])
     existing = _aggregate(placed, library)
     budget = max(0.0, geom["area_m2"] * BUDGET_FRACTION
@@ -472,25 +518,27 @@ def _phase_select(room_id: str) -> None:
                   "category": p.get("category") or "",
                   "width_m": p.get("width_m"), "depth_m": p.get("depth_m"),
                   "height_m": p.get("height_m"), "tags": p.get("tags") or []}
-                 for p in library.values()],
+                 for p in catalog_lib.values()],
         **common)
     picks = _valid_existing(_list_field(
         _llm_json("furnish_select", sys_p, user_p, f"Furnish select: {room_name}"),
-        "existing"), library)
+        "existing"), catalog_lib)
     if not _get_row(room_id):
         return  # discarded while the LLM was busy
-    picks_area = sum(float(library[p["prop_id"]].get("width_m") or 0)
-                     * float(library[p["prop_id"]].get("depth_m") or 0)
+    picks_area = sum(float(catalog_lib[p["prop_id"]].get("width_m") or 0)
+                     * float(catalog_lib[p["prop_id"]].get("depth_m") or 0)
                      * p["count"] for p in picks)
 
     covered = [{"name": e["name"], "count": e["count"]} for e in existing]
-    covered += [{"name": library[p["prop_id"]].get("name") or p["prop_id"],
+    covered += [{"name": catalog_lib[p["prop_id"]].get("name") or p["prop_id"],
                  "count": p["count"]} for p in picks]
     kinds = available_animation_kinds()
     sys_p, user_p = render_task(
         "furnish_new", budget_m2=round(max(0.0, budget - picks_area), 2),
         max_new=MAX_NEW_KINDS, existing=covered,
-        catalog_names=sorted(p.get("name") or p["id"] for p in library.values()),
+        # Duplicate guard over the FILTERED names — an excluded bed must not
+        # stop furnish_new from proposing a different-looking bed.
+        catalog_names=sorted(p.get("name") or p["id"] for p in catalog_lib.values()),
         marker_kinds=kinds, **common)
     new_items = _valid_new(_list_field(
         _llm_json("furnish_new", sys_p, user_p, f"Furnish new: {room_name}"),
@@ -499,7 +547,8 @@ def _phase_select(room_id: str) -> None:
     if not _get_row(room_id):
         return
     _update_row(room_id, state=STATE_PROPOSAL_READY, error="",
-                proposal={"existing": picks, "new": new_items})
+                proposal={"existing": picks, "new": new_items,
+                          **({"exclude": _valid_exclude(exclude)} if exclude else {})})
     logger.info("room_furnish %s: proposal ready (%d library picks, %d new)",
                 room_id, len(picks), len(new_items))
 
@@ -778,13 +827,18 @@ def _resume_phase(row: Dict[str, Any]) -> str:
 
 # ── Public job API ──────────────────────────────────────────────────────
 
-def start(room_id: str) -> Dict[str, Any]:
-    """Open a furnishing job for a room and kick off stage 1."""
+def start(room_id: str, exclude: Any = None) -> Dict[str, Any]:
+    """Open a furnishing job for a room and kick off stage 1. ``exclude``
+    pre-filters the library the LLM gets to see (see _valid_exclude) — it is
+    persisted with the job so retry/continue keep the same filter."""
     loc, room = _load_room(room_id)
     _geometry(loc, room)  # layout + scale anchor are start conditions
     if _get_row(room_id):
         raise FurnishError("A furnishing job for this room is already open.", 409)
     _insert_row(room_id, str(loc.get("id") or ""))
+    ex = _valid_exclude(exclude)
+    if ex["prop_ids"] or ex["categories"] or ex["keywords"]:
+        _update_row(room_id, proposal={"exclude": ex})
     _spawn(room_id, "select", str(room.get("name") or room_id))
     return get_status(room_id) or {}
 

@@ -174,25 +174,34 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
   // Direct mode (skip LLM proposal + generation, user requirement
   // 2026-07-23): pick library props by hand, the job enters at placement.
   const [pickMode, setPickMode] = useState(false)
+  // Library pre-filter for the LLM proposal (start view): excluded props /
+  // categories / keywords are not offered as "available", so rooms stop
+  // all picking THE one bed — furnish_new proposes a fresh piece instead.
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [exCats, setExCats] = useState<Record<string, boolean>>({})
+  const [exProps, setExProps] = useState<Record<string, boolean>>({})
+  const [exKeywords, setExKeywords] = useState('')
   const [libProps, setLibProps] = useState<Array<{ id: string; name: string
-    width_m?: number; depth_m?: number; height_m?: number
+    category?: string; width_m?: number; depth_m?: number; height_m?: number
     has_model?: boolean }> | null>(null)
   const [pickCounts, setPickCounts] = useState<Record<string, number>>({})
 
   useEffect(() => {
-    if (!pickMode || libProps !== null) return
+    if ((!pickMode && !filterOpen) || libProps !== null) return
     let stale = false
-    apiGet<{ props?: Array<{ id: string; name?: string; width_m?: number
-      depth_m?: number; height_m?: number; has_model?: boolean }> }>('/world/props')
+    apiGet<{ props?: Array<{ id: string; name?: string; category?: string
+      width_m?: number; depth_m?: number; height_m?: number
+      has_model?: boolean }> }>('/world/props')
       .then((d) => {
         if (stale) return
         setLibProps((d.props || []).map((p) => ({
-          id: p.id, name: p.name || p.id, width_m: p.width_m,
-          depth_m: p.depth_m, height_m: p.height_m, has_model: p.has_model })))
+          id: p.id, name: p.name || p.id, category: p.category,
+          width_m: p.width_m, depth_m: p.depth_m, height_m: p.height_m,
+          has_model: p.has_model })))
       })
       .catch(() => { if (!stale) setLibProps([]) })
     return () => { stale = true }
-  }, [pickMode, libProps])
+  }, [pickMode, filterOpen, libProps])
 
   const startDirect = () => {
     const existing = Object.entries(pickCounts)
@@ -329,6 +338,60 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
         <div className="ga-form-hint">
           {t('The LLM picks library props and proposes the missing pieces; a solver places them. Nothing is removed — furnishing is additive.')}
         </div>
+        {/* Library pre-filter: what is EXCLUDED here is not offered to the
+            LLM as available — the room gets fresh proposals instead of the
+            same library piece every time. */}
+        <button type="button" className="ga-btn ga-btn-sm"
+          style={{ alignSelf: 'flex-start' }}
+          onClick={() => setFilterOpen((v) => !v)}>
+          🔎 {t('Library filter')}
+          {(() => {
+            const n = Object.values(exCats).filter(Boolean).length
+              + Object.values(exProps).filter(Boolean).length
+              + exKeywords.split(',').map((k) => k.trim()).filter(Boolean).length
+            return n ? ` (${n})` : ''
+          })()}
+        </button>
+        {filterOpen ? (
+          <div className="ga-form" style={{ gap: 6, border: '1px solid var(--border, #30363d)', borderRadius: 8, padding: 8 }}>
+            <div className="ga-form-hint">
+              {t('Excluded categories, keywords and props are NOT offered to the LLM as available — it proposes fresh pieces instead (they are generated and join the library). The filter applies to this run only.')}
+            </div>
+            {libProps === null ? (
+              <div className="ga-loading">{t('Loading…')}</div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {Array.from(new Set(libProps.map((p) => (p.category || '').trim()).filter(Boolean)))
+                    .sort()
+                    .map((cat) => (
+                      <button key={cat} type="button"
+                        className={`ga-btn ga-btn-sm${exCats[cat] ? ' ga-btn-danger' : ''}`}
+                        title={t('Exclude this category from the LLM catalog.')}
+                        onClick={() => setExCats((p) => ({ ...p, [cat]: !p[cat] }))}>
+                        {exCats[cat] ? '🚫 ' : ''}{cat}
+                      </button>
+                    ))}
+                </div>
+                <input className="ga-input" value={exKeywords}
+                  placeholder={t('Exclude keywords (comma-separated, matches name + tags)')}
+                  onChange={(e) => setExKeywords(e.target.value)} />
+                <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                  {libProps.map((p) => (
+                    <label key={p.id} className="ga-check-row" style={{ display: 'flex', gap: 6 }}>
+                      <input type="checkbox" checked={!!exProps[p.id]}
+                        onChange={(e) => setExProps((prev) => ({ ...prev, [p.id]: e.target.checked }))} />
+                      <span style={{ opacity: exProps[p.id] ? 0.5 : 1 }}>
+                        {p.name}
+                        <span className="ga-hint" style={{ marginLeft: 6 }}>{p.category || ''}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        ) : null}
         <div className="ga-furnish-actions">
           {confirmClear ? (
             <>
@@ -356,7 +419,15 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
                 📦 {t('Place from library')}
               </button>
               <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
-                onClick={() => { void run('start') }}>
+                onClick={() => {
+                  const categories = Object.keys(exCats).filter((c) => exCats[c])
+                  const prop_ids = Object.keys(exProps).filter((i) => exProps[i])
+                  const keywords = exKeywords.split(',')
+                    .map((k) => k.trim()).filter(Boolean)
+                  const exclude = categories.length || prop_ids.length || keywords.length
+                    ? { categories, prop_ids, keywords } : undefined
+                  void run('start', exclude ? { exclude } : undefined)
+                }}>
                 ✨ {t('Suggest furnishing')}
               </button>
             </>
