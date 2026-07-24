@@ -215,6 +215,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // The contract's reference surface is a fixed 8×8 m SQUARE — the canvas
   // is square too, whatever the building footprint says.
   const canvasH = CANVAS_W
+  // 2D-plan zoom (1x..3x): the canvas renders LARGER inside a scroll
+  // container — children are %-positioned and every handler works on
+  // getBoundingClientRect fractions, so zooming needs no interaction math.
+  const [planZoom, setPlanZoom] = useState(1)
+  const planZoomRef = useRef(planZoom)
+  planZoomRef.current = planZoom
 
   const placed = rooms.filter((r) => r.layout && (r.layout.level || 0) === level)
   const unplaced = rooms.filter((r) => !r.layout)
@@ -340,7 +346,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     const raw: [number, number] = [(clientX - rect.left) / rect.width,
                                    (clientY - rect.top) / rect.height]
     const planWEff = planW || 8
-    const tol = Math.min(0.05, Math.max(SNAP_TOL_PX / CANVAS_W, 0.15 / planWEff))
+    const zoomW = CANVAS_W * planZoomRef.current
+    const tol = Math.min(0.05, Math.max(SNAP_TOL_PX / zoomW, 0.15 / planWEff))
     const prev = outlineDraft.length ? outlineDraft[outlineDraft.length - 1] : undefined
     const prev2 = outlineDraft.length >= 2 ? outlineDraft[outlineDraft.length - 2] : undefined
     return snapDrawPoint(raw, {
@@ -351,7 +358,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       draftLen: outlineDraft.length,
       targets: snapTargets || { points: [], segments: [] },
       tol,
-      closeTol: CLOSE_TOL_PX / CANVAS_W,
+      closeTol: CLOSE_TOL_PX / zoomW,
       alt,
     })
   }, [outlineDraft, snapTargets, planW])
@@ -528,7 +535,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             { buildingOutline: map3dRef.current?.outline })
           const planWEff = planWRef.current || 8
           const tol = Math.min(0.05,
-            Math.max(SNAP_TOL_PX / CANVAS_W, 0.15 / planWEff))
+            Math.max(SNAP_TOL_PX / (CANVAS_W * planZoomRef.current),
+                     0.15 / planWEff))
           const [sx, sy] = snapMoveOffset(
             absOutline({ ...lay, x: nx, y: ny }), targets, tol)
           nx = clamp(nx + sx, 0, 1 - lay.w)
@@ -977,6 +985,26 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         >
           🏢
         </button>
+        <span aria-hidden style={{ width: 1, alignSelf: 'stretch',
+          background: 'var(--border, #30363d)', margin: '0 2px' }} />
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={planZoom <= 1}
+          onClick={() => setPlanZoom((z) => Math.max(1, z - 0.25))}
+          title={t('Zoom the 2D plan out (Ctrl+wheel works too).')}>
+          ➖
+        </button>
+        <button type="button" className="ga-btn ga-btn-sm"
+          onClick={() => setPlanZoom(1)}
+          title={t('Reset the plan zoom to 100%.')}
+          style={{ minWidth: 52 }}>
+          {Math.round(planZoom * 100)}%
+        </button>
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={planZoom >= 3}
+          onClick={() => setPlanZoom((z) => Math.min(3, z + 0.25))}
+          title={t('Zoom the 2D plan in for precise placement (Ctrl+wheel works too).')}>
+          ➕
+        </button>
         {onMap3d ? (
           <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
             title={t('Floor texture of THIS storey: the client tiles the whole level plate with the kind; a room floor kind overrides only its own area. Empty = the global floor kind.')}>
@@ -1084,13 +1112,26 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         onSuggest={suggestOpenings}
         onProps={() => setPropsOpen((v) => !v)}
       />
+      {/* Zoom viewport: the canvas grows with the zoom, this box keeps the
+          layout footprint and scrolls (Ctrl+wheel zooms on the canvas). */}
+      <div style={{ overflow: 'auto', maxWidth: '100%',
+        maxHeight: canvasH + 14, flex: '0 1 auto' }}>
       <div
         ref={canvasRef}
         style={{
-          position: 'relative', width: CANVAS_W, height: canvasH, maxWidth: '100%',
+          position: 'relative',
+          width: CANVAS_W * planZoom, height: canvasH * planZoom,
+          maxWidth: planZoom === 1 ? '100%' : undefined,
           border: '1px solid var(--border, #30363d)', borderRadius: 6,
           background: 'rgba(255,255,255,0.03)', overflow: 'hidden', touchAction: 'none',
           cursor: clickMode || armedProp ? 'crosshair' : undefined,
+        }}
+        onWheel={(e) => {
+          // Ctrl+wheel zooms (like maps); plain wheel keeps scrolling.
+          if (!e.ctrlKey) return
+          e.preventDefault()
+          setPlanZoom((z) => Math.min(3, Math.max(1,
+            Math.round((z + (e.deltaY < 0 ? 0.25 : -0.25)) * 4) / 4)))
         }}
         onClick={() => { if (!clickMode) setSelected('') }}
         onPointerMove={(e) => {
@@ -1606,6 +1647,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
             {t('No rooms on this level yet — click a room below to place it.')}
           </span>
         ) : null}
+      </div>
       </div>
 
       <PlanSidePanel
