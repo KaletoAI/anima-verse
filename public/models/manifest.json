@@ -1,6 +1,6 @@
 {
   "comment": "Fallback-Modelle für den Dev-/Offline-Betrieb (Demo-Welt). Charakter-Modelle und Animations-Clips kommen im Normalfall vom Server (AV3D-5: /characters/{name}/model3d, /assets/animation-clips); dieses Manifest greift nur, wenn der Server nichts liefert.",
-  "defaultHeight": 1.75,
+  "defaultHeight": 1.70,
   "models": [
     {
       "name": "Soldier",

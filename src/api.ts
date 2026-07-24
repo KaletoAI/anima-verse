@@ -40,10 +40,6 @@ export async function getCharactersAtLocation(locationId: string): Promise<AtLoc
   return data.characters ?? [];
 }
 
-export function mapIconUrl(locationId: string): string {
-  return `/world/locations/${encodeURIComponent(locationId)}/map-icon-2d`;
-}
-
 // --- 3D-Assets (AV3D-5) ------------------------------------------------------
 
 export interface ApiClip {

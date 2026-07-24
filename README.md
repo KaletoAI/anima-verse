@@ -11,8 +11,9 @@ das anima-verse-Projekt selbst bleibt unangetastet.
   Shift/Strg/Alt+Links; rechte Taste geht auch, kollidiert aber je nach
   Browser mit Maus-Gesten).
 - **3D-Locations:** prozedurale Gebäude per Stil-Heuristik (Café, Haus, Hochhaus,
-  Generisch), Terrain-Kacheln (Wald mit Bäumen, Straßen) — Kachelbilder kommen,
-  wenn vorhanden, vom Backend (`/world/locations/{id}/map-icon-2d`).
+  Generisch), Terrain-Kacheln (Wald mit Bäumen, Straßen) — Boden- und
+  Wandtexturen kommen, wenn vorhanden, vom Backend
+  (`/assets/surface-textures`); 2D-Map-Icons werden im 3D-Pfad nicht genutzt.
 - **Raumauflösung beim Reinzoomen:** nah herangezoomte Gebäude blenden Dach und
   Wände aus und zeigen ihre Räume als begehbaren Grundriss (Auto-Layout,
   Raum-Labels, Eingangs-Markierung).

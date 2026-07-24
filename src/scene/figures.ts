@@ -6,11 +6,17 @@ import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
 
 /**
- * Animierte 3D-Figuren für NPCs (Stufe 1 von AV3D-5): Modelle kommen aus
- * /models/manifest.json (gebundelte Beispiel-GLBs). Später ersetzt
- * GET /characters/{name}/model diese Quelle; die Fallback-Kette
- * (Figur -> Portrait-Sprite) bleibt dieselbe.
+ * Animierte 3D-Figuren für NPCs (AV3D-5): Modelle kommen vom Server
+ * (GET /characters/{name}/model3d), /models/manifest.json ist nur noch
+ * Dev-/Offline-Fallback. Die Fallback-Kette (Figur -> Portrait-Sprite)
+ * bleibt dieselbe.
  */
+
+/** Basishöhe einer Figur ohne height_cm, in REALEN Metern.
+ *  Vertrag schnittstellen-3d.md § A3 — Welthöhe = dieser Wert x k
+ *  (roomFigureScale). Nicht auf 1,75 zurückdrehen: die Admin-Vorschau
+ *  und die Prop-/Diorama-Maßstäbe rechnen mit 1,70. */
+export const BASE_FIGURE_HEIGHT_M = 1.70;
 
 interface ManifestModel {
   name: string;
@@ -388,7 +394,8 @@ export class FigureLibrary {
   private charSets = new Map<string, string[]>();
   /** Körpergröße pro Charakter in Metern (aus height_cm der Worldmap) */
   private charHeight = new Map<string, number>();
-  private defaultHeight = 1.75;
+  /** Figuren-Basishöhe in REALEN Metern (Vertrag § A3: 1,70; Welthöhe = x k) */
+  private defaultHeight = BASE_FIGURE_HEIGHT_M;
   /** wird gerufen, sobald ein nachgeladenes Charakter-Modell bereit ist */
   onModelReady: ((charName: string) => void) | null = null;
 
@@ -406,7 +413,7 @@ export class FigureLibrary {
     } catch { /* kein Manifest -> nur Server-Assets */ }
     this.assignments = manifest.assignments ?? {};
     const loader = new GLTFLoader();
-    const defaultHeight = manifest.defaultHeight ?? 1.75;
+    const defaultHeight = manifest.defaultHeight ?? BASE_FIGURE_HEIGHT_M;
 
     const loadFile = async (url: string, forceFbx = false): Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }> => {
       if (forceFbx || /\.fbx(\?|$)/i.test(url)) {

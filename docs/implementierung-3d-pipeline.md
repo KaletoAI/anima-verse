@@ -76,14 +76,18 @@ Job `character_model`: Referenzbild → fertiges GLB.
 
 1. **Ablage:** `characters/<name>/model/default.glb` (später pro Outfit
    `<outfit>.glb`, Server wählt passend zum aktuellen Outfit).
-2. **Endpoints:**
-   - `GET /characters/{name}/model` → GLB-Bytes.
-     **Pflicht: `ETag` + `Cache-Control`** (Dateien 8–10 MB, ändern sich
-     selten; der Client cacht aggressiv). 404 wenn keins → Client fällt
-     automatisch auf Portrait-Marker zurück.
-   - `GET /characters/{name}/model/meta` →
-     `{"format":"glb","rig":"mixamo","source":"generated|upload"}`.
-   - Upload: `POST /characters/{name}/model` (Admin bzw. Gateway-Token).
+2. **Endpoints** (Realität, vgl. `schnittstellen-3d.md` § A7 — die früher hier
+   geplanten `/characters/{name}/model` + `/model/meta` gibt es NICHT):
+   - `GET /characters/{name}/model3d` → JSON
+     `{"model":{"url":…,"format":"glb|fbx","rig":"mixamo|generic|none",
+     "texture_url":…?},"signature":…}`. 404 wenn keins → Client fällt
+     automatisch auf Portrait-Marker zurück. `signature` erkennt
+     Regenerationen/Outfit-Wechsel ohne Reload.
+   - Die Bytes liegen unter `model.url`. **Pflicht dort: `ETag` +
+     `Cache-Control`** (Dateien 8–10 MB, ändern sich selten; der Client
+     cacht aggressiv). `rig: "generic"` = FBX + separates `texture_url`,
+     keine Bibliotheks-Clips → prozedurales Idle.
+   - Upload/Generierung läuft server-seitig (Admin bzw. Gateway-Token).
      Validierung: GLB-Magic, `skins` vorhanden (sonst Warnung „ungeriggt —
      Figur wäre statisch"), Größenlimit.
 3. **Globale Animations-Bibliothek** (einmalig):
@@ -96,8 +100,8 @@ Job `character_model`: Referenzbild → fertiges GLB.
 
 ## Client (dieses Repo) — was sich dann ändert
 
-`FigureLibrary` tauscht die Manifest-Quelle gegen die API:
-Modelle von `GET /characters/{name}/model` (mit meta.rig-Check),
+`FigureLibrary` tauscht die Manifest-Quelle gegen die API (erledigt):
+Modelle von `GET /characters/{name}/model3d` (mit `model.rig`-Check),
 Clips von `GET /assets/animation-clips`. Fallback-Kette bleibt identisch:
 Modell → Portrait-Marker. Das lokale `public/models/manifest.json` bleibt
 als Dev-/Offline-Modus erhalten. Aufwand: klein, Schnittstellen sind isoliert.
