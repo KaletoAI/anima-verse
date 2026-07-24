@@ -96,6 +96,17 @@ export async function apiDelete<T = any>(path: string): Promise<T> {
 }
 
 /**
+ * Scene recipe of an UNSAVED location draft (shared/schnittstellen-3d.md
+ * § B3): the server composes the complete 3D scene — plates, walls, extras,
+ * model placement specs, figures, markers, exits — and the caller only
+ * renders it. Same payload as GET /play/locations/{id}/scene, nothing is
+ * persisted. Admin-only.
+ */
+export async function postScenePreview<T = unknown>(draft: unknown): Promise<T> {
+  return apiPost<T>('/play/scene-preview', draft)
+}
+
+/**
  * Multipart upload. The browser sets the multipart Content-Type (with the
  * boundary) itself, so we must NOT set it manually. Field name defaults to
  * "file" to match the FastAPI upload routes.

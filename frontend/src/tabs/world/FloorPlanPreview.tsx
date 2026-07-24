@@ -1,38 +1,54 @@
 /**
  * FloorPlanPreview — live 3D preview of the room layout (AV3D-2), shown next
- * to the floor-plan editor. Follows the CONTRACT placement semantics
- * (schnittstellen-3d.md → "Platzierungs-Semantik (Referenz für Vorschauen)")
- * so it renders exactly what the game client renders:
+ * to the floor-plan editor. Since v4 it is CONSUMER No. 1 of the server's
+ * scene recipe (shared/schnittstellen-3d.md part B): the current editor
+ * draft goes to POST /play/scene-preview and what comes back is rendered as
+ * it is — plates, walls, extras, model placement specs, figures, markers and
+ * exits, all in world metres around the tile centre.
  *
- *   - reference surface = fixed 8×8 m square (layout fractions refer to it),
- *   - floor height = level × 3 m (map3d.level_height may override the 3),
- *   - room model: normalized to unit footprint (largest XZ side = 1, XZ
- *     centred, bottom y=0), uniformly scaled by min(w/fp_x, d/fp_z) × 0.96,
- *     bottom at floor + 0.12 m — THEN the meta rotation {x,y,z}, the layout
- *     yaw and offset_y (metres) apply,
- *   - exit = fraction of the room rectangle (orange dot), markers green.
+ * That means: NO geometry decision lives here any more. Wall thickness, door
+ * gaps, fit factors, storey heights, figure scale and the colour vocabulary
+ * all come from the payload; this file only builds boxes, extruded polygons
+ * and meshes from it. Anything that stays is view state — camera, toggles,
+ * level solo, culling, labels, texture tiling, clip retargeting.
  *
  * Two compare switches: "Real room models" swaps the level boxes for the
  * rooms' ACTIVE models (rooms without one keep their box), "Building model
  * overlay" ghosts the location's building model over the plan. Models are
- * fetched once and cached; the boxes rebuild live while dragging in the
+ * fetched once and cached; the scene rebuilds live while dragging in the
  * editor (the three.js scene itself is created once). three.js is imported
  * dynamically — it stays in the shared chunk.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D, Texture } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
-import { normalizeOpeningEdge, outlineOf, mirrorOpenings } from './planGeometry'
+import { apiGet, apiPost, postScenePreview } from '../../lib/api'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
 import { useToast } from '../../lib/Toast'
-import type { Map3D, Room } from './worldTypes'
+import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 
-// Contract constants: the 8×8 m reference square and the 3 m storey.
+// The reference square (8 m) is the preview's own stage — ground plate,
+// ruler position and camera framing. Every DERIVED length comes from the
+// scene payload.
 const PLATE_M = 8
 const DEFAULT_LEVEL_M = 3
-const PALETTE = [0x58a6ff, 0x3fb950, 0xd29922, 0xf778ba,
-                 0xa371f7, 0xf85149, 0x79c0ff, 0x56d364]
+// The ONE geometry number that stays on this side: contract § B2 puts the
+// 0.96 fit margin into the client's place() routine (fit_box fallback).
+const FIT_BOX_MARGIN = 0.96
+// Preview AIDS — deliberately NOT part of the scene style (which covers
+// walls, floors, glass and the room palette): these paint things only the
+// admin preview shows. Elevator metal has no colour in the contract yet.
+const AID = {
+  exit: 0xe0a356,
+  marker: 0x3fb950,
+  markerLabel: '#7ee2a0',
+  placeholder: 0xd29922,
+  figure: 0x8b949e,
+  elevatorMetal: 0x6d7681,
+  elevatorPad: 0xaab4be,
+  elevatorCabin: 0x3d4650,
+  ruler: 0xc9d1d9,
+}
 
 interface CachedModel {
   obj: Object3D
@@ -125,12 +141,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // animation clips per kind — markers show a real animated figure; without
   // figure/clip the mannequin stays the fallback.
   const figRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'; obj?: Object3D }>({ status: 'idle' })
-  // Prop library meta (orientation fix + real dims per id) — one fetch feeds
-  // every placement; prop GLBs land in cacheRef under "prop:<id>".
-  const propsMetaRef = useRef<{ status: 'idle' | 'loading' | 'ready'
-    map: Map<string, { rotation: { x?: number; y?: number; z?: number }
-      dims: [number, number, number]; hasModel: boolean }> }>(
-    { status: 'idle', map: new Map() })
   // Surface textures per kind: the /assets listing (url + real tiling size)
   // plus lazily loaded THREE textures — walls/floors sample them real-scale.
   const surfaceListRef = useRef<{ status: 'idle' | 'loading' | 'ready'
@@ -144,6 +154,45 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   const clockRef = useRef<Clock | null>(null)
 
   const lh = levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M
+
+  // ── The scene recipe (contract § B1/B3) ───────────────────────────────
+  // The whole geometry arrives from the server. Editor edits (drag, resize,
+  // opening, prop) reach it as a DRAFT — including everything unsaved — so
+  // the preview shows what the client will get, computed by the same code.
+  // Debounced: a drag fires per pointermove, one POST per ~300 ms is plenty.
+  const [scene, setScene] = useState<ScenePayload | null>(null)
+  const [sceneError, setSceneError] = useState('')
+  const sceneRef = useRef<ScenePayload | null>(null)
+  sceneRef.current = scene
+  // Model edits (rotation fix, width_m, walk_y, a new mesh) change the
+  // payload without touching the draft — this counter refetches it.
+  const [modelVer, setModelVer] = useState(0)
+
+  useEffect(() => {
+    let stale = false
+    const timer = window.setTimeout(() => {
+      postScenePreview<ScenePayload>({
+        id: locationId,
+        map_rotation_2d: fallbackYawDeg,
+        map3d: map3d || {},
+        rooms: rooms.map((r) => ({ id: r.id || '', name: r.name || '',
+                                   layout: r.layout })),
+      })
+        .then((payload) => {
+          if (stale) return
+          setSceneError('')
+          setScene(payload)
+        })
+        .catch((e) => {
+          if (stale) return
+          // No silent fallback to a local computation — the preview says so
+          // instead of showing a second, different geometry.
+          setSceneError((e as Error).message)
+          setScene(null)
+        })
+    }, 300)
+    return () => { stale = true; window.clearTimeout(timer) }
+  }, [locationId, rooms, map3d, fallbackYawDeg, modelVer])
 
   // Mesh width-per-height ratio via the SHARED helper (same value the
   // layout editor uses) — auto plan width = declared height × this ratio
@@ -178,6 +227,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           .catch(() => undefined)
       }
       setBump((b) => b + 1)
+      setModelVer((v) => v + 1)  // model metas feed the scene payload
     }
     window.addEventListener('anima-model3d-changed', onChanged)
     return () => window.removeEventListener('anima-model3d-changed', onChanged)
@@ -359,20 +409,23 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     if (solo !== null) {
       current = current.filter((r) => (r.layout?.level || 0) === solo)
     }
-    // ONE compression factor per location (anchored mode): the reference
-    // square (8 world-m) represents plan_width_m real metres → k = 8 /
-    // plan_width_m. EVERYTHING derives from real size × k — storeys,
-    // figures, shell height; without the anchor k = 1 (legacy). The
-    // building entry is fetched regardless of the overlay toggle so the
-    // storey derivation is always live.
+    // Scalars come FROM THE PAYLOAD (contract § A1): k = world metres per
+    // real metre, storey_m = the derived storey height. Until the first
+    // response arrives the preview stands on the unscaled defaults.
+    const sc = sceneRef.current
+    const kFac = sc ? sc.k : 1
+    const lhEff = sc ? sc.storey_m : lh
+    const style = sc?.style
+    const figBase = sc ? sc.figures.base_height_m_world : 1.7
+    // Hex colour of the payload style ('#rrggbb' → three.js number).
+    const hex = (c: string | undefined, fallback: number): number => {
+      const v = parseInt((c || '').replace('#', ''), 16)
+      return Number.isFinite(v) ? v : fallback
+    }
+    const visibleLevel = (lv: number) => solo === null || lv === solo
+    // The building entry is fetched regardless of the overlay toggle — the
+    // model panel's fields read it.
     const bAnchor = ensureModel('building')
-    const planW = map3dRef.current?.plan_width_m
-      || (bAnchor && bAnchor.heightM > 0 && wphRef.current > 0
-          ? bAnchor.heightM * wphRef.current : 0)
-    const kFac = planW > 0 ? PLATE_M / planW : 1
-    const lhEff = bAnchor && bAnchor.heightM > 0 && bAnchor.floors > 0
-      ? (bAnchor.heightM / bAnchor.floors) * kFac
-      : lh
     for (const mixer of mixersRef.current) mixer.stopAllAction()
     mixersRef.current = []
     // Recursive disposal that BAILS on __noDispose subtrees — cached-model
@@ -401,77 +454,64 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
 
     const deg = (v?: number) => ((v || 0) * Math.PI) / 180
 
-    // Place a model per the CONTRACT chain: normalize to unit footprint
-    // (largest XZ side = 1, XZ centred, bottom y=0), uniform fit
-    // min(w/fp_x, d/fp_z) × 0.96 measured on the UNROTATED model, bottom on
-    // floor + 0.12 m — then meta rotation, layout yaw and offset_y. After
-    // the rotations the bottom is re-grounded from the rotated bounds.
-    const placeModel = (entry: CachedModel, targetW: number, targetD: number,
-                        cx: number, floorY: number, cz: number,
-                        yawDeg: number, offsetY = 0) => {
-      const clone = entry.obj.clone(true)
-      const norm = new THREE.Group()
-      norm.add(clone)
-      norm.updateMatrixWorld(true)
-      const b0 = new THREE.Box3().setFromObject(norm)
-      const s0 = b0.getSize(new THREE.Vector3())
-      const unit = 1 / (Math.max(s0.x, s0.z) || 1)
-      const fpX = s0.x * unit
-      const fpZ = s0.z * unit
-      norm.scale.setScalar(unit)
-      norm.updateMatrixWorld(true)
-      const b1 = new THREE.Box3().setFromObject(norm)
-      const c1 = b1.getCenter(new THREE.Vector3())
-      norm.position.set(-c1.x, -b1.min.y, -c1.z)
+    // ── THE placement routine (contract § B2) ──────────────────────────
+    // Building, room diorama and prop differ only in the SPEC the server
+    // sends — never in code. Chain: fix_euler ('XYZ') on the inner group →
+    // measure → scale per scale_mode → yaw as the PARENT rotation (never
+    // combined into one Euler, an x/z fix would tilt with it) → measure the
+    // result and seat its BBox on bottom_y / anchor.
+    const placeSpec = (source: Object3D, spec: SceneModelSpec): Object3D => {
+      const fix = new THREE.Group()
+      fix.add(source.clone(true))
+      fix.rotation.set(deg(spec.fix_euler?.x), deg(spec.fix_euler?.y),
+                       deg(spec.fix_euler?.z))
+      fix.updateMatrixWorld(true)
+      const sFix = new THREE.Box3().setFromObject(fix).getSize(new THREE.Vector3())
 
-      const fit = new THREE.Group()
-      fit.add(norm)
-      const fitScale = Math.min(targetW / (fpX || 1), targetD / (fpZ || 1)) * 0.96
-      fit.scale.setScalar(fitScale)
-
-      // Contract order: meta rotation FIX first (inner group), THEN the
-      // layout yaw as its own parent — combining both in one Euler drifts
-      // as soon as an x/z fix is set (the yaw would tilt the fixed axis).
-      const holder = new THREE.Group()
-      holder.add(fit)
-      holder.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y),
-                          deg(entry.rotation.z))
       const yawG = new THREE.Group()
-      yawG.add(holder)
-      yawG.rotation.y = -deg(yawDeg)
+      yawG.add(fix)
+      yawG.rotation.y = -deg(spec.yaw_deg)
       yawG.updateMatrixWorld(true)
-      const b2 = new THREE.Box3().setFromObject(yawG)
-      const c2 = b2.getCenter(new THREE.Vector3())
-      yawG.position.set(cx - c2.x,
-                        floorY + 0.12 - b2.min.y + offsetY,
-                        cz - c2.z)
-      yawG.userData.__noDispose = true
-      boxes.add(yawG)
-      // World extent of the model's largest side — with the model's
-      // declared real width this yields the room's content scale.
-      return fitScale
+      const sYaw = new THREE.Box3().setFromObject(yawG).getSize(new THREE.Vector3())
+
+      const outer = new THREE.Group()
+      outer.add(yawG)
+      if (spec.scale_axes) {
+        // Server-measured mesh: the factors come ready (contract § B4).
+        outer.scale.set(spec.scale_axes.xz, spec.scale_axes.y, spec.scale_axes.xz)
+      } else if (spec.scale_mode === 'tile_fit') {
+        // Buildings fill their tile per AXIS, measured on the ROTATED box:
+        // the footprint follows the plan, the height its declared metres.
+        const kxz = (spec.box?.xz || 1) / (Math.max(sYaw.x, sYaw.z) || 1)
+        const ky = spec.box?.y ? spec.box.y / (sYaw.y || 1) : kxz
+        outer.scale.set(kxz, ky, kxz)
+      } else if (spec.scale_mode === 'real_size') {
+        // ONE law of scale: real metres over the largest measured extent.
+        // measure_axes 'xz' ignores the height (dioramas, § B2a).
+        const maxExtent = (spec.measure_axes === 'xz'
+          ? Math.max(sFix.x, sFix.z)
+          : Math.max(sFix.x, sFix.y, sFix.z)) || 1
+        outer.scale.setScalar((spec.max_m || 1) / maxExtent)
+      } else {
+        // fit_box fallback: fit the UNROTATED footprint into the target box.
+        outer.scale.setScalar(Math.min((spec.box?.w || 1) / (sFix.x || 1),
+                                       (spec.box?.d || 1) / (sFix.z || 1))
+                              * FIT_BOX_MARGIN)
+      }
+      outer.updateMatrixWorld(true)
+      const bOut = new THREE.Box3().setFromObject(outer)
+      const cOut = bOut.getCenter(new THREE.Vector3())
+      outer.position.set(spec.anchor[0] - cOut.x,
+                         spec.bottom_y - bOut.min.y,
+                         spec.anchor[1] - cOut.z)
+      outer.userData.__noDispose = true
+      boxes.add(outer)
+      return outer
     }
 
-    // ── Props (plan-room-props.md): meta, meshes, real-size placement ──
-    const ensurePropsMeta = (): boolean => {
-      const s = propsMetaRef.current
-      if (s.status !== 'idle') return s.status === 'ready'
-      s.status = 'loading'
-      apiGet<{ props?: Array<{ id: string; has_model?: boolean
-        rotation?: { x?: number; y?: number; z?: number }
-        width_m?: number; depth_m?: number; height_m?: number }> }>('/world/props')
-        .then((d) => {
-          for (const p of d.props || []) {
-            s.map.set(p.id, { rotation: p.rotation || {},
-              dims: [p.width_m || 1, p.depth_m || 1, p.height_m || 1],
-              hasModel: !!p.has_model })
-          }
-        })
-        .catch(() => {})
-        .finally(() => { s.status = 'ready'; setBump((b) => b + 1) })
-      return false
-    }
-    const ensurePropModel = (propId: string): CachedModel | null => {
+    // Prop meshes by id — the URL comes from the spec, everything else about
+    // the prop (fix, size, placeholder) is already in it.
+    const ensurePropModel = (propId: string, url: string): CachedModel | null => {
       const key = `prop:${propId}`
       const cur = cacheRef.current.get(key)
       if (cur === 'loading' || cur === 'missing') return null
@@ -480,8 +520,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       ;(async () => {
         try {
           const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-          const gltf = await new GLTFLoader().loadAsync(
-            `/assets/props/${encodeURIComponent(propId)}/model`)
+          const gltf = await new GLTFLoader().loadAsync(url)
           cacheRef.current.set(key, { obj: gltf.scene, rotation: {},
             offsetY: 0, floors: 0, heightM: 0, widthM: 0 })
         } catch {
@@ -491,38 +530,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       })()
       return null
     }
-    // REAL-size rule: the prop scales by ITS OWN dims × kFac — uniformly from
-    // the largest edge over the largest extent of the FIXED mesh (dims are
-    // post-fix by convention); the placement never fit-scales. Chain mirrors
-    // placeModel: fix (inner) → yaw (parent) → uniform world scale → re-ground
-    // the rotated bounds at the floor + offset.
-    const placePropModel = (entry: CachedModel,
-        rot: { x?: number; y?: number; z?: number },
-        dims: [number, number, number], px: number, pz: number,
-        floorY: number, yawDeg2: number, offY: number) => {
-      const clone = entry.obj.clone(true)
-      const holder = new THREE.Group()
-      holder.add(clone)
-      holder.rotation.set(deg(rot.x), deg(rot.y), deg(rot.z))
-      holder.updateMatrixWorld(true)
-      const b0 = new THREE.Box3().setFromObject(holder)
-      const s0 = b0.getSize(new THREE.Vector3())
-      const maxExtent = Math.max(s0.x, s0.y, s0.z) || 1
-      const s = (Math.max(dims[0], dims[1], dims[2]) * kFac) / maxExtent
-      const yawG = new THREE.Group()
-      yawG.add(holder)
-      yawG.rotation.y = -deg(yawDeg2)
-      const outer = new THREE.Group()
-      outer.add(yawG)
-      outer.scale.setScalar(s)
-      outer.updateMatrixWorld(true)
-      const b1 = new THREE.Box3().setFromObject(outer)
-      const c1 = b1.getCenter(new THREE.Vector3())
-      outer.position.set(px - c1.x, floorY + 0.05 + offY * kFac - b1.min.y, pz - c1.z)
-      outer.userData.__noDispose = true
-      boxes.add(outer)
-    }
-
     // ── Surface textures: real-scale sampling for walls + room floors ──
     const ensureSurfaceList = (): boolean => {
       const s = surfaceListRef.current
@@ -561,63 +568,193 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       return null
     }
 
+    // ── Figures ────────────────────────────────────────────────────────
+    // ONE figure routine for markers and the comparison figure: the real
+    // Mixamo test figure with the requested clip, else the mannequin. Height
+    // is ALWAYS figures.base_height_m_world from the payload — the figure is
+    // the fixed reference, it never scales with a slider. World coordinates,
+    // bottom seated on `y`; `facing` is the world compass (0 = south).
+    const placeFigure = (opts: { x: number; y: number; z: number
+                                 animation?: string; facing?: number
+                                 label?: string }) => {
+      const fig = new THREE.Group()
+      const figSrc = ensureTestFigure()
+      const kinds = clipListRef.current.clips.map((c) => c.kind)
+      const kind = opts.animation
+        || (kinds.includes('idle') ? 'idle' : kinds.includes('stand') ? 'stand' : kinds[0])
+      const anim = figSrc && kind ? ensureClip(kind) : null
+      if (figSrc && anim) {
+        const inst = h.skclone(figSrc)
+        const pivot = new THREE.Group()
+        pivot.add(inst)
+        // Up-axis fix measured on the REST skeletons (never the animated
+        // pose) — same logic as the model viewer.
+        const hipsOf = (root: Object3D): Object3D | null => {
+          let found: Object3D | null = null
+          root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
+          return found
+        }
+        const modelHips = hipsOf(inst)
+        const clipHips = hipsOf(anim.restObj)
+        if (modelHips?.parent && clipHips?.parent) {
+          inst.updateMatrixWorld(true)
+          anim.restObj.updateMatrixWorld(true)
+          const restModel = modelHips.parent.getWorldQuaternion(new THREE.Quaternion())
+          const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
+          let bestRx = 0
+          let bestAngle = Infinity
+          for (const rx of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+            const cand = new THREE.Quaternion()
+              .setFromEuler(new THREE.Euler(rx, 0, 0)).multiply(restModel)
+            const angle = cand.angleTo(restClip)
+            if (angle < bestAngle) { bestAngle = angle; bestRx = rx }
+          }
+          pivot.rotation.x = bestRx
+        }
+        // BODY size comes from the REST pose (standing T-pose) — the posed
+        // bbox would blow lying/sitting figures up (a lying box is ~half as
+        // tall, so the figure came out ~twice as large).
+        pivot.updateMatrixWorld(true)
+        const fs = new THREE.Box3().setFromObject(pivot).getSize(new THREE.Vector3())
+        const mixer = new THREE.AnimationMixer(inst)
+        mixer.clipAction(anim.clip).play()
+        mixer.update(0)
+        mixersRef.current.push(mixer)
+        pivot.scale.setScalar(figBase / (fs.y || 1))
+        // Grounding DOES use the posed bounds — a lying figure rests on the
+        // floor, not on where its feet would be standing.
+        pivot.updateMatrixWorld(true)
+        const fb2 = new THREE.Box3().setFromObject(pivot)
+        const fc2 = fb2.getCenter(new THREE.Vector3())
+        pivot.position.set(-fc2.x, -fb2.min.y, -fc2.z)
+        pivot.userData.__noDispose = true
+        fig.add(pivot)
+      } else {
+        // Mannequin fallback while figure/clip load (or are missing) — same
+        // height as the real figure would be.
+        const tgt = figBase
+        const figMat = new THREE.MeshStandardMaterial({
+          color: opts.animation ? AID.marker : AID.figure,
+          transparent: true, opacity: 0.85,
+        })
+        const body = new THREE.Mesh(
+          new THREE.CapsuleGeometry(0.055 * tgt, 0.62 * tgt, 4, 10), figMat)
+        body.position.y = 0.42 * tgt
+        fig.add(body)
+        const head = new THREE.Mesh(
+          new THREE.SphereGeometry(0.09 * tgt, 12, 12), figMat)
+        head.position.y = 0.88 * tgt
+        fig.add(head)
+        // Facing nose — only when a facing is set (0 = south/+Z, 90 = east/+X;
+        // unset = the client decides, so the preview stays direction-less).
+        if (opts.facing !== undefined) {
+          const nose = new THREE.Mesh(
+            new THREE.ConeGeometry(0.05 * tgt, 0.16 * tgt, 10), figMat)
+          nose.rotation.x = Math.PI / 2
+          nose.position.set(0, 0.74 * tgt, 0.14 * tgt)
+          fig.add(nose)
+        }
+      }
+      if (opts.facing !== undefined) fig.rotation.y = deg(opts.facing)
+      if (opts.label) {
+        const mc = document.createElement('canvas')
+        mc.width = 128
+        mc.height = 40
+        const mctx = mc.getContext('2d')
+        if (mctx) {
+          mctx.font = '600 22px sans-serif'
+          mctx.textAlign = 'center'
+          mctx.textBaseline = 'middle'
+          mctx.shadowColor = 'rgba(0,0,0,0.9)'
+          mctx.shadowBlur = 5
+          mctx.fillStyle = AID.markerLabel
+          mctx.fillText(opts.label.slice(0, 14), 64, 20)
+        }
+        const msprite = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: new THREE.CanvasTexture(mc), transparent: true, depthTest: false,
+        }))
+        msprite.scale.set(1.3, 0.4, 1)
+        msprite.position.y = figBase * 1.15
+        fig.add(msprite)
+      }
+      fig.position.set(opts.x, opts.y, opts.z)
+      boxes.add(fig)
+      return fig
+    }
+
+    // ── Models (contract § B2): every mesh through the ONE routine ──────
+    // Which meshes exist and where they go is the payload's business; the
+    // toggles only decide what is SHOWN.
+    // Top of the placed building shell — the metre ruler reaches up to it.
+    let buildingTopY = 0
+    const roomsWithModel = new Set(
+      (sc?.models || []).filter((m) => m.role === 'room').map((m) => m.room_id))
+    for (const spec of sc?.models || []) {
+      if (!visibleLevel(spec.level)) continue
+      if (spec.role === 'building') {
+        if (!showBuildingRef.current || !bAnchor) continue
+        if (!bAnchor.ghost) {
+          // Keep the model's own textures — a flat gray ghost was near
+          // invisible on the dark canvas. Unlit (basic) + semi-transparent +
+          // no depth write: clearly the building, rooms shine through.
+          const g = bAnchor.obj.clone(true)
+          g.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            if (!mesh.isMesh) return
+            const src = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+            const map = (src as { map?: unknown })?.map || null
+            mesh.material = new THREE.MeshBasicMaterial({
+              map: map as never, color: 0xffffff,
+              transparent: true, opacity: 0.55, depthWrite: false,
+            })
+          })
+          bAnchor.ghost = g
+        }
+        const placed = placeSpec(bAnchor.ghost, spec)
+        placed.updateMatrixWorld(true)
+        const bb = new THREE.Box3().setFromObject(placed)
+        buildingTopY = bb.max.y
+        continue
+      }
+      if (spec.role === 'room') {
+        if (!showModelsRef.current) continue
+        const entry = ensureModel(`room:${spec.id}`, spec.id)
+        if (entry) placeSpec(entry.obj, spec)
+        continue
+      }
+      // Props: the mesh when there is one, else the payload's placeholder
+      // box (dims × k, already world metres) — a placement is never dropped.
+      const entry = spec.url ? ensurePropModel(spec.id, spec.url) : null
+      if (entry) {
+        placeSpec(entry.obj, spec)
+      } else if (spec.placeholder_dims) {
+        const dims = spec.placeholder_dims
+        const standIn = new THREE.Mesh(
+          new THREE.BoxGeometry(dims.w, dims.h, dims.d),
+          new THREE.MeshBasicMaterial({ color: AID.placeholder, wireframe: true }))
+        standIn.rotation.y = -deg(spec.yaw_deg)
+        standIn.position.set(spec.anchor[0], spec.bottom_y + dims.h / 2, spec.anchor[1])
+        boxes.add(standIn)
+      }
+    }
+
     current.forEach((room, idx) => {
       const lay = room.layout
       if (!lay) return
-      const color = PALETTE[idx % PALETTE.length]
+      const palette = style?.room_palette || []
+      const color = hex(palette[idx % (palette.length || 1)], 0x58a6ff)
       const w = lay.w * PLATE_M
       const d = lay.d * PLATE_M
       const level = lay.level || 0
       const floorY = level * lhEff
       const cy = floorY + lhEff / 2
-      // Diorama placement comes from the PLAN: layout.model_at anchors the
-      // model like a prop (default = centred), layout.model_offset_y is the
-      // height — the room sidecar offset is retired.
-      const mAt = lay.model_at || [0.5, 0.5]
-      const cx = (lay.x + mAt[0] * lay.w - 0.5) * PLATE_M
-      const cz = (lay.y + mAt[1] * lay.d - 0.5) * PLATE_M
+      // Editor overlay only: the room RECTANGLE as placed (the diorama has
+      // its own anchor in the payload and is drawn above).
+      const cx = (lay.x + lay.w / 2 - 0.5) * PLATE_M
+      const cz = (lay.y + lay.d / 2 - 0.5) * PLATE_M
+      const model = showModelsRef.current && room.id && roomsWithModel.has(room.id)
 
-      const model = showModelsRef.current && room.id
-        ? ensureModel(`room:${room.id}`, room.id)
-        : null
-      let fitScale = 0
-      if (model) {
-        fitScale = placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0,
-                              lay.model_offset_y || 0)
-      }
-
-      // Prop placements: real-size furnishing meshes; a wireframe box of the
-      // prop's dims stands in while meta/mesh load and for dangling ids.
-      ;(lay.props || []).forEach((p) => {
-        ensurePropsMeta()
-        const pm = propsMetaRef.current.map.get(p.prop_id)
-        const dims: [number, number, number] = pm?.dims || [1, 1, 1]
-        const px = (lay.x + p.at[0] * lay.w - 0.5) * PLATE_M
-        const pz = (lay.y + p.at[1] * lay.d - 0.5) * PLATE_M
-        const entry = pm?.hasModel ? ensurePropModel(p.prop_id) : null
-        if (entry && pm) {
-          placePropModel(entry, pm.rotation, dims, px, pz, floorY,
-            p.yaw || 0, p.offset_y || 0)
-        } else {
-          const standIn = new THREE.Mesh(
-            new THREE.BoxGeometry(dims[0] * kFac, dims[2] * kFac, dims[1] * kFac),
-            new THREE.MeshBasicMaterial({ color: 0xd29922, wireframe: true }))
-          standIn.rotation.y = -deg(p.yaw || 0)
-          standIn.position.set(px,
-            floorY + 0.05 + (p.offset_y || 0) * kFac + (dims[2] * kFac) / 2, pz)
-          boxes.add(standIn)
-        }
-      })
-      // Figure scale in THIS room. Anchored mode: the ONE location factor
-      // k — rect sizes derive from width_m, so content and figures share
-      // it automatically. Legacy: per-room rect/width_m, else storey/3.
-      const roomFigScale = planW > 0
-        ? kFac
-        : (model && model.widthM > 0 && fitScale > 0
-            ? fitScale / model.widthM
-            : lhEff / 3)
-
-      // Label + exit/marker dots always; the box only when no model stands in.
+      // Label; the box only when no model stands in.
       // A drawn hull renders as its extruded polygon prism instead of the box.
       const roomGroup = new THREE.Group()
       if (!model) {
@@ -664,140 +801,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         roomGroup.add(edges)
       }
 
-      if (lay.exit) {
-        const dot = new THREE.Mesh(
-          new THREE.SphereGeometry(0.16, 12, 12),
-          new THREE.MeshBasicMaterial({ color: 0xe0a356 }),
-        )
-        dot.position.set((lay.exit[0] - 0.5) * w, -lhEff * 0.4, (lay.exit[1] - 0.5) * d)
-        roomGroup.add(dot)
-      }
-      // Animation markers (green — exit stays orange): a dot on the room
-      // floor plus a small TEST FIGURE at the contract's in-room figure
-      // scale (1/3 of the ~1.7 m map figure ≈ 0.57 m) with the animation
-      // kind as a label — placement is judgeable at a glance. A simple
-      // mannequin for now; an animated skinned figure would need a bundled
-      // rigged model.
-      ;(lay.markers || []).forEach((m, mi) => {
-        const mx = (m.at[0] - 0.5) * w
-        const mz = (m.at[1] - 0.5) * d
-        // offset_y is additive to the sampled seat height in the client —
-        // the preview has no sampling, so it applies from the room floor.
-        const floor = -lhEff * 0.44 + (m.offset_y || 0)
-        const fig = new THREE.Group()
-        // No marker dot in 3D — it sat exactly where the figure is judged
-        // and got in the way; the figure + numbered label mark the spot,
-        // the 2D plan keeps its green dot for precise positioning.
-
-        // Preferred: a REAL Mixamo figure with the marker's animation (any
-        // humanoid character model the server offers + the shared clip of
-        // the kind). Falls back to the mannequin while loading / when
-        // figure or clip is missing.
-        const figSrc = ensureTestFigure()
-        const anim = figSrc ? ensureClip(m.animation) : null
-        if (figSrc && anim) {
-          const inst = h.skclone(figSrc)
-          const pivot = new THREE.Group()
-          pivot.add(inst)
-          // Up-axis fix measured on the REST skeletons (never the animated
-          // pose) — same logic as the model viewer.
-          const hipsOf = (root: Object3D): Object3D | null => {
-            let found: Object3D | null = null
-            root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
-            return found
-          }
-          const modelHips = hipsOf(inst)
-          const clipHips = hipsOf(anim.restObj)
-          if (modelHips?.parent && clipHips?.parent) {
-            inst.updateMatrixWorld(true)
-            anim.restObj.updateMatrixWorld(true)
-            const restModel = modelHips.parent.getWorldQuaternion(new THREE.Quaternion())
-            const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
-            let bestRx = 0
-            let bestAngle = Infinity
-            for (const rx of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
-              const cand = new THREE.Quaternion()
-                .setFromEuler(new THREE.Euler(rx, 0, 0)).multiply(restModel)
-              const angle = cand.angleTo(restClip)
-              if (angle < bestAngle) { bestAngle = angle; bestRx = rx }
-            }
-            pivot.rotation.x = bestRx
-          }
-          // BODY size comes from the REST pose (standing T-pose) — the
-          // posed bbox would blow lying/sitting figures up (a lying box is
-          // ~half as tall, so the figure came out ~twice as large).
-          pivot.updateMatrixWorld(true)
-          const fb = new THREE.Box3().setFromObject(pivot)
-          const fs = fb.getSize(new THREE.Vector3())
-          const k = (1.7 * roomFigScale) / (fs.y || 1)
-          const mixer = new THREE.AnimationMixer(inst)
-          mixer.clipAction(anim.clip).play()
-          mixer.update(0)
-          mixersRef.current.push(mixer)
-          pivot.scale.setScalar(k)
-          // Grounding DOES use the posed bounds — a lying figure rests on
-          // the floor, not on where its feet would be standing.
-          pivot.updateMatrixWorld(true)
-          const fb2 = new THREE.Box3().setFromObject(pivot)
-          const fc2 = fb2.getCenter(new THREE.Vector3())
-          pivot.position.set(-fc2.x, floor - fb2.min.y, -fc2.z)
-          pivot.userData.__noDispose = true
-          fig.add(pivot)
-          if (m.rotation !== undefined) {
-            fig.rotation.y = ((m.rotation || 0) * Math.PI) / 180
-          }
-        } else {
-          // Mannequin fallback — scaled to the SAME figure size as the real
-          // figure would be (it used to be a fixed ~0.57 m regardless of
-          // the room scale).
-          const tgt = 1.7 * roomFigScale
-          const figMat = new THREE.MeshStandardMaterial({
-            color: 0x3fb950, transparent: true, opacity: 0.85,
-          })
-          const body = new THREE.Mesh(
-            new THREE.CapsuleGeometry(0.055 * tgt, 0.62 * tgt, 4, 10), figMat)
-          body.position.y = floor + 0.42 * tgt
-          fig.add(body)
-          const head = new THREE.Mesh(
-            new THREE.SphereGeometry(0.09 * tgt, 12, 12), figMat)
-          head.position.y = floor + 0.88 * tgt
-          fig.add(head)
-          // Facing nose — only when a facing is set (0 = south/+Z, 90 = east/+X;
-          // unset = the client decides, so the preview stays direction-less).
-          if (m.rotation !== undefined) {
-            const nose = new THREE.Mesh(
-              new THREE.ConeGeometry(0.05 * tgt, 0.16 * tgt, 10), figMat)
-            nose.rotation.x = Math.PI / 2
-            nose.position.set(0, floor + 0.74 * tgt, 0.14 * tgt)
-            fig.add(nose)
-            fig.rotation.y = ((m.rotation || 0) * Math.PI) / 180
-          }
-        }
-
-        const mc = document.createElement('canvas')
-        mc.width = 128
-        mc.height = 40
-        const mctx = mc.getContext('2d')
-        if (mctx) {
-          mctx.font = '600 22px sans-serif'
-          mctx.textAlign = 'center'
-          mctx.textBaseline = 'middle'
-          mctx.shadowColor = 'rgba(0,0,0,0.9)'
-          mctx.shadowBlur = 5
-          mctx.fillStyle = '#7ee2a0'
-          mctx.fillText(`${mi + 1} · ${m.animation}`.slice(0, 14), 64, 20)
-        }
-        const msprite = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: new THREE.CanvasTexture(mc), transparent: true, depthTest: false,
-        }))
-        msprite.scale.set(1.3, 0.4, 1)
-        msprite.position.y = floor + 0.78
-        fig.add(msprite)
-
-        fig.position.set(mx, 0, mz)
-        roomGroup.add(fig)
-      })
-
       // Name label as a canvas sprite floating above the box.
       const canvas = document.createElement('canvas')
       canvas.width = 256
@@ -820,20 +823,55 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       sprite.position.y = lhEff * 0.62
       roomGroup.add(sprite)
 
-      // The group does NOT yaw: x/y/w/d are the rectangle AS PLACED and the
-      // exit/markers are fractions of that placed rectangle (matches the 2D
-      // editor exactly) — layout.rotation only orients the room MODEL,
-      // applied in placeModel above.
+      // The group does NOT yaw: x/y/w/d are the rectangle AS PLACED
+      // (layout.rotation only orients the room MODEL, which the payload
+      // spec already carries).
       roomGroup.position.set(cx, cy, cz)
       boxes.add(roomGroup)
     })
+
+    // ── Exits and markers (payload, world coordinates) ─────────────────
+    // Exit points: the payload resolves explicit AND derived exits into one
+    // frame — the preview only draws the dot.
+    const levelOfRoom = new Map<string, number>(
+      current.filter((r) => r.id && r.layout)
+        .map((r) => [r.id as string, r.layout!.level || 0]))
+    for (const exit of sc?.exits || []) {
+      const lv = levelOfRoom.get(exit.room_id)
+      if (lv === undefined || !visibleLevel(lv)) continue
+      const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(0.16, 12, 12),
+        new THREE.MeshBasicMaterial({ color: AID.exit }),
+      )
+      dot.position.set(exit.at_world[0], lv * lhEff + 0.25, exit.at_world[1])
+      boxes.add(dot)
+    }
+    // Animation markers: room markers AND the props' seat/stand spots, both
+    // already composed into world coordinates by the server. A figure with
+    // the marker's clip stands there, numbered per room.
+    const markerNo = new Map<string, number>()
+    for (const marker of sc?.markers || []) {
+      const lv = levelOfRoom.get(marker.room_id)
+      if (lv !== undefined && !visibleLevel(lv)) continue
+      const n = (markerNo.get(marker.room_id) || 0) + 1
+      markerNo.set(marker.room_id, n)
+      placeFigure({
+        x: marker.at_world[0], y: marker.y_world, z: marker.at_world[1],
+        animation: marker.animation, facing: marker.facing,
+        label: `${n} · ${marker.animation}`,
+      })
+    }
 
     // Building outline + elevator (AV3D-12): the drawn contour per used
     // level (walls are the client's job — the preview shows the shape) and
     // the elevator as a translucent shaft through all levels.
     const m3 = map3dRef.current
-    const usedLevels = Array.from(new Set(
-      current.filter((r) => r.layout).map((r) => r.layout!.level || 0)))
+    // The levels in play come from the payload (the server decides what a
+    // "used level" is); before the first response the rooms stand in.
+    const usedLevels = sc
+      ? sc.levels.map((l) => l.level)
+      : Array.from(new Set(current.filter((r) => r.layout)
+          .map((r) => r.layout!.level || 0)))
     if (m3?.outline?.length) {
       const base = m3.outline.map(([x, y]) =>
         [(x - 0.5) * PLATE_M, (y - 0.5) * PLATE_M] as [number, number])
@@ -846,418 +884,128 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         })))
       }
     }
-    // "Walls & floor" per the client recipe: per used level a floor plate
-    // in outline shape (extruded downward) + one box per polygon edge as
-    // the outer wall; the ground floor gets door gaps at the projected
-    // room exits (fallback: a central door in the southernmost piece).
+    // ── Server-composed primitives (contract § B1) ──────────────────────
+    // plates / walls / extras arrive FINISHED: world metres around the tile
+    // centre, split around every opening, coloured by `style`. Nothing here
+    // decides geometry — this is Box/Extrude construction and texture
+    // tiling, no more. View state stays local (level solo, toggles, the
+    // camera culling that uses the delivered outward_normal).
     wallCullRef.current = []
-    if (showWallsRef.current && (m3?.outline?.length || 0) >= 3) {
-      const pts = m3!.outline!.map(([fx, fy]) =>
-        [(fx - 0.5) * PLATE_M, (fy - 0.5) * PLATE_M] as [number, number])
-      const lvls = (usedLevels.length ? usedLevels : [0]).slice().sort((a, b) => a - b)
-      let area2 = 0
-      for (let i = 0; i < pts.length; i++) {
-        const [x1, z1] = pts[i]
-        const [x2, z2] = pts[(i + 1) % pts.length]
-        area2 += x1 * z2 - x2 * z1
-      }
-      const ccw = area2 > 0
+    const wallColor = hex(style?.wall_color, 0xcfc4b2)
+    const floorColor = hex(style?.floor_color, 0xd8d0c2)
+    const glassColor = hex(style?.glass_color, 0x9fc2d8)
+    const glassOpacity = style?.glass_opacity ?? 0.25
+    const upperWall = style?.upper_wall_opacity ?? 0.45
+    const upperFloor = style?.upper_floor_opacity ?? 0.4
 
-      // Ground-floor exits projected onto the contour (< 0.45 m = a door).
-      const exits: Array<[number, number]> = current
-        .filter((r) => r.layout?.exit && (r.layout.level || 0) === 0)
-        .map((r) => {
-          const lay = r.layout!
-          return [
-            (lay.x + lay.exit![0] * lay.w - 0.5) * PLATE_M,
-            (lay.y + lay.exit![1] * lay.d - 0.5) * PLATE_M,
-          ] as [number, number]
+    if (sc && showWallsRef.current) {
+      // Floor slabs. A textured kind tiles at its REAL size (size_m × k);
+      // thickness 0 means "texture surface only, no body" (outdoor rooms).
+      for (const plate of sc.plates) {
+        if (!visibleLevel(plate.level) || plate.outline.length < 3) continue
+        const upper = plate.opacity_role === 'upper'
+        const solid = plate.thickness > 0
+        const shape = new THREE.Shape()
+        plate.outline.forEach(([px, pz], i) => {
+          // Extruded plates go in as (x, z) and rotate +90° (the extrusion
+          // then runs downward); flat ones as (x, −z) with −90°.
+          const sy = solid ? pz : -pz
+          if (i === 0) shape.moveTo(px, sy)
+          else shape.lineTo(px, sy)
         })
-      const doorsPerEdge = new Map<number, number[]>()
-      let anyDoor = false
-      pts.forEach((a, i) => {
-        const b = pts[(i + 1) % pts.length]
-        const dx = b[0] - a[0]
-        const dz = b[1] - a[1]
-        const len = Math.hypot(dx, dz) || 1
-        for (const [ex, ez] of exits) {
-          const tp = Math.min(len, Math.max(0, ((ex - a[0]) * dx + (ez - a[1]) * dz) / len))
-          const px = a[0] + (dx / len) * tp
-          const pz = a[1] + (dz / len) * tp
-          if (Math.hypot(ex - px, ez - pz) < 0.45) {
-            if (!doorsPerEdge.has(i)) doorsPerEdge.set(i, [])
-            doorsPerEdge.get(i)!.push(tp)
-            anyDoor = true
-          }
-        }
-      })
-      if (!anyDoor) {
-        let best = 0
-        let bestZ = -Infinity
-        pts.forEach((a, i) => {
-          const b = pts[(i + 1) % pts.length]
-          const mz = (a[1] + b[1]) / 2
-          if (mz > bestZ) { bestZ = mz; best = i }
-        })
-        const a = pts[best]
-        const b = pts[(best + 1) % pts.length]
-        doorsPerEdge.set(best, [Math.hypot(b[0] - a[0], b[1] - a[1]) / 2])
-      }
-
-      // Floor plates: outline shape, extruded DOWNWARD (top at
-      // level × storey + 0.08, thickness 0.14).
-      const shape = new THREE.Shape()
-      pts.forEach(([x, z], i) => { if (i === 0) shape.moveTo(x, z); else shape.lineTo(x, z) })
-      shape.closePath()
-      const plateGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.14, bevelEnabled: false })
-      for (const lv of lvls) {
-        // Per-level floor kind (map3d.level_floors): the plate tiles with
-        // the kind's texture at its real size — rooms lay their own floor
-        // plates ABOVE this one, so a room floor overrides only its area.
-        const lvKind = m3?.level_floors?.[String(lv)] || ''
-        const lvTex = lvKind ? ensureSurfaceTex(lvKind) : null
-        let plateMat: Material
-        if (lvTex?.tex) {
-          const tile = lvTex.sizeM * kFac
-          const t = (lvTex.tex as Texture).clone()
-          t.needsUpdate = true
-          t.repeat.set(1 / tile, 1 / tile)
-          plateMat = new THREE.MeshStandardMaterial({
-            map: t, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.4,
+        shape.closePath()
+        const info = plate.texture_kind ? ensureSurfaceTex(plate.texture_kind) : null
+        let mat: Material
+        if (info?.tex) {
+          const tile = info.sizeM * kFac
+          const tex = (info.tex as Texture).clone()
+          tex.needsUpdate = true
+          tex.repeat.set(1 / tile, 1 / tile)
+          mat = new THREE.MeshStandardMaterial({
+            map: tex, transparent: upper, opacity: upper ? upperFloor : 1,
           })
         } else {
-          plateMat = new THREE.MeshStandardMaterial({
-            color: 0xd8d0c2, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.4,
+          mat = new THREE.MeshStandardMaterial({
+            color: floorColor, transparent: upper, opacity: upper ? upperFloor : 1,
           })
         }
-        const plate = new THREE.Mesh(plateGeo, plateMat)
-        plate.rotation.x = Math.PI / 2
-        plate.position.y = lv * lhEff + 0.08
-        boxes.add(plate)
+        const mesh = new THREE.Mesh(
+          solid
+            ? new THREE.ExtrudeGeometry(shape, { depth: plate.thickness, bevelEnabled: false })
+            : new THREE.ShapeGeometry(shape),
+          mat)
+        mesh.rotation.x = solid ? Math.PI / 2 : -Math.PI / 2
+        mesh.position.y = plate.top_y
+        boxes.add(mesh)
       }
 
-      // Outer walls: one box per edge per level; ground floor split at the
-      // doors (gap ±0.4 m, residues < 0.06 dropped).
-      const WALL_H = Math.max(0.6, lhEff - 0.15)
-      pts.forEach((a, i) => {
-        const b = pts[(i + 1) % pts.length]
-        const dx = b[0] - a[0]
-        const dz = b[1] - a[1]
+      // Wall segments. Doors/passages are already gaps, a window arrives as
+      // sill + head + its own glass entry — one box each.
+      for (const wall of sc.walls) {
+        if (!visibleLevel(wall.level)) continue
+        const dx = wall.to[0] - wall.from[0]
+        const dz = wall.to[1] - wall.from[1]
         const len = Math.hypot(dx, dz)
-        if (len < 0.001) return
-        const yaw = -Math.atan2(dz, dx)
-        const nx = (ccw ? dz : -dz) / len
-        const nz = (ccw ? -dx : dx) / len
-        for (const lv of lvls) {
-          let segs: Array<[number, number]> = [[0, len]]
-          if (lv === 0 && doorsPerEdge.has(i)) {
-            for (const tp of doorsPerEdge.get(i)!.sort((p, q) => p - q)) {
-              const next: Array<[number, number]> = []
-              for (const [s0, s1] of segs) {
-                if (tp - 0.4 > s0) next.push([s0, Math.min(s1, tp - 0.4)])
-                if (tp + 0.4 < s1) next.push([Math.max(s0, tp + 0.4), s1])
-              }
-              segs = next
-            }
-          }
-          for (const [s0, s1] of segs) {
-            const sl = s1 - s0
-            if (sl < 0.06) continue
-            const wall = new THREE.Mesh(
-              new THREE.BoxGeometry(sl, WALL_H, 0.07),
-              new THREE.MeshStandardMaterial({
-                color: 0xcfc4b2, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.45,
-              }),
-            )
-            const tc = (s0 + s1) / 2
-            const mx = a[0] + (dx / len) * tc
-            const mz = a[1] + (dz / len) * tc
-            wall.position.set(mx, lv * lhEff + 0.08 + WALL_H / 2, mz)
-            wall.rotation.y = yaw
-            boxes.add(wall)
-            wallCullRef.current.push({ mesh: wall, mx, mz, nx, nz })
-          }
-        }
-      })
-    }
-
-    // Room-shell walls (B5): per placed room, the hull edges (drawn outline
-    // or the implicit rectangle) as wall segments split around the room's
-    // openings (NO CSG). Doors/passages leave a full-height gap; windows keep
-    // a sill wall + a header wall and fill the opening with a translucent
-    // glass pane between sill and sill+height. Wall height = the derived
-    // storey height (lhEff). Surfaces are only a colour hint here (no texture
-    // sampling — preview latitude); the client does the real texturing. Walls
-    // register in the camera-cull set so the near ones hide and the interior
-    // stays visible.
-    if (showWallsRef.current) {
-      const WALL_T = 0.07
-      const WALL_H = Math.max(0.6, lhEff - 0.15)
-      for (const room of current) {
-        const lay = room.layout
-        if (!lay) continue
-        const lv = lay.level || 0
-        const floorY = lv * lhEff
-        // Outdoor rooms (always_visible — terraces, gardens) get NO shell
-        // walls; their floor plate below still renders. The client follows
-        // the same rule from the flag it already reads.
-        const outdoor = !!lay.always_visible
-        // Surfaces (B1/F7): a set wall kind samples its REAL texture — tiled
-        // at its true size_m — as soon as it is loaded; the warmer colour
-        // hint covers loading and texture-less kinds.
-        const wallTex = lay.surfaces?.wall ? ensureSurfaceTex(lay.surfaces.wall) : null
-        const wallColor = lay.surfaces?.wall ? 0xe8e0d0 : 0xcfc4b2
-        const wallMat = new THREE.MeshStandardMaterial({
-          color: wallColor, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.5,
-        })
-        // BoxGeometry UVs are per-face normalized, so a tiled wall needs a
-        // per-mesh texture clone with its own repeat.
-        const wallMatFor = (segLen: number, h: number): Material => {
-          if (!wallTex?.tex) return wallMat
-          const tile = wallTex.sizeM * kFac
-          const t = (wallTex.tex as Texture).clone()
-          t.needsUpdate = true
-          t.repeat.set(segLen / tile, h / tile)
-          return new THREE.MeshStandardMaterial({
-            map: t, transparent: lv !== 0, opacity: lv === 0 ? 1 : 0.5,
+        if (len < 1e-4) continue
+        const upper = wall.opacity_role === 'upper'
+        let mat: Material
+        if (wall.glass) {
+          mat = new THREE.MeshStandardMaterial({
+            color: glassColor, transparent: true, opacity: glassOpacity,
           })
-        }
-        const glassMat = new THREE.MeshStandardMaterial({
-          color: 0x9fc2d8, transparent: true, opacity: 0.25,
-        })
-        // Hull points in plate metres; with clockwise winding (screen coords
-        // = XZ here) the outward normal of edge (ux, uz) is (uz, -ux).
-        const hull = outlineOf(lay).map(([u, v]) => [
-          (lay.x + u * lay.w - 0.5) * PLATE_M,
-          (lay.y + v * lay.d - 0.5) * PLATE_M,
-        ])
-        // One physical hole, two walls: the neighbours' openings on shared
-        // edges cut this room's wall too (mirror of the recipe/editor).
-        const mirrored = room.id ? mirrorOpenings(
-          { id: room.id, x: lay.x, y: lay.y, w: lay.w, d: lay.d,
-            outline: lay.outline },
-          current.filter((r) => r.id && r.id !== room.id && r.layout
-              && (r.layout.level || 0) === lv)
-            .map((r) => ({ id: r.id!, name: r.name,
-              layout: { id: r.id!, x: r.layout!.x, y: r.layout!.y,
-                w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline,
-                openings: r.layout!.openings } })),
-          planW > 0 ? planW : 8) : []
-        const edges = hull.map((a, i) => {
-          const b = hull[(i + 1) % hull.length]
-          const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
-          return { i, ax: a[0], az: a[1], bx: b[0], bz: b[1],
-            nx: (b[1] - a[1]) / len, nz: -(b[0] - a[0]) / len }
-        })
-        for (const ed of outdoor ? [] : edges) {
-          const L = Math.hypot(ed.bx - ed.ax, ed.bz - ed.az)
-          if (L < 0.05) continue
-          const ux = (ed.bx - ed.ax) / L
-          const uz = (ed.bz - ed.az) / L
-          const yaw = -Math.atan2(ed.bz - ed.az, ed.bx - ed.ax)
-          const placeBox = (segStart: number, segLen: number, y: number,
-                            h: number, thick: number, mat: Material) => {
-            if (segLen < 0.02 || h < 0.02) return
-            const tc = segStart + segLen / 2
-            const mx = ed.ax + ux * tc
-            const mz = ed.az + uz * tc
-            const box = new THREE.Mesh(new THREE.BoxGeometry(segLen, h, thick), mat)
-            box.position.set(mx, floorY + 0.08 + y + h / 2, mz)
-            box.rotation.y = yaw
-            boxes.add(box)
-            // Register on the ground floor only (upper floors stay ghosted).
-            if (lv === 0) wallCullRef.current.push({ mesh: box, mx, mz, nx: ed.nx, nz: ed.nz })
-          }
-          // Openings on this edge → along-edge spans (metres × kFac → world).
-          // Letters and indices read through ONE normalization (planGeometry).
-          const spans = [
-            ...(lay.openings || [])
-              .map((o) => ({ op: o, norm: normalizeOpeningEdge(o) })),
-            // Mirrored entries come pre-normalized onto this room's edges.
-            ...mirrored.map((o) => ({
-              op: o as unknown as NonNullable<typeof lay.openings>[number],
-              norm: { edge: o.edge, at: o.at } })),
-          ]
-            .filter(({ norm }) => norm.edge === ed.i)
-            .map(({ op: o, norm }) => {
-              const halfW = Math.min((o.width_m * kFac) / 2, L / 2)
-              const c = Math.min(Math.max(norm.at, 0), 1) * L
-              return { s0: Math.max(0, c - halfW), s1: Math.min(L, c + halfW), op: o }
-            }).sort((a, b) => a.s0 - b.s0)
-          // Full-height solid wall = [0, L] minus every opening span.
-          let solids: Array<[number, number]> = [[0, L]]
-          for (const sp of spans) {
-            const next: Array<[number, number]> = []
-            for (const [s0, s1] of solids) {
-              if (sp.s0 > s0) next.push([s0, Math.min(s1, sp.s0)])
-              if (sp.s1 < s1) next.push([Math.max(s0, sp.s1), s1])
-            }
-            solids = next.filter(([a, b]) => b - a > 0.02)
-          }
-          for (const [s0, s1] of solids)
-            placeBox(s0, s1 - s0, 0, WALL_H, WALL_T, wallMatFor(s1 - s0, WALL_H))
-          // Windows: sill wall + header wall + glass pane; doors/passages
-          // stay a full gap.
-          for (const sp of spans) {
-            if (sp.op.type !== 'window') continue
-            const segLen = sp.s1 - sp.s0
-            const sill = Math.min(sp.op.sill_m * kFac, WALL_H)
-            const top = Math.min((sp.op.sill_m + sp.op.height_m) * kFac, WALL_H)
-            if (sill > 0.02) placeBox(sp.s0, segLen, 0, sill, WALL_T, wallMatFor(segLen, sill))
-            if (WALL_H - top > 0.02) placeBox(sp.s0, segLen, top, WALL_H - top, WALL_T, wallMatFor(segLen, WALL_H - top))
-            if (top - sill > 0.02) placeBox(sp.s0, segLen, sill, top - sill, WALL_T * 0.6, glassMat)
-          }
-        }
-        // Room floor plate: only when a floor kind is set — textured at its
-        // real tile size (ShapeGeometry UVs are in shape units = metres), a
-        // plain warm hint while it loads / without a texture.
-        if (lay.surfaces?.floor) {
-          const floorTexInfo = ensureSurfaceTex(lay.surfaces.floor)
-          const shape = new THREE.Shape()
-          hull.forEach(([hx, hz], i) => {
-            if (i === 0) shape.moveTo(hx, -hz)
-            else shape.lineTo(hx, -hz)
-          })
-          shape.closePath()
-          let fmat: Material
-          if (floorTexInfo?.tex) {
-            const tile = floorTexInfo.sizeM * kFac
-            const t = (floorTexInfo.tex as Texture).clone()
-            t.needsUpdate = true
-            t.repeat.set(1 / tile, 1 / tile)
-            fmat = new THREE.MeshStandardMaterial({ map: t })
-          } else {
-            fmat = new THREE.MeshStandardMaterial({ color: 0xd8cfc0 })
-          }
-          const plate = new THREE.Mesh(new THREE.ShapeGeometry(shape), fmat)
-          plate.rotation.x = -Math.PI / 2
-          plate.position.y = floorY + 0.04
-          boxes.add(plate)
-        }
-      }
-    }
-
-    if (m3?.elevator && solo === null) {
-      // Elevator per the client's render recipe (schnittstellen →
-      // "Render-Rezept Fahrstuhl"): all sizes are real metres × the figure
-      // scale k (anchored 8/plan_width, legacy storey/3). Shaft 1.8 m
-      // square with four corner columns + roof, glass on three sides (the
-      // side toward the building centre stays open), a 1.6 m pad per
-      // level, a static cabin on the ground floor.
-      const kEl = planW > 0 ? kFac : lhEff / 3
-      const ex = (m3.elevator[0] - 0.5) * PLATE_M
-      const ez = (m3.elevator[1] - 0.5) * PLATE_M
-      const hi = Math.max(0, ...usedLevels)
-      const outer = 1.8 * kEl
-      const col = Math.max(0.14 * kEl, 0.05)
-      const shaftTop = (hi + 1) * lhEff + 0.08
-      const colMat = new THREE.MeshStandardMaterial({ color: 0x6d7681 })
-      for (const sx of [-1, 1]) {
-        for (const sz of [-1, 1]) {
-          const post = new THREE.Mesh(new THREE.BoxGeometry(col, shaftTop, col), colMat)
-          post.position.set(ex + sx * (outer - col) / 2, shaftTop / 2,
-                            ez + sz * (outer - col) / 2)
-          boxes.add(post)
-        }
-      }
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(outer, 0.05, outer), colMat)
-      roof.position.set(ex, shaftTop + 0.025, ez)
-      boxes.add(roof)
-      // Open side = dominant axis of the elevator position, sign toward
-      // the centre; glass on the three other sides.
-      const openSide = Math.abs(ex) >= Math.abs(ez)
-        ? (ex > 0 ? 'west' : 'east')
-        : (ez > 0 ? 'north' : 'south')
-      const glassMat = new THREE.MeshStandardMaterial({
-        color: 0x9fc2d8, transparent: true, opacity: 0.22,
-      })
-      const sides: Array<['north' | 'south' | 'east' | 'west', number, number, number, number]> = [
-        ['north', ex, ez - outer / 2, outer, 0.03],
-        ['south', ex, ez + outer / 2, outer, 0.03],
-        ['west', ex - outer / 2, ez, 0.03, outer],
-        ['east', ex + outer / 2, ez, 0.03, outer],
-      ]
-      for (const [side, gx, gz, w2, d2] of sides) {
-        if (side === openSide) continue
-        const glass = new THREE.Mesh(new THREE.BoxGeometry(w2, shaftTop, d2), glassMat)
-        glass.position.set(gx, shaftTop / 2, gz)
-        boxes.add(glass)
-      }
-      const padMat = new THREE.MeshStandardMaterial({ color: 0xaab4be })
-      for (const lv of (usedLevels.length ? usedLevels : [0])) {
-        const pad = new THREE.Mesh(
-          new THREE.BoxGeometry(1.6 * kEl, 0.05, 1.6 * kEl), padMat)
-        pad.position.set(ex, lv * lhEff + 0.08 - 0.025, ez)
-        boxes.add(pad)
-      }
-      const cab = new THREE.Mesh(
-        new THREE.BoxGeometry(1.4 * kEl, Math.max(0.6 * lhEff, 0.3), 1.4 * kEl),
-        new THREE.MeshStandardMaterial({ color: 0x3d4650, transparent: true, opacity: 0.85 }),
-      )
-      cab.position.set(ex, 0.08 + Math.max(0.6 * lhEff, 0.3) / 2, ez)
-      boxes.add(cab)
-    }
-
-    // Building shell over everything — ghosted so the rooms stay visible.
-    // DETAIL-view scale is PER AXIS: the footprint (XZ) always follows the
-    // plan (tile fit, largest XZ side = 10 × 0.92 × map3d.size) so the
-    // floor-plan rectangles land on the shell; the height (Y) follows
-    // height_m when declared. With correct mesh proportions both factors
-    // coincide (no distortion) — a too-flat relief gets exactly the
-    // repair it needs. Yaw per contract chain: map3d.rotation, absent →
-    // map_rotation_2d (the model turns with the 2D icon), else 0.
-    let buildingTopY = 0
-    if (showBuildingRef.current) {
-      const building = bAnchor
-      if (building) {
-        if (!building.ghost) {
-          // Keep the model's own textures — a flat gray ghost was near
-          // invisible on the dark canvas. Unlit (basic) + semi-transparent +
-          // no depth write: clearly the building, rooms shine through.
-          const g = building.obj.clone(true)
-          g.traverse((o: Object3D) => {
-            const mesh = o as Mesh
-            if (!mesh.isMesh) return
-            const src = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
-            const map = (src as { map?: unknown })?.map || null
-            mesh.material = new THREE.MeshBasicMaterial({
-              map: map as never, color: 0xffffff,
-              transparent: true, opacity: 0.55, depthWrite: false,
+        } else {
+          // BoxGeometry UVs are per-face normalized, so a tiled wall needs a
+          // per-mesh texture clone with its own repeat.
+          const info = wall.texture_kind ? ensureSurfaceTex(wall.texture_kind) : null
+          if (info?.tex) {
+            const tile = info.sizeM * kFac
+            const tex = (info.tex as Texture).clone()
+            tex.needsUpdate = true
+            tex.repeat.set(len / tile, wall.height / tile)
+            mat = new THREE.MeshStandardMaterial({
+              map: tex, transparent: upper, opacity: upper ? upperWall : 1,
             })
-          })
-          building.ghost = g
+          } else {
+            mat = new THREE.MeshStandardMaterial({
+              color: wallColor, transparent: upper, opacity: upper ? upperWall : 1,
+            })
+          }
         }
-        const clone = building.ghost.clone(true)
-        const metaG = new THREE.Group()
-        metaG.add(clone)
-        metaG.rotation.set(deg(building.rotation.x), deg(building.rotation.y),
-                           deg(building.rotation.z))
-        const mapYaw = m3?.rotation !== undefined ? m3.rotation : fallbackYawDeg
-        // Contract order: meta fix first, THEN the map yaw as its own parent.
-        const holder = new THREE.Group()
-        holder.add(metaG)
-        holder.rotation.y = -deg(mapYaw)
-        holder.updateMatrixWorld(true)
-        const br = new THREE.Box3().setFromObject(holder)
-        const sr = br.getSize(new THREE.Vector3())
-        const kxz = (10 * 0.92 * (m3?.size || 0.92)) / (Math.max(sr.x, sr.z) || 1)
-        const ky = building.heightM > 0
-          ? (building.heightM * kFac) / (sr.y || 1)
-          : kxz
-        // Per-axis scale in WORLD space — the outer group sits above the
-        // rotation fix, so a lying model raised by 90° stretches upward.
-        const outer = new THREE.Group()
-        outer.add(holder)
-        outer.scale.set(kxz, ky, kxz)
-        outer.updateMatrixWorld(true)
-        const b2 = new THREE.Box3().setFromObject(outer)
-        const c2 = b2.getCenter(new THREE.Vector3())
-        outer.position.set(-c2.x + (building.offsetX || 0),
-                           0.06 - b2.min.y + building.offsetY,
-                           -c2.z + (building.offsetZ || 0))
-        outer.userData.__noDispose = true
-        boxes.add(outer)
-        buildingTopY = 0.06 + building.offsetY + (b2.max.y - b2.min.y)
+        const box = new THREE.Mesh(
+          new THREE.BoxGeometry(len, wall.height, wall.thickness), mat)
+        const mx = (wall.from[0] + wall.to[0]) / 2
+        const mz = (wall.from[1] + wall.to[1]) / 2
+        box.position.set(mx, wall.base_y + wall.height / 2, mz)
+        box.rotation.y = -Math.atan2(dz, dx)
+        boxes.add(box)
+        // Camera culling with the DELIVERED normal — a wall whose outside
+        // faces the camera hides so the interior stays visible.
+        if (!wall.glass) {
+          wallCullRef.current.push({ mesh: box, mx, mz,
+            nx: wall.outward_normal[0], nz: wall.outward_normal[1] })
+        }
+      }
+    }
+
+    // Extras (elevator shaft/glass/pads/cabin): typed boxes, centre + size,
+    // straight from the payload. The shaft spans all levels, so it only
+    // shows in the all-levels view.
+    if (sc && solo === null) {
+      for (const extra of sc.extras) {
+        const glass = extra.kind.endsWith('_glass')
+        const mat = glass
+          ? new THREE.MeshStandardMaterial({
+              color: glassColor, transparent: true, opacity: glassOpacity })
+          : new THREE.MeshStandardMaterial({
+              color: extra.kind === 'elevator_pad' ? AID.elevatorPad
+                : extra.kind === 'elevator_cabin' ? AID.elevatorCabin
+                  : AID.elevatorMetal,
+              transparent: extra.kind === 'elevator_cabin',
+              opacity: extra.kind === 'elevator_cabin' ? 0.85 : 1 })
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(extra.size[0], extra.size[1], extra.size[2]), mat)
+        mesh.position.set(extra.center[0], extra.center[1], extra.center[2])
+        boxes.add(mesh)
       }
     }
 
@@ -1326,79 +1074,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         ]), storeyMat))
       }
 
-      // Comparison figure at the ruler: the room-scale Mixamo test figure
-      // (1.7 m × level_height/3) standing on the ground next to the metre
-      // scale — storey height vs. figure height is judgeable at a glance.
-      {
-        const target = planW > 0 ? 1.7 * kFac : 1.7 * (lhEff / 3)
-        const fig = new THREE.Group()
-        const figSrc = ensureTestFigure()
-        const kinds = clipListRef.current.clips.map((c) => c.kind)
-        const kind = kinds.includes('idle') ? 'idle'
-          : kinds.includes('stand') ? 'stand' : kinds[0]
-        const anim = figSrc && kind ? ensureClip(kind) : null
-        if (figSrc && anim) {
-          const inst = h.skclone(figSrc)
-          const pivot = new THREE.Group()
-          pivot.add(inst)
-          // Same up-axis fix as the marker figures (rest skeletons only).
-          const hipsOf = (root: Object3D): Object3D | null => {
-            let found: Object3D | null = null
-            root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
-            return found
-          }
-          const modelHips = hipsOf(inst)
-          const clipHips = hipsOf(anim.restObj)
-          if (modelHips?.parent && clipHips?.parent) {
-            inst.updateMatrixWorld(true)
-            anim.restObj.updateMatrixWorld(true)
-            const restModel = modelHips.parent.getWorldQuaternion(new THREE.Quaternion())
-            const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
-            let bestRx = 0
-            let bestAngle = Infinity
-            for (const rxc of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
-              const cand = new THREE.Quaternion()
-                .setFromEuler(new THREE.Euler(rxc, 0, 0)).multiply(restModel)
-              const angle = cand.angleTo(restClip)
-              if (angle < bestAngle) { bestAngle = angle; bestRx = rxc }
-            }
-            pivot.rotation.x = bestRx
-          }
-          // Same rest-pose measurement as the marker figures.
-          pivot.updateMatrixWorld(true)
-          const fb = new THREE.Box3().setFromObject(pivot)
-          const fs = fb.getSize(new THREE.Vector3())
-          const k = target / (fs.y || 1)
-          const mixer = new THREE.AnimationMixer(inst)
-          mixer.clipAction(anim.clip).play()
-          mixer.update(0)
-          mixersRef.current.push(mixer)
-          pivot.scale.setScalar(k)
-          pivot.updateMatrixWorld(true)
-          const fb2 = new THREE.Box3().setFromObject(pivot)
-          const fc2 = fb2.getCenter(new THREE.Vector3())
-          pivot.position.set(-fc2.x, -fb2.min.y, -fc2.z)
-          pivot.userData.__noDispose = true
-          fig.add(pivot)
-        } else {
-          // Mannequin fallback while figure/clip load (or are missing).
-          const figMat = new THREE.MeshStandardMaterial({
-            color: 0x8b949e, transparent: true, opacity: 0.85,
-          })
-          const body = new THREE.Mesh(
-            new THREE.CapsuleGeometry(0.055 * target, 0.62 * target, 4, 10), figMat)
-          body.position.y = 0.42 * target
-          fig.add(body)
-          const head = new THREE.Mesh(
-            new THREE.SphereGeometry(0.09 * target, 12, 12), figMat)
-          head.position.y = 0.88 * target
-          fig.add(head)
-        }
-        // Facing the plate, just inside the ruler corner.
-        fig.position.set(rx + 0.55, 0, rz - 0.35)
-        fig.rotation.y = Math.PI / 4
-        boxes.add(fig)
-      }
+      // Comparison figure at the ruler: the test figure at exactly
+      // figures.base_height_m_world, standing on the ground next to the
+      // metre scale — storey height vs. figure height at a glance. Facing 45
+      // = north-east, i.e. towards the plate.
+      placeFigure({ x: rx + 0.55, y: 0, z: rz - 0.35, facing: 45 })
     }
   }
 
@@ -1672,7 +1352,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, map3d, showModels, showBuilding, showWalls, soloLevel, bump, lh,
-      fallbackYawDeg])
+      fallbackYawDeg, scene])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
@@ -1823,18 +1503,23 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             background: 'rgba(255, 255, 255, 0.04)', overflow: 'hidden',
           }}
         />
-        {loading || error ? (
+        {loading || error || sceneError ? (
           <div style={{
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
             justifyContent: 'center', pointerEvents: 'none', fontSize: '0.85em',
             opacity: 0.75, padding: 8, textAlign: 'center',
           }}>
-            {error ? `${t('Error')}: ${error}` : t('Loading…')}
+            {error ? `${t('Error')}: ${error}`
+              : sceneError
+                // The server owns the geometry — without its answer there is
+                // nothing to show. No second, locally computed picture.
+                ? `${t('Scene recipe unavailable — the preview renders what the server composes. Reload once the backend answers again.')} (${sceneError})`
+                : t('Loading…')}
           </div>
         ) : null}
       </div>
       <span className="ga-hint">
-        {t('Renders per the client contract (8×8 m reference, 0.96 fit, floor + 0.12 m; building: largest side = 10 × 0.92 × size m) — metre ruler + storey lines check the level height against the model.')}
+        {t('Renders the server-composed scene (POST /play/scene-preview) — the same geometry the 3D client gets; metre ruler + storey lines check the level height against the model.')}
       </span>
     </div>
   )
