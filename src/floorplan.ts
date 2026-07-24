@@ -123,7 +123,8 @@ async function poll() {
   // v3-Anker (explizit): plan_width_m + Gebäude-Meta -> Etagen/Figuren-Maßstab
   try {
     const bmeta = await getLocationModel(loc.id);
-    metas.push(['building', bmeta?.height_m, bmeta?.floors, bmeta?.signature]);
+    metas.push(['building', bmeta?.height_m, bmeta?.floors, bmeta?.signature,
+      bmeta?.rotation, bmeta?.offset_y, bmeta?.offset_x, bmeta?.offset_z]);
     const planW = loc.map3d?.plan_width_m || 0;
     if (planW > 0) {
       const k = 8 / planW;

@@ -1077,7 +1077,9 @@ export function applyBuildingModel(tile: Tile, model: THREE.Group) {
   const kX = fill ? (CELL * sizeK) / Math.max(size.x, 1e-3) : kUni;
   const kZ = fill ? (CELL * sizeK) / Math.max(size.z, 1e-3) : kUni;
   const kBaseY = fill ? Math.min(kX, kZ) : kUni;
-  const metaA = model.userData.meta as { height_m?: number; offset_y?: number } | undefined;
+  const metaA = model.userData.meta as {
+    height_m?: number; offset_y?: number; offset_x?: number; offset_z?: number;
+  } | undefined;
   const anchor = locationAnchors.get(tile.loc.id);
   const kY = metaA?.height_m
     ? (metaA.height_m * (anchor?.k ?? 1)) / Math.max(size.y, 1e-3)
@@ -1087,12 +1089,14 @@ export function applyBuildingModel(tile: Tile, model: THREE.Group) {
   model.scale.set(kX, kBaseY, kZ);
   model.userData.scaleBase = kBaseY;
   model.userData.scaleYDetail = kY;
-  // 5. BBox des Ergebnisses -> Unterkante auf 0,06 + offset_y, XZ zentrieren
+  // 5. BBox des Ergebnisses -> Unterkante auf 0,06 + offset_y, XZ zentrieren;
+  //    offset_x/z (Nachtrag 2026-07-23) als LETZTER Schritt in Welt-Achsen
+  //    (+x = Ost, +z = Süd) — der Yaw dreht die Offsets nicht mit
   model.updateMatrixWorld(true);
   box = new THREE.Box3().setFromObject(model);
   const center = box.getCenter(new THREE.Vector3());
-  model.position.x = -center.x;
-  model.position.z = -center.z;
+  model.position.x = -center.x + (metaA?.offset_x || 0);
+  model.position.z = -center.z + (metaA?.offset_z || 0);
   model.position.y = -(box.min.y) + 0.06 + (metaA?.offset_y || 0);
 
   // Fade-Verwaltung auf das Modell umziehen: Materialien pro Tile klonen
@@ -1138,18 +1142,21 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   slot.holder.add(model);
   slot.plate.visible = false;   // Platte nur als Platzhalter ohne Modell
   // Neu-Erdung der ROTIERTEN Box (nach Meta-Fix + Layout-Yaw): Unterkante
-  // auf Etagenboden + 0,12 + offset_y (Welt-Meter), XZ-Zentrum auf die
-  // Rechteck-Mitte — nach einem Kipp-Fix wandert min.y, ohne Neu-Erdung
-  // schwingt das Modell unter den Boden.
+  // auf Etagenboden + 0,12 + model_offset_y (Welt-Meter), XZ-Zentrum auf den
+  // model_at-Anker (Fraktionen des Raum-Rechtecks; fehlt = Mitte) — Nachtrag
+  // 2026-07-24: beides kommt aus dem LAYOUT, das Sidecar-offset_y ist für
+  // Räume stillgelegt (Gebäude lesen weiter ihr Meta). Nach einem Kipp-Fix
+  // wandert min.y, ohne Neu-Erdung schwingt das Modell unter den Boden.
   tile.group.updateMatrixWorld(true);
+  const lay = tile.loc.rooms.find((r) => r.id === roomId)?.layout;
   const rbox = new THREE.Box3().setFromObject(model);
   const rc = rbox.getCenter(new THREE.Vector3());
   const hw = slot.holder.getWorldPosition(new THREE.Vector3());
-  const offY = (model.userData.offsetY as number) || 0;
+  const offY = lay?.model_offset_y ?? 0;
   const delta = new THREE.Vector3(
-    hw.x - rc.x,
+    hw.x + ((lay?.model_at?.[0] ?? 0.5) - 0.5) * slot.w - rc.x,
     hw.y + 0.12 + offY - rbox.min.y,
-    hw.z - rc.z
+    hw.z + ((lay?.model_at?.[1] ?? 0.5) - 0.5) * slot.d - rc.z
   );
   delta.applyQuaternion(slot.holder.getWorldQuaternion(new THREE.Quaternion()).invert());
   model.position.add(delta);

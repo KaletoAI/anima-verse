@@ -84,6 +84,10 @@ export interface ApiModelAnchors {
   rotation?: { x?: number; y?: number; z?: number };
   /** Höhen-Feinjustierung in Metern */
   offset_y?: number;
+  /** Kachel-Verschiebung in Welt-Metern (±25, nur Gebäude): letzter Schritt
+   *  der Kette, Welt-Achsen (+x = Ost, +z = Süd), Yaw dreht NICHT mit */
+  offset_x?: number;
+  offset_z?: number;
   /** Gebäude: geschätzte Gesamthöhe in realen Metern */
   height_m?: number;
   /** Gebäude: sichtbare Geschosse des Meshs */
@@ -130,6 +134,7 @@ export async function getLocationModel(locationId: string): Promise<ApiLocationM
   return {
     url: data.url, format: data.format ?? 'glb',
     rotation: data.rotation, offset_y: data.offset_y,
+    offset_x: data.offset_x, offset_z: data.offset_z,
     height_m: data.height_m, floors: data.floors, signature: data.signature,
   };
 }

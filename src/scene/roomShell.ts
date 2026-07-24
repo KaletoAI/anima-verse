@@ -23,6 +23,9 @@ export interface ShellCtx {
     kind: string | undefined,
     use: 'floor' | 'wall'
   ) => { texture: THREE.Texture; sizeM: number } | null;
+  /** false = Outdoor-Raum (always_visible): nur Bodenplatte, keine Wände —
+   *  Öffnungen wirken dann allein über die Spiegelung in den Nachbarwänden */
+  walls?: boolean;
 }
 
 export interface RoomShell {
@@ -133,6 +136,8 @@ export function buildRoomShell(recipe: ApiRoomRecipe, ctx: ShellCtx): RoomShell 
   };
 
   const glassMat = std({ color: 0xbcd4e0, opacity: 0.3, roughness: 0.3 });
+
+  if (ctx.walls === false) return { group, walls };
 
   const openings = recipe.openings ?? [];
   for (let i = 0; i < pts.length; i++) {

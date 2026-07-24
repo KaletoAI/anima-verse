@@ -19,6 +19,12 @@ export interface RoomLayout {
   rotation?: number;
   exit?: [number, number]; // Ausgangspunkt (Fraktion der Raum-Grundfläche)
   markers?: RoomMarker[];  // AV3D-11
+  /** Anker des Diorama-Modells als Fraktionen des Raum-Rechtecks
+   *  (Nachtrag 2026-07-24); fehlt = zentriert */
+  model_at?: [number, number];
+  /** Höhen-Feinjustierung des Diorama-Modells in WELT-Metern — ersetzt für
+   *  Räume das stillgelegte Sidecar-offset_y */
+  model_offset_y?: number;
   /** Raum dauerhaft zeigen (unabhängig von der Innenansicht) — für
    *  Outdoor-Räume, die NICHT schon im Gebäude-Modell abgebildet sind.
    *  Default: false */

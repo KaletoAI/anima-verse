@@ -109,7 +109,11 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
   // Rezept (zurück geht es über die Weiche in main.ts, das Modell bleibt
   // im Cache der roomModelLibrary)
   slot.holder.clear();
-  const shell = buildRoomShell(recipe, { k, storey, floorY, surface: surfaceFor });
+  // Outdoor-Räume (always_visible): nur Bodenplatte, keine Hüllen-Wände
+  const shell = buildRoomShell(recipe, {
+    k, storey, floorY, surface: surfaceFor,
+    walls: !tile.alwaysVisibleRooms.has(roomId),
+  });
   const g = shell.group;
   g.name = groupName(roomId);
   g.userData.cullWalls = shell.walls.map((w) => w.mesh);

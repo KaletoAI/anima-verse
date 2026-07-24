@@ -41,6 +41,7 @@ export function neutralizeGltfMaterials(root: THREE.Object3D) {
 function metaSig(meta: ModelMeta): string {
   return JSON.stringify([
     meta.url, meta.signature, meta.rotation, meta.offset_y,
+    meta.offset_x, meta.offset_z,
     meta.height_m, meta.floors, meta.width_m,
   ]);
 }
@@ -50,6 +51,9 @@ interface ModelMeta {
   rotation?: { x?: number; y?: number; z?: number };
   /** Höhen-Feinjustierung in Metern */
   offset_y?: number;
+  /** Kachel-Verschiebung in Welt-Metern (nur Gebäude, ±25) */
+  offset_x?: number;
+  offset_z?: number;
   /** Maßstabs-Anker (backend-note-scale-anchors.md): 0 = nicht deklariert */
   height_m?: number;
   floors?: number;
@@ -128,6 +132,7 @@ export class ModelLibrary {
         model.userData.meta = {
           height_m: meta.height_m || 0, floors: meta.floors || 0,
           width_m: meta.width_m || 0, offset_y: meta.offset_y || 0,
+          offset_x: meta.offset_x || 0, offset_z: meta.offset_z || 0,
           signature: meta.signature ?? '',
         };
         this.models.set(id, model);
