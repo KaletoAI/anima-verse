@@ -606,19 +606,23 @@ async def room_model3d_rotation(location_id: str, room_id: str,
     return {"meta": meta}
 
 
-@router.post("/locations/{location_id}/rooms/{room_id}/model3d/offset")
-async def room_model3d_offset(location_id: str, room_id: str,
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/walk_y")
+async def room_model3d_walk_y(location_id: str, room_id: str,
                               request: Request) -> Dict[str, Any]:
-    """Persist a room model's vertical placement offset ({offset_y} in
-    metres, ±; optional {file}) — same contract as the building model."""
-    from app.core.location_model3d import set_offset_y
+    """Persist a room model's WALKABLE floor height (body: {walk_y} in world
+    metres above the diorama's final lower edge, 0..5; empty/null removes it;
+    optional {file}). Diorama floors are modelled — podiums, sunken lounges
+    or holes make the standing height unmeasurable from outside, so the admin
+    dials it against the reference figure. Delivered via /model/meta and as
+    ``walk_y_world`` on the room's spec in /play/locations/{id}/scene."""
+    from app.core.location_model3d import set_walk_y
     _require_room(location_id, room_id)
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
-        meta = set_offset_y(location_id, data.get("offset_y"), room_id=room_id,
-                            filename=str(data.get("file") or "").strip())
+        meta = set_walk_y(location_id, room_id, data.get("walk_y"),
+                          filename=str(data.get("file") or "").strip())
     except ValueError:
         raise HTTPException(status_code=404, detail="No model")
     return {"meta": meta}

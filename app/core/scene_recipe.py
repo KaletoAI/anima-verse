@@ -589,6 +589,12 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "bottom_y": _r(level * storey + DIORAMA_CLEARANCE
                        + _num(lay.get("model_offset_y"))),
     }
+    # Modelled floors (podium, sunken lounge, a hole in the mesh) make the
+    # standing height unmeasurable from outside — the admin dials walk_y once
+    # per model, in world metres above the diorama's lower edge, and the
+    # consumer gets the absolute height (§ B6 no. 7).
+    if meta.get("walk_y") is not None:
+        spec["walk_y_world"] = _r(spec["bottom_y"] + _num(meta.get("walk_y")))
     width_m = _num(meta.get("width_m"))
     if anchored and width_m > 0:
         spec["scale_mode"] = "real_size"

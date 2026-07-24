@@ -312,33 +312,42 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
     if not p:
         return None
     meta = _read_sidecar(p)
-    return {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
-            "rig": meta.get("rig", "none"),
-            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
-            # Vertical placement offset in metres (model property — reliefs
-            # have different socket thicknesses; negative sinks the model
-            # into the terrain, e.g. a park). Client applies it on load.
-            "offset_y": float(meta.get("offset_y") or 0.0),
-            # Tile-plane shift in world metres (after the yaw): +x = east,
-            # +z = south — the building need not sit centred on its tile.
-            "offset_x": float(meta.get("offset_x") or 0.0),
-            "offset_z": float(meta.get("offset_z") or 0.0),
-            # Detail-view scale anchors (0 = undeclared, see the shared
-            # backend note): buildings — height_m (uniform scale so the
-            # shell is exactly this tall) + floors (storeys the mesh
-            # depicts; storey height = height_m / floors, fallback
-            # map3d.level_height). Rooms — width_m (real-world width of
-            # the model's largest side; content scale = rect extent /
-            # width_m, figures in the room derive from it).
-            "floors": float(meta.get("floors") or 0.0),
-            "height_m": float(meta.get("height_m") or 0.0),
-            "width_m": float(meta.get("width_m") or 0.0),
-            # Changes whenever ANOTHER model file becomes active (new
-            # generation, upload, selection) — a running client polls the
-            # meta and re-downloads on a signature change (AV3D-2 addendum);
-            # rotation/offset edits are visible in the meta itself.
-            "signature": hashlib.md5(
-                f"{p.name}:{meta.get('created_at', '')}".encode()).hexdigest()[:12]}
+    out = {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
+           "rig": meta.get("rig", "none"),
+           "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
+           # Detail-view scale anchors (0 = undeclared, see the shared
+           # backend note): buildings — height_m (uniform scale so the
+           # shell is exactly this tall) + floors (storeys the mesh
+           # depicts; storey height = height_m / floors, fallback
+           # map3d.level_height). Rooms — width_m (real-world width of
+           # the model's largest side; the diorama scales real-size from
+           # it, like a prop).
+           "floors": float(meta.get("floors") or 0.0),
+           "height_m": float(meta.get("height_m") or 0.0),
+           "width_m": float(meta.get("width_m") or 0.0),
+           # Changes whenever ANOTHER model file becomes active (new
+           # generation, upload, selection) — a running client polls the
+           # meta and re-downloads on a signature change (AV3D-2 addendum);
+           # rotation/offset edits are visible in the meta itself.
+           "signature": hashlib.md5(
+               f"{p.name}:{meta.get('created_at', '')}".encode()).hexdigest()[:12]}
+    if room_id:
+        # Rooms: the height offset lives in the FLOOR PLAN
+        # (layout.model_offset_y), not on the model — the sidecar offsets are
+        # gone here (2026-07-24). What IS a model property: the height a
+        # figure walks at inside the diorama.
+        if meta.get("walk_y") is not None:
+            out["walk_y"] = float(meta.get("walk_y") or 0.0)
+        return out
+    # Buildings: vertical placement offset in metres (model property —
+    # reliefs have different socket thicknesses; negative sinks the model
+    # into the terrain, e.g. a park) plus the tile-plane shift in world
+    # metres (after the yaw: +x = east, +z = south — a building need not sit
+    # centred on its tile). Every client applies them on load.
+    out["offset_y"] = float(meta.get("offset_y") or 0.0)
+    out["offset_x"] = float(meta.get("offset_x") or 0.0)
+    out["offset_z"] = float(meta.get("offset_z") or 0.0)
+    return out
 
 
 def model_file_path(location_id: str, filename: str,
@@ -386,21 +395,24 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
 
 
 def set_offset_y(location_id: str, offset_y: Any = None,
-                 room_id: str = "", filename: str = "",
+                 filename: str = "",
                  offset_x: Any = None, offset_z: Any = None) -> Dict[str, Any]:
-    """Persist the vertical placement offset (metres, ±, clamped to ±25) on
-    ONE model's sidecar (default: the active model). A MODEL property like
-    the orientation fix — generated reliefs come with different socket
+    """Persist a BUILDING model's placement offsets (metres, ±, clamped to
+    ±25) on ONE model's sidecar (default: the active model). A MODEL property
+    like the orientation fix — generated reliefs come with different socket
     thicknesses, and a negative value sinks e.g. a park into the terrain —
     and ``offset_x``/``offset_z`` shift the model on the TILE PLANE (world
     axes, applied after the yaw: +x = east, +z = south; the building need
     not sit centred on its tile). ``None`` leaves a field untouched. Every
-    client applies them on load. Returns the updated sidecar meta."""
+    client applies them on load. Returns the updated sidecar meta.
+
+    Buildings only (2026-07-24): a ROOM's height offset lives in the floor
+    plan as ``layout.model_offset_y``, its walkable floor as ``walk_y``."""
     owner = _owner_id(location_id)
     if not owner:
         raise ValueError("no model")
-    p = (model_file_path(location_id, filename, room_id) if filename
-         else find_building_model(location_id, room_id))
+    p = (model_file_path(location_id, filename) if filename
+         else find_building_model(location_id))
     if not p:
         raise ValueError("no model")
     meta = _read_sidecar(p)
@@ -484,6 +496,38 @@ def set_width_m(location_id: str, width_m: Any,
     0/empty = undeclared (figures fall back to storey_height / 3)."""
     return _set_sidecar_number(location_id, "width_m", width_m,
                                room_id=room_id, filename=filename)
+
+
+def set_walk_y(location_id: str, room_id: str, walk_y: Any = None,
+               filename: str = "") -> Dict[str, Any]:
+    """Persist a ROOM model's WALKABLE floor height (sidecar).
+
+    Diorama floors are modelled, not flat: a raised podium, a sunken lounge
+    or a hole in the mesh make the height a figure stands at unmeasurable
+    from outside (client wishlist 2026-07-24). ``walk_y`` states it once, in
+    WORLD metres above the model's FINAL lower edge (0 = the lower edge
+    itself, clamped to 0..5) — the scene payload delivers the absolute
+    result as ``walk_y_world``. The admin dials it against the reference
+    figure, like every other anchor. ``None``/empty removes the value; unlike
+    the other numeric setters 0 is a MEANINGFUL value here, not "unset"."""
+    owner = _owner_id(location_id)
+    if not owner:
+        raise ValueError("no model")
+    p = (model_file_path(location_id, filename, room_id) if filename
+         else find_building_model(location_id, room_id))
+    if not p:
+        raise ValueError("no model")
+    meta = _read_sidecar(p)
+    if walk_y is None or f"{walk_y}".strip() == "":
+        meta.pop("walk_y", None)
+    else:
+        try:
+            v = float(walk_y)
+        except (TypeError, ValueError):
+            v = float(meta.get("walk_y") or 0.0)
+        meta["walk_y"] = round(min(max(v, 0.0), 5.0), 3)
+    _write_sidecar(p, meta)
+    return meta
 
 
 def _new_model_path(d: Path, stem: str, suffix: str = ".glb") -> Path:
