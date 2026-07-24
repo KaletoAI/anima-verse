@@ -530,7 +530,16 @@ def _phase_generate(room_id: str) -> None:
                 return
         pid = str(item["prop_id"])
         from app.core.props import is_pending
-        trigger_generation(pid)
+        # Automatic path = nobody clicks a dialog, so face count and texture
+        # size derive from the piece's REAL size (the 3D client's asset-sizing
+        # recommendation): faces ~6000 x largest edge clamped to 2k..20k,
+        # texture 512 (<=0.5 m) / 1024 (<1.5 m) / 2048.
+        max_dim = max(float(item.get("width_m") or 0),
+                      float(item.get("depth_m") or 0),
+                      float(item.get("height_m") or 0)) or 1.0
+        face_num = max(2000, min(20000, int(round(6000 * max_dim))))
+        texture_size = 512 if max_dim <= 0.5 else (1024 if max_dim < 1.5 else 2048)
+        trigger_generation(pid, face_num=face_num, texture_size=texture_size)
         deadline = time.monotonic() + MODEL_TIMEOUT_SECONDS
         while not _prop_ready(pid):
             if not _get_row(room_id):
