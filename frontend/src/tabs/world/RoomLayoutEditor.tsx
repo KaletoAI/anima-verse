@@ -784,7 +784,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               to: shared ? shared.neighborId : 'outside' }]
       updateLayout(room.id, { openings })
       setOpeningSel(openings.length - 1)
-      return  // stays armed — placing several doors/windows in a row
+      // Single shot: back to normal mode — an armed tool made it too easy
+      // to stack several doors/windows on top of each other.
     }
     setClickMode('')
   }, [clickMode, armedProp, ghostYaw, markerKind, markerSel, selected,
