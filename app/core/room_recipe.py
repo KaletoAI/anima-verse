@@ -421,6 +421,11 @@ def compose_recipe(room: Dict[str, Any],
             payload["exit_derived"] = True
     if lay.get("markers"):
         payload["markers"] = lay["markers"]
+    # Outdoor rooms (terraces, gardens): the client builds NO shell walls
+    # for them — floor plate only (openings act via the mirror in the
+    # neighbours' walls). Same flag as the visibility rule (AV3D-12).
+    if lay.get("always_visible"):
+        payload["always_visible"] = True
     if lay.get("rotation") is not None:
         payload["rotation"] = lay["rotation"]
     # Change detection without polling the whole payload chain: the client

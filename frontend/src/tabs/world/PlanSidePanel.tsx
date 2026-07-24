@@ -84,13 +84,13 @@ export function PlanSidePanel({
         {layout.outline?.length ? ` · ⬠ ${layout.outline.length}` : ''}
       </span>
       <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-        title={t('Show this room permanently in the 3D client, independent of the interior view — for outdoor rooms the building model does not cover.')}>
+        title={t('Marks an OUTDOOR room (terrace, garden, pool): shown permanently in the 3D client independent of the interior view, and it gets NO shell walls — only its floor plate.')}>
         <input
           type="checkbox"
           checked={!!layout.always_visible}
           onChange={(e) => onAlwaysVisible(e.target.checked)}
         />
-        <span>{t('Always visible')}</span>
+        <span>{t('Outdoor room (always visible)')}</span>
       </label>
 
       <button
