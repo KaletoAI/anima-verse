@@ -981,6 +981,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         if (!lay) continue
         const lv = lay.level || 0
         const floorY = lv * lhEff
+        // Outdoor rooms (always_visible — terraces, gardens) get NO shell
+        // walls; their floor plate below still renders. The client follows
+        // the same rule from the flag it already reads.
+        const outdoor = !!lay.always_visible
         // Surfaces (B1/F7): a set wall kind samples its REAL texture — tiled
         // at its true size_m — as soon as it is loaded; the warmer colour
         // hint covers loading and texture-less kinds.
@@ -1028,7 +1032,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           return { i, ax: a[0], az: a[1], bx: b[0], bz: b[1],
             nx: (b[1] - a[1]) / len, nz: -(b[0] - a[0]) / len }
         })
-        for (const ed of edges) {
+        for (const ed of outdoor ? [] : edges) {
           const L = Math.hypot(ed.bx - ed.ax, ed.bz - ed.az)
           if (L < 0.05) continue
           const ux = (ed.bx - ed.ax) / L
