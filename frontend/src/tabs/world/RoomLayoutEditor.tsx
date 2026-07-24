@@ -221,6 +221,35 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   const [planZoom, setPlanZoom] = useState(1)
   const planZoomRef = useRef(planZoom)
   planZoomRef.current = planZoom
+  const zoomViewportRef = useRef<HTMLDivElement>(null)
+
+  // Plain mouse wheel zooms, anchored at the cursor (native non-passive
+  // listener — React's synthetic wheel cannot preventDefault reliably).
+  // At the 1x lower bound the event passes through so the page scrolls.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const vp = zoomViewportRef.current
+    if (!canvas || !vp) return
+    const onWheel = (e: WheelEvent) => {
+      const cur = planZoomRef.current
+      const nz = Math.min(3, Math.max(1,
+        Math.round((cur + (e.deltaY < 0 ? 0.25 : -0.25)) * 4) / 4))
+      if (nz === cur) return
+      e.preventDefault()
+      const rect = canvas.getBoundingClientRect()
+      const fx = (e.clientX - rect.left) / rect.width
+      const fy = (e.clientY - rect.top) / rect.height
+      const vpRect = vp.getBoundingClientRect()
+      setPlanZoom(nz)
+      // After the resize, scroll so the point under the cursor stays put.
+      requestAnimationFrame(() => {
+        vp.scrollLeft = fx * CANVAS_W * nz - (e.clientX - vpRect.left)
+        vp.scrollTop = fy * CANVAS_W * nz - (e.clientY - vpRect.top)
+      })
+    }
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
+  }, [])
 
   const placed = rooms.filter((r) => r.layout && (r.layout.level || 0) === level)
   const unplaced = rooms.filter((r) => !r.layout)
@@ -990,7 +1019,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         <button type="button" className="ga-btn ga-btn-sm"
           disabled={planZoom <= 1}
           onClick={() => setPlanZoom((z) => Math.max(1, z - 0.25))}
-          title={t('Zoom the 2D plan out (Ctrl+wheel works too).')}>
+          title={t('Zoom the 2D plan out (mouse wheel over the plan works too).')}>
           ➖
         </button>
         <button type="button" className="ga-btn ga-btn-sm"
@@ -1002,7 +1031,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         <button type="button" className="ga-btn ga-btn-sm"
           disabled={planZoom >= 3}
           onClick={() => setPlanZoom((z) => Math.min(3, z + 0.25))}
-          title={t('Zoom the 2D plan in for precise placement (Ctrl+wheel works too).')}>
+          title={t('Zoom the 2D plan in for precise placement (mouse wheel over the plan works too).')}>
           ➕
         </button>
         {onMap3d ? (
@@ -1114,7 +1143,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       />
       {/* Zoom viewport: the canvas grows with the zoom, this box keeps the
           layout footprint and scrolls (Ctrl+wheel zooms on the canvas). */}
-      <div style={{ overflow: 'auto', maxWidth: '100%',
+      <div ref={zoomViewportRef} style={{ overflow: 'auto', maxWidth: '100%',
         maxHeight: canvasH + 14, flex: '0 1 auto' }}>
       <div
         ref={canvasRef}
@@ -1126,13 +1155,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           background: 'rgba(255,255,255,0.03)', overflow: 'hidden', touchAction: 'none',
           cursor: clickMode || armedProp ? 'crosshair' : undefined,
         }}
-        onWheel={(e) => {
-          // Ctrl+wheel zooms (like maps); plain wheel keeps scrolling.
-          if (!e.ctrlKey) return
-          e.preventDefault()
-          setPlanZoom((z) => Math.min(3, Math.max(1,
-            Math.round((z + (e.deltaY < 0 ? 0.25 : -0.25)) * 4) / 4)))
-        }}
+
         onClick={() => { if (!clickMode) setSelected('') }}
         onPointerMove={(e) => {
           if (armedProp) {
