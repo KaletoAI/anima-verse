@@ -29,7 +29,9 @@ attaches the scene to its tile):
                 already resolved into world coordinates.
 
 Numbers are NOT free here: every constant below is quoted from the contract
-(§ A2/A3/A6). When code and contract disagree, the CONTRACT wins.
+(``/home/dev/projekte/shared/schnittstellen-3d.md``, § A2/A3/A6 for the
+values, part B for the payload shape) — that document, not this file, is
+where a value is changed. When code and contract disagree, the CONTRACT wins.
 
 The composer is pure: location dict + rooms in, primitives out. Loading
 (world DB, model sidecars, scale anchor) is the route's job; the prop library
