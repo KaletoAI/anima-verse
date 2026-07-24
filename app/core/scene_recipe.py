@@ -22,7 +22,11 @@ attaches the scene to its tile):
                 walls already split around every opening (window = sill +
                 head + glass segment),
 - ``extras``  — the elevator primitives,
-- ``style``   — the colours/opacities both renderers used to keep as copies.
+- ``style``   — the colours/opacities both renderers used to keep as copies,
+- ``models``  — ONE spec form for building, room diorama and prop; the client
+                runs the single ``place()`` routine of § B2 over it,
+- ``figures``/``markers``/``exits`` — the figure scale and every anchor point
+                already resolved into world coordinates.
 
 Numbers are NOT free here: every constant below is quoted from the contract
 (§ A2/A3/A6). When code and contract disagree, the CONTRACT wins.
@@ -500,6 +504,226 @@ def _elevator(map3d: Dict[str, Any], levels: List[int], storey: float,
     return out
 
 
+# ── Placement specs (§ B2) ──────────────────────────────────────────────
+
+def _fix_euler(rotation: Any) -> Dict[str, float]:
+    """The orientation fix as an 'XYZ' Euler in degrees (§ A1)."""
+    rot = rotation if isinstance(rotation, dict) else {}
+    return {axis: _r(_num(rot.get(axis)), 3) for axis in ("x", "y", "z")}
+
+
+def _building_yaw(location: Dict[str, Any], map3d: Dict[str, Any]) -> float:
+    """Yaw chain (§ A1): map3d.rotation (an explicit 0 counts) →
+    map_rotation_2d → 0."""
+    if (map3d or {}).get("rotation") is not None:
+        return _num(map3d.get("rotation"))
+    return _num(location.get("map_rotation_2d"))
+
+
+def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
+                    meta: Dict[str, Any], k: float) -> Optional[Dict[str, Any]]:
+    """The building shell as a ``tile_fit`` spec (§ A2/B2).
+
+    The footprint always follows the tile (largest XZ side = 10 × 0.92 ×
+    map3d.size) so the floor plan lands on the shell; the height follows
+    ``height_m × k`` when the model declares it — with correct proportions
+    both factors coincide, a too-flat relief gets exactly the repair it needs.
+    """
+    if not meta:
+        return None
+    from urllib.parse import quote
+    loc_id = str(location.get("id") or "")
+    size = _num((map3d or {}).get("size")) or TILE_FILL
+    height_m = _num(meta.get("height_m"))
+    box: Dict[str, float] = {"xz": _r(TILE_M * TILE_FILL * size)}
+    if height_m > 0:
+        box["y"] = _r(height_m * k)
+    return {
+        "role": "building",
+        "id": loc_id,
+        "url": f"/play/locations/{quote(loc_id)}/model",
+        "level": 0,
+        "fix_euler": _fix_euler(meta.get("rotation")),
+        "yaw_deg": _r(_building_yaw(location, map3d), 1),
+        "scale_mode": "tile_fit",
+        "box": box,
+        "anchor": [_r(_num(meta.get("offset_x"))), _r(_num(meta.get("offset_z")))],
+        "bottom_y": _r(BUILDING_BOTTOM_Y + _num(meta.get("offset_y"))),
+    }
+
+
+def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
+                   meta: Dict[str, Any], storey: float, k: float,
+                   anchored: bool) -> Optional[Dict[str, Any]]:
+    """A room's diorama model as a placement spec (§ B2a).
+
+    ONE law of scale: with a scale anchor AND a declared ``width_m`` the
+    diorama scales like a prop (real size over its largest XZ side) — the
+    room RECTANGLE no longer influences its size at all, it stays floor-plan
+    area for plate, shell and walkability. Without either, the documented
+    fallback is the old rectangle fit.
+
+    Coexistence rule: a room whose recipe carries prop placements is
+    furnished from the recipe and gets NO diorama.
+    """
+    if not meta or recipe.get("placements"):
+        return None
+    from urllib.parse import quote
+    lay = room.get("layout") or {}
+    room_id = str(room.get("id") or "")
+    level = int(recipe.get("level") or 0)
+    x, y, w, d = _room_rect(recipe, room)
+    at = lay.get("model_at")
+    if not isinstance(at, (list, tuple)) or len(at) != 2:
+        at = [0.5, 0.5]
+    spec: Dict[str, Any] = {
+        "role": "room",
+        "id": room_id,
+        "url": f"/play/rooms/{quote(room_id)}/model",
+        "room_id": room_id,
+        "level": level,
+        "fix_euler": _fix_euler(meta.get("rotation")),
+        "yaw_deg": _r(_num(lay.get("rotation")), 1),
+        "anchor": [_r(_w(x + _num(at[0], 0.5) * w)),
+                   _r(_w(y + _num(at[1], 0.5) * d))],
+        "bottom_y": _r(level * storey + DIORAMA_CLEARANCE
+                       + _num(lay.get("model_offset_y"))),
+    }
+    width_m = _num(meta.get("width_m"))
+    if anchored and width_m > 0:
+        spec["scale_mode"] = "real_size"
+        spec["max_m"] = _r(width_m * k)
+        spec["measure_axes"] = "xz"
+    else:
+        spec["scale_mode"] = "fit_box"
+        spec["box"] = {"w": _r(w * PLATE_M), "d": _r(d * PLATE_M)}
+    return spec
+
+
+def _prop_models(recipe: Dict[str, Any], storey: float,
+                 k: float) -> List[Dict[str, Any]]:
+    """The room's prop placements as specs (REAL-SIZE rule, § A2).
+
+    A placement never scales its prop: the size comes from the prop's own
+    dims × k. Dangling ids and props without a mesh keep their placement and
+    carry ``placeholder_dims`` (already × k) so the consumer can draw a box.
+    """
+    from urllib.parse import quote
+    from app.core import props as prop_store
+    level = int(recipe.get("level") or 0)
+    room_id = recipe.get("room_id") or ""
+    floor_y = level * storey
+    out: List[Dict[str, Any]] = []
+    for placement in recipe.get("placements") or []:
+        pid = str(placement.get("prop_id") or "")
+        dims_raw = placement.get("dims") or {}
+        dims = [_num(dims_raw.get("width_m"), 1.0), _num(dims_raw.get("depth_m"), 1.0),
+                _num(dims_raw.get("height_m"), 1.0)]
+        at = placement.get("at") or [0.5, 0.5]
+        has_model = bool(placement.get("has_model"))
+        prop = prop_store.get_prop(pid) if pid else None
+        spec: Dict[str, Any] = {
+            "role": "prop",
+            "id": pid,
+            "url": f"/assets/props/{quote(pid)}/model" if has_model else "",
+            "room_id": room_id,
+            "level": level,
+            "fix_euler": _fix_euler((prop or {}).get("rotation")),
+            "yaw_deg": _r(_num(placement.get("yaw")), 1),
+            "scale_mode": "real_size",
+            "max_m": _r(max(dims) * k),
+            "anchor": [_r(_w(at[0])), _r(_w(at[1]))],
+            "bottom_y": _r(floor_y + _num(placement.get("offset_y")) * k),
+        }
+        if not has_model:
+            spec["placeholder_dims"] = {"w": _r(dims[0] * k), "d": _r(dims[1] * k),
+                                        "h": _r(dims[2] * k)}
+        out.append(spec)
+    return out
+
+
+# ── Markers, exits, figures ─────────────────────────────────────────────
+
+def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
+             k: float) -> List[Dict[str, Any]]:
+    """Every marker of one room, finished in world coordinates.
+
+    Room markers are fractions of the room rectangle with an offset additive
+    to the sampled floor; prop markers arrive from the recipe as
+    placement-relative transforms (fix → real size → yaw already applied) and
+    only need ``placement point + [dx, dz] × k`` — the one multiply the
+    contract promises the consumer, done here.
+    """
+    room_id = recipe.get("room_id") or ""
+    level = int(recipe.get("level") or 0)
+    floor_y = level * storey
+    x, y, w, d = _room_rect(recipe, room)
+    out: List[Dict[str, Any]] = []
+    for marker in recipe.get("markers") or []:
+        at = marker.get("at") or [0.5, 0.5]
+        entry: Dict[str, Any] = {
+            "room_id": room_id,
+            "at_world": [_r(_w(x + _num(at[0], 0.5) * w)),
+                         _r(_w(y + _num(at[1], 0.5) * d))],
+            "y_world": _r(floor_y + _num(marker.get("offset_y"))),
+            "animation": marker.get("animation") or "",
+            "source": "room",
+        }
+        if marker.get("rotation") is not None:
+            entry["facing"] = _r(_num(marker.get("rotation")), 1)
+        out.append(entry)
+    placements = recipe.get("placements") or []
+    for marker in recipe.get("prop_markers") or []:
+        try:
+            placement = placements[int(marker.get("placement"))]
+        except (TypeError, ValueError, IndexError):
+            continue
+        at = placement.get("at") or [0.5, 0.5]
+        offset = marker.get("offset_m") or [0.0, 0.0]
+        entry = {
+            "room_id": room_id,
+            "at_world": [_r(_w(at[0]) + _num(offset[0]) * k),
+                         _r(_w(at[1]) + _num(offset[1]) * k)],
+            "y_world": _r(floor_y + _num(marker.get("height_m")) * k),
+            "animation": marker.get("animation") or "",
+            "source": "prop",
+        }
+        if marker.get("facing") is not None:
+            entry["facing"] = _r(_num(marker.get("facing")), 1)
+        out.append(entry)
+    return out
+
+
+def _figures(storey: float, k: float, anchored: bool) -> Dict[str, Any]:
+    """Figure scale (§ A3): 1.70 m × k, legacy 1.7 × storey / 3. The stand
+    clearance is a world-metre CONSTANT — never × k."""
+    base = FIGURE_HEIGHT_M * k if anchored else FIGURE_HEIGHT_M * storey / 3
+    return {"base_height_m_world": _r(base),
+            "stand_clearance": STAND_CLEARANCE}
+
+
+def _signature(location: Dict[str, Any], plan_width_m: float,
+               recipes: List[Dict[str, Any]], building_meta: Dict[str, Any],
+               room_metas: Dict[str, Dict[str, Any]]) -> str:
+    """Change detection for the whole scene — a SUPERSET of the room recipe's
+    signature: the room signatures already cover layouts, neighbour openings
+    and prop sidecars, and the model metas add every anchor dial (floors,
+    height_m, width_m, walk_y, rotation, offsets). Polling it is enough."""
+    import hashlib
+    import json
+    payload = {
+        "map3d": location.get("map3d") or {},
+        "map_rotation_2d": location.get("map_rotation_2d") or 0,
+        "plan_width_m": round(float(plan_width_m or 0), 3),
+        "rooms": {str(r.get("room_id") or ""): r.get("signature") or ""
+                  for r in recipes},
+        "building_meta": building_meta or {},
+        "room_metas": room_metas or {},
+    }
+    return hashlib.md5(json.dumps(payload, sort_keys=True,
+                                  default=str).encode()).hexdigest()
+
+
 # ── Composer ────────────────────────────────────────────────────────────
 
 def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
@@ -515,7 +739,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     """
     map3d = location.get("map3d") or {}
     rooms = [r for r in (location.get("rooms") or []) if isinstance(r, dict)]
-    k, storey = derive_scalars(map3d, plan_width_m, building_meta or {})
+    building_meta = building_meta or {}
+    room_metas = room_metas or {}
+    k, storey = derive_scalars(map3d, plan_width_m, building_meta)
+    anchored = plan_width_m > 0
 
     recipes: List[Dict[str, Any]] = []
     by_room: Dict[str, Dict[str, Any]] = {}
@@ -528,23 +755,44 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         by_room[str(room.get("id") or "")] = room
     levels = _used_levels(recipes)
 
-    # Ground-floor exits feed the contour's door gaps — the DERIVED exits
-    # count too (a room with a door is never walled in).
-    ground_exits: List[List[float]] = []
+    exits: List[Dict[str, Any]] = []
     for recipe in recipes:
-        if int(recipe.get("level") or 0) != 0:
-            continue
         room = by_room.get(str(recipe.get("room_id") or ""))
         point = room_exit_world(recipe, room) if room else None
-        if point:
-            ground_exits.append(point)
+        if not point:
+            continue
+        entry = {"room_id": recipe.get("room_id") or "", "at_world": point}
+        if recipe.get("exit_derived"):
+            entry["derived"] = True
+        exits.append(entry)
+
+    # Ground-floor exits feed the contour's door gaps — the DERIVED exits
+    # count too (a room with a door is never walled in).
+    ground_exits = [e["at_world"] for e in exits
+                    if int((by_room.get(e["room_id"], {}).get("layout")
+                            or {}).get("level") or 0) == 0]
 
     walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey,
                                                  ground_exits)
+    models: List[Dict[str, Any]] = []
+    markers: List[Dict[str, Any]] = []
+    building = _building_model(location, map3d, building_meta, k)
+    if building:
+        models.append(building)
     for recipe in recipes:
+        room_id = str(recipe.get("room_id") or "")
+        room = by_room.get(room_id) or {}
         walls.extend(_room_walls(recipe, storey, k))
+        diorama = _diorama_model(recipe, room, room_metas.get(room_id) or {},
+                                 storey, k, anchored)
+        if diorama:
+            models.append(diorama)
+        models.extend(_prop_models(recipe, storey, k))
+        markers.extend(_markers(recipe, room, storey, k))
 
     return {
+        "signature": _signature(location, plan_width_m, recipes,
+                                building_meta, room_metas),
         "k": _r(k, 6),
         "storey_m": _r(storey),
         "levels": [{"level": lv, "floor_y": _r(lv * storey)} for lv in levels],
@@ -552,4 +800,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "plates": _plates(map3d, recipes, levels, storey),
         "walls": walls,
         "extras": _elevator(map3d, levels, storey, k),
+        "models": models,
+        "figures": _figures(storey, k, anchored),
+        "markers": markers,
+        "exits": exits,
+        "outdoor_rooms": [r.get("room_id") or "" for r in recipes
+                          if r.get("always_visible")],
     }
