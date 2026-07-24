@@ -10,6 +10,12 @@ export interface RoomLayout {
   d: number
   rotation?: number
   exit?: [number, number]
+  /** Diorama-model anchor as fractions of the room rect (absent = centred)
+   *  — the room's 3D model is positioned in the PLAN like a prop. */
+  model_at?: [number, number]
+  /** Diorama-model height offset in metres (replaces the room sidecar
+   *  offset; buildings keep theirs). */
+  model_offset_y?: number
   /** AV3D-12: show this room permanently, independent of the interior view
    *  — for outdoor rooms not covered by the building model. */
   always_visible?: boolean

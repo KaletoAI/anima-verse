@@ -408,7 +408,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // the rotations the bottom is re-grounded from the rotated bounds.
     const placeModel = (entry: CachedModel, targetW: number, targetD: number,
                         cx: number, floorY: number, cz: number,
-                        yawDeg: number) => {
+                        yawDeg: number, offsetY = 0) => {
       const clone = entry.obj.clone(true)
       const norm = new THREE.Group()
       norm.add(clone)
@@ -443,7 +443,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       const b2 = new THREE.Box3().setFromObject(yawG)
       const c2 = b2.getCenter(new THREE.Vector3())
       yawG.position.set(cx - c2.x,
-                        floorY + 0.12 - b2.min.y + entry.offsetY,
+                        floorY + 0.12 - b2.min.y + offsetY,
                         cz - c2.z)
       yawG.userData.__noDispose = true
       boxes.add(yawG)
@@ -570,15 +570,20 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       const level = lay.level || 0
       const floorY = level * lhEff
       const cy = floorY + lhEff / 2
-      const cx = (lay.x + lay.w / 2 - 0.5) * PLATE_M
-      const cz = (lay.y + lay.d / 2 - 0.5) * PLATE_M
+      // Diorama placement comes from the PLAN: layout.model_at anchors the
+      // model like a prop (default = centred), layout.model_offset_y is the
+      // height — the room sidecar offset is retired.
+      const mAt = lay.model_at || [0.5, 0.5]
+      const cx = (lay.x + mAt[0] * lay.w - 0.5) * PLATE_M
+      const cz = (lay.y + mAt[1] * lay.d - 0.5) * PLATE_M
 
       const model = showModelsRef.current && room.id
         ? ensureModel(`room:${room.id}`, room.id)
         : null
       let fitScale = 0
       if (model) {
-        fitScale = placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0)
+        fitScale = placeModel(model, w, d, cx, floorY, cz, lay.rotation || 0,
+                              lay.model_offset_y || 0)
       }
 
       // Prop placements: real-size furnishing meshes; a wireframe box of the

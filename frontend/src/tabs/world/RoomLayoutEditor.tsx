@@ -91,6 +91,7 @@ type DragState =
   | { kind: 'opening'; roomId: string; index: number; edge: number }
   | { kind: 'prop'; roomId: string; index: number }
   | { kind: 'ghost'; roomId: string; index: number }
+  | { kind: 'model'; roomId: string }
   | null
 
 /** Real prop dims for true-size footprints — lean mirror of /world/props. */
@@ -571,6 +572,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           r4(clamp((fx - lay.x) / (lay.w || 1), 0, 1)),
           r4(clamp((fy - lay.y) / (lay.d || 1), 0, 1)),
         ]
+        if (drag.kind === 'model') {
+          // The room's DIORAMA model is positioned like a prop: the anchor
+          // lives in the PLAN (layout.model_at), not on the model sidecar.
+          updateLayout(drag.roomId, { model_at: at })
+          return
+        }
         if (drag.kind === 'ghost') {
           // Pending placements live in FE state only — nothing is stored
           // until Accept.
@@ -748,6 +755,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
 
+  // Model presence for the SELECTED room — the plan-placement handle and
+  // strip only show when a diorama model exists (anchored mode loads dims
+  // for all rooms anyway; this covers the legacy mode too).
+  useEffect(() => {
+    if (!selected || selected in modelDims) return
+    getRoomModelDims(selected)
+      .then((d) => setModelDims((prev) => ({ ...prev, [selected]: d })))
+      .catch(() => setModelDims((prev) => ({ ...prev, [selected]: null })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected])
+
   // Arm a click mode from the toolbar (clicking the armed tool disarms it).
   // Drawing modes start with an empty draft; redrawing targets the selected
   // room — the "Not on the plan" chips arm the same mode for a new room.
@@ -799,6 +817,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       y: r4(clamp(lay.y + (lay.d - d) / 2, 0, 1 - d)),
       ...(lay.exit
         ? { exit: [r4(1 - lay.exit[1]), r4(lay.exit[0])] as [number, number] }
+        : {}),
+      ...(lay.model_at
+        ? { model_at: [r4(1 - lay.model_at[1]), r4(lay.model_at[0])] as [number, number] }
         : {}),
       ...(lay.markers?.length
         ? { markers: lay.markers.map((m) => ({
@@ -1306,6 +1327,37 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   />
                 ) : null
               })()}
+              {/* Diorama-model anchor: positioned in the PLAN like a prop
+                  (layout.model_at, default = centre). Drag moves it; the
+                  strip below fine-tunes X/Y/height. */}
+              {room.id === selected && modelDims[room.id] ? (() => {
+                const mAt = lay.model_at || [0.5, 0.5]
+                return (
+                  <span
+                    title={t('Room model anchor — drag it like a prop; fine-tune X/Y/height in the strip below.')}
+                    onPointerDown={(e) => {
+                      if (clickMode || armedProp || !room.id) return
+                      e.preventDefault()
+                      e.stopPropagation()
+                      dragRef.current = { kind: 'model', roomId: room.id }
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      position: 'absolute',
+                      left: `calc(${mAt[0] * 100}% - 9px)`,
+                      top: `calc(${mAt[1] * 100}% - 9px)`,
+                      width: 18, height: 18, borderRadius: 3,
+                      border: '1.5px dashed #d29922',
+                      background: 'rgba(210,153,34,0.18)',
+                      display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', fontSize: 11,
+                      cursor: 'grab', userSelect: 'none',
+                    }}
+                  >
+                    ⌂
+                  </span>
+                )
+              })() : null}
               {(lay.markers || []).map((m, i) => (
                 <span
                   key={`${m.animation}-${i}`}
@@ -1684,6 +1736,57 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               onClick={() => patchProp(null)}
             >
               × {t('Remove')}
+            </button>
+          </div>
+        )
+      })() : null}
+
+      {/* Model-placement strip: X/Y sliders + height for the selected
+          room's diorama model — mirrors the prop strip; ↺ recentres. */}
+      {selectedRoom && selectedRoom.layout && modelDims[selectedRoom.id || ''] ? (() => {
+        const lay = selectedRoom.layout
+        const mAt = lay.model_at || [0.5, 0.5]
+        const setAt = (axis: 0 | 1, v: number) => {
+          const next: [number, number] = [mAt[0], mAt[1]]
+          next[axis] = r4(clamp(v, 0, 1))
+          updateLayout(selectedRoom.id || '', { model_at: next })
+        }
+        return (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="ga-hint" style={{ fontWeight: 600 }}>
+              ⌂ {t('Model placement')}:
+            </span>
+            {(['X', 'Y'] as const).map((label, axis) => (
+              <label key={label} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}>
+                {label}
+                <input type="range" min={0} max={1} step={0.005}
+                  value={mAt[axis]}
+                  style={{ width: 110 }}
+                  onChange={(e) => setAt(axis as 0 | 1, e.target.valueAsNumber)} />
+                <input className="ga-input" type="number" min={0} max={1} step={0.005}
+                  style={{ width: 72 }} value={mAt[axis]}
+                  onChange={(e) => setAt(axis as 0 | 1, Number(e.target.value) || 0)} />
+              </label>
+            ))}
+            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Height offset of the model in metres — negative sinks it (replaces the old per-model offset).')}>
+              {t('Height (m)')}
+              <input className="ga-input" type="number" step={0.05}
+                style={{ width: 78 }}
+                value={lay.model_offset_y ?? 0}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  updateLayout(selectedRoom.id || '', {
+                    model_offset_y: Number.isFinite(v) && v !== 0 ? v : undefined,
+                  })
+                }} />
+            </label>
+            <button type="button" className="ga-btn ga-btn-sm"
+              title={t('Back to the centred default placement.')}
+              onClick={() => updateLayout(selectedRoom.id || '', {
+                model_at: undefined, model_offset_y: undefined,
+              })}>
+              ↺
             </button>
           </div>
         )

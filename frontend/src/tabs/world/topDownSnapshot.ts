@@ -242,8 +242,10 @@ export async function renderTopDownSnapshot(opts: {
     yawG.updateMatrixWorld(true)
     const b2 = new THREE.Box3().setFromObject(yawG)
     const c2 = b2.getCenter(new THREE.Vector3())
-    yawG.position.set((lay.x + lay.w / 2 - 0.5) * PLATE_M - c2.x, -b2.min.y,
-                      (lay.y + lay.d / 2 - 0.5) * PLATE_M - c2.z)
+    // Plan-placed diorama anchor (layout.model_at, default = centred).
+    const mAt = lay.model_at || [0.5, 0.5]
+    yawG.position.set((lay.x + mAt[0] * lay.w - 0.5) * PLATE_M - c2.x, -b2.min.y,
+                      (lay.y + mAt[1] * lay.d - 0.5) * PLATE_M - c2.z)
     scene.add(yawG)
   })
 

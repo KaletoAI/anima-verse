@@ -477,6 +477,25 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                            round(min(max(float(ex[1]), 0.0), 1.0), 4)]
         except (TypeError, ValueError):
             pass
+    # Diorama-model placement IN THE PLAN (2026-07-24): the room's 3D model
+    # is positioned like a prop — ``model_at`` = anchor point as fractions of
+    # the room rectangle (absent = centred, today's behaviour) and
+    # ``model_offset_y`` = height in metres. This REPLACES the per-model
+    # sidecar offset for rooms (values migrate by hand; buildings keep their
+    # sidecar offsets).
+    mat = raw.get("model_at")
+    if isinstance(mat, (list, tuple)) and len(mat) == 2:
+        try:
+            out["model_at"] = [round(min(max(float(mat[0]), 0.0), 1.0), 4),
+                               round(min(max(float(mat[1]), 0.0), 1.0), 4)]
+        except (TypeError, ValueError):
+            pass
+    moy = raw.get("model_offset_y")
+    if moy is not None and f"{moy}".strip() != "":
+        try:
+            out["model_offset_y"] = round(max(-25.0, min(25.0, float(moy))), 3)
+        except (TypeError, ValueError):
+            pass
     # Animation markers (schnittstellen-3d.md): optional spots in the room a
     # figure with a matching active animation snaps to. ``at`` = fraction of
     # the ROOM rectangle, ``animation`` = a clip kind from the OPEN clip
