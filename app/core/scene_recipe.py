@@ -56,10 +56,16 @@ DEFAULT_STOREY_M = 3.0
 LEVEL_PLATE_TOP = 0.08
 LEVEL_PLATE_THICKNESS = 0.14
 # Room floor plate: sits ABOVE the level plate (it overrides only its own
-# area). The top offset is the preview's value; the body is deliberately
-# thin — thickness 0 is RESERVED for "texture only, no geometry" (§ A5).
-ROOM_PLATE_TOP = 0.04
+# area) — its top must clear the level plate's 0.08 top or it is buried
+# under it (the old preview's 0.04 was exactly that drift; the client's
+# 0.10 was the consistent value). The body is deliberately thin —
+# thickness 0 is RESERVED for "texture only, no geometry" (§ A5).
+ROOM_PLATE_TOP = 0.10
 ROOM_PLATE_THICKNESS = 0.02
+# Props stand ON the room plate, not on the abstract storey floor: bottom
+# = plate top + this clearance (+ offset_y × k). Outdoor rooms have no
+# plate — there the clearance sits on the storey/terrain level directly.
+PROP_CLEARANCE = 0.01
 # Walls: height max(0.6, storey − 0.15), thickness 0.07; glass panes thinner.
 WALL_THICKNESS = 0.07
 WALL_MIN_HEIGHT = 0.6
@@ -373,7 +379,9 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
     if len(outline) < 3:
         return []
     level = int(recipe.get("level") or 0)
-    base = level * storey + LEVEL_PLATE_TOP
+    # Room shell walls stand on the ROOM plate (0.10), the contour walls on
+    # the level plate (0.08) — § A4/A6.
+    base = level * storey + ROOM_PLATE_TOP
     height = _wall_height(storey)
     kind = str(((recipe.get("surfaces") or {}).get("wall")) or "").strip()
     room_id = recipe.get("room_id") or ""
@@ -457,7 +465,9 @@ def _elevator(map3d: Dict[str, Any], levels: List[int], storey: float,
               k: float) -> List[Dict[str, Any]]:
     """The elevator of a building: shaft columns + roof, glass on three sides
     (the side facing the building centre stays open), a pad per level and a
-    static cabin on the ground floor (§ A6). All sizes are real metres × k.
+    static cabin on the ground floor (§ A6). All sizes are real metres × k —
+    the caller hands in the LEGACY figure scale (storey / 3) as k when the
+    location has no anchor, exactly like the preview's kEl.
     """
     pos = (map3d or {}).get("elevator")
     if not isinstance(pos, (list, tuple)) or len(pos) != 2:
@@ -615,12 +625,15 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     A placement never scales its prop: the size comes from the prop's own
     dims × k. Dangling ids and props without a mesh keep their placement and
     carry ``placeholder_dims`` (already × k) so the consumer can draw a box.
+    Furniture stands ON the room plate (plate top + clearance); an outdoor
+    room has no plate, so the clearance sits on the storey level directly.
     """
     from urllib.parse import quote
     from app.core import props as prop_store
     level = int(recipe.get("level") or 0)
     room_id = recipe.get("room_id") or ""
-    floor_y = level * storey
+    plate_top = 0.0 if recipe.get("always_visible") else ROOM_PLATE_TOP
+    floor_y = level * storey + plate_top + PROP_CLEARANCE
     out: List[Dict[str, Any]] = []
     for placement in recipe.get("placements") or []:
         pid = str(placement.get("prop_id") or "")
@@ -681,6 +694,11 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             entry["facing"] = _r(_num(marker.get("rotation")), 1)
         out.append(entry)
     placements = recipe.get("placements") or []
+    # Prop markers are composed relative to the placement point on the floor;
+    # the mesh itself stands plate top + clearance higher (§ A4) — the seat
+    # heights ride along.
+    plate_top = 0.0 if recipe.get("always_visible") else ROOM_PLATE_TOP
+    prop_lift = plate_top + PROP_CLEARANCE
     for marker in recipe.get("prop_markers") or []:
         try:
             placement = placements[int(marker.get("placement"))]
@@ -692,7 +710,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             "room_id": room_id,
             "at_world": [_r(_w(at[0]) + _num(offset[0]) * k),
                          _r(_w(at[1]) + _num(offset[1]) * k)],
-            "y_world": _r(floor_y + _num(marker.get("height_m")) * k),
+            "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m")) * k),
             "animation": marker.get("animation") or "",
             "source": "prop",
         }
@@ -807,7 +825,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "style": STYLE,
         "plates": _plates(map3d, recipes, levels, storey),
         "walls": walls,
-        "extras": _elevator(map3d, levels, storey, k),
+        "extras": _elevator(map3d, levels, storey,
+                            k if anchored else storey / 3),
         "models": models,
         "figures": _figures(storey, k, anchored),
         "markers": markers,
