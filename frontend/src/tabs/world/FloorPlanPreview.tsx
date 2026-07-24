@@ -621,10 +621,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       // A drawn hull renders as its extruded polygon prism instead of the box.
       const roomGroup = new THREE.Group()
       if (!model) {
-        // Outdoor rooms (always_visible — terraces, gardens) stand in as a
-        // FLAT plate: the full-height prism read as walls they must not have.
+        // Outdoor rooms (always_visible — terraces, gardens) get NO body at
+        // all: only their outline as a flat line loop on the ground — the
+        // floor TEXTURE below (surfaces.floor / level plate / terrain) is
+        // what one sees.
         const outdoorStandin = !!lay.always_visible
-        const boxH = outdoorStandin ? 0.12 : lhEff * 0.94
+        const boxH = outdoorStandin ? 0.02 : lhEff * 0.94
         const mat = new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.5 })
         let box: Mesh
         if (lay.outline?.length) {
@@ -646,8 +648,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           box = new THREE.Mesh(new THREE.BoxGeometry(w, boxH, d), mat)
         }
         if (outdoorStandin) {
-          // Ground the plate on the storey floor (the group sits mid-storey;
-          // the prism geometry spans 0..boxH, the box is centred).
+          // Ground the outline on the storey floor (the group sits
+          // mid-storey; the prism geometry spans 0..boxH, the box is centred).
           box.position.y = lay.outline?.length
             ? -lhEff / 2
             : -lhEff / 2 + boxH / 2
@@ -658,7 +660,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         )
         edges.rotation.copy(box.rotation)
         edges.position.copy(box.position)
-        roomGroup.add(box)
+        if (!outdoorStandin) roomGroup.add(box)  // outdoor: lines only
         roomGroup.add(edges)
       }
 
