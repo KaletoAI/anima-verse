@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
-from app.core.auth_dependency import get_current_user
+from app.core.auth_dependency import get_current_user, require_admin
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
 
@@ -546,6 +546,100 @@ def play_room_model_meta(room_id: str):
     if not meta:
         raise HTTPException(status_code=404, detail="No model")
     return {**meta, "url": f"/play/rooms/{quote(room_id)}/model"}
+
+
+# --- Scene recipe (shared/schnittstellen-3d.md part B) — the COMPLETE scene
+# of a location as finished primitives + placement specs, so the renderers
+# own no geometry decision of their own (app/core/scene_recipe.py).
+# ⚠ Not to be confused with GET /play/scene above: that is the avatar's CHAT
+# perception and has nothing to do with 3D.
+
+def _scene_inputs(location: dict, location_id: str) -> tuple:
+    """(plan_width_m, building_meta, room_metas) — everything the composer
+    needs from disk. Clones need no special handling: the model store
+    redirects them to their template (gallery owner) and room ids are
+    template-identical, so the same call works for template and clone."""
+    from app.core.location_model3d import derive_plan_width_m, get_client_meta
+    map3d = location.get("map3d") or {}
+    if not location_id:
+        try:
+            plan_width_m = float(map3d.get("plan_width_m") or 0)
+        except (TypeError, ValueError):
+            plan_width_m = 0.0
+        return plan_width_m, {}, {}
+    room_metas = {}
+    for room in location.get("rooms") or []:
+        if not isinstance(room, dict) or not room.get("layout"):
+            continue
+        rid = str(room.get("id") or "")
+        meta = get_client_meta(location_id, room_id=rid) if rid else None
+        if meta:
+            room_metas[rid] = meta
+    return (derive_plan_width_m(location_id, map3d),
+            get_client_meta(location_id) or {}, room_metas)
+
+
+@router.get("/play/locations/{location_id}/scene")
+def play_location_scene(location_id: str):
+    """The whole location as a ready-to-render scene: plates, walls, extras,
+    model placement specs, figures, markers and exits — all in world metres
+    around the tile centre (contract § B1). Poll ``signature`` for changes.
+
+    404 = nothing to compose (no building outline, no room with a layout and
+    no building model) — that is the legacy auto-grid case, the client keeps
+    rendering the location procedurally as before."""
+    from app.models.world import get_location_by_id
+    from app.core.scene_recipe import compose_scene
+    loc = get_location_by_id(location_id)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    plan_width_m, building_meta, room_metas = _scene_inputs(loc, location_id)
+    map3d = loc.get("map3d") or {}
+    has_layout = any(isinstance(r, dict) and r.get("layout")
+                     for r in loc.get("rooms") or [])
+    if not has_layout and len(map3d.get("outline") or []) < 3 \
+            and not building_meta:
+        raise HTTPException(status_code=404, detail="No scene")
+    return compose_scene(loc, plan_width_m=plan_width_m,
+                         building_meta=building_meta, room_metas=room_metas)
+
+
+@router.post("/play/scene-preview")
+async def play_scene_preview(request: Request, _=Depends(require_admin)):
+    """The same payload for an UNSAVED location draft (contract § B3) — the
+    Game-Admin floor-plan preview renders from the same composer as the 3D
+    client instead of reimplementing the geometry. Body = a location entry
+    ({id?, map3d, rooms:[{id, name, layout}]}); nothing is persisted.
+
+    The draft runs through the world editor's own sanitizers first — no
+    unchecked user payload reaches the composer. With a known ``id`` the
+    stored model metas (scale anchor, orientation fixes, width_m) are pulled
+    in, so the preview matches what the client will see."""
+    from app.models.world import get_location_by_id
+    from app.core.scene_recipe import compose_scene
+    from app.core.world_ops import _sanitize_map3d, _sanitize_rooms_layout
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    rooms = [{"id": str(r.get("id") or ""),
+              "name": r.get("name") or "",
+              "layout": r.get("layout")}
+             for r in (data.get("rooms") or []) if isinstance(r, dict)]
+    try:
+        rotation_2d = int(data.get("map_rotation_2d") or 0)
+    except (TypeError, ValueError):
+        rotation_2d = 0
+    draft = {
+        "id": str(data.get("id") or ""),
+        "map_rotation_2d": rotation_2d,
+        "map3d": _sanitize_map3d(data.get("map3d")),
+        "rooms": _sanitize_rooms_layout(rooms),
+    }
+    known = bool(draft["id"] and get_location_by_id(draft["id"]))
+    plan_width_m, building_meta, room_metas = _scene_inputs(
+        draft, draft["id"] if known else "")
+    return compose_scene(draft, plan_width_m=plan_width_m,
+                         building_meta=building_meta, room_metas=room_metas)
 
 
 def _party_block(avatar: str):
