@@ -3,10 +3,9 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, setTerrainGrid, storeyHeight, tileGroundY, CELL, type Tile } from './scene/tiles';
-import { buildingLibrary, roomModelLibrary, setModelEnvironment } from './scene/buildings';
-import { setPropLibrary, setPropLoadFocus } from './scene/propAssets';
-import { mountRoomRecipe, RecipeLibrary, unmountRoomRecipe } from './scene/roomRecipe';
+import { applyLevelDisplay, applyNightGlow, applyRoomFocus, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
+import { setModelEnvironment } from './scene/glbMaterials';
+import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, sceneFigureScale, SceneLibrary } from './scene/sceneRecipe';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
@@ -37,16 +36,14 @@ async function startApp(username: string) {
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
   (window as unknown as { __THREE: typeof THREE }).__THREE = THREE; // Debug-Hook (Szene vermessen)
   const figures = new FigureLibrary();
-  const [allLocs, firstMap, surfaces, props] = await Promise.all([
+  const [allLocs, firstMap, surfaces] = await Promise.all([
     api.getLocations(),
     api.getWorldMap(),
     api.getSurfaceTextures(),
-    api.getProps(),
     figures.load(),
   ]);
   setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
-  setPropLibrary(props);          // Prop-Bibliothek (Maße + Orientierungs-Fix)
-  setPropLoadFocus(engine.target);   // GLB-Queue: Props nahe der Kamera zuerst
+  setPropLoadFocus(engine.target);   // GLB-Queue: Modelle nahe der Kamera zuerst
   const npcs = new NpcManager(figures);
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
@@ -115,103 +112,23 @@ async function startApp(username: string) {
 
   const tiles = new Map<string, Tile>();
   for (const loc of placeable) {
-    const scene = scenes.get(loc.id);
-    const tile = buildTile(loc, { sceneMode: !!scene });
+    const tile = buildTile(loc);
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
+    const scene = scenes.get(loc.id);
     if (scene) void mountScene(tile, scene);
   }
   engine.setPickables([...tiles.values()].map((t) => t.group));
 
-  // Gebäude-/Kachel-Modelle vom Server (AV3D-9): lazy laden, prozedurale
-  // Hülle ersetzen; solange 404/Generierung läuft, regelmäßig erneut fragen.
-  // Klon-Kacheln (z.B. viele Wald-Kacheln einer Template-Location) teilen
-  // sich ein Modell — der Schlüssel ist die Template-ID, jede Kachel bekommt
-  // einen Klon mit geteilter Geometrie.
-  const modelKeyOf = (loc: WorldLocation) => loc.template_location_id || loc.id;
-  const buildings = buildingLibrary();
-  const applyServerBuilding = (tile: Tile) => {
-    // Szenen-Pfad: Hülle, Maßstab und Erdung stehen in der Spec — hier gibt es
-    // keine zweite, lokal gerechnete Antwort auf die Gebäudegröße.
-    if (scenes.has(tile.loc.id)) return;
-    const model = buildings.get(modelKeyOf(tile.loc));
-    if (!model) return;
-    // v3-Maßstabs-Anker (backend-note-scale-anchors.md): explizites
-    // plan_width_m, sonst Auto-Ableitung height_m x Mesh-Proportion.
-    // Ändert sich der Anker, wird die Kachel mit den Anker-Maßen neu gebaut.
-    const meta = model.userData.meta as { height_m?: number; floors?: number } | undefined;
-    const planW = tile.loc.map3d?.plan_width_m
-      || ((meta?.height_m || 0) * ((model.userData.aspectXZoverY as number) || 0));
-    if (planW > 0) {
-      const k = 8 / planW;
-      const storeyWorld = meta?.height_m && meta?.floors
-        ? (meta.height_m / meta.floors) * k
-        : storeyHeight(tile.loc);
-      if (setLocationAnchor(tile.loc.id, { k, storeyWorld })) {
-        rebuildTile(tile, tile.loc);   // wendet das Modell wieder an
-        return;
-      }
-    }
-    applyBuildingModel(tile, model);
-  };
-  buildings.onModelReady = (key) => {
-    // Multimap-Auflösung: ein Template-Modell landet auf allen Klon-Kacheln
-    for (const tile of [...tiles.values()]) {
-      if (modelKeyOf(tile.loc) === key) applyServerBuilding(tile);
-    }
-  };
-  // Raum-Modelle (AV3D-2): nur Räume mit Layout haben einen Andockpunkt
-  const roomModels = roomModelLibrary();
-  const tileByRoom = new Map<string, Tile>();
-  for (const tile of tiles.values()) {
-    for (const r of tile.loc.rooms) if (r.layout) tileByRoom.set(r.id, tile);
-  }
-  // Raum-Rezepte (Raum-Props): die Hülle kommt immer aus dem Rezept (Wände/
-  // Boden/Öffnungen), Props wenn placements da sind — und das DIORAMA
-  // koexistiert (seit layout.model_at wird es wie ein Prop im Raum
-  // platziert) und wird immer geladen. signature-Polling im 60-s-Zyklus.
-  const recipes = new RecipeLibrary();
-  /** Legacy-Ketten laufen nur für Locations OHNE Szenen-Rezept — sonst gäbe es
-   *  die Geometrie zweimal, genau die Drift, die Teil B beseitigt. */
-  const legacyRoom = (roomId: string): Tile | null => {
-    const tile = tileByRoom.get(roomId);
-    if (!tile || scenes.has(tile.loc.id)) return null;
-    return tile;
-  };
-  recipes.onRecipe = (roomId, recipe) => {
-    const tile = legacyRoom(roomId);
-    if (!tile) return;
-    if (recipe && recipe.outline.length >= 3) void mountRoomRecipe(tile, roomId, recipe);
-    else unmountRoomRecipe(tile, roomId);
-    roomModels.request(roomId);
-    const model = roomModels.get(roomId);
-    if (model) applyRoomModel(tile, roomId, model);
-  };
-  roomModels.onModelReady = (roomId) => {
-    const tile = legacyRoom(roomId);
-    const model = roomModels.get(roomId);
-    if (tile && model) applyRoomModel(tile, roomId, model);
-  };
   let firstSweep = true;
   const requestServerModels = () => {
-    for (const tile of tiles.values()) {
-      if (scenes.has(tile.loc.id)) continue;          // Szene liefert das Modell
-      if (!tile.serverModel) buildings.request(modelKeyOf(tile.loc));
-    }
-    // Rezept zuerst (Weiche); Diorama-Anfragen stößt onRecipe an
-    for (const [roomId, tile] of tileByRoom) {
-      if (!scenes.has(tile.loc.id)) recipes.request(roomId);
-    }
-    // Szenen-Rezepte: neue Locations holen + Signaturen nachfassen (deckt
-    // map3d, alle Raum-Layouts, Modell-Metas und Prop-Sidecars ab). Beim
-    // ersten Durchlauf entfällt der Sweep — prime() hat gerade geholt.
+    // Szenen-Rezepte: neue Locations holen + Signaturen nachfassen. EINE
+    // Signatur deckt map3d, alle Raum-Layouts, die Modell-Metas und die
+    // Prop-Sidecars ab (§ B1) — mehr gibt es nicht zu pollen. Beim ersten
+    // Durchlauf entfällt der Sweep, prime() hat gerade geholt.
     for (const locId of tiles.keys()) scenes.request(locId);
     if (!firstSweep) void scenes.sweep();
     firstSweep = false;
-    // neu generierte Modelle/Rezepte ohne Reload erkennen (signature)
-    void recipes.sweep();
-    void buildings.sweepSignatures();
-    void roomModels.sweepSignatures();
   };
   requestServerModels();
   setInterval(requestServerModels, 60_000);
@@ -229,37 +146,19 @@ async function startApp(username: string) {
       const el = (o as { isCSS2DObject?: boolean; element?: HTMLElement });
       if (el.isCSS2DObject && el.element) el.element.remove();
     });
-    const scene = scenes.get(loc.id);
-    const tile = buildTile(loc, { sceneMode: !!scene });
+    const tile = buildTile(loc);
     tile.fade = old.fade;
     tile.fadeTarget = old.fadeTarget;
     tile.levelFilter = old.levelFilter;   // gewählte Etage über den Rebuild halten
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
-    for (const r of loc.rooms) if (r.layout) tileByRoom.set(r.id, tile);
-    if (scene) {
-      // Szenen-Pfad: die ganze Innenansicht plus Gebäudehülle kommt aus dem
-      // Payload — keine der Legacy-Ketten anfassen.
-      void mountScene(tile, scene);
-    } else {
-      const bm = buildings.get(modelKeyOf(loc));
-      if (bm) applyBuildingModel(tile, bm);
-      for (const r of loc.rooms) {
-        if (!r.layout) continue;
-        const recipe = recipes.get(r.id);
-        if (recipe && recipe.outline.length >= 3) {
-          void mountRoomRecipe(tile, r.id, recipe);   // frische Kachel: Rezept-Szene neu montieren
-        }
-        recipes.request(r.id);         // unbekannt: onRecipe montiert nach dem Laden
-        roomModels.invalidate(r.id);   // rotation/model_at evtl. geändert
-        roomModels.request(r.id);
-      }
-    }
+    const scene = scenes.get(loc.id);
+    if (scene) void mountScene(tile, scene);
     engine.setPickables([...tiles.values()].map((t) => t.group));
   }
   // Szenen-Signatur bewegt sich (Layout, map3d, Modell-Meta, Prop-Sidecar) →
-  // Kachel im passenden Modus neu bauen. Wird eine Szene zu 404 (Layout
-  // gelöscht), fällt dieselbe Kachel auf den Legacy-Pfad zurück.
+  // Kachel neu bauen. Wird eine Szene zu 404 (Layout gelöscht), bleibt genau
+  // die prozedurale Kachel übrig — es gibt dann nichts mehr aufzuklappen.
   scenes.onScene = (locId) => {
     const tile = tiles.get(locId);
     if (tile) rebuildTile(tile, tile.loc);

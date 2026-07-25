@@ -26,7 +26,7 @@ import {
  * `fit_box`-Fallbacks, den § B2 ausdrücklich hier verortet.
  *
  * Was hier bleibt, ist Sicht- und Interaktions-Zustand: `mountScene` füllt
- * exakt dieselben Tile-Felder wie das Legacy-`buildInterior`, damit LOD,
+ * die Tile-Felder der Innenansicht, damit LOD,
  * Crossfade, Etagen-Umschalter, Raum-Fokus, Wand-Culling, NPC-Platzierung und
  * Wegfindung unverändert weiterlaufen.
  *
@@ -396,11 +396,11 @@ const mountSeq = new WeakMap<Tile, number>();
 /**
  * Die komplette Innenansicht einer Location aus dem Payload bauen.
  *
- * Füllt genau dieselben Tile-Felder wie das Legacy-`buildInterior`
+ * Füllt die Tile-Felder der Innenansicht
  * (roomGroups/-Centers/-Exits/-Levels/-Rects/-Slots/-Markers, outlineWalls,
  * levelSlabs, levelWallMats, elevatorStops, alwaysVisibleRooms, interior,
  * interiorLabels, interiorLift) — der ganze Sicht- und Interaktionscode
- * darüber bleibt unberührt.
+ * darüber (LOD, Crossfade, Fokus, Culling, NPCs) bleibt unberührt.
  *
  * Modelle (Gebäudehülle, Raum-Dioramen, Props) laufen ALLE durch `placeSpec`;
  * sie trudeln asynchron ein und werden nachgetragen.
@@ -524,16 +524,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     tile.roomCenters.set(id, centre);
     const name = nameOf.get(id);
     if (name) tile.roomCenters.set(name, centre);
-    // Slot für sampleRoomWalkables: Halter auf der Raum-Mitte in Auflagehöhe,
-    // Maße = Umschließende der Platte. Die Platzhalter-Platte des Legacy-Pfads
-    // gibt es hier nicht (die Szene liefert immer eine echte) — ein leeres,
-    // unsichtbares Mesh erfüllt den Vertrag des Feldes.
+    // Bezugsrahmen für sampleRoomWalkables: Halter auf der Raum-Mitte in
+    // Auflagehöhe, Maße = Umschließende der Platte.
     const holder = new THREE.Group();
     holder.position.set(cx, plate.top_y, cz);
     parentFor(id).add(holder);
-    const dummy = new THREE.Mesh();
-    dummy.visible = false;
-    tile.roomSlots.set(id, { holder, w, d, plate: dummy });
+    tile.roomSlots.set(id, { holder, w, d });
   }
 
   // ── Wände ───────────────────────────────────────────────────────────────

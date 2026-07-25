@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import type { Room, WorldLocation } from '../types';
+import type { WorldLocation } from '../types';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
@@ -59,8 +59,9 @@ export interface Tile {
   roomCenters: Map<string, THREE.Vector3>;
   /** Ausgangspunkt pro Raum (Welt-Koordinaten; Schlüssel: ID und Name) */
   roomExits: Map<string, THREE.Vector3>;
-  /** Andockpunkte für Raum-Modelle (AV3D-2): Raum-ID -> Halter + Maße + Platte */
-  roomSlots: Map<string, { holder: THREE.Group; w: number; d: number; plate: THREE.Mesh }>;
+  /** Bezugsrahmen der Begehbarkeits-Abtastung je Raum: Halter auf der
+   *  Raum-Mitte in Auflagehöhe + Maße der Raum-Umschließenden */
+  roomSlots: Map<string, { holder: THREE.Group; w: number; d: number }>;
   /** freie Stellflächen im Raum-Modell (Welt-Koordinaten auf Bodenhöhe) */
   roomSpots: Map<string, THREE.Vector3[]>;
   /** erkannte Sitzflächen (Möbelhöhe, kleine Flächen) */
@@ -225,45 +226,11 @@ function surfaceTexture(kind: string, fallback: THREE.Texture): THREE.Texture {
   return tex;
 }
 
-/** Etagenboden-Textur aus der Surface-Library (Kind "floor", Ersatz für
- *  das zurückgezogene layout.floor_source): die Extrude-UVs der Platten
- *  sind Welt-Meter -> Wiederholung 1/size_m. Ohne kuratierten "floor"-
- *  Eintrag bleibt das eingebaute einfarbige Material. */
-function floorSlabTexture(): THREE.Texture | null {
-  const entry = serverSurfaces.get('floor');
-  if (!entry?.url) return null;
-  let tex = serverSurfaceCache.get('floor@slab');
-  if (!tex) {
-    tex = loader.load(entry.url);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(1 / entry.sizeM, 1 / entry.sizeM);
-    serverSurfaceCache.set('floor@slab', tex);
-  }
-  return tex;
-}
+// Die Boden-Kachelung der Etagen-/Raumplatten läuft seit dem Szenen-Rezept
+// über `surfaceFor` (Kind kommt als `texture_kind` mit dem Primitiv, Maßstab
+// als size_m × k) — die beiden früheren Sonder-Caches dafür sind entfallen.
 
-/** Etagenplatten-Textur je Level (map3d.level_floors, Raum-Rezept §7):
- *  Extrude-UVs der Platten sind Welt-Meter -> Kachelmaß size_m x k.
- *  Cache pro Kind UND Maßstab (k ist je Location verschieden). */
-function levelFloorTexture(kind: string | undefined, k: number): THREE.Texture | null {
-  if (!kind) return null;
-  const key = kind.toLowerCase();
-  const entry = serverSurfaces.get(key);
-  if (!entry?.url) return null;
-  const cacheKey = `${key}@slab@${k.toFixed(3)}`;
-  let tex = serverSurfaceCache.get(cacheKey);
-  if (!tex) {
-    tex = loader.load(entry.url);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(1 / (entry.sizeM * k), 1 / (entry.sizeM * k));
-    serverSurfaceCache.set(cacheKey, tex);
-  }
-  return tex;
-}
-
-/** Surface-Texturen für den Rezept-Pfad (roomShell klont sie und setzt
+/** Surface-Texturen für die Szenen-Primitive (jedes Stück klont sie und setzt
  *  eigene repeat-Werte): Klone eines noch ladenden Bildes blieben leer,
  *  daher gibt surfaceFor nur FERTIG geladene Texturen heraus — der Mount
  *  ruft vorher preloadSurfaceTexture für die benötigten Kinds. */
@@ -288,10 +255,10 @@ export function preloadSurfaceTexture(kind: string | undefined): Promise<void> {
   return pending;
 }
 
-/** Aktive Surface-Textur eines Kinds für die Raum-Hülle (ShellCtx.surface).
- *  Ohne Raum-Eintrag fällt der Boden auf das globale "floor"-Kind zurück
+/** Aktive Surface-Textur eines Kinds für Platten und Wände der Szene.
+ *  Ohne eigenen Eintrag fällt der Boden auf das globale "floor"-Kind zurück
  *  (Vertrag: „ohne Eintrag/Textur wie bisher"); Wände haben kein globales
- *  Kind -> null = Farb-Fallback der Hülle. */
+ *  Kind -> null = Farb-Fallback aus `style`. */
 export function surfaceFor(
   kind: string | undefined,
   use: 'floor' | 'wall'
@@ -568,360 +535,14 @@ function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
   }
 }
 
-/** Innenansicht: gesetzte Räume (Layout), Grundriss-Wände, Fahrstuhl. */
-function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean; markers?: boolean } = {}) {
-  const loc = tile.loc;
-  // NUR gesetzte Räume (mit Layout) werden angezeigt — ohne sie gibt es
-  // keine Innenansicht (kein Auto-Grid, keine Legacy-Wände); das Gebäude
-  // bleibt beim Reinzoomen geschlossen.
-  if (!loc.rooms.some((r) => r.layout)) return;
-  const g = new THREE.Group();
-  g.visible = false;
-  // Etagenhöhe: Server-Einstellung (map3d.level_height, Welt-Meter)
-  const storey = storeyHeight(loc);
-
-  const open = opts.walls === false; // Naturfläche: flacher + durchscheinend
-  const addRoomCommon = (room: Room, x: number, z: number, floorY: number, hue: number, rw: number, rd: number, parent: THREE.Group = g): THREE.Mesh => {
-    const plate = box(rw, open ? 0.08 : 0.18, rd, std({
-      color: new THREE.Color(`hsl(${hue}, 42%, 72%)`),
-      opacity: open ? 0.55 : 1,
-    }));
-    plate.position.set(x, floorY + (open ? 0.18 : 0.35), z);
-    parent.add(plate);
-
-    const el = document.createElement('div');
-    el.className = 'room-label';
-    el.textContent = room.name;
-    const label = new CSS2DObject(el);
-    label.position.set(x, floorY + Math.min(1.5, storey * 0.8), z);
-    parent.add(label);
-    tile.interiorLabels.push(label);
-
-    const worldPos = tile.center.clone().add(new THREE.Vector3(x, floorY + 0.45, z));
-    tile.roomCenters.set(room.id, worldPos);
-    tile.roomCenters.set(room.name, worldPos);
-    return plate;
-  };
-
-  // Räume mit Layout (AV3D-2): Position/Größe/Etage vom Server.
-  // Referenzfläche ist ein FESTES 8x8-m-Quadrat zentriert auf der Kachel —
-  // unabhängig vom Gebäudestil, damit Editor/Admin-Vorschau/Client dieselbe
-  // Geometrie sehen (Vertrag: schnittstellen-3d.md, Platzierungs-Semantik).
-  const LW = 8, LD = 8;
-  const usedLevels = new Set<number>();
-  const exitPtsL0: THREE.Vector2[] = [];   // EG-Ausgänge (lokal) -> Türen im Grundriss
-  loc.rooms.forEach((room, i) => {
-    const lay = room.layout;
-    if (!lay) return;
-    const roomW = Math.max(lay.w * LW, 0.5);
-    const roomD = Math.max(lay.d * LD, 0.5);
-    const x = -LW / 2 + (lay.x + lay.w / 2) * LW;
-    const z = -LD / 2 + (lay.y + lay.d / 2) * LD;
-    const floorY = (lay.level ?? 0) * storey;
-    usedLevels.add(lay.level ?? 0);
-    tile.roomLevels.set(room.id, lay.level ?? 0);
-    tile.roomLevels.set(room.name, lay.level ?? 0);
-    if ((room.indoor ?? '').toLowerCase() === 'outdoor') {
-      tile.roomOutdoor.add(room.id);
-      tile.roomOutdoor.add(room.name);
-    }
-    // eigene Gruppe pro Raum — für den Fokus-Modus komplett ausblendbar.
-    // always_visible (Server-Entscheidung, Default aus): Raum hängt direkt
-    // an der Kachel und ist damit dauerhaft sichtbar — für Outdoor-Räume,
-    // die nicht schon im Gebäude-Modell abgebildet sind.
-    const rg = new THREE.Group();
-    if (lay.always_visible === true) {
-      tile.group.add(rg);
-      tile.alwaysVisibleRooms.add(room.id);
-      tile.alwaysVisibleRooms.add(room.name);
-    } else {
-      g.add(rg);
-    }
-    tile.roomGroups.set(room.id, rg);
-    tile.roomRects.set(room.id, { x: tile.center.x + x, z: tile.center.z + z, w: roomW, d: roomD });
-    const plate = addRoomCommon(room, x, z, floorY, (i * 67) % 360, roomW, roomD, rg);
-
-    // Andockpunkt für das Raum-Modell auf Etagenboden-Höhe — die Erdung
-    // (Unterkante = +0,12 + offset_y) macht applyRoomModel an der
-    // gemessenen Box; die Platzhalter-Platte wird beim Modell-Einwechseln
-    // ausgeblendet. layout.rotation dreht den Raum-INHALT (analog
-    // map3d.rotation).
-    const holder = new THREE.Group();
-    holder.position.set(x, floorY, z);
-    holder.rotation.y = -THREE.MathUtils.degToRad(lay.rotation ?? 0);
-    rg.add(holder);
-    tile.roomSlots.set(room.id, { holder, w: roomW, d: roomD, plate });
-
-    // Animations-Marker (AV3D-11): Welt-Positionen auf Platten-Höhe;
-    // applyRoomModel verfeinert die Höhe später per Abtastung
-    if (lay.markers?.length) {
-      const byKind = new Map<string, { p: THREE.Vector3; rotation?: number; offsetY: number }[]>();
-      for (const m of lay.markers) {
-        if (!m?.at || !m.animation) continue;
-        const mx = -LW / 2 + (lay.x + m.at[0] * lay.w) * LW;
-        const mz = -LD / 2 + (lay.y + m.at[1] * lay.d) * LD;
-        const p = tile.center.clone().add(new THREE.Vector3(mx, floorY + 0.45 + (m.offset_y ?? 0), mz));
-        const entry = { p, rotation: m.rotation, offsetY: m.offset_y ?? 0 };
-        (byKind.get(m.animation) ?? byKind.set(m.animation, []).get(m.animation)!).push(entry);
-        if (opts.markers) {   // Debug-/Editor-Ansicht: Marker als türkise Punkte
-          const dot = new THREE.Mesh(new THREE.CircleGeometry(0.22, 16), std({ color: 0x4ac3e0 }));
-          dot.rotation.x = -Math.PI / 2;
-          dot.position.set(mx, floorY + 0.47, mz);
-          rg.add(dot);
-        }
-      }
-      tile.roomMarkers.set(room.id, byKind);
-      tile.roomMarkers.set(room.name, byKind);
-    }
-
-    // Ausgangspunkt: vom Server (exit) oder Mitte der dem Zentrum
-    // zugewandten Raumkante als Fallback
-    const ex = lay.exit
-      ? -LW / 2 + (lay.x + lay.exit[0] * lay.w) * LW
-      : x - Math.sign(x) * roomW / 2 * (Math.abs(x) > Math.abs(z) ? 1 : 0);
-    const ez = lay.exit
-      ? -LD / 2 + (lay.y + lay.exit[1] * lay.d) * LD
-      : z - Math.sign(z) * roomD / 2 * (Math.abs(z) >= Math.abs(x) ? 1 : 0);
-    const exitWorld = tile.center.clone().add(new THREE.Vector3(ex, floorY + 0.45, ez));
-    tile.roomExits.set(room.id, exitWorld);
-    tile.roomExits.set(room.name, exitWorld);
-    if ((lay.level ?? 0) === 0) exitPtsL0.push(new THREE.Vector2(ex, ez));
-    if (opts.markers) {
-      const mark = new THREE.Mesh(new THREE.CircleGeometry(0.3, 18), std({ color: 0xe0b64a }));
-      mark.rotation.x = -Math.PI / 2;
-      mark.position.set(ex, floorY + 0.46, ez);
-      rg.add(mark);
-    }
-  });
-
-  // AV3D-12: gezeichneter GEBÄUDE-Grundriss (map3d.outline) — pro genutzter
-  // Etage Boden + Wände entlang der Kontur; Türöffnung im Erdgeschoss am
-  // südlichsten Wandstück (Räume selbst bleiben Rechtecke)
-  const outline = (loc.map3d?.outline ?? []).filter((p) => Array.isArray(p) && p.length === 2);
-  if (outline.length >= 3 && usedLevels.size) {
-    const pts = outline.map(([fx, fz]) => new THREE.Vector2(-LW / 2 + fx * LW, -LD / 2 + fz * LD));
-    const floorShape = new THREE.Shape(pts);
-    // Wandhöhe folgt der Etagenhöhe (knapp unter der nächsten Platte)
-    const WALL_H = Math.max(0.6, storey - 0.15), DOOR_HALF = 0.4;
-    // Polygon-Umlaufrichtung -> Außennormale der Wandstücke (fürs Culling)
-    let area = 0;
-    for (let k = 0; k < pts.length; k++) {
-      const a = pts[k], b = pts[(k + 1) % pts.length];
-      area += a.x * b.y - b.x * a.y;
-    }
-    const ccw = area > 0;
-    const wallSeg = (a: THREE.Vector2, b: THREE.Vector2, floorY: number, mat: THREE.Material) => {
-      const len = a.distanceTo(b);
-      if (len < 0.06) return;
-      const seg = box(len, WALL_H, 0.07, mat);
-      seg.position.set((a.x + b.x) / 2, floorY + 0.08 + WALL_H / 2, (a.y + b.y) / 2);
-      seg.rotation.y = -Math.atan2(b.y - a.y, b.x - a.x);
-      seg.receiveShadow = false;
-      g.add(seg);
-      const dx = (b.x - a.x) / len, dz = (b.y - a.y) / len;
-      tile.outlineWalls.push({
-        mesh: seg,
-        level: Math.round(floorY / storey),
-        mid: new THREE.Vector2(tile.center.x + (a.x + b.x) / 2, tile.center.z + (a.y + b.y) / 2),
-        normal: ccw ? new THREE.Vector2(dz, -dx) : new THREE.Vector2(-dz, dx),
-      });
-    };
-    // Türen im EG: überall dort, wo ein Erdgeschoss-Exit auf der Kontur
-    // liegt; findet sich keiner, ersatzweise das südlichste Wandstück
-    let southIdx = 0, southZ = -Infinity;
-    for (let k = 0; k < pts.length; k++) {
-      const mid = (pts[k].y + pts[(k + 1) % pts.length].y) / 2;
-      if (mid > southZ) { southZ = mid; southIdx = k; }
-    }
-    for (const level of usedLevels) {
-      const floorY = level * storey;
-      // Obergeschosse halbtransparent — sonst verdecken sie in der
-      // Draufsicht das Erdgeschoss vollständig
-      const upper = level > 0;
-      const wallMat = std({ color: 0xcfc4b2, opacity: upper ? 0.45 : 1 });
-      const slabMat = std({ color: 0xd8d0c2, opacity: upper ? 0.4 : 1 });
-      // Bodentextur der Etage: kuratiertes Kind je Level (map3d.level_floors)
-      // vor dem globalen "floor"-Kind; Raum-Böden aus dem Rezept liegen ÜBER
-      // der Platte und überschreiben ihre Raumfläche von selbst
-      const floorTex = levelFloorTexture(loc.map3d?.level_floors?.[String(level)], roomFigureScale(loc))
-        ?? floorSlabTexture();
-      if (floorTex) {
-        slabMat.map = floorTex;
-        slabMat.color.set(0xffffff);
-      }
-      tile.levelWallMats.set(level, [wallMat]);
-      const slab = new THREE.Mesh(
-        new THREE.ExtrudeGeometry(floorShape, { depth: 0.14, bevelEnabled: false }),
-        slabMat
-      );
-      slab.rotation.x = Math.PI / 2;                 // Shape-XY -> Boden-XZ
-      // nach UNTEN extrudiert: Oberkante knapp über der Etage, damit die
-      // Böden der Raum-Modelle (ab +0.12) nicht überdeckt werden
-      slab.position.y = floorY + 0.08;
-      slab.castShadow = level > 0;
-      g.add(slab);
-      tile.levelSlabs.set(level, slab);
-      let doorsCut = 0;
-      for (let k = 0; k < pts.length; k++) {
-        const a = pts[k], b = pts[(k + 1) % pts.length];
-        const len = a.distanceTo(b);
-        const dir = b.clone().sub(a).divideScalar(Math.max(len, 1e-6));
-        // Tür-Positionen auf diesem Wandstück sammeln (nur EG)
-        const cuts: number[] = [];
-        if (level === 0) {
-          for (const e of exitPtsL0) {
-            const t = THREE.MathUtils.clamp(e.clone().sub(a).dot(dir), 0, len);
-            const closest = a.clone().addScaledVector(dir, t);
-            if (closest.distanceTo(e) < 0.45) cuts.push(t);
-          }
-          if (!cuts.length && k === southIdx && !exitPtsL0.length) cuts.push(len / 2);
-        }
-        if (cuts.length) {
-          doorsCut += cuts.length;
-          cuts.sort((p, q2) => p - q2);
-          let start = 0;
-          for (const t of cuts) {
-            wallSeg(a.clone().addScaledVector(dir, start), a.clone().addScaledVector(dir, Math.max(start, t - DOOR_HALF)), floorY, wallMat);
-            start = Math.min(len, t + DOOR_HALF);
-          }
-          wallSeg(a.clone().addScaledVector(dir, start), b, floorY, wallMat);
-        } else {
-          wallSeg(a, b, floorY, wallMat);
-        }
-      }
-      // EG ganz ohne Tür (Exits liegen alle im Inneren): Süd-Fallback
-      if (level === 0 && doorsCut === 0) {
-        const a = pts[southIdx], b = pts[(southIdx + 1) % pts.length];
-        // vorhandenes Wandstück des Fallback-Randes entfernen und neu mit Tür bauen
-        const idx = tile.outlineWalls.findIndex((w) =>
-          Math.abs(w.mid.x - (tile.center.x + (a.x + b.x) / 2)) < 1e-4 &&
-          Math.abs(w.mid.y - (tile.center.z + (a.y + b.y) / 2)) < 1e-4);
-        if (idx >= 0) {
-          const [w] = tile.outlineWalls.splice(idx, 1);
-          g.remove(w.mesh);
-          const len = a.distanceTo(b);
-          const dir = b.clone().sub(a).divideScalar(len);
-          const wm = w.mesh.material as THREE.Material;
-          wallSeg(a, a.clone().addScaledVector(dir, Math.max(0, len / 2 - DOOR_HALF)), 0, wm);
-          wallSeg(a.clone().addScaledVector(dir, Math.min(len, len / 2 + DOOR_HALF)), b, 0, wm);
-        }
-      }
-    }
-  }
-
-  // AV3D-12: Fahrstuhl (map3d.elevator) — verglaster Schacht mit Rahmen,
-  // Ebenen-Pads bündig zur Etagen-Platte, Kabine; die Zugangsseite (zur
-  // Gebäudemitte) bleibt offen. Alle Maße in REALEN Metern x Maßstab k,
-  // damit Client und Server-Vorschau identisch sind. Haltepunkte fürs
-  // Etagen-Routing.
-  const elev = loc.map3d?.elevator;
-  let elevSwitchPos: THREE.Vector3 | null = null;   // Ankerpunkt für den Etagen-Umschalter
-  if (elev?.length === 2 && usedLevels.size) {
-    const s = roomFigureScale(loc);            // Welt-Meter je Real-Meter
-    const half = 0.9 * s;                      // Schacht außen = 1,8 m real
-    const postT = Math.max(0.05, 0.14 * s);    // Rahmen-Säulen 0,14 m real
-    const exl = -LW / 2 + elev[0] * LW;
-    const ezl = -LD / 2 + elev[1] * LD;
-    const stopLevels = new Set([0, ...usedLevels]);
-    const maxLevel = Math.max(...stopLevels);
-    const topY = (maxLevel + 1) * storey + 0.08;
-    const frameMat = std({ color: 0x6d7681 });
-    const glassMat = std({ color: 0x9fc2d8, opacity: 0.22, roughness: 0.3 });
-    // Ecksäulen + Dach
-    for (const [px, pz] of [[-half, -half], [half, -half], [-half, half], [half, half]] as const) {
-      const post = box(postT, topY, postT, frameMat);
-      post.position.set(exl + px, topY / 2, ezl + pz);
-      post.receiveShadow = false;
-      g.add(post);
-    }
-    const cap = box(half * 2 + postT, 0.05, half * 2 + postT, frameMat);
-    cap.position.set(exl, topY + 0.025, ezl);
-    g.add(cap);
-    elevSwitchPos = new THREE.Vector3(exl, 0, ezl);   // XZ-Anker, Höhe folgt der Etage
-    // Glas auf drei Seiten — offen Richtung Gebäudemitte
-    const open = Math.abs(exl) > Math.abs(ezl) ? (exl > 0 ? 'nx' : 'px') : (ezl > 0 ? 'nz' : 'pz');
-    const paneLen = half * 2 - postT;
-    const panes: Record<string, [number, number, number, number]> = {
-      px: [0.03, paneLen, exl + half, ezl],
-      nx: [0.03, paneLen, exl - half, ezl],
-      pz: [paneLen, 0.03, exl, ezl + half],
-      nz: [paneLen, 0.03, exl, ezl - half],
-    };
-    for (const [key, [w, d, px, pz]] of Object.entries(panes)) {
-      if (key === open) continue;
-      const pane = new THREE.Mesh(new THREE.BoxGeometry(w, topY, d), glassMat);
-      pane.position.set(px, topY / 2, pz);
-      g.add(pane);
-    }
-    // Ebenen-Pads bündig mit der Etagen-Platte + Haltepunkte
-    tile.elevatorStops = new Map();
-    for (const level of stopLevels) {
-      const floorY = level * storey;
-      const pad = box(1.6 * s, 0.05, 1.6 * s, std({ color: 0xaab4be }));
-      pad.position.set(exl, floorY + 0.08, ezl);
-      pad.receiveShadow = false;
-      g.add(pad);
-      tile.elevatorStops.set(level, tile.center.clone().add(new THREE.Vector3(exl, floorY + 0.11, ezl)));
-    }
-    // Kabine (statisch im Erdgeschoss)
-    const cabW = 1.4 * s;
-    const cabH = Math.max(0.3, storey * 0.6);
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(cabW, cabH, cabW), std({ color: 0x3d4650, opacity: 0.85 }));
-    cab.position.set(exl, 0.11 + cabH / 2, ezl);
-    g.add(cab);
-  }
-
-  // Obergeschosse: Innenansicht bis zu größerer Kameradistanz halten
-  tile.interiorLift = (usedLevels.size ? Math.max(...usedLevels) : 0) * storey * 1.5;
-
-  // Etagen-Umschalter neben dem Label (nur bei mehreren Etagen; hängt an
-  // der Innenansicht und erscheint damit erst beim Reinzoomen)
-  if (usedLevels.size > 1) {
-    const el = document.createElement('div');
-    el.className = 'level-switch';
-    const sw = new CSS2DObject(el);
-    // am Fahrstuhl verankern (dort wechselt man die Etage; ohne Fahrstuhl
-    // nahe der Kachelmitte) — auf DECKENHÖHE der gewählten Etage, damit er
-    // beim Blick in die Etage im Bild bleibt statt über dem Dach zu schweben;
-    // beim Umschalten wandert er mit
-    const swAt = (lv: number) => {
-      const x = elevSwitchPos?.x ?? 2.2, z = elevSwitchPos?.z ?? 0;
-      sw.position.set(x, (lv + 2 / 3) * storey, z);
-    };
-    for (const lv of [...usedLevels].sort((a, b) => a - b)) {
-      const btn = document.createElement('button');
-      btn.textContent = lv === 0 ? 'EG' : `${lv}.`;
-      if (lv === tile.levelFilter) btn.classList.add('active');
-      btn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        tile.levelFilter = lv;
-        swAt(lv);
-        el.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
-      });
-      el.appendChild(btn);
-    }
-    swAt(tile.levelFilter);
-    g.add(sw);
-  }
-
-  tile.interior = g;
-  tile.group.add(g);
-}
-
-export interface BuildTileOpts {
-  /** Eingangs-/Exit-Marker (gelbe Punkte) zeigen — nur für die
-   *  Grundriss-Vorschau; im Spiel-Client bleiben sie aus. */
-  markers?: boolean;
-  /** true = die Location hat ein Szenen-Rezept (§ B1): die komplette
-   *  Innenansicht kommt aus dem Payload, buildInterior baut NICHTS
-   *  (keine Raum-Platten, kein Grundriss, kein Fahrstuhl, keine
-   *  Etagen-Auswahl). mountScene füllt danach dieselben Tile-Felder,
-   *  damit LOD, Fades, Fokus, Etagen-Umschalter und NPC-Platzierung
-   *  unverändert weiterlaufen. */
-  sceneMode?: boolean;
-}
-
-export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
+/** Die Kachel baut nur noch das ÄUSSERE: Boden, prozedurale Hülle, Deko,
+ *  Label, Auswahlring. Die Innenansicht (Platten, Wände, Fahrstuhl, Räume,
+ *  Modelle) kommt vollständig aus dem Szenen-Rezept und wird von
+ *  `mountScene` (sceneRecipe.ts) in dieselben Tile-Felder gebaut. Eine
+ *  Location ohne Rezept (404) hat per Server-Definition weder Raum-Layout
+ *  noch Grundriss noch Gebäudemodell — es gibt dort schlicht nichts
+ *  aufzuklappen. */
+export function buildTile(loc: WorldLocation): Tile {
   grassTex = grassTex ?? grassTexture();
   asphaltTex = asphaltTex ?? asphaltTexture();
   waterTex = waterTex ?? waterTexture();
@@ -1012,8 +633,6 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
       tile.decor = decor;
     }
     tile.height = style === 'forest' ? 3 : 0.6;
-    const spec: BuildingSpec = { w: 8, d: 8, h: 0, build() { /* Naturfläche */ } };
-    if (!opts.sceneMode) buildInterior(tile, spec, { walls: false, markers: opts.markers });
     addLabel();
   } else {
     // Sockel-Platte unter Gebäuden: deklariertes Terrain der Location
@@ -1044,7 +663,6 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     group.add(shell);
     tile.shell = shell;
     tile.height = spec.h;
-    if (!opts.sceneMode) buildInterior(tile, spec, { markers: opts.markers });
     addLabel();
   }
 
@@ -1053,137 +671,6 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
   return tile;
 }
 
-/** Server-Gebäudemodell (AV3D-9) einwechseln: ersetzt die prozedurale Hülle.
- *  Fürs Reinzoomen verhält sich das ganze Modell wie ein Dach — es blendet
- *  aus und gibt den Blick auf die Räume frei. */
-export function applyBuildingModel(tile: Tile, model: THREE.Group) {
-  if (tile.serverModel) return;
-  tile.serverModel = model;
-  // prozedurale Hülle ersetzen; Kacheln ohne Hülle (Naturflächen,
-  // Terrain-/Template-Kacheln wie der Wald) bekommen das Modell dazu
-  if (tile.shell) {
-    tile.group.remove(tile.shell);
-    tile.shell = undefined;
-  }
-  // prozedurale Deko (Bäume) weicht dem Servermodell
-  if (tile.decor) tile.decor.visible = false;
-
-  // Platzierungs-Kette exakt nach backend-note-scale-anchors.md (Antwort 3):
-  // 1. Meta-Rotations-Fix (bereits in der Normalisierung angewendet)
-  // 2. Karten-Yaw als eigene Rotation
-  const yawDeg = tile.loc.map3d?.rotation ?? tile.loc.map_rotation_2d ?? 0;
-  model.rotation.y = -THREE.MathUtils.degToRad(yawDeg);
-  model.updateMatrixWorld(true);
-  // 3. BBox des ROTIERTEN Ganzen messen -> k_xz (Kachel-Fit) und k_y
-  let box = new THREE.Box3().setFromObject(model);
-  let size = box.getSize(new THREE.Vector3());
-  // Vertrag (backend-note-scale-anchors.md): größte XZ-Seite der GEDREHTEN
-  // BBox = 10 m x 0,92 x size; size in ]0, 2], Werte > 1 ragen bewusst über
-  // die Kachel hinaus (rein visuell, Begehbarkeit unberührt) — nicht clampen,
-  // nicht an der Kachelgrenze clippen.
-  const frac = tile.loc.map3d?.size;
-  const sizeK = frac && frac > 0.05 && frac <= 2 ? frac : 1;
-  // Gebäude: uniform auf die größte Seite (Proportionen bleiben), mit dem
-  // 0,92-Sockelrand aus dem Vertrag. Terrain-/Template-Kacheln (Wald usw.):
-  // beide Achsen getrennt und OHNE Sockelrand füllen, damit Nachbar-Kacheln
-  // bei size=1 nahtlos aneinanderstoßen.
-  const fill = !tile.isBuilding;
-  const kUni = (CELL * 0.92 * sizeK) / Math.max(size.x, size.z, 1e-3);
-  const kX = fill ? (CELL * sizeK) / Math.max(size.x, 1e-3) : kUni;
-  const kZ = fill ? (CELL * sizeK) / Math.max(size.z, 1e-3) : kUni;
-  const kBaseY = fill ? Math.min(kX, kZ) : kUni;
-  const metaA = model.userData.meta as {
-    height_m?: number; offset_y?: number; offset_x?: number; offset_z?: number;
-  } | undefined;
-  const anchor = locationAnchors.get(tile.loc.id);
-  const kY = metaA?.height_m
-    ? (metaA.height_m * (anchor?.k ?? 1)) / Math.max(size.y, 1e-3)
-    : kBaseY;
-  // 4. Skalierung auf Welt-Achsen (XZ uniform bei Gebäuden -> kommutiert mit
-  //    dem Yaw). Kachel-Sicht startet mit Basis-Y; der Fade blendet auf k_y.
-  model.scale.set(kX, kBaseY, kZ);
-  model.userData.scaleBase = kBaseY;
-  model.userData.scaleYDetail = kY;
-  // 5. BBox des Ergebnisses -> Unterkante auf 0,06 + offset_y, XZ zentrieren;
-  //    offset_x/z (Nachtrag 2026-07-23) als LETZTER Schritt in Welt-Achsen
-  //    (+x = Ost, +z = Süd) — der Yaw dreht die Offsets nicht mit
-  model.updateMatrixWorld(true);
-  box = new THREE.Box3().setFromObject(model);
-  const center = box.getCenter(new THREE.Vector3());
-  model.position.x = -center.x + (metaA?.offset_x || 0);
-  model.position.z = -center.z + (metaA?.offset_z || 0);
-  model.position.y = -(box.min.y) + 0.06 + (metaA?.offset_y || 0);
-
-  // Fade-Verwaltung auf das Modell umziehen: Materialien pro Tile klonen
-  // (Vorlage wird geteilt) und als "Dach" registrieren.
-  tile.shellMats = [];
-  tile.roofMats = [];
-  tile.roofParts = [model];
-  tile.facadeMats = [];
-  model.traverse((o) => {
-    const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    if (Array.isArray(mesh.material)) {
-      mesh.material = mesh.material.map((m) => {
-        const c = m.clone();
-        c.transparent = true;
-        tile.roofMats.push(c as THREE.MeshStandardMaterial);
-        return c;
-      });
-    } else {
-      const c = mesh.material.clone();
-      c.transparent = true;
-      mesh.material = c;
-      tile.roofMats.push(c as THREE.MeshStandardMaterial);
-    }
-  });
-  tile.group.add(model);
-
-  const h = box.max.y - box.min.y;
-  tile.height = h;
-  tile.labelObj?.position.set(0, h + 2.2, 0);
-}
-
-/** Server-Raummodell (AV3D-2) auf seine Bodenplatte setzen. Das Modell ist
- *  auf Einheits-Grundfläche normalisiert und wird in den Raum eingepasst.
- *  Danach wird die begehbare Fläche abgetastet: Fußhöhe + freie Stellen. */
-export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
-  const slot = tile.roomSlots.get(roomId);
-  if (!slot || slot.holder.children.length) return;
-  const fp = (model.userData.footprint as { x: number; z: number }) ?? { x: 1, z: 1 };
-  // Raum-Rezept (backend-note-scale-anchors.md): Fit uniform an der
-  // UNROTIERTEN Box — kein Höhen-Deckel, die Höhe folgt den Proportionen
-  model.scale.setScalar(Math.min(slot.w / fp.x, slot.d / fp.z) * 0.96);
-  slot.holder.add(model);
-  slot.plate.visible = false;   // Platte nur als Platzhalter ohne Modell
-  // Neu-Erdung der ROTIERTEN Box (nach Meta-Fix + Layout-Yaw): Unterkante
-  // auf Etagenboden + 0,12 + model_offset_y (Welt-Meter), XZ-Zentrum auf den
-  // model_at-Anker (Fraktionen des Raum-Rechtecks; fehlt = Mitte) — Nachtrag
-  // 2026-07-24: beides kommt aus dem LAYOUT, das Sidecar-offset_y ist für
-  // Räume stillgelegt (Gebäude lesen weiter ihr Meta). Nach einem Kipp-Fix
-  // wandert min.y, ohne Neu-Erdung schwingt das Modell unter den Boden.
-  tile.group.updateMatrixWorld(true);
-  const lay = tile.loc.rooms.find((r) => r.id === roomId)?.layout;
-  const rbox = new THREE.Box3().setFromObject(model);
-  const rc = rbox.getCenter(new THREE.Vector3());
-  const hw = slot.holder.getWorldPosition(new THREE.Vector3());
-  const offY = lay?.model_offset_y ?? 0;
-  // Outdoor-Räume (always_visible) liegen auf dem TERRAIN — die Server-
-  // Vorschau setzt sie 0,05 höher (Geländeauflage) als Innenräume
-  const base = tile.alwaysVisibleRooms.has(roomId) ? 0.17 : 0.12;
-  const delta = new THREE.Vector3(
-    hw.x + ((lay?.model_at?.[0] ?? 0.5) - 0.5) * slot.w - rc.x,
-    hw.y + base + offY - rbox.min.y,
-    hw.z + ((lay?.model_at?.[1] ?? 0.5) - 0.5) * slot.d - rc.z
-  );
-  delta.applyQuaternion(slot.holder.getWorldQuaternion(new THREE.Quaternion()).invert());
-  model.position.add(delta);
-
-  // Begehbarkeit über Diorama UND (falls montiert) Rezept-Szene — die
-  // Gruppe heißt "recipe:<roomId>" (Konvention aus roomRecipe.ts)
-  const recipeG = tile.roomGroups.get(roomId)?.getObjectByName(`recipe:${roomId}`);
-  sampleRoomWalkables(tile, roomId, recipeG ? [model, recipeG] : model);
-}
 
 /** Begehbarkeit eines Raum-Aufbaus abtasten (Diorama-Modell ODER
  *  Rezept-Szene aus Hülle + Props): Raster von oben, 20. Perzentil =

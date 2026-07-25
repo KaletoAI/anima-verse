@@ -1,24 +1,15 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import type { ApiProp } from '../api';
-import { propModelUrl } from '../api';
-import { neutralizeGltfMaterials } from './buildings';
+import { neutralizeGltfMaterials } from './glbMaterials';
 
-// Prop-Assets (Raum-Rezept, Abschnitt 2b/2c): Bibliotheks-Cache, GLB-Loading,
-// Platzhalter. KEIN Orientierungs-Fix, NICHT skalieren, NICHT positionieren —
-// die Platzierungskette baut die Integration und erwartet hier rohe Meshes.
-
-const library = new Map<string, ApiProp>();
-
-/** Bibliothek setzen (einmalig beim Start aus getProps()). */
-export function setPropLibrary(list: ApiProp[]): void {
-  library.clear();
-  for (const p of list) if (p?.id) library.set(p.id, p);
-}
-
-export function propInfo(id: string): ApiProp | undefined {
-  return library.get(id);
-}
+// GLB-Ladewarteschlange für alle Modelle der Szene (Gebäude, Raum-Dioramen,
+// Props). Liefert ROHE Meshes: kein Orientierungs-Fix, keine Skalierung,
+// keine Position — all das steht in der Platzierungs-Spec und läuft durch
+// die eine place()-Routine (sceneRecipe.ts, Vertrag § B2).
+//
+// Eine Prop-BIBLIOTHEK gibt es hier nicht mehr: Maße und Orientierungs-Fix
+// eines Props kommen mit seiner Spec (`dims` → `max_m`, `fix_euler`), der
+// Client muss /assets/props nicht mehr kennen.
 
 const loader = new GLTFLoader();
 const loadCache = new Map<string, Promise<THREE.Group | null>>();
@@ -94,31 +85,3 @@ export function loadGlb(url: string, near?: THREE.Vector3): Promise<THREE.Group 
   return pending;
 }
 
-/** Prop-GLB über die Bibliotheks-URL (Legacy-Rezept-Pfad). */
-export function loadPropModel(id: string, near?: THREE.Vector3): Promise<THREE.Group | null> {
-  return loadGlb(propModelUrl(id), near);
-}
-
-/** Platzhalter für missing / has_model:false — Box in Realgröße dims × k,
- *  halbtransparent neutral-grau, Ursprung = ZENTRUM DER UNTERKANTE
- *  (die Integration setzt ihn direkt auf den Platzierungspunkt). */
-export function buildPropPlaceholder(
-  dims: { width_m: number; depth_m: number; height_m: number },
-  k: number
-): THREE.Object3D {
-  const w = Math.max(dims.width_m * k, 0.01);
-  const h = Math.max(dims.height_m * k, 0.01);
-  const d = Math.max(dims.depth_m * k, 0.01);
-  const geo = new THREE.BoxGeometry(w, h, d);
-  geo.translate(0, h / 2, 0);   // Ursprung an das Zentrum der Unterkante legen
-  const mesh = new THREE.Mesh(
-    geo,
-    new THREE.MeshStandardMaterial({
-      color: 0x9a9a9a, roughness: 0.9, metalness: 0.0,
-      transparent: true, opacity: 0.5,
-    })
-  );
-  mesh.castShadow = false;
-  mesh.receiveShadow = true;
-  return mesh;
-}

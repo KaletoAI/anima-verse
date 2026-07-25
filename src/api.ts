@@ -1,4 +1,4 @@
-import type { AtLocationChar, AuthUser, RoomMarker, WorldLocation, WorldMap } from './types';
+import type { AtLocationChar, AuthUser, WorldLocation, WorldMap } from './types';
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -113,162 +113,6 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
   };
 }
 
-export interface ApiLocationModel extends ApiModelAnchors {
-  url: string;
-  format: string;
-}
-
-/** Gebäude-Modell einer Location (AV3D-9); null wenn der Server keins hat
- *  (404 ist der Normalfall — prozedurales Gebäude bleibt). Andere Fehler
- *  werfen, der Aufrufer versucht es später erneut. */
-export async function getLocationModel(locationId: string): Promise<ApiLocationModel | null> {
-  const res = await fetch(`/play/locations/${encodeURIComponent(locationId)}/model/meta`);
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`location model ${locationId}: HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data?.url) return null;
-  return {
-    url: data.url, format: data.format ?? 'glb',
-    rotation: data.rotation, offset_y: data.offset_y,
-    offset_x: data.offset_x, offset_z: data.offset_z,
-    height_m: data.height_m, floors: data.floors, signature: data.signature,
-  };
-}
-
-export interface ApiRoomModel extends ApiModelAnchors {
-  url: string;
-  format: string;
-}
-
-/** 3D-Modell eines Raums (AV3D-2); null wenn keins da ist (404 = Normalfall). */
-export async function getRoomModel(roomId: string): Promise<ApiRoomModel | null> {
-  const res = await fetch(`/play/rooms/${encodeURIComponent(roomId)}/model/meta`);
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`room model ${roomId}: HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data?.url) return null;
-  return {
-    url: data.url, format: data.format ?? 'glb',
-    rotation: data.rotation, offset_y: data.offset_y,
-    width_m: data.width_m, signature: data.signature,
-  };
-}
-
-// --- Raum-Rezept & Prop-Bibliothek (Raum-Props) ------------------------------
-
-export interface ApiProp {
-  id: string;
-  name: string;
-  category?: string;
-  /** REALE Maße in Metern, NACH dem Orientierungs-Fix (x=width, y=height, z=depth) */
-  width_m: number;
-  depth_m: number;
-  height_m: number;
-  /** Orientierungs-Fix in Grad (Euler 'XYZ', wie bei den Raum-Modellen) */
-  rotation?: { x?: number; y?: number; z?: number };
-  tags?: string[];
-  marker_count?: number;
-  has_model: boolean;
-}
-
-/** Prop-Bibliothek; BARE ARRAY vom Server, leer = Normalzustand.
- *  Fehler/nicht verfügbar → []. */
-export async function getProps(): Promise<ApiProp[]> {
-  try {
-    const res = await fetch('/assets/props');
-    if (!res.ok) return [];
-    const data = await res.json();
-    const list = Array.isArray(data) ? data : data.props ?? [];
-    return list.filter((p: ApiProp) => p?.id);
-  } catch {
-    return [];
-  }
-}
-
-export function propModelUrl(id: string): string {
-  return `/assets/props/${encodeURIComponent(id)}/model`;
-}
-
-export interface ApiOpening {
-  edge: number;            // Kanten-INDEX in outline (Kante i = Punkt i -> i+1)
-  at: number;              // 0..1 ENTLANG der gerichteten Kante (Öffnungs-Mitte)
-  width_m: number;
-  height_m: number;
-  sill_m: number;          // reale Meter
-  type: string;            // "window" | "door" | "passage" (offen)
-  to?: string;
-  prop_id?: string;
-  /** vom Nachbarraum gespiegelte Öffnung (rein informativ; Kante/at sind
-   *  bereits auf diesen Raum umgerechnet -> exakt wie eigene behandeln) */
-  mirrored?: boolean;
-}
-
-export interface ApiPlacement {
-  prop_id: string;
-  at: [number, number];    // Fraktionen des 8x8-Referenzquadrats
-  yaw: number;             // Grad, im Uhrzeigersinn (Draufsicht)
-  offset_y: number;        // reale Meter
-  dims: { width_m: number; depth_m: number; height_m: number };
-  has_model: boolean;
-  model_url?: string;
-  missing?: boolean;
-}
-
-export interface ApiPropMarker {
-  placement: number;       // Index in placements
-  animation: string;
-  offset_m: [number, number]; // Meter relativ zum Platzierungspunkt (dx, dz)
-  height_m: number;        // Meter ÜBER dem Etagenboden
-  facing?: number;         // Grad, Welt-Kompass (0=S/90=E/180=N/270=W)
-}
-
-export interface ApiRoomRecipe {
-  room_id: string;
-  level: number;
-  rotation?: number;       // Modell-Yaw wie gehabt
-  outline: [number, number][];   // absolute Fraktionen 8x8, im Uhrzeigersinn
-  surfaces?: { floor?: string; wall?: string };   // Surface-Texture-Kinds
-  openings?: ApiOpening[];
-  exit?: [number, number];
-  /** exit wurde aus einer Tür/Passage abgeleitet (layout.exit fehlt) */
-  exit_derived?: boolean;
-  markers?: RoomMarker[];        // bestehendes Vokabular aus types.ts
-  placements?: ApiPlacement[];
-  prop_markers?: ApiPropMarker[];
-  /** Outdoor-Raum (§2e): keine Hüllen-Wände, keine Bodenplatten-Geometrie —
-   *  nur die Boden-Textur flach auf dem Untergrund */
-  always_visible?: boolean;
-  signature: string;             // md5, ändert sich bei Layout- UND Prop-Änderungen
-}
-
-/** Raum-Rezept; 404 = Raum ohne Layout (null), andere Fehler werfen.
- *  Optionale Felder werden durchgereicht; nur outline auf gültige
- *  [x, y]-Paare gefiltert (defensiv wie bei map3d.outline im Bestand). */
-export async function getRoomRecipe(roomId: string): Promise<ApiRoomRecipe | null> {
-  const res = await fetch(`/play/rooms/${encodeURIComponent(roomId)}/recipe`);
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`room recipe ${roomId}: HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data) return null;
-  const outline = (Array.isArray(data.outline) ? data.outline : []).filter(
-    (p: unknown): p is [number, number] =>
-      Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number'
-  );
-  return {
-    room_id: data.room_id,
-    level: data.level ?? 0,
-    rotation: data.rotation,
-    outline,
-    surfaces: data.surfaces,
-    openings: data.openings,
-    exit: data.exit,
-    markers: data.markers,
-    placements: data.placements,
-    prop_markers: data.prop_markers,
-    always_visible: data.always_visible,
-    signature: data.signature ?? '',
-  };
-}
 
 // --- Szenen-Rezept (schnittstellen-3d.md Teil B) ------------------------------
 // Der Server komponiert die GANZE Szene einer Location; der Client stellt sie
@@ -374,6 +218,22 @@ export interface SceneStyle {
   elevator_cabin_color?: string;
   elevator_cabin_opacity?: number;
   elevator_glass_opacity?: number;
+}
+
+/** Öffnung einer Raumkante in PLAN-FRAKTIONEN. Im 3D-Client rein
+ *  informativ: die Wände kommen bereits um jede Öffnung geteilt als
+ *  `walls` — hier wird nichts mehr aufgeteilt oder gespiegelt. */
+export interface ApiOpening {
+  edge: number;            // Kanten-INDEX in outline (Kante i = Punkt i -> i+1)
+  at: number;              // 0..1 ENTLANG der gerichteten Kante (Öffnungs-Mitte)
+  width_m: number;
+  height_m: number;
+  sill_m: number;
+  type: string;            // "window" | "door" | "passage" (offen)
+  to?: string;
+  prop_id?: string;
+  /** vom Nachbarraum gespiegelte Öffnung (rein informativ) */
+  mirrored?: boolean;
 }
 
 /** Raum-Vokabular in PLAN-FRAKTIONEN — was der 2D-Editor zum ZEICHNEN
