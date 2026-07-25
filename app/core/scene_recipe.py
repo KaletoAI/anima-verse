@@ -816,9 +816,26 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         models.extend(_prop_models(recipe, storey, k))
         markers.extend(_markers(recipe, room, storey, k))
 
+    # Per-room recipe vocabulary in PLAN FRACTIONS — the 2D editor's ghost
+    # openings and derived-exit dot draw from here instead of re-deriving
+    # mirroring/exit locally (v4: no geometry twice). Pure pass-through of
+    # the room recipe: openings are already normalized AND mirrored in,
+    # ``exit`` keeps the recipe's dual frame (explicit = room-rect fraction,
+    # derived = absolute plate fraction, flagged by ``exit_derived``).
+    room_blocks = [{
+        "room_id": r.get("room_id") or "",
+        "level": int(r.get("level") or 0),
+        "always_visible": bool(r.get("always_visible")),
+        "outline": r.get("outline") or [],
+        "openings": r.get("openings") or [],
+        "exit": r.get("exit"),
+        "exit_derived": bool(r.get("exit_derived")),
+    } for r in recipes]
+
     return {
         "signature": _signature(location, plan_width_m, recipes,
                                 building_meta, room_metas),
+        "rooms": room_blocks,
         "k": _r(k, 6),
         "storey_m": _r(storey),
         "levels": [{"level": lv, "floor_y": _r(lv * storey)} for lv in levels],
