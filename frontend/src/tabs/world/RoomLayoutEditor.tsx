@@ -71,8 +71,6 @@ interface RoomLayoutEditorProps {
   onChange: (rooms: Room[]) => void
   /** Location id — the building-underlay + auto plan width need its model. */
   locationId?: string
-  /** 2D icon rotation: yaw fallback for the building underlay. */
-  fallbackYawDeg?: number
   /** Location map3d draft — the editor draws/edits the building outline and
    *  the elevator position (AV3D-12) in it. */
   map3d?: Map3D
@@ -106,7 +104,7 @@ type DragState =
 /** Real prop dims for true-size footprints — lean mirror of /world/props. */
 interface PropDims { name: string; width_m: number; depth_m: number; height_m: number }
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -266,9 +264,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     new Set(rooms.filter((r) => r.layout).map((r) => r.layout!.level || 0)),
   ).sort((a, b) => a - b)
 
-  // Re-render the underlay (debounced — drags update per pointermove) when
-  // the level or any placed geometry changes. Alignment comes for free: the
-  // snapshot places models with the same layout fractions as the rectangles.
+  // Re-render the underlay (debounced — drags update per pointermove)
+  // whenever the SERVER's scene payload changes: the snapshot places models
+  // from the same specs as the 3D preview, so both match by construction.
   const geomKey = JSON.stringify(rooms.filter((r) => r.layout).map((r) => [
     r.id, r.layout!.level || 0, r.layout!.x, r.layout!.y, r.layout!.w,
     r.layout!.d, r.layout!.rotation || 0,
@@ -278,20 +276,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
       setUnderlayUrl('')
       return
     }
+    if (!scene) return   // payload pending — keep the last underlay
     const tid = setTimeout(() => {
       renderTopDownSnapshot({
-        rooms: roomsRef.current, level, includeRooms: underlay,
-        building: bUnderlay && locationId
-          ? { locationId, map3d, fallbackYawDeg }
-          : undefined,
+        models: scene.models || [], level, includeRooms: underlay,
+        buildingId: bUnderlay && locationId ? locationId : undefined,
       })
         .then((url) => setUnderlayUrl(url || ''))
         .catch(() => setUnderlayUrl(''))
     }, 350)
     return () => clearTimeout(tid)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [underlay, bUnderlay, level, geomKey, locationId, fallbackYawDeg,
-      map3d?.rotation, map3d?.size])
+  }, [underlay, bUnderlay, level, locationId, scene])
 
   // Anchored mode (map3d.plan_width_m set): room-rectangle sizes DERIVE
   // from the models' declared real width — long side = width_m /

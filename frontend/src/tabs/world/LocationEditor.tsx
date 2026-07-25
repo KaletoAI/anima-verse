@@ -541,7 +541,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           rooms={draft.rooms || []}
           onChange={(rooms) => upd('rooms', rooms)}
           locationId={location.id}
-          fallbackYawDeg={location.map_rotation_2d || 0}
           map3d={draft.map3d}
           onMap3d={updMap3d}
           onSelectRoom={setFloorRoomSel}

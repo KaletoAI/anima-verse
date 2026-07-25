@@ -223,6 +223,11 @@ export interface SceneStyle {
   upper_wall_opacity: number
   upper_floor_opacity: number
   room_palette: string[]
+  elevator_frame_color: string
+  elevator_pad_color: string
+  elevator_cabin_color: string
+  elevator_cabin_opacity: number
+  elevator_glass_opacity: number
 }
 
 /** Per-room recipe vocabulary in PLAN FRACTIONS — what the 2D editor needs

@@ -3,8 +3,13 @@
  * above (orthographic, exactly covering the contract's 8×8 m reference
  * square) and returns the image as a data URL. The floor-plan editor lays it
  * BEHIND the room rectangles, so markers can be dropped on actual furniture.
- * Placement follows the contract chain (schnittstellen-3d.md → placement
- * semantics), so the underlay lines up with what the game client renders.
+ *
+ * Placement comes from the SERVER's scene payload (`models` specs, contract
+ * § B1/B2) through the same shared place() routine as the 3D preview — the
+ * underlay therefore matches the preview by construction (finding
+ * 2026-07-25: a local legacy fit chain here made the underlay diorama
+ * smaller than the preview's real-size one). This module only loads meshes
+ * and points the camera.
  *
  * Models are cached per room id (shared promise — a re-render never
  * re-downloads); the WebGL context is created per snapshot and released
@@ -12,7 +17,8 @@
  */
 import { apiGet } from '../../lib/api'
 import type { Mesh, Object3D } from 'three'
-import type { Map3D, Room } from './worldTypes'
+import type { SceneModelSpec } from './worldTypes'
+import { placeModelSpec } from './scenePlace'
 
 const PLATE_M = 8
 
@@ -142,26 +148,27 @@ export async function getRoomModelDims(roomId: string):
 }
 
 export async function renderTopDownSnapshot(opts: {
-  rooms: Room[]
+  /** The scene payload's `models` specs — the SERVER's placement truth. */
+  models: SceneModelSpec[]
   level: number
   width?: number
   /** Render the room models (the "Models behind the plan" layer). */
   includeRooms?: boolean
-  /** Also render the location's BUILDING model (ghosted, plan-fit + yaw
-   *  chain) — for tracing the outline polygon over the real footprint. */
-  building?: { locationId: string; map3d?: Map3D; fallbackYawDeg?: number }
+  /** Also render the location's BUILDING model (ghosted, per its tile_fit
+   *  spec) — for tracing the outline polygon over the real footprint. */
+  buildingId?: string
 }): Promise<string | null> {
-  const { rooms, level, width = 840, includeRooms = true, building } = opts
-  const placed = includeRooms
-    ? rooms.filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
+  const { models, level, width = 840, includeRooms = true, buildingId } = opts
+  const roomSpecs = includeRooms
+    ? models.filter((m) => m.role === 'room' && m.level === level)
     : []
-  const bModel = building ? await loadBuildingModel(building.locationId) : null
-  if (!placed.length && !bModel) return null
-  const entries = await Promise.all(placed.map((r) => loadRoomModel(r.id!)))
+  const bSpec = buildingId ? models.find((m) => m.role === 'building') : undefined
+  const bModel = bSpec && buildingId ? await loadBuildingModel(buildingId) : null
+  if (!roomSpecs.length && !bModel) return null
+  const entries = await Promise.all(roomSpecs.map((s) => loadRoomModel(s.id)))
   if (!entries.some(Boolean) && !bModel) return null
 
   const THREE = await import('three')
-  const deg = (v?: number) => ((v || 0) * Math.PI) / 180
   const scene = new THREE.Scene()
   scene.background = null
   // Bright, even light — the underlay is a reference image, not a staging.
@@ -170,9 +177,7 @@ export async function renderTopDownSnapshot(opts: {
 
   // Building layer first, half-transparent — the roof view IS the real
   // footprint to trace the outline over; rooms stay readable through it.
-  if (bModel && building) {
-    const m3 = building.map3d
-    const holder = new THREE.Group()
+  if (bModel && bSpec) {
     const clone = bModel.obj.clone(true)
     clone.traverse((o: Object3D) => {
       const mesh = o as Mesh
@@ -184,69 +189,17 @@ export async function renderTopDownSnapshot(opts: {
         transparent: true, opacity: 0.55, depthWrite: false,
       })
     })
-    const metaG = new THREE.Group()
-    metaG.add(clone)
-    metaG.rotation.set(deg(bModel.rotation.x), deg(bModel.rotation.y),
-                       deg(bModel.rotation.z))
-    holder.add(metaG)
-    const mapYaw = m3?.rotation !== undefined
-      ? m3.rotation : (building.fallbackYawDeg || 0)
-    holder.rotation.y = -deg(mapYaw)
-    holder.updateMatrixWorld(true)
-    const br = new THREE.Box3().setFromObject(holder)
-    const sr = br.getSize(new THREE.Vector3())
-    const kxz = (10 * 0.92 * (m3?.size || 0.92)) / (Math.max(sr.x, sr.z) || 1)
-    holder.scale.setScalar(kxz)
-    holder.updateMatrixWorld(true)
-    const b2 = new THREE.Box3().setFromObject(holder)
-    const c2 = b2.getCenter(new THREE.Vector3())
-    holder.position.set(-c2.x + (bModel.offsetX || 0),
-                        -b2.min.y - (b2.max.y - b2.min.y) - 0.5,
-                        -c2.z + (bModel.offsetZ || 0))
-    scene.add(holder)
+    const g = placeModelSpec(THREE, clone, bSpec)
+    // Sink the roof view below the room layer so rooms draw over it.
+    const b = new THREE.Box3().setFromObject(g)
+    g.position.y -= b.max.y + 0.5
+    scene.add(g)
   }
 
-  placed.forEach((room, idx) => {
+  roomSpecs.forEach((spec, idx) => {
     const entry = entries[idx]
-    const lay = room.layout
-    if (!entry || !lay) return
-    const w = lay.w * PLATE_M
-    const d = lay.d * PLATE_M
-    // Contract chain: normalize to unit footprint, fit × 0.96 (unrotated),
-    // then meta rotation + layout yaw; top-down ignores heights.
-    const norm = new THREE.Group()
-    norm.add(entry.obj.clone(true))
-    norm.updateMatrixWorld(true)
-    const b0 = new THREE.Box3().setFromObject(norm)
-    const s0 = b0.getSize(new THREE.Vector3())
-    const unit = 1 / (Math.max(s0.x, s0.z) || 1)
-    const fpX = s0.x * unit
-    const fpZ = s0.z * unit
-    norm.scale.setScalar(unit)
-    norm.updateMatrixWorld(true)
-    const b1 = new THREE.Box3().setFromObject(norm)
-    const c1 = b1.getCenter(new THREE.Vector3())
-    norm.position.set(-c1.x, -b1.min.y, -c1.z)
-    const fit = new THREE.Group()
-    fit.add(norm)
-    fit.scale.setScalar(Math.min(w / (fpX || 1), d / (fpZ || 1)) * 0.96)
-    // Contract order: meta rotation fix first (inner), THEN the layout yaw
-    // as its own parent — one combined Euler drifts once an x/z fix is set.
-    const holder = new THREE.Group()
-    holder.add(fit)
-    holder.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y),
-                        deg(entry.rotation.z))
-    const yawG = new THREE.Group()
-    yawG.add(holder)
-    yawG.rotation.y = -deg(lay.rotation)
-    yawG.updateMatrixWorld(true)
-    const b2 = new THREE.Box3().setFromObject(yawG)
-    const c2 = b2.getCenter(new THREE.Vector3())
-    // Plan-placed diorama anchor (layout.model_at, default = centred).
-    const mAt = lay.model_at || [0.5, 0.5]
-    yawG.position.set((lay.x + mAt[0] * lay.w - 0.5) * PLATE_M - c2.x, -b2.min.y,
-                      (lay.y + mAt[1] * lay.d - 0.5) * PLATE_M - c2.z)
-    scene.add(yawG)
+    if (!entry) return
+    scene.add(placeModelSpec(THREE, entry.obj, spec))
   })
 
   // Straight down, up = -Z: image top = plan top, image left = plan left —

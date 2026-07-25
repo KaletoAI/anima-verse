@@ -24,6 +24,7 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
+import { placeModelSpec } from './scenePlace'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 
@@ -32,9 +33,6 @@ import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 // scene payload.
 const PLATE_M = 8
 const DEFAULT_LEVEL_M = 3
-// The ONE geometry number that stays on this side: contract § B2 puts the
-// 0.96 fit margin into the client's place() routine (fit_box fallback).
-const FIT_BOX_MARGIN = 0.96
 // Verify tolerance in world metres (contract § B5a).
 const VERIFY_EPS = 0.01
 
@@ -48,16 +46,13 @@ interface VerifyRow {
 }
 // Preview AIDS — deliberately NOT part of the scene style (which covers
 // walls, floors, glass and the room palette): these paint things only the
-// admin preview shows. Elevator metal has no colour in the contract yet.
+// admin preview shows. Elevator colours come from the payload's style block.
 const AID = {
   exit: 0xe0a356,
   marker: 0x3fb950,
   markerLabel: '#7ee2a0',
   placeholder: 0xd29922,
   figure: 0x8b949e,
-  elevatorMetal: 0x6d7681,
-  elevatorPad: 0xaab4be,
-  elevatorCabin: 0x3d4650,
   ruler: 0xc9d1d9,
 }
 
@@ -495,49 +490,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // combined into one Euler, an x/z fix would tilt with it) → measure the
     // result and seat its BBox on bottom_y / anchor.
     const placeSpec = (source: Object3D, spec: SceneModelSpec): Object3D => {
-      const fix = new THREE.Group()
-      fix.add(source.clone(true))
-      fix.rotation.set(deg(spec.fix_euler?.x), deg(spec.fix_euler?.y),
-                       deg(spec.fix_euler?.z))
-      fix.updateMatrixWorld(true)
-      const sFix = new THREE.Box3().setFromObject(fix).getSize(new THREE.Vector3())
-
-      const yawG = new THREE.Group()
-      yawG.add(fix)
-      yawG.rotation.y = -deg(spec.yaw_deg)
-      yawG.updateMatrixWorld(true)
-      const sYaw = new THREE.Box3().setFromObject(yawG).getSize(new THREE.Vector3())
-
-      const outer = new THREE.Group()
-      outer.add(yawG)
-      if (spec.scale_axes) {
-        // Server-measured mesh: the factors come ready (contract § B4).
-        outer.scale.set(spec.scale_axes.xz, spec.scale_axes.y, spec.scale_axes.xz)
-      } else if (spec.scale_mode === 'tile_fit') {
-        // Buildings fill their tile per AXIS, measured on the ROTATED box:
-        // the footprint follows the plan, the height its declared metres.
-        const kxz = (spec.box?.xz || 1) / (Math.max(sYaw.x, sYaw.z) || 1)
-        const ky = spec.box?.y ? spec.box.y / (sYaw.y || 1) : kxz
-        outer.scale.set(kxz, ky, kxz)
-      } else if (spec.scale_mode === 'real_size') {
-        // ONE law of scale: real metres over the largest measured extent.
-        // measure_axes 'xz' ignores the height (dioramas, § B2a).
-        const maxExtent = (spec.measure_axes === 'xz'
-          ? Math.max(sFix.x, sFix.z)
-          : Math.max(sFix.x, sFix.y, sFix.z)) || 1
-        outer.scale.setScalar((spec.max_m || 1) / maxExtent)
-      } else {
-        // fit_box fallback: fit the UNROTATED footprint into the target box.
-        outer.scale.setScalar(Math.min((spec.box?.w || 1) / (sFix.x || 1),
-                                       (spec.box?.d || 1) / (sFix.z || 1))
-                              * FIT_BOX_MARGIN)
-      }
-      outer.updateMatrixWorld(true)
-      const bOut = new THREE.Box3().setFromObject(outer)
-      const cOut = bOut.getCenter(new THREE.Vector3())
-      outer.position.set(spec.anchor[0] - cOut.x,
-                         spec.bottom_y - bOut.min.y,
-                         spec.anchor[1] - cOut.z)
+      const outer = placeModelSpec(THREE, source, spec)
       outer.userData.__noDispose = true
       boxes.add(outer)
       if (verifyRef.current) verifyPlacement(outer, spec)
@@ -1073,13 +1026,17 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         const glass = extra.kind.endsWith('_glass')
         const mat = glass
           ? new THREE.MeshStandardMaterial({
-              color: glassColor, transparent: true, opacity: glassOpacity })
+              color: glassColor, transparent: true,
+              opacity: sc.style.elevator_glass_opacity })
           : new THREE.MeshStandardMaterial({
-              color: extra.kind === 'elevator_pad' ? AID.elevatorPad
-                : extra.kind === 'elevator_cabin' ? AID.elevatorCabin
-                  : AID.elevatorMetal,
+              color: hex(extra.kind === 'elevator_pad'
+                ? sc.style.elevator_pad_color
+                : extra.kind === 'elevator_cabin'
+                  ? sc.style.elevator_cabin_color
+                  : sc.style.elevator_frame_color, 0x6d7681),
               transparent: extra.kind === 'elevator_cabin',
-              opacity: extra.kind === 'elevator_cabin' ? 0.85 : 1 })
+              opacity: extra.kind === 'elevator_cabin'
+                ? sc.style.elevator_cabin_opacity : 1 })
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(extra.size[0], extra.size[1], extra.size[2]), mat)
         mesh.position.set(extra.center[0], extra.center[1], extra.center[2])
