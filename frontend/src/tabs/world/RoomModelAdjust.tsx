@@ -1,10 +1,13 @@
 /**
  * RoomModelAdjust — compact adjustment strip for the SELECTED room's active
  * 3D model on the location's Floor-plan tab (AV3D-10 addendum): orientation
- * fix (↻ 90° per axis) + height offset in metres, persisted immediately on
- * the model's sidecar — no window switching while dialing a room in. The
- * full model management (list/select/upload) stays in the room editor's
- * 3D tab; the built-in preview re-reads the meta on its next model load.
+ * fix (↻ 90° per axis) plus the two CALIBRATION anchors of the diorama —
+ * its real width (which now sets the whole room's scale, § B2a) and the
+ * walkable floor height a figure stands at. Both persist immediately on the
+ * model's sidecar; the 🧍 toggle puts the fixed 1.70 m reference figure into
+ * the room so they can be dialed against something. The height OFFSET is not
+ * here — for rooms it lives in the plan (layout.model_offset_y). Full model
+ * management (list/select/upload) stays in the room editor's 3D tab.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -15,7 +18,6 @@ import { notifyModel3dChanged } from './topDownSnapshot'
 interface ActiveModel {
   filename: string
   rotation?: { x?: number; y?: number; z?: number }
-  offset_y?: number
   /** Real-world width estimate of the room's largest side (metres) —
    *  figures in the room derive their scale from it. */
   width_m?: number
@@ -23,21 +25,25 @@ interface ActiveModel {
 }
 
 export function RoomModelAdjust({ locationId, roomId, roomName,
-                                  calibration = false, onCalibration }: {
+                                  calibration = false, onCalibration,
+                                  walkY }: {
   locationId: string
   roomId: string
   roomName: string
   /** Calibration figure showing in the 3D preview for THIS room. */
   calibration?: boolean
   onCalibration?: (on: boolean) => void
+  /** Current walkable floor height (metres above the diorama's lower edge),
+   *  read back from the scene payload; undefined = not declared. */
+  walkY?: number
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = `${encodeURIComponent(locationId)}/rooms/${encodeURIComponent(roomId)}`
   const [model, setModel] = useState<ActiveModel | null>(null)
   const [loaded, setLoaded] = useState(false)
-  const [offsetDraft, setOffsetDraft] = useState('0')
   const [widthDraft, setWidthDraft] = useState('')
+  const [walkDraft, setWalkDraft] = useState('')
 
   useEffect(() => {
     let stale = false
@@ -48,7 +54,6 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
         if (stale) return
         const active = (d.models || []).find((m) => m.active) || (d.models || [])[0] || null
         setModel(active)
-        setOffsetDraft(String(active?.offset_y ?? 0))
         setWidthDraft(active?.width_m ? String(active.width_m) : '')
         setLoaded(true)
       })
@@ -111,23 +116,30 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
     }
   }, [model, widthDraft, enc, roomId, t, toast])
 
-  const commitOffset = useCallback(async () => {
+  // Walkable floor height: what the scene payload says, unless the admin is
+  // typing. Empty input = remove the value (0 is a MEANINGFUL height here).
+  useEffect(() => {
+    setWalkDraft(walkY === undefined ? '' : String(walkY))
+  }, [walkY, roomId])
+
+  const commitWalkY = useCallback(async () => {
     if (!model) return
-    const v = parseFloat(offsetDraft)
-    if (!Number.isFinite(v) || v === (model.offset_y ?? 0)) {
-      setOffsetDraft(String(model.offset_y ?? 0))
+    const raw = walkDraft.trim()
+    const v = raw === '' ? null : parseFloat(raw)
+    if (v !== null && !Number.isFinite(v)) {
+      setWalkDraft(walkY === undefined ? '' : String(walkY))
       return
     }
+    if ((v ?? undefined) === walkY) return
     try {
-      const d = await apiPost<{ meta: { offset_y?: number } }>(
-        `/world/locations/${enc}/model3d/offset`,
-        { offset_y: v, file: model.filename })
-      setModel((prev) => (prev ? { ...prev, offset_y: d.meta?.offset_y || 0 } : prev))
+      await apiPost<{ meta: { walk_y?: number } }>(
+        `/world/locations/${enc}/model3d/walk_y`,
+        { walk_y: v, file: model.filename })
       notifyModel3dChanged({ roomId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [model, offsetDraft, enc, roomId, t, toast])
+  }, [model, walkDraft, walkY, enc, roomId, t, toast])
 
   if (!loaded) return null
   if (!model) {
@@ -167,19 +179,6 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
           />
         </span>
       ))}
-      <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
-        {t('Height offset (m)')}
-        <input
-          className="ga-input"
-          type="number"
-          step={0.05}
-          style={{ width: 90 }}
-          value={offsetDraft}
-          onChange={(e) => setOffsetDraft(e.target.value)}
-          onBlur={() => { void commitOffset() }}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-        />
-      </label>
       <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
         title={t('Real-world width of the room (largest side). Calibrate it against the reference figure instead of estimating: the diorama scales by this value like a prop does, so furniture, props and NPCs in the room share ONE scale. The room rectangle no longer affects it.')}>
         {t('Room width (m)')}
@@ -194,6 +193,23 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
           placeholder="—"
           onChange={(e) => setWidthDraft(e.target.value)}
           onBlur={() => { void commitWidth() }}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        />
+      </label>
+      <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+        title={t('Walkable floor height (m): how high above the model’s lower edge a figure actually stands — modelled floors (a podium, a sunken lounge, a hole in the mesh) cannot be measured from outside. Dial it until the calibration figure stands on the visible floor. Empty = undeclared, 0 = the lower edge itself.')}>
+        {t('Walkable floor (m)')}
+        <input
+          className="ga-input"
+          type="number"
+          min={0}
+          max={5}
+          step={0.05}
+          style={{ width: 82 }}
+          value={walkDraft}
+          placeholder="—"
+          onChange={(e) => setWalkDraft(e.target.value)}
+          onBlur={() => { void commitWalkY() }}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
         />
       </label>

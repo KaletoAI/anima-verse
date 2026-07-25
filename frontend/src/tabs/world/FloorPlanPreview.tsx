@@ -35,6 +35,17 @@ const DEFAULT_LEVEL_M = 3
 // The ONE geometry number that stays on this side: contract § B2 puts the
 // 0.96 fit margin into the client's place() routine (fit_box fallback).
 const FIT_BOX_MARGIN = 0.96
+// Verify tolerance in world metres (contract § B5a).
+const VERIFY_EPS = 0.01
+
+/** One measured-vs-specified number of the verify pass (§ B5a). */
+interface VerifyRow {
+  object: string
+  field: string
+  actual: number
+  target: number
+  delta: number
+}
 // Preview AIDS — deliberately NOT part of the scene style (which covers
 // walls, floors, glass and the room palette): these paint things only the
 // admin preview shows. Elevator metal has no colour in the contract yet.
@@ -118,6 +129,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // storey (rooms, plates, walls, figures) — the ruler and the building
   // overlay stay, the elevator shaft only shows with all levels visible.
   const [soloLevel, setSoloLevel] = useState<number | null>(null)
+  // Verify mode (contract § B5a): arithmetic instead of screenshots — after
+  // every rebuild the placed objects are re-measured and diffed against the
+  // spec they were built from.
+  const [verify, setVerify] = useState(false)
+  const verifyRef = useRef(verify)
+  verifyRef.current = verify
+  const [verifyReport, setVerifyReport] = useState<{
+    checked: number; rows: VerifyRow[] } | null>(null)
   // Model-load completion re-triggers the rebuild (loads are async, the
   // rebuild itself is synchronous against the cache).
   const [bump, setBump] = useState(0)
@@ -400,6 +419,44 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       return Number.isFinite(v) ? v : fallback
     }
     const visibleLevel = (lv: number) => solo === null || lv === solo
+
+    // ── Verify (contract § B5a): arithmetic instead of screenshots ──────
+    // The scene recipe is the TARGET. After building, every object is
+    // re-measured in world space and diffed against the spec it came from;
+    // findings travel between sessions as numbers, never as pictures.
+    const verifyRows: VerifyRow[] = []
+    let verifyChecked = 0
+    const vcheck = (object: string, field: string, actual: number,
+                    target: number) => {
+      verifyChecked += 1
+      const delta = actual - target
+      if (Math.abs(delta) > VERIFY_EPS) {
+        const r3 = (v: number) => Math.round(v * 1000) / 1000
+        verifyRows.push({ object, field, actual: r3(actual), target: r3(target),
+                          delta: r3(delta) })
+      }
+    }
+    const verifyPlacement = (obj: Object3D, spec: SceneModelSpec) => {
+      obj.updateMatrixWorld(true)
+      const box = new THREE.Box3().setFromObject(obj)
+      const size = box.getSize(new THREE.Vector3())
+      const centre = box.getCenter(new THREE.Vector3())
+      const name = `${spec.role}:${spec.id}`
+      vcheck(name, 'bottom_y', box.min.y, spec.bottom_y)
+      vcheck(name, 'anchor.x', centre.x, spec.anchor[0])
+      vcheck(name, 'anchor.z', centre.z, spec.anchor[1])
+      // Extent checks only hold for axis-aligned yaws — the world BBox of a
+      // diagonally rotated mesh is legitimately larger than its target box.
+      if (Math.abs(((spec.yaw_deg % 90) + 90) % 90) > 0.01) return
+      if (spec.scale_mode === 'real_size' && spec.max_m) {
+        vcheck(name, 'max_m', spec.measure_axes === 'xz'
+          ? Math.max(size.x, size.z) : Math.max(size.x, size.y, size.z),
+          spec.max_m)
+      } else if (spec.scale_mode === 'tile_fit' && spec.box) {
+        if (spec.box.xz) vcheck(name, 'box.xz', Math.max(size.x, size.z), spec.box.xz)
+        if (spec.box.y) vcheck(name, 'box.y', size.y, spec.box.y)
+      }
+    }
     // The building entry is fetched regardless of the overlay toggle — the
     // model panel's fields read it.
     const bAnchor = ensureModel('building')
@@ -483,6 +540,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
                          spec.anchor[1] - cOut.z)
       outer.userData.__noDispose = true
       boxes.add(outer)
+      if (verifyRef.current) verifyPlacement(outer, spec)
       return outer
     }
 
@@ -941,6 +999,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         mesh.rotation.x = solid ? Math.PI / 2 : -Math.PI / 2
         mesh.position.y = plate.top_y
         boxes.add(mesh)
+        if (verifyRef.current) {
+          mesh.updateMatrixWorld(true)
+          const bb = new THREE.Box3().setFromObject(mesh)
+          const name = `plate:${plate.room_id || 'level'}@${plate.level}`
+          vcheck(name, 'top_y', bb.max.y, plate.top_y)
+          if (solid) vcheck(name, 'bottom_y', bb.min.y, plate.top_y - plate.thickness)
+        }
       }
 
       // Wall segments. Doors/passages are already gaps, a window arrives as
@@ -987,6 +1052,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         if (!wall.glass) {
           wallCullRef.current.push({ mesh: box, mx, mz,
             nx: wall.outward_normal[0], nz: wall.outward_normal[1] })
+        }
+        if (verifyRef.current) {
+          box.updateMatrixWorld(true)
+          const bb = new THREE.Box3().setFromObject(box)
+          const name = `wall:${wall.room_id || 'contour'}@${wall.level}`
+          vcheck(name, 'base_y', bb.min.y, wall.base_y)
+          vcheck(name, 'top_y', bb.max.y, wall.base_y + wall.height)
+          vcheck(name, 'centre.x', (bb.min.x + bb.max.x) / 2, mx)
+          vcheck(name, 'centre.z', (bb.min.z + bb.max.z) / 2, mz)
         }
       }
     }
@@ -1083,6 +1157,23 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       // metre scale — storey height vs. figure height at a glance. Facing 45
       // = north-east, i.e. towards the plate.
       placeFigure({ x: rx + 0.55, y: 0, z: rz - 0.35, facing: 45 })
+    }
+
+    // Verify report (§ B5a): machine-readable, deviations one by one with
+    // actual/target. The console table is the one that travels between
+    // sessions; the overlay is just the hint that it is there.
+    if (verifyRef.current) {
+      if (verifyRows.length) {
+        console.warn(`[verify] ${verifyRows.length} deviation(s) > ${VERIFY_EPS} m `
+          + `in ${verifyChecked} checked numbers`)
+        console.table(verifyRows)
+      } else {
+        console.info(`[verify] ${verifyChecked} numbers checked, `
+          + `no deviation > ${VERIFY_EPS} m`)
+      }
+      setVerifyReport({ checked: verifyChecked, rows: verifyRows })
+    } else {
+      setVerifyReport(null)
     }
   }
 
@@ -1356,7 +1447,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, map3d, showModels, showBuilding, showWalls, soloLevel, bump, lh,
-      fallbackYawDeg, scene, calibration])
+      fallbackYawDeg, scene, calibration, verify])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
@@ -1411,6 +1502,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           title={t('Walls & floor — render the outline floor plates and outer walls exactly like the game client (doors at the ground-floor exits; walls facing the camera hide). Needs a drawn outline.')}
         >
           🧱
+        </button>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${verify ? ' ga-btn-primary' : ''}`}
+          onClick={() => setVerify((v) => !v)}
+          title={t('Verify — re-measure every placed object and diff it against the scene recipe (tolerance 0.01 m). Deviations land in the browser console as a table with actual/target; that table is the evidence, not a screenshot.')}
+        >
+          ✓
         </button>
         {onPlanWidth ? (
           <label className="ga-check-row"
@@ -1507,6 +1606,29 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             background: 'rgba(255, 255, 255, 0.04)', overflow: 'hidden',
           }}
         />
+        {verifyReport ? (
+          <div style={{
+            position: 'absolute', left: 8, top: 8, maxWidth: '70%',
+            padding: '6px 8px', borderRadius: 6, fontSize: '0.78em',
+            background: 'rgba(13,17,23,0.85)', pointerEvents: 'none',
+            border: `1px solid ${verifyReport.rows.length ? '#f85149' : '#3fb950'}`,
+          }}>
+            <div style={{ fontWeight: 600,
+              color: verifyReport.rows.length ? '#f85149' : '#3fb950' }}>
+              {t('{n} numbers checked, {m} deviations')
+                .replace('{n}', String(verifyReport.checked))
+                .replace('{m}', String(verifyReport.rows.length))}
+            </div>
+            {verifyReport.rows.slice(0, 6).map((r, i) => (
+              <div key={i} style={{ color: '#f85149', fontFamily: 'monospace' }}>
+                {`${r.object} ${r.field}: ${r.actual} ≠ ${r.target} (Δ ${r.delta})`}
+              </div>
+            ))}
+            {verifyReport.rows.length > 6 ? (
+              <div style={{ opacity: 0.8 }}>{t('…full table in the console')}</div>
+            ) : null}
+          </div>
+        ) : null}
         {loading || error || sceneError ? (
           <div style={{
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',

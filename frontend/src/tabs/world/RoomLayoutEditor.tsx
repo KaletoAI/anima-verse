@@ -1852,6 +1852,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         )
       })() : null}
 
+      {/* Model calibration strip (rotation fix, room width, walkable floor)
+          — placed BEFORE the model-placement strip so the three calibration
+          anchors read in order: width_m → walk_y → model_offset_y. */}
+      {children}
+
       {/* Model-placement strip: X/Y sliders + height for the selected
           room's diorama model — mirrors the prop strip; ↺ recentres. */}
       {selectedRoom && selectedRoom.layout && modelDims[selectedRoom.id || ''] ? (() => {
@@ -2166,8 +2171,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
           ))}
         </div>
       ) : null}
-
-      {children}
     </div>
   )
 }
