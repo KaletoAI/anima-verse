@@ -1191,7 +1191,8 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
  *  Figuren). Füllt roomSpots/-SitSpots/-LieSpots, hebt Mitte/Ausgang auf
  *  die echte Bodenhöhe und verfeinert die Marker-Höhen (außer fertig
  *  komponierte prop_markers, fixed). */
-export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Object3D | THREE.Object3D[]) {
+export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Object3D | THREE.Object3D[],
+                                    declaredFloor?: number) {
   const slot = tile.roomSlots.get(roomId);
   if (!slot) return;
   const roots = (Array.isArray(root) ? root : [root]).filter(Boolean);
@@ -1258,6 +1259,11 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
     const eh = ray.intersectObjects(roots, true)[0];
     if (eh && eh.point.y > floor + 0.1 && eh.point.y < floor + 0.55) floor = eh.point.y;
   }
+  // walk_y (§ B6 Nr. 7): eine DEKLARIERTE Standhöhe schlägt die komplette
+  // Heuristik (dominante Lage + Tür-Referenz) — bei modellierten Böden
+  // (Podest, Löcher, versenkte Lounge) ist sie von außen nicht messbar.
+  // Spots/Sitze filtern dann relativ zum deklarierten Boden.
+  if (declaredFloor !== undefined) floor = declaredFloor;
   const spots = samples
     .filter((s) => Math.abs(s.p.y - floor) < 0.12)               // eben genug = begehbar
     .sort((a, b) => a.p.distanceToSquared(base) - b.p.distanceToSquared(base))

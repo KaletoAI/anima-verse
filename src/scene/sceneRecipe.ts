@@ -695,15 +695,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   // ── Begehbarkeit abtasten (Sicht-/Spiel-Logik, bleibt Client) ───────────
   // Über ALLES im Raum: Platte, Wände, Diorama, Props.
   for (const [id, rg] of roomGroup) {
-    sampleRoomWalkables(tile, id, rg);
-    // walk_y (§ B6 Nr. 7): bei modellierten Böden (Podest, Loch im Mesh) ist
-    // die Standhöhe von außen nicht messbar — der gelieferte Wert schlägt die
-    // Abtastung, deshalb NACH ihr.
-    const wy = walkY.get(id);
-    if (wy !== undefined) {
-      tile.roomCenters.get(id)?.setY(wy + 0.01);
-      tile.roomExits.get(id)?.setY(wy + 0.01);
-    }
+    // walk_y (§ B6 Nr. 7): die deklarierte Standhöhe geht als Boden-SOLL in
+    // die Abtastung — sie schlägt dort die Höhen-Heuristik, und damit stehen
+    // auch die STEH-SPOTS (nicht nur Mitte/Exit) auf dem sichtbaren Boden.
+    // Ohne walk_y wie gehabt: dominante Lage + Tür-Referenz.
+    sampleRoomWalkables(tile, id, rg, walkY.get(id));
   }
 
   // ── Verify (§ B5a): Primitive gegen das Soll ────────────────────────────
