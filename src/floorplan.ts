@@ -84,11 +84,9 @@ function rebuild(loc: WorldLocation) {
   engine.scene.add(tile.group);
   for (const room of shown.rooms) {
     if (!room.layout) continue;
+    // Hülle immer aus dem Rezept; das Diorama koexistiert (model_at)
     const recipe = recipeByRoom.get(room.id);
-    if (recipe?.placements?.length) {
-      void mountRoomRecipe(tile, room.id, recipe);
-      continue;
-    }
+    if (recipe && recipe.outline.length >= 3) void mountRoomRecipe(tile, room.id, recipe);
     const model = roomModels.get(room.id);
     if (model) applyRoomModel(tile, room.id, model);
     else roomModels.request(room.id);
@@ -96,7 +94,7 @@ function rebuild(loc: WorldLocation) {
 }
 
 roomModels.onModelReady = (roomId) => {
-  if (!tile || recipeByRoom.get(roomId)?.placements?.length) return;
+  if (!tile) return;
   const model = roomModels.get(roomId);
   if (model) applyRoomModel(tile, roomId, model);
 };

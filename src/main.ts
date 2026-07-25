@@ -34,6 +34,7 @@ async function startApp(username: string) {
   const engine = new Engine(app);
   setModelEnvironment(engine.modelEnv);
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
+  (window as unknown as { __THREE: typeof THREE }).__THREE = THREE; // Debug-Hook (Szene vermessen)
   const figures = new FigureLibrary();
   const [allLocs, firstMap, surfaces, props] = await Promise.all([
     api.getLocations(),
@@ -149,26 +150,21 @@ async function startApp(username: string) {
   for (const tile of tiles.values()) {
     for (const r of tile.loc.rooms) if (r.layout) tileByRoom.set(r.id, tile);
   }
-  // Raum-Rezepte (Raum-Props): die Datenlage entscheidet die Weiche — Rezept
-  // MIT placements -> Szenengraph aus Hülle + Einzel-Props; ohne (oder 404)
-  // -> Diorama-Pfad unverändert. signature-Polling über den 60-s-Zyklus.
+  // Raum-Rezepte (Raum-Props): die Hülle kommt immer aus dem Rezept (Wände/
+  // Boden/Öffnungen), Props wenn placements da sind — und das DIORAMA
+  // koexistiert (seit layout.model_at wird es wie ein Prop im Raum
+  // platziert) und wird immer geladen. signature-Polling im 60-s-Zyklus.
   const recipes = new RecipeLibrary();
-  const isRecipeRoom = (roomId: string) => !!recipes.get(roomId)?.placements?.length;
   recipes.onRecipe = (roomId, recipe) => {
     const tile = tileByRoom.get(roomId);
     if (!tile) return;
-    if (recipe?.placements?.length) {
-      void mountRoomRecipe(tile, roomId, recipe);
-    } else {
-      // kein/leeres Rezept: evtl. vorhandenen Rezept-Aufbau abbauen, Diorama
-      unmountRoomRecipe(tile, roomId);
-      roomModels.request(roomId);
-      const model = roomModels.get(roomId);
-      if (model) applyRoomModel(tile, roomId, model);
-    }
+    if (recipe && recipe.outline.length >= 3) void mountRoomRecipe(tile, roomId, recipe);
+    else unmountRoomRecipe(tile, roomId);
+    roomModels.request(roomId);
+    const model = roomModels.get(roomId);
+    if (model) applyRoomModel(tile, roomId, model);
   };
   roomModels.onModelReady = (roomId) => {
-    if (isRecipeRoom(roomId)) return;   // verspätetes Diorama nicht über die Rezept-Szene legen
     const tile = tileByRoom.get(roomId);
     const model = roomModels.get(roomId);
     if (tile && model) applyRoomModel(tile, roomId, model);
@@ -211,13 +207,12 @@ async function startApp(username: string) {
       if (!r.layout) continue;
       tileByRoom.set(r.id, tile);
       const recipe = recipes.get(r.id);
-      if (recipe?.placements?.length) {
+      if (recipe && recipe.outline.length >= 3) {
         void mountRoomRecipe(tile, r.id, recipe);   // frische Kachel: Rezept-Szene neu montieren
-      } else {
-        recipes.request(r.id);         // unbekannt: Weiche entscheidet in onRecipe
-        roomModels.invalidate(r.id);   // rotation/offset_y evtl. geändert
-        roomModels.request(r.id);
       }
+      recipes.request(r.id);         // unbekannt: onRecipe montiert nach dem Laden
+      roomModels.invalidate(r.id);   // rotation/model_at evtl. geändert
+      roomModels.request(r.id);
     }
     engine.setPickables([...tiles.values()].map((t) => t.group));
   }

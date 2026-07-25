@@ -235,6 +235,9 @@ export interface ApiRoomRecipe {
   markers?: RoomMarker[];        // bestehendes Vokabular aus types.ts
   placements?: ApiPlacement[];
   prop_markers?: ApiPropMarker[];
+  /** Outdoor-Raum (§2e): keine Hüllen-Wände, keine Bodenplatten-Geometrie —
+   *  nur die Boden-Textur flach auf dem Untergrund */
+  always_visible?: boolean;
   signature: string;             // md5, ändert sich bei Layout- UND Prop-Änderungen
 }
 
@@ -262,6 +265,7 @@ export async function getRoomRecipe(roomId: string): Promise<ApiRoomRecipe | nul
     markers: data.markers,
     placements: data.placements,
     prop_markers: data.prop_markers,
+    always_visible: data.always_visible,
     signature: data.signature ?? '',
   };
 }

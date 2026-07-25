@@ -1007,8 +1007,14 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     buildInterior(tile, spec, { walls: false, markers: opts.markers });
     addLabel();
   } else {
-    // Sockel-Platte unter Gebäuden (Pflaster)
-    const plinth = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), std({ map: paversTexture() }));
+    // Sockel-Platte unter Gebäuden: deklariertes Terrain der Location
+    // (z.B. grass beim Campus) vor dem Pflaster-Default — "Terrain = grass"
+    // soll auch in der Raumansicht Gras zeigen, nicht Steine
+    const tKind = terrainKind(loc.terrain);
+    const plinthTex = tKind
+      ? surfaceTexture(surfaceKindOf(loc, tKind), fallbackFor(tKind))
+      : paversTexture();
+    const plinth = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), std({ map: plinthTex }));
     plinth.rotation.x = -Math.PI / 2;
     plinth.position.y = 0.045;
     plinth.receiveShadow = true;
@@ -1153,15 +1159,21 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
   const rc = rbox.getCenter(new THREE.Vector3());
   const hw = slot.holder.getWorldPosition(new THREE.Vector3());
   const offY = lay?.model_offset_y ?? 0;
+  // Outdoor-Räume (always_visible) liegen auf dem TERRAIN — die Server-
+  // Vorschau setzt sie 0,05 höher (Geländeauflage) als Innenräume
+  const base = tile.alwaysVisibleRooms.has(roomId) ? 0.17 : 0.12;
   const delta = new THREE.Vector3(
     hw.x + ((lay?.model_at?.[0] ?? 0.5) - 0.5) * slot.w - rc.x,
-    hw.y + 0.12 + offY - rbox.min.y,
+    hw.y + base + offY - rbox.min.y,
     hw.z + ((lay?.model_at?.[1] ?? 0.5) - 0.5) * slot.d - rc.z
   );
   delta.applyQuaternion(slot.holder.getWorldQuaternion(new THREE.Quaternion()).invert());
   model.position.add(delta);
 
-  sampleRoomWalkables(tile, roomId, model);
+  // Begehbarkeit über Diorama UND (falls montiert) Rezept-Szene — die
+  // Gruppe heißt "recipe:<roomId>" (Konvention aus roomRecipe.ts)
+  const recipeG = tile.roomGroups.get(roomId)?.getObjectByName(`recipe:${roomId}`);
+  sampleRoomWalkables(tile, roomId, recipeG ? [model, recipeG] : model);
 }
 
 /** Begehbarkeit eines Raum-Aufbaus abtasten (Diorama-Modell ODER
@@ -1170,10 +1182,28 @@ export function applyRoomModel(tile: Tile, roomId: string, model: THREE.Group) {
  *  Figuren). Füllt roomSpots/-SitSpots/-LieSpots, hebt Mitte/Ausgang auf
  *  die echte Bodenhöhe und verfeinert die Marker-Höhen (außer fertig
  *  komponierte prop_markers, fixed). */
-export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Object3D) {
+export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Object3D | THREE.Object3D[]) {
   const slot = tile.roomSlots.get(roomId);
   if (!slot) return;
+  const roots = (Array.isArray(root) ? root : [root]).filter(Boolean);
+  if (!roots.length) return;
   tile.group.updateMatrixWorld(true);
+  // Abtastung unabhängig von der Material-Seitigkeit: generierte Meshes
+  // haben teils nach UNTEN orientierte Boden-Dreiecke — einseitig trifft
+  // sie der Strahl von oben nicht und fällt auf die Sockelplatte durch
+  // (Figuren stehen dann im Boden). Für die Dauer der Abtastung DoubleSide.
+  const savedSides: [THREE.Material, THREE.Side][] = [];
+  for (const r of roots) {
+    r.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        savedSides.push([m, m.side]);
+        m.side = THREE.DoubleSide;
+      }
+    });
+  }
+  const restoreSides = () => { for (const [m, s] of savedSides) m.side = s; };
   const ray = new THREE.Raycaster();
   const down = new THREE.Vector3(0, -1, 0);
   const base = slot.holder.getWorldPosition(new THREE.Vector3());
@@ -1184,15 +1214,43 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
       const ox = (ix / (N - 1) - 0.5) * slot.w * 0.78;
       const oz = (iz / (N - 1) - 0.5) * slot.d * 0.78;
       ray.set(new THREE.Vector3(base.x + ox, base.y + 20, base.z + oz), down);
-      const hit = ray.intersectObject(root, true)[0];
+      const hit = ray.intersectObjects(roots, true)[0];
       if (hit) samples.push({ p: hit.point.clone(), ix, iz, uv: hit.uv?.clone(), mesh: hit.object as THREE.Mesh });
     }
   }
-  if (samples.length < 5) return;
-  const heights = samples.map((s) => s.p.y).sort((a, b) => a - b);
-  const floor = heights[Math.floor(heights.length * 0.2)];
+  if (samples.length < 5) { restoreSides(); return; }
+  // Bodenhöhe = DOMINANTE Höhenlage (7-cm-Raster) statt 20. Perzentil: bei
+  // Dioramen mit sichtbarem Sockelrand erwischte das Perzentil die Sockel-
+  // platte und stellte die Figuren IN den eigentlichen Boden. Bei Gleich-
+  // stand gewinnt die tiefere Lage (Boden unter Möbeln); Feinwert = Median
+  // der Treffer in der Gewinner-Lage.
+  const bins = new Map<number, number>();
+  for (const s of samples) {
+    const b = Math.round(s.p.y / 0.07);
+    bins.set(b, (bins.get(b) ?? 0) + 1);
+  }
+  let floorBin = 0, floorVotes = -1;
+  for (const [b, n] of bins) {
+    if (n > floorVotes || (n === floorVotes && b < floorBin)) { floorVotes = n; floorBin = b; }
+  }
+  const inBin = samples.map((s) => s.p.y)
+    .filter((y) => Math.abs(y - floorBin * 0.07) < 0.08)
+    .sort((a, b) => a - b);
+  let floor = inBin[Math.floor(inBin.length / 2)];
+  // Referenzmessung am Exit: generierte Meshes haben an verdeckten Stellen
+  // LÖCHER im Boden — Raster-Strahlen fallen dort auf die Sockelplatte
+  // durch und die dominante Lage unterschätzt den Boden (Figuren stehen im
+  // Boden). An der Tür ist der Boden praktisch immer intakt (Sichtfeld der
+  // Generierung): liegt der Treffer dort ETWAS über der dominanten Lage,
+  // ist ER der Boden; deutlich höhere Treffer (Möbel vor der Tür) nicht.
+  const exitP = tile.roomExits.get(roomId);
+  if (exitP) {
+    ray.set(new THREE.Vector3(exitP.x, base.y + 20, exitP.z), down);
+    const eh = ray.intersectObjects(roots, true)[0];
+    if (eh && eh.point.y > floor + 0.1 && eh.point.y < floor + 0.55) floor = eh.point.y;
+  }
   const spots = samples
-    .filter((s) => s.p.y < floor + 0.12)                         // eben genug = begehbar
+    .filter((s) => Math.abs(s.p.y - floor) < 0.12)               // eben genug = begehbar
     .sort((a, b) => a.p.distanceToSquared(base) - b.p.distanceToSquared(base))
     .map((s) => s.p.clone().setY(s.p.y + 0.01));
 
@@ -1253,13 +1311,14 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
       for (const e of entries) {
         if (e.fixed) continue;   // prop_markers: Höhe kommt fertig vom Server
         ray.set(new THREE.Vector3(e.p.x, base.y + 20, e.p.z), down);
-        const hit = ray.intersectObject(root, true)[0];
+        const hit = ray.intersectObjects(roots, true)[0];
         const surface = hit && hit.point.y < floor + 0.5 ? hit.point.y : floor;
         const anchor = kind === 'sit' ? Math.max(floor, surface - seatDrop) : surface;
         e.p.setY(anchor + 0.01 + e.offsetY);
       }
     }
   }
+  restoreSides();
 }
 
 /** Kachel als Kamera-Verdecker aus-/einblenden (weich). Nachbarn zwischen

@@ -93,8 +93,12 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
   const storey = storeyHeight(tile.loc);
   const level = recipe.level ?? 0;
   const floorY = level * storey;
-  // Props/Marker stehen AUF der Bodenplatte der Hülle (Oberkante +0.10)
-  const floorTop = floorY + 0.11;
+  // Outdoor (§2e): Flag kommt jetzt auch im Rezept; die Kachel-Sets decken
+  // den Diorama-/Legacy-Fall (layout.always_visible) ab
+  const outdoor = recipe.always_visible === true || tile.alwaysVisibleRooms.has(roomId);
+  // Props/Marker stehen AUF der Bodenplatte der Hülle (Oberkante +0.10);
+  // outdoor gibt es keine Platte — direkt auf dem Untergrund
+  const floorTop = outdoor ? floorY + (floorY > 0 ? 0.095 : 0.065) : floorY + 0.11;
 
   // Surface-Bilder fertig laden, BEVOR die Hülle sie klont (Klone eines noch
   // ladenden Bildes blieben leer); "floor" ist der globale Boden-Fallback
@@ -104,15 +108,14 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
     preloadSurfaceTexture(recipe.surfaces?.wall),
   ]);
 
+  // Diorama und Rezept-Szene KOEXISTIEREN (seit layout.model_at wird das
+  // Diorama wie ein Prop im Raum platziert): die Hülle kommt immer aus dem
+  // Rezept, Props wenn placements da sind, das Diorama bleibt im Holder.
+  const hullOnly = !recipe.placements?.length;
+
   unmountRoomRecipe(tile, roomId);
-  // Datenlage entscheidet: ein evtl. schon montiertes Diorama weicht dem
-  // Rezept (zurück geht es über die Weiche in main.ts, das Modell bleibt
-  // im Cache der roomModelLibrary)
-  slot.holder.clear();
-  // Outdoor-Räume (always_visible): nur Bodenplatte, keine Hüllen-Wände
   const shell = buildRoomShell(recipe, {
-    k, storey, floorY, surface: surfaceFor,
-    walls: !tile.alwaysVisibleRooms.has(roomId),
+    k, storey, floorY, surface: surfaceFor, walls: !outdoor,
   });
   const g = shell.group;
   g.name = groupName(roomId);
@@ -169,6 +172,12 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
     const room = tile.loc.rooms.find((r) => r.id === roomId);
     if (room) tile.roomExits.set(room.name, exitWorld);
   }
+  if (outdoor) {
+    // Figuren stehen outdoor direkt auf dem Untergrund (§2e) — es gibt
+    // keine Platte, an der die Abtastung die Höhe festmachen könnte
+    tile.roomCenters.get(roomId)?.setY(floorTop + 0.01);
+    tile.roomExits.get(roomId)?.setY(floorTop + 0.01);
+  }
 
   // Props platzieren — Real-Size-Regel (propPlace.ts, verifiziert gegen 2d).
   // missing / has_model:false -> Platzhalter in dims-Größe, Platzierung nie
@@ -204,6 +213,7 @@ export async function mountRoomRecipe(tile: Tile, roomId: string, recipe: ApiRoo
     console.info(`[recipe] ${roomId}: Mount verworfen (Remount/Rebuild während des Ladens)`);
     return;
   }
-  console.info(`[recipe] ${roomId}: montiert — ${placements.length} Props, ${shell.walls.length} Wandsegmente`);
-  sampleRoomWalkables(tile, roomId, g);
+  console.info(`[recipe] ${roomId}: montiert — ${placements.length} Props, ${shell.walls.length} Wandsegmente${hullOnly ? ' (nur Hülle)' : ''}`);
+  // Begehbarkeit über ALLES im Raum: Hülle + Props + (evtl.) Diorama
+  sampleRoomWalkables(tile, roomId, [g, ...slot.holder.children]);
 }

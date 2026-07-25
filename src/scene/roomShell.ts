@@ -23,8 +23,10 @@ export interface ShellCtx {
     kind: string | undefined,
     use: 'floor' | 'wall'
   ) => { texture: THREE.Texture; sizeM: number } | null;
-  /** false = Outdoor-Raum (always_visible): nur Bodenplatte, keine Wände —
-   *  Öffnungen wirken dann allein über die Spiegelung in den Nachbarwänden */
+  /** false = Outdoor-Raum (§2e): weder Wände noch Platten-Geometrie — nur
+   *  die Boden-TEXTUR flach auf dem Untergrund (ohne surfaces.floor gar
+   *  nichts, der Level-/Terrain-Boden scheint durch); Öffnungen wirken
+   *  allein über die Spiegelung in den Nachbarwänden */
   walls?: boolean;
 }
 
@@ -68,6 +70,28 @@ export function buildRoomShell(recipe: ApiRoomRecipe, ctx: ShellCtx): RoomShell 
     area += a.x * b.y - b.x * a.y;
   }
   const ccw = area > 0;
+
+  // --- Outdoor (§2e): nur die Boden-Textur, flach auf dem Untergrund ----------
+  if (ctx.walls === false) {
+    const surf = recipe.surfaces?.floor ? ctx.surface(recipe.surfaces.floor, 'floor') : null;
+    if (surf) {
+      const tex = surf.texture.clone();
+      tex.needsUpdate = true;
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      const rep = 1 / (surf.sizeM * k);
+      tex.repeat.set(rep, rep);
+      // knapp über Terrain-/Sockelplatte (0.04/0.045) bzw. Etagen-Platte (0.08)
+      const flat = new THREE.Mesh(
+        new THREE.ShapeGeometry(new THREE.Shape(pts)),
+        std({ color: 0xffffff, map: tex, side: THREE.DoubleSide })
+      );
+      flat.rotation.x = Math.PI / 2;   // Shape-XY -> Boden-XZ (wie die Platte)
+      flat.position.y = floorY + (floorY > 0 ? 0.085 : 0.055);
+      flat.receiveShadow = true;
+      group.add(flat);
+    }
+    return { group, walls };
+  }
 
   // --- Bodenplatte: outline-Fläche, Oberkante bei floorY + 0.08 ---------------
   const floorShape = new THREE.Shape(pts);
@@ -136,8 +160,6 @@ export function buildRoomShell(recipe: ApiRoomRecipe, ctx: ShellCtx): RoomShell 
   };
 
   const glassMat = std({ color: 0xbcd4e0, opacity: 0.3, roughness: 0.3 });
-
-  if (ctx.walls === false) return { group, walls };
 
   const openings = recipe.openings ?? [];
   for (let i = 0; i < pts.length; i++) {
