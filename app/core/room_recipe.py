@@ -320,8 +320,14 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
         "offset_m": [_r(dx, 3), _r(dz, 3)],
         "height_m": _r(pre[1] + float(placement_offset_y or 0), 3),
     }
-    if facing is not None:
-        out["facing"] = _r((float(facing) - float(placement_yaw or 0)) % 360, 1)
+    # No object facing declared (the auto-furnish default) → the sitter still
+    # follows the CHAIR: assume the prop's front is south (facing 0) in
+    # object space, so the composed facing rides the placement yaw. A prop
+    # whose front is not south gets its marker facing set once at the object
+    # (existing mechanism) — without this default every sitter on a rotated
+    # chair kept the world default and looked the same way.
+    eff_facing = 0.0 if facing is None else float(facing)
+    out["facing"] = _r((eff_facing - float(placement_yaw or 0)) % 360, 1)
     return out
 
 
