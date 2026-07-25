@@ -1268,6 +1268,56 @@ def _location_image_height() -> int:
         return 720
 
 
+# Free image resolution + floor-plan proportions (2026-07-25). A 2 x 5 m room
+# rendered at 1024² becomes an unusably square diorama — the fix pulls on two
+# ropes at once: the caller may pick the pixel size, and the prompt states the
+# footprint the floor plan actually has.
+IMAGE_DIM_MIN = 256
+IMAGE_DIM_MAX = 2048
+IMAGE_DIM_GRID = 64
+# Below this length ratio a room counts as square enough to say nothing.
+ROOM_PROPORTION_MIN_RATIO = 1.2
+
+
+def _clamp_image_dim(value: Any) -> int:
+    """A caller-supplied image edge in pixels, rounded to the 64-px grid every
+    diffusion backend expects and clamped to 256..2048. 0 = nothing usable was
+    passed (the use-case/backend default stays)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if v <= 0:
+        return 0
+    v = round(v / IMAGE_DIM_GRID) * IMAGE_DIM_GRID
+    return int(max(IMAGE_DIM_MIN, min(IMAGE_DIM_MAX, v)))
+
+
+def room_proportions_hint(room: Optional[Dict[str, Any]]) -> str:
+    """The room's floor-plan proportions as a prompt clause, or "" when the
+    room has no layout rectangle or is square enough not to matter.
+
+    The rectangle (``layout.w`` x ``layout.d``) is the only place that knows a
+    room is long and narrow; without the hint the generator answers every room
+    with the same square box. Rendered as a plain short:long ratio ("roughly
+    2:5") so it survives both prompt families (prose and keyword)."""
+    from fractions import Fraction
+    lay = (room or {}).get("layout") or {}
+    try:
+        w = float(lay.get("w") or 0)
+        d = float(lay.get("d") or 0)
+    except (TypeError, ValueError):
+        return ""
+    lo, hi = min(w, d), max(w, d)
+    if lo <= 0 or hi / lo < ROOM_PROPORTION_MIN_RATIO:
+        return ""
+    frac = Fraction(hi / lo).limit_denominator(9)
+    short, long = frac.denominator, frac.numerator
+    shape = "long narrow" if hi / lo >= 2.5 else "elongated"
+    return (f"{shape} rectangular floor plan, "
+            f"footprint roughly {short}:{long}")
+
+
 def resolve_background_path(location_name: str, room: str = "", hour: int = -1,
                             file: str = "") -> Optional[Path]:
     """Resolve the background image of a location (by id or name).
@@ -2207,6 +2257,17 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         else:
             full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
             negative = _ucp.get("prompt_negative", "")
+
+        # Floor-plan proportions: a room whose rectangle is far from square
+        # says so in the prompt, whichever branch composed it (the dialog
+        # prefills the same clause — appending it twice is what the
+        # containment check prevents). Only ROOM renders, never a map tile and
+        # never a regenerate, whose prompt is a literal adjustment order.
+        if room_id and not _map_blend and not _is_regen:
+            _prop_hint = room_proportions_hint(get_room_by_id(location, room_id))
+            if _prop_hint and _prop_hint.lower() not in full_prompt.lower():
+                full_prompt = f"{full_prompt}, {_prop_hint}" if full_prompt else _prop_hint
+                logger.info("Room proportions in the prompt: %s", _prop_hint)
         # Map icons are small thumbnails for the world overview and get
         # downscaled. Day/night/description stay at full resolution
         # as background images.
@@ -2232,6 +2293,20 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             params["image_use_case"] = "building"
             params["width"] = 1024
             params["height"] = 1024
+        # Caller-picked resolution beats every use-case default (2026-07-25):
+        # a 2 x 5 room needs a 2 x 5 image, not the square building format.
+        # Rounded/clamped above; unset keeps the default. Backends without a
+        # free size ignore the values — best effort, never an error. The
+        # map-blend canvas below still overrides both: its size is geometry.
+        _req_w = _clamp_image_dim(data.get("width"))
+        _req_h = _clamp_image_dim(data.get("height"))
+        if _req_w:
+            params["width"] = _req_w
+        if _req_h:
+            params["height"] = _req_h
+        if _req_w or _req_h:
+            logger.info("Caller-picked image size: %sx%s",
+                        params["width"], params["height"])
         # Model override from the dialog — backends read params["model"].
         if model_override:
             params["model"] = model_override
