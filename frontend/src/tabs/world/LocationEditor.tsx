@@ -523,6 +523,16 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const { scene, error: sceneError } = useScenePreview(
     location.id, draft.rooms || [], draft.map3d, location.map_rotation_2d || 0)
 
+  // Calibration figure (§ B2a): the fixed 1.70 m reference standing in the
+  // room whose width_m / walk_y are being dialed. Its spot is UI state — a
+  // click on the 2D plan moves it, nothing is persisted.
+  const [calibration, setCalibration] = useState<
+    { roomId: string; at?: [number, number] } | null>(null)
+  useEffect(() => {
+    // Selecting another room ends the calibration of the previous one.
+    setCalibration((cur) => (cur && cur.roomId === floorRoomSel ? cur : null))
+  }, [floorRoomSel])
+
   const floorSelRoom = (draft.rooms || []).find((r) => r.id === floorRoomSel)
   const tabFloor = (
     <div className="ga-form">
@@ -536,12 +546,17 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           onMap3d={updMap3d}
           onSelectRoom={setFloorRoomSel}
           scene={scene}
+          calibrationRoomId={calibration?.roomId || ''}
+          onCalibrationAt={(at) => setCalibration((cur) => (cur ? { ...cur, at } : cur))}
         >
           {floorSelRoom?.id ? (
             <RoomModelAdjust
               locationId={location.id}
               roomId={floorSelRoom.id}
               roomName={floorSelRoom.name || floorSelRoom.id}
+              calibration={calibration?.roomId === floorSelRoom.id}
+              onCalibration={(on) => setCalibration(
+                on && floorSelRoom.id ? { roomId: floorSelRoom.id } : null)}
             />
           ) : null}
         </RoomLayoutEditor>
@@ -555,6 +570,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           fallbackYawDeg={location.map_rotation_2d || 0}
           scene={scene}
           sceneError={sceneError}
+          calibration={calibration}
         />
       </div>
     </div>

@@ -95,10 +95,15 @@ interface FloorPlanPreviewProps {
    *  or the composer failed; then there is nothing to render. */
   scene: ScenePayload | null
   sceneError?: string
+  /** Calibration figure (§ B2a): the FIXED 1.70 m reference standing IN a
+   *  room while its width_m / walk_y are dialed. ``at`` = fraction of the
+   *  room rectangle (click on the 2D plan); absent = the diorama anchor.
+   *  Pure UI state, never persisted. */
+  calibration?: { roomId: string; at?: [number, number] } | null
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, onPlanWidth, fallbackYawDeg = 0, scene, sceneError = '', height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, onPlanWidth, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -164,6 +169,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // parent holds the debounced draft request, this component only renders.
   const sceneRef = useRef<ScenePayload | null>(null)
   sceneRef.current = scene
+  const calibrationRef = useRef(calibration)
+  calibrationRef.current = calibration
 
   // Mesh width-per-height ratio via the SHARED helper (same value the
   // layout editor uses) — auto plan width = declared height × this ratio
@@ -816,6 +823,30 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       dot.position.set(exit.at_world[0], lv * lhEff + 0.25, exit.at_world[1])
       boxes.add(dot)
     }
+    // Calibration figure (§ B2a): the FIXED 1.70 m reference INSIDE the room
+    // — the admin dials width_m until the furniture matches it, and walk_y
+    // until it stands on the visible floor. It never scales with either.
+    const calib = calibrationRef.current
+    if (sc && calib?.roomId) {
+      const room = current.find((r) => r.id === calib.roomId)
+      const lay = room?.layout
+      if (lay && visibleLevel(lay.level || 0)) {
+        const spec = sc.models.find(
+          (m) => m.role === 'room' && m.room_id === calib.roomId)
+        const plate = sc.plates.find((p) => p.room_id === calib.roomId)
+        const at = calib.at
+        placeFigure({
+          x: at ? (lay.x + at[0] * lay.w - 0.5) * PLATE_M
+            : spec?.anchor[0] ?? (lay.x + lay.w / 2 - 0.5) * PLATE_M,
+          // Standing height: the room's declared walkable floor, else the
+          // room plate, else the storey floor — all from the payload.
+          y: spec?.walk_y_world ?? plate?.top_y ?? (lay.level || 0) * lhEff,
+          z: at ? (lay.y + at[1] * lay.d - 0.5) * PLATE_M
+            : spec?.anchor[1] ?? (lay.y + lay.d / 2 - 0.5) * PLATE_M,
+          facing: 0,
+        })
+      }
+    }
     // Animation markers: room markers AND the props' seat/stand spots, both
     // already composed into world coordinates by the server. A figure with
     // the marker's clip stands there, numbered per room.
@@ -1325,7 +1356,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, map3d, showModels, showBuilding, showWalls, soloLevel, bump, lh,
-      fallbackYawDeg, scene])
+      fallbackYawDeg, scene, calibration])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>

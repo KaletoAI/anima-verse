@@ -22,10 +22,14 @@ interface ActiveModel {
   active?: boolean
 }
 
-export function RoomModelAdjust({ locationId, roomId, roomName }: {
+export function RoomModelAdjust({ locationId, roomId, roomName,
+                                  calibration = false, onCalibration }: {
   locationId: string
   roomId: string
   roomName: string
+  /** Calibration figure showing in the 3D preview for THIS room. */
+  calibration?: boolean
+  onCalibration?: (on: boolean) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -177,7 +181,7 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
         />
       </label>
       <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-        title={t('Estimated real-world width of the room (largest side, from the source image, e.g. 6). Placement is unchanged — the value sets the room’s content scale, and figures in the room size themselves from it automatically.')}>
+        title={t('Real-world width of the room (largest side). Calibrate it against the reference figure instead of estimating: the diorama scales by this value like a prop does, so furniture, props and NPCs in the room share ONE scale. The room rectangle no longer affects it.')}>
         {t('Room width (m)')}
         <input
           className="ga-input"
@@ -193,6 +197,16 @@ export function RoomModelAdjust({ locationId, roomId, roomName }: {
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
         />
       </label>
+      {onCalibration ? (
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${calibration ? ' ga-btn-primary' : ''}`}
+          onClick={() => onCalibration(!calibration)}
+          title={t('Calibration figure: puts a FIXED 1.70 m person into this room in the 3D preview. Dial "Room width (m)" until the furniture fits the figure, and the walkable floor height until it stands on the visible floor. Click inside the room on the 2D plan to move it; the spot is not saved.')}
+        >
+          🧍
+        </button>
+      ) : null}
       <span className="ga-hint">
         {t('Persisted on the active model — preview and 3D client pick it up.')}
       </span>

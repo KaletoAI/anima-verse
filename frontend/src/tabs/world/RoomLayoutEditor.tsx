@@ -85,6 +85,10 @@ interface RoomLayoutEditorProps {
    *  neighbours' shared-wall openings and the derived exit in plan
    *  fractions — the editor DRAWS them, it does not derive them. */
   scene?: ScenePayload | null
+  /** While the calibration figure is on for this room, a plain click inside
+   *  it moves the figure (fraction of the room rectangle, UI state only). */
+  calibrationRoomId?: string
+  onCalibrationAt?: (at: [number, number]) => void
   /** Rendered at the bottom INSIDE the editor's frame — the Floor-plan tab
    *  slots the model adjustment strip of the selected room here. */
   children?: ReactNode
@@ -102,7 +106,7 @@ type DragState =
 /** Real prop dims for true-size footprints — lean mirror of /world/props. */
 interface PropDims { name: string; width_m: number; depth_m: number; height_m: number }
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, scene = null, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -759,12 +763,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // animation marker or a prop placement — all as fractions of the ROOM
   // rectangle (contract).
   const onRoomClick = useCallback((e: React.MouseEvent, room: Room) => {
-    if ((!clickMode && !armedProp) || !room.id || !room.layout) return
+    if ((!clickMode && !armedProp && !calibrationRoomId) || !room.id || !room.layout) return
     e.stopPropagation()
     const target = e.currentTarget as HTMLDivElement
     const rect = target.getBoundingClientRect()
     const px = r4(clamp((e.clientX - rect.left) / rect.width, 0, 1))
     const py = r4(clamp((e.clientY - rect.top) / rect.height, 0, 1))
+    if (!clickMode && !armedProp) {
+      // Calibration figure armed: a click inside ITS room moves the
+      // reference person there (UI state only, never stored).
+      if (room.id === calibrationRoomId) onCalibrationAt?.([px, py])
+      return
+    }
     if (armedProp) {
       // Place the armed prop at the clicked spot. REAL-size rule: only
       // position + yaw are stored — the prop's own dims scale it. The tool
@@ -820,7 +830,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
     }
     setClickMode('')
   }, [clickMode, armedProp, ghostYaw, markerKind, markerSel, selected,
-    setSelected, updateLayout])
+    setSelected, updateLayout, calibrationRoomId, onCalibrationAt])
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
 
@@ -1348,6 +1358,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
               onClick={(e) => {
                 e.stopPropagation()
                 if (clickMode || armedProp) onRoomClick(e, room)
+                else if (room.id && room.id === calibrationRoomId) onRoomClick(e, room)
                 else setSelected(room.id || '')
               }}
               title={room.name || room.id}
