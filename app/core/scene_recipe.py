@@ -87,6 +87,8 @@ ELEVATOR_CABIN_STOREY_FRAC = 0.6
 ELEVATOR_ROOF_THICKNESS = 0.05
 ELEVATOR_PAD_THICKNESS = 0.05
 ELEVATOR_GLASS_THICKNESS = 0.03
+# A fit_box placement keeps a 4 % margin inside its target box (§ B2).
+FIT_BOX_MARGIN = 0.96
 # Buildings: tile fit leaves a 0.92 margin, the shell stands at 0.06.
 TILE_FILL = 0.92
 BUILDING_BOTTOM_Y = 0.06
@@ -611,20 +613,37 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "bottom_y": _r(level * storey + DIORAMA_CLEARANCE
                        + _num(lay.get("model_offset_y"))),
     }
-    # Modelled floors (podium, sunken lounge, a hole in the mesh) make the
-    # standing height unmeasurable from outside — the admin dials walk_y once
-    # per model, in world metres above the diorama's lower edge, and the
-    # consumer gets the absolute height (§ B6 no. 7).
-    if meta.get("walk_y") is not None:
-        spec["walk_y_world"] = _r(spec["bottom_y"] + _num(meta.get("walk_y")))
     width_m = _num(meta.get("width_m"))
+    bbox = meta.get("bbox_fixed")
+    fixed = ([_num(v) for v in bbox]
+             if isinstance(bbox, (list, tuple)) and len(bbox) == 3 else [])
+    scale = 0.0
     if anchored and width_m > 0:
         spec["scale_mode"] = "real_size"
         spec["max_m"] = _r(width_m * k)
         spec["measure_axes"] = "xz"
+        if fixed and max(fixed[0], fixed[2]) > 0:
+            scale = width_m * k / max(fixed[0], fixed[2])
     else:
+        box = {"w": _r(w * PLATE_M), "d": _r(d * PLATE_M)}
         spec["scale_mode"] = "fit_box"
-        spec["box"] = {"w": _r(w * PLATE_M), "d": _r(d * PLATE_M)}
+        spec["box"] = box
+        if fixed and fixed[0] > 0 and fixed[2] > 0:
+            scale = min(box["w"] / fixed[0], box["d"] / fixed[2]) * FIT_BOX_MARGIN
+    # Modelled floors (podium, sunken lounge, a hole in the mesh) make the
+    # standing height unmeasurable from OUTSIDE the mesh — but not from the
+    # inside: the server measures the dominant walkable surface once per model
+    # (``walk_frac``, § B4 light) and, knowing the model's final height, turns
+    # it into the height a figure stands at. The admin's manual ``walk_y``
+    # stays the override; ``walk_y_auto`` is what the slider shows when it is
+    # empty (§ B6 no. 7).
+    walk_auto: Optional[float] = None
+    if scale > 0 and fixed and meta.get("walk_frac") is not None:
+        walk_auto = _num(meta.get("walk_frac")) * scale * fixed[1]
+        spec["walk_y_auto"] = _r(walk_auto)
+    walk = _num(meta.get("walk_y")) if meta.get("walk_y") is not None else walk_auto
+    if walk is not None:
+        spec["walk_y_world"] = _r(spec["bottom_y"] + walk)
     return spec
 
 

@@ -120,6 +120,51 @@ def _write_sidecar(model_path: Path, meta: Dict[str, Any]) -> None:
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+# ── Mesh measurements (contract § B4 "light") ───────────────────────────
+# A ROOM model is measured exactly once: the bounding box after the
+# orientation fix and the height of its walkable floor as a fraction of the
+# model height. With both, the scene composer knows the diorama's FINAL
+# height and can derive the height a figure stands at — dialling ``walk_y``
+# by hand becomes the correction, not the rule (the manual value stays the
+# override). Changing the orientation fix invalidates both values.
+_MEASURED_KEYS = ("measured", "bbox_fixed", "walk_frac")
+
+
+def _ensure_measured(path: Path, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Measure a room model once and cache the result in its sidecar. Runs at
+    ingest (generation/upload) and lazily on the first read of an older model
+    — no cut-off date. A failed measurement is cached as well, so an exotic
+    file is not re-parsed on every poll."""
+    if meta.get("measured") or path.suffix.lower() != ".glb":
+        return meta
+    from app.core.model_validate import glb_bounds, mesh_metrics
+    from app.core.props import oriented_dims
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return meta
+    meta["measured"] = True
+    metrics = mesh_metrics(data, meta.get("rotation"))
+    if metrics:
+        meta["bbox_fixed"] = metrics["bbox_fixed"]
+        if metrics.get("walk_frac") is not None:
+            meta["walk_frac"] = round(float(metrics["walk_frac"]), 4)
+    else:
+        # Geometry we cannot iterate (Draco, sparse, external buffers): the
+        # extent still comes off the declared accessor boxes, only the walk
+        # height stays unknown — the admin dials walk_y for those.
+        bounds = glb_bounds(data)
+        od = oriented_dims([bounds[1][i] - bounds[0][i] for i in range(3)],
+                           meta.get("rotation")) if bounds else []
+        if od:
+            meta["bbox_fixed"] = od
+    try:
+        _write_sidecar(path, meta)
+    except OSError:
+        logger.warning("Model measurement of %s could not be cached", path.name)
+    return meta
+
+
 def _read_selection(owner_id: str) -> Dict[str, str]:
     sp = _model_dir(owner_id) / _SEL_FILE
     if sp.exists():
@@ -336,8 +381,18 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
         # (layout.model_offset_y), not on the model — the sidecar offsets are
         # gone here (2026-07-24). What IS a model property: the height a
         # figure walks at inside the diorama.
+        meta = _ensure_measured(p, meta)
         if meta.get("walk_y") is not None:
             out["walk_y"] = float(meta.get("walk_y") or 0.0)
+        # Measured once per model (§ B4 light): the fixed bounding box lets the
+        # scene composer compute the diorama's final height, and with the
+        # walkable-floor fraction it derives walk_y itself — the absolute
+        # result rides along the scene payload, which is the only place that
+        # knows the scale k.
+        if meta.get("bbox_fixed"):
+            out["bbox_fixed"] = list(meta["bbox_fixed"])
+        if meta.get("walk_frac") is not None:
+            out["walk_frac"] = float(meta.get("walk_frac") or 0.0)
         return out
     # Buildings: vertical placement offset in metres (model property —
     # reliefs have different socket thicknesses; negative sinks the model
@@ -389,8 +444,14 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
         v = round(v % 360, 1)
         # Whole numbers stay ints in the sidecar (no 90.0 noise).
         rot[axis] = int(v) if float(v).is_integer() else v
+    if rot != cur:
+        # Every measurement is taken AFTER the fix — a new fix invalidates it.
+        for key in _MEASURED_KEYS:
+            meta.pop(key, None)
     meta["rotation"] = rot
     _write_sidecar(p, meta)
+    if room_id:
+        meta = _ensure_measured(p, meta)
     return meta
 
 
@@ -564,6 +625,8 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
     if room_id:
         meta["room"] = room_id
     _write_sidecar(target, meta)
+    if room_id:
+        meta = _ensure_measured(target, meta)
     select_model(location_id, target.name, room_id)
     logger.info("Location model %s%s: uploaded (%d bytes) -> %s", owner,
                 f"/{room_id}" if room_id else "", len(contents), target.name)
@@ -642,6 +705,8 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
         if room_id:
             meta["room"] = room_id
         _write_sidecar(path, meta)
+        if room_id:
+            meta = _ensure_measured(path, meta)
         select_model(location_id, path.name, room_id)
         logger.info("Location model %s: %s (%d bytes, from %s)", owner, path.name,
                     path.stat().st_size, source_image)
