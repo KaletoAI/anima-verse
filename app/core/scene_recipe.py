@@ -100,6 +100,9 @@ DIORAMA_CLEARANCE = 0.12
 DEFAULT_FLOOR_KIND = "floor"
 
 # The renderers' colour vocabulary — ONE place for both of them (§ B1 style).
+# Editor-only overlay colours (markers, exit dots, ruler) are deliberately
+# NOT here: they are preview aids, not contract geometry. The elevator IS
+# contract geometry (extras), so its colours are.
 STYLE: Dict[str, Any] = {
     "wall_color": "#cfc4b2",
     "floor_color": "#d8d0c2",
@@ -109,6 +112,11 @@ STYLE: Dict[str, Any] = {
     "upper_floor_opacity": 0.4,
     "room_palette": ["#58a6ff", "#3fb950", "#d29922", "#f778ba",
                      "#a371f7", "#f85149", "#79c0ff", "#56d364"],
+    "elevator_frame_color": "#6d7681",
+    "elevator_pad_color": "#aab4be",
+    "elevator_cabin_color": "#3d4650",
+    "elevator_cabin_opacity": 0.85,
+    "elevator_glass_opacity": 0.22,
 }
 
 
