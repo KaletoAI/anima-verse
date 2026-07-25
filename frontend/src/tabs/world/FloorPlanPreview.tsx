@@ -22,7 +22,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D, Texture } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost, postScenePreview } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
@@ -90,10 +90,15 @@ interface FloorPlanPreviewProps {
   /** The 2D icon rotation (map_rotation_2d) — the contract's yaw fallback
    *  when map3d.rotation is unset (the model turns with the 2D icon). */
   fallbackYawDeg?: number
+  /** The server-composed scene of the current draft (useScenePreview in the
+   *  parent — the 2D editor reads the same response). null = not there yet
+   *  or the composer failed; then there is nothing to render. */
+  scene: ScenePayload | null
+  sceneError?: string
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, onPlanWidth, fallbackYawDeg = 0, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, onPlanWidth, fallbackYawDeg = 0, scene, sceneError = '', height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -155,44 +160,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
 
   const lh = levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M
 
-  // ── The scene recipe (contract § B1/B3) ───────────────────────────────
-  // The whole geometry arrives from the server. Editor edits (drag, resize,
-  // opening, prop) reach it as a DRAFT — including everything unsaved — so
-  // the preview shows what the client will get, computed by the same code.
-  // Debounced: a drag fires per pointermove, one POST per ~300 ms is plenty.
-  const [scene, setScene] = useState<ScenePayload | null>(null)
-  const [sceneError, setSceneError] = useState('')
+  // The whole geometry arrives from the server (contract § B1/B3) — the
+  // parent holds the debounced draft request, this component only renders.
   const sceneRef = useRef<ScenePayload | null>(null)
   sceneRef.current = scene
-  // Model edits (rotation fix, width_m, walk_y, a new mesh) change the
-  // payload without touching the draft — this counter refetches it.
-  const [modelVer, setModelVer] = useState(0)
-
-  useEffect(() => {
-    let stale = false
-    const timer = window.setTimeout(() => {
-      postScenePreview<ScenePayload>({
-        id: locationId,
-        map_rotation_2d: fallbackYawDeg,
-        map3d: map3d || {},
-        rooms: rooms.map((r) => ({ id: r.id || '', name: r.name || '',
-                                   layout: r.layout })),
-      })
-        .then((payload) => {
-          if (stale) return
-          setSceneError('')
-          setScene(payload)
-        })
-        .catch((e) => {
-          if (stale) return
-          // No silent fallback to a local computation — the preview says so
-          // instead of showing a second, different geometry.
-          setSceneError((e as Error).message)
-          setScene(null)
-        })
-    }, 300)
-    return () => { stale = true; window.clearTimeout(timer) }
-  }, [locationId, rooms, map3d, fallbackYawDeg, modelVer])
 
   // Mesh width-per-height ratio via the SHARED helper (same value the
   // layout editor uses) — auto plan width = declared height × this ratio
@@ -227,7 +198,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           .catch(() => undefined)
       }
       setBump((b) => b + 1)
-      setModelVer((v) => v + 1)  // model metas feed the scene payload
     }
     window.addEventListener('anima-model3d-changed', onChanged)
     return () => window.removeEventListener('anima-model3d-changed', onChanged)
@@ -891,12 +861,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // tiling, no more. View state stays local (level solo, toggles, the
     // camera culling that uses the delivered outward_normal).
     wallCullRef.current = []
-    const wallColor = hex(style?.wall_color, 0xcfc4b2)
-    const floorColor = hex(style?.floor_color, 0xd8d0c2)
-    const glassColor = hex(style?.glass_color, 0x9fc2d8)
-    const glassOpacity = style?.glass_opacity ?? 0.25
-    const upperWall = style?.upper_wall_opacity ?? 0.45
-    const upperFloor = style?.upper_floor_opacity ?? 0.4
+    // Every colour/opacity below is the payload's — there is no local
+    // default to fall back to, because without the payload there is nothing
+    // to paint in the first place.
+    const wallColor = hex(sc?.style.wall_color, 0xffffff)
+    const floorColor = hex(sc?.style.floor_color, 0xffffff)
+    const glassColor = hex(sc?.style.glass_color, 0xffffff)
+    const glassOpacity = sc?.style.glass_opacity ?? 1
+    const upperWall = sc?.style.upper_wall_opacity ?? 1
+    const upperFloor = sc?.style.upper_floor_opacity ?? 1
 
     if (sc && showWallsRef.current) {
       // Floor slabs. A textured kind tiles at its REAL size (size_m × k);

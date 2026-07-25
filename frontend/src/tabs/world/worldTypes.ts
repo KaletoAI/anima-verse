@@ -225,8 +225,25 @@ export interface SceneStyle {
   room_palette: string[]
 }
 
+/** Per-room recipe vocabulary in PLAN FRACTIONS — what the 2D editor needs
+ *  to DRAW without re-deriving anything: the hull, the openings (already
+ *  normalized to edge indices and with the neighbours' shared-wall holes
+ *  mirrored in) and the exit. ``exit`` keeps the recipe's dual frame:
+ *  explicit = fraction of the room RECTANGLE, derived = absolute plate
+ *  fraction (``exit_derived`` says which). */
+export interface SceneRoom {
+  room_id: string
+  level: number
+  always_visible: boolean
+  outline: Array<[number, number]>
+  openings: Array<RoomOpening & { edge: number; mirrored?: boolean }>
+  exit?: [number, number] | null
+  exit_derived?: boolean
+}
+
 export interface ScenePayload {
   signature: string
+  rooms: SceneRoom[]
   /** World metres per real metre (8 / plan_width_m; 1 = legacy). */
   k: number
   storey_m: number

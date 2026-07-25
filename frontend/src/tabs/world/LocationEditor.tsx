@@ -13,6 +13,7 @@ import { BuildingModelPanel } from './BuildingModelPanel'
 import { RoomLayoutEditor } from './RoomLayoutEditor'
 import { FloorPlanPreview } from './FloorPlanPreview'
 import { RoomModelAdjust } from './RoomModelAdjust'
+import { useScenePreview } from './useScenePreview'
 
 // ── Location editor ────────────────────────────────────────────────────────
 // Split into four tabs: General (gameplay data), 2D world (day/night/map
@@ -516,6 +517,12 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
     </div>
   )
 
+  // ONE scene recipe for the whole floor-plan tab: the 3D preview renders it,
+  // the 2D editor draws its per-room block (ghost openings, derived exit) —
+  // same debounced request, no second roundtrip and no second geometry.
+  const { scene, error: sceneError } = useScenePreview(
+    location.id, draft.rooms || [], draft.map3d, location.map_rotation_2d || 0)
+
   const floorSelRoom = (draft.rooms || []).find((r) => r.id === floorRoomSel)
   const tabFloor = (
     <div className="ga-form">
@@ -528,6 +535,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           map3d={draft.map3d}
           onMap3d={updMap3d}
           onSelectRoom={setFloorRoomSel}
+          scene={scene}
         >
           {floorSelRoom?.id ? (
             <RoomModelAdjust
@@ -545,6 +553,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           onLevelHeight={(v) => updMap3d('level_height', v)}
           onPlanWidth={(v) => updMap3d('plan_width_m', v)}
           fallbackYawDeg={location.map_rotation_2d || 0}
+          scene={scene}
+          sceneError={sceneError}
         />
       </div>
     </div>

@@ -18,8 +18,8 @@ import { apiGet } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import {
   CLOSE_TOL_PX, MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
-  SNAP_TOL_PX, absOutline, buildSnapTargets, clamp, deriveExit, edgePointOnEdge,
-  edgeSegment, exteriorEdges, mirrorOpenings, nearestPolygonEdge,
+  SNAP_TOL_PX, absOutline, buildSnapTargets, clamp, edgePointOnEdge,
+  edgeSegment, exteriorEdges, nearestPolygonEdge,
   normalizeOpeningEdge, outlineOf, r4, rotateOpeningCW, sharedEdges,
   snapDrawPoint, snapMoveOffset,
 } from './planGeometry'
@@ -29,7 +29,7 @@ import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { getBuildingDims, getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
-import type { Map3D, Room, RoomLayout, RoomOpening } from './worldTypes'
+import type { Map3D, Room, RoomLayout, RoomOpening, SceneRoom, ScenePayload } from './worldTypes'
 
 const CANVAS_W = 420
 
@@ -80,6 +80,11 @@ interface RoomLayoutEditorProps {
   /** Reports the selected room id ('' = none) — the Floor-plan tab shows the
    *  model adjustment strip for it. */
   onSelectRoom?: (roomId: string) => void
+  /** The server-composed scene of the current draft (useScenePreview in the
+   *  parent, shared with the 3D preview). Its per-room block delivers the
+   *  neighbours' shared-wall openings and the derived exit in plan
+   *  fractions — the editor DRAWS them, it does not derive them. */
+  scene?: ScenePayload | null
   /** Rendered at the bottom INSIDE the editor's frame — the Floor-plan tab
    *  slots the model adjustment strip of the selected room here. */
   children?: ReactNode
@@ -97,7 +102,7 @@ type DragState =
 /** Real prop dims for true-size footprints — lean mirror of /world/props. */
 interface PropDims { name: string; width_m: number; depth_m: number; height_m: number }
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYawDeg = 0, map3d, onMap3d, onSelectRoom, scene = null, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -329,6 +334,32 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
   // data stays readable and selectable; only the geometry tools are locked.
   const anchorMissing = planW <= 0 && (
     rooms.some((r) => r.layout) || !!map3d?.outline?.length)
+  // ── Server-composed room vocabulary (contract § B1 `rooms`) ──────────
+  // Shared-wall openings and the derived exit are TRUTH, not cosmetics —
+  // they come from the same scene payload the 3D preview renders, in plan
+  // fractions. The editor draws them; it never re-derives them.
+  const sceneRooms = useMemo(
+    () => new Map((scene?.rooms || []).map((r) => [r.room_id, r] as [string, SceneRoom])),
+    [scene])
+  // A mirrored opening is one hole seen from the other side — find the
+  // ORIGINAL in the owning room so a click can select it there. Identity by
+  // position (plan fractions), since the payload does not index back.
+  const ownerOpeningIndex = useCallback(
+    (ownerId: string, point: { x: number; y: number }): number => {
+      const owner = rooms.find((r) => r.id === ownerId)
+      const ownerScene = sceneRooms.get(ownerId)
+      if (!owner?.layout || !ownerScene) return -1
+      const hull = absOutline(owner.layout)
+      let best = -1
+      let bestD = Infinity
+      ownerScene.openings.forEach((o, i) => {
+        if (o.mirrored || o.edge >= hull.length) return
+        const p = edgePointOnEdge(hull, o.edge, o.at)
+        const dist = Math.hypot(p.x - point.x, p.y - point.y)
+        if (dist < bestD) { bestD = dist; best = i }
+      })
+      return bestD < 0.02 ? best : -1
+    }, [rooms, sceneRooms])
   // Refs for the window-level drag handler (its effect closure would go
   // stale on level/anchor changes otherwise).
   const map3dRef = useRef(map3d)
@@ -1304,18 +1335,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
         {placed.map((room) => {
           const lay = room.layout!
           const isSel = room.id === selected
-          // Holes owned by a NEIGHBOUR that pierce this room's wall too —
-          // drawn as ghosts below and counted by the exit derivation.
-          const mirrored = room.id ? mirrorOpenings(
-            { id: room.id, x: lay.x, y: lay.y, w: lay.w, d: lay.d,
-              outline: lay.outline },
-            placed.filter((r) => r.id && r.id !== room.id).map((r) => ({
-              id: r.id!, name: r.name,
-              layout: { id: r.id!, x: r.layout!.x, y: r.layout!.y,
-                w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline,
-                openings: r.layout!.openings },
-            })),
-            planW || 8) : []
+          // Holes owned by a NEIGHBOUR that pierce this room's wall too:
+          // WHICH ones and WHERE is the server's answer (scene payload, plan
+          // fractions) — the editor only draws them and routes a click to
+          // the owning room.
+          const sceneRoom = sceneRooms.get(room.id || '')
+          const mirrored = (sceneRoom?.openings || []).filter((o) => o.mirrored)
           return (
             <div
               key={room.id}
@@ -1373,11 +1398,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                   }}
                 />
               ) : (() => {
-                // No explicit exit: it DERIVES from the doors (own openings
-                // plus the mirrored ones) — same rule as the recipe.
-                const own = (lay.openings || [])
-                  .map((o) => ({ ...o, ...normalizeOpeningEdge(o) }))
-                const auto = deriveExit(lay, [...own, ...mirrored], planW || 8)
+                // No explicit exit: the payload's DERIVED one — an absolute
+                // plate fraction (exit_derived flags the frame), converted
+                // into the room-local fractions this markup positions with.
+                const src = sceneRoom?.exit_derived ? sceneRoom.exit : null
+                const auto: [number, number] | null = src
+                  ? [clamp((src[0] - lay.x) / (lay.w || 1), 0, 1),
+                     clamp((src[1] - lay.y) / (lay.d || 1), 0, 1)]
+                  : null
                 return auto ? (
                   <span
                     title={t('Exit (auto — derived from the door)')}
@@ -1586,10 +1614,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                 const deg = Math.atan2((seg.b[1] - seg.a[1]) * lay.d,
                                        (seg.b[0] - seg.a[0]) * lay.w) * 180 / Math.PI
                 const mwPct = ((op.width_m || 1) / (planW || 8)) / (lay.w || 1) * 100
+                // `to` names the owning room (that is where the door leads
+                // from here); the original is edited there.
+                const ownerId = op.to || ''
+                const ownerName = rooms.find((r) => r.id === ownerId)?.name || ownerId
                 return (
                   <div
                     key={`mop-${i}`}
-                    title={`${op.type} · ${t('defined in {room} — click to edit it there').replace('{room}', op.ownerName)}`}
+                    title={`${op.type} · ${t('defined in {room} — click to edit it there').replace('{room}', ownerName)}`}
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       // A shared-wall opening is one hole seen from two
@@ -1597,8 +1629,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', fallbackYaw
                       // happens on the original in the owning room.
                       e.stopPropagation()
                       if (clickMode || armedProp) return
-                      setSelected(op.ownerId)
-                      setOpeningSel(op.ownerIndex)
+                      setSelected(ownerId)
+                      const idx = ownerOpeningIndex(ownerId, edgePointOnEdge(
+                        absOutline(lay), op.edge, op.at))
+                      if (idx >= 0) setOpeningSel(idx)
                     }}
                     style={{
                       position: 'absolute',
