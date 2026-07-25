@@ -583,10 +583,12 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     area for plate, shell and walkability. Without either, the documented
     fallback is the old rectangle fit.
 
-    Coexistence rule: a room whose recipe carries prop placements is
-    furnished from the recipe and gets NO diorama.
+    Coexistence (user decision 2026-07-25): the diorama ALWAYS coexists with
+    the recipe scene — it is treated like one more prop (placed via model_at,
+    calibrated via width_m/walk_y), whether or not the room carries prop
+    placements. A room without a diorama simply has no model.
     """
-    if not meta or recipe.get("placements"):
+    if not meta:
         return None
     from urllib.parse import quote
     lay = room.get("layout") or {}
