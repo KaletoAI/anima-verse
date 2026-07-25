@@ -87,8 +87,10 @@ export interface Tile {
   outlineWalls: { mesh: THREE.Mesh; level: number; mid: THREE.Vector2; normal: THREE.Vector2 }[];
   /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
   levelSlabs: Map<number, THREE.Mesh>;
-  /** Wand-Material je Etage (fürs Etagen-Umschalten) */
-  levelWallMats: Map<number, THREE.MeshStandardMaterial>;
+  /** Wand-Materialien je Etage (fürs Etagen-Umschalten). Liste, weil
+   *  texturierte Wände je Stück ein eigenes Material mit eigener repeat
+   *  brauchen (Szenen-Rezept) — der Legacy-Grundriss trägt genau eines ein. */
+  levelWallMats: Map<number, THREE.MeshStandardMaterial[]>;
   /** aktuell gewählte Etage der Innenansicht (Umschalter; Default EG) */
   levelFilter: number;
   /** Zoom-Zugabe für die Innenansicht bei mehrgeschossigen Gebäuden:
@@ -747,7 +749,7 @@ function buildInterior(tile: Tile, _spec: BuildingSpec, opts: { walls?: boolean;
         slabMat.map = floorTex;
         slabMat.color.set(0xffffff);
       }
-      tile.levelWallMats.set(level, wallMat);
+      tile.levelWallMats.set(level, [wallMat]);
       const slab = new THREE.Mesh(
         new THREE.ExtrudeGeometry(floorShape, { depth: 0.14, bevelEnabled: false }),
         slabMat
@@ -910,6 +912,13 @@ export interface BuildTileOpts {
   /** Eingangs-/Exit-Marker (gelbe Punkte) zeigen — nur für die
    *  Grundriss-Vorschau; im Spiel-Client bleiben sie aus. */
   markers?: boolean;
+  /** true = die Location hat ein Szenen-Rezept (§ B1): die komplette
+   *  Innenansicht kommt aus dem Payload, buildInterior baut NICHTS
+   *  (keine Raum-Platten, kein Grundriss, kein Fahrstuhl, keine
+   *  Etagen-Auswahl). mountScene füllt danach dieselben Tile-Felder,
+   *  damit LOD, Fades, Fokus, Etagen-Umschalter und NPC-Platzierung
+   *  unverändert weiterlaufen. */
+  sceneMode?: boolean;
 }
 
 export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
@@ -1004,7 +1013,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     }
     tile.height = style === 'forest' ? 3 : 0.6;
     const spec: BuildingSpec = { w: 8, d: 8, h: 0, build() { /* Naturfläche */ } };
-    buildInterior(tile, spec, { walls: false, markers: opts.markers });
+    if (!opts.sceneMode) buildInterior(tile, spec, { walls: false, markers: opts.markers });
     addLabel();
   } else {
     // Sockel-Platte unter Gebäuden: deklariertes Terrain der Location
@@ -1035,7 +1044,7 @@ export function buildTile(loc: WorldLocation, opts: BuildTileOpts = {}): Tile {
     group.add(shell);
     tile.shell = shell;
     tile.height = spec.h;
-    buildInterior(tile, spec, { markers: opts.markers });
+    if (!opts.sceneMode) buildInterior(tile, spec, { markers: opts.markers });
     addLabel();
   }
 
@@ -1367,8 +1376,8 @@ export function applyLevelDisplay(tile: Tile) {
     const m = slab.material as THREE.MeshStandardMaterial;
     m.opacity = lv === tile.levelFilter ? 1 : 0.85;
   }
-  for (const [lv, mat] of tile.levelWallMats) {
-    mat.opacity = lv === tile.levelFilter ? 1 : 0.45;
+  for (const [lv, mats] of tile.levelWallMats) {
+    for (const mat of mats) mat.opacity = lv === tile.levelFilter ? 1 : 0.45;
   }
 }
 

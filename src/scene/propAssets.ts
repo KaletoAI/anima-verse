@@ -56,19 +56,22 @@ function pump() {
   }
 }
 
-/** GLB laden (Promise-Cache pro id; parallele Aufrufe teilen den Load).
- *  `near` = Weltposition des Verwenders (Kachelzentrum) für die
- *  Priorisierung. Rückgabe: die ROHE Szene des glTF, unverändert.
- *  404/Fehler → null, fehlgeschlagene Loads nicht dauerhaft als null cachen
- *  (Retry möglich). Browser-HTTP-Cache + ETag erledigen die Revalidierung. */
-export function loadPropModel(id: string, near?: THREE.Vector3): Promise<THREE.Group | null> {
-  const cached = loadCache.get(id);
+/** GLB per URL laden (Promise-Cache pro URL; parallele Aufrufe teilen den
+ *  Load). `near` = Weltposition des Verwenders (Kachelzentrum) für die
+ *  Priorisierung. Rückgabe: die ROHE Szene des glTF, unverändert — kein
+ *  Orientierungs-Fix, keine Skalierung, keine Position. Genau das braucht
+ *  die place()-Routine des Szenen-Rezepts (§ B2): sie wendet fix_euler aus
+ *  der Spec selbst an und misst danach. 404/Fehler → null, fehlgeschlagene
+ *  Loads nicht dauerhaft als null cachen (Retry möglich); Browser-HTTP-Cache
+ *  + ETag erledigen die Revalidierung. */
+export function loadGlb(url: string, near?: THREE.Vector3): Promise<THREE.Group | null> {
+  const cached = loadCache.get(url);
   if (cached) return cached;
   const pending = new Promise<THREE.Group | null>((resolve) => {
     queue.push({
       at: near,
       start: () => {
-        loader.loadAsync(propModelUrl(id))
+        loader.loadAsync(url)
           .then((gltf) => {
             // gleiche Material-Behandlung wie Gebäude-/Raum-GLBs (Metalness/Env)
             neutralizeGltfMaterials(gltf.scene);
@@ -76,7 +79,7 @@ export function loadPropModel(id: string, near?: THREE.Vector3): Promise<THREE.G
           })
           .catch(() => {
             // 404/Fehler nicht dauerhaft festhalten -> Retry möglich
-            loadCache.delete(id);
+            loadCache.delete(url);
             resolve(null);
           })
           .finally(() => {
@@ -87,8 +90,13 @@ export function loadPropModel(id: string, near?: THREE.Vector3): Promise<THREE.G
     });
     pump();
   });
-  loadCache.set(id, pending);
+  loadCache.set(url, pending);
   return pending;
+}
+
+/** Prop-GLB über die Bibliotheks-URL (Legacy-Rezept-Pfad). */
+export function loadPropModel(id: string, near?: THREE.Vector3): Promise<THREE.Group | null> {
+  return loadGlb(propModelUrl(id), near);
 }
 
 /** Platzhalter für missing / has_model:false — Box in Realgröße dims × k,

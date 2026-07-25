@@ -1,9 +1,16 @@
 // Grundriss-Vorschau (AV3D-2) für den Game-Admin:
-//   /floorplan.html?location=<id-oder-name>
-// Zeigt EINE Location isoliert mit aufgedeckter Innenansicht (Raum-Platten,
-// Etagen, Exit-Marker, Raum-Modelle) und pollt das Layout — Änderungen im
-// Grundriss-Editor erscheinen ohne Reload. Gedacht als iframe rechts neben
-// dem Editor; Voraussetzung ist eine bestehende Anmeldung im 3D-Client.
+//   /floorplan.html?location=<id-oder-name>[&verify=1]
+// Zeigt EINE Location isoliert mit aufgedeckter Innenansicht und pollt sie —
+// Änderungen im Grundriss-Editor erscheinen ohne Reload. Gedacht als iframe
+// rechts neben dem Editor; Voraussetzung ist eine bestehende Anmeldung im
+// 3D-Client.
+//
+// Hat die Location ein Szenen-Rezept (Vertrag § B1), rendert die Vorschau
+// AUSSCHLIESSLICH daraus — damit zeigt sie zwangsläufig dasselbe Bild wie die
+// Game-Admin-Vorschau, die denselben Composer über /play/scene-preview liest
+// (§ B3). Ohne Rezept (404) bleibt der Legacy-Pfad. `&verify=1` schaltet den
+// Verify-Modus nach § B5a ein: Welt-BBox je Objekt gegen die Spec, ε = 0,01 m,
+// Ausgabe als Konsolen-Tabelle.
 import * as THREE from 'three';
 import { Engine } from './scene/engine';
 import { applyRoomModel, applyTileFade, buildTile, type Tile } from './scene/tiles';
@@ -12,6 +19,7 @@ import { getLocationModel, getProps, getRoomModel, getRoomRecipe, getSurfaceText
 import { setLocationAnchor, setSurfaceTextures, storeyHeight } from './scene/tiles';
 import { setPropLibrary } from './scene/propAssets';
 import { mountRoomRecipe } from './scene/roomRecipe';
+import { mountScene, SceneLibrary } from './scene/sceneRecipe';
 void getSurfaceTextures().then(setSurfaceTextures);
 void getProps().then(setPropLibrary);
 import { grassTexture } from './scene/textures';
@@ -50,8 +58,9 @@ ground.receiveShadow = true;
 engine.scene.add(ground);
 
 const roomModels = roomModelLibrary();
-// Raum-Rezepte (Raum-Props): placements vorhanden -> Rezept-Szene statt Diorama
+// Raum-Rezepte (Legacy-Pfad, nur ohne Szenen-Rezept)
 const recipeByRoom = new Map<string, ApiRoomRecipe | null>();
+const scenes = new SceneLibrary();
 let tile: Tile | null = null;
 let lastSig = '';
 
@@ -77,11 +86,26 @@ function rebuild(loc: WorldLocation) {
   // CSS2D-Label-Reste des alten Baus entfernen (der Renderer räumt sie nicht ab)
   document.querySelectorAll('.room-label, .loc-label').forEach((el) => el.remove());
 
+  const scene = scenes.get(loc.id);
   const shown: WorldLocation = { ...loc, grid_x: 0, grid_y: 0, rooms: loc.rooms ?? [] };
-  tile = buildTile(shown, { markers: true });   // Editor-Kontext: Exit-Punkte zeigen
+  // Editor-Kontext: Exit-Punkte zeigen (nur Legacy — im Szenen-Pfad kommen
+  // Ausgänge fertig als Weltpunkte und brauchen keine gemalten Hilfspunkte)
+  tile = buildTile(shown, { markers: !scene, sceneMode: !!scene });
   tile.fade = 1;
   tile.fadeTarget = 1;   // Innenansicht dauerhaft aufgedeckt
   engine.scene.add(tile.group);
+  if (scene) {
+    // Kachel steht auf Grid 0/0 → Payload-Koordinaten sind hier direkt
+    // Weltkoordinaten; die Verify-Tabelle vergleicht damit 1:1 gegen die Spec.
+    void mountScene(tile, scene).then((report) => {
+      if (report) {
+        say(report.rows.length
+          ? `Verify: ${report.rows.length} Abweichung(en) von ${report.checked} Zahlen — siehe Konsole`
+          : `Verify: ${report.checked} Zahlen geprüft, keine Abweichung`);
+      }
+    });
+    return;
+  }
   for (const room of shown.rooms) {
     if (!room.layout) continue;
     // Hülle immer aus dem Rezept; das Diorama koexistiert (model_at)
@@ -94,7 +118,7 @@ function rebuild(loc: WorldLocation) {
 }
 
 roomModels.onModelReady = (roomId) => {
-  if (!tile) return;
+  if (!tile || scenes.has(tile.loc.id)) return;
   const model = roomModels.get(roomId);
   if (model) applyRoomModel(tile, roomId, model);
 };
@@ -102,6 +126,22 @@ roomModels.onModelReady = (roomId) => {
 async function poll() {
   const loc = await fetchLocation();
   if (!loc) return;
+
+  // Szenen-Rezept zuerst: seine Signatur deckt map3d, ALLE Raum-Layouts, die
+  // Modell-Metas und die Prop-Sidecars ab (§ B1) — ein Poll, ein Vergleich.
+  // genau EIN Fetch je Poll: beim ersten Mal holen, danach die Signatur prüfen
+  if (scenes.get(loc.id) === undefined) await scenes.prime([loc.id]);
+  else await scenes.sweep();
+  const scene = scenes.get(loc.id);
+  if (scene) {
+    if (scene.signature !== lastSig) {
+      lastSig = scene.signature;
+      rebuild(loc);
+      say('');
+    }
+    return;
+  }
+
   // Auch Meta-Justierungen (rotation/offset_y/Anker/signature) live
   // übernehmen: Metas abfragen und geänderte Modelle aus dem Cache werfen.
   const metas: unknown[] = [];

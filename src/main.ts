@@ -7,6 +7,7 @@ import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, 
 import { buildingLibrary, roomModelLibrary, setModelEnvironment } from './scene/buildings';
 import { setPropLibrary, setPropLoadFocus } from './scene/propAssets';
 import { mountRoomRecipe, RecipeLibrary, unmountRoomRecipe } from './scene/roomRecipe';
+import { mountScene, sceneFigureScale, SceneLibrary } from './scene/sceneRecipe';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { createHud, InfoPanel, showLogin } from './ui';
@@ -102,11 +103,23 @@ async function startApp(username: string) {
   // wie die Küste: Verlauf Richtung Wasser-Nachbarn)
   setTerrainGrid(placeable.map((l) => ({ gx: l.grid_x!, gy: l.grid_y!, kind: gridSurfaceKind(l) })));
 
+  // Szenen-Rezept (Vertrag Teil B): der Server liefert die komplette Szene
+  // einer Location als fertige Primitive + Platzierungs-Specs. Wo es eins
+  // gibt, baut der Client NICHTS selbst mehr (kein Grundriss, keine
+  // Öffnungs-Aufteilung, keine eigenen Konstanten/Farben) — 404 = Legacy-Fall,
+  // dann bleibt der prozedurale Pfad unverändert.
+  // Vor dem ersten Kachelbau holen, damit jede Kachel gleich im richtigen
+  // Modus entsteht.
+  const scenes = new SceneLibrary();
+  await scenes.prime(placeable.map((l) => l.id));
+
   const tiles = new Map<string, Tile>();
   for (const loc of placeable) {
-    const tile = buildTile(loc);
+    const scene = scenes.get(loc.id);
+    const tile = buildTile(loc, { sceneMode: !!scene });
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
+    if (scene) void mountScene(tile, scene);
   }
   engine.setPickables([...tiles.values()].map((t) => t.group));
 
@@ -118,6 +131,9 @@ async function startApp(username: string) {
   const modelKeyOf = (loc: WorldLocation) => loc.template_location_id || loc.id;
   const buildings = buildingLibrary();
   const applyServerBuilding = (tile: Tile) => {
+    // Szenen-Pfad: Hülle, Maßstab und Erdung stehen in der Spec — hier gibt es
+    // keine zweite, lokal gerechnete Antwort auf die Gebäudegröße.
+    if (scenes.has(tile.loc.id)) return;
     const model = buildings.get(modelKeyOf(tile.loc));
     if (!model) return;
     // v3-Maßstabs-Anker (backend-note-scale-anchors.md): explizites
@@ -155,8 +171,15 @@ async function startApp(username: string) {
   // koexistiert (seit layout.model_at wird es wie ein Prop im Raum
   // platziert) und wird immer geladen. signature-Polling im 60-s-Zyklus.
   const recipes = new RecipeLibrary();
-  recipes.onRecipe = (roomId, recipe) => {
+  /** Legacy-Ketten laufen nur für Locations OHNE Szenen-Rezept — sonst gäbe es
+   *  die Geometrie zweimal, genau die Drift, die Teil B beseitigt. */
+  const legacyRoom = (roomId: string): Tile | null => {
     const tile = tileByRoom.get(roomId);
+    if (!tile || scenes.has(tile.loc.id)) return null;
+    return tile;
+  };
+  recipes.onRecipe = (roomId, recipe) => {
+    const tile = legacyRoom(roomId);
     if (!tile) return;
     if (recipe && recipe.outline.length >= 3) void mountRoomRecipe(tile, roomId, recipe);
     else unmountRoomRecipe(tile, roomId);
@@ -165,16 +188,26 @@ async function startApp(username: string) {
     if (model) applyRoomModel(tile, roomId, model);
   };
   roomModels.onModelReady = (roomId) => {
-    const tile = tileByRoom.get(roomId);
+    const tile = legacyRoom(roomId);
     const model = roomModels.get(roomId);
     if (tile && model) applyRoomModel(tile, roomId, model);
   };
+  let firstSweep = true;
   const requestServerModels = () => {
     for (const tile of tiles.values()) {
+      if (scenes.has(tile.loc.id)) continue;          // Szene liefert das Modell
       if (!tile.serverModel) buildings.request(modelKeyOf(tile.loc));
     }
     // Rezept zuerst (Weiche); Diorama-Anfragen stößt onRecipe an
-    for (const roomId of tileByRoom.keys()) recipes.request(roomId);
+    for (const [roomId, tile] of tileByRoom) {
+      if (!scenes.has(tile.loc.id)) recipes.request(roomId);
+    }
+    // Szenen-Rezepte: neue Locations holen + Signaturen nachfassen (deckt
+    // map3d, alle Raum-Layouts, Modell-Metas und Prop-Sidecars ab). Beim
+    // ersten Durchlauf entfällt der Sweep — prime() hat gerade geholt.
+    for (const locId of tiles.keys()) scenes.request(locId);
+    if (!firstSweep) void scenes.sweep();
+    firstSweep = false;
     // neu generierte Modelle/Rezepte ohne Reload erkennen (signature)
     void recipes.sweep();
     void buildings.sweepSignatures();
@@ -196,26 +229,41 @@ async function startApp(username: string) {
       const el = (o as { isCSS2DObject?: boolean; element?: HTMLElement });
       if (el.isCSS2DObject && el.element) el.element.remove();
     });
-    const tile = buildTile(loc);
+    const scene = scenes.get(loc.id);
+    const tile = buildTile(loc, { sceneMode: !!scene });
     tile.fade = old.fade;
     tile.fadeTarget = old.fadeTarget;
+    tile.levelFilter = old.levelFilter;   // gewählte Etage über den Rebuild halten
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
-    const bm = buildings.get(modelKeyOf(loc));
-    if (bm) applyBuildingModel(tile, bm);
-    for (const r of loc.rooms) {
-      if (!r.layout) continue;
-      tileByRoom.set(r.id, tile);
-      const recipe = recipes.get(r.id);
-      if (recipe && recipe.outline.length >= 3) {
-        void mountRoomRecipe(tile, r.id, recipe);   // frische Kachel: Rezept-Szene neu montieren
+    for (const r of loc.rooms) if (r.layout) tileByRoom.set(r.id, tile);
+    if (scene) {
+      // Szenen-Pfad: die ganze Innenansicht plus Gebäudehülle kommt aus dem
+      // Payload — keine der Legacy-Ketten anfassen.
+      void mountScene(tile, scene);
+    } else {
+      const bm = buildings.get(modelKeyOf(loc));
+      if (bm) applyBuildingModel(tile, bm);
+      for (const r of loc.rooms) {
+        if (!r.layout) continue;
+        const recipe = recipes.get(r.id);
+        if (recipe && recipe.outline.length >= 3) {
+          void mountRoomRecipe(tile, r.id, recipe);   // frische Kachel: Rezept-Szene neu montieren
+        }
+        recipes.request(r.id);         // unbekannt: onRecipe montiert nach dem Laden
+        roomModels.invalidate(r.id);   // rotation/model_at evtl. geändert
+        roomModels.request(r.id);
       }
-      recipes.request(r.id);         // unbekannt: onRecipe montiert nach dem Laden
-      roomModels.invalidate(r.id);   // rotation/model_at evtl. geändert
-      roomModels.request(r.id);
     }
     engine.setPickables([...tiles.values()].map((t) => t.group));
   }
+  // Szenen-Signatur bewegt sich (Layout, map3d, Modell-Meta, Prop-Sidecar) →
+  // Kachel im passenden Modus neu bauen. Wird eine Szene zu 404 (Layout
+  // gelöscht), fällt dieselbe Kachel auf den Legacy-Pfad zurück.
+  scenes.onScene = (locId) => {
+    const tile = tiles.get(locId);
+    if (tile) rebuildTile(tile, tile.loc);
+  };
   async function pollLocations() {
     try {
       const fresh = await api.getLocations();
@@ -425,8 +473,9 @@ async function startApp(username: string) {
         // dauerhaft sichtbare Räume gelten in jeder Zoomstufe
         const inRoom = roomCenter && room && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(room))
           ? room : null;
-        // Innenraum-Maßstab folgt der Etagenhöhe (level_height / 3)
-        const roomScale = roomFigureScale(tile.loc);
+        // Innenraum-Maßstab: bei Szenen-Locations aus dem Payload
+        // (figures.base_height_m_world, § B1), sonst wie bisher aus dem Anker
+        const roomScale = sceneFigureScale(tile.loc.id) ?? roomFigureScale(tile.loc);
         if (inRoom && roomCenter) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);

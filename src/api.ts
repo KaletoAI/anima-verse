@@ -270,6 +270,172 @@ export async function getRoomRecipe(roomId: string): Promise<ApiRoomRecipe | nul
   };
 }
 
+// --- Szenen-Rezept (schnittstellen-3d.md Teil B) ------------------------------
+// Der Server komponiert die GANZE Szene einer Location; der Client stellt sie
+// nur dar. Jede Zahl unten ist bereits ein WELT-Meter um das Kachelzentrum —
+// keine Fraktionen, keine Maßstabsfaktoren, keine Geometrie-Entscheidung auf
+// dieser Seite. Gegenstück: app/core/scene_recipe.py, gleiche Typen wie die
+// Admin-Vorschau (frontend/src/tabs/world/worldTypes.ts).
+
+/** Bodenplatte: Kontur-Platte je genutzter Etage oder Boden eines Raums.
+ *  thickness 0 = reine Textur-Fläche ohne Körper (Outdoor-Räume, § A5). */
+export interface ScenePlate {
+  level: number;
+  outline: [number, number][];
+  top_y: number;
+  thickness: number;
+  texture_kind?: string;
+  opacity_role: 'ground' | 'upper';
+  room_id?: string;
+}
+
+/** Ein Wandstück — um Türen/Fenster bereits geteilt; das Glasband eines
+ *  Fensters kommt als eigener Eintrag mit `glass`. `outward_normal` zeigt vom
+ *  umschlossenen Raum weg (Blickrichtungs-Culling). */
+export interface SceneWall {
+  level: number;
+  from: [number, number];
+  to: [number, number];
+  base_y: number;
+  height: number;
+  thickness: number;
+  texture_kind?: string;
+  glass?: boolean;
+  opacity_role: 'ground' | 'upper';
+  room_id?: string;
+  outward_normal: [number, number];
+}
+
+/** Typisiertes Box-Primitiv (Fahrstuhl: Schacht/Glas/Pad/Kabine) — Zentrum
+ *  plus Größe, fertig in Welt-Metern. */
+export interface SceneExtra {
+  kind: string;
+  center: [number, number, number];
+  size: [number, number, number];
+  side?: string;
+  level?: number;
+}
+
+/** EINE Platzierungs-Spec für Gebäude, Raum-Diorama und Prop gleichermaßen —
+ *  Futter für die einzige place()-Routine des Vertrags (§ B2). */
+export interface SceneModelSpec {
+  role: 'building' | 'room' | 'prop';
+  id: string;
+  /** ETag-Endpunkt; leer = kein Mesh (dann placeholder_dims) */
+  url: string;
+  room_id?: string;
+  level: number;
+  /** Orientierungs-Fix, Euler 'XYZ' in Grad — VOR dem Messen */
+  fix_euler: { x: number; y: number; z: number };
+  yaw_deg: number;
+  scale_mode: 'fit_box' | 'real_size' | 'tile_fit';
+  /** fit_box: {w,d}; tile_fit: {xz, y?} */
+  box?: { w?: number; d?: number; h?: number; xz?: number; y?: number };
+  /** real_size: Ziel-Ausdehnung in Welt-Metern */
+  max_m?: number;
+  /** real_size: welche BBox-Achsen maxExtent bilden (Default xyz) */
+  measure_axes?: 'xyz' | 'xz';
+  /** § B4: server-vermessenes Mesh — Faktoren kommen fertig */
+  scale_axes?: { xz: number; y: number };
+  anchor: [number, number];
+  bottom_y: number;
+  /** Platzhalter-Box (schon Welt-Meter) für fehlendes/mesh-loses Prop */
+  placeholder_dims?: { w: number; d: number; h: number };
+  /** Räume: absolute Höhe, auf der eine Figur im Diorama steht (§ B6 Nr. 7) */
+  walk_y_world?: number;
+}
+
+export interface SceneMarker {
+  room_id: string;
+  at_world: [number, number];
+  y_world: number;
+  animation: string;
+  facing?: number;
+  source: 'room' | 'prop';
+}
+
+export interface SceneExit {
+  room_id: string;
+  at_world: [number, number];
+  derived?: boolean;
+}
+
+/** Gemeinsames Farb-Vokabular beider Renderer — keine Hex-Konstanten hier. */
+export interface SceneStyle {
+  wall_color: string;
+  floor_color: string;
+  glass_color: string;
+  glass_opacity: number;
+  upper_wall_opacity: number;
+  upper_floor_opacity: number;
+  room_palette: string[];
+  elevator_frame_color?: string;
+  elevator_pad_color?: string;
+  elevator_cabin_color?: string;
+  elevator_cabin_opacity?: number;
+  elevator_glass_opacity?: number;
+}
+
+/** Raum-Vokabular in PLAN-FRAKTIONEN — was der 2D-Editor zum ZEICHNEN
+ *  braucht; im 3D-Client nur als Raum-Verzeichnis (Etage, Outdoor-Flag). */
+export interface SceneRoom {
+  room_id: string;
+  level: number;
+  always_visible: boolean;
+  outline: [number, number][];
+  openings?: ApiOpening[];
+  exit?: [number, number] | null;
+  exit_derived?: boolean;
+}
+
+export interface ScenePayload {
+  signature: string;
+  rooms: SceneRoom[];
+  /** Welt-Meter je Real-Meter (8 / plan_width_m; 1 = Legacy) */
+  k: number;
+  storey_m: number;
+  levels: { level: number; floor_y: number }[];
+  style: SceneStyle;
+  plates: ScenePlate[];
+  walls: SceneWall[];
+  extras: SceneExtra[];
+  models: SceneModelSpec[];
+  figures: { base_height_m_world: number; stand_clearance: number };
+  markers: SceneMarker[];
+  exits: SceneExit[];
+  outdoor_rooms: string[];
+}
+
+/** Komplette Szene einer Location (§ B1). 404 = nichts zu komponieren (kein
+ *  Grundriss, kein Raum mit Layout, kein Gebäudemodell) → Legacy-Pfad wie
+ *  bisher. Andere Fehler werfen; der Aufrufer versucht es später erneut. */
+export async function getLocationScene(locationId: string): Promise<ScenePayload | null> {
+  const res = await fetch(`/play/locations/${encodeURIComponent(locationId)}/scene`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`scene ${locationId}: HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data?.signature) return null;
+  // Defensiv nur da, wo eine kaputte Liste den Aufbau abbrechen ließe; die
+  // Zahlenfelder kommen aus dem Composer und werden NICHT nachgerechnet.
+  const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  return {
+    signature: String(data.signature),
+    rooms: arr<SceneRoom>(data.rooms),
+    k: data.k || 1,
+    storey_m: data.storey_m || 3,
+    levels: arr(data.levels),
+    style: data.style ?? {},
+    plates: arr<ScenePlate>(data.plates).filter((p) => arr(p.outline).length >= 3),
+    walls: arr<SceneWall>(data.walls),
+    extras: arr<SceneExtra>(data.extras),
+    models: arr<SceneModelSpec>(data.models),
+    figures: data.figures ?? { base_height_m_world: 1.7, stand_clearance: 0.12 },
+    markers: arr<SceneMarker>(data.markers),
+    exits: arr<SceneExit>(data.exits),
+    outdoor_rooms: arr<string>(data.outdoor_rooms),
+  };
+}
+
 /** Zusammenstellung (Surface-Tab): Zonen-Verlauf Richtung einer Nachbar-Art. */
 export interface ApiSurfaceBlend {
   /** Nachbar-Art, zu der der Verlauf zeigt (z.B. "water") */
