@@ -437,7 +437,14 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   const g = new THREE.Group();
   g.name = SCENE_GROUP;
   g.visible = false;                      // der Crossfade deckt sie auf
-  tile.interior = g;
+  // NUR eine Szene mit INNEN-Inhalt ist eine Innenansicht: eine Location,
+  // deren Payload allein aus dem Gebäudemodell besteht (Mondscheinsee —
+  // Modell, aber keine Räume/Platten/Wände), darf beim Reinzoomen NICHT
+  // ausgeblendet werden; es gäbe nichts aufzudecken.
+  const hasInterior = scene.plates.length > 0 || scene.walls.length > 0
+    || scene.extras.length > 0 || scene.markers.length > 0
+    || scene.models.some((m) => m.role !== 'building');
+  tile.interior = hasInterior ? g : null;
   tile.group.add(g);
 
   const style = scene.style;
@@ -792,7 +799,10 @@ function applySceneBuilding(tile: Tile, model: THREE.Group): void {
  *  Räumt auch die Felder, die mountScene gefüllt hat — die Kachel selbst
  *  (Sockel, prozedurale Hülle, Label, Ring) bleibt stehen. */
 export function unmountScene(tile: Tile): void {
-  const prev = tile.interior;
+  // Über den NAMEN suchen, nicht über tile.interior — eine Nur-Gebäude-Szene
+  // (kein Innen-Inhalt) hängt als Gruppe im Graphen, ohne interior zu sein.
+  const prev = tile.group.children.find((c) => c.name === SCENE_GROUP)
+    ?? tile.interior;
   if (prev && prev.name === SCENE_GROUP) tile.group.remove(prev);
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
