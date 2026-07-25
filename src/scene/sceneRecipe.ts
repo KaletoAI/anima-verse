@@ -746,6 +746,23 @@ function applySceneBuilding(tile: Tile, model: THREE.Group): void {
   }
   if (tile.decor) tile.decor.visible = false;
   tile.serverModel = model;
+  // Kachel-/Detail-Crossfade (Anker-Note "zwei Sichten"): die tile_fit-Spec
+  // liefert die DETAIL-Skalierung (Y = height_m × k); die Kartenansicht
+  // zeigt weiter uniform (Y = k_xz), applyTileFade blendet beim Zoomen —
+  // der Umbau hatte das verloren (Befund Kira: Bodenhaut am Eingang stand
+  // im Café ×1,24 höher als in der Kachel-Ansicht). Damit der Boden beim
+  // Blenden nicht wandert, wird der Inhalt auf lokale Unterkante 0
+  // umgeankert (Welt-Geometrie bleibt exakt gleich — Verify unberührt).
+  model.updateMatrixWorld(true);
+  const bb = new THREE.Box3().setFromObject(model);
+  const inner = model.children[0];
+  if (inner && model.scale.y > 1e-6) {
+    const localBottom = (bb.min.y - model.position.y) / model.scale.y;
+    inner.position.y -= localBottom;
+    model.position.y = bb.min.y;
+  }
+  model.userData.scaleBase = model.scale.x;
+  model.userData.scaleYDetail = model.scale.y;
   tile.shellMats = [];
   tile.roofMats = [];
   tile.roofParts = [model];

@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, setTerrainGrid, storeyHeight, CELL, type Tile } from './scene/tiles';
+import { applyBuildingModel, applyLevelDisplay, applyNightGlow, applyRoomFocus, applyRoomModel, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setLocationAnchor, setSurfaceTextures, setTerrainGrid, storeyHeight, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { buildingLibrary, roomModelLibrary, setModelEnvironment } from './scene/buildings';
 import { setPropLibrary, setPropLoadFocus } from './scene/propAssets';
 import { mountRoomRecipe, RecipeLibrary, unmountRoomRecipe } from './scene/roomRecipe';
@@ -509,6 +509,9 @@ async function startApp(username: string) {
           scale = roomScale;
         } else {
           pos = tile.center.clone().add(slotOffset(tile, i, chars.length));
+          // Eingebackene Bodenhaut des Gebäude-Meshes: auf die Oberfläche
+          // stellen statt bei y=0 darin zu versinken (Befund Kira).
+          pos.setY(tileGroundY(tile, pos));
         }
         // Exit-Routing: bei Betreten/Verlassen/Wechsel des dargestellten
         // Raums über die Ausgänge laufen statt durch Wände; bei

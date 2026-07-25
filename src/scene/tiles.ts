@@ -1336,6 +1336,22 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
   restoreSides();
 }
 
+/** Standhöhe auf KACHEL-Ebene (Figur außerhalb der Räume, z.B. am
+ *  Eingang): Gebäude-Meshes haben oft eine eingebackene Bodenhaut/Gelände
+ *  um den Eingang — die Figur steht auf der tatsächlichen Oberfläche statt
+ *  bei y=0 darin zu versinken. Strahl von oben; Dach-Treffer (alles über
+ *  1,2 m) werden übersprungen, ohne Treffer bleibt es beim Kachel-Boden. */
+export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
+  const target = tile.serverModel;
+  if (!target) return 0;
+  const ray = new THREE.Raycaster(
+    new THREE.Vector3(at.x, 20, at.z), new THREE.Vector3(0, -1, 0));
+  for (const h of ray.intersectObject(target, true)) {
+    if (h.point.y < 1.2) return h.point.y + 0.01;
+  }
+  return 0;
+}
+
 /** Kachel als Kamera-Verdecker aus-/einblenden (weich). Nachbarn zwischen
  *  Kamera und einer geöffneten Innenansicht verdecken sonst den Blick. */
 export function applyTileOcclusion(tile: Tile, hide: boolean, dt: number) {
