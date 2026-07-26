@@ -473,6 +473,11 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # view — for outdoor rooms that are not part of the building model.
     if raw.get("always_visible"):
         out["always_visible"] = True
+    # Diorama clipping (§ B1 ``clip_outline``): opt-in per room — the renderer
+    # discards model fragments outside the room's shell, so a diorama that
+    # overhangs its floor plan (real_size, § B2a) is cut at the shell.
+    if raw.get("clip_model"):
+        out["clip_model"] = True
     ex = raw.get("exit")
     if isinstance(ex, (list, tuple)) and len(ex) == 2:
         try:
