@@ -2173,8 +2173,21 @@ def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
     from app.core.prompt_compose import compose as _compose
     composed = _compose(use_case=use_case, subject=subject, backend=backend,
                         hints=hints)
+
+    # LLM stage: explicit request from the dialog button wins; without the
+    # field the use-case flag decides (auto-prefill). Explicit false = off.
+    from app.core import config as _cfg
+    _want = data.get("llm")
+    if (bool(_want) if _want is not None
+            else _cfg.use_case_llm_compose(use_case)):
+        from app.core.prompt_compose_llm import llm_compose
+        composed = llm_compose(composed, use_case=use_case, subject=subject,
+                               family=composed.meta.get("family", "keywords"))
+
     return {"prompt": composed.prompt, "negative": composed.negative,
-            "warnings": composed.warnings, "use_case": use_case}
+            "warnings": composed.warnings, "use_case": use_case,
+            "llm_composed": bool(composed.meta.get("llm_composed")),
+            "cache_hit": bool(composed.meta.get("cache_hit"))}
 
 
 async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2367,6 +2380,13 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                     _hints.append(_sh)
             _composed = _compose(use_case=_uc_name, subject=prompt,
                                  backend=backend, hints=_hints)
+            # Opt-in LLM stage on top of the mechanical result. Blocking call
+            # -> thread. The cache makes a batch/regenerate series ONE call.
+            if _cfg.use_case_llm_compose(_uc_name):
+                from app.core.prompt_compose_llm import llm_compose
+                _composed = await asyncio.to_thread(
+                    llm_compose, _composed, use_case=_uc_name, subject=prompt,
+                    family=_composed.meta.get("family", "keywords"))
             full_prompt = _composed.prompt
             negative = _composed.negative
             _compose_meta = _composed.meta
