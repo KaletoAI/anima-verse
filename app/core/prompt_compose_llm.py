@@ -148,12 +148,7 @@ def repair(text: str, style: str, hint: str) -> tuple:
     notes = []
     tail = _frame_tail(style)
     if tail and tail not in (text or "").lower():
-        # The answer becomes a clause inside the style sentence, so a leading
-        # article loses its capital ("… render of A small kitchen").
-        woven = text.strip()
-        if woven.split(" ")[0].lower() in ("a", "an", "the"):
-            woven = woven[0].lower() + woven[1:]
-        text = prompt_compose.weave_subject(style, woven)[0]
+        text = prompt_compose.weave_subject(style, text)[0]
         notes.append("The LLM prompt lost the style frame — it was re-woven "
                      "into the use-case style.")
     # Marker for "the hint survived": its measurements when it has any,

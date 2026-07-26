@@ -238,8 +238,15 @@ def weave_subject(style: str, subject: str) -> tuple:
     slots = (style or "").count("{subject}")
     if slots:
         # The style sentence continues after the slot — a trailing full stop
-        # from the DB text would cut it in half ("… Format., staged on …").
-        body = style.replace("{subject}", (subject or "").rstrip(" ."), 1)
+        # from the DB text would cut it in half ("… Format., staged on …"),
+        # and a leading article keeps its capital mid-sentence ("a wide
+        # establishing shot of A cozy corner cafe"). Articles only: a foreign
+        # noun ("Küche") must keep its capital.
+        woven = (subject or "").strip().rstrip(" .")
+        if (style.index("{subject}") > 0
+                and woven.split(" ")[0].lower() in ("a", "an", "the")):
+            woven = woven[0].lower() + woven[1:]
+        body = style.replace("{subject}", woven, 1)
         if slots > 1:
             body = body.replace("{subject}", "")
             warnings.append(

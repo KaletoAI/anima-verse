@@ -108,12 +108,12 @@ _NEG_OUTDOOR_SCENE = ("illustration, anime, cartoon, drawing, sketch, painting, 
 _DEFAULT_IMAGE_USE_CASES = {
     "map": {
         "keywords": {
-            "prompt_style": "game map tile, photorealistic, oblique top-down angle with a slight tilt for depth, single close-up map tile, subject fills the entire frame edge to edge, cohesive palette, highly detailed, full-bleed, no border, no frame, borderless",
+            "prompt_style": "{subject}, game map tile, photorealistic, oblique top-down angle with a slight tilt for depth, single close-up map tile, subject fills the entire frame edge to edge, cohesive palette, highly detailed, full-bleed, no border, no frame, borderless",
             "prompt_negative": "people, person, characters, faces, text, words, letters, watermark, signature, logo, frame, border, framed, vignette, grid lines, map pins, icons, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, lowres, jpeg artifacts, low quality",
             "prompt_instruction": "Write comma-separated keywords for a single close-up game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, photorealistic style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject fills the entire frame edge to edge, closely framed, no border or frame. No people, no text, no camera or style talk.",
         },
         "natural": {
-            "prompt_style": "a single close-up game map tile of the place, photorealistic, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, cohesive palette, highly detailed",
+            "prompt_style": "a single close-up game map tile of {subject}, photorealistic, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, cohesive palette, highly detailed",
             "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, framed, vignette, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, low quality",
             "prompt_instruction": "Describe a single close-up game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, photorealistic style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject is closely framed and fills the entire frame edge to edge with no border or frame. No people, no text.",
         },
@@ -150,12 +150,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     },
     "location": {
         "keywords": {
-            "prompt_style": "wide establishing shot, environment, atmospheric, detailed, no people",
+            "prompt_style": "{subject}, wide establishing shot, environment, atmospheric, detailed, no people",
             "prompt_negative": _NEG_PHOTO,
             "prompt_instruction": "Write comma-separated tags for an establishing shot of the place — environment, architecture, lighting, mood. No people.",
         },
         "natural": {
-            "prompt_style": "a wide establishing shot of the place, atmospheric, detailed environment, no people",
+            "prompt_style": "a wide establishing shot of {subject}, atmospheric, detailed environment, no people",
             "prompt_negative": _NEG_PHOTO,
             "prompt_instruction": "Describe an establishing shot of the place — environment, architecture, lighting, mood. No people.",
         },
@@ -169,12 +169,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # light (shadows bake into the 3D texture). Deliberately NOT _NEG_PHOTO.
     "building": {
         "keywords": {
-            "prompt_style": "exterior view of a single building, three-quarter view, slightly elevated eye level, the entire structure from ground to rooftop in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "{subject}, exterior view of a single building, three-quarter view, slightly elevated eye level, the entire structure from ground to rooftop in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_BUILDING,
             "prompt_instruction": "Write comma-separated tags for a three-quarter exterior view of the WHOLE building — architecture, materials, roof, storeys, style. The entire structure is in frame with a margin, neutral background, no people, no interior.",
         },
         "natural": {
-            "prompt_style": "an exterior photo of a single building seen from a three-quarter angle at a slightly elevated eye level, the entire structure from ground to rooftop inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "an exterior photo of {subject} as a single building seen from a three-quarter angle at a slightly elevated eye level, the entire structure from ground to rooftop inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_BUILDING,
             "prompt_instruction": "Describe a three-quarter exterior view of the WHOLE building — architecture, materials, roof, storeys, style. The entire structure is in frame with a margin, neutral background, no people, no interior.",
         },
@@ -184,12 +184,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # Picked via the location's indoor/outdoor field (dialog + server).
     "building_outdoor": {
         "keywords": {
-            "prompt_style": "outdoor scene diorama on a square ground base, three-quarter view, elevated eye level, the entire scene from ground to treetops in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "{subject}, outdoor scene diorama on a square ground base, three-quarter view, elevated eye level, the entire scene from ground to treetops in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_OUTDOOR_SCENE,
             "prompt_instruction": "Write comma-separated tags for a three-quarter view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. Entire scene in frame with a margin, neutral background, no people.",
         },
         "natural": {
-            "prompt_style": "a photo of a single outdoor scene diorama on a square ground base seen from a three-quarter angle at an elevated eye level, the entire scene from ground to treetops inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "a photo of {subject} as a single outdoor scene diorama on a square ground base seen from a three-quarter angle at an elevated eye level, the entire scene from ground to treetops inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_OUTDOOR_SCENE,
             "prompt_instruction": "Describe a three-quarter view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. The entire scene is in frame with a margin, neutral background, no people.",
         },

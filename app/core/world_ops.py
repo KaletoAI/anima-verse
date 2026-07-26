@@ -2153,6 +2153,14 @@ def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
     subject = (data.get("subject") or "").strip() or resolve_gallery_subject(
         location, room_id, prompt_type, location_id)
 
+    # The regenerate dialog needs the bare SUBJECT: its prompt is a literal
+    # adjustment order, so it gets no style, no hint and no guard — but the
+    # resolution chain must still live in exactly one place.
+    if data.get("subject_only"):
+        return {"prompt": subject, "negative": "", "warnings": [],
+                "use_case": use_case, "llm_composed": False,
+                "cache_hit": False}
+
     # The backend only supplies the family (image_family/model) — availability
     # does not matter for a text preview, so take the configured instance by
     # name instead of probing it.

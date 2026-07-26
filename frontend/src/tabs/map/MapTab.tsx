@@ -246,11 +246,8 @@ export function MapTab() {
     [t, toast],
   )
 
-  // Default-Prompt fuer Map-Icons: nur der Subjekt-Teil (Stil-Suffix haengt der
-  // Dialog/Server an). Subjekt aus image_prompt_map_2d, sonst Beschreibung/Name.
-  const buildDefaultPrompt = useCallback((loc: Location): string => {
-    return (loc.image_prompt_map_2d || '').trim() || (loc.description || loc.name || '').trim()
-  }, [])
+  // The map-icon prompt comes from /world/compose-preview (subject chain +
+  // style + guard live on the server) — the dialog prefills from there.
 
   // Kein PERIODISCHER Auto-Refresh (stört das Editieren). Stattdessen: nach einer
   // erfolgreichen Generierung EINMAL gezielt das/die betroffene(n) Tile(s) neu
@@ -296,6 +293,8 @@ export function MapTab() {
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
       if (payload.prompt_settings_applied) body.settings_applied = true
+      // Composed negative (carries what the guard moved out of the subject).
+      if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
       try {
         const r = await apiPost<{ track_id?: string }>(
           `/world/locations/${encodeURIComponent(target.loc.id)}/gallery`, body)
@@ -855,9 +854,10 @@ export function MapTab() {
           title={(gen.type === 'map_3x3'
             ? t('Generate 3×3 map tile — {name}')
             : t('Generate 2D icon — {name}')).replace('{name}', gen.loc.name)}
-          defaultPrompt={buildDefaultPrompt(gen.loc)}
-          styleUseCase="map"
-          hideNegative
+          defaultPrompt=""
+          // The server composes style + subject + guard (same composer the
+          // batch path uses) and decides the use case itself.
+          composeRequest={{ location_id: gen.loc.id, prompt_type: gen.type }}
           onSubmit={(payload) => submitGen(payload, gen)}
           onClose={() => setGen(null)}
         />

@@ -106,6 +106,10 @@ interface Props {
    * shape hints are then woven together server-side (app/core/prompt_compose.py),
    * by the same composer the batch path uses. Submit stays literal
    * (`prompt_settings_applied`).
+   *
+   * With `subject_only: true` the server answers with the bare subject
+   * instead of a composed prompt (the regenerate dialog, whose prompt is a
+   * literal adjustment order) — the "Compose with AI" button stays hidden.
    */
   composeRequest?: Record<string, unknown>
   /**
@@ -641,7 +645,7 @@ export function ImageGenDialog({
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <label className="ga-imagegen-label" style={{ margin: 0 }}>{t('Prompt')}</label>
-                {composeRequest ? (
+                {composeRequest && !composeRequest.subject_only ? (
                   <>
                     <button
                       type="button"
