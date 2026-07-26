@@ -31,6 +31,12 @@ nicht in eine der beiden Apps.**
 **Bewusst NICHT hier:** Kamera, LOD, Fades, Culling-Anwendung, Labels,
 Wegfindung, NPC-Logik, Editor-Overlays. Sicht-Zustand bleibt pro App.
 
+**Noch nicht hier, aber ein Kandidat:** die Primitiv-Builder (Platte, Wand,
+Extras, Platzhalter). Die stehen weiterhin doppelt — sie sind mit dem
+Material-/Textursystem der jeweiligen Seite verwoben, ein geteilter Builder
+müsste das Material als Parameter nehmen. Ausgearbeitet in
+`development_instructions/plan-scene-render-primitive-builder.md`.
+
 Die Berichte bleiben ebenfalls bei den Konsumenten: der Admin zeichnet ein
 Overlay, der Client schreibt nach `window.__sceneVerify`. Geteilt ist nur die
 Rechnung.
