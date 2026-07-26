@@ -226,12 +226,16 @@ async function startApp(username: string) {
   setInterval(pollLocations, 10_000);
 
   // Wegfindung: Gebäude blockieren, Straßen/Natur sind begehbar
-  npcs.setPathGrid(new PathGrid(
+  const pathGrid = new PathGrid(
     placeable.map((l) => ({
       x: l.grid_x!, y: l.grid_y!,
       passable: !!(l.passable || l.template_location_id),
     }))
-  ));
+  );
+  npcs.setPathGrid(pathGrid);
+  // Debug-Hooks: laufendes Grid + Klasse, um Wegfindung zu vermessen
+  (window as unknown as { __pathGrid: PathGrid }).__pathGrid = pathGrid;
+  (window as unknown as { __PathGrid: typeof PathGrid }).__PathGrid = PathGrid;
   engine.target.copy(center);
   engine.dist = engine.targetDist = 70;
 
