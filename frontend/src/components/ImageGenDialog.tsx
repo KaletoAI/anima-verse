@@ -88,6 +88,17 @@ interface Props {
    */
   styleUseCase?: string
   /**
+   * Server-composed prefill. The object is the POST body for
+   * `/world/compose-preview` minus `backend` (the dialog fills that in): on
+   * open and on every backend switch the dialog asks the server for the
+   * finished prompt + negative and shows both as editable fields, plus the
+   * composer's warnings. Use INSTEAD of `styleUseCase` — style, subject and
+   * shape hints are then woven together server-side (app/core/prompt_compose.py),
+   * by the same composer the batch path uses. Submit stays literal
+   * (`prompt_settings_applied`).
+   */
+  composeRequest?: Record<string, unknown>
+  /**
    * Show the optional output-resolution fields (width × height plus a live
    * aspect display). Empty fields = the server keeps its use-case/backend
    * default. Only for callers whose endpoint honours the values — today the
@@ -156,7 +167,7 @@ const LORA_SLOTS = 4
 
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
-  styleUseCase,
+  styleUseCase, composeRequest,
   showResolution, defaultResolution,
   showRoomReference, defaultUseSource, requireSourceReference,
   showCreateNew, defaultCreateNew,
@@ -219,8 +230,10 @@ export function ImageGenDialog({
   // Resync prompt + independent config parts when the caller changes them
   // (e.g. day → night, or map → map_2d with a different suffix).
   useEffect(() => {
-    if (open) setPrompt(defaultPrompt)
-  }, [open, defaultPrompt])
+    // With a server-composed prefill the prompt comes from compose-preview —
+    // the caller's defaultPrompt would only overwrite it on every rerender.
+    if (open && !composeRequest) setPrompt(defaultPrompt)
+  }, [open, defaultPrompt, composeRequest])
   useEffect(() => {
     if (open) setPrefixText(settingsPrefix?.text || '')
   }, [open, settingsPrefix?.text])
@@ -298,6 +311,30 @@ export function ImageGenDialog({
     }
   }, [open, styleUseCase, currentOption])
 
+  // Server-composed prefill: ask the composer for the finished prompt when
+  // the dialog opens and whenever the backend changes (the prompt family and
+  // the resolved style depend on it). No debounce/live reload while typing —
+  // the text is the user's from the first keystroke on.
+  const [composeWarnings, setComposeWarnings] = useState<string[]>([])
+  const composeKey = useMemo(
+    () => (composeRequest ? JSON.stringify(composeRequest) : ''), [composeRequest])
+  useEffect(() => {
+    if (!open || !composeKey || !optionKey) return
+    let dropped = false
+    apiPost<{ prompt?: string; negative?: string; warnings?: string[] }>(
+      '/world/compose-preview',
+      { ...(JSON.parse(composeKey) as Record<string, unknown>), backend: optionKey },
+    )
+      .then((r) => {
+        if (dropped) return
+        setPrompt(r.prompt || '')
+        setNegative(r.negative || '')
+        setComposeWarnings(r.warnings || [])
+      })
+      .catch(() => { if (!dropped) setComposeWarnings([]) })
+    return () => { dropped = true }
+  }, [open, composeKey, optionKey])
+
   // ESC closes; lock body scroll while open.
   useEffect(() => {
     if (!open) return
@@ -337,7 +374,9 @@ export function ImageGenDialog({
     const fullPrompt = [styleText.trim(), prefixText.trim(), prompt.trim(), suffixText.trim()]
       .filter(Boolean).join(', ')
     const payload: ImageGenSubmit = { prompt: fullPrompt }
-    if (settingsPrefix || settingsSuffix || styleUseCase) payload.prompt_settings_applied = true
+    if (settingsPrefix || settingsSuffix || styleUseCase || composeRequest) {
+      payload.prompt_settings_applied = true
+    }
     // Exact backend name — backends match their own name on the server.
     payload.backend = currentOption.name
     if (currentOption.has_loras) {
@@ -364,7 +403,7 @@ export function ImageGenDialog({
       setSubmitting(false)
     }
   }, [currentOption, prompt, prefixText, suffixText, settingsPrefix,
-      settingsSuffix, styleText, styleUseCase, loraSlots, onSubmit, onClose,
+      settingsSuffix, styleText, styleUseCase, composeRequest, loraSlots, onSubmit, onClose,
       isRegen, showCreateNew, createNew,
       improvement, hideNegative, negative, characterOptions, selectedChars,
       showRoomReference, useRoom, sourceImageUrl, useSource,
@@ -553,6 +592,13 @@ export function ImageGenDialog({
                   </label>
                   <textarea className="ga-textarea" rows={2} value={prefixText}
                     disabled={submitting} onChange={(e) => setPrefixText(e.target.value)} />
+                </div>
+              ) : null}
+
+              {composeWarnings.length ? (
+                <div className="ga-form-hint" style={{ color: 'var(--warn, #e0a356)' }}>
+                  <strong>{t('Prompt composer')}:</strong>
+                  {composeWarnings.map((w, i) => <div key={i}>{w}</div>)}
                 </div>
               ) : null}
 

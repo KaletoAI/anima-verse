@@ -336,6 +336,10 @@ export function LocationGallery({
   // resolution order in routes/world.py:generate_gallery_image — room
   // first, then location, falling back to description. The user can
   // edit it before submitting; edits are not persisted.
+  // NOT used for the room-model source anymore: that dialog prefills from
+  // /world/compose-preview, so the subject chain lives server-side only
+  // (the branch below still serves the regenerate dialog, whose prompt is a
+  // literal adjustment order).
   const buildDefaultPrompt = useCallback(
     (promptType: string): string => {
       const fromRoom = (key: 'image_prompt_day' | 'image_prompt_night') =>
@@ -404,6 +408,10 @@ export function LocationGallery({
       if (payload.loras) body.loras = payload.loras
       // The dialog already has the map-icon suffix in the prompt → don't duplicate it server-side.
       if (payload.prompt_settings_applied) body.settings_applied = true
+      // Negative from the dialog (room-model renders): carries the items the
+      // composer's negation guard moved out of the subject — without it the
+      // server would fall back to the bare use-case negative and lose them.
+      if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
       // Output size (empty fields = the server's use-case default).
       if (payload.width) body.width = payload.width
       if (payload.height) body.height = payload.height
@@ -676,6 +684,18 @@ export function LocationGallery({
     </div>
   )
 
+  // Room-model source (room_model / room_model_outdoor): the SERVER composes
+  // prompt + negative — one composer for dialog and batch, and it decides the
+  // use case itself (indoor/outdoor, room vs. location). Every other render
+  // type keeps the client-side style + subject fields.
+  const isRoomModel = dialogType === 'building' && !!roomFilter
+  const composeRequest = useMemo(
+    () => (isRoomModel
+      ? { location_id: locationId, room_id: roomFilter, prompt_type: 'building' }
+      : undefined),
+    [isRoomModel, locationId, roomFilter],
+  )
+
   const dialog = dialogType ? (
     <ImageGenDialog
       open
@@ -690,22 +710,22 @@ export function LocationGallery({
                 ? t('Generate 3×3 map tile — {name}').replace('{name}', location.name)
                 : t('Generate 2D map icon — {name}').replace('{name}', location.name)
       }
-      defaultPrompt={buildDefaultPrompt(dialogType)}
-      hideNegative
+      defaultPrompt={isRoomModel ? '' : buildDefaultPrompt(dialogType)}
+      composeRequest={composeRequest}
+      // The composed negative is editable and submitted for room models (it
+      // carries the moved negations); every other type keeps it hidden.
+      hideNegative={!isRoomModel}
       styleUseCase={
-        dialogType === 'day' || dialogType === 'night'
-          ? 'location'
-          : dialogType === 'building'
-            ? (() => {
-                // Indoor/outdoor picks the style: an outdoor location's
-                // "building" is a scene diorama, an outdoor room (park
-                // section) an open-air area. Room flag overrides location.
-                const outdoor = ((roomFilter ? room?.indoor : '') || location.indoor) === 'outdoor'
-                return roomFilter
-                  ? (outdoor ? 'room_model_outdoor' : 'room_model')
-                  : (outdoor ? 'building_outdoor' : 'building')
-              })()
-            : 'map'
+        isRoomModel
+          ? undefined
+          : dialogType === 'day' || dialogType === 'night'
+            ? 'location'
+            : dialogType === 'building'
+              // Indoor/outdoor picks the style: an outdoor location's
+              // "building" is a scene diorama. (Rooms never reach this
+              // branch — they compose server-side.)
+              ? (location.indoor === 'outdoor' ? 'building_outdoor' : 'building')
+              : 'map'
       }
       settingsSuffix={
         (dialogType === 'map_2d' || dialogType === 'map_3x3') && mapSuffix.map_2d
