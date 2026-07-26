@@ -47,14 +47,28 @@ function pump() {
   }
 }
 
+/** Wiederholungen je Modell, bevor es als „nicht ladbar" gilt.
+ *  Der Server ist unter paralleler Last nachweislich stabil (Fable
+ *  2026-07-26: 120 gleichzeitige GETs → 120 × 200, 30 Conditional-GETs
+ *  → 30 × 304, kein Rate-Limit); 5xx entsteht dort praktisch nur während
+ *  eines Backend-Neustarts. Genau dieser Fall war die Lücke: ein einzelner
+ *  Fehlschlag ließ das Modell für die ganze Sitzung verschwinden. */
+const LOAD_ATTEMPTS = 3;
+const RETRY_BASE_MS = 800;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** GLB per URL laden (Promise-Cache pro URL; parallele Aufrufe teilen den
  *  Load). `near` = Weltposition des Verwenders (Kachelzentrum) für die
  *  Priorisierung. Rückgabe: die ROHE Szene des glTF, unverändert — kein
  *  Orientierungs-Fix, keine Skalierung, keine Position. Genau das braucht
  *  die place()-Routine des Szenen-Rezepts (§ B2): sie wendet fix_euler aus
- *  der Spec selbst an und misst danach. 404/Fehler → null, fehlgeschlagene
- *  Loads nicht dauerhaft als null cachen (Retry möglich); Browser-HTTP-Cache
- *  + ETag erledigen die Revalidierung. */
+ *  der Spec selbst an und misst danach.
+ *
+ *  Fehlschläge werden mit Backoff wiederholt (der Slot bleibt dabei belegt —
+ *  gewollt: reißt das Backend gerade weg, soll die Queue warten statt zu
+ *  hämmern). Erst danach null, und der Cache-Eintrag wird verworfen, damit
+ *  ein späterer Aufruf erneut versuchen darf. Browser-HTTP-Cache + ETag
+ *  erledigen die Revalidierung. */
 export function loadGlb(url: string, near?: THREE.Vector3): Promise<THREE.Group | null> {
   const cached = loadCache.get(url);
   if (cached) return cached;
@@ -62,21 +76,31 @@ export function loadGlb(url: string, near?: THREE.Vector3): Promise<THREE.Group 
     queue.push({
       at: near,
       start: () => {
-        loader.loadAsync(url)
-          .then((gltf) => {
-            // gleiche Material-Behandlung wie Gebäude-/Raum-GLBs (Metalness/Env)
-            neutralizeGltfMaterials(gltf.scene);
-            resolve(gltf.scene);
-          })
-          .catch(() => {
-            // 404/Fehler nicht dauerhaft festhalten -> Retry möglich
-            loadCache.delete(url);
-            resolve(null);
-          })
-          .finally(() => {
+        void (async () => {
+          try {
+            for (let attempt = 1; attempt <= LOAD_ATTEMPTS; attempt++) {
+              try {
+                const gltf = await loader.loadAsync(url);
+                // gleiche Material-Behandlung wie Gebäude-/Raum-GLBs (Metalness/Env)
+                neutralizeGltfMaterials(gltf.scene);
+                if (attempt > 1) console.info(`[glb] ${url}: geladen im Versuch ${attempt}`);
+                resolve(gltf.scene);
+                return;
+              } catch (e) {
+                if (attempt === LOAD_ATTEMPTS) {
+                  console.warn(`[glb] ${url}: nach ${LOAD_ATTEMPTS} Versuchen nicht ladbar`, e);
+                  loadCache.delete(url);
+                  resolve(null);
+                  return;
+                }
+                await sleep(RETRY_BASE_MS * 2 ** (attempt - 1));
+              }
+            }
+          } finally {
             active--;
             pump();
-          });
+          }
+        })();
       },
     });
     pump();

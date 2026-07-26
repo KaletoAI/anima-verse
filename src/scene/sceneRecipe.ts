@@ -131,6 +131,11 @@ export interface VerifyReport {
   location: string;
   checked: number;
   rows: VerifyRow[];
+  /** Modell-Specs, die gar nicht platziert wurden (Mesh nicht ladbar). Eine
+   *  übersprungene Spec ist ein FEHLENDES Objekt in der Szene und darf nicht
+   *  als „geprüft und in Ordnung" durchgehen — sie zählt als Abweichung. */
+  skipped: number;
+  models: { placed: number; total: number };
 }
 
 /** Verify-Modus aus: `?verify=1` in der URL oder `window.__verify3d = true`
@@ -151,7 +156,25 @@ function verifyOn(): boolean {
 class Verifier {
   rows: VerifyRow[] = [];
   checked = 0;
+  skipped = 0;
+  placed = 0;
+  total = 0;
   constructor(readonly active: boolean) {}
+
+  /** Eine Modell-Spec, die NICHT platziert wurde (Mesh nach allen Versuchen
+   *  nicht ladbar, kein Platzhalter). Das ist ein fehlendes Objekt in der
+   *  Szene — es wandert als Abweichungszeile in die Tabelle (`geladen` 0
+   *  statt 1), damit eine Lücke nicht wie ein Erfolg aussieht. Wird
+   *  unabhängig vom Verify-Modus gezählt und geloggt. */
+  skip(spec: SceneModelSpec): void {
+    this.skipped += 1;
+    console.warn(`[scene] ${spec.role}:${spec.id} übersprungen — Mesh nicht ladbar `
+      + `(${spec.url || 'ohne URL'})`);
+    if (!this.active) return;
+    this.checked += 1;
+    this.rows.push({ object: `${spec.role}:${spec.id}`, field: 'geladen',
+                     actual: 0, target: 1, delta: -1 });
+  }
 
   check(object: string, field: string, actual: number, target: number): void {
     if (!this.active) return;
@@ -204,14 +227,19 @@ class Verifier {
 
   report(locationId: string): VerifyReport | null {
     if (!this.active) return null;
-    const out: VerifyReport = { location: locationId, checked: this.checked, rows: this.rows };
+    const out: VerifyReport = {
+      location: locationId, checked: this.checked, rows: this.rows,
+      skipped: this.skipped, models: { placed: this.placed, total: this.total },
+    };
+    const modelInfo = `Modelle ${this.placed}/${this.total}`;
     if (this.rows.length) {
-      console.warn(`[verify] ${locationId}: ${this.rows.length} Abweichung(en) > ${VERIFY_EPS} m `
-        + `bei ${this.checked} geprüften Zahlen`);
+      console.warn(`[verify] ${locationId}: ${this.rows.length} Abweichung(en) `
+        + `bei ${this.checked} geprüften Zahlen (${modelInfo}, `
+        + `${this.skipped} übersprungen), Toleranz ${VERIFY_EPS} m`);
       console.table(this.rows);
     } else {
       console.info(`[verify] ${locationId}: ${this.checked} Zahlen geprüft, `
-        + `keine Abweichung > ${VERIFY_EPS} m`);
+        + `keine Abweichung > ${VERIFY_EPS} m (${modelInfo})`);
     }
     const w = window as unknown as { __sceneVerify?: Record<string, VerifyReport> };
     w.__sceneVerify = { ...(w.__sceneVerify ?? {}), [locationId]: out };
@@ -665,6 +693,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   // unterscheidet sie. Das Diorama koexistiert seit § A4 (2026-07-25) immer
   // mit den Props des Raums; es ist einfach ein weiteres Modell im Raum.
   const walkY = new Map<string, number>();
+  verify.total = scene.models.length;
   await Promise.all(scene.models.map(async (spec) => {
     let source: THREE.Object3D | null = null;
     if (spec.url) {
@@ -679,9 +708,19 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       ph.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1]);
       ph.rotation.y = -deg(spec.yaw_deg);
       parentFor(spec.room_id).add(ph);
+      verify.placed += 1;
       return;
     }
-    if (!source || stale()) return;
+    if (stale()) return;
+    if (!source) {
+      // Mesh nach allen Versuchen nicht ladbar UND kein Platzhalter geliefert:
+      // hier fehlt ein Objekt in der Szene. Das wird GEZÄHLT (A3) — früher
+      // verschwand die Platzierung stillschweigend und die Verify-Tabelle
+      // meldete trotzdem „keine Abweichung".
+      verify.skip(spec);
+      return;
+    }
+    verify.placed += 1;
     const placed = placeSpec(source, spec);
     if (spec.role === 'building') {
       applySceneBuilding(tile, placed);
@@ -732,9 +771,13 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     }
   }
 
+  // Modelle als platziert/gesamt loggen — eine Lücke ist damit auch ohne
+  // Verify-Modus im Log sichtbar (A3).
   console.info(`[scene] ${locId}: montiert — ${scene.plates.length} Platten, `
-    + `${scene.walls.length} Wandsegmente, ${scene.models.length} Modelle, `
-    + `${scene.markers.length} Marker, Etagen ${levels.join('/')}`);
+    + `${scene.walls.length} Wandsegmente, `
+    + `${verify.placed}/${scene.models.length} Modelle, `
+    + `${scene.markers.length} Marker, Etagen ${levels.join('/')}`
+    + (verify.skipped ? ` — ${verify.skipped} Modell(e) NICHT ladbar` : ''));
   return verify.report(locId);
 }
 

@@ -95,9 +95,11 @@ function rebuild(loc: WorldLocation) {
   // Weltkoordinaten; die Verify-Tabelle vergleicht damit 1:1 gegen die Spec.
   void mountScene(tile, scene).then((report) => {
     if (report) {
+      const models = `Modelle ${report.models.placed}/${report.models.total}`;
       say(report.rows.length
-        ? `Verify: ${report.rows.length} Abweichung(en) von ${report.checked} Zahlen — siehe Konsole`
-        : `Verify: ${report.checked} Zahlen geprüft, keine Abweichung`);
+        ? `Verify: ${report.rows.length} Abweichung(en) von ${report.checked} Zahlen `
+          + `(${models}) — siehe Konsole`
+        : `Verify: ${report.checked} Zahlen geprüft, keine Abweichung (${models})`);
     }
   });
 }
