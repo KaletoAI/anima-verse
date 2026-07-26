@@ -32,8 +32,9 @@ migrated_backups/
 migration_backup/
 
 # Internal helper / migration scripts — not part of the public release
-scripts/
-tools/
+# Verankert (fuehrender /), sonst wuerden sie auch client3d/tools/ schlucken.
+/scripts/
+/tools/
 
 # Files removed from public release
 docs/llm-task-mapping.md
