@@ -650,6 +650,36 @@ export class FigureLibrary {
         }
       });
     }
+    // Charaktere sind DIELEKTRIKA: Metalness hart auf 0 (AV3D-14).
+    // Das Gateway bettet seit Rosi auch bei Humanoiden eine
+    // Metal-Roughness-Textur ein, deren B-Kanal ~0,5 Metalness über den
+    // ganzen Körper behauptet — auf Haut und Stoff physikalisch Unsinn; dazu
+    // ist `metallicFactor` oft unbelegt, und der glTF-Default ist 1,0. Ohne
+    // Korrektur rendert der Körper ohne Env-Map falsch (Rosi grünstichig).
+    // Bewusst KEINE Env-Map-Lösung wie bei Gebäuden/Props: ein halb-
+    // metallischer Körper ist auch mit Env-Map falsch. metalness = 0 macht
+    // die metalnessMap multiplikativ tot; die ROUGHNESS aus dem G-Kanal
+    // derselben Textur bleibt aktiv und ist erwünscht — deshalb wird
+    // `roughness` NICHT angetastet.
+    const matLog: string[] = [];
+    template.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        const std = m as THREE.MeshStandardMaterial;
+        if (!std.isMeshStandardMaterial) continue;
+        const before = std.metalness;
+        const mr = std.metalnessMap ? 'MR-Map' : 'ohne MR-Map';
+        if (before !== 0) {
+          std.metalness = 0;
+          std.needsUpdate = true;
+        }
+        matLog.push(`metalness ${before}->${std.metalness} (${mr}, roughness ${std.roughness}`
+          + `${std.roughnessMap ? ' + Map' : ''})`);
+      }
+    });
+    if (matLog.length) console.info(`[figures] ${name}: ${matLog.join(' | ')}`);
+
     const b = new THREE.Box3().setFromObject(template);
     const s = b.getSize(new THREE.Vector3());
     if (s.z > s.y * 1.5) {                       // Z-up-Export aufrichten
