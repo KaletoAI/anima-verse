@@ -24,7 +24,7 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
-import { placeModelSpec } from './scenePlace'
+import { disposeClipMaterials, placeModelSpec } from './scenePlace'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 
@@ -131,7 +131,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   const verifyRef = useRef(verify)
   verifyRef.current = verify
   const [verifyReport, setVerifyReport] = useState<{
-    checked: number; rows: VerifyRow[] } | null>(null)
+    checked: number; rows: VerifyRow[]; notes: string[] } | null>(null)
   // Model-load completion re-triggers the rebuild (loads are async, the
   // rebuild itself is synchronous against the cache).
   const [bump, setBump] = useState(0)
@@ -420,6 +420,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // re-measured in world space and diffed against the spec it came from;
     // findings travel between sessions as numbers, never as pictures.
     const verifyRows: VerifyRow[] = []
+    // Facts the arithmetic CANNOT check: a shell clip discards fragments, not
+    // geometry, so the rendered BBox stays the unclipped one (§ B1). The
+    // report names where clipping is active instead of pretending to measure it.
+    const verifyNotes: string[] = []
     let verifyChecked = 0
     const vcheck = (object: string, field: string, actual: number,
                     target: number) => {
@@ -437,6 +441,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       const size = box.getSize(new THREE.Vector3())
       const centre = box.getCenter(new THREE.Vector3())
       const name = `${spec.role}:${spec.id}`
+      if (spec.clip_outline?.length) {
+        verifyNotes.push(`${name} clip: ${spec.clip_outline.length} points`)
+      }
       vcheck(name, 'bottom_y', box.min.y, spec.bottom_y)
       vcheck(name, 'anchor.x', centre.x, spec.anchor[0])
       vcheck(name, 'anchor.z', centre.z, spec.anchor[1])
@@ -461,7 +468,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // and test-figure clones share geometry/materials with their caches
     // (a plain traverse would visit and kill the shared resources).
     const disposeSafe = (o: Object3D) => {
-      if (o.userData.__noDispose) return
+      if (o.userData.__noDispose) {
+        // The subtree's geometry/textures belong to the cache — but a shell
+        // clip put PRIVATE material clones on it (§ B1), and those are ours.
+        disposeClipMaterials(o)
+        return
+      }
       const mesh = o as Mesh
       mesh.geometry?.dispose?.()
       const m = mesh.material as Material | Material[] | undefined
@@ -1128,7 +1140,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         console.info(`[verify] ${verifyChecked} numbers checked, `
           + `no deviation > ${VERIFY_EPS} m`)
       }
-      setVerifyReport({ checked: verifyChecked, rows: verifyRows })
+      if (verifyNotes.length) console.info(`[verify] ${verifyNotes.join(' · ')}`)
+      setVerifyReport({ checked: verifyChecked, rows: verifyRows,
+                        notes: verifyNotes })
     } else {
       setVerifyReport(null)
     }
@@ -1299,7 +1313,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         scene.add(boxes)
         disposers.push(() => {
           const disposeSafe = (o: Object3D) => {
-            if (o.userData.__noDispose) return
+            if (o.userData.__noDispose) { disposeClipMaterials(o); return }
             const mesh = o as Mesh
             mesh.geometry?.dispose?.()
             const m = mesh.material as Material | Material[] | undefined
@@ -1584,6 +1598,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             {verifyReport.rows.length > 6 ? (
               <div style={{ opacity: 0.8 }}>{t('…full table in the console')}</div>
             ) : null}
+            {verifyReport.notes.map((n, i) => (
+              <div key={`n${i}`} style={{ opacity: 0.8, fontFamily: 'monospace' }}>{n}</div>
+            ))}
           </div>
         ) : null}
         {loading || error || sceneError ? (
