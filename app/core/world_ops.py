@@ -2274,13 +2274,16 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
 
         # Floor-plan proportions: a room whose rectangle is far from square
         # says so in the prompt, whichever branch composed it (the dialog
-        # prefills the same clause — appending it twice is what the
-        # containment check prevents). Only ROOM renders, never a map tile and
-        # never a regenerate, whose prompt is a literal adjustment order.
+        # prefills the same clause — adding it twice is what the containment
+        # check prevents). Only ROOM renders, never a map tile and never a
+        # regenerate, whose prompt is a literal adjustment order.
+        # PREPENDED, not appended (finding 2026-07-26, café kitchen): early
+        # tokens steer diffusion — at the end of a long prompt the clause was
+        # ignored, and the style's own slab wording had already set the shape.
         if room_id and not _map_blend and not _is_regen:
             _prop_hint = room_proportions_hint(get_room_by_id(location, room_id))
             if _prop_hint and _prop_hint.lower() not in full_prompt.lower():
-                full_prompt = f"{full_prompt}, {_prop_hint}" if full_prompt else _prop_hint
+                full_prompt = f"{_prop_hint}, {full_prompt}" if full_prompt else _prop_hint
                 logger.info("Room proportions in the prompt: %s", _prop_hint)
         # Map icons are small thumbnails for the world overview and get
         # downscaled. Day/night/description stay at full resolution

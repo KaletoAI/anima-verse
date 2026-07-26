@@ -209,12 +209,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # product render. The negative stays for CFG backends (SD/Z-Image).
     "room_model": {
         "keywords": {
-            "prompt_style": "furniture and decor arranged on a bare rectangular floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high three-quarter camera angle, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "furniture and decor arranged on a bare floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high three-quarter camera angle, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_ROOM,
             "prompt_instruction": "Write comma-separated tags for the furniture, decor, floor and style ONLY — the interior as a set piece on a bare floor slab. Never mention walls, ceilings or the building; describe just what stands on the floor. Neutral background, no people.",
         },
         "natural": {
-            "prompt_style": "a product render of an interior reduced to its bare rectangular floor slab with all of its furniture and decor arranged on top — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furniture. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed",
+            "prompt_style": "a product render of an interior reduced to its bare floor slab with all of its furniture and decor arranged on top — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furniture. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed",
             "prompt_negative": _NEG_ROOM,
             "prompt_instruction": "Describe the furniture, decor, floor and style ONLY — the interior as a set piece on a bare floor slab. Never mention walls, ceilings or the building; describe just what stands on the floor. Neutral background, no people.",
         },
