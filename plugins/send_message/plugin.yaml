@@ -8,6 +8,7 @@ skills:
     default_enabled: true
     remote_comm: true             # reaches characters NOT present (world-setup checklist)
     cascade_brake: true           # reply_only_to gate for messaging cascades
+    delivers_speech: true         # spoken/written words reach someone through this verb
     intents: [send_message]       # [INTENT: send_message] follow-up (F6)
     intent_payload_keys: [content, message]
 

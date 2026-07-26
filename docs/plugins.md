@@ -105,6 +105,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `skills[].suppress_in_person` | nein | Verb wird unterdrückt, solange die Gesprächspartner im selben Raum sind (Bewegungs-Verben) |
 | `skills[].cascade_brake` | nein | reply_only_to-Gate für Messaging-Kaskaden greift auf dieses Verb |
 | `skills[].search_intent` | nein | Der Search-Forcing-Hint (User fragt nach realen Infos) zielt auf dieses Tool |
+| `skills[].delivers_speech` | nein | Über dieses Verb erreicht wörtliche Rede jemanden (TalkTo/SendMessage) — das B-lite-Sprachnetz prüft Thought-Turns dagegen |
 | `skills[].intents` | nein | `[INTENT: <typ>]`-Marker, die dieses Verb ausführt (F6) — die Klasse implementiert `handle_intent()`; Default = Payload-Durchreichung an `execute()` |
 | `skills[].intent_payload_keys` | nein | INTENT-Params mit dem vergleichbaren Inhalt (Redundanz-Skip: Marker vs. bereits ausgeführtes Tool im selben Turn) |
 | `skills[].user_notification` | nein | Tool-Ergebnis wird User-Notification (Telegram-Forward) — generisch gelesen via `tool_names_with_flag` |

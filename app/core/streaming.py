@@ -185,6 +185,47 @@ def _suppress_in_person_tool_names() -> frozenset:
         return frozenset()
 
 
+def _speech_tool_names() -> frozenset:
+    """Tools declared DELIVERS_SPEECH — the verbs through which spoken
+    dialogue reaches someone (TalkTo/SendMessage declare it, F7)."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        return get_skill_manager().tool_names_with_flag("DELIVERS_SPEECH")
+    except Exception:
+        return frozenset()
+
+
+# Quote pairs recognized by the B-lite speech net: „…“/„…”/„…" · “…” · "…" ·
+# «…» · »…« · ‚…‘ — RP models close a German „-quote with a straight " often
+# enough that the first pair accepts it too.
+_QUOTE_PAIR_RE = re.compile(
+    '„([^“”„"\n]+)["“”]'
+    '|“([^”\n]+)”'
+    '|"([^"\n]+)"'
+    '|«([^»\n]+)»'
+    '|»([^«\n]+)«'
+    '|‚([^‘’\n]+)[‘’]'
+)
+
+
+def _quoted_speech(text: str) -> List[str]:
+    """Quoted dialogue segments in RP prose — the deterministic scan of the
+    B-lite speech net (plan-thought-speech-dropped.md).
+
+    Emphasis/name quotes do not count: a spoken line has at least one space
+    or ends in sentence punctuation („Eclipse" stays out, „Ja." counts).
+    """
+    out: List[str] = []
+    for m in _QUOTE_PAIR_RE.finditer(text or ""):
+        seg = next((g for g in m.groups() if g), "").strip()
+        if len(seg) < 2:
+            continue
+        if " " not in seg and seg[-1] not in ".!?…":
+            continue
+        out.append(seg)
+    return out
+
+
 def _dedupe_singleton_tools(matches: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     """For SINGLETON-flagged tools: keep only the last call per tool name.
 
@@ -731,6 +772,12 @@ class StreamingAgent:
         async for event in self._invoke_tool_decision(
                 state_tool, tool_system, tool_decision_input):
             yield event
+        if _is_thought and not state_tool.decision_failed:
+            # B-lite speech net: in a thought turn dropped dialogue is lost
+            # for good — catch it deterministically before moving on.
+            async for event in self._ensure_speech_mapped(
+                    state_tool, rp_response, tool_system, tool_decision_input):
+                yield event
         # Expose the raw decision text (never streamed to the client).
         self.last_tool_response = state_tool.response.strip()
 
@@ -1205,6 +1252,59 @@ class StreamingAgent:
         if state.tool_matches:
             state.tool_matches = _dedupe_singleton_tools(state.tool_matches)
             logger.info("%d Tool-Match(es) erkannt", len(state.tool_matches))
+
+    async def _ensure_speech_mapped(
+        self,
+        state_tool: _StreamState,
+        rp_response: str,
+        tool_system: str,
+        tool_decision_input: str) -> AsyncGenerator[StreamEvent, None]:
+        """B-lite speech net for THOUGHT turns (plan-thought-speech-dropped.md).
+
+        A thought turn's prose is discarded, so spoken dialogue reaches the
+        room ONLY through a speech verb — a decision that dropped a quoted
+        line loses it silently. Deterministic quote scan over the RP prose;
+        when dialogue is present but no DELIVERS_SPEECH verb was called, ONE
+        pointed retry asks for exactly the missing speech calls and merges
+        them in. Still nothing → WARNING (observable, not silent).
+        """
+        quotes = _quoted_speech(rp_response)
+        if not quotes:
+            return
+        speech_names = _speech_tool_names()
+        if not speech_names:
+            return
+        if any(n in speech_names for n, _ in state_tool.tool_matches):
+            return
+        logger.info("B-lite: %d gesprochene Zeile(n) ohne Speech-Verb in der "
+                    "Tool-Entscheidung — gezielter Retry", len(quotes))
+        hint = (
+            "RETRY — your previous decision dropped spoken dialogue. The "
+            "character's RP text contains these SPOKEN lines:\n"
+            + "\n".join(f"  - «{q}»" for q in quotes[:5])
+            + "\nOutput ONLY the speech tool calls that deliver them: TalkTo "
+            'with JSON {"name": "<addressed person>", "message": "<the spoken '
+            'words, verbatim>"} for someone present (add "volume": '
+            '"whisper"/"shout" when the RP says so), or SendMessage for a '
+            "remote recipient. No other tools, no markers. If a quoted "
+            "segment is not actually speech to someone (a memory, reading "
+            "aloud, an inner voice), skip it; if none qualify, respond NONE.")
+        state_retry = _StreamState()
+        async for event in self._invoke_tool_decision(
+                state_retry, tool_system,
+                tool_decision_input + "\n\n" + hint):
+            yield event
+        added = [(n, i) for n, i in state_retry.tool_matches
+                 if n in speech_names]
+        if added:
+            state_tool.tool_matches = list(state_tool.tool_matches) + added
+            logger.info("B-lite: %d Speech-Call(s) nachgetragen", len(added))
+        elif not state_retry.decision_failed:
+            # decision_failed has its own loud warning in _invoke_tool_decision.
+            logger.warning(
+                "B-lite: RP enthaelt woertliche Rede («%s»%s), aber auch der "
+                "Retry lieferte kein Speech-Verb — Dialog geht verloren",
+                quotes[0][:60], "…" if len(quotes) > 1 else "")
 
     # ------------------------------------------------------------------
     # Tool execution

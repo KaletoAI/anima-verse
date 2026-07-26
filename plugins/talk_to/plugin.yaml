@@ -7,6 +7,7 @@ skills:
   - skill_id: talk_to
     default_enabled: true    # replaces the entry in DEFAULT_NEW_CHARACTER_SKILLS
     cascade_brake: true      # replaces the class attribute (F7)
+    delivers_speech: true    # spoken dialogue reaches the room through this verb
     remote_comm: true        # reaches characters not present (setup checklist)
     progress_type: talkto
 
