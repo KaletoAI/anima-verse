@@ -261,10 +261,9 @@ class DescribeRoomSkill(BaseSkill):
                 if not description:
                     return
 
-                prompt = (
-                    f"{description}, wide angle establishing shot, no people, "
-                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
-                )
+                # SUBJECT only — framing, "no people" and the photographic
+                # tail are the location style's job (legacy tail, N7).
+                prompt = description
 
                 skill_manager = get_skill_manager()
                 img_skill = None
@@ -286,14 +285,11 @@ class DescribeRoomSkill(BaseSkill):
                     logger.warning("Kein Image-Backend verfuegbar fuer Raum-Bild")
                     return
 
-                from app.core import config as _cfg
-                _ucp = _cfg.resolve_use_case_style(
-                    "location",
-                    backend_model=getattr(backend, "model", "") or "",
-                    backend_family=getattr(backend, "image_family", ""))
-                full_prompt = (f"{_ucp['prompt_style']}, {prompt}"
-                               if _ucp.get("prompt_style") else prompt)
-                negative = _ucp.get("prompt_negative", "")
+                from app.core.prompt_compose import compose as _compose
+                _composed = _compose(use_case="location", subject=prompt,
+                                     backend=backend)
+                full_prompt = _composed.prompt
+                negative = _composed.negative
                 # Raum-Szenenbild ist ein Hintergrund — voll, kein Downscale.
                 try:
                     _bg_w = int(os.environ.get("LOCATION_IMAGE_WIDTH", "1280"))

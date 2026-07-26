@@ -1421,14 +1421,10 @@ async def generate_location_background(location_name: str,
 
     description = location.get("description", location_name)
 
-    # Build the prompt
-    if custom_prompt:
-        prompt = custom_prompt
-    else:
-        prompt = (
-            f"{description}, wide angle establishing shot, no people, "
-            f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
-        )
+    # SUBJECT only — the framing tail ("wide angle establishing shot, no
+    # people, … 16:9 aspect ratio") is what the location style already says;
+    # as a second copy it fought the real canvas size (legacy tail, N7).
+    prompt = custom_prompt or description
 
     # Get the image backend (cheapest available one)
 
@@ -1446,12 +1442,12 @@ async def generate_location_background(location_name: str,
         raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
 
     # Generate image (blocking, in a thread) — style/negative from the use case.
-    from app.core import config as _cfg
-    _ucp = _cfg.resolve_use_case_style(
-        "location", getattr(backend, "image_family", "") or "",
-        backend_model=getattr(backend, "model", "") or "")
-    full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
-    negative = _ucp.get("prompt_negative", "")
+    from app.core.prompt_compose import compose as _compose
+    _composed = _compose(use_case="location", subject=prompt, backend=backend)
+    full_prompt = _composed.prompt
+    negative = _composed.negative
+    for _w in _composed.warnings:
+        logger.info("Prompt composer (location/background): %s", _w)
     # Location background: full resolution — used as a background scene
     # image, no downscale.
     params = {"width": _location_image_width(), "height": _location_image_height()}
@@ -2787,6 +2783,20 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Time-of-day clauses for the day/night variant, keyed (is_room, is_night).
+# Interiors get no sky or stars — their light changes, not the weather.
+_TIME_VARIANT_CLAUSES = {
+    (True, True): ("at night, dim warm lamp light, evening atmosphere, "
+                   "cozy shadows, dark sky outside the windows"),
+    (True, False): ("in daytime, bright natural light, sunlight through the "
+                    "windows, warm daylight atmosphere"),
+    (False, True): ("at night, dark sky, moonlight, stars, dim lighting, "
+                    "evening mood"),
+    (False, False): ("in daytime, bright sunlight, clear sky, natural "
+                     "lighting, warm daylight atmosphere"),
+}
+
+
 async def generate_time_variant_core(location_name: str, image_name: str,
                                      target_type: str, workflow_name: str,
                                      backend_name: str,
@@ -2827,39 +2837,11 @@ async def generate_time_variant_core(location_name: str, image_name: str,
             description = (location.get(prompt_field, "") or
                            location.get("description", location.get("name", location_name)))
 
-        if is_room:
-            # Interior: no sky/stars, adjust the lighting instead
-            if target_type == "night":
-                prompt = (
-                    f"{description}, nighttime interior, dim warm lighting, "
-                    f"lamp light, evening atmosphere, cozy shadows, "
-                    f"window showing dark sky outside, "
-                    f"wide angle interior shot, no people, "
-                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
-                )
-            else:
-                prompt = (
-                    f"{description}, daytime interior, bright natural light, "
-                    f"sunlight through windows, warm daylight atmosphere, "
-                    f"wide angle interior shot, no people, "
-                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
-                )
-        else:
-            # Outdoor area / location
-            if target_type == "night":
-                prompt = (
-                    f"{description}, nighttime, dark sky, moonlight, "
-                    f"night atmosphere, dim lighting, stars, evening mood, "
-                    f"wide angle establishing shot, no people, "
-                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
-                )
-            else:
-                prompt = (
-                    f"{description}, daytime, bright sunlight, clear sky, "
-                    f"warm daylight atmosphere, natural lighting, "
-                    f"wide angle establishing shot, no people, "
-                    f"atmospheric, cinematic lighting, background wallpaper, 16:9 aspect ratio"
-                )
+        # SUBJECT + time-of-day clause only. Framing, "no people" and the
+        # photographic tail come from the location use-case style (composed
+        # below) — repeating them here doubled the frame, and the literal
+        # "16:9 aspect ratio" fought the real canvas from params.width/height.
+        prompt = f"{description}, {_TIME_VARIANT_CLAUSES[(is_room, target_type == 'night')]}"
 
 
     # Core image SERVICE (wave-6 split) — NOT the skill-manager lookup: the
@@ -2920,12 +2902,12 @@ async def generate_time_variant_core(location_name: str, image_name: str,
             detail=(f"Backend '{backend.name}' ist fuer Tag/Nacht-Varianten "
                     "ungeeignet (Inpaint bzw. ohne Referenzbild-Slot)."))
 
-    from app.core import config as _cfg
-    _ucp = _cfg.resolve_use_case_style(
-        "location", getattr(backend, "image_family", "") or "",
-        backend_model=getattr(backend, "model", "") or "")
-    full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
-    negative = _ucp.get("prompt_negative", "")
+    from app.core.prompt_compose import compose as _compose
+    _composed = _compose(use_case="location", subject=prompt, backend=backend)
+    full_prompt = _composed.prompt
+    negative = _composed.negative
+    for _w in _composed.warnings:
+        logger.info("Prompt composer (location/time-variant): %s", _w)
     # Day/night variants are background images — full size, no downscale.
     params = {"width": _location_image_width(), "height": _location_image_height()}
 
@@ -2952,7 +2934,8 @@ async def generate_time_variant_core(location_name: str, image_name: str,
         # GPU provider queue: serialized per backend + track only active
         # once the channel picks up the work (waiting ones stay "pending").
         _log_meta = {"agent_name": location.get("name", location_name),
-                     "original_prompt": prompt, "auto_enhance": False}
+                     "original_prompt": prompt, "auto_enhance": False,
+                     "compose": _composed.meta}
         def _op(b):
             def _gen():
                 try:
