@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { snapResolution } from '../../lib/imageSize'
 import { IMAGE_TYPES, type GalleryResponse, type Location, type Room } from './worldTypes'
 import { ImageSetDialog } from './ImageSetDialog'
 
@@ -369,6 +370,22 @@ export function LocationGallery({
     [location, room],
   )
 
+  // Image shape from the floor plan: the room-model source feeds img2mesh, so
+  // a 2 × 5 m room rendered at 1024² comes back as a square box. The long side
+  // of the rectangle becomes the long side of the image (w → width, d → height
+  // — the cutaway is seen from above, so depth reads vertically). Only a
+  // prefill; the admin overrides it in the dialog. Rooms without a rectangle
+  // keep the backend default.
+  const roomResolution = useMemo(() => {
+    const w = Number(room?.layout?.w) || 0
+    const d = Number(room?.layout?.d) || 0
+    if (!(w > 0) || !(d > 0)) return null
+    const LONG = 1024
+    return w >= d
+      ? { width: LONG, height: snapResolution(LONG * (d / w)) }
+      : { width: snapResolution(LONG * (w / d)), height: LONG }
+  }, [room?.layout?.w, room?.layout?.d])
+
   // Submit handler the dialog calls on Generate. Truly fire-and-forget —
   // the function returns immediately so ImageGenDialog can close right
   // away. The POST + reload run on a detached promise. Errors land in
@@ -387,6 +404,9 @@ export function LocationGallery({
       if (payload.loras) body.loras = payload.loras
       // The dialog already has the map-icon suffix in the prompt → don't duplicate it server-side.
       if (payload.prompt_settings_applied) body.settings_applied = true
+      // Output size (empty fields = the server's use-case default).
+      if (payload.width) body.width = payload.width
+      if (payload.height) body.height = payload.height
 
       // Detached: do NOT await. handleSubmit will see a resolved Promise
       // immediately and trigger onClose() in the next microtask.
@@ -692,6 +712,11 @@ export function LocationGallery({
           ? { label: t('2D map icon'), text: mapSuffix.map_2d }
           : undefined
       }
+      // Map tiles stay square by contract (they have to tile) — no size fields
+      // there. Everything else may pick its own; only the room-model source
+      // arrives prefilled from the floor plan.
+      showResolution={dialogType === 'day' || dialogType === 'night' || dialogType === 'building'}
+      defaultResolution={dialogType === 'building' ? roomResolution : null}
       onSubmit={submitGenerate}
       onClose={() => setDialogType(null)}
     />

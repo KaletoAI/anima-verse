@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { RES_GRID, RES_MAX, RES_MIN, ratioLabel, snapResolution } from '../lib/imageSize'
 import { useHelp } from '../help/HelpContext'
 
 /**
@@ -58,6 +59,10 @@ export interface ImageGenSubmit {
   // Reference-slot toggles (managed against the backend's ref_slot_count budget).
   use_room?: boolean
   use_source_as_reference?: boolean
+  // Output resolution in pixels — only emitted when `showResolution` is on and
+  // the field carries a value; otherwise the server keeps its use-case default.
+  width?: number
+  height?: number
 }
 
 interface Props {
@@ -82,6 +87,20 @@ interface Props {
    * server prepends nothing. Swapping the backend re-fills the style.
    */
   styleUseCase?: string
+  /**
+   * Show the optional output-resolution fields (width × height plus a live
+   * aspect display). Empty fields = the server keeps its use-case/backend
+   * default. Only for callers whose endpoint honours the values — today the
+   * location gallery (day/night/room-model renders); map tiles stay square by
+   * contract and do not get the fields.
+   */
+  showResolution?: boolean
+  /**
+   * Prefill for the resolution fields — e.g. the aspect of a room's
+   * floor-plan rectangle, so a 2 × 5 room is not rendered as a square box.
+   * Absent/null leaves them empty.
+   */
+  defaultResolution?: { width: number; height: number } | null
   /** Show a "Room / background" reference toggle (counts against the slot budget). */
   showRoomReference?: boolean
   /** Initial state of the "use current image as reference" toggle. */
@@ -138,6 +157,7 @@ const LORA_SLOTS = 4
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
   styleUseCase,
+  showResolution, defaultResolution,
   showRoomReference, defaultUseSource, requireSourceReference,
   showCreateNew, defaultCreateNew,
   enhanceEndpoint = '/world/imagegen-enhance-prompt', onSubmit, onClose,
@@ -165,6 +185,13 @@ export function ImageGenDialog({
   )
   const [submitting, setSubmitting] = useState(false)
   const [enhancing, setEnhancing] = useState(false)
+  // Output size as TEXT: empty is a meaningful state ("keep the default"), so
+  // the fields never coerce an empty input to a number.
+  const [widthText, setWidthText] = useState('')
+  const [heightText, setHeightText] = useState('')
+  const resRatio = useMemo(
+    () => ratioLabel(parseFloat(widthText), parseFloat(heightText)),
+    [widthText, heightText])
 
   // "Improve": laesst den Prompt per LLM aus dem Aenderungswunsch umschreiben
   // und schreibt das Ergebnis ins Prompt-Feld (sichtbar/editierbar vor dem
@@ -203,6 +230,11 @@ export function ImageGenDialog({
   useEffect(() => {
     if (open) { setUseRoom(true); setUseSource(!!defaultUseSource) }
   }, [open, defaultUseSource])
+  useEffect(() => {
+    if (!open) return
+    setWidthText(defaultResolution?.width ? String(defaultResolution.width) : '')
+    setHeightText(defaultResolution?.height ? String(defaultResolution.height) : '')
+  }, [open, defaultResolution?.width, defaultResolution?.height])
 
   // Reset the regenerate extras when (re)opening; pre-select detected characters.
   const detNames = (characterOptions?.detected || []).map(charName)
@@ -318,6 +350,12 @@ export function ImageGenDialog({
     if (characterOptions) payload.character_names = selectedChars
     if (showRoomReference) payload.use_room = useRoom
     if (sourceImageUrl) payload.use_source_as_reference = useSource
+    if (showResolution) {
+      const w = snapResolution(parseFloat(widthText))
+      const h = snapResolution(parseFloat(heightText))
+      if (w) payload.width = w
+      if (h) payload.height = h
+    }
     setSubmitting(true)
     try {
       await onSubmit(payload)
@@ -329,7 +367,8 @@ export function ImageGenDialog({
       settingsSuffix, styleText, styleUseCase, loraSlots, onSubmit, onClose,
       isRegen, showCreateNew, createNew,
       improvement, hideNegative, negative, characterOptions, selectedChars,
-      showRoomReference, useRoom, sourceImageUrl, useSource])
+      showRoomReference, useRoom, sourceImageUrl, useSource,
+      showResolution, widthText, heightText])
 
   // Reference-slot budget: how many ref images may be used (backend ref_slot_count).
   // Persons + room + current-image each consume one slot.
@@ -390,6 +429,55 @@ export function ImageGenDialog({
                   <option key={e.name} value={e.name}>{e.label || e.name}</option>
                 ))}
               </select>
+
+              {showResolution ? (
+                <>
+                  <label className="ga-imagegen-label">{t('Output size (px)')}</label>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input
+                      className="ga-input"
+                      type="number"
+                      min={RES_MIN}
+                      max={RES_MAX}
+                      step={RES_GRID}
+                      style={{ width: 84 }}
+                      value={widthText}
+                      placeholder={t('auto')}
+                      disabled={submitting}
+                      aria-label={t('Width in pixels')}
+                      onChange={(e) => setWidthText(e.target.value)}
+                      onBlur={() => setWidthText((cur) => {
+                        const v = snapResolution(parseFloat(cur))
+                        return v ? String(v) : ''
+                      })}
+                    />
+                    <span aria-hidden>×</span>
+                    <input
+                      className="ga-input"
+                      type="number"
+                      min={RES_MIN}
+                      max={RES_MAX}
+                      step={RES_GRID}
+                      style={{ width: 84 }}
+                      value={heightText}
+                      placeholder={t('auto')}
+                      disabled={submitting}
+                      aria-label={t('Height in pixels')}
+                      onChange={(e) => setHeightText(e.target.value)}
+                      onBlur={() => setHeightText((cur) => {
+                        const v = snapResolution(parseFloat(cur))
+                        return v ? String(v) : ''
+                      })}
+                    />
+                    {resRatio ? (
+                      <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{resRatio}</span>
+                    ) : null}
+                  </div>
+                  <div className="ga-form-hint">
+                    {t('Empty = the backend default. Snaps to 64-pixel steps, 256–2048. A long narrow room needs an image of the same shape — a square one turns it into a box.')}
+                  </div>
+                </>
+              ) : null}
 
               {currentOption?.has_loras ? (
                 <>

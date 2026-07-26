@@ -197,6 +197,11 @@ export interface SceneModelSpec {
   placeholder_dims?: { w: number; d: number; h: number }
   /** Rooms: absolute height a figure stands at inside the diorama. */
   walk_y_world?: number
+  /** Rooms: the height the SERVER measured out of the mesh (metres above the
+   *  diorama's lower edge — the same unit the walk_y slider stores). Feeds
+   *  ``walk_y_world`` unless the admin overrode it; shown as the slider's
+   *  placeholder. Absent = the model could not be measured. */
+  walk_y_auto?: number
 }
 
 export interface SceneMarker {

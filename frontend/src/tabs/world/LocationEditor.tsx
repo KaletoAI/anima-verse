@@ -556,14 +556,15 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
               calibration={calibration?.roomId === floorSelRoom.id}
               onCalibration={(on) => setCalibration(
                 on && floorSelRoom.id ? { roomId: floorSelRoom.id } : null)}
-              walkY={(() => {
-                // walk_y is delivered ABSOLUTE (bottom_y + walk_y) — the
-                // slider edits the relative value the sidecar stores.
+              walkYAuto={(() => {
+                // The height the server measured out of the mesh — relative to
+                // the diorama's lower edge, i.e. the same unit the slider
+                // stores, so it can be shown as its placeholder. The MANUAL
+                // value comes from the model sidecar (the strip loads it), not
+                // from here: walk_y_world already has the auto value baked in.
                 const spec = (scene?.models || []).find(
                   (m) => m.role === 'room' && m.room_id === floorSelRoom.id)
-                return spec?.walk_y_world === undefined
-                  ? undefined
-                  : Math.round((spec.walk_y_world - spec.bottom_y) * 1000) / 1000
+                return spec?.walk_y_auto
               })()}
             />
           ) : null}

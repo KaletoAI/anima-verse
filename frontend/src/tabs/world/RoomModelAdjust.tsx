@@ -5,7 +5,10 @@
  * its real width (which now sets the whole room's scale, § B2a) and the
  * walkable floor height a figure stands at. Both persist immediately on the
  * model's sidecar; the 🧍 toggle puts the fixed 1.70 m reference figure into
- * the room so they can be dialed against something. The height OFFSET is not
+ * the room so they can be dialed against something. The walkable height is an
+ * OVERRIDE — the server measures the diorama's floor out of the mesh and
+ * offers that value as the field's placeholder (M6), so typing one is the
+ * correction, not the rule. The height OFFSET is not
  * here — for rooms it lives in the plan (layout.model_offset_y). Full model
  * management (list/select/upload) stays in the room editor's 3D tab.
  */
@@ -21,21 +24,25 @@ interface ActiveModel {
   /** Real-world width estimate of the room's largest side (metres) —
    *  figures in the room derive their scale from it. */
   width_m?: number
+  /** The admin's OVERRIDE of the walkable floor height (metres above the
+   *  model's lower edge); undefined = the server's measured value applies. */
+  walk_y?: number
   active?: boolean
 }
 
 export function RoomModelAdjust({ locationId, roomId, roomName,
                                   calibration = false, onCalibration,
-                                  walkY }: {
+                                  walkYAuto }: {
   locationId: string
   roomId: string
   roomName: string
   /** Calibration figure showing in the 3D preview for THIS room. */
   calibration?: boolean
   onCalibration?: (on: boolean) => void
-  /** Current walkable floor height (metres above the diorama's lower edge),
-   *  read back from the scene payload; undefined = not declared. */
-  walkY?: number
+  /** The walkable floor height the SERVER measured out of the mesh (metres
+   *  above the diorama's lower edge, from the scene payload). Shown as the
+   *  field's placeholder — an empty field means exactly this value applies. */
+  walkYAuto?: number
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -49,12 +56,18 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
     let stale = false
     setLoaded(false)
     setModel(null)
-    apiGet<{ models?: ActiveModel[] }>(`/world/locations/${enc}/model3d/status`)
+    // ``meta`` is the ACTIVE model's sidecar — the only place that says whether
+    // walk_y was set BY HAND (the scene payload's walk_y_world already contains
+    // the server-measured value when it was not).
+    apiGet<{ models?: ActiveModel[]; meta?: { walk_y?: number } }>(
+      `/world/locations/${enc}/model3d/status`)
       .then((d) => {
         if (stale) return
-        const active = (d.models || []).find((m) => m.active) || (d.models || [])[0] || null
+        const found = (d.models || []).find((m) => m.active) || (d.models || [])[0] || null
+        const active = found ? { ...found, walk_y: d.meta?.walk_y } : null
         setModel(active)
         setWidthDraft(active?.width_m ? String(active.width_m) : '')
+        setWalkDraft(active?.walk_y === undefined ? '' : String(active.walk_y))
         setLoaded(true)
       })
       .catch(() => { if (!stale) setLoaded(true) })
@@ -116,30 +129,28 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
     }
   }, [model, widthDraft, enc, roomId, t, toast])
 
-  // Walkable floor height: what the scene payload says, unless the admin is
-  // typing. Empty input = remove the value (0 is a MEANINGFUL height here).
-  useEffect(() => {
-    setWalkDraft(walkY === undefined ? '' : String(walkY))
-  }, [walkY, roomId])
-
+  // Walkable floor height. Empty input = remove the override (0 is a MEANINGFUL
+  // height here, so it must not be treated as "unset"); the server's measured
+  // value then applies and shows as the placeholder.
   const commitWalkY = useCallback(async () => {
     if (!model) return
     const raw = walkDraft.trim()
     const v = raw === '' ? null : parseFloat(raw)
     if (v !== null && !Number.isFinite(v)) {
-      setWalkDraft(walkY === undefined ? '' : String(walkY))
+      setWalkDraft(model.walk_y === undefined ? '' : String(model.walk_y))
       return
     }
-    if ((v ?? undefined) === walkY) return
+    if ((v ?? undefined) === model.walk_y) return
     try {
-      await apiPost<{ meta: { walk_y?: number } }>(
+      const d = await apiPost<{ meta: { walk_y?: number } }>(
         `/world/locations/${enc}/model3d/walk_y`,
         { walk_y: v, file: model.filename })
+      setModel((prev) => (prev ? { ...prev, walk_y: d.meta?.walk_y } : prev))
       notifyModel3dChanged({ roomId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [model, walkDraft, walkY, enc, roomId, t, toast])
+  }, [model, walkDraft, enc, roomId, t, toast])
 
   if (!loaded) return null
   if (!model) {
@@ -197,7 +208,9 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
         />
       </label>
       <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-        title={t('Walkable floor height (m): how high above the model’s lower edge a figure actually stands — modelled floors (a podium, a sunken lounge, a hole in the mesh) cannot be measured from outside. Dial it until the calibration figure stands on the visible floor. Empty = undeclared, 0 = the lower edge itself.')}>
+        title={walkYAuto === undefined
+          ? t('Walkable floor height (m): how high above the model’s lower edge a figure actually stands — modelled floors (a podium, a sunken lounge, a hole in the mesh) cannot be measured from outside. Dial it until the calibration figure stands on the visible floor. Empty = undeclared, 0 = the lower edge itself.')
+          : t('Walkable floor height (m): how high above the model’s lower edge a figure actually stands. The server measured this model’s floor itself — leave the field EMPTY to use that value (the placeholder), and only type a value when the figure does not end up on the visible floor. 0 = the lower edge itself.')}>
         {t('Walkable floor (m)')}
         <input
           className="ga-input"
@@ -205,9 +218,9 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
           min={0}
           max={5}
           step={0.05}
-          style={{ width: 82 }}
+          style={{ width: 104 }}
           value={walkDraft}
-          placeholder="—"
+          placeholder={walkYAuto === undefined ? '—' : `${t('auto')} (${walkYAuto.toFixed(2)})`}
           onChange={(e) => setWalkDraft(e.target.value)}
           onBlur={() => { void commitWalkY() }}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
