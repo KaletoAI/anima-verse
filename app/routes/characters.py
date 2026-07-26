@@ -1286,7 +1286,11 @@ def _resolve_character_model(character_name: str):
                 "created_at": info.get("created_at", ""),
                 "backend": info.get("backend", ""),
                 "source": info.get("source", "generated")}
-        return path, meta, find_texture(character_name)
+        # FBX case only — a GLB embeds its textures; a stray image next to a
+        # GLB is an auxiliary material map, never the basecolor.
+        tex = (find_texture(character_name)
+               if path.suffix.lower() == ".fbx" else None)
+        return path, meta, tex
     return None, None, None
 
 

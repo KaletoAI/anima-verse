@@ -65,6 +65,65 @@ def _log_image_failure(lv: dict, error_msg: str) -> None:
         logger.debug("Fehler-Logging (Image) fehlgeschlagen: %s", _le)
 
 
+# Material maps the mesh gateway may ship ALONGSIDE the model (Trellis2
+# chains deliver e.g. a metallic PNG even for GLB aliases). None of these is
+# the basecolor an FBX needs — applied as basecolor they tint the whole model.
+_MESH_AUX_MAP_TOKENS = ("metallic", "roughness", "normal", "occlusion",
+                        "emissive", "displacement")
+_MESH_BASECOLOR_TOKENS = ("basecolor", "base_color", "albedo", "diffuse")
+
+
+def _sniff_mesh_suffix(blob: bytes) -> str:
+    """File format by magic bytes — authoritative over delivered names
+    (a name can be missing or wrong; the content cannot)."""
+    if blob[:4] == b"glTF":
+        return ".glb"
+    if blob.startswith(b"Kaydara FBX Binary"):
+        return ".fbx"
+    if blob[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if blob[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    return ""
+
+
+def _split_mesh_files(blobs: List[bytes], names: List[str]):
+    """Sorts a mesh job's delivered files into the model and — FBX case only —
+    its basecolor texture. Returns ``(model_blob, model_name, texture_blob)``.
+
+    A GLB embeds its textures, so every image delivered next to a GLB is an
+    auxiliary material map and dropped. For an FBX the basecolor is picked by
+    gateway file name; auxiliary maps (metallic/roughness/…) never qualify.
+    An unnamed image (older chains send no names) still counts as basecolor.
+    """
+    from pathlib import Path as _P
+    model_blob = None
+    model_name = ""
+    images = []  # (blob, lowercased gateway name)
+    for idx, blob in enumerate(blobs):
+        nm = names[idx] if idx < len(names) else ""
+        suf = _sniff_mesh_suffix(blob) or _P(nm).suffix.lower()
+        if suf in (".png", ".jpg", ".jpeg", ".webp"):
+            images.append((blob, nm.lower()))
+        elif model_blob is None:
+            model_blob, model_name = blob, nm
+    if model_blob is None:  # nothing classifiable — first blob is the model
+        if not blobs:
+            return None, "", None
+        model_blob, model_name = blobs[0], (names[0] if names else "")
+        images = [(b, n) for b, n in images if b is not model_blob]
+
+    model_suf = _sniff_mesh_suffix(model_blob) or _P(model_name).suffix.lower()
+    if model_suf == ".glb":
+        return model_blob, model_name, None
+    candidates = [(b, n) for b, n in images
+                  if not any(tok in n for tok in _MESH_AUX_MAP_TOKENS)]
+    preferred = [(b, n) for b, n in candidates
+                 if any(tok in n for tok in _MESH_BASECOLOR_TOKENS)]
+    pick = preferred or candidates
+    return model_blob, model_name, (pick[0][0] if pick else None)
+
+
 def render_has_reference_image(character_name: str, *,
                                set_profile: bool = False) -> bool:
     """Whether this render will slot an identity reference image — the signal
@@ -468,38 +527,13 @@ class ImageService:
         blobs: List[bytes] = result["blobs"]
         names: List[str] = result["names"]
 
-        def _sniff_suffix(blob: bytes) -> str:
-            """File format by magic bytes — authoritative over delivered names
-            (a name can be missing or wrong; the content cannot)."""
-            if blob[:4] == b"glTF":
-                return ".glb"
-            if blob.startswith(b"Kaydara FBX Binary"):
-                return ".fbx"
-            if blob[:8] == b"\x89PNG\r\n\x1a\n":
-                return ".png"
-            if blob[:3] == b"\xff\xd8\xff":
-                return ".jpg"
-            return ""
-
         # Sort the returned blobs: the model file (glb/fbx/…) and — for the
         # generic aliases — its basecolor texture. Content sniffing first,
         # gateway names as the fallback for formats without a magic check.
-        model_blob = None
-        model_name = ""
-        texture_blob = None
-        for idx, blob in enumerate(blobs):
-            nm = names[idx] if idx < len(names) else ""
-            suf = _sniff_suffix(blob) or _P(nm).suffix.lower()
-            if suf in (".png", ".jpg", ".jpeg", ".webp"):
-                texture_blob = blob
-            elif model_blob is None:
-                model_blob = blob
-                model_name = nm
-        if model_blob is None:  # nothing classifiable — first blob is the model
-            model_blob, model_name = blobs[0], (names[0] if names else "")
+        model_blob, model_name, texture_blob = _split_mesh_files(blobs, names)
 
         out = _P(output_path)
-        suffix = (_sniff_suffix(model_blob)
+        suffix = (_sniff_mesh_suffix(model_blob)
                   or (_P(model_name).suffix.lower() if model_name else ""))
         if suffix and suffix != out.suffix.lower():
             out = out.with_suffix(suffix)
@@ -510,7 +544,7 @@ class ImageService:
             if texture_blob is not None:
                 # PNG or JPEG — the gateway prefers JPEG now (a third of the
                 # size); the extension follows the content.
-                tex = out.with_suffix(_sniff_suffix(texture_blob) or ".png")
+                tex = out.with_suffix(_sniff_mesh_suffix(texture_blob) or ".png")
                 tex.write_bytes(texture_blob)
                 texture_path = str(tex)
         except Exception as e:

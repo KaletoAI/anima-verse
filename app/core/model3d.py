@@ -191,10 +191,13 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                     info["rig"] = meta["rig"]  # what it was ACTUALLY made with
             except (OSError, ValueError):
                 pass
-        tex = find_texture(character_name, signature)
-        if tex:
-            info["texture_url"] = f"/characters/{enc}/model3d/texture"
-            info["texture_size"] = tex.stat().st_size
+        # FBX case only — a GLB embeds its textures; a stray image next to a
+        # GLB is an auxiliary material map, never the basecolor.
+        if info["format"] == "fbx":
+            tex = find_texture(character_name, signature)
+            if tex:
+                info["texture_url"] = f"/characters/{enc}/model3d/texture"
+                info["texture_size"] = tex.stat().st_size
         out["model"] = info
     out["options"] = get_model3d_options(character_name)
     out.update(list_mesh_backends(rig))
