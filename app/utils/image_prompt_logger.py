@@ -46,6 +46,7 @@ def log_image_prompt(
     actor_labels: Optional[List[str]] = None,
     workflow_type: str = "",
     entry_point: str = "",
+    compose: Optional[Dict[str, Any]] = None,
     error: str = ""):
     """Loggt einen Bildgenerierungs-Prompt als JSONL-Zeile.
 
@@ -63,6 +64,9 @@ def log_image_prompt(
         context: Kontext-Daten (outfit, feeling, activity, location)
         duration_s: Dauer der Bildgenerierung in Sekunden
         reference_images: Referenzbilder {slot_title: file_path}
+        compose: Kompositions-Metadaten von prompt_compose.compose
+            (use_case, family, style_had_slot, hint_rendered,
+            negations_moved) — Grundlage der numerischen Prompt-Verifikation
     """
     end_time = utc_now()
     start_time = end_time - timedelta(seconds=duration_s) if duration_s > 0 else end_time
@@ -110,6 +114,8 @@ def log_image_prompt(
             "entry_point": entry_point,
         },
     }
+    if compose:
+        entry["compose"] = compose
     if error:
         entry["error"] = error
 

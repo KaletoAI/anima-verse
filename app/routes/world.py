@@ -1459,6 +1459,21 @@ async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
     return {"prompt": enhanced}
 
 
+@router.post("/compose-preview")
+async def compose_preview(request: Request) -> Dict[str, Any]:
+    """Composes the final render prompt WITHOUT generating anything.
+
+    Body: { use_case?, prompt_type?, subject?, location_id, room_id?, backend }
+    Returns: { prompt, negative, warnings, use_case }
+
+    The render dialog prefills from here, so its prompt and the batch path
+    come out of the same composer (app/core/prompt_compose.py) — including
+    the use-case decision, which the client no longer guesses.
+    """
+    data = await request.json()
+    return world_ops.compose_preview_core(data)
+
+
 @router.post("/locations/{location_name}/gallery/batch")
 async def generate_gallery_batch(location_name: str, request: Request) -> Dict[str, Any]:
     """Startet Batch-Generierung aller Bilder fuer einen Ort (Background-Task)."""

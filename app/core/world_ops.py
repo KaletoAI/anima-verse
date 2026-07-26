@@ -9,9 +9,12 @@ import os
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from app.core.log import get_logger
 from app.imagegen.base import BackendBusyError
+
+if TYPE_CHECKING:  # type-only — the composer is imported where it is used
+    from app.core.prompt_compose import ShapeHint
 
 logger = get_logger("world")
 
@@ -1275,8 +1278,10 @@ def _location_image_height() -> int:
 IMAGE_DIM_MIN = 256
 IMAGE_DIM_MAX = 2048
 IMAGE_DIM_GRID = 64
-# Below this length ratio a room counts as square enough to say nothing.
-ROOM_PROPORTION_MIN_RATIO = 1.2
+# Up to this ratio a room is called "square", above it "rectangular". The
+# threshold for the length CLAUSE lives in prompt_compose (RATIO_MIN) — this
+# one only picks the shape word.
+ROOM_SQUARE_MAX_RATIO = 1.05
 
 
 def _clamp_image_dim(value: Any) -> int:
@@ -1293,43 +1298,43 @@ def _clamp_image_dim(value: Any) -> int:
     return int(max(IMAGE_DIM_MIN, min(IMAGE_DIM_MAX, v)))
 
 
-def room_proportions_hint(room: Optional[Dict[str, Any]]) -> str:
-    """The room's floor-plan proportions as a prompt clause, or "" when the
-    room has no layout rectangle or is square enough not to matter.
+def room_shape_hint(location: Optional[Dict[str, Any]],
+                    room: Optional[Dict[str, Any]],
+                    outdoor: bool = False) -> Optional["ShapeHint"]:
+    """The room's footprint as a :class:`ShapeHint`, or None when there is
+    nothing worth saying (no layout rectangle, or square without a scale
+    anchor).
 
-    The rectangle (``layout.w`` x ``layout.d``) is the only place that knows a
-    room is long and narrow; without the hint the generator answers every room
-    with the same square box.
-
-    Wording matters more than precision here (finding 2026-07-26: the exact
-    fraction of a real rectangle read "footprint roughly 9:19" — noise to a
-    diffusion model, which then ignored it): the clause carries a VERBAL
-    multiplier ("about 2 times as long as it is wide") plus the nearest SMALL
-    ratio in the familiar short:long form ("1:2"), and tells the model to
-    fill the frame — the canvas the dialog picks does the rest."""
+    This is a BUILDER, not a renderer: the wording per prompt family lives in
+    ``prompt_compose.render_hint``. The rectangle (``layout.w`` x ``layout.d``)
+    is the only place that knows a room is long and narrow — without the hint
+    the generator answers every room with the same square box. The real
+    metres come from ``scene_recipe.room_size_m`` (geometry lives in exactly
+    one place); a location without a scale anchor keeps the bare proportion.
+    """
+    from app.core.prompt_compose import RATIO_MIN, ShapeHint
     lay = (room or {}).get("layout") or {}
     try:
         w = float(lay.get("w") or 0)
         d = float(lay.get("d") or 0)
     except (TypeError, ValueError):
-        return ""
+        return None
     lo, hi = min(w, d), max(w, d)
-    if lo <= 0 or hi / lo < ROOM_PROPORTION_MIN_RATIO:
-        return ""
+    if lo <= 0:
+        return None
     ratio = hi / lo
-    # Nearest ratio a generator can actually follow — small numbers only.
-    presets = [(4, 3), (3, 2), (5, 3), (2, 1), (5, 2), (3, 1), (4, 1), (5, 1)]
-    long_n, short_n = min(presets, key=lambda p: abs(p[0] / p[1] - ratio))
-    mult = round(ratio * 2) / 2
-    if mult < 2:
-        words = "noticeably longer than it is wide"
-    else:
-        mult_txt = str(int(mult)) if float(mult).is_integer() else f"{mult:g}"
-        words = f"about {mult_txt} times as long as it is wide"
-    shape = "long narrow" if ratio >= 2.5 else "elongated"
-    return (f"{shape} rectangular floor plan, {words} "
-            f"(footprint about {short_n}:{long_n}), the floor slab fills "
-            f"the frame edge to edge")
+    from app.core.scene_recipe import room_size_m
+    size = room_size_m(location or {}, room or {})
+    if not size and ratio < RATIO_MIN:
+        return None  # square-ish and sizeless — the style says it all
+    long_m = short_m = None
+    if size:
+        long_m, short_m = max(size), min(size)
+    return ShapeHint(
+        shape="square" if ratio < ROOM_SQUARE_MAX_RATIO else "rectangular",
+        long_m=long_m, short_m=short_m,
+        surface="ground base" if outdoor else "floor slab",
+        ratio=ratio)
 
 
 def resolve_background_path(location_name: str, room: str = "", hour: int = -1,
@@ -2059,6 +2064,114 @@ def set_location_prompt_changed(location_id: str, room_id: str,
 
 # === Gallery image generation ===
 
+def resolve_gallery_subject(location: Dict[str, Any], room_id: str,
+                            prompt_type: str, fallback: str = "") -> str:
+    """The SUBJECT text of a gallery render — room+type > room > location+type
+    > location description. One chain, used by the generate path and by the
+    compose preview, so the dialog never has to guess it client-side.
+    """
+    description = ""
+    if room_id:
+        room = get_room_by_id(location, room_id)
+        if room:
+            # Room with prompt type: prefer the room's day/night prompt
+            if prompt_type == "day":
+                description = (room.get("image_prompt_day", "") or "").strip()
+            elif prompt_type == "night":
+                description = (room.get("image_prompt_night", "") or "").strip()
+            elif prompt_type == "building":
+                # Room-model source image: dedicated per-room prompt,
+                # else the room text (mirrors the gallery dialog).
+                description = ((room.get("image_prompt_building", "") or "").strip()
+                               or (room.get("description", "") or "").strip())
+            if not description:
+                description = room.get("image_prompt_day", "") or room.get("description", "")
+    if not description and prompt_type == "day":
+        description = location.get("image_prompt_day", "").strip()
+    elif not description and prompt_type == "night":
+        description = location.get("image_prompt_night", "").strip()
+    elif not description and prompt_type in ("map_2d", "map_3x3"):
+        description = location.get("image_prompt_map_2d", "").strip()
+    elif not description and prompt_type == "building":
+        description = location.get("image_prompt_building", "").strip()
+    if not description:
+        description = location.get("description", location.get("name", fallback))
+    return description
+
+
+def gallery_use_case(location: Dict[str, Any], room_id: str, prompt_type: str,
+                     map_blend: bool = False) -> str:
+    """The use case a gallery render belongs to.
+
+    A building-type render FOR A ROOM is the room-model source — its own use
+    case (open cutaway); the building exterior style would demand a "single
+    building" even for a park room. Both split further on the indoor/outdoor
+    flag (room overrides location): an outdoor location's "building" is a
+    scene diorama, an outdoor room an open-air area.
+    """
+    model_uc = ""
+    if prompt_type == "building":
+        model_uc = (("room_model_outdoor" if is_outdoor_room(location, room_id)
+                     else "room_model") if room_id
+                    else ("building_outdoor" if is_outdoor_room(location, "")
+                          else "building"))
+    return ("mapfit" if map_blend
+            else "map" if prompt_type in ("map_2d", "map_3x3")
+            else model_uc if model_uc
+            else "location")
+
+
+def is_outdoor_room(location: Dict[str, Any], room_id: str) -> bool:
+    """Indoor/outdoor of a room (falls back to the location's own flag)."""
+    from app.models.world import resolve_indoor_flag
+    room = get_room_by_id(location, room_id) if room_id else None
+    return resolve_indoor_flag(location, room) == "outdoor"
+
+
+def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The finished prompt for a render occasion, without generating it.
+
+    Feeds the render dialog's prefill so dialog and batch go through the SAME
+    composer (the dialog used to concatenate style + subject itself and
+    guessed the use case client-side). Request:
+    ``{use_case?, subject?, location_id, room_id?, backend}``.
+    """
+    location_id = (data.get("location_id") or "").strip()
+    location = resolve_location(location_id)
+    if not location:
+        raise HTTPException(status_code=404,
+                            detail=f"Ort '{location_id}' nicht gefunden")
+    room_id = (data.get("room_id") or "").strip()
+    prompt_type = (data.get("prompt_type") or "building").strip()
+    use_case = ((data.get("use_case") or "").strip()
+                or gallery_use_case(location, room_id, prompt_type))
+    subject = (data.get("subject") or "").strip() or resolve_gallery_subject(
+        location, room_id, prompt_type, location_id)
+
+    # The backend only supplies the family (image_family/model) — availability
+    # does not matter for a text preview, so take the configured instance by
+    # name instead of probing it.
+    backend = None
+    backend_name = (data.get("backend") or "").strip()
+    if backend_name:
+        from app.imagegen.service import get_image_service
+        _svc = get_image_service()
+        backend = next((b for b in (getattr(_svc, "backends", None) or [])
+                        if b.name == backend_name), None)
+
+    hints = []
+    if room_id:
+        _sh = room_shape_hint(location, get_room_by_id(location, room_id),
+                              outdoor=is_outdoor_room(location, room_id))
+        if _sh:
+            hints.append(_sh)
+    from app.core.prompt_compose import compose as _compose
+    composed = _compose(use_case=use_case, subject=subject, backend=backend,
+                        hints=hints)
+    return {"prompt": composed.prompt, "negative": composed.negative,
+            "warnings": composed.warnings, "use_case": use_case}
+
+
 async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
     """Actual generation logic — fired by the single mode as a background
     task and awaited directly by the batch mode (dispatchers in
@@ -2094,39 +2207,10 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         if not location:
             raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
 
-        # Prompt source: custom_prompt > room+type > room > prompt type > location description
-        if custom_prompt:
-            prompt = custom_prompt
-        else:
-            description = ""
-            if room_id:
-                room = get_room_by_id(location, room_id)
-                if room:
-                    # Room with prompt type: prefer the room's day/night prompt
-                    if prompt_type == "day":
-                        description = (room.get("image_prompt_day", "") or "").strip()
-                    elif prompt_type == "night":
-                        description = (room.get("image_prompt_night", "") or "").strip()
-                    elif prompt_type == "building":
-                        # Room-model source image: dedicated per-room prompt,
-                        # else the room text (mirrors the gallery dialog).
-                        description = ((room.get("image_prompt_building", "") or "").strip()
-                                       or (room.get("description", "") or "").strip())
-                    if not description:
-                        description = room.get("image_prompt_day", "") or room.get("description", "")
-            if not description and prompt_type == "day":
-                description = location.get("image_prompt_day", "").strip()
-            elif not description and prompt_type == "night":
-                description = location.get("image_prompt_night", "").strip()
-            elif not description and prompt_type in ("map_2d", "map_3x3"):
-                description = location.get("image_prompt_map_2d", "").strip()
-            elif not description and prompt_type == "building":
-                description = location.get("image_prompt_building", "").strip()
-            if not description:
-                description = location.get("description", location.get("name", location_name))
-
-            # Subject only — framing/style come from the use case (map/location).
-            prompt = description
+        # Prompt source: custom_prompt > room+type > room > prompt type > location description.
+        # Subject only — framing/style come from the use case (map/location).
+        prompt = custom_prompt or resolve_gallery_subject(
+            location, room_id, prompt_type, location_name)
 
         # The map/location style now comes from the use case (applied below
         # via resolve_use_case_style) — no separate suffix anymore.
@@ -2239,26 +2323,12 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # areas seamlessly, no "new tile" style), normal tile -> "map",
         # otherwise location background.
         from app.core import config as _cfg
-        # A building-type render FOR A ROOM is the room-model source — its own
-        # use case (open cutaway), the building exterior style would demand a
-        # "single building" even for a park room. Both split further on the
-        # indoor/outdoor flag (room overrides location): an outdoor location's
-        # "building" is a scene diorama, an outdoor room an open-air area.
-        if prompt_type == "building":
-            from app.models.world import resolve_indoor_flag
-            _room = get_room_by_id(location, room_id) if room_id else None
-            _outdoor = resolve_indoor_flag(location, _room) == "outdoor"
-            _model_uc = (("room_model_outdoor" if _outdoor else "room_model") if room_id
-                         else ("building_outdoor" if _outdoor else "building"))
-        else:
-            _model_uc = ""
-        _uc_name = ("mapfit" if _map_blend
-                    else "map" if prompt_type in ("map_2d", "map_3x3")
-                    else _model_uc if _model_uc
-                    else "location")
+        _uc_name = gallery_use_case(location, room_id, prompt_type, _map_blend)
         _ucp = _cfg.resolve_use_case_style(
             _uc_name, getattr(backend, "image_family", "") or "",
             backend_model=getattr(backend, "model", "") or "")
+        _compose_meta: Dict[str, Any] = {}
+        _warnings: List[str] = []
         if _is_regen:
             full_prompt = prompt
             negative = ""
@@ -2270,29 +2340,34 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             full_prompt = prompt
             negative = _ucp.get("prompt_negative", "")
         elif bool(data.get("settings_applied")):
-            # The dialog already composed the FULL prompt (use-case style shown
-            # as an editable part — the rule: the dialog always shows the final
-            # prompt). Prepending the style again would double it. The negative
-            # still comes from the use case.
+            # The dialog already composed the FULL prompt (use-case style +
+            # shape hint woven in by /world/compose-preview — the rule: the
+            # dialog always shows the final prompt). Composing again would
+            # double both. A negative from the dialog wins: it carries the
+            # items the composer's negation guard moved out of the subject.
             full_prompt = prompt
-            negative = _ucp.get("prompt_negative", "")
+            negative = ((data.get("negative_prompt") or "").strip()
+                        or _ucp.get("prompt_negative", ""))
         else:
-            full_prompt = f"{_ucp['prompt_style']}, {prompt}" if _ucp.get("prompt_style") else prompt
-            negative = _ucp.get("prompt_negative", "")
-
-        # Floor-plan proportions: a room whose rectangle is far from square
-        # says so in the prompt, whichever branch composed it (the dialog
-        # prefills the same clause — adding it twice is what the containment
-        # check prevents). Only ROOM renders, never a map tile and never a
-        # regenerate, whose prompt is a literal adjustment order.
-        # PREPENDED, not appended (finding 2026-07-26, café kitchen): early
-        # tokens steer diffusion — at the end of a long prompt the clause was
-        # ignored, and the style's own slab wording had already set the shape.
-        if room_id and not _map_blend and not _is_regen:
-            _prop_hint = room_proportions_hint(get_room_by_id(location, room_id))
-            if _prop_hint and _prop_hint.lower() not in full_prompt.lower():
-                full_prompt = f"{_prop_hint}, {full_prompt}" if full_prompt else _prop_hint
-                logger.info("Room proportions in the prompt: %s", _prop_hint)
+            # ONE composer for the dialog prefill and this (batch/auto) path:
+            # style + subject slot + shape hints + negation guard, in
+            # app/core/prompt_compose.py. The hint is PREPENDED there — early
+            # tokens steer diffusion (finding 2026-07-26, café kitchen).
+            from app.core.prompt_compose import compose as _compose
+            _hints = []
+            if room_id and not _map_blend:
+                _sh = room_shape_hint(location, get_room_by_id(location, room_id),
+                                      outdoor=is_outdoor_room(location, room_id))
+                if _sh:
+                    _hints.append(_sh)
+            _composed = _compose(use_case=_uc_name, subject=prompt,
+                                 backend=backend, hints=_hints)
+            full_prompt = _composed.prompt
+            negative = _composed.negative
+            _compose_meta = _composed.meta
+            _warnings = _composed.warnings
+            for _w in _warnings:
+                logger.info("Prompt composer (%s): %s", _uc_name, _w)
         # Map icons are small thumbnails for the world overview and get
         # downscaled. Day/night/description stay at full resolution
         # as background images.
@@ -2467,6 +2542,11 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             # backend, model, LoRAs, refs, duration are set by generate() itself).
             _log_meta = {"agent_name": location.get("name", location_name),
                          "original_prompt": prompt, "auto_enhance": False}
+            if _compose_meta:
+                # Numeric verification runs over logs/image_prompts.jsonl —
+                # the composer states which family, slot and hint produced
+                # the final prompt.
+                _log_meta["compose"] = _compose_meta
             def _op(b):
                 def _gen():
                     try:
@@ -2658,7 +2738,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
 
             # Image-prompt logging now happens CENTRALLY in backend.generate()
             # (with the final, trigger-injected prompt) — via log_meta below.
-            return {"status": "success", "location": location["name"], "location_id": loc_id, "image": image_name}
+            return {"status": "success", "location": location["name"],
+                    "location_id": loc_id, "image": image_name,
+                    "warnings": _warnings}
         except HTTPException:
             raise
         except Exception as e:

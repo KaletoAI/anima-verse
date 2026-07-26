@@ -193,6 +193,29 @@ def _room_rect(recipe: Dict[str, Any], room: Dict[str, Any]) -> Tuple[float, flo
             _num(lay.get("w"), 1.0), _num(lay.get("d"), 1.0))
 
 
+def room_size_m(location: Dict[str, Any],
+                room: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """A room's rectangle in REAL METRES ``(w_m, d_m)``, or None when it has
+    no layout or the location has no scale anchor.
+
+    The scale rule lives HERE, in the one module that owns geometry (§ A1):
+    a layout side is a fraction of the reference square, so its real size is
+    that fraction times the plan width. Consumers outside the 3D path (the
+    image-prompt composer wants the footprint in metres) call this instead
+    of re-deriving the rule.
+    """
+    lay = (room or {}).get("layout") or {}
+    w, d = _num(lay.get("w")), _num(lay.get("d"))
+    if w <= 0 or d <= 0:
+        return None
+    from app.core.location_model3d import derive_plan_width_m
+    plan_w = derive_plan_width_m(str((location or {}).get("id") or ""),
+                                 (location or {}).get("map3d"))
+    if plan_w <= 0:
+        return None
+    return (round(w * plan_w, 2), round(d * plan_w, 2))
+
+
 def room_exit_world(recipe: Dict[str, Any],
                     room: Dict[str, Any]) -> Optional[List[float]]:
     """A room's entry/exit point in WORLD metres, or None.

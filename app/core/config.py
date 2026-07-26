@@ -207,14 +207,20 @@ _DEFAULT_IMAGE_USE_CASES = {
     # So the subject is reframed: a bare FLOOR SLAB with furniture standing
     # on it — an object that never had walls — floating like a game-asset
     # product render. The negative stays for CFG backends (SD/Z-Image).
+    # The style carries the subject SLOT ({subject}, filled by
+    # prompt_compose.compose): the subject belongs inside the style sentence,
+    # not 60 tokens behind it. Two placeholders the frame must NOT set: the
+    # inviting "with all of its furniture and decor" (it invites exactly what
+    # a subject may want to exclude) and any shape word ("rectangular") —
+    # form and size come from the dynamic ShapeHint alone (fix 237f5a1).
     "room_model": {
         "keywords": {
-            "prompt_style": "furniture and decor arranged on a bare floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high three-quarter camera angle, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "{subject}, arranged on a bare floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high three-quarter camera angle, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_ROOM,
             "prompt_instruction": "Write comma-separated tags for the furniture, decor, floor and style ONLY — the interior as a set piece on a bare floor slab. Never mention walls, ceilings or the building; describe just what stands on the floor. Neutral background, no people.",
         },
         "natural": {
-            "prompt_style": "a product render of an interior reduced to its bare floor slab with all of its furniture and decor arranged on top — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furniture. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed",
+            "prompt_style": "a product render of {subject}, staged on a bare floor slab — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furnishings. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed",
             "prompt_negative": _NEG_ROOM,
             "prompt_instruction": "Describe the furniture, decor, floor and style ONLY — the interior as a set piece on a bare floor slab. Never mention walls, ceilings or the building; describe just what stands on the floor. Neutral background, no people.",
         },
@@ -222,12 +228,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # Open-air "room" (park section, courtyard): no walls or ceiling at all.
     "room_model_outdoor": {
         "keywords": {
-            "prompt_style": "open-air area diorama on a square ground base, no walls, no ceiling, three-quarter view, elevated eye level, the entire area in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "{subject}, open-air area diorama on a bare ground base, no walls, no ceiling, three-quarter view, elevated eye level, the entire area in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_ROOM,
             "prompt_instruction": "Write comma-separated tags for the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
         },
         "natural": {
-            "prompt_style": "a photo of a single open-air area diorama on a square ground base with no walls and no ceiling, seen from a three-quarter angle at an elevated eye level, the entire area inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_style": "a photo of {subject} as a single open-air area diorama on a bare ground base with no walls and no ceiling, seen from a three-quarter angle at an elevated eye level, the entire area inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
             "prompt_negative": _NEG_ROOM,
             "prompt_instruction": "Describe the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
         },

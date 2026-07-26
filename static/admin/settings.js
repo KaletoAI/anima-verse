@@ -177,7 +177,15 @@ function renderUseCaseDetail(uc) {
             html += '<div class="field" style="margin-bottom:8px"><label style="font-size:.8em;opacity:.8">' + esc(lbl) + copyBtn + '</label>';
             html += '<textarea rows="2" style="width:100%;font-family:inherit;resize:vertical" '
                   + 'placeholder="' + esc(def) + '" '
-                  + 'onchange="setVal(\'' + p + '\', this.value)">' + esc(val) + '</textarea></div>';
+                  + 'onchange="setVal(\'' + p + '\', this.value)">' + esc(val) + '</textarea>';
+            // The subject slot: the composer weaves the subject INTO the style
+            // sentence where the placeholder sits (early tokens steer diffusion).
+            if (fld === 'prompt_style') {
+                html += '<div class="hint" style="opacity:.7;font-size:.78em;margin-top:2px">'
+                      + 'Optional placeholder <code>{subject}</code> — replaced with the subject text; '
+                      + 'without it the subject is appended.</div>';
+            }
+            html += '</div>';
         }
         html += '</div>';
     }
