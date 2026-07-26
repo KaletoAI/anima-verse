@@ -2069,6 +2069,14 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
     try:
         custom_prompt = data.get("prompt", "").strip()
         room_id = data.get("room_id", "").strip()
+        # A regenerate/adjust is a VARIANT of its source image: without an
+        # explicit room_id it inherits the source's room assignment — the
+        # adjust dialog never sends one, and the result silently landed as a
+        # location-level image (finding 2026-07-26, "Adjust image — Küche").
+        if not room_id and (data.get("reference_image") or "").strip():
+            from app.models.world import get_gallery_image_rooms
+            room_id = get_gallery_image_rooms(location_name).get(
+                (data.get("reference_image") or "").strip(), "")
         prompt_type = data.get("prompt_type", "").strip()  # day/night/map/description
         workflow_name = data.get("workflow", "").strip()
         backend_name = data.get("backend", "").strip()
