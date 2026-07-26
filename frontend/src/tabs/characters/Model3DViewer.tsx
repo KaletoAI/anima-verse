@@ -337,6 +337,25 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         // 3D client, DCC imports) binds it as stored, no compensation.
         // Textures generated BEFORE that gateway fix render mirrored here:
         // regenerate the model.
+        // AV3D-14 aftermath (finding 2026-07-26, Rosi): generated GLBs now
+        // embed a metal-roughness texture, and character bakes carry ~0.5
+        // metalness across skin — with the glTF default metallicFactor 1.0
+        // and no env map the figure renders as the MR map's tint instead of
+        // its base colour. This viewer is a diagnostic: kill metalness (the
+        // roughness channel of the same map stays active), colours stay true.
+        object.traverse((o: Object3D) => {
+          const mesh = o as Mesh
+          if (!mesh.isMesh) return
+          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+          for (const m of mats) {
+            const std = m as MeshStandardMaterial
+            if (std.isMeshStandardMaterial && std.metalnessMap) {
+              std.metalness = 0
+              std.needsUpdate = true
+            }
+          }
+        })
+
         if (textureUrl) {
           const tex = await new THREE.TextureLoader().loadAsync(textureUrl)
           if (disposed) return
