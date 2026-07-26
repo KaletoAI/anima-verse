@@ -371,19 +371,19 @@ export function LocationGallery({
   )
 
   // Image shape from the floor plan: the room-model source feeds img2mesh, so
-  // a 2 × 5 m room rendered at 1024² comes back as a square box. The long side
-  // of the rectangle becomes the long side of the image (w → width, d → height
-  // — the cutaway is seen from above, so depth reads vertically). Only a
-  // prefill; the admin overrides it in the dialog. Rooms without a rectangle
-  // keep the backend default.
+  // a 2 × 5 m room rendered at 1024² comes back as a square box. User finding
+  // 2026-07-26: the generator handles LANDSCAPE canvases better for this use
+  // case — the LONG side always goes to the WIDTH, whatever the rectangle's
+  // orientation on the plan (the mesh takes its true footprint from the image
+  // content; the plan yaw orients it later). Only a prefill; the admin
+  // overrides it in the dialog. Rooms without a rectangle keep the default.
   const roomResolution = useMemo(() => {
     const w = Number(room?.layout?.w) || 0
     const d = Number(room?.layout?.d) || 0
     if (!(w > 0) || !(d > 0)) return null
     const LONG = 1024
-    return w >= d
-      ? { width: LONG, height: snapResolution(LONG * (d / w)) }
-      : { width: snapResolution(LONG * (w / d)), height: LONG }
+    const ratio = Math.min(w, d) / Math.max(w, d)
+    return { width: LONG, height: snapResolution(LONG * ratio) }
   }, [room?.layout?.w, room?.layout?.d])
 
   // Submit handler the dialog calls on Generate. Truly fire-and-forget —

@@ -1299,9 +1299,14 @@ def room_proportions_hint(room: Optional[Dict[str, Any]]) -> str:
 
     The rectangle (``layout.w`` x ``layout.d``) is the only place that knows a
     room is long and narrow; without the hint the generator answers every room
-    with the same square box. Rendered as a plain short:long ratio ("roughly
-    2:5") so it survives both prompt families (prose and keyword)."""
-    from fractions import Fraction
+    with the same square box.
+
+    Wording matters more than precision here (finding 2026-07-26: the exact
+    fraction of a real rectangle read "footprint roughly 9:19" — noise to a
+    diffusion model, which then ignored it): the clause carries a VERBAL
+    multiplier ("about 2 times as long as it is wide") plus the nearest SMALL
+    ratio in the familiar short:long form ("1:2"), and tells the model to
+    fill the frame — the canvas the dialog picks does the rest."""
     lay = (room or {}).get("layout") or {}
     try:
         w = float(lay.get("w") or 0)
@@ -1311,11 +1316,20 @@ def room_proportions_hint(room: Optional[Dict[str, Any]]) -> str:
     lo, hi = min(w, d), max(w, d)
     if lo <= 0 or hi / lo < ROOM_PROPORTION_MIN_RATIO:
         return ""
-    frac = Fraction(hi / lo).limit_denominator(9)
-    short, long = frac.denominator, frac.numerator
-    shape = "long narrow" if hi / lo >= 2.5 else "elongated"
-    return (f"{shape} rectangular floor plan, "
-            f"footprint roughly {short}:{long}")
+    ratio = hi / lo
+    # Nearest ratio a generator can actually follow — small numbers only.
+    presets = [(4, 3), (3, 2), (5, 3), (2, 1), (5, 2), (3, 1), (4, 1), (5, 1)]
+    long_n, short_n = min(presets, key=lambda p: abs(p[0] / p[1] - ratio))
+    mult = round(ratio * 2) / 2
+    if mult < 2:
+        words = "noticeably longer than it is wide"
+    else:
+        mult_txt = str(int(mult)) if float(mult).is_integer() else f"{mult:g}"
+        words = f"about {mult_txt} times as long as it is wide"
+    shape = "long narrow" if ratio >= 2.5 else "elongated"
+    return (f"{shape} rectangular floor plan, {words} "
+            f"(footprint about {short_n}:{long_n}), the floor slab fills "
+            f"the frame edge to edge")
 
 
 def resolve_background_path(location_name: str, room: str = "", hour: int = -1,
