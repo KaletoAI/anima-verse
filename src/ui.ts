@@ -1,5 +1,25 @@
 import type { MapCharacter, MapEvent, WorldLocation } from './types';
 
+/** Start-Statusanzeige: hält die Seite am Leben, während auf den Server
+ *  gewartet wird (Neustart des Backends während des Bootens). Ohne sie bliebe
+ *  nur eine leere Seite, die sich nie wieder fängt. */
+export function bootStatus() {
+  const el = document.createElement('div');
+  el.className = 'boot-status';
+  el.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;'
+    + 'justify-content:center;background:#0d1117;color:#c9d1d9;'
+    + 'font:15px system-ui;text-align:center;padding:24px;z-index:50';
+  return {
+    set(text: string) {
+      el.textContent = text;
+      if (!el.isConnected) document.body.appendChild(el);
+    },
+    remove() {
+      el.remove();
+    },
+  };
+}
+
 export function showLogin(onLogin: (u: string, p: string) => Promise<void>): HTMLElement {
   const overlay = document.createElement('div');
   overlay.className = 'login-overlay';

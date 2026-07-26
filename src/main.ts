@@ -9,7 +9,7 @@ import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, sceneFigureScale, SceneLibrary } from './scene/sceneRecipe';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
-import { createHud, InfoPanel, showLogin } from './ui';
+import { bootStatus, createHud, InfoPanel, showLogin } from './ui';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
@@ -18,15 +18,52 @@ const INTERIOR_CAM_DIST = 26; // näher als das -> Räume auflösen
 
 const app = document.getElementById('app')!;
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Start-Anfragen so lange wiederholen, bis der Server antwortet.
+ *
+ * Der Backend-Neustart (start.sh) trifft nur Port 8000; der Vite-Proxy
+ * antwortet währenddessen mit 500, also schlagen genau die Boot-Abfragen
+ * fehl. Vorher starb der Client daran endgültig: `startApp` warf, niemand
+ * fing es, die Seite blieb leer und kam von selbst nie wieder — ein Reload
+ * während des Neustarts sah aus wie ein Absturz. Jetzt wartet der Boot mit
+ * sichtbarem Status und fängt sich, sobald der Server wieder da ist.
+ */
+async function retryBoot<T>(what: string, fn: () => Promise<T>,
+                            status: ReturnType<typeof bootStatus>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const out = await fn();
+      status.remove();
+      return out;
+    } catch (e) {
+      const wait = Math.min(15_000, 1000 * 2 ** Math.min(attempt, 4));
+      console.warn(`[boot] ${what} fehlgeschlagen (Versuch ${attempt + 1}) — `
+        + `neuer Versuch in ${wait / 1000} s`, e);
+      status.set(`Server nicht erreichbar (${what}) — neuer Versuch in `
+        + `${Math.round(wait / 1000)} s …`);
+      await sleep(wait);
+    }
+  }
+}
+
 async function boot() {
-  const status = await api.authStatus().catch(() => ({ authenticated: false as const }));
-  if (status.authenticated && 'user' in status && status.user) {
-    startApp(status.user.username);
+  const status = bootStatus();
+  // Erreichbarkeit und Anmeldung trennen: ein nicht erreichbarer Server ist
+  // KEIN "nicht angemeldet" — sonst zeigt der Client eine Login-Maske, deren
+  // Absenden zwangsläufig scheitert.
+  const auth = await retryBoot('Anmeldestatus', () => api.authStatus(), status);
+  if (auth.authenticated && auth.user) {
+    void startApp(auth.user.username).catch((e) => {
+      console.error('[boot] Start fehlgeschlagen', e);
+      status.set('Start fehlgeschlagen — bitte Seite neu laden.');
+    });
     return;
   }
   showLogin(async (u, p) => {
     const user = await api.login(u, p);
-    startApp(user.username);
+    await startApp(user.username);
   });
 }
 
@@ -36,12 +73,16 @@ async function startApp(username: string) {
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
   (window as unknown as { __THREE: typeof THREE }).__THREE = THREE; // Debug-Hook (Szene vermessen)
   const figures = new FigureLibrary();
-  const [allLocs, firstMap, surfaces] = await Promise.all([
+  // figures.load() wirft nie (Manifest/Clips fangen selbst) und darf NICHT
+  // wiederholt werden — ein zweiter Lauf würde die Modelle doppelt einhängen.
+  const figuresReady = figures.load();
+  const status = bootStatus();
+  const [allLocs, firstMap, surfaces] = await retryBoot('Weltdaten', () => Promise.all([
     api.getLocations(),
     api.getWorldMap(),
     api.getSurfaceTextures(),
-    figures.load(),
-  ]);
+  ]), status);
+  await figuresReady;
   setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
   setPropLoadFocus(engine.target);   // GLB-Queue: Modelle nahe der Kamera zuerst
   const npcs = new NpcManager(figures);
