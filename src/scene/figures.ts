@@ -399,6 +399,10 @@ const CLIP_FALLBACK: Record<string, ClipKind> = {
   run: 'walk',
 };
 
+/** Modelle, deren gebundene Kinds schon geloggt wurden (einmal je Modell,
+ *  nicht je NPC-Instanz). */
+const loggedActionKinds = new Set<string>();
+
 
 /** Freitext-Activity -> Animations-Kategorie (Client-Workaround für AV3D-6). */
 export function activityToClipKind(activity: string): ClipKind {
@@ -817,8 +821,22 @@ export class Figure {
     this.root.add(inst);
 
     this.mixer = new THREE.AnimationMixer(inst);
+    // Offenes Clip-Vokabular (Vertrag § A8): JEDES geladene Kind bekommt eine
+    // Action unter seinem EIGENEN Namen. Vorher wurden nur die sieben
+    // hartkodierten CLIP_SYNONYMS-Kinds gebunden — alle anderen Server-Kinds
+    // (bartending, harvesting, situps, treading, plant, send, taking …) lagen
+    // in model.clips, waren aber nie abspielbar und fielen still auf idle.
+    // Die Clip-Namen SIND die Server-Kinds (FigureLibrary.load setzt
+    // clip.name = kind, das Retargeting behält den Namen).
     const byName = new Map(model.clips.map((c) => [c.name.toLowerCase(), c]));
+    for (const [kind, clip] of byName) {
+      if (kind) this.actions.set(kind, this.mixer.clipAction(clip));
+    }
+    // Synonym-Tabelle bleibt als ALIAS-Schicht: ein kanonisches Kind, das kein
+    // Clip wörtlich trägt, wird über seine Synonyme nachgebunden (der Server
+    // liefert z.B. "laying"/"sleep", gemeint ist auch "lie").
     for (const [kind, needles] of Object.entries(CLIP_SYNONYMS) as [ClipKind, string[]][]) {
+      if (this.actions.has(kind)) continue;
       for (const needle of needles) {
         const clip = [...byName.entries()].find(([n]) => n.includes(needle))?.[1];
         if (clip) {
@@ -826,6 +844,13 @@ export class Figure {
           break;
         }
       }
+    }
+    // Einmal je Modell die gebundenen Kinds nennen — das ist der Nachweis,
+    // dass das Vokabular offen ist (Abnahme A4).
+    if (!loggedActionKinds.has(model.name)) {
+      loggedActionKinds.add(model.name);
+      console.info(`[figures] ${model.name}: ${this.actions.size} Kinds gebunden — `
+        + `${[...this.actions.keys()].sort().join(', ')}`);
     }
     // Clip-lose Rigs (UniRig-Tiere): Beinketten für den prozeduralen Gang
     if (this.actions.size === 0 && !box.isEmpty()) {
@@ -835,14 +860,22 @@ export class Figure {
     this.play('idle');
   }
 
-  /** Clip mit Crossfade wechseln; fehlt der Clip: Ersatz-Clip, dann idle. */
-  play(kind: ClipKind) {
+  /** Clip mit Crossfade wechseln; fehlt der Clip: Ersatz-Clip, dann idle.
+   *  `kind` kommt server-authoritativ aus `activity_animation` — deshalb hier
+   *  normalisieren, die Actions liegen unter kleingeschriebenen Kinds. */
+  play(rawKind: ClipKind) {
+    const kind = (rawKind || 'idle').toLowerCase();
     if (this.currentKind === kind) return;
     const fallback = CLIP_FALLBACK[kind];
     const resolved = this.actions.get(kind)
       ?? (fallback ? this.actions.get(fallback) : undefined)
       ?? this.actions.get('idle')
       ?? [...this.actions.values()][0];
+    // Beobachtbar machen, WELCHES Kind gewünscht war und ob es überhaupt
+    // gebunden ist — ohne das ist von außen nicht unterscheidbar, ob ein Kind
+    // gespielt oder still auf idle zurückgefallen ist (Abnahme A4).
+    this.root.userData.clipKind = kind;
+    this.root.userData.clipBound = this.actions.has(kind);
     if (!resolved || resolved === this.current) {
       this.currentKind = kind;
       // Fallback-Fall: gleicher Clip, aber ggf. Tempo anpassen (siehe unten)
