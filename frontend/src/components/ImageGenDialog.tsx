@@ -677,7 +677,7 @@ export function ImageGenDialog({
               </div>
               <textarea
                 className="ga-textarea"
-                rows={6}
+                rows={12}
                 value={prompt}
                 disabled={submitting || enhancing || composing}
                 onFocus={() => setTopic('image_prompt')}
@@ -787,7 +787,7 @@ export function ImageGenDialog({
                   <label className="ga-imagegen-label">{t('Negative prompt')}</label>
                   <textarea
                     className="ga-textarea"
-                    rows={2}
+                    rows={4}
                     placeholder={t('What to avoid (optional)')}
                     value={negative}
                     disabled={submitting}
