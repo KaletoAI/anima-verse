@@ -587,12 +587,19 @@ def _generate(kind: str, backend_glob: str, prompt: str, negative: str) -> Dict[
             "width": 1024, "height": 1024,
             "seed": random.randint(1, 2**31 - 1),
         }
+        # The prompt arrives already composed (compose_prompt, or edited in
+        # the dialog) — the metablock records the use case, not a fresh compose.
+        _log_meta = {"agent_name": f"Surface {kind}", "original_prompt": prompt,
+                     "auto_enhance": False,
+                     "compose": {"use_case": "surface_texture",
+                                 "settings_applied": True}}
         from app.core.llm_queue import get_llm_queue, Priority
         images = get_llm_queue().submit_gpu_task(
             provider_name=backend.name,
             task_type="surface_texture",
             priority=Priority.IMAGE_GEN,
-            callable_fn=lambda: backend.generate(prompt, negative, params),
+            callable_fn=lambda: backend.generate(prompt, negative, params,
+                                                 log_meta=_log_meta),
             agent_name="system",
             label=f"Surface texture: {kind}",
             gpu_type=backend.api_type)

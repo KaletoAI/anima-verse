@@ -592,6 +592,7 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
                  "duplicated person, duplicated animal, clone, twins, "
                  "second copy of the same person")
     from app.core.prompt_compose import compose as _compose
+    _subject = prompt
     _composed = _compose(use_case="scene", subject=prompt, backend=backend,
                          negative_extra=_neg_base)
     prompt = _composed.prompt
@@ -610,6 +611,10 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     _tq = get_task_queue()
     _track_id = _tq.track_start("scene_render", f"Scene: {state['label']}",
                                 agent_name=avatar, provider=backend.name)
+    _log_meta = {"agent_name": avatar or "scene",
+                 "original_prompt": _subject, "auto_enhance": False,
+                 "compose": _composed.meta,
+                 "prompt_location": state.get("location", "")}
     try:
         from app.core.llm_queue import get_llm_queue, Priority as _P
         if backend.api_type == "a1111":
@@ -617,12 +622,14 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
                 provider_name=backend.name,
                 task_type="scene_render",
                 priority=_P.IMAGE_GEN,
-                callable_fn=lambda: backend.generate(prompt, negative, params),
+                callable_fn=lambda: backend.generate(prompt, negative, params,
+                                                     log_meta=_log_meta),
                 agent_name=avatar,
                 label=f"Scene: {state['label']}",
                 gpu_type=backend.api_type)
         else:
-            images = backend.generate(prompt, negative, params)
+            images = backend.generate(prompt, negative, params,
+                                      log_meta=_log_meta)
     except Exception as e:
         logger.error("scene render failed (%s): %s", backend.name, e)
         _tq.track_finish(_track_id, error=str(e))

@@ -302,6 +302,9 @@ def _do_generate(event_id: str,
     # Reference image (current location background) as slot 1.
     params["reference_images"] = {"input_reference_image_1": str(bg_path)}
 
+    _log_meta = {"agent_name": f"Event {event_id}",
+                 "original_prompt": image_prompt, "auto_enhance": False,
+                 "compose": _composed.meta}
     try:
         from app.core.llm_queue import get_llm_queue, Priority as _P
         is_local = backend.api_type == "a1111"
@@ -310,12 +313,14 @@ def _do_generate(event_id: str,
                 provider_name=backend.name,
                 task_type="event_image",
                 priority=_P.IMAGE_GEN,
-                callable_fn=lambda: backend.generate(full_prompt, negative, params),
+                callable_fn=lambda: backend.generate(full_prompt, negative, params,
+                                                     log_meta=_log_meta),
                 agent_name="system",
                 label=f"Event: {event_id}{' (after)' if resolved else ''}",
                 gpu_type=backend.api_type)
         else:
-            images = backend.generate(full_prompt, negative, params)
+            images = backend.generate(full_prompt, negative, params,
+                                      log_meta=_log_meta)
     except Exception as e:
         logger.error("Event-Bild [%s] Backend-Fehler: %s", event_id, e)
         return None

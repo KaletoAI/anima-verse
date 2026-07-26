@@ -47,6 +47,7 @@ def log_image_prompt(
     workflow_type: str = "",
     entry_point: str = "",
     compose: Optional[Dict[str, Any]] = None,
+    media: str = "",
     error: str = ""):
     """Loggt einen Bildgenerierungs-Prompt als JSONL-Zeile.
 
@@ -67,6 +68,10 @@ def log_image_prompt(
         compose: Kompositions-Metadaten von prompt_compose.compose
             (use_case, family, style_had_slot, hint_rendered,
             negations_moved) — Grundlage der numerischen Prompt-Verifikation
+        media: "video" / "mesh" fuer Nicht-Bild-Backends (leer = Bild).
+            Ohne diesen Parameter warf der zentrale Logger fuer jede
+            Video-/Mesh-Generierung einen (verschluckten) TypeError — sie
+            tauchten NIE im Log auf.
     """
     end_time = utc_now()
     start_time = end_time - timedelta(seconds=duration_s) if duration_s > 0 else end_time
@@ -116,6 +121,8 @@ def log_image_prompt(
     }
     if compose:
         entry["compose"] = compose
+    if media:
+        entry["media"] = media
     if error:
         entry["error"] = error
 

@@ -362,6 +362,11 @@ export function LocationGallery({
       // composer's negation guard moved out of the subject — without it the
       // server would fall back to the bare use-case negative and lose them.
       if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
+      // Provenance of the shown prompt — the server logs it with the render.
+      if (payload.llm_composed) {
+        body.llm_composed = true
+        body.cache_hit = !!payload.cache_hit
+      }
       // Output size (empty fields = the server's use-case default).
       if (payload.width) body.width = payload.width
       if (payload.height) body.height = payload.height

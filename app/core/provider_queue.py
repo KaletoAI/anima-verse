@@ -133,6 +133,9 @@ class ProviderQueue:
             created_at=utc_now_iso(),
             provider_name=self.provider.name,
             model=get_model_name(llm),
+            # The label rides ON the task: the task panel shows it, and the
+            # JSONL logger writes it so a call can be traced to its caller.
+            label=label,
             _llm=llm,
             _messages=messages_or_prompt)
 
@@ -824,6 +827,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
             tokens_input=tokens_in,
             tokens_output=tokens_out,
             max_tokens=max_tokens,
+            label=getattr(task, "label", "") or "",
             error=error)
     except Exception as e:
         logger.error("Logging-Fehler: %s", e, exc_info=True)

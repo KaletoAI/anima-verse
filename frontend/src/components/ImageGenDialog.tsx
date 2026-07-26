@@ -73,6 +73,10 @@ export interface ImageGenSubmit {
   // the field carries a value; otherwise the server keeps its use-case default.
   width?: number
   height?: number
+  // Where the shown prompt came from (server-composed dialogs only) — the
+  // render path logs it, so a dialog render is traceable in the JSONL.
+  llm_composed?: boolean
+  cache_hit?: boolean
 }
 
 interface Props {
@@ -418,6 +422,10 @@ export function ImageGenDialog({
     if (settingsPrefix || settingsSuffix || styleUseCase || composeRequest) {
       payload.prompt_settings_applied = true
     }
+    if (composeLlm.llm) {
+      payload.llm_composed = true
+      payload.cache_hit = composeLlm.cached
+    }
     // Exact backend name — backends match their own name on the server.
     payload.backend = currentOption.name
     if (currentOption.has_loras) {
@@ -444,7 +452,8 @@ export function ImageGenDialog({
       setSubmitting(false)
     }
   }, [currentOption, prompt, prefixText, suffixText, settingsPrefix,
-      settingsSuffix, styleText, styleUseCase, composeRequest, loraSlots, onSubmit, onClose,
+      settingsSuffix, styleText, styleUseCase, composeRequest, composeLlm,
+      loraSlots, onSubmit, onClose,
       isRegen, showCreateNew, createNew,
       improvement, hideNegative, negative, characterOptions, selectedChars,
       showRoomReference, useRoom, sourceImageUrl, useSource,

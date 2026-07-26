@@ -305,7 +305,11 @@ class DescribeRoomSkill(BaseSkill):
                 params["seed"] = _rnd.randint(1, 2**31 - 1)
 
                 logger.info("Raum-Bild Generierung gestartet fuer %s/%s", location_id, room_id)
-                images = backend.generate(full_prompt, negative, params)
+                images = backend.generate(
+                    full_prompt, negative, params,
+                    log_meta={"agent_name": location.get("name", location_id),
+                              "original_prompt": prompt, "auto_enhance": False,
+                              "compose": _composed.meta})
                 if not images:
                     logger.warning("Raum-Bild Generierung fehlgeschlagen fuer %s/%s", location_id, room_id)
                     return

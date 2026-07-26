@@ -1460,14 +1460,18 @@ async def generate_location_background(location_name: str,
     # Backend fallback engine: tries primary, falls back to the next
     # available backend on failure. Local GPU backends go through the
     # GPU provider queue → never two in parallel per backend.
+    _log_meta = {"agent_name": location.get("name", location_name),
+                 "original_prompt": prompt, "auto_enhance": False,
+                 "compose": _composed.meta}
     def _op(b):
         if getattr(b, "api_type", "") == "a1111":
             from app.core.llm_queue import get_llm_queue, Priority as _P
             return get_llm_queue().submit_gpu_task(
                 provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
-                callable_fn=lambda: b.generate(full_prompt, negative, params),
+                callable_fn=lambda: b.generate(full_prompt, negative, params,
+                                               log_meta=_log_meta),
                 agent_name=location.get("name", location_name), gpu_type=b.api_type)
-        return b.generate(full_prompt, negative, params)
+        return b.generate(full_prompt, negative, params, log_meta=_log_meta)
     try:
         images, backend = await asyncio.to_thread(
             lambda: img_skill.run_on_backend(backend, op=_op))
@@ -2370,6 +2374,12 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             full_prompt = prompt
             negative = ((data.get("negative_prompt") or "").strip()
                         or _ucp.get("prompt_negative", ""))
+            # Dialog renders were unmarked in the JSONL — a minimal metablock
+            # says where the prompt came from. The dialog reports whether its
+            # prefill went through the LLM stage.
+            _compose_meta = {"use_case": _uc_name, "settings_applied": True,
+                             "llm_composed": bool(data.get("llm_composed")),
+                             "cache_hit": bool(data.get("cache_hit"))}
         else:
             # ONE composer for the dialog prefill and this (batch/auto) path:
             # style + subject slot + shape hints + negation guard, in

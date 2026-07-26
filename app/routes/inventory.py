@@ -428,6 +428,10 @@ def generate_item_image_sync(
         if _clean_loras:
             params["lora_inputs"] = _clean_loras
 
+    _log_meta = {"agent_name": item.get("name", item_id),
+                 "original_prompt": prompt_text, "auto_enhance": False,
+                 "compose": (_compose_meta
+                             or {"use_case": "item", "settings_applied": True})}
     try:
         from app.core.llm_queue import get_llm_queue, Priority as _P
         _is_local = backend.api_type == "a1111"
@@ -436,12 +440,14 @@ def generate_item_image_sync(
                 provider_name=backend.name,
                 task_type="item_image",
                 priority=_P.IMAGE_GEN,
-                callable_fn=lambda: backend.generate(prompt_text, negative, params),
+                callable_fn=lambda: backend.generate(prompt_text, negative, params,
+                                                     log_meta=_log_meta),
                 agent_name=item.get("name", item_id),
                 label=f"Item: {item.get('name', item_id)}",
                 gpu_type=backend.api_type)
         else:
-            images = backend.generate(prompt_text, negative, params)
+            images = backend.generate(prompt_text, negative, params,
+                                      log_meta=_log_meta)
     except Exception as e:
         logger.error("Item-Bild [%s] fehlgeschlagen: %s", item_id, e)
         return False

@@ -295,6 +295,10 @@ export function MapTab() {
       if (payload.prompt_settings_applied) body.settings_applied = true
       // Composed negative (carries what the guard moved out of the subject).
       if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
+      if (payload.llm_composed) {
+        body.llm_composed = true
+        body.cache_hit = !!payload.cache_hit
+      }
       try {
         const r = await apiPost<{ track_id?: string }>(
           `/world/locations/${encodeURIComponent(target.loc.id)}/gallery`, body)

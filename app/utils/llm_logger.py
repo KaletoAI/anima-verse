@@ -50,7 +50,8 @@ def log_llm_call(
     messages: Optional[List[Dict[str, str]]] = None,
     error: str = "",
     llm_role: str = "",
-    template: str = ""):
+    template: str = "",
+    label: str = ""):
     """Loggt einen LLM-Aufruf als JSONL-Zeile und gibt eine kurze Zeile auf stdout aus.
 
     Args:
@@ -73,6 +74,9 @@ def log_llm_call(
             als drittes Badge angezeigt — erleichtert Fehlersuche, weil man
             sofort sieht welche Template-Datei gerendert wurde. Bei leerem
             Wert faellt der Logger auf ``task`` zurueck.
+        label: Aufrufer-Detail des Calls (z.B. ``compose:room_model``) — der
+            Aufrufer uebergibt es an ``llm_call``, hier landet es im JSONL,
+            damit sich ein Call im Log seiner Quelle zuordnen laesst.
     """
     template_basename = _template_basename(template, task)
     end_time = utc_now()
@@ -97,6 +101,8 @@ def log_llm_call(
         "response": response,
     }
 
+    if label:
+        entry["label"] = label
     if error:
         entry["error"] = error
 
