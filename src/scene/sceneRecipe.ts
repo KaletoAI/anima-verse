@@ -610,7 +610,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
 
   // ── Platten ─────────────────────────────────────────────────────────────
   // Raum-Platten liefern zugleich Rechteck, Mitte und Auflagehöhe des Raums:
-  // roomRects (Fokus-Erkennung), roomCenters (NPC-Standort) und der Slot für
+  // roomRects (Label-Position), roomCenters (NPC-Standort) und der Slot für
   // die Begehbarkeits-Abtastung entstehen aus ihrer Umschließenden.
   const roomPlateTop = new Map<string, number>();
   /** Gebaute Primitive für den Verify-Durchgang — vermessen wird erst, wenn

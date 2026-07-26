@@ -3,7 +3,7 @@ import * as api from './api';
 import { Engine } from './scene/engine';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
-import { applyLevelDisplay, applyNightGlow, applyRoomFocus, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, sceneFigureScale, SceneLibrary } from './scene/sceneRecipe';
@@ -547,20 +547,12 @@ async function startApp(username: string) {
       applyTileOcclusion(tile, hide, dt);
     }
 
-    // Raum-Fokus: füllt ein Raum ~80 % des Bildes (Kameradistanz < 1,5x
-    // Raumgröße bei 45°-FOV), Nachbar-Räume der Kachel ausblenden
+    // Raum-Sichtbarkeit: allein die gewählte Etage entscheidet. Der frühere
+    // „Raum-Fokus" (Nachbarräume ausblenden, sobald einer das Bild füllt)
+    // ist gestrichen — er hing am wandernden Kamera-Zielpunkt und ließ
+    // Räume samt Diorama und Props winkelabhängig verschwinden.
     for (const tile of tiles.values()) {
-      if (!tile.roomGroups.size) continue;
-      let focus: string | null = null;
-      if (tile === open) {
-        for (const [id, r] of tile.roomRects) {
-          if (Math.abs(engine.target.x - r.x) < r.w / 2 && Math.abs(engine.target.z - r.z) < r.d / 2) {
-            if (engine.dist < Math.max(r.w, r.d) * 1.5) focus = id;
-            break;
-          }
-        }
-      }
-      applyRoomFocus(tile, focus);
+      if (tile.roomGroups.size) applyRoomVisibility(tile);
     }
     npcs.tick(dt, engine.dist);
     bob += dt * 2.2;

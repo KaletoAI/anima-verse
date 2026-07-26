@@ -890,14 +890,21 @@ export function applyLevelDisplay(tile: Tile) {
   }
 }
 
-/** Fokus-Modus: füllt EIN Raum das Bild, werden die Nachbar-Räume der
- *  Kachel ausgeblendet (null = alle zeigen). Räume anderer Etagen als der
- *  gewählten bleiben aus (Ausnahme: dauerhaft sichtbare Outdoor-Räume). */
-export function applyRoomFocus(tile: Tile, focusRoomId: string | null) {
+/** Raum-Sichtbarkeit: NUR die Etage entscheidet. Räume der gewählten Etage
+ *  sind sichtbar, dauerhaft sichtbare Outdoor-Räume immer.
+ *
+ *  Bis v4 blendete diese Funktion zusätzlich alle Nachbarräume aus, sobald
+ *  ein Raum das Bild füllte („Raum-Fokus"). Das ist ersatzlos gestrichen:
+ *  der Zielpunkt der Kamera wandert beim Zoomen und Schwenken über den
+ *  Boden, wodurch der Fokus bei kleinen Räumen zwischen Nachbarn hin- und
+ *  herkippte und Räume samt Diorama und Props winkelabhängig verschwanden.
+ *  Seit die Rezept-Wände ihr eigenes Blickrichtungs-Culling haben
+ *  (applyWallCulling), braucht es das Ausblenden nicht mehr — auf einer
+ *  Etage wird außer Wänden nichts versteckt. */
+export function applyRoomVisibility(tile: Tile) {
   for (const [id, rg] of tile.roomGroups) {
-    const levelOk = tile.alwaysVisibleRooms.has(id)
+    rg.visible = tile.alwaysVisibleRooms.has(id)
       || (tile.roomLevels.get(id) ?? 0) === tile.levelFilter;
-    rg.visible = levelOk && (!focusRoomId || id === focusRoomId);
   }
 }
 
