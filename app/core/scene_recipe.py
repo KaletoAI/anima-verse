@@ -336,14 +336,48 @@ def _segment_points(a: List[float], ux: float, uz: float,
             [_r(a[0] + ux * s1), _r(a[1] + uz * s1)])
 
 
+# A room wall counts as sitting ON the contour when its edge is colinear
+# within roughly a wall thickness (0.07 m) plus slack.
+COLINEAR_TOL_M = 0.09
+
+
+def _colinear_span(a: List[float], ux: float, uz: float, length: float,
+                   pa: List[float], pb: List[float]) -> Optional[Tuple[float, float]]:
+    """Span (t0, t1) that segment ``pa→pb`` covers on the directed edge
+    starting at ``a`` with unit (ux, uz) — None when it is not colinear
+    with the edge or the overlap is not worth a hole."""
+    def proj(p: List[float]) -> Tuple[float, float]:
+        t = (p[0] - a[0]) * ux + (p[1] - a[1]) * uz
+        e = abs(-(p[0] - a[0]) * uz + (p[1] - a[1]) * ux)
+        return t, e
+    t0, e0 = proj(pa)
+    t1, e1 = proj(pb)
+    if max(e0, e1) > COLINEAR_TOL_M:
+        return None
+    lo, hi = sorted((t0, t1))
+    lo = max(lo, 0.0)
+    hi = min(hi, length)
+    if hi - lo < MIN_WALL_PIECE_M:
+        return None
+    return (lo, hi)
+
+
 def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
-                   exits: List[List[float]]) -> List[Dict[str, Any]]:
+                   exits: List[List[float]],
+                   room_hulls: Optional[Dict[int, List[List[List[float]]]]] = None,
+                   ) -> List[Dict[str, Any]]:
     """The building contour as walls, per used level (§ A6).
 
     The ground floor gets a door gap wherever a room exit projects onto the
     contour closer than 0.45 m; without a single such exit ONE central door
     is punched into the southernmost wall piece, so a building is never
     sealed shut.
+
+    ONE wall, one owner (finding 2026-07-27, "Haus von Kai": 27 colinear
+    pairs, 16.5 m doubled → z-fighting the moment a wall texture landed on
+    the room side): wherever an INDOOR room hull runs on the contour line,
+    the contour piece yields — the room wall carries texture and openings.
+    ``room_hulls`` maps level → list of room outlines in world metres.
     """
     pts = _outline_world(map3d)
     if len(pts) < 3:
@@ -390,8 +424,17 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         holes = sorted((t - DOOR_HALF_GAP_M, t + DOOR_HALF_GAP_M)
                        for t in doors.get(i, []))
         for level in levels:
-            segs = _subtract([(0.0, length)],
-                             holes if level == 0 else [], MIN_WALL_PIECE_M)
+            lvl_holes = list(holes) if level == 0 else []
+            # Room-hull spans on this contour edge: colinear within roughly
+            # a wall thickness → the room wall owns that stretch.
+            for hull in (room_hulls or {}).get(level, []):
+                for j, ha in enumerate(hull):
+                    hb = hull[(j + 1) % len(hull)]
+                    span = _colinear_span(a, ux, uz, length, ha, hb)
+                    if span:
+                        lvl_holes.append(span)
+            segs = _subtract([(0.0, length)], sorted(lvl_holes),
+                             MIN_WALL_PIECE_M)
             for s0, s1 in segs:
                 start, end = _segment_points(a, ux, uz, s0, s1)
                 walls.append({
@@ -876,8 +919,18 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                     if int((by_room.get(e["room_id"], {}).get("layout")
                             or {}).get("level") or 0) == 0]
 
+    # Indoor room hulls per level, world metres — where they run on the
+    # contour line, the contour wall yields (one wall, one owner).
+    room_hulls: Dict[int, List[List[List[float]]]] = {}
+    for recipe in recipes:
+        if recipe.get("always_visible"):
+            continue
+        hull = _room_outline_world(recipe)
+        if hull:
+            room_hulls.setdefault(int(recipe.get("level") or 0), []).append(hull)
+
     walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey,
-                                                 ground_exits)
+                                                 ground_exits, room_hulls)
     models: List[Dict[str, Any]] = []
     markers: List[Dict[str, Any]] = []
     building = _building_model(location, map3d, building_meta, k)
