@@ -48,7 +48,7 @@ run in parallel on the same backend.
 **Prompts are Jinja2 templates, not Python string-building.** Every LLM prompt lives under
 `shared/templates/llm/` and is live-editable at `/admin/templates`.
 
-**Two frontends, one project:**
+**Three frontends, one project:**
 
 - **React / Vite SPA** (`frontend/`, built to `static/game_admin/`):
   - **Player UI** at **`/play`** — the actual game: chat, world map, character panels, gallery,
@@ -58,6 +58,11 @@ run in parallel on the same backend.
 - **Server-rendered admin pages** (Python) — `/admin/settings`, `/admin/users`, `/admin/models`,
   `/admin/agent-loop`, `/admin/templates`, `/admin/llm-stats`, `/logs/*`, `/dashboard`. These are
   the configuration surface; there is no React replacement for them.
+- **3D world map** (`client3d/`, Three.js, no React) — a zoomable Age-of-Empires-style view of the
+  world that resolves buildings into walkable floor plans as you zoom in. It runs as its own process
+  (`./start.sh --with-3d`, port 5183) and talks to the backend over the HTTP API only, so it can
+  just as well run on a different machine. Geometry shared with the admin's floor-plan preview lives
+  in `packages/scene-render`.
 
 **Three nouns, kept distinct:** a **Character** is any entity; an **Agent** is an LLM-driven chat
 partner / NPC; an **Avatar** is a character the user has taken over and now controls directly (it
@@ -253,12 +258,21 @@ Logs: `logs/main.log` (server), `logs/llm_calls.jsonl`, `logs/image_prompts.json
 Once running, open `http://<host>:8000/` — it redirects to the Player UI at `/play`.
 
 ### Frontend development
-The React app lives in `frontend/` and is committed pre-built under `static/game_admin/`.
+The repository is an npm workspace root (`frontend`, `client3d`, `packages/*`) — one `npm install`
+at the top covers all of them. The React app lives in `frontend/` and is committed pre-built under
+`static/game_admin/`.
 ```bash
+npm install                  # once, from the repository root
+
 cd frontend
-npm run dev      # Vite dev server on :5173, proxies the API to :8000
-npm run build    # tsc -b && vite build → static/game_admin/
+npm run dev                  # Vite dev server on :5173, proxies the API to :8000
+npm run build                # tsc -b && vite build → static/game_admin/
 npm run lint
+
+# 3D world map (separate process, own port)
+npm run dev -w client3d      # :5183 — or ./start.sh --with-3d to run it alongside the backend
+npm run build -w client3d    # tsc --noEmit && vite build → client3d/dist/
+ANIMA_API=http://<host>:8000 npm run dev -w client3d   # against a backend elsewhere
 ```
 
 ---

@@ -1,8 +1,13 @@
-# anima-verse-3d
+# client3d — 3D-Weltkarte
 
-Prototyp einer zoombaren 3D-Weltkarte im Age-of-Empires-Stil für
-[anima-verse](../anima-verse). Nutzt ausschließlich die Backend-HTTP-API —
-das anima-verse-Projekt selbst bleibt unangetastet.
+Zoombare 3D-Weltkarte im Age-of-Empires-Stil. Spricht das Backend
+**ausschließlich über die HTTP-API** an und läuft deshalb genauso gut auf einem
+anderen Rechner als der Server.
+
+Seit 2026-07-26 ein npm-Workspace dieses Repos (vorher ein eigenes Repo
+`anima-verse-3d`; per `git subtree` eingezogen, die Historie ist erhalten).
+Geometrie, die auch die Admin-Vorschau braucht, liegt im geteilten Paket
+[`@anima/scene-render`](../packages/scene-render) — nicht hier.
 
 ## Features (Prototyp)
 
@@ -27,18 +32,41 @@ das anima-verse-Projekt selbst bleibt unangetastet.
 ## Starten
 
 ```bash
-# 1. anima-verse-Backend auf :8000 starten (z.B. ./start.sh --world demo)
-# 2. hier:
-npm install
-npm run dev        # http://localhost:5183, Login mit Backend-Benutzer
+# Alles in einem Rutsch, aus dem Wurzelverzeichnis des Repos:
+./start.sh --with-3d --world demo    # Backend :8000 + 3D-Client :5183
+
+# Oder getrennt:
+npm install                          # EINMAL im Wurzelverzeichnis, für alle Workspaces
+npm run dev -w client3d              # http://localhost:5183, Login mit Backend-Benutzer
+npm run build -w client3d            # tsc --noEmit && vite build -> client3d/dist/
 ```
 
-Anderes Backend-Ziel: `ANIMA_API=http://host:port npm run dev`
-(Vite-Dev-Proxy leitet `/auth /play /world /characters /state /events` weiter).
+**Auf einem anderen Rechner** (Backend läuft woanders):
+
+```bash
+ANIMA_API=http://<server>:8000 npm run dev -w client3d
+```
+
+Der Vite-Dev-Proxy leitet `/auth /play /world /characters /state /events /assets`
+dorthin weiter. `CLIENT3D_PORT` verschiebt den Port, wenn 5183 belegt ist.
+
+## Verify (§ B5a)
+
+Rechnen statt Screenshots: `http://localhost:5183/?verify=1` laden und ~5 Minuten
+laufen lassen — jedes platzierte Objekt wird neu vermessen und gegen seine Spec
+gediffrt. Ergebnis je Location in der Konsole und in `window.__sceneVerify`.
+Stand 2026-07-26 (Welt `anima-dome`): **1757 geprüfte Zahlen, 0 Abweichungen,
+85/85 Modelle**. Die absolute Zahl gilt nur, solange die Welt stillsteht — die
+0 Abweichungen sind die Aussage.
 
 ## Architektur
 
-- Vite + TypeScript + Three.js (vanilla), CSS2DRenderer für Labels.
+- Vite + TypeScript + Three.js (vanilla, bewusst kein React), CSS2DRenderer für Labels.
+- `@anima/scene-render` — geteilt mit der Admin-Vorschau: `placeModelSpec()`
+  (§ B2), Raum-Clip (§ B1), Verify-Diff (§ B5a), Payload-Typen. Hier liegt
+  KEINE zweite Fassung davon.
+- `src/scene/sceneRecipe.ts` — Primitiv-Builder (Platten/Wände/Extras) und der
+  Aufbau der Szene aus dem Payload
 - `src/scene/engine.ts` — Kamera/Input/Licht/Renderloop
 - `src/scene/tiles.ts` — Location-Kacheln, Gebäude, Innenraum-Crossfade
 - `src/scene/npcs.ts` — NPC-Sprites, Bewegung, Reiserouten
