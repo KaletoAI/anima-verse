@@ -587,9 +587,15 @@ def run_chat_turn(
     # im Hintergrund mit RP-Kontext-Injektion. CONTENT_TOOLs bräuchten einen
     # Chat-Retry (Ergebnis fließt zurück ins RP) — den gibt es in diesem Pfad
     # (noch) nicht, daher werden sie geloggt und ausgelassen.
-    _markers = ""
-    if (ctx.get("mode") == "rp_first" and ctx.get("tool_system_content")
-            and ctx.get("tool_llm") is not None and ctx.get("tools_dict")):
+    # Läuft NICHT mehr vor dem return: der Aufrufer bekommt die Antwort sofort
+    # (siehe _bg_after_reply unten) — der Tool-LLM-Call kostete sonst ~8 s
+    # sichtbare Antwortlatenz vor der Utterance-Aufzeichnung.
+    _needs_tool_phase = bool(
+        ctx.get("mode") == "rp_first" and ctx.get("tool_system_content")
+        and ctx.get("tool_llm") is not None and ctx.get("tools_dict"))
+
+    def _run_tool_phase() -> str:
+        """rp_first-Tool-Phase — gibt die extrahierten Fallback-Marker zurück."""
         try:
             from app.core.tool_formats import find_tool_calls
             from app.core.streaming import _extract_markers, _inject_rp_context
@@ -663,9 +669,10 @@ def run_chat_turn(
 
                 import threading
                 threading.Thread(target=_run_deferred, daemon=True).start()
-            _markers = _extract_markers(_ttext, clean) or ""
+            return _extract_markers(_ttext, clean) or ""
         except Exception as _e:
             logger.warning("run_chat_turn rp_first tool-phase failed: %s", _e)
+            return ""
 
     ts = utc_now_iso()
 
@@ -707,15 +714,30 @@ def run_chat_turn(
     except Exception as e:
         logger.debug("pending_report Sofort-Trigger Fehler: %s", e)
 
-    # Post-Processing (Feature-Parität mit dem Stream-Chat): Memory, Relationship,
-    # Intent, Mood-/Location-/Activity-Übernahme, Expression-Regen, History-Summary.
-    # Opt-in (nur Player-Chat via Loop), im Daemon-Thread → blockiert die Antwort
-    # nicht. plan-room-conversation-feature-parity §D.
-    if post_process:
+    # Tool-Phase + Post-Processing im Daemon-Thread, NACH dem return: die
+    # Antwort steht fest und geht sofort an den Aufrufer (der Respond-Turn
+    # zeichnet sie als Utterance auf). Reihenfolge bleibt erhalten: erst die
+    # Tool-Phase (liefert die Fallback-Marker), dann das Post-Processing
+    # (Memory, Relationship, Intent, Mood-/Location-/Activity-Übernahme,
+    # Expression-Regen, History-Summary — Opt-in, nur Player-Chat via Loop).
+    # plan-room-conversation-feature-parity §D.
+    if _needs_tool_phase or post_process:
         try:
+            import contextvars
             import threading
 
-            def _bg_post():
+            # Die Tool-Phase lief frueher synchron IM Kontext des Aufrufers —
+            # inklusive einer evtl. aktiven perception_shadow.suppressed()
+            # (Respond-Turn). Ein Thread kopiert ContextVars nicht, darum wird
+            # der Kontext hier eingefangen und die Tool-Phase darin ausgefuehrt;
+            # das Post-Processing lief schon immer im frischen Thread-Kontext.
+            _caller_ctx = contextvars.copy_context()
+
+            def _bg_after_reply():
+                _markers = (_caller_ctx.run(_run_tool_phase)
+                            if _needs_tool_phase else "")
+                if not post_process:
+                    return
                 try:
                     # Partner = the SPEAKER of the trigger utterance, not
                     # ctx["user_display_name"]: that one resolves the active
@@ -736,9 +758,9 @@ def run_chat_turn(
                 except Exception as _pe:
                     logger.error("run_chat_turn post_process(%s) failed: %s",
                                  responder, _pe)
-            threading.Thread(target=_bg_post, daemon=True).start()
+            threading.Thread(target=_bg_after_reply, daemon=True).start()
         except Exception as _e:
-            logger.debug("post_process spawn failed: %s", _e)
+            logger.debug("Nachlauf-Spawn (Tool-Phase/Post-Processing) fehlgeschlagen: %s", _e)
 
     return clean
 
