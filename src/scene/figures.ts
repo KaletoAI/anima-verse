@@ -292,20 +292,49 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
 
   const q = new THREE.Quaternion();
   const v = new THREE.Vector3();
-  // Steh-Referenz der Quelle: MAXIMALE Hüfthöhe über ALLE Clips des Sets.
-  // Ein einzelner In-Pose-Clip (Sitzen/Liegen startet abgesenkt) hat keine
-  // eigene Referenz — mit dem ersten Frame als Bezug blieb die Hüfte beim
-  // Sitzen auf Stehhöhe hängen. Walk/Idle im Set liefern die echte Stehhöhe.
-  let sourceRest = 0;
-  for (const clip of clips) {
+  // Steh-Referenz der Quelle. Früher: MAXIMALE Hüfthöhe über ALLE Clips —
+  // ein EINZELNER falsch skalierter Clip wurde damit zur Referenz und
+  // drückte JEDE Figur in den Boden (Befund 2026-07-26: taking-fotos.fbx
+  // mit Hüfte ~211 statt ~110 → alle NPCs ~0,47 m tief, überall).
+  // Jetzt: pro Clip die MEDIAN-Hüfthöhe messen; Referenz = größter
+  // Clip-Median, den mindestens ein zweiter Clip zu 70 % bestätigt
+  // (Sitz-/Liege-Clips bleiben legitim darunter und senken die Hüfte wie
+  // gewollt). Ein Clip ÜBER dem 1,5-fachen der Referenz ist ein
+  // Export-Maßstabsfehler und wird selbst auf die Referenz zurückskaliert.
+  const hipMedian = (clip: THREE.AnimationClip): number => {
+    const ys: number[] = [];
     for (const track of clip.tracks) {
       if (track.name.endsWith('.position') && /hips\./i.test(track.name.replace(/^mixamorig:?/i, ''))) {
-        for (let i = 1; i < track.values.length; i += 3) {
-          sourceRest = Math.max(sourceRest, Math.abs(track.values[i]));
-        }
+        for (let i = 1; i < track.values.length; i += 3) ys.push(Math.abs(track.values[i]));
       }
     }
+    ys.sort((a, b) => a - b);
+    return ys.length ? ys[Math.floor(ys.length / 2)] : 0;
+  };
+  const medians = new Map<THREE.AnimationClip, number>(
+    clips.map((c) => [c, hipMedian(c)] as [THREE.AnimationClip, number]));
+  const sorted = [...medians.values()].filter((m) => m > 1e-6).sort((a, b) => b - a);
+  // Obergrenze (cap) = größter Wert, den ein zweiter Clip zu 70 % bestätigt;
+  // Referenz = Median des STEH-Clusters [0,7 × cap .. cap] — so bestimmt
+  // weder ein Maßstabs-Ausreißer (211) noch ein einzelner hoher Clip (sleep
+  // 119,5) die Stehhöhe, sondern die dichte Idle/Walk-Gruppe (~110).
+  let cap = sorted[0] || 0;
+  for (let i = 0; i < sorted.length; i++) {
+    if (sorted.length === 1 || (sorted[i + 1] !== undefined && sorted[i + 1] >= sorted[i] * 0.7)) {
+      cap = sorted[i];
+      break;
+    }
   }
+  const cluster = sorted.filter((m) => m >= cap * 0.7 && m <= cap).sort((a, b) => a - b);
+  const sourceRest = cluster.length
+    ? cluster[Math.floor(cluster.length / 2)]
+    : (sorted[0] || 0);
+  // Maßstabs-Heilung pro Clip: |y|-Werte eines Ausreißers vor der
+  // Bounce-Rechnung auf die Referenz normieren.
+  const scaleFixOf = (clip: THREE.AnimationClip): number => {
+    const m = medians.get(clip) || 0;
+    return sourceRest > 1e-6 && m > sourceRest * 1.5 ? sourceRest / m : 1;
+  };
   const out: THREE.AnimationClip[] = [];
   for (const clip of clips) {
     const tracks: THREE.KeyframeTrack[] = [];
@@ -333,10 +362,11 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
         // Referenz der Quelle — so senken Sitz-/Liege-Clips die Hüfte ab),
         // Lokomotion/Drift verwerfen — die Wurzel bewegt der Client selbst.
         const k = hipsPosScale / sourceRest;
+        const scaleFix = scaleFixOf(clip);
         const rest = hips.position;
         const vals = new Float32Array(track.values.length);
         for (let i = 0; i < track.values.length; i += 3) {
-          const bounce = (Math.abs(track.values[i + 1]) - sourceRest) * k; // Welt-Delta in m
+          const bounce = (Math.abs(track.values[i + 1]) * scaleFix - sourceRest) * k; // Welt-Delta in m
           v.set(0, bounce, 0).applyMatrix4(hipsPosMatrix); // in Eltern-Raum (Richtung+Skala)
           v.sub(new THREE.Vector3().setFromMatrixPosition(hipsPosMatrix!)); // nur Richtungsanteil
           v.add(rest);
