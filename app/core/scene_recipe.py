@@ -631,7 +631,10 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     room_id = str(room.get("id") or "")
     level = int(recipe.get("level") or 0)
     x, y, w, d = _room_rect(recipe, room)
-    at = lay.get("model_at")
+    # Anchor + height come from the RECIPE payload, like clip_model: only
+    # payload fields move the signature, and the client must re-fetch when
+    # the admin drags the ⌂ handle or dials the height (M8-review hole).
+    at = recipe.get("model_at")
     if not isinstance(at, (list, tuple)) or len(at) != 2:
         at = [0.5, 0.5]
     spec: Dict[str, Any] = {
@@ -645,7 +648,7 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "anchor": [_r(_w(x + _num(at[0], 0.5) * w)),
                    _r(_w(y + _num(at[1], 0.5) * d))],
         "bottom_y": _r(level * storey + DIORAMA_CLEARANCE
-                       + _num(lay.get("model_offset_y"))),
+                       + _num(recipe.get("model_offset_y"))),
     }
     width_m = _num(meta.get("width_m"))
     bbox = meta.get("bbox_fixed")

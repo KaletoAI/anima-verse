@@ -437,6 +437,15 @@ def compose_recipe(room: Dict[str, Any],
     # toggling the checkbox makes the client re-fetch.
     if lay.get("clip_model"):
         payload["clip_model"] = True
+    # Diorama anchor + height (2026-07-24 plan placement): SAME signature
+    # reasoning — the composer reads them from the payload so that dragging
+    # the ⌂ handle or the height slider moves the signature and the client
+    # re-fetches (found as a hole during the M8 review: layout-only fields
+    # never reached the hash).
+    if lay.get("model_at") is not None:
+        payload["model_at"] = lay["model_at"]
+    if lay.get("model_offset_y") is not None:
+        payload["model_offset_y"] = lay["model_offset_y"]
     if lay.get("rotation") is not None:
         payload["rotation"] = lay["rotation"]
     # Change detection without polling the whole payload chain: the client
