@@ -709,6 +709,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       ph.rotation.y = -deg(spec.yaw_deg);
       parentFor(spec.room_id).add(ph);
       verify.placed += 1;
+      // Auch der Platzhalter wird gegen seine Spec geprüft: er steht an
+      // derselben Stelle und hat dieselbe Zielgröße wie das fehlende Mesh
+      // (dims × k). Ohne diese Prüfung blieb ein Loch in der Abdeckung —
+      // an 526cf40b waren das 2 Props / 8 Prüfungen, und die Verify-Summe
+      // lag ohne Grund unter dem Soll.
+      verify.placement(ph, spec, tile.center);
       return;
     }
     if (stale()) return;
