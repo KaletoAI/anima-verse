@@ -351,7 +351,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       const hull = absOutline(owner.layout)
       let best = -1
       let bestD = Infinity
-      ownerScene.openings.forEach((o, i) => {
+      // `openings` is optional in the payload — a room without any is simply
+      // absent, it does not arrive as an empty list.
+      ;(ownerScene.openings || []).forEach((o, i) => {
         if (o.mirrored || o.edge >= hull.length) return
         const p = edgePointOnEdge(hull, o.edge, o.at)
         const dist = Math.hypot(p.x - point.x, p.y - point.y)

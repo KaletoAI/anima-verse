@@ -18,7 +18,7 @@
 import { apiGet } from '../../lib/api'
 import type { Mesh, Object3D } from 'three'
 import type { SceneModelSpec } from './worldTypes'
-import { placeModelSpec } from './scenePlace'
+import { placeModelSpec } from '@anima/scene-render'
 
 const PLATE_M = 8
 

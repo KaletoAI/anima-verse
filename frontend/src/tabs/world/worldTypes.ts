@@ -134,148 +134,20 @@ export interface Map3D {
 
 // ── Scene recipe (shared/schnittstellen-3d.md part B) ──
 // The server composes the WHOLE scene of a location; renderers only display
-// it. Every number below is already in WORLD metres around the tile centre —
-// no fractions, no scale factors, no geometry decisions on this side.
+// it. Every number is already in WORLD metres around the tile centre — no
+// fractions, no scale factors, no geometry decisions on this side.
 // Source: GET /play/locations/{id}/scene, draft variant POST
 // /play/scene-preview (app/core/scene_recipe.py).
-
-/** Floor slab: contour plate per used level, or a room's own floor.
- *  thickness 0 = a pure texture surface without a body (outdoor rooms). */
-export interface ScenePlate {
-  level: number
-  outline: Array<[number, number]>
-  top_y: number
-  thickness: number
-  texture_kind?: string
-  opacity_role: 'ground' | 'upper'
-  room_id?: string
-}
-
-/** One wall segment — already split around doors/windows; a window's glass
- *  band arrives as its own entry with `glass`. `outward_normal` points away
- *  from the enclosed space (camera culling). */
-export interface SceneWall {
-  level: number
-  from: [number, number]
-  to: [number, number]
-  base_y: number
-  height: number
-  thickness: number
-  texture_kind?: string
-  glass?: boolean
-  opacity_role: 'ground' | 'upper'
-  room_id?: string
-  outward_normal: [number, number]
-}
-
-/** Typed box primitive (elevator shaft/pad/cabin/glass) — centre + size. */
-export interface SceneExtra {
-  kind: string
-  center: [number, number, number]
-  size: [number, number, number]
-  side?: string
-  level?: number
-}
-
-/** ONE placement spec for building, room diorama and prop alike — fed to the
- *  single place() routine of contract § B2. */
-export interface SceneModelSpec {
-  role: 'building' | 'room' | 'prop'
-  id: string
-  url: string
-  room_id?: string
-  level: number
-  fix_euler: { x: number; y: number; z: number }
-  yaw_deg: number
-  scale_mode: 'fit_box' | 'real_size' | 'tile_fit'
-  /** fit_box: {w,d}; tile_fit: {xz, y?}. */
-  box?: { w?: number; d?: number; h?: number; xz?: number; y?: number }
-  /** real_size: the target extent in world metres. */
-  max_m?: number
-  /** real_size: which BBox axes feed maxExtent (default xyz). */
-  measure_axes?: 'xyz' | 'xz'
-  scale_axes?: { xz: number; y: number }
-  anchor: [number, number]
-  bottom_y: number
-  /** Placeholder box (already world metres) for a missing/mesh-less prop. */
-  placeholder_dims?: { w: number; d: number; h: number }
-  /** Rooms: the room shell in WORLD metres — the renderer discards every
-   *  fragment outside it (§ B1). Opt-in per room (layout.clip_model), max 32
-   *  points; absent = no clipping. */
-  clip_outline?: Array<[number, number]>
-  /** Rooms: absolute height a figure stands at inside the diorama. */
-  walk_y_world?: number
-  /** Rooms: the height the SERVER measured out of the mesh (metres above the
-   *  diorama's lower edge — the same unit the walk_y slider stores). Feeds
-   *  ``walk_y_world`` unless the admin overrode it; shown as the slider's
-   *  placeholder. Absent = the model could not be measured. */
-  walk_y_auto?: number
-}
-
-export interface SceneMarker {
-  room_id: string
-  at_world: [number, number]
-  y_world: number
-  animation: string
-  facing?: number
-  source: 'room' | 'prop'
-}
-
-export interface SceneExit {
-  room_id: string
-  at_world: [number, number]
-  derived?: boolean
-}
-
-/** The renderers' shared colour vocabulary — no hex constants on this side. */
-export interface SceneStyle {
-  wall_color: string
-  floor_color: string
-  glass_color: string
-  glass_opacity: number
-  upper_wall_opacity: number
-  upper_floor_opacity: number
-  room_palette: string[]
-  elevator_frame_color: string
-  elevator_pad_color: string
-  elevator_cabin_color: string
-  elevator_cabin_opacity: number
-  elevator_glass_opacity: number
-}
-
-/** Per-room recipe vocabulary in PLAN FRACTIONS — what the 2D editor needs
- *  to DRAW without re-deriving anything: the hull, the openings (already
- *  normalized to edge indices and with the neighbours' shared-wall holes
- *  mirrored in) and the exit. ``exit`` keeps the recipe's dual frame:
- *  explicit = fraction of the room RECTANGLE, derived = absolute plate
- *  fraction (``exit_derived`` says which). */
-export interface SceneRoom {
-  room_id: string
-  level: number
-  always_visible: boolean
-  outline: Array<[number, number]>
-  openings: Array<RoomOpening & { edge: number; mirrored?: boolean }>
-  exit?: [number, number] | null
-  exit_derived?: boolean
-}
-
-export interface ScenePayload {
-  signature: string
-  rooms: SceneRoom[]
-  /** World metres per real metre (8 / plan_width_m; 1 = legacy). */
-  k: number
-  storey_m: number
-  levels: Array<{ level: number; floor_y: number }>
-  style: SceneStyle
-  plates: ScenePlate[]
-  walls: SceneWall[]
-  extras: SceneExtra[]
-  models: SceneModelSpec[]
-  figures: { base_height_m_world: number; stand_clearance: number }
-  markers: SceneMarker[]
-  exits: SceneExit[]
-  outdoor_rooms: string[]
-}
+//
+// The types themselves live in @anima/scene-render: ONE definition for the
+// admin preview and the 3D client. They used to be declared twice (here and
+// in client3d/src/api.ts) and had already drifted — elevator_* was required
+// here and optional there, and the two described `openings` differently.
+// Re-exported so every existing importer keeps working unchanged.
+export type {
+  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,
+  SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom,
+} from '@anima/scene-render'
 
 /** What the preview POSTs to /play/scene-preview: the editor draft as it
  *  stands, including unsaved layouts. */

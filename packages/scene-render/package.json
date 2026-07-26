@@ -1,0 +1,13 @@
+{
+  "name": "@anima/scene-render",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Geteilte Renderer-Routinen des Szenen-Vertrags (§ B1/B2/B4): EINE place()-Routine, EIN Raum-Clip, EIN Satz Payload-Typen — konsumiert von frontend (Admin-Vorschau) und client3d (3D-Client).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "three": ">=0.185.0"
+  }
+}

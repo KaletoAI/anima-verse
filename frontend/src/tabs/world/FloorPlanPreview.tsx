@@ -24,7 +24,9 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
-import { disposeClipMaterials, placeModelSpec } from './scenePlace'
+import { disposeClipMaterials, placeModelSpec, SpecVerifier,
+  VERIFY_EPS } from '@anima/scene-render'
+import type { VerifyRow } from '@anima/scene-render'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 
@@ -33,17 +35,6 @@ import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 // scene payload.
 const PLATE_M = 8
 const DEFAULT_LEVEL_M = 3
-// Verify tolerance in world metres (contract § B5a).
-const VERIFY_EPS = 0.01
-
-/** One measured-vs-specified number of the verify pass (§ B5a). */
-interface VerifyRow {
-  object: string
-  field: string
-  actual: number
-  target: number
-  delta: number
-}
 // Preview AIDS — deliberately NOT part of the scene style (which covers
 // walls, floors, glass and the room palette): these paint things only the
 // admin preview shows. Elevator colours come from the payload's style block.
@@ -419,45 +410,22 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // The scene recipe is the TARGET. After building, every object is
     // re-measured in world space and diffed against the spec it came from;
     // findings travel between sessions as numbers, never as pictures.
-    const verifyRows: VerifyRow[] = []
+    // The diff itself lives in @anima/scene-render — the SAME arithmetic the
+    // 3D client runs, so a number measured here means the same thing there.
+    // The admin preview is built around the origin, hence the zero reference.
+    const verifier = new SpecVerifier(THREE)
+    const VERIFY_ORIGIN = new THREE.Vector3()
     // Facts the arithmetic CANNOT check: a shell clip discards fragments, not
     // geometry, so the rendered BBox stays the unclipped one (§ B1). The
     // report names where clipping is active instead of pretending to measure it.
     const verifyNotes: string[] = []
-    let verifyChecked = 0
     const vcheck = (object: string, field: string, actual: number,
-                    target: number) => {
-      verifyChecked += 1
-      const delta = actual - target
-      if (Math.abs(delta) > VERIFY_EPS) {
-        const r3 = (v: number) => Math.round(v * 1000) / 1000
-        verifyRows.push({ object, field, actual: r3(actual), target: r3(target),
-                          delta: r3(delta) })
-      }
-    }
+                    target: number) => verifier.check(object, field, actual, target)
     const verifyPlacement = (obj: Object3D, spec: SceneModelSpec) => {
-      obj.updateMatrixWorld(true)
-      const box = new THREE.Box3().setFromObject(obj)
-      const size = box.getSize(new THREE.Vector3())
-      const centre = box.getCenter(new THREE.Vector3())
-      const name = `${spec.role}:${spec.id}`
       if (spec.clip_outline?.length) {
-        verifyNotes.push(`${name} clip: ${spec.clip_outline.length} points`)
+        verifyNotes.push(`${spec.role}:${spec.id} clip: ${spec.clip_outline.length} points`)
       }
-      vcheck(name, 'bottom_y', box.min.y, spec.bottom_y)
-      vcheck(name, 'anchor.x', centre.x, spec.anchor[0])
-      vcheck(name, 'anchor.z', centre.z, spec.anchor[1])
-      // Extent checks only hold for axis-aligned yaws — the world BBox of a
-      // diagonally rotated mesh is legitimately larger than its target box.
-      if (Math.abs(((spec.yaw_deg % 90) + 90) % 90) > 0.01) return
-      if (spec.scale_mode === 'real_size' && spec.max_m) {
-        vcheck(name, 'max_m', spec.measure_axes === 'xz'
-          ? Math.max(size.x, size.z) : Math.max(size.x, size.y, size.z),
-          spec.max_m)
-      } else if (spec.scale_mode === 'tile_fit' && spec.box) {
-        if (spec.box.xz) vcheck(name, 'box.xz', Math.max(size.x, size.z), spec.box.xz)
-        if (spec.box.y) vcheck(name, 'box.y', size.y, spec.box.y)
-      }
+      verifier.placement(obj, spec, VERIFY_ORIGIN)
     }
     // The building entry is fetched regardless of the overlay toggle — the
     // model panel's fields read it.
@@ -1132,16 +1100,16 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // actual/target. The console table is the one that travels between
     // sessions; the overlay is just the hint that it is there.
     if (verifyRef.current) {
-      if (verifyRows.length) {
-        console.warn(`[verify] ${verifyRows.length} deviation(s) > ${VERIFY_EPS} m `
-          + `in ${verifyChecked} checked numbers`)
-        console.table(verifyRows)
+      if (verifier.rows.length) {
+        console.warn(`[verify] ${verifier.rows.length} deviation(s) > ${VERIFY_EPS} m `
+          + `in ${verifier.checked} checked numbers`)
+        console.table(verifier.rows)
       } else {
-        console.info(`[verify] ${verifyChecked} numbers checked, `
+        console.info(`[verify] ${verifier.checked} numbers checked, `
           + `no deviation > ${VERIFY_EPS} m`)
       }
       if (verifyNotes.length) console.info(`[verify] ${verifyNotes.join(' · ')}`)
-      setVerifyReport({ checked: verifyChecked, rows: verifyRows,
+      setVerifyReport({ checked: verifier.checked, rows: verifier.rows,
                         notes: verifyNotes })
     } else {
       setVerifyReport(null)
