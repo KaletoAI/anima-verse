@@ -1471,7 +1471,8 @@ async def compose_preview(request: Request) -> Dict[str, Any]:
     the use-case decision, which the client no longer guesses.
     """
     data = await request.json()
-    return world_ops.compose_preview_core(data)
+    # Into a thread: resolving the scale anchor may read the building GLB.
+    return await asyncio.to_thread(world_ops.compose_preview_core, data)
 
 
 @router.post("/locations/{location_name}/gallery/batch")
