@@ -43,6 +43,16 @@ interface ImagegenOptionsResponse {
   default_location?: string
 }
 
+/** Answer of POST /world/compose-preview (app/core/prompt_compose.py). */
+interface ComposePreview {
+  prompt?: string
+  negative?: string
+  warnings?: string[]
+  use_case?: string
+  llm_composed?: boolean
+  cache_hit?: boolean
+}
+
 export interface ImageGenSubmit {
   prompt: string
   backend?: string
@@ -316,12 +326,17 @@ export function ImageGenDialog({
   // the resolved style depend on it). No debounce/live reload while typing —
   // the text is the user's from the first keystroke on.
   const [composeWarnings, setComposeWarnings] = useState<string[]>([])
+  // Whether the shown prompt came out of the LLM stage (and from its cache) —
+  // set by the use-case flag on prefill or by the "Compose with AI" button.
+  const [composeLlm, setComposeLlm] = useState<{ llm: boolean; cached: boolean }>(
+    { llm: false, cached: false })
+  const [composing, setComposing] = useState(false)
   const composeKey = useMemo(
     () => (composeRequest ? JSON.stringify(composeRequest) : ''), [composeRequest])
   useEffect(() => {
     if (!open || !composeKey || !optionKey) return
     let dropped = false
-    apiPost<{ prompt?: string; negative?: string; warnings?: string[] }>(
+    apiPost<ComposePreview>(
       '/world/compose-preview',
       { ...(JSON.parse(composeKey) as Record<string, unknown>), backend: optionKey },
     )
@@ -330,10 +345,32 @@ export function ImageGenDialog({
         setPrompt(r.prompt || '')
         setNegative(r.negative || '')
         setComposeWarnings(r.warnings || [])
+        setComposeLlm({ llm: !!r.llm_composed, cached: !!r.cache_hit })
       })
       .catch(() => { if (!dropped) setComposeWarnings([]) })
     return () => { dropped = true }
   }, [open, composeKey, optionKey])
+
+  // "Compose with AI": the same endpoint with llm=true — the LLM stage runs on
+  // the mechanical result and its output lands in the (editable) prompt field.
+  // The negative stays as composed; submit stays literal, no second call.
+  const composeWithLlm = useCallback(async () => {
+    if (!composeKey || !optionKey || composing) return
+    setComposing(true)
+    try {
+      const r = await apiPost<ComposePreview>('/world/compose-preview', {
+        ...(JSON.parse(composeKey) as Record<string, unknown>),
+        backend: optionKey, llm: true,
+      })
+      setPrompt(r.prompt || '')
+      setComposeWarnings(r.warnings || [])
+      setComposeLlm({ llm: !!r.llm_composed, cached: !!r.cache_hit })
+    } catch {
+      /* The mechanical prompt stays in the field — nothing is lost. */
+    } finally {
+      setComposing(false)
+    }
+  }, [composeKey, optionKey, composing])
 
   // ESC closes; lock body scroll while open.
   useEffect(() => {
@@ -602,12 +639,34 @@ export function ImageGenDialog({
                 </div>
               ) : null}
 
-              <label className="ga-imagegen-label">{t('Prompt')}</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <label className="ga-imagegen-label" style={{ margin: 0 }}>{t('Prompt')}</label>
+                {composeRequest ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm"
+                      disabled={submitting || composing}
+                      onClick={() => { void composeWithLlm() }}
+                      title={t('Let an LLM rewrite the composed prompt into one coherent, positively exhaustive English prompt. The result stays editable.')}
+                    >
+                      {composing ? '…' : `✨ ${t('Compose with AI')}`}
+                    </button>
+                    {composeLlm.llm ? (
+                      <span className="ga-hint" style={{ fontSize: '0.78em' }}>
+                        {composeLlm.cached
+                          ? t('LLM-composed (cached)')
+                          : t('LLM-composed')}
+                      </span>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
               <textarea
                 className="ga-textarea"
                 rows={6}
                 value={prompt}
-                disabled={submitting || enhancing}
+                disabled={submitting || enhancing || composing}
                 onFocus={() => setTopic('image_prompt')}
                 onChange={(e) => setPrompt(e.target.value)}
               />
