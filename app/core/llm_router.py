@@ -476,7 +476,7 @@ def llm_call(
     user_prompt: str,
     *,
     agent_name: str = "", priority: Optional[int] = None,
-    label: str = "") -> Any:
+    label: str = "", max_tokens: Optional[int] = None) -> Any:
     """Zentraler LLM-Einstiegspunkt fuer Non-Stream-Calls.
 
     Resolved Provider+Model per Task, submitted ueber Queue, Logging
@@ -484,6 +484,10 @@ def llm_call(
     (5xx / Connection-Reset / Backend-Crash) wird der Provider in
     Cooldown gesetzt und der Call durch die Routing-Kette weitergeleitet
     (max ``_LLM_CALL_MAX_ATTEMPTS`` Versuche).
+
+    ``max_tokens`` capt das Completion-Budget fuer DIESEN Call (statt des
+    Routing-Eintrags) — Anti-Halluzinations-Schranke fuer eng begrenzte
+    Ausgaben wie den Prompt-Composer.
 
     Returns:
         Das Response-Objekt der Queue (kompatibel mit bestehenden
@@ -512,7 +516,8 @@ def llm_call(
                     f"letzter Fehler: {last_err}")
             raise RuntimeError(f"llm_call: Kein verfuegbares LLM fuer Task '{task}'")
 
-        llm = instance.create_llm()
+        llm = (instance.create_llm(max_tokens=max_tokens) if max_tokens
+               else instance.create_llm())
         logger.info("llm_call task=%s provider=%s model=%s agent=%s attempt=%d/%d",
                     task, instance.provider_name, instance.model,
                     agent_name or "-", attempt, _LLM_CALL_MAX_ATTEMPTS)

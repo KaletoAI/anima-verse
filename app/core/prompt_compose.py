@@ -225,6 +225,39 @@ def merge_tags(*parts: str) -> str:
     return ", ".join(out)
 
 
+# ── Weaving (shared with the LLM stage) ───────────────────────────────────
+
+def weave_subject(style: str, subject: str) -> tuple:
+    """(body, warnings) — the subject in its slot, or appended without one.
+
+    ``.replace()``, never ``.format()``: a user style may contain other
+    curly braces. The LLM stage reuses this when it has to re-weave a
+    frameless answer, so the weaving rule exists exactly once.
+    """
+    warnings: List[str] = []
+    slots = (style or "").count("{subject}")
+    if slots:
+        # The style sentence continues after the slot — a trailing full stop
+        # from the DB text would cut it in half ("… Format., staged on …").
+        body = style.replace("{subject}", (subject or "").rstrip(" ."), 1)
+        if slots > 1:
+            body = body.replace("{subject}", "")
+            warnings.append(
+                "The use-case style contains {subject} more than once — "
+                "only the first placeholder was filled, the others dropped.")
+        return body, warnings
+    if style and subject:
+        return f"{style}, {subject}", warnings
+    return style or subject or "", warnings
+
+
+def prepend_hints(body: str, hint_block: str) -> str:
+    """The hint block in front of the prompt (empty block = unchanged)."""
+    if not hint_block:
+        return body
+    return f"{hint_block}, {body}" if body else hint_block
+
+
 # ── The composer ──────────────────────────────────────────────────────────
 
 def compose(*, use_case: str, subject: str, backend: Any,
@@ -267,22 +300,10 @@ def compose(*, use_case: str, subject: str, backend: Any,
             f"A diffusion model draws what the negation names — phrase it "
             f"positively.")
 
-    # 2. Subject slot: weave instead of append. .replace(), never .format() —
-    # a user style may contain other curly braces.
+    # 2. Subject slot: weave instead of append.
     slots = style.count("{subject}")
-    if slots:
-        # The style sentence continues after the slot — a trailing full stop
-        # from the DB text would cut it in half ("… Format., staged on …").
-        body = style.replace("{subject}", subject.rstrip(" ."), 1)
-        if slots > 1:
-            body = body.replace("{subject}", "")
-            warnings.append(
-                "The use-case style contains {subject} more than once — "
-                "only the first placeholder was filled, the others dropped.")
-    elif style and subject:
-        body = f"{style}, {subject}"
-    else:
-        body = style or subject
+    body, weave_warnings = weave_subject(style, subject)
+    warnings.extend(weave_warnings)
 
     # 3. Hints first: early tokens steer diffusion (fix 237f5a1). A hint
     # already present in the text is not repeated.
@@ -292,7 +313,7 @@ def compose(*, use_case: str, subject: str, backend: Any,
         if clause and clause.lower() not in body.lower():
             rendered.append(clause)
     hint_block = ", ".join(rendered)
-    prompt = f"{hint_block}, {body}" if hint_block and body else (hint_block or body)
+    prompt = prepend_hints(body, hint_block)
 
     negative = merge_tags(ucp.get("prompt_negative", ""),
                           ", ".join(moved), negative_extra)

@@ -572,6 +572,17 @@ SCHEMA_STATEMENTS = [
     # machine behind the dialog (selecting -> proposal_ready -> generating ->
     # placing -> review_ready | error); accept/discard/reset DELETE the row,
     # so the table only ever holds jobs in flight. See app/core/room_furnish.py.
+    # ── LLM prompt composition cache (prompt_compose_llm.py) ─────────────
+    # Same input -> same composed prompt: a regenerate series and a batch run
+    # cost ONE call, not one per image. Key = sha256 over style, subject,
+    # shape hint, family and the template's mtime (editing the template in
+    # /admin/templates starts a new generation of keys). No eviction.
+    """CREATE TABLE IF NOT EXISTS prompt_compose_cache (
+        key        TEXT PRIMARY KEY,
+        prompt     TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+
     """CREATE TABLE IF NOT EXISTS room_furnish (
         room_id     TEXT PRIMARY KEY,
         location_id TEXT NOT NULL,
