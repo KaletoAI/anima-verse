@@ -196,7 +196,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "item": {
         "styles": {
@@ -210,7 +211,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "character": {
         "styles": {
@@ -224,7 +226,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "outfit": {
         "styles": {
@@ -238,7 +241,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "expression": {
         "styles": {
@@ -252,7 +256,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "instagram": {
         "styles": {
@@ -266,7 +271,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "event": {
         "styles": {
@@ -280,7 +286,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "story": {
         "styles": {
@@ -294,7 +301,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "profile": {
         "styles": {
@@ -308,7 +316,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "location": {
         "styles": {
@@ -322,7 +331,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "mapfit": {
         "styles": {
@@ -336,7 +346,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "scene": {
         "styles": {
@@ -350,7 +361,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "tpose": {
         "styles": {
@@ -364,7 +376,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "tpose_animal": {
         "styles": {
@@ -378,7 +391,8 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
       },
       "building": {
         "styles": {
@@ -392,7 +406,83 @@
             "prompt_negative": "",
             "prompt_instruction": ""
           }
-        }
+        },
+        "llm_compose": false
+      },
+      "building_outdoor": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": false
+      },
+      "room_model": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": false
+      },
+      "room_model_outdoor": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": false
+      },
+      "surface_texture": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": false
+      },
+      "prop": {
+        "styles": {
+          "natural": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "",
+            "prompt_negative": "",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": false
       }
     },
     "postprocess_enabled": false,
@@ -405,12 +495,20 @@
       {
         "lora": "Flux2-9B-BreastSlider(-10to16).safetensors",
         "word": "",
-        "endpoint": "LocalAI-Flux9"
+        "source": "manual",
+        "backends": [
+          "LocalAI-Flux9"
+        ],
+        "missing_on": []
       },
       {
         "lora": "Flux1-Dev-RPGmaps_v5.safetensors",
         "word": "rpgmap",
-        "endpoint": "LocalAI-Flux1-Dev"
+        "source": "manual",
+        "backends": [
+          "LocalAI-Flux1-Dev"
+        ],
+        "missing_on": []
       }
     ],
     "mapfit_imagegen_default": ""
