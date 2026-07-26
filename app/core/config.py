@@ -509,6 +509,19 @@ def get_lora_options(backend_name: str, lora_filter: str = "") -> list:
     return out
 
 
+def use_case_llm_compose(use_case: str) -> bool:
+    """True when this use case composes its prompt through the LLM stage.
+
+    Same read semantics as the styles: world override -> seeded default
+    (False). Opt-in only — the mechanical composer stays the base, the LLM
+    stage runs on ITS result (app/core/prompt_compose_llm.py).
+    """
+    uc = (use_case or "").strip()
+    if not uc:
+        return False
+    return bool(get(f"image_generation.use_cases.{uc}.llm_compose", False))
+
+
 def resolve_use_case_style(use_case: str, image_family: str = "",
                            backend_model: str = "",
                            backend_family: str = "") -> dict:
@@ -671,6 +684,11 @@ def _seed_default_use_cases(config: dict, config_path: Path) -> bool:
     for uc in _DEFAULT_IMAGE_USE_CASES:
         entry = uc_cfg.setdefault(uc, {})
         styles = entry.setdefault("styles", {})
+        # Opt-in LLM composition per use case (sibling of styles, default off —
+        # it costs a call and latency, so it is never implicit).
+        if "llm_compose" not in entry:
+            entry["llm_compose"] = False
+            changed = True
         for fam in _PROMPT_STYLE_FAMILIES:
             if fam not in styles:
                 styles[fam] = copy.deepcopy(empty_fields)

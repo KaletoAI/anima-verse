@@ -156,6 +156,16 @@ function renderUseCaseDetail(uc) {
     const D = USE_CASE_DEFAULTS || { families: [], defaults: {} };
     const FIELDS = [['prompt_style', 'Style'], ['prompt_negative', 'Negative'], ['prompt_instruction', 'Instruction']];
     let html = '<div class="md-detail-head"><span class="md-detail-title">' + esc(uc) + '</span></div>';
+    // Opt-in LLM stage — per USE CASE, not per family: it rewrites whatever
+    // the mechanical composer produced, in that family's voice.
+    const llmPath = 'image_generation.use_cases.' + uc + '.llm_compose';
+    html += '<div class="field" style="margin:0 0 14px 0">'
+          + '<label style="font-size:.85em;display:flex;align-items:center;gap:6px">'
+          + '<input type="checkbox" ' + (getVal(llmPath) ? 'checked' : '') + ' '
+          + 'onchange="setVal(\'' + llmPath + '\', this.checked)"> Compose via LLM (opt-in)</label>'
+          + '<div class="hint" style="opacity:.7;font-size:.78em;margin-top:2px">'
+          + 'When enabled, an LLM rewrites the composed prompt into one coherent, '
+          + 'positively-exhaustive English prompt. Shown editable in the render dialog.</div></div>';
     for (const fam of (D.families || [])) {
         html += '<div style="margin:4px 0 16px 0;padding-left:8px;border-left:2px solid var(--border,#30363d)">';
         html += '<div style="opacity:.6;font-size:.8em;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">' + esc(fam) + '</div>';
