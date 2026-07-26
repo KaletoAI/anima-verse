@@ -432,6 +432,11 @@ def compose_recipe(room: Dict[str, Any],
     # neighbours' walls). Same flag as the visibility rule (AV3D-12).
     if lay.get("always_visible"):
         payload["always_visible"] = True
+    # Diorama clipping (§ B1): the scene composer reads the opt-in from HERE,
+    # not from the layout — that keeps the flag inside the signature below, so
+    # toggling the checkbox makes the client re-fetch.
+    if lay.get("clip_model"):
+        payload["clip_model"] = True
     if lay.get("rotation") is not None:
         payload["rotation"] = lay["rotation"]
     # Change detection without polling the whole payload chain: the client

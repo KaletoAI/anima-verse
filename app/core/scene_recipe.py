@@ -66,6 +66,10 @@ ROOM_PLATE_THICKNESS = 0.02
 # = plate top + this clearance (+ offset_y × k). Outdoor rooms have no
 # plate — there the clearance sits on the storey/terrain level directly.
 PROP_CLEARANCE = 0.01
+# Diorama clipping (§ B1): the shell polygon a room model may be cut against
+# is capped — the shader test runs per fragment, more points than this are not
+# worth the frame time, so the opt-in is ignored instead.
+CLIP_OUTLINE_MAX_POINTS = 32
 # Walls: height max(0.6, storey − 0.15), thickness 0.07; glass panes thinner.
 WALL_THICKNESS = 0.07
 WALL_MIN_HEIGHT = 0.6
@@ -133,6 +137,13 @@ def _w(frac: Any) -> float:
         return (float(frac) - 0.5) * PLATE_M
     except (TypeError, ValueError):
         return 0.0
+
+
+def _room_outline_world(recipe: Dict[str, Any]) -> List[List[float]]:
+    """The room shell in world metres — the ONE source for the room's floor
+    plate and for a diorama's ``clip_outline`` (§ B1); [] when degenerate."""
+    pts = [[_r(_w(p[0])), _r(_w(p[1]))] for p in recipe.get("outline") or []]
+    return pts if len(pts) >= 3 else []
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -267,8 +278,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     for recipe in recipes:
         level = int(recipe.get("level") or 0)
         outdoor = bool(recipe.get("always_visible"))
-        outline = [[_r(_w(p[0])), _r(_w(p[1]))] for p in recipe.get("outline") or []]
-        if len(outline) < 3:
+        outline = _room_outline_world(recipe)
+        if not outline:
             continue
         entry: Dict[str, Any] = {
             "level": level,
@@ -667,6 +678,18 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     walk = _num(meta.get("walk_y")) if meta.get("walk_y") is not None else walk_auto
     if walk is not None:
         spec["walk_y_world"] = _r(spec["bottom_y"] + walk)
+    # Opt-in shell clip (§ B1): a real_size diorama may stick out over its
+    # floor plan — with the flag the renderer discards everything outside the
+    # room shell. The polygon is the room's floor plate, not a second
+    # derivation. An outdoor room has no shell to clip against (§ A5).
+    if recipe.get("clip_model") and not recipe.get("always_visible"):
+        clip = _room_outline_world(recipe)
+        if len(clip) > CLIP_OUTLINE_MAX_POINTS:
+            logger.warning(
+                "Room %s: clip_model ignored — outline has %d points (max %d)",
+                room_id, len(clip), CLIP_OUTLINE_MAX_POINTS)
+        elif clip:
+            spec["clip_outline"] = clip
     return spec
 
 
