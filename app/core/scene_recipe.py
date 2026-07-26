@@ -153,9 +153,14 @@ def _num(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _opacity_role(level: int) -> str:
-    """Ground floor is opaque, every other storey is ghosted (§ A6)."""
-    return "ground" if level == 0 else "upper"
+def _opacity_role(level: int, ground_level: int) -> str:
+    """The LOWEST used storey is opaque, every level above is ghosted (§ A6).
+
+    The camera looks from above, so opacity must open the view down to the
+    bottom-most storey — with a basement (level -1) the terrain-level floor
+    ghosts too, otherwise the basement sits invisibly under an opaque plate.
+    """
+    return "ground" if level == ground_level else "upper"
 
 
 def derive_scalars(map3d: Dict[str, Any], plan_width_m: float,
@@ -262,6 +267,7 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     plates: List[Dict[str, Any]] = []
     contour = _outline_world(map3d)
     level_floors = (map3d or {}).get("level_floors") or {}
+    ground = min(levels)
     if contour:
         for level in levels:
             kind = ""
@@ -273,7 +279,7 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
                 "top_y": _r(level * storey + LEVEL_PLATE_TOP),
                 "thickness": LEVEL_PLATE_THICKNESS,
                 "texture_kind": kind or DEFAULT_FLOOR_KIND,
-                "opacity_role": _opacity_role(level),
+                "opacity_role": _opacity_role(level, ground),
             })
     for recipe in recipes:
         level = int(recipe.get("level") or 0)
@@ -286,7 +292,7 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
             "outline": outline,
             "top_y": _r(level * storey + (0.0 if outdoor else ROOM_PLATE_TOP)),
             "thickness": 0.0 if outdoor else ROOM_PLATE_THICKNESS,
-            "opacity_role": _opacity_role(level),
+            "opacity_role": _opacity_role(level, ground),
             "room_id": recipe.get("room_id") or "",
         }
         kind = str(((recipe.get("surfaces") or {}).get("floor")) or "").strip()
@@ -424,6 +430,8 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         holes = sorted((t - DOOR_HALF_GAP_M, t + DOOR_HALF_GAP_M)
                        for t in doors.get(i, []))
         for level in levels:
+            # Door gaps stay a level-0 thing: the building entrance sits on
+            # the terrain storey even when a basement exists below it.
             lvl_holes = list(holes) if level == 0 else []
             # Room-hull spans on this contour edge: colinear within roughly
             # a wall thickness → the room wall owns that stretch.
@@ -444,14 +452,14 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                     "base_y": _r(level * storey + LEVEL_PLATE_TOP),
                     "height": _r(height),
                     "thickness": WALL_THICKNESS,
-                    "opacity_role": _opacity_role(level),
+                    "opacity_role": _opacity_role(level, min(levels)),
                     "outward_normal": [_r(nx), _r(nz)],
                 })
     return walls
 
 
-def _room_walls(recipe: Dict[str, Any], storey: float,
-                k: float) -> List[Dict[str, Any]]:
+def _room_walls(recipe: Dict[str, Any], storey: float, k: float,
+                ground_level: int) -> List[Dict[str, Any]]:
     """One room's shell walls, split around its openings (§ A4).
 
     Doors and passages leave a full-height gap; a window keeps a sill segment
@@ -472,7 +480,7 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
     height = _wall_height(storey)
     kind = str(((recipe.get("surfaces") or {}).get("wall")) or "").strip()
     room_id = recipe.get("room_id") or ""
-    role = _opacity_role(level)
+    role = _opacity_role(level, ground_level)
     walls: List[Dict[str, Any]] = []
 
     for i, a in enumerate(outline):
@@ -939,7 +947,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     for recipe in recipes:
         room_id = str(recipe.get("room_id") or "")
         room = by_room.get(room_id) or {}
-        walls.extend(_room_walls(recipe, storey, k))
+        walls.extend(_room_walls(recipe, storey, k, min(levels)))
         diorama = _diorama_model(recipe, room, room_metas.get(room_id) or {},
                                  storey, k, anchored)
         if diorama:
