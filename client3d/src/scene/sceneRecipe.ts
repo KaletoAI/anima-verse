@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { applyClipOutline, CLIP_MAX_POINTS, placeModelSpec,
+  SpecVerifier, VERIFY_EPS } from '@anima/scene-render';
+import type { PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
   type SceneModelSpec, type ScenePayload, type ScenePlate, type SceneWall,
@@ -17,13 +20,15 @@ import {
  *
  * EIN Endpoint liefert die komplette Szene einer Location als fertige
  * Primitive (plates/walls/extras) und Platzierungs-Specs (models). Dieses
- * Modul besitzt daher genau ZWEI generische Routinen — `placeSpec` („Modell
- * platzieren", § B2) und die Primitiv-Builder („Primitiv bauen") — und keine
- * einzige eigene Geometrie-Entscheidung: keine Öffnungs-Aufteilung, keine
- * Spiegelung, keine Exit-Ableitung, keine Fahrstuhl-Maße, keine Konstanten
- * (0,07 / 0,14 / 0,12 / ±0,4 …) und keine Farben. Alles davon kommt aus dem
- * Payload; die einzige Geometrie-Zahl auf dieser Seite ist der 0,96-Rand des
- * `fit_box`-Fallbacks, den § B2 ausdrücklich hier verortet.
+ * Modul stellt sie dar und trifft keine einzige eigene Geometrie-Entscheidung:
+ * keine Öffnungs-Aufteilung, keine Spiegelung, keine Exit-Ableitung, keine
+ * Fahrstuhl-Maße, keine Konstanten (0,07 / 0,14 / 0,12 / ±0,4 …) und keine
+ * Farben. Alles davon kommt aus dem Payload.
+ *
+ * Die Routine „Modell platzieren" (§ B2) und der Raum-Clip (§ B1) liegen seit
+ * Stufe 2 in `@anima/scene-render` — dieselbe Rechnung, die die Admin-Vorschau
+ * fährt; auch der 0,96-Rand des `fit_box`-Fallbacks wohnt dort. Hier bleiben
+ * die Primitiv-Builder („Primitiv bauen") und der Sicht-Zustand.
  *
  * Was hier bleibt, ist Sicht- und Interaktions-Zustand: `mountScene` füllt
  * die Tile-Felder der Innenansicht, damit LOD,
@@ -33,11 +38,6 @@ import {
  * 404 auf /scene = Legacy-Fall (kein Grundriss, kein Layout, kein Modell) —
  * dann rührt dieses Modul die Kachel nicht an.
  */
-
-/** Der EINE Rand, den § B2 auf der Client-Seite lässt (fit_box-Fallback). */
-const FIT_BOX_MARGIN = 0.96;
-/** Verify-Toleranz in Welt-Metern (§ B5a). */
-const VERIFY_EPS = 0.01;
 
 const deg = (v: number | undefined) => ((v || 0) * Math.PI) / 180;
 
@@ -119,13 +119,10 @@ export class SceneLibrary {
 
 // ── Verify (§ B5a): Arithmetik statt Screenshots ──────────────────────────
 
-export interface VerifyRow {
-  object: string;
-  field: string;
-  actual: number;
-  target: number;
-  delta: number;
-}
+/** Eine Abweichungszeile — Definition im geteilten Paket, hier nur
+ *  weitergereicht, damit die Konsumenten dieses Moduls sie weiter von hier
+ *  beziehen können. */
+export type { VerifyRow } from '@anima/scene-render';
 
 export interface VerifyReport {
   location: string;
@@ -156,19 +153,20 @@ function verifyOn(): boolean {
  *  Weltkoordinaten vermessen und gegen die Spec gedifft. Befunde reisen als
  *  ZAHLEN zwischen den Sessions (Objekt, Feld, Ist, Soll), nie als Bild. */
 class Verifier {
-  rows: VerifyRow[] = [];
-  checked = 0;
+  // Der Diff selbst liegt in @anima/scene-render — DIESELBE Rechnung, die die
+  // Admin-Vorschau fährt. Hier drumherum bleibt der BERICHT: übersprungene
+  // Specs, Modellzählung, Clip-Vermerke, console-Ausgabe und der Ablageort
+  // window.__sceneVerify. Das ist Client-Sache und soll es bleiben.
+  private readonly v: SpecVerifier;
   skipped = 0;
   placed = 0;
   total = 0;
   clips: { object: string; punkte: number }[] = [];
-  constructor(readonly active: boolean) {}
+  constructor(readonly active: boolean) { this.v = new SpecVerifier(THREE, active); }
 
-  /** Eine Modell-Spec, die NICHT platziert wurde (Mesh nach allen Versuchen
-   *  nicht ladbar, kein Platzhalter). Das ist ein fehlendes Objekt in der
-   *  Szene — es wandert als Abweichungszeile in die Tabelle (`geladen` 0
-   *  statt 1), damit eine Lücke nicht wie ein Erfolg aussieht. Wird
-   *  unabhängig vom Verify-Modus gezählt und geloggt. */
+  get rows(): VerifyRow[] { return this.v.rows; }
+  get checked(): number { return this.v.checked; }
+
   /** Beschnittenes Diorama vermerken (§ B1 clip_outline). Keine Abweichung,
    *  sondern eine Eigenschaft des Aufbaus — sie gehört trotzdem in die
    *  Ausgabe, sonst sieht man einem fehlenden Möbelstück nicht an, ob es
@@ -177,64 +175,34 @@ class Verifier {
     this.clips.push({ object: `${spec.role}:${spec.id}`, punkte: points });
   }
 
+  /** Eine Modell-Spec, die NICHT platziert wurde (Mesh nach allen Versuchen
+   *  nicht ladbar, kein Platzhalter). Das ist ein fehlendes Objekt in der
+   *  Szene — es wandert als Abweichungszeile in die Tabelle (`geladen` 0
+   *  statt 1), damit eine Lücke nicht wie ein Erfolg aussieht. Wird
+   *  unabhängig vom Verify-Modus gezählt und geloggt. */
   skip(spec: SceneModelSpec): void {
     this.skipped += 1;
     console.warn(`[scene] ${spec.role}:${spec.id} übersprungen — Mesh nicht ladbar `
       + `(${spec.url || 'ohne URL'})`);
-    if (!this.active) return;
-    this.checked += 1;
-    this.rows.push({ object: `${spec.role}:${spec.id}`, field: 'geladen',
-                     actual: 0, target: 1, delta: -1 });
+    this.v.check(`${spec.role}:${spec.id}`, 'geladen', 0, 1);
   }
 
   check(object: string, field: string, actual: number, target: number): void {
-    if (!this.active) return;
-    this.checked += 1;
-    const delta = actual - target;
-    if (Math.abs(delta) > VERIFY_EPS) {
-      const r3 = (v: number) => Math.round(v * 1000) / 1000;
-      this.rows.push({ object, field, actual: r3(actual), target: r3(target), delta: r3(delta) });
-    }
+    this.v.check(object, field, actual, target);
   }
 
-  /** Primitiv gegen seine Spec prüfen: Welt-BBox messen und die vom Payload
-   *  vorgegebenen Kanten/Mitten diffen. `origin` = Weltposition des
+  /** Primitiv gegen seine Spec prüfen. `origin` = Weltposition des
    *  Kachelzentrums (die Spec rechnet um das Kachelzentrum). */
   primitive(mesh: THREE.Object3D, origin: THREE.Vector3, name: string,
-            targets: { field: string; actual: (b: THREE.Box3) => number; target: number }[]): void {
-    if (!this.active) return;
-    mesh.updateWorldMatrix(true, true);   // Eltern MIT — sonst misst man eine kalte Matrix
-    const box = new THREE.Box3().setFromObject(mesh);
-    box.min.sub(origin);
-    box.max.sub(origin);
-    for (const t of targets) this.check(name, t.field, t.actual(box), t.target);
+            targets: PrimitiveTarget[]): void {
+    this.v.primitive(mesh, origin, name, targets);
   }
 
-  /** Platziertes Modell gegen seine Spec prüfen. `origin` = Weltposition des
-   *  Kachelzentrums: die Spec rechnet um das Kachelzentrum, die Messung liegt
-   *  in Weltkoordinaten. */
+  /** Platziertes Modell gegen seine Spec prüfen. */
   placement(obj: THREE.Object3D, spec: SceneModelSpec, origin: THREE.Vector3): void {
-    if (!this.active) return;
-    obj.updateWorldMatrix(true, true);   // Eltern MIT — sonst misst man eine kalte Matrix
-    const box = new THREE.Box3().setFromObject(obj);
-    const size = box.getSize(new THREE.Vector3());
-    const centre = box.getCenter(new THREE.Vector3());
-    const name = `${spec.role}:${spec.id}`;
-    this.check(name, 'bottom_y', box.min.y - origin.y, spec.bottom_y);
-    this.check(name, 'anchor.x', centre.x - origin.x, spec.anchor[0]);
-    this.check(name, 'anchor.z', centre.z - origin.z, spec.anchor[1]);
-    // Ausdehnungs-Prüfungen gelten nur bei achsenparallelen Yaws — die
-    // Welt-BBox eines diagonal gedrehten Meshes ist legitim größer als die
-    // Zielbox.
-    if (Math.abs(((spec.yaw_deg % 90) + 90) % 90) > 0.01) return;
-    if (spec.scale_mode === 'real_size' && spec.max_m) {
-      this.check(name, 'max_m', spec.measure_axes === 'xz'
-        ? Math.max(size.x, size.z) : Math.max(size.x, size.y, size.z), spec.max_m);
-    } else if (spec.scale_mode === 'tile_fit' && spec.box) {
-      if (spec.box.xz) this.check(name, 'box.xz', Math.max(size.x, size.z), spec.box.xz);
-      if (spec.box.y) this.check(name, 'box.y', size.y, spec.box.y);
-    }
+    this.v.placement(obj, spec, origin);
   }
+
 
   report(locationId: string): VerifyReport | null {
     if (!this.active) return null;
@@ -263,61 +231,6 @@ class Verifier {
 
 // ── DIE Platzierungs-Routine (§ B2) ───────────────────────────────────────
 
-/**
- * Gebäude, Raum-Diorama und Prop unterscheiden sich nur in der SPEC, die der
- * Server schickt — nie im Code. Kette: fix_euler ('XYZ') auf die innere
- * Gruppe → messen → skalieren nach scale_mode → Yaw als ELTERN-Rotation (nie
- * in einen Euler kombinieren, ein x/z-Fix würde mitkippen) → Ergebnis-BBox
- * messen und Unterkante/XZ-Zentrum auf bottom_y/anchor setzen.
- *
- * Rückgabe: eine Hülle um `source`. Der Aufrufer hängt sie in eine Gruppe
- * OHNE eigene Transformation (die Erdung misst im Eltern-Koordinatensystem,
- * und die Spec-Zahlen gelten um das Kachelzentrum).
- */
-export function placeSpec(source: THREE.Object3D, spec: SceneModelSpec): THREE.Group {
-  const fix = new THREE.Group();
-  fix.add(source);
-  fix.rotation.set(deg(spec.fix_euler?.x), deg(spec.fix_euler?.y), deg(spec.fix_euler?.z));
-  fix.updateMatrixWorld(true);
-  const sFix = new THREE.Box3().setFromObject(fix).getSize(new THREE.Vector3());
-
-  const yawG = new THREE.Group();
-  yawG.add(fix);
-  yawG.rotation.y = -deg(spec.yaw_deg);
-  yawG.updateMatrixWorld(true);
-  const sYaw = new THREE.Box3().setFromObject(yawG).getSize(new THREE.Vector3());
-
-  const outer = new THREE.Group();
-  outer.add(yawG);
-  if (spec.scale_axes) {
-    // Server-vermessenes Mesh: die Faktoren kommen fertig (§ B4).
-    outer.scale.set(spec.scale_axes.xz, spec.scale_axes.y, spec.scale_axes.xz);
-  } else if (spec.scale_mode === 'tile_fit') {
-    // Gebäude füllen ihre Kachel je ACHSE, gemessen an der GEDREHTEN Box:
-    // der Fußabdruck folgt dem Grundriss, die Höhe ihren deklarierten Metern.
-    const kxz = (spec.box?.xz || 1) / (Math.max(sYaw.x, sYaw.z) || 1);
-    const ky = spec.box?.y ? spec.box.y / (sYaw.y || 1) : kxz;
-    outer.scale.set(kxz, ky, kxz);
-  } else if (spec.scale_mode === 'real_size') {
-    // EIN Maßstabsgesetz: reale Meter über der größten gemessenen Ausdehnung.
-    // measure_axes 'xz' ignoriert die Höhe (Dioramen, § B2a).
-    const maxExtent = (spec.measure_axes === 'xz'
-      ? Math.max(sFix.x, sFix.z)
-      : Math.max(sFix.x, sFix.y, sFix.z)) || 1;
-    outer.scale.setScalar((spec.max_m || 1) / maxExtent);
-  } else {
-    // fit_box-Fallback: den UNROTIERTEN Fußabdruck in die Zielbox einpassen.
-    outer.scale.setScalar(Math.min((spec.box?.w || 1) / (sFix.x || 1),
-                                   (spec.box?.d || 1) / (sFix.z || 1)) * FIT_BOX_MARGIN);
-  }
-  outer.updateMatrixWorld(true);
-  const bOut = new THREE.Box3().setFromObject(outer);
-  const cOut = bOut.getCenter(new THREE.Vector3());
-  outer.position.set(spec.anchor[0] - cOut.x,
-                     spec.bottom_y - bOut.min.y,
-                     spec.anchor[1] - cOut.z);
-  return outer;
-}
 
 // ── Primitiv-Builder ─────────────────────────────────────────────────────
 
@@ -400,79 +313,7 @@ function buildWall(wall: SceneWall, k: number, style: ScenePayload['style'],
 
 // ── Raum-Clipping (§ B1 `clip_outline`) ──────────────────────────────────
 
-/** Obergrenze des Vertrags; das Uniform-Array trägt einen Punkt mehr, weil
- *  das Polygon geschlossen hochgeladen wird (letzter Punkt = erster). */
-const CLIP_MAX_POINTS = 32;
 
-/**
- * Ein Diorama auf seinen Raum beschneiden: Fragmente außerhalb des
- * gelieferten Polygons werden verworfen.
- *
- * Warum Fragment-Discard und nicht `clippingPlanes`: der Grundriss ist ein
- * beliebiges Polygon, keine Handvoll Halbräume — Ebenen bräuchten pro Kante
- * eine und würden bei konkaven Umrissen falsch schneiden. Der Paritätstest
- * (Punkt-im-Polygon) ist dagegen exakt und kostet einen kurzen Loop.
- *
- * Die Schnittkanten bleiben OFFEN (das Mesh wird nicht verschlossen) —
- * deshalb DoubleSide, damit man von außen nicht durch die Rückseite ins
- * Nichts schaut. Bekannt und laut Auftrag akzeptiert.
- *
- * Materialien werden vorher GEKLONT: `loadGlb` cacht die rohe Szene, und
- * `clone(true)` teilt die Materialien — ohne Klon würde derselbe Patch auch
- * bei jeder anderen Verwendung desselben GLB zuschlagen.
- */
-function applyRoomClip(model: THREE.Object3D, outlineWorld: THREE.Vector2[]): void {
-  const poly: THREE.Vector2[] = [];
-  for (let i = 0; i <= CLIP_MAX_POINTS; i++) {
-    poly.push(outlineWorld[Math.min(i, outlineWorld.length - 1)].clone());
-  }
-  // geschlossen hochladen: Kante i = poly[i] -> poly[i+1]; der Loop im Shader
-  // darf damit mit konstantem i+1 indizieren (GLSL-ES-Regel für Uniform-Arrays)
-  poly[outlineWorld.length] = outlineWorld[0].clone();
-  const count = outlineWorld.length;
-
-  model.traverse((o) => {
-    const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    const patch = (src: THREE.Material): THREE.Material => {
-      const m = src.clone();
-      m.side = THREE.DoubleSide;
-      m.onBeforeCompile = (shader) => {
-        shader.uniforms.uClipPoly = { value: poly };
-        shader.uniforms.uClipCount = { value: count };
-        shader.vertexShader = `varying vec3 vClipWorld;\n${shader.vertexShader}`
-          .replace('#include <project_vertex>',
-            'vClipWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\n'
-            + '#include <project_vertex>');
-        shader.fragmentShader = `uniform vec2 uClipPoly[${CLIP_MAX_POINTS + 1}];\n`
-          + 'uniform int uClipCount;\n'
-          + 'varying vec3 vClipWorld;\n'
-          + shader.fragmentShader.replace('#include <clipping_planes_fragment>',
-            `#include <clipping_planes_fragment>
-            {
-              bool insidePoly = false;
-              for (int i = 0; i < ${CLIP_MAX_POINTS}; i++) {
-                if (i >= uClipCount) break;
-                vec2 a = uClipPoly[i];
-                vec2 b = uClipPoly[i + 1];
-                if (((a.y > vClipWorld.z) != (b.y > vClipWorld.z))
-                    && (vClipWorld.x < (b.x - a.x) * (vClipWorld.z - a.y)
-                                       / (b.y - a.y) + a.x)) {
-                  insidePoly = !insidePoly;
-                }
-              }
-              if (!insidePoly) discard;
-            }`);
-      };
-      // sonst greift three auf das Programm des ungepatchten Materials zurück
-      m.customProgramCacheKey = () => `roomclip:${count}`;
-      m.needsUpdate = true;
-      return m;
-    };
-    mesh.material = Array.isArray(mesh.material)
-      ? mesh.material.map(patch) : patch(mesh.material);
-  });
-}
 
 /** Platzhalter für ein Prop ohne Mesh: Box in den gelieferten Maßen (schon
  *  Welt-Meter), Ursprung im Zentrum der Unterkante. */
@@ -520,7 +361,7 @@ const mountSeq = new WeakMap<Tile, number>();
  * interiorLabels, interiorLift) — der ganze Sicht- und Interaktionscode
  * darüber (LOD, Crossfade, Fokus, Culling, NPCs) bleibt unberührt.
  *
- * Modelle (Gebäudehülle, Raum-Dioramen, Props) laufen ALLE durch `placeSpec`;
+ * Modelle (Gebäudehülle, Raum-Dioramen, Props) laufen ALLE durch `placeModelSpec` (§ B2, geteiltes Paket);
  * sie trudeln asynchron ein und werden nachgetragen.
  */
 export async function mountScene(tile: Tile, scene: ScenePayload): Promise<VerifyReport | null> {
@@ -778,7 +619,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     g.add(sw);
   }
 
-  // ── Modelle: ALLE durch placeSpec (§ B2) ────────────────────────────────
+  // ── Modelle: ALLE durch placeModelSpec (§ B2, @anima/scene-render) ──────
   // Gebäudehülle, Raum-Dioramen und Props sind derselbe Code — nur die Spec
   // unterscheidet sie. Das Diorama koexistiert seit § A4 (2026-07-25) immer
   // mit den Props des Raums; es ist einfach ein weiteres Modell im Raum.
@@ -817,7 +658,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       return;
     }
     verify.placed += 1;
-    const placed = placeSpec(source, spec);
+    // clone:false — der Client uebergibt das Objekt zur Uebernahme (die
+    // Admin-Vorschau platziert dasselbe gecachte Objekt mehrfach und klont).
+    // clip:false — wir clippen unten selbst, in WELT-Koordinaten um das
+    // Kachelzentrum; die Spec traegt das Polygon relativ dazu.
+    const placed = placeModelSpec(THREE, source, spec,
+                                  { clone: false, clip: false });
     if (spec.role === 'building') {
       applySceneBuilding(tile, placed);
     } else {
@@ -830,8 +676,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       // Polygon kommt um das Kachelzentrum, der Shader misst in Weltkoordinaten.
       const clip = spec.clip_outline;
       if (clip && clip.length >= 3) {
-        applyRoomClip(placed, clip.slice(0, CLIP_MAX_POINTS).map(
-          ([cx, cz]) => new THREE.Vector2(tile.center.x + cx, tile.center.z + cz)));
+        applyClipOutline(THREE, placed, clip.slice(0, CLIP_MAX_POINTS).map(
+          ([cx, cz]) => [tile.center.x + cx, tile.center.z + cz] as [number, number]));
         verify.clipped(spec, Math.min(clip.length, CLIP_MAX_POINTS));
       }
     }

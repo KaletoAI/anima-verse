@@ -19,7 +19,7 @@
  * Haupt-Bundle ziehen. Der Client reicht schlicht sein importiertes Modul
  * durch.
  */
-import type { Object3D } from 'three'
+import type { Group, Object3D } from 'three'
 import { applyClipOutline } from './clip'
 import type { SceneModelSpec } from './types'
 
@@ -40,7 +40,7 @@ export interface PlaceOptions {
 export function placeModelSpec(THREE: typeof import('three'),
                                source: Object3D,
                                spec: SceneModelSpec,
-                               opts: PlaceOptions = {}): Object3D {
+                               opts: PlaceOptions = {}): Group {
   const { clone = true, clip = true } = opts
   const deg = (v?: number) => ((v || 0) * Math.PI) / 180
 

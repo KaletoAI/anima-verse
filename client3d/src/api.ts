@@ -1,4 +1,10 @@
 import type { AtLocationChar, AuthUser, WorldLocation, WorldMap } from './types';
+// Zusaetzlich lokal importiert: der Re-Export weiter unten stellt die Typen
+// nur nach aussen, die Parse-Helfer hier brauchen sie im eigenen Scope.
+import type {
+  SceneExit, SceneExtra, SceneMarker, SceneModelSpec, ScenePayload,
+  ScenePlate, SceneRoom, SceneWall,
+} from '@anima/scene-render';
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -116,160 +122,20 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 
 // --- Szenen-Rezept (schnittstellen-3d.md Teil B) ------------------------------
 // Der Server komponiert die GANZE Szene einer Location; der Client stellt sie
-// nur dar. Jede Zahl unten ist bereits ein WELT-Meter um das Kachelzentrum —
-// keine Fraktionen, keine Maßstabsfaktoren, keine Geometrie-Entscheidung auf
-// dieser Seite. Gegenstück: app/core/scene_recipe.py, gleiche Typen wie die
-// Admin-Vorschau (frontend/src/tabs/world/worldTypes.ts).
-
-/** Bodenplatte: Kontur-Platte je genutzter Etage oder Boden eines Raums.
- *  thickness 0 = reine Textur-Fläche ohne Körper (Outdoor-Räume, § A5). */
-export interface ScenePlate {
-  level: number;
-  outline: [number, number][];
-  top_y: number;
-  thickness: number;
-  texture_kind?: string;
-  opacity_role: 'ground' | 'upper';
-  room_id?: string;
-}
-
-/** Ein Wandstück — um Türen/Fenster bereits geteilt; das Glasband eines
- *  Fensters kommt als eigener Eintrag mit `glass`. `outward_normal` zeigt vom
- *  umschlossenen Raum weg (Blickrichtungs-Culling). */
-export interface SceneWall {
-  level: number;
-  from: [number, number];
-  to: [number, number];
-  base_y: number;
-  height: number;
-  thickness: number;
-  texture_kind?: string;
-  glass?: boolean;
-  opacity_role: 'ground' | 'upper';
-  room_id?: string;
-  outward_normal: [number, number];
-}
-
-/** Typisiertes Box-Primitiv (Fahrstuhl: Schacht/Glas/Pad/Kabine) — Zentrum
- *  plus Größe, fertig in Welt-Metern. */
-export interface SceneExtra {
-  kind: string;
-  center: [number, number, number];
-  size: [number, number, number];
-  side?: string;
-  level?: number;
-}
-
-/** EINE Platzierungs-Spec für Gebäude, Raum-Diorama und Prop gleichermaßen —
- *  Futter für die einzige place()-Routine des Vertrags (§ B2). */
-export interface SceneModelSpec {
-  role: 'building' | 'room' | 'prop';
-  id: string;
-  /** ETag-Endpunkt; leer = kein Mesh (dann placeholder_dims) */
-  url: string;
-  room_id?: string;
-  level: number;
-  /** Orientierungs-Fix, Euler 'XYZ' in Grad — VOR dem Messen */
-  fix_euler: { x: number; y: number; z: number };
-  yaw_deg: number;
-  scale_mode: 'fit_box' | 'real_size' | 'tile_fit';
-  /** fit_box: {w,d}; tile_fit: {xz, y?} */
-  box?: { w?: number; d?: number; h?: number; xz?: number; y?: number };
-  /** real_size: Ziel-Ausdehnung in Welt-Metern */
-  max_m?: number;
-  /** real_size: welche BBox-Achsen maxExtent bilden (Default xyz) */
-  measure_axes?: 'xyz' | 'xz';
-  /** § B4: server-vermessenes Mesh — Faktoren kommen fertig */
-  scale_axes?: { xz: number; y: number };
-  anchor: [number, number];
-  bottom_y: number;
-  /** Platzhalter-Box (schon Welt-Meter) für fehlendes/mesh-loses Prop */
-  placeholder_dims?: { w: number; d: number; h: number };
-  /** Räume: absolute Höhe, auf der eine Figur im Diorama steht (§ B6 Nr. 7) */
-  walk_y_world?: number;
-  /** Räume, Opt-in je Raum: Hüllen-Polygon in WELT-Koordinaten um das
-   *  Kachelzentrum (max. 32 Punkte, = Bodenplatten-Kontur). Alles außerhalb
-   *  wird verworfen — ein real-size-Diorama darf über seinen Grundriss
-   *  hinausragen, sichtbar bleibt nur der Teil im Raum. */
-  clip_outline?: [number, number][];
-}
-
-export interface SceneMarker {
-  room_id: string;
-  at_world: [number, number];
-  y_world: number;
-  animation: string;
-  facing?: number;
-  source: 'room' | 'prop';
-}
-
-export interface SceneExit {
-  room_id: string;
-  at_world: [number, number];
-  derived?: boolean;
-}
-
-/** Gemeinsames Farb-Vokabular beider Renderer — keine Hex-Konstanten hier. */
-export interface SceneStyle {
-  wall_color: string;
-  floor_color: string;
-  glass_color: string;
-  glass_opacity: number;
-  upper_wall_opacity: number;
-  upper_floor_opacity: number;
-  room_palette: string[];
-  elevator_frame_color?: string;
-  elevator_pad_color?: string;
-  elevator_cabin_color?: string;
-  elevator_cabin_opacity?: number;
-  elevator_glass_opacity?: number;
-}
-
-/** Öffnung einer Raumkante in PLAN-FRAKTIONEN. Im 3D-Client rein
- *  informativ: die Wände kommen bereits um jede Öffnung geteilt als
- *  `walls` — hier wird nichts mehr aufgeteilt oder gespiegelt. */
-export interface ApiOpening {
-  edge: number;            // Kanten-INDEX in outline (Kante i = Punkt i -> i+1)
-  at: number;              // 0..1 ENTLANG der gerichteten Kante (Öffnungs-Mitte)
-  width_m: number;
-  height_m: number;
-  sill_m: number;
-  type: string;            // "window" | "door" | "passage" (offen)
-  to?: string;
-  prop_id?: string;
-  /** vom Nachbarraum gespiegelte Öffnung (rein informativ) */
-  mirrored?: boolean;
-}
-
-/** Raum-Vokabular in PLAN-FRAKTIONEN — was der 2D-Editor zum ZEICHNEN
- *  braucht; im 3D-Client nur als Raum-Verzeichnis (Etage, Outdoor-Flag). */
-export interface SceneRoom {
-  room_id: string;
-  level: number;
-  always_visible: boolean;
-  outline: [number, number][];
-  openings?: ApiOpening[];
-  exit?: [number, number] | null;
-  exit_derived?: boolean;
-}
-
-export interface ScenePayload {
-  signature: string;
-  rooms: SceneRoom[];
-  /** Welt-Meter je Real-Meter (8 / plan_width_m; 1 = Legacy) */
-  k: number;
-  storey_m: number;
-  levels: { level: number; floor_y: number }[];
-  style: SceneStyle;
-  plates: ScenePlate[];
-  walls: SceneWall[];
-  extras: SceneExtra[];
-  models: SceneModelSpec[];
-  figures: { base_height_m_world: number; stand_clearance: number };
-  markers: SceneMarker[];
-  exits: SceneExit[];
-  outdoor_rooms: string[];
-}
+// nur dar. Jede Zahl ist bereits ein WELT-Meter um das Kachelzentrum — keine
+// Fraktionen, keine Maßstabsfaktoren, keine Geometrie-Entscheidung hier.
+// Gegenstück auf der Serverseite: app/core/scene_recipe.py.
+//
+// Die Typen selbst leben in @anima/scene-render: EINE Definition für diesen
+// Client und die Admin-Vorschau. Sie standen vorher doppelt (hier und in
+// frontend/src/tabs/world/worldTypes.ts) und waren bereits auseinander-
+// gelaufen. Re-Export, damit kein Importeur angefasst werden muss.
+export type {
+  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,
+  SceneMarker, SceneExit, SceneStyle, SceneRoom,
+  /** hiess hier frueher ApiOpening */
+  SceneOpening,
+} from '@anima/scene-render';
 
 /** Komplette Szene einer Location (§ B1). 404 = nichts zu komponieren (kein
  *  Grundriss, kein Raum mit Layout, kein Gebäudemodell) → Legacy-Pfad wie
