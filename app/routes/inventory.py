@@ -388,13 +388,26 @@ def generate_item_image_sync(
         logger.warning("Item-Bild [%s]: Kein Backend verfuegbar", item_id)
         return False
 
+    # A custom prompt from the dialog is LITERAL (settings_applied
+    # equivalent): the style is already in it, so the composer stays out.
     from app.core import config as _cfg
     _ucp = _cfg.resolve_use_case_style(
         "item", getattr(backend, "image_family", "") or "",
         backend_model=getattr(backend, "model", "") or "")
-    if _ucp.get("prompt_style") and not custom_prompt:
-        prompt_text = f"{_ucp['prompt_style']}, {prompt_text}"
-    negative = (overrides.get("negative_prompt") or "").strip() or _ucp.get("prompt_negative", "")
+    _compose_meta: Dict[str, Any] = {}
+    if custom_prompt:
+        negative = ((overrides.get("negative_prompt") or "").strip()
+                    or _ucp.get("prompt_negative", ""))
+    else:
+        from app.core.prompt_compose import compose as _compose
+        _composed = _compose(use_case="item", subject=prompt_text,
+                             backend=backend)
+        prompt_text = _composed.prompt
+        negative = ((overrides.get("negative_prompt") or "").strip()
+                    or _composed.negative)
+        _compose_meta = _composed.meta
+        for _w in _composed.warnings:
+            logger.info("Prompt composer (item): %s", _w)
 
     # Items are generated at the backend's default resolution. The later
     # downscale pipeline shrinks the result to ui.downscale_item_max_dim.

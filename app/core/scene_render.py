@@ -586,17 +586,18 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
         if len(_ev) > 240:
             _ev = _ev[:240].rstrip() + "…"
         prompt += f" Ongoing event shaping this scene: {_ev}"
-    _ucp = config.resolve_use_case_style(
-        "scene",
-        backend_model=getattr(backend, "model", "") or "",
-        backend_family=getattr(backend, "image_family", ""))
-    if _ucp.get("prompt_style"):
-        prompt = f"{_ucp['prompt_style']}, {prompt}"
-    # Built-in anti-duplicate negative, merged with the use-case negative.
+    # Built-in anti-duplicate negative — handed to the composer, which merges
+    # it with the use-case negative (deduplicated, one place).
     _neg_base = ("additional people, extra person, extra animal, crowd, "
                  "duplicated person, duplicated animal, clone, twins, "
                  "second copy of the same person")
-    negative = ", ".join(p for p in (_ucp.get("prompt_negative", ""), _neg_base) if p)
+    from app.core.prompt_compose import compose as _compose
+    _composed = _compose(use_case="scene", subject=prompt, backend=backend,
+                         negative_extra=_neg_base)
+    prompt = _composed.prompt
+    negative = _composed.negative
+    for _w in _composed.warnings:
+        logger.info("Prompt composer (scene): %s", _w)
 
     params: Dict[str, Any] = {
         "width": w, "height": h,

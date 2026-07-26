@@ -284,15 +284,13 @@ def _do_generate(event_id: str,
         logger.warning("Event-Bild [%s]: kein Backend verfuegbar", event_id)
         return None
 
-    from app.core import config as _cfg
-    _ucp = _cfg.resolve_use_case_style(
-        "event",
-        backend_model=getattr(backend, "model", "") or "",
-        backend_family=getattr(backend, "image_family", ""))
-    full_prompt = image_prompt.strip()
-    if _ucp.get("prompt_style"):
-        full_prompt = f"{_ucp['prompt_style']}, {full_prompt}"
-    negative = _ucp.get("prompt_negative", "")
+    from app.core.prompt_compose import compose as _compose
+    _composed = _compose(use_case="event", subject=image_prompt,
+                         backend=backend)
+    full_prompt = _composed.prompt
+    negative = _composed.negative
+    for _w in _composed.warnings:
+        logger.info("Prompt composer (event): %s", _w)
 
     params: Dict[str, Any] = {
         "width": w,
