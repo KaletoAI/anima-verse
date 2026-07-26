@@ -8,7 +8,13 @@
 #   ./start.sh --storage /path/to/x  Start with custom storage directory
 #   ./start.sh --stop                Stop the main app
 #   ./start.sh --restart             Restart the main app
+#   ./start.sh --with-3d             ... and also the 3D client (own process)
 #   ./start.sh --status              Show running services
+#
+# The 3D client is a SEPARATE process on its own port and can just as well run
+# on another machine — then don't use --with-3d, but start it over there with
+# ANIMA_API pointing at this host:
+#   ANIMA_API=http://<this-host>:8000 npm run dev -w client3d
 
 set -euo pipefail
 
@@ -28,6 +34,18 @@ MAIN_PORT=8000
 # restarts. Used to recover orphan PIDs when the PID file is missing and to
 # kill stragglers when starting fresh.
 MAIN_PATTERN="uvicorn app.server:app"
+
+# ── 3D-Client (client3d) ──────────────────────────────────────────────────────
+# Eigener Prozess, eigener Port, Opt-in per --with-3d. Er spricht das Backend
+# ausschliesslich ueber HTTP an (ANIMA_API), laeuft also genauso gut auf einem
+# anderen Rechner. Port und Backend-Ziel sind per Umgebung ueberschreibbar.
+CLIENT3D_PORT="${CLIENT3D_PORT:-5183}"
+CLIENT3D_PID="$PID_DIR/client3d.pid"
+CLIENT3D_LOG="$LOG_DIR/client3d.log"
+# Eindeutig, weil wir den Port explizit mitgeben — der nackte Vite-Aufruf
+# stuende sonst als "node .../vite" ohne Bezug zu diesem Workspace da.
+CLIENT3D_PATTERN="vite --port $CLIENT3D_PORT"
+WITH_CLIENT3D=0
 
 mkdir -p "$PID_DIR" "$LOG_DIR" "$ARCHIVE_DIR"
 
@@ -183,6 +201,34 @@ start_main() {
     echo "[main] Started (PID $pid, log: $MAIN_LOG)"
 }
 
+start_client3d() {
+    if is_running "$CLIENT3D_PID"; then
+        echo "[client3d] Already running (PID $(cat "$CLIENT3D_PID"))"
+        return
+    fi
+    local vite="$SCRIPT_DIR/node_modules/.bin/vite"
+    if [[ ! -x "$vite" ]]; then
+        echo "[client3d] Vite not found at $vite"
+        echo "[client3d] Run 'npm install' in $SCRIPT_DIR once, then try again."
+        return 1
+    fi
+    kill_port "$CLIENT3D_PORT" "client3d" "$CLIENT3D_PATTERN"
+    rotate_log "$CLIENT3D_LOG"
+    # Kein Backend-Ziel gesetzt? Dann das lokale. Ein bereits gesetztes
+    # ANIMA_API bleibt stehen — so zeigt der Client auf einen anderen Rechner.
+    export ANIMA_API="${ANIMA_API:-http://localhost:$MAIN_PORT}"
+    echo "[client3d] Starting 3D client on port $CLIENT3D_PORT (backend: $ANIMA_API)..."
+    # Vite DIREKT statt ueber 'npm run dev': npm wuerde als Elternprozess
+    # dazwischenhaengen, und beim Stoppen bliebe der echte Server als Waise.
+    cd "$SCRIPT_DIR/client3d"
+    nohup "$vite" --port "$CLIENT3D_PORT" --host 0.0.0.0 \
+        >> "$CLIENT3D_LOG" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$CLIENT3D_PID"
+    cd "$SCRIPT_DIR"
+    echo "[client3d] Started (PID $pid, log: $CLIENT3D_LOG)"
+}
+
 stop_service() {
     local name="$1"
     local pid_file="$2"
@@ -216,6 +262,11 @@ show_status() {
     else
         echo "[main]         Stopped"
     fi
+    if is_running_or_orphan "$CLIENT3D_PID" "$CLIENT3D_PORT" "$CLIENT3D_PATTERN"; then
+        echo "[client3d]     Running (PID $(cat "$CLIENT3D_PID"), port $CLIENT3D_PORT)"
+    else
+        echo "[client3d]     Stopped"
+    fi
 }
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
@@ -225,6 +276,8 @@ STORAGE_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --with-3d|--with-client3d)
+                         WITH_CLIENT3D=1; shift ;;
         --stop)          ACTION="stop"; shift ;;
         --restart)       ACTION="restart"; shift ;;
         --status)        ACTION="status"; shift ;;
@@ -235,14 +288,22 @@ while [[ $# -gt 0 ]]; do
             STORAGE_ARG="$2"
             shift 2 ;;
         --help|-h)
-            echo "Usage: $0 [--stop|--restart|--status] [--world NAME|--storage PATH]"
+            echo "Usage: $0 [--stop|--restart|--status] [--with-3d] [--world NAME|--storage PATH]"
             echo ""
             echo "  (no flags)       Start the main app (storage: ./storage)"
             echo "  --world NAME     Use ./worlds/NAME as storage directory"
             echo "  --storage PATH   Use custom storage directory"
-            echo "  --stop           Stop the main app"
-            echo "  --restart        Restart the main app"
+            echo "  --with-3d        Also start the 3D client (separate process,"
+            echo "                   port \$CLIENT3D_PORT, default $CLIENT3D_PORT)"
+            echo "  --stop           Stop the main app AND the 3D client"
+            echo "  --restart        Restart whatever the flags name"
             echo "  --status         Show service status"
+            echo ""
+            echo "  The 3D client only needs the HTTP API, so it can run on another"
+            echo "  machine instead. Over there:"
+            echo "    ANIMA_API=http://<this-host>:$MAIN_PORT npm run dev -w client3d"
+            echo "  Environment: CLIENT3D_PORT (default 5183), ANIMA_API (default"
+            echo "  http://localhost:$MAIN_PORT)"
             exit 0
             ;;
         *)
@@ -267,22 +328,30 @@ case "$ACTION" in
     start)
         acquire_lock
         start_main
+        [[ "$WITH_CLIENT3D" == "1" ]] && start_client3d
         echo ""
         echo "==> Browser: http://localhost:8000"
         echo "==> Admin:   http://localhost:8000/admin"
+        [[ "$WITH_CLIENT3D" == "1" ]] && echo "==> 3D:      http://localhost:$CLIENT3D_PORT"
         ;;
     stop)
+        # Immer beide — wer mit --with-3d gestartet hat, erwartet bei --stop
+        # nicht, dass der Client weiterlaeuft. Nicht laufend = "Not running".
         stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
+        stop_service "client3d" "$CLIENT3D_PID" "$CLIENT3D_PORT" "$CLIENT3D_PATTERN"
         ;;
     restart)
         acquire_lock
         echo "[restart] Restarting main app..."
         stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
+        stop_service "client3d" "$CLIENT3D_PID" "$CLIENT3D_PORT" "$CLIENT3D_PATTERN"
         sleep 1
         start_main
+        [[ "$WITH_CLIENT3D" == "1" ]] && start_client3d
         echo ""
         echo "==> Browser: http://localhost:8000"
         echo "==> Admin:   http://localhost:8000/admin"
+        [[ "$WITH_CLIENT3D" == "1" ]] && echo "==> 3D:      http://localhost:$CLIENT3D_PORT"
         ;;
     status)
         show_status
