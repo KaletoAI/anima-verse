@@ -628,17 +628,27 @@ class ProviderQueue:
                     # Strip thinking tags from response (Qwen3.5 etc.)
                     response = _strip_thinking(response)
 
-                    # Retry wenn Response leer (Modell hat alle Tokens fuer Thinking verbraucht)
+                    # Retry wenn Response leer. Zwei Faelle: mit gesetztem
+                    # max_tokens hat das Thinking vermutlich das Budget
+                    # aufgefressen -> verdoppeln; ohne max_tokens hat ein
+                    # Reasoning-Modell nach leerem Think-Block direkt EOS
+                    # emittiert (Signatur: usage meldet wenige completion-
+                    # Tokens, content leer) — stochastisch, unveraenderter
+                    # Retry heilt meist.
                     resp_content = getattr(response, "content", None) or ""
-                    if not resp_content.strip() and max_tokens and max_tokens > 0:
+                    if not resp_content.strip():
+                        from app.utils.llm_logger import extract_token_info
+                        _hidden = extract_token_info(response).get("output_tokens", 0)
                         logger.warning(
-                            "[%s] Leere Response nach Thinking-Strip: %s (%s) agent=%s — "
-                            "Retry mit max_tokens=%d (vorher %d)",
+                            "[%s] Leere Response: %s (%s) agent=%s model=%s — "
+                            "%d Token(s) ohne Content (Reasoning-Kanal?), Retry %s",
                             self._queue_name, task.task_id, task.task_type,
-                            task.agent_name, max_tokens * 2, max_tokens)
-                        # max_tokens verdoppeln und erneut versuchen
+                            task.agent_name, model_name, _hidden,
+                            ("mit max_tokens=%d (vorher %d)" % (max_tokens * 2, max_tokens))
+                            if max_tokens else "unveraendert")
                         orig_max = task._llm.max_tokens
-                        task._llm.max_tokens = max_tokens * 2
+                        if max_tokens:
+                            task._llm.max_tokens = max_tokens * 2
                         try:
                             with self._lock:
                                 self._futures.pop(task.task_id, None)
