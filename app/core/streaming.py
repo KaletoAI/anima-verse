@@ -316,6 +316,9 @@ class _StreamState:
     """Mutable container for _stream_llm_response results."""
     response: str = ""
     tool_matches: list = field(default_factory=list)
+    # Tool decision came back empty twice — a failure, NOT "no tools"
+    # (the decision template demands at least NONE).
+    decision_failed: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -725,12 +728,10 @@ class StreamingAgent:
         tool_system = self.tool_system_content or system_content
 
         state_tool = _StreamState()
-        async for event in self._stream_llm_response(
-            state_tool, self.tool_llm, tool_system, [], tool_decision_input,
-            llm_label="Tool-LLM", detect_tools=True, is_tool_decision=True,
-            iteration=2):
+        async for event in self._invoke_tool_decision(
+                state_tool, tool_system, tool_decision_input):
             yield event
-        # Expose the raw decision text (ContentEvents are suppressed above).
+        # Expose the raw decision text (never streamed to the client).
         self.last_tool_response = state_tool.response.strip()
 
         # Extrahierte Marker (Intent, Assignment, Fallback-Mood/Activity/Location)
@@ -738,6 +739,13 @@ class StreamingAgent:
         if _extracted:
             yield ExtractionEvent(markers=_extracted)
             logger.info("rp_first: extrahierte Marker: %s", _extracted[:100])
+
+        if state_tool.decision_failed:
+            logger.warning(
+                "rp_first: Tool-Entscheidung blieb LEER — RP-Text ohne "
+                "Tool-Auswertung, Turn gilt als gestoert (2 Calls, %.2fs)",
+                time.monotonic() - _start)
+            return
 
         if not state_tool.tool_matches:
             logger.info("rp_first: keine Tools → fertig (2 Calls, %.2fs)",
@@ -825,7 +833,6 @@ class StreamingAgent:
         *,
         llm_label: str = "LLM",
         detect_tools: bool = False,
-        is_tool_decision: bool = False,
         iteration: int = 1) -> AsyncGenerator[StreamEvent, None]:
         """Core LLM streaming.
 
@@ -838,9 +845,8 @@ class StreamingAgent:
             system_content: System prompt
             history: Message history (list of dicts)
             user_input: User message (always the original)
-            llm_label: Label for logging ("LLM", "Tool-LLM", "Chat-LLM")
+            llm_label: Label for logging ("LLM", "Chat-LLM")
             detect_tools: Whether to scan for tool calls in stream
-            is_tool_decision: If True, suppress ContentEvents (Tool-LLM phase)
             iteration: Iteration number for LoopInfoEvent
         """
         _active_model = get_model_name(active_llm)
@@ -862,7 +868,7 @@ class StreamingAgent:
 
         # Konfiguration
         _HEARTBEAT_INTERVAL = 15  # Sekunden
-        _EMPTY_RETRIES = 8 if not is_tool_decision else 0
+        _EMPTY_RETRIES = 8
         _RETRY_WAIT = 30  # Sekunden zwischen Retries
         _TOOL_BUFFER_SIZE = 60
         # Mid-stream loop detect: cancel the stream when the same substantial
@@ -948,7 +954,7 @@ class StreamingAgent:
                     # never restart.
                     if chunk_count == 0 and not iteration_response and count_sent == 0:
                         _next_llm = self._fallback_after_upstream_error(
-                            active_llm, _chunk_err, is_tool_decision, _tried_models)
+                            active_llm, _chunk_err, _tried_models)
                         if _next_llm is not None:
                             active_llm = _next_llm
                             try:
@@ -1020,18 +1026,17 @@ class StreamingAgent:
                     if tool_check:
                         tool_call_detected = True
                         tool_call_end_pos = tool_check.end()
-                        if not is_tool_decision:
-                            # Nur Text VOR dem Tool-Call senden
-                            tool_start_in_response = tool_check.start()
-                            safe_chars = tool_start_in_response - count_sent
-                            if safe_chars > 0:
-                                safe_text = _SPECIAL_TOKEN_RE.sub('', unsent_buffer[:safe_chars])
-                                if safe_text:
-                                    count_sent += len(safe_text)
-                                    yield ContentEvent(content=safe_text)
+                        # Nur Text VOR dem Tool-Call senden
+                        tool_start_in_response = tool_check.start()
+                        safe_chars = tool_start_in_response - count_sent
+                        if safe_chars > 0:
+                            safe_text = _SPECIAL_TOKEN_RE.sub('', unsent_buffer[:safe_chars])
+                            if safe_text:
+                                count_sent += len(safe_text)
+                                yield ContentEvent(content=safe_text)
                         unsent_buffer = ""
                         logger.info("Tool-Pattern im Stream erkannt - stoppe Ausgabe")
-                    elif not is_tool_decision:
+                    else:
                         # Buffer: letzten Zeichen zurueckhalten (koennten Tool-Anfang sein)
                         safe_len = max(0, len(unsent_buffer) - _TOOL_BUFFER_SIZE)
                         if safe_len > 0:
@@ -1040,7 +1045,7 @@ class StreamingAgent:
                                 count_sent += len(to_send)
                                 yield ContentEvent(content=to_send)
                             unsent_buffer = unsent_buffer[safe_len:]
-                elif not is_tool_decision:
+                else:
                     # --- Kein Tool-Detection — Content direkt senden ---
                     clean = _SPECIAL_TOKEN_RE.sub('', chunk.content)
                     if clean:
@@ -1048,8 +1053,6 @@ class StreamingAgent:
 
             # --- Retry-Check ---
             if iteration_response:
-                if is_tool_decision:
-                    break  # Tool-LLM: jede Antwort akzeptieren (SKIP/NONE/Tool)
                 if iteration_response.strip().upper() != "SKIP":
                     break  # Gueltige Chat-Antwort
                 # SKIP-Behandlung context-abhaengig:
@@ -1066,7 +1069,7 @@ class StreamingAgent:
             # Leere Antwort → retry (falls Retries uebrig)
 
         # --- Stream beendet: Buffer flushen ---
-        if not tool_call_detected and unsent_buffer and not is_tool_decision:
+        if not tool_call_detected and unsent_buffer:
             flush_text = _SPECIAL_TOKEN_RE.sub('', unsent_buffer)
             if flush_text:
                 count_sent += len(flush_text)
@@ -1110,6 +1113,98 @@ class StreamingAgent:
                 logger.info("%d Tool-Match(es) erkannt", len(state.tool_matches))
 
         state.response = iteration_response
+
+    async def _invoke_tool_decision(
+        self,
+        state: _StreamState,
+        system_content: str,
+        user_input: str,
+        *,
+        iteration: int = 2) -> AsyncGenerator[StreamEvent, None]:
+        """The rp_first tool decision as a NON-streaming call.
+
+        The decision text is short and never reaches the client (its
+        ContentEvents were suppressed even when this phase streamed), so
+        streaming bought nothing — while a gateway that mishandles a
+        reasoning model's stream can deliver ZERO chunks even though the
+        non-streaming path keeps working (2026-07: every thought turn
+        lost its tools that way). Heartbeats keep the SSE alive while
+        the call runs in a thread.
+
+        An empty answer is a FAILURE, not a "no tools" decision — the
+        template demands at least NONE. One retry; still empty → the
+        caller sees ``state.decision_failed`` and reports the turn as
+        broken instead of silently finishing.
+        """
+        _active_model = get_model_name(self.tool_llm)
+        logger.info("Iteration %d (Tool-LLM: %s, non-streaming)",
+                    iteration, _active_model)
+        if self.chat_task_id:
+            try:
+                from app.core.llm_queue import get_llm_queue
+                get_llm_queue().register_chat_iteration(
+                    self.chat_task_id, iteration, self.max_iterations)
+            except Exception:
+                pass  # Non-fatal — display only.
+
+        from app.core.provider_queue import _strip_thinking
+        messages = [{"role": "system", "content": system_content},
+                    {"role": "user", "content": user_input}]
+        _HEARTBEAT_INTERVAL = 15
+        _start = time.monotonic()
+        response_text = ""
+        saw_empty = False
+        last_error = None
+        for _attempt in (1, 2):
+            _call = asyncio.create_task(
+                asyncio.to_thread(self.tool_llm.invoke, messages))
+            while True:
+                done, _ = await asyncio.wait({_call},
+                                             timeout=_HEARTBEAT_INTERVAL)
+                if done:
+                    break
+                yield HeartbeatEvent()
+            try:
+                response = _call.result()
+            except Exception as err:
+                last_error = err
+                logger.warning("Tool-Entscheidung fehlgeschlagen "
+                               "(Versuch %d/2): %s", _attempt, err)
+                continue
+            response = _strip_thinking(response)
+            response_text = (getattr(response, "content", None) or "").strip()
+            if response_text:
+                break
+            saw_empty = True
+            logger.warning(
+                "Tool-Entscheidung LEER (Versuch %d/2, Modell %s) — leere "
+                "Antwort ist keine Entscheidung (Minimum: NONE)",
+                _attempt, _active_model)
+
+        if not response_text and last_error is not None and not saw_empty:
+            # Both attempts raised — surface the error like the old
+            # streaming path did instead of faking a "no tools" result.
+            self._log_llm_error(self.tool_llm, system_content, user_input,
+                                "Tool-LLM", last_error, _start)
+            raise last_error
+
+        self._log_llm_call(self.tool_llm, system_content, user_input,
+                           response_text, "Tool-LLM", _start)
+        yield LoopInfoEvent(
+            iteration=iteration,
+            max_iterations=self.max_iterations,
+            chunks=1 if response_text else 0,
+            response_length=len(response_text))
+
+        if not response_text:
+            state.decision_failed = True
+            return
+        state.response = response_text
+        state.tool_matches = find_tool_calls(
+            self.tool_format, response_text, self.tools_dict)
+        if state.tool_matches:
+            state.tool_matches = _dedupe_singleton_tools(state.tool_matches)
+            logger.info("%d Tool-Match(es) erkannt", len(state.tool_matches))
 
     # ------------------------------------------------------------------
     # Tool execution
@@ -1338,8 +1433,7 @@ class StreamingAgent:
         return ""
 
     def _fallback_after_upstream_error(
-            self, failed_llm, err: BaseException, is_tool_decision: bool,
-            tried: set):
+            self, failed_llm, err: BaseException, tried: set):
         """On an upstream failure during stream init: take the failed model/
         provider out of rotation and resolve the next provider in the chain.
 
@@ -1352,10 +1446,9 @@ class StreamingAgent:
         (provider, model) is cooled down, the provider stays available for its
         other models. A connection/5xx failure cools the whole provider down.
 
-        Seamless re-resolve happens only for the main/chat LLM, whose routing
-        task is reliably ``self.log_task`` ("chat_stream"/"thought"). For the
-        Tool-LLM we only cool down (return None) — the next turn then resolves
-        onto the fallback.
+        Only the main/chat LLM streams through here (the tool decision runs
+        non-streaming since 2026-07), so the routing task for the re-resolve
+        is reliably ``self.log_task`` ("chat_stream"/"thought").
 
         Note: per-turn overrides (frequency_penalty / anti-rep temperature) are
         lost on the fallback provider — acceptable in the error path.
@@ -1377,7 +1470,7 @@ class StreamingAgent:
             mark_model_unhealthy(prov_name, failed_model)
         else:
             _cooldown_provider(prov_name, f"stream upstream-fail: {str(err)[:120]}")
-        if is_tool_decision or not self.log_task:
+        if not self.log_task:
             return None
         instance = resolve_llm(self.log_task, agent_name=self.agent_name)
         if instance is None or (instance.provider_name, instance.model) in tried:
