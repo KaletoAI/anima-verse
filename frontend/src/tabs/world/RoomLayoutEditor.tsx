@@ -1892,6 +1892,20 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   })
                 }} />
             </label>
+            {/* Shell clip (§ B1): a real-size diorama may be bigger than its
+                floor plan — with this on, the renderer cuts it at the room
+                hull. An outdoor room has no hull, so the server ignores it. */}
+            {!lay.always_visible ? (
+              <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+                title={t('Cut the model at the room hull: everything sticking out over the floor plan is hidden (the drawn polygon counts, not just the rectangle). Looking into a cut edge shows the room’s inside — there is no cap surface.')}>
+                <input type="checkbox"
+                  checked={!!lay.clip_model}
+                  onChange={(e) => updateLayout(selectedRoom.id || '', {
+                    clip_model: e.target.checked ? true : undefined,
+                  })} />
+                {t('Clip model to room bounds')}
+              </label>
+            ) : null}
             <button type="button" className="ga-btn ga-btn-sm"
               title={t('Back to the centred default placement.')}
               onClick={() => updateLayout(selectedRoom.id || '', {

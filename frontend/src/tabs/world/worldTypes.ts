@@ -19,6 +19,10 @@ export interface RoomLayout {
   /** AV3D-12: show this room permanently, independent of the interior view
    *  — for outdoor rooms not covered by the building model. */
   always_visible?: boolean
+  /** Cut the room's diorama at its shell (§ B1): the renderer discards every
+   *  fragment outside the room hull, so a model that overhangs its floor plan
+   *  ends at the room. Ignored for outdoor rooms. */
+  clip_model?: boolean
   /** Animation markers: spots a figure with a matching active animation
    *  snaps to. at = fraction of the room rectangle; animation = a clip kind
    *  from the open animation-clip vocabulary; rotation = facing in degrees
@@ -195,6 +199,10 @@ export interface SceneModelSpec {
   bottom_y: number
   /** Placeholder box (already world metres) for a missing/mesh-less prop. */
   placeholder_dims?: { w: number; d: number; h: number }
+  /** Rooms: the room shell in WORLD metres — the renderer discards every
+   *  fragment outside it (§ B1). Opt-in per room (layout.clip_model), max 32
+   *  points; absent = no clipping. */
+  clip_outline?: Array<[number, number]>
   /** Rooms: absolute height a figure stands at inside the diorama. */
   walk_y_world?: number
   /** Rooms: the height the SERVER measured out of the mesh (metres above the
