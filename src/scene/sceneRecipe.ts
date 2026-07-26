@@ -136,6 +136,8 @@ export interface VerifyReport {
    *  als „geprüft und in Ordnung" durchgehen — sie zählt als Abweichung. */
   skipped: number;
   models: { placed: number; total: number };
+  /** Beschnittene Dioramen (§ B1 clip_outline) mit ihrer Punktzahl. */
+  clips: { object: string; punkte: number }[];
 }
 
 /** Verify-Modus aus: `?verify=1` in der URL oder `window.__verify3d = true`
@@ -159,6 +161,7 @@ class Verifier {
   skipped = 0;
   placed = 0;
   total = 0;
+  clips: { object: string; punkte: number }[] = [];
   constructor(readonly active: boolean) {}
 
   /** Eine Modell-Spec, die NICHT platziert wurde (Mesh nach allen Versuchen
@@ -166,6 +169,14 @@ class Verifier {
    *  Szene — es wandert als Abweichungszeile in die Tabelle (`geladen` 0
    *  statt 1), damit eine Lücke nicht wie ein Erfolg aussieht. Wird
    *  unabhängig vom Verify-Modus gezählt und geloggt. */
+  /** Beschnittenes Diorama vermerken (§ B1 clip_outline). Keine Abweichung,
+   *  sondern eine Eigenschaft des Aufbaus — sie gehört trotzdem in die
+   *  Ausgabe, sonst sieht man einem fehlenden Möbelstück nicht an, ob es
+   *  weggeclippt oder gar nicht geladen wurde. */
+  clipped(spec: SceneModelSpec, points: number): void {
+    this.clips.push({ object: `${spec.role}:${spec.id}`, punkte: points });
+  }
+
   skip(spec: SceneModelSpec): void {
     this.skipped += 1;
     console.warn(`[scene] ${spec.role}:${spec.id} übersprungen — Mesh nicht ladbar `
@@ -230,8 +241,10 @@ class Verifier {
     const out: VerifyReport = {
       location: locationId, checked: this.checked, rows: this.rows,
       skipped: this.skipped, models: { placed: this.placed, total: this.total },
+      clips: this.clips,
     };
-    const modelInfo = `Modelle ${this.placed}/${this.total}`;
+    const modelInfo = `Modelle ${this.placed}/${this.total}`
+      + (this.clips.length ? `, ${this.clips.length} beschnitten` : '');
     if (this.rows.length) {
       console.warn(`[verify] ${locationId}: ${this.rows.length} Abweichung(en) `
         + `bei ${this.checked} geprüften Zahlen (${modelInfo}, `
@@ -241,6 +254,7 @@ class Verifier {
       console.info(`[verify] ${locationId}: ${this.checked} Zahlen geprüft, `
         + `keine Abweichung > ${VERIFY_EPS} m (${modelInfo})`);
     }
+    if (this.clips.length) console.table(this.clips);
     const w = window as unknown as { __sceneVerify?: Record<string, VerifyReport> };
     w.__sceneVerify = { ...(w.__sceneVerify ?? {}), [locationId]: out };
     return out;
@@ -382,6 +396,82 @@ function buildWall(wall: SceneWall, k: number, style: ScenePayload['style'],
   mesh.castShadow = false;
   mesh.receiveShadow = false;
   return mesh;
+}
+
+// ── Raum-Clipping (§ B1 `clip_outline`) ──────────────────────────────────
+
+/** Obergrenze des Vertrags; das Uniform-Array trägt einen Punkt mehr, weil
+ *  das Polygon geschlossen hochgeladen wird (letzter Punkt = erster). */
+const CLIP_MAX_POINTS = 32;
+
+/**
+ * Ein Diorama auf seinen Raum beschneiden: Fragmente außerhalb des
+ * gelieferten Polygons werden verworfen.
+ *
+ * Warum Fragment-Discard und nicht `clippingPlanes`: der Grundriss ist ein
+ * beliebiges Polygon, keine Handvoll Halbräume — Ebenen bräuchten pro Kante
+ * eine und würden bei konkaven Umrissen falsch schneiden. Der Paritätstest
+ * (Punkt-im-Polygon) ist dagegen exakt und kostet einen kurzen Loop.
+ *
+ * Die Schnittkanten bleiben OFFEN (das Mesh wird nicht verschlossen) —
+ * deshalb DoubleSide, damit man von außen nicht durch die Rückseite ins
+ * Nichts schaut. Bekannt und laut Auftrag akzeptiert.
+ *
+ * Materialien werden vorher GEKLONT: `loadGlb` cacht die rohe Szene, und
+ * `clone(true)` teilt die Materialien — ohne Klon würde derselbe Patch auch
+ * bei jeder anderen Verwendung desselben GLB zuschlagen.
+ */
+function applyRoomClip(model: THREE.Object3D, outlineWorld: THREE.Vector2[]): void {
+  const poly: THREE.Vector2[] = [];
+  for (let i = 0; i <= CLIP_MAX_POINTS; i++) {
+    poly.push(outlineWorld[Math.min(i, outlineWorld.length - 1)].clone());
+  }
+  // geschlossen hochladen: Kante i = poly[i] -> poly[i+1]; der Loop im Shader
+  // darf damit mit konstantem i+1 indizieren (GLSL-ES-Regel für Uniform-Arrays)
+  poly[outlineWorld.length] = outlineWorld[0].clone();
+  const count = outlineWorld.length;
+
+  model.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const patch = (src: THREE.Material): THREE.Material => {
+      const m = src.clone();
+      m.side = THREE.DoubleSide;
+      m.onBeforeCompile = (shader) => {
+        shader.uniforms.uClipPoly = { value: poly };
+        shader.uniforms.uClipCount = { value: count };
+        shader.vertexShader = `varying vec3 vClipWorld;\n${shader.vertexShader}`
+          .replace('#include <project_vertex>',
+            'vClipWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\n'
+            + '#include <project_vertex>');
+        shader.fragmentShader = `uniform vec2 uClipPoly[${CLIP_MAX_POINTS + 1}];\n`
+          + 'uniform int uClipCount;\n'
+          + 'varying vec3 vClipWorld;\n'
+          + shader.fragmentShader.replace('#include <clipping_planes_fragment>',
+            `#include <clipping_planes_fragment>
+            {
+              bool insidePoly = false;
+              for (int i = 0; i < ${CLIP_MAX_POINTS}; i++) {
+                if (i >= uClipCount) break;
+                vec2 a = uClipPoly[i];
+                vec2 b = uClipPoly[i + 1];
+                if (((a.y > vClipWorld.z) != (b.y > vClipWorld.z))
+                    && (vClipWorld.x < (b.x - a.x) * (vClipWorld.z - a.y)
+                                       / (b.y - a.y) + a.x)) {
+                  insidePoly = !insidePoly;
+                }
+              }
+              if (!insidePoly) discard;
+            }`);
+      };
+      // sonst greift three auf das Programm des ungepatchten Materials zurück
+      m.customProgramCacheKey = () => `roomclip:${count}`;
+      m.needsUpdate = true;
+      return m;
+    };
+    mesh.material = Array.isArray(mesh.material)
+      ? mesh.material.map(patch) : patch(mesh.material);
+  });
 }
 
 /** Platzhalter für ein Prop ohne Mesh: Box in den gelieferten Maßen (schon
@@ -734,6 +824,15 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       parentFor(spec.room_id).add(placed);
       if (spec.role === 'room' && spec.walk_y_world !== undefined && spec.room_id) {
         walkY.set(spec.room_id, spec.walk_y_world);
+      }
+      // Raum-Clipping (§ B1): NUR das Spec-Modell wird beschnitten — Figuren
+      // und Marker bleiben unberührt, die stehen bewusst auch am Rand.
+      // Polygon kommt um das Kachelzentrum, der Shader misst in Weltkoordinaten.
+      const clip = spec.clip_outline;
+      if (clip && clip.length >= 3) {
+        applyRoomClip(placed, clip.slice(0, CLIP_MAX_POINTS).map(
+          ([cx, cz]) => new THREE.Vector2(tile.center.x + cx, tile.center.z + cz)));
+        verify.clipped(spec, Math.min(clip.length, CLIP_MAX_POINTS));
       }
     }
     verify.placement(placed, spec, tile.center);

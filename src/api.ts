@@ -187,6 +187,11 @@ export interface SceneModelSpec {
   placeholder_dims?: { w: number; d: number; h: number };
   /** Räume: absolute Höhe, auf der eine Figur im Diorama steht (§ B6 Nr. 7) */
   walk_y_world?: number;
+  /** Räume, Opt-in je Raum: Hüllen-Polygon in WELT-Koordinaten um das
+   *  Kachelzentrum (max. 32 Punkte, = Bodenplatten-Kontur). Alles außerhalb
+   *  wird verworfen — ein real-size-Diorama darf über seinen Grundriss
+   *  hinausragen, sichtbar bleibt nur der Teil im Raum. */
+  clip_outline?: [number, number][];
 }
 
 export interface SceneMarker {
