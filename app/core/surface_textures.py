@@ -523,16 +523,21 @@ def compose_prompt(kind: str, backend) -> Dict[str, str]:
     rule); ``style`` is returned separately so the UI can recompose per
     kind."""
     from app.core import config as _cfg
+    from app.core.prompt_compose import compose as _compose
     ucp = _cfg.resolve_use_case_style(
         "surface_texture",
         backend_model=getattr(backend, "model", "") or "",
         backend_family=getattr(backend, "image_family", ""))
     subject = surface_subject(kind)
-    style = (ucp.get("prompt_style") or "").strip()
+    # Composition (slot/append, negation guard, negative merge) belongs to
+    # prompt_compose; the return SHAPE stays, the dialog recomposes per kind
+    # from `style` + its own subject field.
+    composed = _compose(use_case="surface_texture", subject=subject,
+                        backend=backend)
     return {
-        "style": style,
-        "prompt": f"{style}, {subject}" if style else subject,
-        "negative": ucp.get("prompt_negative", ""),
+        "style": (ucp.get("prompt_style") or "").strip(),
+        "prompt": composed.prompt,
+        "negative": composed.negative,
     }
 
 

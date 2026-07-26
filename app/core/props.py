@@ -689,16 +689,20 @@ def compose_prompt(subject: str, backend) -> Dict[str, str]:
     (final-prompt rule); ``style`` is returned separately so the UI can
     recompose it per object."""
     from app.core import config as _cfg
+    from app.core.prompt_compose import compose as _compose
     ucp = _cfg.resolve_use_case_style(
         "prop",
         backend_model=getattr(backend, "model", "") or "",
         backend_family=getattr(backend, "image_family", ""))
     subject = (subject or "").strip() or "a single object"
-    style = (ucp.get("prompt_style") or "").strip()
+    # The composition itself (slot/append, negation guard, negative merge)
+    # belongs to prompt_compose; only the return SHAPE is this module's, the
+    # dialog recomposes per object from `style` + its own subject field.
+    composed = _compose(use_case="prop", subject=subject, backend=backend)
     return {
-        "style": style,
-        "prompt": f"{style}, {subject}" if style else subject,
-        "negative": ucp.get("prompt_negative", ""),
+        "style": (ucp.get("prompt_style") or "").strip(),
+        "prompt": composed.prompt,
+        "negative": composed.negative,
     }
 
 
