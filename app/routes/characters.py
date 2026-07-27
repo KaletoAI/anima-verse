@@ -1594,49 +1594,79 @@ def delete_character_model3d(character_name: str) -> Dict[str, Any]:
 
 # --- Outfit batch: pre-warm T-pose + mesh for every saved outfit ---
 
-@router.get("/{character_name}/outfit-batch")
-def get_character_outfit_batch(character_name: str) -> Dict[str, Any]:
-    """Plan (one row per saved outfit: signature, what already exists, why it
-    would be skipped) plus the progress of this character's batch. The status
-    stays readable after the run until the next start."""
-    from app.core import outfit_batch
-    if not get_character_dir(character_name).exists():
-        raise HTTPException(status_code=404, detail="Character not found")
-    return {"plan": outfit_batch.plan(character_name),
-            "status": outfit_batch.get_status(character_name)}
-
-
-@router.post("/{character_name}/outfit-batch/start")
-async def start_character_outfit_batch(character_name: str,
-                                       request: Request) -> Dict[str, Any]:
-    """Starts the batch for ``{"outfit_ids": [...], "force": false}``.
-    ``force`` re-renders reference and mesh of combinations that already have
-    one. 409 while a batch of this character is still running."""
-    from app.core import outfit_batch
-    if not get_character_dir(character_name).exists():
-        raise HTTPException(status_code=404, detail="Character not found")
+async def _outfit_batch_body(request: Request) -> Dict[str, Any]:
+    """Body of the two POSTs that carry a filter: ``{"slots": {slot: [item_id
+    | null, …]}, "force": bool}``. A missing/empty ``slots`` means "every
+    combination" — the filter is a restriction, never a requirement."""
     try:
         body = await request.json()
     except Exception:
         body = {}
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    outfit_ids = body.get("outfit_ids")
-    if not isinstance(outfit_ids, list) or not outfit_ids:
-        raise HTTPException(status_code=400, detail="outfit_ids must be a non-empty list")
-    res = outfit_batch.start(character_name, [str(i) for i in outfit_ids],
-                             force=bool(body.get("force")))
+    slots = body.get("slots")
+    if slots is not None and not isinstance(slots, dict):
+        raise HTTPException(status_code=400,
+                            detail="slots must be an object of slot -> options")
+    return {"slots": slots or None, "force": bool(body.get("force"))}
+
+
+@router.get("/{character_name}/outfit-batch")
+def get_character_outfit_batch(character_name: str) -> Dict[str, Any]:
+    """The pieces available per slot (the dialog's filter matrix), the live
+    progress of a running batch and the queue state of this character's task.
+    The queue state is the restart-proof part — the in-process status is empty
+    after a server restart while the task keeps going."""
+    from app.core import outfit_batch
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    return {"options": outfit_batch.combo_options(character_name),
+            "status": outfit_batch.get_status(character_name),
+            "queue": outfit_batch.queue_state(character_name)}
+
+
+@router.post("/{character_name}/outfit-batch/estimate")
+async def estimate_character_outfit_batch(character_name: str,
+                                          request: Request) -> Dict[str, Any]:
+    """Count and duration for a filter — its own endpoint because the dialog
+    recomputes on every checkbox and a GET with query parameters would be
+    unwieldy at a dozen slots. Answer: ``{total, missing, missing_exact,
+    est_seconds}``; an invalid filter is a 400."""
+    from app.core import outfit_batch
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    body = await _outfit_batch_body(request)
+    stats = outfit_batch.combo_stats(character_name, body["slots"], body["force"])
+    if stats.get("error"):
+        raise HTTPException(status_code=400, detail=str(stats["error"]))
+    return {k: v for k, v in stats.items() if k != "error"}
+
+
+@router.post("/{character_name}/outfit-batch/start")
+async def start_character_outfit_batch(character_name: str,
+                                       request: Request) -> Dict[str, Any]:
+    """Queues the batch for the filtered combinations at low priority.
+    ``force`` re-renders reference and mesh of combinations that already have
+    one. 409 while a batch of this character is still pending or running."""
+    from app.core import outfit_batch
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    body = await _outfit_batch_body(request)
+    res = outfit_batch.start(character_name, body["slots"], force=body["force"])
     if not res.get("ok"):
         error = str(res.get("error") or "")
         raise HTTPException(status_code=409 if error == "already running" else 400,
                             detail=error)
-    return {"status": "started", "count": res.get("count", 0)}
+    return {"status": "started", "task_id": res.get("task_id", ""),
+            "total": res.get("total", 0), "missing": res.get("missing", 0),
+            "missing_exact": bool(res.get("missing_exact", True)),
+            "est_seconds": res.get("est_seconds", 0.0)}
 
 
 @router.post("/{character_name}/outfit-batch/stop")
 def stop_character_outfit_batch(character_name: str) -> Dict[str, Any]:
-    """Asks the running batch to stop after the current outfit (the GPU jobs
-    themselves always run to completion)."""
+    """Cancels the pending/running batch task. A running one stops BETWEEN two
+    combinations — a GPU job already handed out runs to completion."""
     from app.core import outfit_batch
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
