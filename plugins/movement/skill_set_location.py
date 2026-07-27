@@ -260,16 +260,15 @@ class SetLocationSkill(PluginSkill):
             return (f"{location_name} ist ein Durchgangsort, kein Ziel. "
                     f"Waehle einen richtigen Ort als Reiseziel.")
 
-        # Walk-Modus: Cross-Location-Move => movement_target setzen, Schritt
-        # erfolgt im naechsten AgentLoop-Tick. Same-Location (nur Raum-Wechsel)
-        # bleibt instant.
+        # Journey mode: a cross-location move starts a timed journey
+        # (start_journey; the travel ticker advances it as game time
+        # passes). Same-location moves (room change only) stay instant.
         current_loc_id_now = get_character_current_location(character_name) or ""
         known_list = get_known_locations(character_name)
         is_cross_location = bool(current_loc_id_now and current_loc_id_now != location_id)
-        # Walk-Mode greift NUR bei NPCs — der Spieler-Avatar bewegt sich
-        # direkt (der AgentLoop-Walk-Step skippt player-controlled, sodass
-        # ein gesetzter movement_target sonst ewig auf "intent" stehen bleibt
-        # waehrend der Char visuell schon woanders ist).
+        # Journeys apply to NPCs only — the player avatar moves directly/
+        # instantly; timed travel for avatars is a stage-3 decision still
+        # pending.
         from app.models.account import is_player_controlled as _is_player
         if is_cross_location and not _is_player(character_name):
             path = find_path_through_known(current_loc_id_now, location_id, known_list)
@@ -485,11 +484,10 @@ class SetLocationSkill(PluginSkill):
                 f"{self.description}. "
                 f"Input: location name, optionally with room and/or activity "
                 f"(e.g. 'Büro, Küche' or 'home, bedroom, sleeping'). "
-                f"Cross-location moves walk one grid-step per tick along a "
-                f"path through locations you already know — you set the "
-                f"destination once, the system carries you over multiple "
-                f"ticks. Within the same location (room change), the move is "
-                f"instant. "
+                f"Cross-location moves start a timed journey along locations "
+                f"you already know — you set the destination once and the "
+                f"journey proceeds automatically as game time passes. Within "
+                f"the same location (room change), the move is instant. "
                 f"IMPORTANT: You MUST use one of the available location names exactly as listed. "
                 f"Do NOT invent location names."
                 f"{locations_hint}"
