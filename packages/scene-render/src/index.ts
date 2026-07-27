@@ -1,16 +1,18 @@
 /**
- * @anima/scene-render — die geteilten Renderer-Routinen des Szenen-Vertrags.
+ * @anima/scene-render — the shared renderer routines of the scene contract.
  *
- * Konsumenten: `frontend` (Admin-Grundriss-Vorschau + 2D-Untergrund) und
- * `client3d` (3D-Weltkarte). Beide hatten diese Routinen vorher je einmal
- * selbst — der Clip-Shader wurde nachweislich zweimal unabhängig gebaut.
+ * Consumers: `frontend` (admin floor-plan preview + 2D underlay) and
+ * `client3d` (3D world map). Both used to carry these routines once each —
+ * the clip shader was demonstrably built twice, independently.
  *
- * BEWUSST NICHT hier: Kamera/LOD/Fades, Culling-Anwendung, Labels,
- * Wegfindung, NPC-Logik, Editor-Overlays. Sicht-Zustand bleibt pro App.
+ * DELIBERATELY NOT here: camera/LOD/fades, culling application, labels,
+ * pathfinding, NPC logic, editor overlays. View state stays per app. The
+ * primitive builders draw the same line one level down: geometry here,
+ * material from the caller.
  *
- * three kommt überall als PARAMETER, nie als Import — sonst zöge das Paket
- * die Bibliothek in das Haupt-Bundle des Admins, der sie verzögert nachlädt.
- * Typ-Importe sind davon nicht betroffen (sie verschwinden beim Übersetzen).
+ * three is a PARAMETER everywhere, never an import — otherwise the package
+ * would pull the library into the main bundle of the admin, which loads it
+ * lazily. Type imports are unaffected (they vanish on compile).
  */
 export { FIT_BOX_MARGIN, placeModelSpec } from './place'
 export type { PlaceOptions } from './place'
@@ -19,6 +21,11 @@ export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
 export { SpecVerifier, VERIFY_EPS } from './verify'
 export type { PrimitiveTarget, VerifyRow } from './verify'
+
+export {
+  buildPlate, buildWall, buildExtra, buildPlaceholder, wallLength,
+  plateTargets, wallTargets,
+} from './primitives'
 
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,

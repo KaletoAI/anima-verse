@@ -24,8 +24,9 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
-import { disposeClipMaterials, placeModelSpec, SpecVerifier,
-  VERIFY_EPS } from '@anima/scene-render'
+import { buildExtra, buildPlaceholder, buildPlate, buildWall,
+  disposeClipMaterials, placeModelSpec, plateTargets, SpecVerifier,
+  VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render'
 import type { VerifyRow } from '@anima/scene-render'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
@@ -419,8 +420,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // geometry, so the rendered BBox stays the unclipped one (§ B1). The
     // report names where clipping is active instead of pretending to measure it.
     const verifyNotes: string[] = []
-    const vcheck = (object: string, field: string, actual: number,
-                    target: number) => verifier.check(object, field, actual, target)
     const verifyPlacement = (obj: Object3D, spec: SceneModelSpec) => {
       if (spec.clip_outline?.length) {
         verifyNotes.push(`${spec.role}:${spec.id} clip: ${spec.clip_outline.length} points`)
@@ -696,12 +695,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       if (entry) {
         placeSpec(entry.obj, spec)
       } else if (spec.placeholder_dims) {
-        const dims = spec.placeholder_dims
-        const standIn = new THREE.Mesh(
-          new THREE.BoxGeometry(dims.w, dims.h, dims.d),
+        // The builder's box sits on its own bottom face, so it seats on
+        // bottom_y like a placed mesh — the wireframe look stays ours.
+        const standIn = buildPlaceholder(THREE, spec.placeholder_dims,
           new THREE.MeshBasicMaterial({ color: AID.placeholder, wireframe: true }))
         standIn.rotation.y = -deg(spec.yaw_deg)
-        standIn.position.set(spec.anchor[0], spec.bottom_y + dims.h / 2, spec.anchor[1])
+        standIn.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1])
         boxes.add(standIn)
       }
     }
@@ -879,9 +878,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // ── Server-composed primitives (contract § B1) ──────────────────────
     // plates / walls / extras arrive FINISHED: world metres around the tile
     // centre, split around every opening, coloured by `style`. Nothing here
-    // decides geometry — this is Box/Extrude construction and texture
-    // tiling, no more. View state stays local (level solo, toggles, the
-    // camera culling that uses the delivered outward_normal).
+    // decides geometry — the boxes and extrusions themselves are built by
+    // @anima/scene-render, the same routines the 3D client runs. What stays
+    // here is the MATERIAL (preview colours, texture tiling) and the view
+    // state (level solo, toggles, the camera culling that uses the delivered
+    // outward_normal).
     wallCullRef.current = []
     // Every colour/opacity below is the payload's — there is no local
     // default to fall back to, because without the payload there is nothing
@@ -899,16 +900,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       for (const plate of sc.plates) {
         if (!visibleLevel(plate.level) || plate.outline.length < 3) continue
         const upper = plate.opacity_role === 'upper'
-        const solid = plate.thickness > 0
-        const shape = new THREE.Shape()
-        plate.outline.forEach(([px, pz], i) => {
-          // Extruded plates go in as (x, z) and rotate +90° (the extrusion
-          // then runs downward); flat ones as (x, −z) with −90°.
-          const sy = solid ? pz : -pz
-          if (i === 0) shape.moveTo(px, sy)
-          else shape.lineTo(px, sy)
-        })
-        shape.closePath()
         const info = plate.texture_kind ? ensureSurfaceTex(plate.texture_kind) : null
         let mat: Material
         if (info?.tex) {
@@ -924,20 +915,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             color: floorColor, transparent: upper, opacity: upper ? upperFloor : 1,
           })
         }
-        const mesh = new THREE.Mesh(
-          solid
-            ? new THREE.ExtrudeGeometry(shape, { depth: plate.thickness, bevelEnabled: false })
-            : new THREE.ShapeGeometry(shape),
-          mat)
-        mesh.rotation.x = solid ? Math.PI / 2 : -Math.PI / 2
-        mesh.position.y = plate.top_y
+        const mesh = buildPlate(THREE, plate, mat)
         boxes.add(mesh)
         if (verifyRef.current) {
-          mesh.updateMatrixWorld(true)
-          const bb = new THREE.Box3().setFromObject(mesh)
-          const name = `plate:${plate.room_id || 'level'}@${plate.level}`
-          vcheck(name, 'top_y', bb.max.y, plate.top_y)
-          if (solid) vcheck(name, 'bottom_y', bb.min.y, plate.top_y - plate.thickness)
+          verifier.primitive(mesh, VERIFY_ORIGIN,
+            `plate:${plate.room_id || 'level'}@${plate.level}`, plateTargets(plate))
         }
       }
 
@@ -945,9 +927,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       // sill + head + its own glass entry — one box each.
       for (const wall of sc.walls) {
         if (!visibleLevel(wall.level)) continue
-        const dx = wall.to[0] - wall.from[0]
-        const dz = wall.to[1] - wall.from[1]
-        const len = Math.hypot(dx, dz)
+        const len = wallLength(wall)
         if (len < 1e-4) continue
         const upper = wall.opacity_role === 'upper'
         let mat: Material
@@ -973,27 +953,19 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             })
           }
         }
-        const box = new THREE.Mesh(
-          new THREE.BoxGeometry(len, wall.height, wall.thickness), mat)
-        const mx = (wall.from[0] + wall.to[0]) / 2
-        const mz = (wall.from[1] + wall.to[1]) / 2
-        box.position.set(mx, wall.base_y + wall.height / 2, mz)
-        box.rotation.y = -Math.atan2(dz, dx)
+        const box = buildWall(THREE, wall, mat)
         boxes.add(box)
         // Camera culling with the DELIVERED normal — a wall whose outside
         // faces the camera hides so the interior stays visible.
         if (!wall.glass) {
-          wallCullRef.current.push({ mesh: box, mx, mz,
+          wallCullRef.current.push({ mesh: box,
+            mx: (wall.from[0] + wall.to[0]) / 2,
+            mz: (wall.from[1] + wall.to[1]) / 2,
             nx: wall.outward_normal[0], nz: wall.outward_normal[1] })
         }
         if (verifyRef.current) {
-          box.updateMatrixWorld(true)
-          const bb = new THREE.Box3().setFromObject(box)
-          const name = `wall:${wall.room_id || 'contour'}@${wall.level}`
-          vcheck(name, 'base_y', bb.min.y, wall.base_y)
-          vcheck(name, 'top_y', bb.max.y, wall.base_y + wall.height)
-          vcheck(name, 'centre.x', (bb.min.x + bb.max.x) / 2, mx)
-          vcheck(name, 'centre.z', (bb.min.z + bb.max.z) / 2, mz)
+          verifier.primitive(box, VERIFY_ORIGIN,
+            `wall:${wall.room_id || 'contour'}@${wall.level}`, wallTargets(wall))
         }
       }
     }
@@ -1017,10 +989,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
               transparent: extra.kind === 'elevator_cabin',
               opacity: extra.kind === 'elevator_cabin'
                 ? sc.style.elevator_cabin_opacity : 1 })
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(extra.size[0], extra.size[1], extra.size[2]), mat)
-        mesh.position.set(extra.center[0], extra.center[1], extra.center[2])
-        boxes.add(mesh)
+        boxes.add(buildExtra(THREE, extra, mat))
       }
     }
 
