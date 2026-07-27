@@ -364,26 +364,23 @@ def generate_item_image_sync(
         # damit rembg das Subjekt sauber freistellen kann.
         prompt_text = f"{base}, isolated object on green background, product photography, sharp focus, realistic"
 
-    from app.core.dependencies import get_skill_manager
-    img_skill = None
-    for skill in get_skill_manager().skills:
-        if getattr(skill, 'SKILL_ID', '') == "image_generation":
-            img_skill = skill
-            break
-    if not img_skill:
-        logger.warning("Item-Bild [%s]: ImageGeneration Skill nicht verfuegbar", item_id)
-        return False
+    # Backend selection goes through the image-service façade — the LAST
+    # holdout that fished the skill out of the skill manager broke when the
+    # take_photo plugin took over SKILL_ID "image_generation" without the
+    # old class API (world_ops has used get_image_service() all along).
+    from app.imagegen.service import get_image_service
+    img_service = get_image_service()
 
     # Backend override: match glob (e.g. "Together.ai" / "Together*"), else auto-select.
     backend = None
     backend_name = (overrides.get("backend") or "").strip()
     if backend_name:
-        backend = img_skill.match_backend(backend_name)
+        backend = img_service.match_backend(backend_name)
         if not backend:
             logger.warning("Item-Bild [%s]: Override-Backend '%s' nicht verfuegbar — Auto",
                            item_id, backend_name)
     if not backend:
-        backend = img_skill._select_backend()
+        backend = img_service._select_backend()
     if not backend:
         logger.warning("Item-Bild [%s]: Kein Backend verfuegbar", item_id)
         return False
