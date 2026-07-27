@@ -20,9 +20,7 @@ from app.models.character import (
     save_character_current_room,
     get_character_current_location,
     get_character_config,
-    set_movement_target,
     get_movement_target,
-    clear_movement_target,
     get_known_locations)
 from app.models.world import (
     list_locations, get_location_rooms, get_room_by_name,
@@ -290,12 +288,25 @@ class SetLocationSkill(PluginSkill):
                 return (f"Du kennst den Weg nach {location_name} (noch) nicht. "
                         f"Du musst zuerst dorthin gefuehrt werden oder einen "
                         f"angrenzenden Ort entdecken.")
-            set_movement_target(character_name, location_id)
-            steps = max(0, len(path) - 1)
-            logger.info("Walk-Mode: %s -> %s (%d Schritte)",
-                        character_name, location_name, steps)
-            return (f"Du machst dich auf den Weg nach {location_name}. "
-                    f"Geschaetzt {steps} Schritt(e) ueber bekannte Orte.")
+            from app.core.travel_engine import start_journey, journey_state
+            from app.core.timeutils import game_now, to_world_tz
+            j = start_journey(character_name, location_id)
+            if not j:
+                # Path vanished between the check above and here — treat like
+                # the no-path case (same wording as the known-path guard).
+                return (f"Du kennst den Weg nach {location_name} (noch) nicht. "
+                        f"Du musst zuerst dorthin gefuehrt werden oder einen "
+                        f"angrenzenden Ort entdecken.")
+            st = journey_state(j["path"], j["started_at_game"], game_now(),
+                               j["seconds_per_cell"])
+            eta_local = to_world_tz(st["eta_game"])
+            steps = len(j["path"]) - 1
+            logger.info("Journey: %s -> %s (%d Zellen, ETA %s)",
+                        character_name, location_name, steps, st["eta_game"])
+            return (f"Du machst dich auf den Weg nach {location_name} "
+                    f"({steps} Wegzelle(n)). Voraussichtliche Ankunft: "
+                    f"{eta_local:%H:%M} (Spielzeit). Die Reise laeuft "
+                    f"automatisch weiter.")
 
         rooms = get_location_rooms(matched_location)
 
@@ -541,7 +552,8 @@ class CancelTravelSkill(PluginSkill):
             target_name = get_location_name(target_id) or target_id
         except Exception:
             pass
-        clear_movement_target(character_name)
+        from app.core.travel_engine import cancel_journey
+        cancel_journey(character_name)
         logger.info("Reise abgebrochen: %s (Ziel war %s)",
                     character_name, target_name)
         return (f"Du hast deine Reise nach {target_name} abgebrochen "

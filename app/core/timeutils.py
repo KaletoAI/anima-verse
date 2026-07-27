@@ -77,6 +77,12 @@ def parse_iso(s: str) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
+def to_world_tz(iso_or_dt) -> datetime:
+    """ISO string or aware datetime -> game-world local time (aware)."""
+    dt = parse_iso(iso_or_dt) if isinstance(iso_or_dt, str) else iso_or_dt
+    return dt.astimezone(_world_tz())
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Game clock — anchored to the system clock, persisted in world_kv
 # ═══════════════════════════════════════════════════════════════════════════

@@ -906,106 +906,6 @@ class AgentLoop:
                         and _IN_CHAT_HOT_MIN <= chat_age_min < _IN_CHAT_WARM_MIN):
                     template_name = "chat/agent_thought_in_chat.md"
 
-                # Programmierter Walk-Step: ein Grid-Schritt Richtung
-                # movement_target. LLM hat das Ziel vorher gewaehlt; der Tick
-                # wandert es ohne LLM ab. Wird waehrend WARM-Window pausiert
-                # (Character noch im Gespraech). Bei Ankunft loescht
-                # save_character_current_location das Target automatisch.
-                try:
-                    if chat_age_min is None or chat_age_min >= _IN_CHAT_WARM_MIN:
-                        from app.models.character import (
-                            get_movement_target, clear_movement_target,
-                            save_character_current_location,
-                            get_character_current_location)
-                        from app.models.world import next_step_toward
-                        target = get_movement_target(character_name)
-                        # Leave-Gate: Pinning/Confine-Rules koennen den
-                        # Walk-Step blockieren, selbst wenn movement_target
-                        # frueher gesetzt wurde (Rule wurde erst danach
-                        # aktiv, oder Cross-Tick-Aenderung). Target loeschen,
-                        # damit der Char nicht ewig "auf der Reise" bleibt.
-                        leave_blocked = False
-                        if target:
-                            try:
-                                from app.models.rules import check_leave
-                                # Walk-Step kennt nur das Ziel-Loc, nicht den
-                                # Ziel-Raum — Cross-Location-Walk verlaesst den
-                                # aktuellen Raum eh. target_room_id leer lassen.
-                                _leave_ok, _leave_reason = check_leave(
-                                    character_name,
-                                    target_location_id=target)
-                            except Exception:
-                                _leave_ok, _leave_reason = True, ""
-                            if not _leave_ok:
-                                leave_blocked = True
-                                clear_movement_target(character_name)
-                                logger.info(
-                                    "Walk blockiert (leave): %s — Target %s geloescht (%s)",
-                                    character_name, target, _leave_reason)
-                                try:
-                                    from app.models.character import record_access_denied
-                                    from app.models.world import get_location_name as _gln_walk
-                                    _cur = get_character_current_location(character_name) or ""
-                                    _cur_name = _gln_walk(_cur) or _cur
-                                    record_access_denied(character_name, _cur, _cur_name,
-                                                          _leave_reason, action="leave")
-                                except Exception:
-                                    logger.debug("record_access_denied(walk-leave) failed", exc_info=True)
-                        if target and not leave_blocked:
-                            next_loc = next_step_toward(character_name, target)
-                            if next_loc is None:
-                                clear_movement_target(character_name)
-                                logger.info(
-                                    "Movement-Target %s fuer %s nicht erreichbar — Target geloescht",
-                                    target, character_name)
-                                try:
-                                    from app.models.character import _record_state_change
-                                    from app.models.world import get_location_name
-                                    _name = get_location_name(target) or target
-                                    _record_state_change(
-                                        character_name, "travel_failed", _name,
-                                        metadata={"location_id": target,
-                                                  "reason": "path_lost_in_transit"})
-                                except Exception:
-                                    pass
-                            else:
-                                # Entry-Room-Discipline: NPC verlaesst die
-                                # Location nur ueber den Entry-Room. Steht er
-                                # in einem anderen Raum, geht er erst zum
-                                # Entry-Room (1 Tick) und im naechsten Tick
-                                # ueber die Grenze.
-                                from app.models.world import (
-                                    get_location_by_id, get_entry_room_id)
-                                from app.models.character import (
-                                    get_character_current_room,
-                                    save_character_current_room)
-                                _cur_loc = get_character_current_location(
-                                    character_name) or ""
-                                _cur_loc_obj = get_location_by_id(_cur_loc) if _cur_loc else None
-                                _cur_entry = get_entry_room_id(_cur_loc_obj) if _cur_loc_obj else ""
-                                _cur_room = (get_character_current_room(character_name) or "").strip()
-                                if _cur_entry and _cur_room and _cur_room != _cur_entry:
-                                    save_character_current_room(character_name, _cur_entry)
-                                    logger.info(
-                                        "AgentLoop walk: %s -> Entry-Room %s "
-                                        "(vor Cross-Location-Step nach %s)",
-                                        character_name, _cur_entry, next_loc)
-                                else:
-                                    save_character_current_location(
-                                        character_name, next_loc,
-                                        _preserve_movement_target=True)
-                                    # Ankunft im Entry-Room der Ziel-Location.
-                                    _next_obj = get_location_by_id(next_loc)
-                                    _next_entry = get_entry_room_id(_next_obj) if _next_obj else ""
-                                    if _next_entry:
-                                        save_character_current_room(character_name, _next_entry)
-                                    logger.info(
-                                        "AgentLoop walk: %s -> %s (Ziel: %s)",
-                                        character_name, next_loc, target)
-                except Exception as _we:
-                    logger.debug("Walk-Step fuer %s fehlgeschlagen: %s",
-                                 character_name, _we)
-
                 # Discovery-Check: vor dem Thought-Build, damit der entdeckte
                 # Ort sofort im list_locations_for_character-Kontext auftaucht
                 # und der Character im aktuellen Tick darueber nachdenken kann.
@@ -1081,23 +981,23 @@ class AgentLoop:
                 self._current_agent = ""
 
     def _maybe_auto_sleep(self, character_name: str) -> Optional[Dict[str, Any]]:
-        """Bei Erschoepfung (stamina<10) den Char autonom nach Hause schicken.
+        """On exhaustion (stamina<10) send the character home autonomously.
 
-        Drei Pfade:
-          1. Char hat home_location=__offmap__ → enter_offmap_sleep direkt
-          2. Char ist bereits am home_location → SetActivity Sleeping
-          3. Char ist anderswo → SetLocation home (Walk oder Direct-Move)
+        Three paths:
+          1. home_location=__offmap__ → enter_offmap_sleep directly
+          2. already at home_location → set activity to Sleeping
+          3. elsewhere → start a timed journey home (travel ticker drives
+             the movement; the next check here settles the sleep)
 
-        Returns dict {outcome, preview, tools} bei Aktion, sonst None.
-        Cooldown via _chat_skip_until — ein erschoepfter Char wird nicht in
-        jedem Tick neu geprueft, sonst spinnt der Loop.
+        Returns dict {outcome, preview, tools} when it acted, else None.
+        Idempotent per tick: already home → sleep, journey home running →
+        no-op, offmap → continue.
         """
         try:
             from app.models.character import (
                 get_character_profile, get_character_config,
                 get_character_current_location, OFFMAP_SLEEP_SENTINEL,
-                enter_offmap_sleep, set_is_sleeping,
-                set_movement_target)
+                enter_offmap_sleep, set_is_sleeping)
             profile = get_character_profile(character_name) or {}
             stamina = (profile.get("status_effects") or {}).get("stamina")
             if stamina is None or stamina >= 10:
@@ -1111,14 +1011,7 @@ class AgentLoop:
             cur_loc = (get_character_current_location(character_name) or "").strip()
             already_offmap = not cur_loc
 
-            # Kein Cooldown via _chat_skip_until — sonst koennte der Char
-            # zwischen den Walk-Steps nicht erneut gepickt werden und
-            # wuerde nur alle 5 min einen Schritt machen. Die maybe_auto_sleep-
-            # Logik ist idempotent: bereits-zuhause → SetActivity Sleep, en
-            # route → naechster Schritt, offmap → continue. Jeder Tick
-            # bringt den Char einen Step naeher.
-
-            # Pfad 1: home ist offmap
+            # Path 1: home is offmap
             if home_loc == OFFMAP_SLEEP_SENTINEL:
                 if already_offmap:
                     set_is_sleeping(character_name, True)
@@ -1135,9 +1028,9 @@ class AgentLoop:
                             "preview": f"exhausted (stamina={stamina}) → offmap sleep",
                             "tools": ["SetLocation", "Sleep"]}
 
-            # Pfad 2/3: home ist eine reguläre Location
+            # Path 2/3: home is a regular location
             if cur_loc == home_loc:
-                # Schon zuhause — Activity auf Sleeping setzen
+                # Already home — set activity to Sleeping
                 set_is_sleeping(character_name, True)
                 logger.info("Auto-Sleep: %s zuhause, Activity=Sleeping",
                             character_name)
@@ -1145,8 +1038,8 @@ class AgentLoop:
                         "preview": f"home & exhausted (stamina={stamina}) → sleeping",
                         "tools": ["Sleep"]}
 
-            # Leave-Gate: Confined Char kann auch erschoepft nicht heim
-            # laufen. Schlaeft dann am aktuellen Ort ein.
+            # Leave gate: a confined character cannot walk home even when
+            # exhausted — sleeps in place instead.
             try:
                 from app.models.rules import check_leave
                 _auto_leave_ok, _auto_leave_reason = check_leave(character_name)
@@ -1160,53 +1053,35 @@ class AgentLoop:
                         "preview": f"exhausted (stamina={stamina}) → confined, sleeping in place",
                         "tools": ["Sleep"]}
 
-            # Anderswo — movement_target setzen UND sofort den ersten
-            # Schritt ausfuehren. Der Walk-Step im normalen Tick-Flow wird
-            # nicht erreicht weil _maybe_auto_sleep frueh returnt; ohne den
-            # Inline-Step wuerde der Char waehrend der naechsten 5min
-            # (_chat_skip_until-Cooldown) gar nicht laufen.
-            set_movement_target(character_name, home_loc)
-            steps_taken = 0
-            arrived = False
-            try:
-                from app.models.character import (
-                    save_character_current_location,
-                    clear_movement_target)
-                from app.models.world import next_step_toward
-                next_loc = next_step_toward(character_name, home_loc)
-                if next_loc is None:
-                    # Pfad nicht erreichbar — Target loeschen, sonst haengt
-                    # der Char ewig im "walking home"-State.
-                    clear_movement_target(character_name)
-                    logger.warning(
-                        "Auto-Sleep walk: kein Pfad von %s nach %s — Target geloescht",
-                        character_name, home_loc)
-                else:
-                    save_character_current_location(
-                        character_name, next_loc, _preserve_movement_target=True)
-                    steps_taken = 1
-                    arrived = (next_loc == home_loc)
-                    logger.info(
-                        "Auto-Sleep walk: %s -> %s (Ziel: %s)%s",
-                        character_name, next_loc, home_loc,
-                        " — angekommen" if arrived else "")
-            except Exception as _we:
-                logger.debug("Auto-Sleep walk-step fehlgeschlagen: %s", _we)
-
-            # Wenn beim ersten Step schon angekommen: Activity sofort auf
-            # Sleeping setzen, sonst kommt Char zwar an, ist aber wach.
-            if arrived:
+            # Elsewhere — start a timed journey home. Arrival is handled by
+            # the travel ticker; the NEXT auto-sleep check (stamina still
+            # low, now at home) flips the character to sleeping.
+            # Guard: if a journey home is already running, leave it alone —
+            # restarting would reset started_at_game on every loop pick
+            # (~30s) and the character would never finish a 60-game-second
+            # cell. journeying toward somewhere ELSE is re-pointed home.
+            from app.core.travel_engine import get_journey, start_journey
+            j = get_journey(character_name)
+            if j and j.get("target") == home_loc:
+                return {"outcome": "auto_sleep_walking",
+                        "preview": f"exhausted (stamina={stamina}) → journey home in progress",
+                        "tools": []}
+            j = start_journey(character_name, home_loc)
+            if j is None:
+                # No known path home: sleep in place instead of pacing the
+                # loop forever (behaviour change vs. the old inline step,
+                # which retried every tick without ever sleeping).
                 set_is_sleeping(character_name, True)
-                logger.info("Auto-Sleep: %s zuhause angekommen, Activity=Sleeping",
-                            character_name)
-                return {"outcome": "auto_sleep_arrived_home",
-                        "preview": f"exhausted (stamina={stamina}) → arrived home → sleeping",
-                        "tools": ["SetLocation", "Sleep"]}
-
-            logger.info("Auto-Sleep: %s erschoepft (stamina=%s) -> Reise nach Hause (%s) [Schritte: %d]",
-                        character_name, stamina, home_loc, steps_taken)
-            return {"outcome": "auto_sleep_walking_home",
-                    "preview": f"exhausted (stamina={stamina}) → walking home (step {steps_taken})",
+                logger.warning(
+                    "Auto-sleep: no path home for %s — sleeping in place",
+                    character_name)
+                return {"outcome": "auto_sleep_no_path",
+                        "preview": f"exhausted (stamina={stamina}) → no path home, sleeping in place",
+                        "tools": ["Sleep"]}
+            logger.info("Auto-sleep: %s journeys home to %s (%d cells)",
+                        character_name, home_loc, len(j["path"]) - 1)
+            return {"outcome": "auto_sleep_walking",
+                    "preview": f"exhausted (stamina={stamina}) → journeying home",
                     "tools": ["SetLocation"]}
         except Exception as e:
             logger.debug("_maybe_auto_sleep failed for %s: %s",

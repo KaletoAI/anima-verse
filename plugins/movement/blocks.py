@@ -28,41 +28,35 @@ def _current_location_id(character_name: str) -> str:
 
 
 def travel_section(character_name: str) -> str:
-    """Active journey info: target name + remaining steps via known path.
+    """Active journey info: target name + remaining cells + ETA from the
+    stored journey state (no path recomputation).
 
-    Empty string when no movement_target is set. Communicates that the
-    system handles the movement automatically and re-issuing SetLocation
-    is only needed to change the destination.
+    Empty string when no journey is active. Communicates that the system
+    handles the movement automatically and re-issuing SetLocation is only
+    needed to change the destination.
     """
     try:
-        from app.models.character import get_movement_target
-        target_id = get_movement_target(character_name)
-        if not target_id:
+        from app.core.travel_engine import get_journey, journey_state
+        j = get_journey(character_name)
+        if not j:
             return ""
-        from app.models.world import (
-            get_location_name, find_path_through_known)
-        from app.models.character import get_known_locations
-        current_location_id = _current_location_id(character_name)
-        target_name = get_location_name(target_id) or target_id
-        known = get_known_locations(character_name) or []
-        path = find_path_through_known(current_location_id, target_id, known) \
-            if current_location_id else None
-        if path and len(path) >= 2:
-            steps = len(path) - 1
-            body = (f"You are travelling to {target_name}. "
-                    f"{steps} step(s) remaining — the system moves you one "
-                    f"grid-cell per tick. RECONSIDER on every turn whether "
-                    f"this journey still fits: if something here matters "
-                    f"more now (a conversation, an event), cancel it with "
-                    f"CancelTravel. Use SetLocation only to change the "
-                    f"destination.")
-        elif path and len(path) == 1:
-            # already at target — will be cleared next tick
+        from app.models.world import get_location_name
+        from app.core.timeutils import game_now, to_world_tz
+        target_name = get_location_name(j["target"]) or j["target"]
+        st = journey_state(j["path"], j["started_at_game"], game_now(),
+                           j["seconds_per_cell"])
+        if st["arrived"]:
             body = f"You have arrived at {target_name}."
         else:
-            body = (f"You wanted to travel to {target_name}, but the path "
-                    f"through known places is no longer reachable. The "
-                    f"destination will be cleared on the next tick.")
+            remaining = max(0, len(j["path"]) - 1 - int(st["progress_cells"]))
+            eta_local = to_world_tz(st["eta_game"])
+            body = (f"You are travelling to {target_name} — about "
+                    f"{remaining} cell(s) to go, arriving around "
+                    f"{eta_local:%H:%M} (game time). The journey continues "
+                    f"automatically. RECONSIDER on every turn whether it "
+                    f"still fits: if something here matters more now (a "
+                    f"conversation, an event), cancel it with CancelTravel. "
+                    f"Use SetLocation only to change the destination.")
         return "=== On the road ===\n" + body
     except Exception as e:
         logger.debug("travel section failed for %s: %s", character_name, e)
