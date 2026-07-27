@@ -100,6 +100,12 @@ export interface Tile {
   interiorLift: number;
   /** als outdoor markierte Räume (liefern keine Boden-Farbe fürs Gebäude) */
   roomOutdoor: Set<string>;
+  /** Boden-/Sockelplatte DIESER Kachel (immer opak, Höhe 0) — die Innenansicht
+   *  eines Gebäudes mit Keller muss durch sie hindurchsehen. */
+  groundPlate?: THREE.Mesh;
+  /** Szene dieser Kachel nutzt eine Etage < 0 (aus dem Payload abgeleitet,
+   *  gesetzt von mountScene). Ohne Keller bleibt der Boden unangetastet. */
+  hasBasement?: boolean;
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
   highlightRing: THREE.Mesh;
@@ -606,7 +612,8 @@ export function buildTile(loc: WorldLocation): Tile {
   };
 
   if (!isBuilding) {
-    group.add(groundPlateFor());
+    tile.groundPlate = groundPlateFor();
+    group.add(tile.groundPlate);
     if (style === 'forest') {
       const decor = new THREE.Group();
       for (let i = 0; i < 8; i++) {
@@ -619,7 +626,8 @@ export function buildTile(loc: WorldLocation): Tile {
     }
     tile.height = style === 'forest' ? 3 : 0.3;
   } else if (natureSite) {
-    group.add(groundPlateFor());
+    tile.groundPlate = groundPlateFor();
+    group.add(tile.groundPlate);
     if (style === 'forest') {
       // Bäume am Rand, Mitte bleibt frei für die Raum-Slabs
       const decor = new THREE.Group();
@@ -647,6 +655,7 @@ export function buildTile(loc: WorldLocation): Tile {
     plinth.position.y = 0.045;
     plinth.receiveShadow = true;
     group.add(plinth);
+    tile.groundPlate = plinth;
 
     const spec = buildingSpec(style, loc);
     // Hülle in eigene Gruppe kapseln, damit ein Server-Modell (AV3D-9) sie
@@ -928,6 +937,25 @@ export function applyTileFade(tile: Tile, dt: number) {
     );
   }
   if (!tile.interior) return;
+
+  // Ein Keller (Etage < 0) liegt UNTER dem Kachelboden — und der ist die
+  // eigene, immer opake Platte dieser Kachel, kein Teil des Szenen-Rezepts.
+  // Solange die Innenansicht einer Szene mit Unter-Etage steht, wird er zum
+  // Geist, sonst sieht man den Keller nie. Nachbarkacheln bleiben bewusst
+  // unangetastet — der Schrägblick durch fremdes Gelände ist akzeptiert.
+  const gp = tile.groundPlate;
+  if (gp) {
+    const gm = gp.material as THREE.MeshStandardMaterial;
+    const ghost = !!tile.hasBasement && f > 0.03;
+    if (gm.transparent !== ghost) {
+      gm.transparent = ghost;
+      // Ohne Tiefen-Schreiben verdeckt die Platte nichts mehr, was unter ihr
+      // liegt — der eigentliche Punkt der Übung.
+      gm.depthWrite = !ghost;
+      gm.needsUpdate = true;
+    }
+    gm.opacity = ghost ? Math.max(0.15, 1 - f * 0.85) : 1;
+  }
 
   const ringMat = tile.highlightRing.material as THREE.MeshBasicMaterial;
   ringMat.opacity = 0.7 * Math.max(0, 1 - f * 2);

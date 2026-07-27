@@ -391,6 +391,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   const style = scene.style;
   const floorYof = new Map(scene.levels.map((l) => [l.level, l.floor_y]));
   const levels = scene.levels.map((l) => l.level);
+  // Signal for the tile's view logic: a storey below ground exists, so the
+  // tile's own ground plate has to get out of the way while the interior is
+  // up (applyTileFade). The recipe itself needs nothing for this.
+  tile.hasBasement = levels.some((lv) => lv < 0);
 
   // ── Räume: Gruppen, Etagen, Outdoor-Flags ───────────────────────────────
   // Outdoor-Räume (§ A5) hängen direkt an der Kachel und sind damit in jeder
