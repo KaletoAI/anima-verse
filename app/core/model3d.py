@@ -222,7 +222,7 @@ def save_uploaded_model(character_name: str, original_filename: str,
     that belongs to an FBX; a GLB embeds its textures. Validation is the
     caller's job (app/core/model_validate.py)."""
     ext = Path(original_filename.lower()).suffix
-    _, _, signature = current_outfit_state(character_name)
+    pieces, items, signature = current_outfit_state(character_name)
     out_dir = get_model3d_dir(character_name)
     _purge_combination(out_dir, signature)
     target = out_dir / f"{signature}{ext}"
@@ -238,6 +238,10 @@ def save_uploaded_model(character_name: str, original_filename: str,
         "source_filename": original_filename,
         "signature": signature,
         "character": character_name,
+        # Manifest (outfit_cache_gc) — an upload is made FOR the worn
+        # combination, so its pieces are exactly what this signature stands for.
+        "pieces": dict(pieces or {}),
+        "items": list(items or []),
     }
     target.with_suffix(".json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -337,6 +341,24 @@ def _char_lock(character_name: str) -> threading.Lock:
         return _char_locks.setdefault(character_name, threading.Lock())
 
 
+def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
+    """``{pieces, items}`` of the T-pose render a mesh is built from, read
+    from its sidecar — the reference render records the equipped state it
+    was made with. ``{}`` when there is nothing to copy (a legacy render),
+    which simply leaves the mesh sidecar without a manifest."""
+    try:
+        meta = json.loads(
+            ref_image.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, AttributeError):
+        return {}
+    pieces = meta.get("equipped_pieces")
+    if not isinstance(pieces, dict):
+        return {}
+    items = meta.get("equipped_items")
+    return {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
+            "items": [str(i) for i in (items or []) if i]}
+
+
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
                                 prefer_cheapest: bool = False,
@@ -433,6 +455,12 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             "character": character_name,
             "no_fingers": no_fingers,
         }
+        # Manifest (outfit_cache_gc): WHICH pieces this signature stands for.
+        # The md5 cannot be read back, so without this a cache entry can only
+        # be judged by "could it still be produced" — with it, exactly. The
+        # T-pose render this mesh comes from already recorded it, so the
+        # source of truth is copied rather than derived a second time.
+        meta.update(_ref_manifest(src))
         path.with_suffix(".json").write_text(
             json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
