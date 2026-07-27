@@ -98,6 +98,18 @@ export interface MapLocation {
   map3d?: Map3dMeta;  // AV3D-1 (nur emittiert, wenn gesetzt)
 }
 
+/** Server-authoritative journey along the tile chain (contract § A11). */
+export interface MapTravel {
+  path: string[];
+  target_id: string;
+  seg: number;
+  frac: number;
+  progress_cells: number;
+  eta_game: string;
+  /** real seconds per cell for client-side extrapolation; null = frozen */
+  cell_seconds_real: number | null;
+}
+
 export interface MapCharacter {
   name: string;
   location_id: string;
@@ -113,6 +125,8 @@ export interface MapCharacter {
   activity?: string;
   movement_target_id?: string;
   movement_target_name?: string;
+  /** running journey (§ A11); null/absent when the character is not travelling */
+  travel?: MapTravel | null;
   avatar_url?: string;
 }
 

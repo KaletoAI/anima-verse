@@ -86,6 +86,8 @@ interface Npc {
   face: THREE.Vector3 | null;
   /** Restliche Wegpunkte bis zum Ziel (Wegfindung um Gebäude) */
   waypoints: THREE.Vector3[];
+  /** server journey being followed (§ A11) — replaces goal/waypoint logic */
+  route: NpcState['route'] | null;
   activity: string;
   travelLine: THREE.Line | null;
   travelKey: string;
@@ -103,6 +105,11 @@ export interface NpcState {
   hidden?: boolean;
   /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
   via?: THREE.Vector3[];
+  /** server journey (§ A11): world points of the path cells (length ==
+   *  travel.path.length) + last polled seg/frac; cellSecondsReal steers the
+   *  client-side extrapolation between polls (null = frozen world) */
+  route?: { points: THREE.Vector3[]; seg: number; frac: number;
+            cellSecondsReal: number | null };
   travelTo: THREE.Vector3 | null;   // Reiseziel (Linien-Endpunkt) oder null
 }
 
@@ -146,9 +153,24 @@ export class NpcManager {
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
       }
+      // Server-Reise übernehmen; Reconcile: seg/frac vom Server nur hart
+      // übernehmen, wenn |server - lokal| > 0,5 Zellen (§ A11) — sonst lokal
+      // weiterlaufen lassen, das vermeidet Poll-Ruckeln.
+      if (st.route) {
+        const server = st.route.seg + st.route.frac;
+        const local = npc.route ? npc.route.seg + npc.route.frac : -1;
+        if (!npc.route || Math.abs(server - local) > 0.5
+            || npc.route.points.length !== st.route.points.length) {
+          npc.route = { ...st.route, points: st.route.points.map((p) => p.clone()) };
+        }
+        npc.waypoints = [];
+      } else {
+        npc.route = null;
+      }
       // Zielwechsel -> Weg planen: vorgegebene Zwischenstationen (Raum-
-      // Ausgänge) haben Vorrang, sonst um Gebäude herum (A*)
-      if (!npc.target.equals(st.pos)) {
+      // Ausgänge) haben Vorrang, sonst um Gebäude herum (A*). Nur für
+      // Nicht-Reisende — auf Reisen führt allein die Server-Route.
+      if (!st.route && !npc.target.equals(st.pos)) {
         npc.waypoints = st.via?.length
           ? st.via.map((v) => v.clone())
           : this.planPath(npc.root.position, st.pos);
@@ -161,7 +183,8 @@ export class NpcManager {
       npc.animation = st.char.activity_animation || undefined;
       npc.labelActivity.textContent = npc.activity;
       const travelling = !!st.travelTo;
-      npc.labelName.textContent = (travelling ? '🚶 ' : '') + st.char.name;
+      const eta = st.char.travel?.eta_game ? ` ${st.char.travel.eta_game.slice(11, 16)}` : '';
+      npc.labelName.textContent = (travelling ? `🚶${eta} ` : '') + st.char.name;
       this.updateTravelLine(npc, st);
     }
     for (const [name, npc] of this.npcs) {
@@ -229,7 +252,7 @@ export class NpcManager {
     return {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
-      target: st.pos.clone(), targetScale: st.scale ?? 1, face: st.face ?? null, waypoints: [], activity: st.char.activity || '',
+      target: st.pos.clone(), targetScale: st.scale ?? 1, face: st.face ?? null, waypoints: [], route: null, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
@@ -294,6 +317,55 @@ export class NpcManager {
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
+      // Server-Reise (§ A11): entlang der Route laufen statt auf npc.target.
+      // Extrapoliert wird der GESAMT-Fortschritt (seg+frac als eine Zahl),
+      // seg/frac werden daraus neu abgeleitet — wer nur frac im aktuellen
+      // Segment hochzählt, bleibt an jedem Knoten stehen bis zum nächsten
+      // Poll. cellSecondsReal == null (Freeze) => nicht extrapolieren.
+      if (npc.route && npc.route.points.length >= 2) {
+        const r = npc.route;
+        if (r.cellSecondsReal && r.cellSecondsReal > 0) {
+          let progress = r.seg + r.frac + dt / r.cellSecondsReal;
+          const maxProgress = r.points.length - 1;
+          // last node: hold at frac 1 and wait for the server's arrival
+          // (travel vanishes up to half a cell BEFORE that — § A11)
+          if (progress > maxProgress) progress = maxProgress;
+          r.seg = THREE.MathUtils.clamp(Math.floor(progress), 0, r.points.length - 2);
+          r.frac = progress - r.seg;
+        }
+        const a = r.points[r.seg];
+        const b = r.points[Math.min(r.seg + 1, r.points.length - 1)];
+        const goalPos = a.clone().lerp(b, r.frac);
+        const delta = goalPos.clone().sub(npc.root.position);
+        delta.y = 0;
+        const d = delta.length();
+        if (d > 0.05) {
+          // catch-up speed: at most WALK_SPEED, so corrections stay a walk
+          const step = Math.min(d, WALK_SPEED * dt);
+          const dir = delta.clone().normalize();
+          npc.root.position.addScaledVector(dir, step);
+          npc.figure?.faceTowards(dir);
+        }
+        npc.root.position.y += (goalPos.y - npc.root.position.y) * Math.min(1, dt * 4);
+        // blend back to map scale — a journey may start out of an interior
+        const rs = npc.root.scale.x;
+        if (Math.abs(rs - npc.targetScale) > 1e-3) {
+          npc.root.scale.setScalar(rs + (npc.targetScale - rs) * Math.min(1, dt * 5));
+        }
+        if (npc.figure) {
+          // no 'run' on journeys: the pace comes from the server —
+          // walk while the game clock moves, idle on freeze
+          npc.figure.play(d > 0.02 || (r.cellSecondsReal ?? 0) > 0 ? 'walk' : 'idle');
+          npc.figure.update(dt);
+          npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
+        } else if (npc.sprite) {
+          npc.bobPhase += dt * 14;
+          npc.sprite.position.y = 0.15 + Math.abs(Math.sin(npc.bobPhase)) * 0.35;
+          npc.sprite.scale.setScalar(spriteScale);
+        }
+        npc.label.visible = labelVisible;
+        continue;   // travellers skip the normal goal/waypoint logic
+      }
       // Nächster Wegpunkt (falls ein Weg geplant ist), sonst direkt zum Ziel
       while (npc.waypoints.length && npc.root.position.distanceTo(npc.waypoints[0]) < 1.5) {
         npc.waypoints.shift();

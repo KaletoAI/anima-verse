@@ -438,6 +438,33 @@ async function startApp(username: string) {
         if (room) (roomMates.get(room) ?? roomMates.set(room, []).get(room)!).push(c.name);
       }
       chars.forEach((c, i) => {
+        // Server-authoritative journey (contract § A11: the server computes, we
+        // render): position = lerp along the path cells at seg/frac — NEVER the
+        // tile centre of location_id, which lags at ticker cadence. The
+        // NpcManager keeps extrapolating between polls via cellSecondsReal.
+        const tr = c.travel;
+        if (tr && tr.path.length >= 2) {
+          const points = tr.path.map((id) => {
+            const t = tiles.get(id);
+            if (t) return t.center.clone().setY(tileGroundY(t, t.center));
+            return null;
+          });
+          if (points.every((p): p is THREE.Vector3 => !!p)) {
+            const seg = THREE.MathUtils.clamp(tr.seg, 0, points.length - 2);
+            const pos = points[seg].clone().lerp(points[seg + 1], tr.frac);
+            const last = points[points.length - 1];
+            states.push({
+              char: c,
+              pos,
+              scale: 1,
+              route: { points, seg, frac: tr.frac,
+                       cellSecondsReal: tr.cell_seconds_real },
+              travelTo: last.clone(),
+            });
+            shownRoom.set(c.name, null);
+            return;   // forEach callback — travellers skip room placement
+          }
+        }
         let pos: THREE.Vector3;
         let via: THREE.Vector3[] | undefined;
         let face: THREE.Vector3 | undefined;
