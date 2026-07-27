@@ -70,6 +70,11 @@ PROP_CLEARANCE = 0.01
 # is capped — the shader test runs per fragment, more points than this are not
 # worth the frame time, so the opt-in is ignored instead.
 CLIP_OUTLINE_MAX_POINTS = 32
+# Area locations (plan-area-locations.md): how many holes may be cut out of a
+# location model and how many points each may have. Same per-polygon cap as
+# the room clip — the shader that applies them is its inverted twin.
+CUTOUT_MAX_POLYS = 16
+CUTOUT_MAX_POINTS = CLIP_OUTLINE_MAX_POINTS
 # Walls: height max(0.6, storey − 0.15), thickness 0.07; glass panes thinner.
 WALL_THICKNESS = 0.07
 WALL_MIN_HEIGHT = 0.6
@@ -200,6 +205,39 @@ def _outline_world(map3d: Dict[str, Any]) -> List[List[float]]:
             return []
         out.append([_r(_w(pt[0])), _r(_w(pt[1]))])
     return out
+
+
+def _point_in_polygon(x: float, z: float, poly: List[List[float]]) -> bool:
+    """Parity (ray-casting) test in the XZ plane — the same rule the renderers'
+    clip shader applies per fragment, so "inside" means the same thing on both
+    sides."""
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        ax, az = poly[i]
+        bx, bz = poly[(i + 1) % n]
+        if (az > z) != (bz > z):
+            t = (z - az) / ((bz - az) or 1e-12)
+            if x < ax + t * (bx - ax):
+                inside = not inside
+    return inside
+
+
+def _bbox_inside(outline: List[List[float]],
+                 contour: List[List[float]]) -> bool:
+    """Does an outline lie fully inside the building contour?
+
+    The BBox is enough (plan decision): all four corners inside means the room
+    sits within the floor plan and behaves exactly as it does today. Without a
+    contour nothing can be "inside", so every placed room counts as outside.
+    """
+    if not outline or len(contour) < 3:
+        return False
+    xs = [p[0] for p in outline]
+    zs = [p[1] for p in outline]
+    corners = ((min(xs), min(zs)), (max(xs), min(zs)),
+               (max(xs), max(zs)), (min(xs), max(zs)))
+    return all(_point_in_polygon(x, z, contour) for x, z in corners)
 
 
 def _room_rect(recipe: Dict[str, Any], room: Dict[str, Any]) -> Tuple[float, float, float, float]:
@@ -756,6 +794,42 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     return spec
 
 
+def _cutouts(contour: List[List[float]],
+             outside_indoor: List[Tuple[str, List[List[float]]]],
+             ) -> List[List[List[float]]]:
+    """The holes to cut out of an AREA location's model (plan-area-locations).
+
+    Two sources, both already world metres and both the SAME point source the
+    plates use — nothing is re-derived here: the building contour as a whole
+    (inside it stands the ordinary recipe interior: storey plate, contour
+    walls, rooms), plus the outline of every placed INDOOR room that does not
+    sit fully inside that contour (the hut off to the side).
+
+    Caps mirror the shader: at most ``CUTOUT_MAX_POINTS`` per polygon and
+    ``CUTOUT_MAX_POLYS`` polygons. Anything over is dropped with a warning
+    rather than silently truncated — a half-cut hole is worse than none.
+    """
+    polys: List[List[List[float]]] = []
+    if contour:
+        if len(contour) > CUTOUT_MAX_POINTS:
+            logger.warning("Area location: outline has %d points (max %d) — "
+                           "not cut out", len(contour), CUTOUT_MAX_POINTS)
+        else:
+            polys.append(contour)
+    for room_id, outline in outside_indoor:
+        if len(polys) >= CUTOUT_MAX_POLYS:
+            logger.warning("Area location: more than %d cutouts — room %s and "
+                           "any further ones are not cut out",
+                           CUTOUT_MAX_POLYS, room_id)
+            break
+        if len(outline) > CUTOUT_MAX_POINTS:
+            logger.warning("Room %s: outline has %d points (max %d) — not cut "
+                           "out", room_id, len(outline), CUTOUT_MAX_POINTS)
+            continue
+        polys.append(outline)
+    return polys
+
+
 def _prop_models(recipe: Dict[str, Any], storey: float,
                  k: float) -> List[Dict[str, Any]]:
     """The room's prop placements as specs (REAL-SIZE rule, § A2).
@@ -953,6 +1027,50 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     building = _building_model(location, map3d, building_meta, k)
     if building:
         models.append(building)
+
+    # ── Area location (plan-area-locations.md) ──────────────────────────
+    # The model stays standing in the interior view, so the recipe interior
+    # needs holes to stand in. Which room is CUT and which one is laid ON the
+    # model follows from outdoor/indoor plus its position relative to the
+    # floor plan — no per-room display field exists, deliberately.
+    area_model = bool(map3d.get("area_model"))
+    contour_world = _outline_world(map3d)
+    overlay_rooms: Dict[str, Dict[str, Any]] = {}
+    if area_model:
+        outside_indoor: List[Tuple[str, List[List[float]]]] = []
+        outside_outdoor: List[Dict[str, Any]] = []
+        for recipe in recipes:
+            outline = _room_outline_world(recipe)
+            if not outline or _bbox_inside(outline, contour_world):
+                continue
+            if recipe.get("always_visible"):
+                outside_outdoor.append(recipe)
+            else:
+                outside_indoor.append((str(recipe.get("room_id") or ""), outline))
+        cutout_polys = _cutouts(contour_world, outside_indoor)
+        if cutout_polys and building:
+            building["cutouts"] = cutout_polys
+        # Outdoor zones ON the model surface: no plate, no walls — but a
+        # position, so NPCs, markers and labels have somewhere to stand. The
+        # height is the model's walkable surface where it declares one,
+        # otherwise its lower edge; without a model the storey floor.
+        for recipe in outside_outdoor:
+            outline = _room_outline_world(recipe)
+            xs = [p[0] for p in outline]
+            zs = [p[1] for p in outline]
+            cx, cz = (min(xs) + max(xs)) / 2, (min(zs) + max(zs)) / 2
+            if building:
+                y = _num(building.get("walk_y_world"),
+                         _num(building.get("bottom_y")))
+            else:
+                y = int(recipe.get("level") or 0) * storey
+            overlay_rooms[str(recipe.get("room_id") or "")] = {
+                "centre": [_r(cx), _r(cz)],
+                "rect": {"x": _r(cx), "z": _r(cz),
+                         "w": _r(max(max(xs) - min(xs), 0.5)),
+                         "d": _r(max(max(zs) - min(zs), 0.5))},
+                "y": _r(y),
+            }
     for recipe in recipes:
         room_id = str(recipe.get("room_id") or "")
         room = by_room.get(room_id) or {}
@@ -970,15 +1088,24 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # the room recipe: openings are already normalized AND mirrored in,
     # ``exit`` keeps the recipe's dual frame (explicit = room-rect fraction,
     # derived = absolute plate fraction, flagged by ``exit_derived``).
-    room_blocks = [{
-        "room_id": r.get("room_id") or "",
-        "level": int(r.get("level") or 0),
-        "always_visible": bool(r.get("always_visible")),
-        "outline": r.get("outline") or [],
-        "openings": r.get("openings") or [],
-        "exit": r.get("exit"),
-        "exit_derived": bool(r.get("exit_derived")),
-    } for r in recipes]
+    room_blocks = []
+    for r in recipes:
+        block: Dict[str, Any] = {
+            "room_id": r.get("room_id") or "",
+            "level": int(r.get("level") or 0),
+            "always_visible": bool(r.get("always_visible")),
+            "outline": r.get("outline") or [],
+            "openings": r.get("openings") or [],
+            "exit": r.get("exit"),
+            "exit_derived": bool(r.get("exit_derived")),
+        }
+        # Zone on the model surface instead of a built room — the consumer
+        # takes centre/rect/y from HERE, because there is no plate to read
+        # them off (area location, plan-area-locations.md).
+        overlay = overlay_rooms.get(block["room_id"])
+        if overlay:
+            block["overlay"] = overlay
+        room_blocks.append(block)
 
     return {
         "signature": _signature(location, plan_width_m, recipes,
@@ -988,7 +1115,11 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "storey_m": _r(storey),
         "levels": [{"level": lv, "floor_y": _r(lv * storey)} for lv in levels],
         "style": STYLE,
-        "plates": _plates(map3d, recipes, levels, storey),
+        # Overlay rooms get no plate at all: they lie ON the model, and a
+        # texture surface floating at storey height would cut through it.
+        "plates": _plates(map3d, [r for r in recipes
+                                  if str(r.get("room_id") or "") not in overlay_rooms],
+                          levels, storey),
         "walls": walls,
         "extras": _elevator(map3d, levels, storey,
                             k if anchored else storey / 3),

@@ -366,6 +366,13 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     wk = raw.get("wall_kind")
     if isinstance(wk, str) and wk.strip():
         out["wall_kind"] = wk.strip()[:60]
+    # Area location (plan-area-locations.md): the location model STAYS in the
+    # interior view instead of fading out — the building outline and any
+    # indoor rooms placed outside it are cut out of it, outdoor rooms outside
+    # it become walkable zones ON its surface. Only set when true; absent =
+    # today's behaviour (single building, model fades).
+    if bool(raw.get("area_model")):
+        out["area_model"] = True
     return out
 
 
