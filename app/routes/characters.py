@@ -1594,6 +1594,34 @@ def delete_character_model3d(character_name: str) -> Dict[str, Any]:
 
 # --- Outfit batch: pre-warm T-pose + mesh for every saved outfit ---
 
+@router.get("/{character_name}/thoughts")
+def get_character_thoughts(character_name: str, limit: int = 50,
+                           before: str = "",
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The character's thought journal, newest first (plan-thought-journal.md).
+
+    ADMIN ONLY, and that is the whole access story: thoughts are private
+    cognition. They never reach the perception stream, another character's
+    prompt, a chat history or a player surface — the only other readers are
+    this character's own next thought prompt and its own consolidation.
+
+    ``before`` is the ts of the oldest row you already have (paging cursor);
+    ``limit`` is capped at 200. ``has_more`` says whether another page exists.
+    """
+    from app.models.thought_store import list_thoughts
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    limit = max(1, min(int(limit or 50), 200))
+    # One extra row decides has_more without a second count query.
+    rows = list_thoughts(character_name, limit=limit + 1, before=before or None)
+    has_more = len(rows) > limit
+    return {"thoughts": [{"ts": r["ts"], "location_id": r.get("location_id", ""),
+                          "room_id": r.get("room_id", ""),
+                          "content": r.get("content", "")}
+                         for r in rows[:limit]],
+            "has_more": has_more}
+
+
 async def _outfit_batch_body(request: Request) -> Dict[str, Any]:
     """Body of the two POSTs that carry a filter: ``{"slots": {slot: [item_id
     | null, …]}, "force": bool}``. A missing/empty ``slots`` means "every

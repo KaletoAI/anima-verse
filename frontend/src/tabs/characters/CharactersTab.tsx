@@ -24,6 +24,7 @@ import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from './TemplateField'
 import { SecretsEditor } from './SecretsEditor'
 import { SkillsTab } from './SkillsTab'
+import { ThoughtsTab } from './ThoughtsTab'
 import { WardrobeTab } from './WardrobeTab'
 import { KnownLocationsEditor } from './KnownLocationsEditor'
 import { NewCharacterDialog } from './NewCharacterDialog'
@@ -76,6 +77,7 @@ const SPECIAL_TABS: Array<{ id: string; label: string }> = [
   { id: 'home', label: 'Activity & Home' },
   { id: 'locations', label: 'Locations' },
   { id: 'skills', label: 'Skills' },
+  { id: 'thoughts', label: 'Thoughts' },
   { id: 'wardrobe', label: 'Wardrobe' },
   { id: 'secrets', label: 'Secrets' },
 ]
@@ -663,6 +665,8 @@ export function CharactersTab() {
               <ExpressionsTab character={selected} />
             ) : subTab === 'skills' ? (
               <SkillsTab character={selected} />
+            ) : subTab === 'thoughts' ? (
+              <ThoughtsTab character={selected} />
             ) : subTab === 'wardrobe' ? (
               <WardrobeTab character={selected} />
             ) : subTab === 'secrets' ? (

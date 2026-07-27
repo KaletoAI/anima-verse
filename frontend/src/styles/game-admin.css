@@ -2644,6 +2644,30 @@ html, * {
 .ga-mind-list .ts { opacity: 0.55; font-size: 11px; margin-right: 6px; }
 .ga-mind-empty { opacity: 0.5; font-size: 12px; }
 
+/* Thought journal (character tab): read-only history, newest first. The text
+   is the point, so it wraps and keeps its paragraphs. */
+.ga-thought-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ga-thought-entry {
+  border-left: 2px solid var(--border, #30363d);
+  padding-left: 10px;
+}
+.ga-thought-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.78em;
+  opacity: 0.6;
+}
+.ga-thought-text {
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Outfit batch (3D tab): the filter matrix — one block per slot, inside it
    "(empty)" plus one checkbox per piece. Scrolls once a wardrobe gets long. */
 .ga-outfit-batch-list {
