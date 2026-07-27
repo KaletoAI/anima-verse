@@ -17,7 +17,7 @@ keeps the whole existing inventory working and lets a deliberately neutral
 piece (a plain white shirt) belong everywhere.
 """
 
-from typing import Any, Dict, Iterable, List, Set
+from typing import Any, Dict, Iterable, List, Set, Tuple
 
 from app.core.log import get_logger
 
@@ -91,12 +91,42 @@ def visible_types(pieces: Dict[str, str]) -> List[List[str]]:
     return [_types_of(iid) for iid in visible.values() if iid]
 
 
-def common_types(pieces: Dict[str, str]) -> Set[str]:
-    """The tags ALL tagged visible pieces share — the reason a combination is
-    coherent, for a log line or a tooltip. Empty set when they share none;
-    with no tagged piece at all it is the whole vocabulary (everything goes).
+#: Slots whose pieces are UNDERWEAR: they never constrain a combination that
+#: has visible outerwear (user finding 2026-07-27 — an intimate lace bra under
+#: or peeking out of a business blouse is simply normal underwear). Only when
+#: NOTHING but underwear is visible do these pieces check against each other
+#: (a pure lingerie set still has to match itself).
+UNDERWEAR_SLOTS = {"underwear_top", "underwear_bottom"}
+
+
+def _visible_slot_types(pieces: Dict[str, str]) -> List[Tuple[str, List[str]]]:
+    """``(slot, tags)`` of the VISIBLE pieces of a combination.
+
+    Covered slots drop out via the render normalisation — a piece nobody sees
+    cannot clash with anything.
     """
-    tagged = [set(t) for t in visible_types(pieces) if t]
+    try:
+        from app.core.outfit_renderer import visible_equipped_pieces
+        visible = visible_equipped_pieces(pieces or {})
+    except Exception:
+        visible = {k: v for k, v in (pieces or {}).items() if v}
+    return [(slot, _types_of(iid)) for slot, iid in visible.items() if iid]
+
+
+def common_types(pieces: Dict[str, str]) -> Set[str]:
+    """The tags the RELEVANT visible pieces share — the reason a combination
+    is coherent, for a log line or a tooltip.
+
+    Relevant = the tagged NON-underwear pieces; underwear only counts when it
+    is all there is (see ``UNDERWEAR_SLOTS``). Empty set when they share none;
+    with no relevant tagged piece at all it is the whole vocabulary
+    (everything goes).
+    """
+    slot_types = _visible_slot_types(pieces)
+    outer = [set(t) for slot, t in slot_types
+             if t and slot not in UNDERWEAR_SLOTS]
+    tagged = outer or [set(t) for slot, t in slot_types
+                       if t and slot in UNDERWEAR_SLOTS]
     if not tagged:
         return set(CANONICAL_OUTFIT_TYPES)
     common = tagged[0]
@@ -108,9 +138,11 @@ def common_types(pieces: Dict[str, str]) -> Set[str]:
 def is_coherent(pieces: Dict[str, str]) -> bool:
     """Do the visible pieces of this combination go together?
 
-    True when every TAGGED visible piece shares at least one tag with all the
-    others. Untagged pieces are wildcards; a combination of nothing but
-    untagged pieces is coherent, and so is a single visible piece.
+    True when every relevant TAGGED visible piece shares at least one tag
+    with the others — underwear does not constrain outerwear (it only checks
+    against itself when nothing else is visible). Untagged pieces are
+    wildcards; a combination of nothing but untagged pieces is coherent, and
+    so is a single visible piece.
     """
     return bool(common_types(pieces))
 
