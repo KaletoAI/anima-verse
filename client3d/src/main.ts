@@ -137,6 +137,36 @@ async function startApp(username: string) {
   ground.receiveShadow = true;
   engine.scene.add(ground);
 
+  // Basement view: the global ground plane sits at height 0 across the whole
+  // map, so a storey below ground would stay hidden even after the tile's own
+  // plate ghosts (applyTileFade). While the interior view of a tile with a
+  // basement is up, a rectangular hole the size of that tile's cell is
+  // discarded out of this plane — same shader technique as the room clip
+  // (@anima/scene-render clip.ts), just inverted: inside the rect goes away.
+  // Uniforms are shared objects, so the frame hook can steer them per frame
+  // without recompiling.
+  const groundHole = { value: new THREE.Vector4(0, 0, 0, 0) }; // minX, minZ, maxX, maxZ
+  const groundHoleOn = { value: 0 };
+  const groundMat = ground.material as THREE.MeshStandardMaterial;
+  groundMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uHole = groundHole;
+    shader.uniforms.uHoleOn = groundHoleOn;
+    shader.vertexShader = `varying vec3 vHoleWorld;\n${shader.vertexShader}`
+      .replace('#include <project_vertex>',
+        '#include <project_vertex>\n\tvHoleWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;');
+    const head = 'uniform vec4 uHole;\nuniform float uHoleOn;\nvarying vec3 vHoleWorld;\n';
+    const test = `
+  if ( uHoleOn > 0.5 &&
+       vHoleWorld.x > uHole.x && vHoleWorld.x < uHole.z &&
+       vHoleWorld.z > uHole.y && vHoleWorld.z < uHole.w ) discard;
+`;
+    const body = head + shader.fragmentShader;
+    shader.fragmentShader = body.includes('#include <clipping_planes_fragment>')
+      ? body.replace('#include <clipping_planes_fragment>', `${test}\n#include <clipping_planes_fragment>`)
+      : body.replace('void main() {', `void main() {\n${test}`);
+  };
+  groundMat.customProgramCacheKey = () => 'ground-hole';
+
   // Nachbarschafts-Grid der Oberflächen-Arten (für Zusammenstellungen
   // wie die Küste: Verlauf Richtung Wasser-Nachbarn)
   setTerrainGrid(placeable.map((l) => ({ gx: l.grid_x!, gy: l.grid_y!, kind: gridSurfaceKind(l) })));
@@ -512,6 +542,7 @@ async function startApp(username: string) {
   let bob = 0;
   engine.addFrameHook((dt) => {
     let open: Tile | null = null;
+    let basementOpen: Tile | null = null;
     for (const tile of tiles.values()) {
       if (tile.isBuilding && tile.interior) {
         const d = Math.hypot(engine.target.x - tile.center.x, engine.target.z - tile.center.z);
@@ -524,9 +555,17 @@ async function startApp(username: string) {
           if (tile.outlineWalls.length) {
             applyWallCulling(tile, engine.camera.position.x, engine.camera.position.z);
           }
+          // Same condition as the ground-plate ghost in applyTileFade: while
+          // a basement scene's interior is up, the global ground opens too.
+          if (tile.hasBasement) basementOpen = tile;
         }
         if (tile.fadeTarget === 1 && tile.fade > 0.4) open = tile;
       }
+    }
+    groundHoleOn.value = basementOpen ? 1 : 0;
+    if (basementOpen) {
+      groundHole.value.set(basementOpen.center.x - CELL / 2, basementOpen.center.z - CELL / 2,
+                           basementOpen.center.x + CELL / 2, basementOpen.center.z + CELL / 2);
     }
 
     // Verdecker Richtung Kamera: bei offener Innenansicht Nachbar-Kacheln
