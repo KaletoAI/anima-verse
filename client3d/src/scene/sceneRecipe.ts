@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { applyClipOutline, CLIP_MAX_POINTS, placeModelSpec,
-  SpecVerifier, VERIFY_EPS } from '@anima/scene-render';
+import { applyClipOutline, buildExtra, buildPlaceholder, buildPlate, buildWall,
+  CLIP_MAX_POINTS, placeModelSpec, plateTargets, SpecVerifier, VERIFY_EPS,
+  wallLength, wallTargets } from '@anima/scene-render';
 import type { PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
-  type SceneModelSpec, type ScenePayload, type ScenePlate, type SceneWall,
+  type SceneExtra, type SceneModelSpec, type ScenePayload, type ScenePlate,
+  type SceneWall,
 } from '../api';
 import { BASE_FIGURE_HEIGHT_M } from './figures';
 import { loadGlb } from './propAssets';
@@ -15,28 +17,29 @@ import {
 } from './tiles';
 
 /**
- * Szenen-Rezept (schnittstellen-3d.md Teil B) — der Server rechnet, der
- * Client stellt dar.
+ * Scene recipe (schnittstellen-3d.md part B) — the server computes, the
+ * client renders.
  *
- * EIN Endpoint liefert die komplette Szene einer Location als fertige
- * Primitive (plates/walls/extras) und Platzierungs-Specs (models). Dieses
- * Modul stellt sie dar und trifft keine einzige eigene Geometrie-Entscheidung:
- * keine Öffnungs-Aufteilung, keine Spiegelung, keine Exit-Ableitung, keine
- * Fahrstuhl-Maße, keine Konstanten (0,07 / 0,14 / 0,12 / ±0,4 …) und keine
- * Farben. Alles davon kommt aus dem Payload.
+ * ONE endpoint delivers the complete scene of a location as finished
+ * primitives (plates/walls/extras) and placement specs (models). This module
+ * renders them and makes not a single geometry decision of its own: no
+ * opening split, no mirroring, no exit derivation, no elevator dimensions, no
+ * constants (0.07 / 0.14 / 0.12 / ±0.4 …) and no colours. All of that comes
+ * from the payload.
  *
- * Die Routine „Modell platzieren" (§ B2) und der Raum-Clip (§ B1) liegen seit
- * Stufe 2 in `@anima/scene-render` — dieselbe Rechnung, die die Admin-Vorschau
- * fährt; auch der 0,96-Rand des `fit_box`-Fallbacks wohnt dort. Hier bleiben
- * die Primitiv-Builder („Primitiv bauen") und der Sicht-Zustand.
+ * Since stage 2 the routine "place a model" (§ B2), the room clip (§ B1) and
+ * — since the primitive builders moved (N) — plate, wall segment, extra box
+ * and placeholder live in `@anima/scene-render`: the same arithmetic the
+ * admin preview runs, the 0.96 margin of the `fit_box` fallback included.
  *
- * Was hier bleibt, ist Sicht- und Interaktions-Zustand: `mountScene` füllt
- * die Tile-Felder der Innenansicht, damit LOD,
- * Crossfade, Etagen-Umschalter, Raum-Fokus, Wand-Culling, NPC-Platzierung und
- * Wegfindung unverändert weiterlaufen.
+ * What stays here is the MATERIAL of those primitives (the surface-texture
+ * chain, the payload colour vocabulary) plus view and interaction state:
+ * `mountScene` fills the tile fields of the interior view so that LOD,
+ * crossfade, level switch, room focus, wall culling, NPC placement and
+ * pathfinding keep running unchanged.
  *
- * 404 auf /scene = Legacy-Fall (kein Grundriss, kein Layout, kein Modell) —
- * dann rührt dieses Modul die Kachel nicht an.
+ * 404 on /scene = the legacy case (no floor plan, no layout, no model) —
+ * then this module leaves the tile alone.
  */
 
 const deg = (v: number | undefined) => ((v || 0) * Math.PI) / 180;
@@ -229,16 +232,17 @@ class Verifier {
   }
 }
 
-// ── DIE Platzierungs-Routine (§ B2) ───────────────────────────────────────
+// ── Materials for the shared primitive builders ──────────────────────────
+// The geometry of plate, wall, extra box and placeholder comes from
+// @anima/scene-render; what belongs to this client is the LOOK. That is the
+// side of the split that genuinely differs: the world-scale surface-texture
+// chain and the payload's colour vocabulary — the admin preview paints the
+// same primitives in its own preview colours.
 
-
-// ── Primitiv-Builder ─────────────────────────────────────────────────────
-
-/** Kachelbare Surface-Textur eines Kinds im WELT-Maßstab (size_m × k).
- *  Box- und Extrude-UVs brauchen je Stück einen Klon mit eigener repeat.
- *  `use` steuert die Fallback-Kette von surfaceFor: Böden fallen auf das
- *  globale "floor"-Kind zurück, Wände nicht (sonst klebt Bodenbelag an der
- *  Wand). */
+/** Tileable surface texture of a kind in WORLD scale (size_m × k). Box and
+ *  extrude UVs need a per-piece clone with its own repeat. `use` drives the
+ *  fallback chain of surfaceFor: floors fall back to the global "floor" kind,
+ *  walls deliberately do not (else floor covering sticks to the wall). */
 function tiledTexture(kind: string | undefined, use: 'floor' | 'wall', k: number,
                       repeat: (tileM: number) => [number, number]): THREE.Texture | null {
   const surf = kind ? surfaceFor(kind, use) : null;
@@ -251,81 +255,59 @@ function tiledTexture(kind: string | undefined, use: 'floor' | 'wall', k: number
   return tex;
 }
 
-/** Bodenplatte aus einem fertigen Primitiv: `thickness > 0` = nach unten
- *  extrudierter Körper mit Oberkante auf `top_y`, `thickness 0` = reine
- *  Textur-Fläche ohne Körper (Outdoor-Räume, § A5). */
-function buildPlate(plate: ScenePlate, k: number, style: ScenePayload['style']): THREE.Mesh {
+/** Material of a floor plate: the tiled surface texture of its kind, else the
+ *  payload's floor colour; upper storeys stay translucent. A body faces
+ *  outward only, a bare surface both ways. */
+function plateMaterial(plate: ScenePlate, k: number,
+                       style: ScenePayload['style']): THREE.MeshStandardMaterial {
   const solid = plate.thickness > 0;
   const upper = plate.opacity_role === 'upper';
-  const shape = new THREE.Shape();
-  plate.outline.forEach(([px, pz], i) => {
-    // Extrudierte Platten gehen als (x, z) hinein und drehen +90° (die
-    // Extrusion läuft dann nach unten); flache als (x, −z) mit −90°.
-    const sy = solid ? pz : -pz;
-    if (i === 0) shape.moveTo(px, sy);
-    else shape.lineTo(px, sy);
-  });
-  shape.closePath();
   const opacity = upper ? (style.upper_floor_opacity ?? 1) : 1;
+  const side = solid ? THREE.FrontSide : THREE.DoubleSide;
   const tex = tiledTexture(plate.texture_kind, 'floor', k, (tileM) => [1 / tileM, 1 / tileM]);
-  const mat = std(tex
-    ? { map: tex, transparent: upper, opacity, side: solid ? THREE.FrontSide : THREE.DoubleSide }
-    : { color: hex(style.floor_color), transparent: upper, opacity, side: solid ? THREE.FrontSide : THREE.DoubleSide });
-  const mesh = new THREE.Mesh(
-    solid
-      ? new THREE.ExtrudeGeometry(shape, { depth: plate.thickness, bevelEnabled: false })
-      : new THREE.ShapeGeometry(shape),
-    mat);
-  mesh.rotation.x = solid ? Math.PI / 2 : -Math.PI / 2;
-  mesh.position.y = plate.top_y;
-  mesh.receiveShadow = true;
-  mesh.castShadow = plate.level > 0 && solid;
-  return mesh;
+  return std(tex
+    ? { map: tex, transparent: upper, opacity, side }
+    : { color: hex(style.floor_color), transparent: upper, opacity, side });
 }
 
-/** Wandsegment aus einem fertigen Primitiv: Türen/Passagen sind bereits
- *  Lücken, ein Fenster kommt als Brüstung + Sturz + eigener Glas-Eintrag —
- *  je eine Box, nichts wird hier geteilt. */
-function buildWall(wall: SceneWall, k: number, style: ScenePayload['style'],
-                   len: number): THREE.Mesh {
-  const upper = wall.opacity_role === 'upper';
-  let mat: THREE.MeshStandardMaterial;
+/** Material of a wall segment: a glass band from the glass vocabulary, else
+ *  the tiled wall texture or the wall colour. `len` tiles the texture across
+ *  the segment's actual length. */
+function wallMaterial(wall: SceneWall, k: number, style: ScenePayload['style'],
+                      len: number): THREE.MeshStandardMaterial {
   if (wall.glass) {
-    mat = std({ color: hex(style.glass_color), transparent: true,
-                opacity: style.glass_opacity ?? 0.25, roughness: 0.3 });
-  } else {
-    const tex = tiledTexture(wall.texture_kind, 'wall', k,
-      (tileM) => [len / tileM, wall.height / tileM]);
-    const opacity = upper ? (style.upper_wall_opacity ?? 1) : 1;
-    mat = std(tex
-      ? { map: tex, transparent: upper, opacity }
-      : { color: hex(style.wall_color), transparent: upper, opacity });
+    return std({ color: hex(style.glass_color), transparent: true,
+                 opacity: style.glass_opacity ?? 0.25, roughness: 0.3 });
   }
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(len, wall.height, wall.thickness), mat);
-  const mx = (wall.from[0] + wall.to[0]) / 2;
-  const mz = (wall.from[1] + wall.to[1]) / 2;
-  mesh.position.set(mx, wall.base_y + wall.height / 2, mz);
-  mesh.rotation.y = -Math.atan2(wall.to[1] - wall.from[1], wall.to[0] - wall.from[0]);
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-  return mesh;
+  const upper = wall.opacity_role === 'upper';
+  const opacity = upper ? (style.upper_wall_opacity ?? 1) : 1;
+  const tex = tiledTexture(wall.texture_kind, 'wall', k,
+    (tileM) => [len / tileM, wall.height / tileM]);
+  return std(tex
+    ? { map: tex, transparent: upper, opacity }
+    : { color: hex(style.wall_color), transparent: upper, opacity });
 }
 
-// ── Raum-Clipping (§ B1 `clip_outline`) ──────────────────────────────────
+/** Material of an extra box: the part kind picks colour and opacity from the
+ *  payload's style vocabulary — glass translucent, cabin semi-transparent,
+ *  pad and shaft opaque. */
+function extraMaterial(extra: SceneExtra,
+                       style: ScenePayload['style']): THREE.MeshStandardMaterial {
+  const glass = extra.kind.endsWith('_glass');
+  const cabin = extra.kind === 'elevator_cabin';
+  const color = glass ? style.glass_color
+    : extra.kind === 'elevator_pad' ? style.elevator_pad_color
+      : cabin ? style.elevator_cabin_color : style.elevator_frame_color;
+  const opacity = glass ? (style.elevator_glass_opacity ?? style.glass_opacity ?? 0.22)
+    : cabin ? (style.elevator_cabin_opacity ?? 1) : 1;
+  return std({ color: hex(color), transparent: opacity < 1, opacity,
+               roughness: glass ? 0.3 : 0.85 });
+}
 
-
-
-/** Platzhalter für ein Prop ohne Mesh: Box in den gelieferten Maßen (schon
- *  Welt-Meter), Ursprung im Zentrum der Unterkante. */
-function buildPlaceholder(dims: { w: number; d: number; h: number }): THREE.Mesh {
-  const geo = new THREE.BoxGeometry(Math.max(dims.w, 0.01), Math.max(dims.h, 0.01),
-                                    Math.max(dims.d, 0.01));
-  geo.translate(0, Math.max(dims.h, 0.01) / 2, 0);
-  const mesh = new THREE.Mesh(geo, std({
-    color: 0x9a9a9a, roughness: 0.9, transparent: true, opacity: 0.5,
-  }));
-  mesh.receiveShadow = true;
-  return mesh;
+/** Material of the placeholder for a prop without a mesh: matte, half
+ *  translucent grey — readable as a gap without dominating the scene. */
+function placeholderMaterial(): THREE.MeshStandardMaterial {
+  return std({ color: 0x9a9a9a, roughness: 0.9, transparent: true, opacity: 0.5 });
 }
 
 // ── Mount ────────────────────────────────────────────────────────────────
@@ -459,7 +441,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   const builtPlates: { mesh: THREE.Mesh; plate: ScenePlate }[] = [];
   const builtWalls: { mesh: THREE.Mesh; wall: SceneWall }[] = [];
   for (const plate of scene.plates) {
-    const mesh = buildPlate(plate, k, style);
+    const mesh = buildPlate(THREE, plate, plateMaterial(plate, k, style));
+    // Shadow flags are view state and stay here: upper storeys cast, every
+    // plate receives.
+    mesh.receiveShadow = true;
+    mesh.castShadow = plate.level > 0 && plate.thickness > 0;
     parentFor(plate.room_id).add(mesh);
     builtPlates.push({ mesh, plate });
     if (!plate.room_id) {
@@ -495,9 +481,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   // Bereits um jede Öffnung geteilt; das Glasband eines Fensters ist ein
   // eigener Eintrag. `outward_normal` kommt mit und speist das Culling.
   for (const wall of scene.walls) {
-    const len = Math.hypot(wall.to[0] - wall.from[0], wall.to[1] - wall.from[1]);
+    const len = wallLength(wall);
     if (len < 1e-4) continue;
-    const mesh = buildWall(wall, k, style, len);
+    const mesh = buildWall(THREE, wall, wallMaterial(wall, k, style, len));
     parentFor(wall.room_id).add(mesh);
     builtWalls.push({ mesh, wall });
     if (!wall.glass) {
@@ -514,24 +500,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     }
   }
 
-  // ── Extras (Fahrstuhl) ──────────────────────────────────────────────────
-  // Typisierte Boxen, Zentrum + Größe, direkt aus dem Payload. Die Pads
-  // liefern zugleich die Haltepunkte fürs Etagen-Routing.
+  // ── Extras (elevator) ───────────────────────────────────────────────────
+  // Typed boxes, centre + size, straight from the payload — one entry per
+  // part. The pads double as the stops for the level routing.
   let elevatorXZ: THREE.Vector2 | null = null;
   for (const extra of scene.extras) {
-    const glass = extra.kind.endsWith('_glass');
-    const cabin = extra.kind === 'elevator_cabin';
-    const color = glass ? style.glass_color
-      : extra.kind === 'elevator_pad' ? style.elevator_pad_color
-        : cabin ? style.elevator_cabin_color : style.elevator_frame_color;
-    const opacity = glass ? (style.elevator_glass_opacity ?? style.glass_opacity ?? 0.22)
-      : cabin ? (style.elevator_cabin_opacity ?? 1) : 1;
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(extra.size[0], extra.size[1], extra.size[2]),
-      std({ color: hex(color), transparent: opacity < 1, opacity, roughness: glass ? 0.3 : 0.85 }));
-    mesh.position.set(extra.center[0], extra.center[1], extra.center[2]);
-    mesh.receiveShadow = false;
-    g.add(mesh);
+    g.add(buildExtra(THREE, extra, extraMaterial(extra, style)));
     elevatorXZ = elevatorXZ ?? new THREE.Vector2(extra.center[0], extra.center[2]);
     if (extra.kind === 'elevator_pad' && extra.level !== undefined) {
       tile.elevatorStops = tile.elevatorStops ?? new Map();
@@ -635,7 +609,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     if (!source && spec.placeholder_dims) {
       // missing / has_model:false → Platzhalter in gelieferter Größe; die
       // Platzierung wird NIE verworfen (§ A2).
-      const ph = buildPlaceholder(spec.placeholder_dims);
+      const ph = buildPlaceholder(THREE, spec.placeholder_dims, placeholderMaterial());
+      ph.receiveShadow = true;
       ph.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1]);
       ph.rotation.y = -deg(spec.yaw_deg);
       parentFor(spec.room_id).add(ph);
@@ -695,30 +670,20 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     sampleRoomWalkables(tile, id, rg, walkY.get(id));
   }
 
-  // ── Verify (§ B5a): Primitive gegen das Soll ────────────────────────────
-  // Erst jetzt vermessen: die Kachel-Matrizen stehen, jedes Objekt hängt an
-  // seinem endgültigen Platz. Platten prüfen Oberkante (und Unterkante bei
-  // Körpern), Wände Fuß-/Oberkante und Mitte.
+  // ── Verify (§ B5a): primitives against the target ───────────────────────
+  // Only now measure: the tile matrices are set, every object hangs in its
+  // final place. WHICH numbers a plate or a wall has to match follows from
+  // the payload and therefore comes from the shared package
+  // (plateTargets/wallTargets) — the admin preview diffs the same fields.
   if (verify.active) {
     tile.group.updateMatrixWorld(true);
     for (const { mesh, plate } of builtPlates) {
-      const name = `plate:${plate.room_id || 'level'}@${plate.level}`;
-      const targets = [{ field: 'top_y', actual: (b: THREE.Box3) => b.max.y, target: plate.top_y }];
-      if (plate.thickness > 0) {
-        targets.push({ field: 'bottom_y', actual: (b: THREE.Box3) => b.min.y,
-                       target: plate.top_y - plate.thickness });
-      }
-      verify.primitive(mesh, tile.center, name, targets);
+      verify.primitive(mesh, tile.center,
+        `plate:${plate.room_id || 'level'}@${plate.level}`, plateTargets(plate));
     }
     for (const { mesh, wall } of builtWalls) {
-      verify.primitive(mesh, tile.center, `wall:${wall.room_id || 'contour'}@${wall.level}`, [
-        { field: 'base_y', actual: (b) => b.min.y, target: wall.base_y },
-        { field: 'top_y', actual: (b) => b.max.y, target: wall.base_y + wall.height },
-        { field: 'centre.x', actual: (b) => (b.min.x + b.max.x) / 2,
-          target: (wall.from[0] + wall.to[0]) / 2 },
-        { field: 'centre.z', actual: (b) => (b.min.z + b.max.z) / 2,
-          target: (wall.from[1] + wall.to[1]) / 2 },
-      ]);
+      verify.primitive(mesh, tile.center,
+        `wall:${wall.room_id || 'contour'}@${wall.level}`, wallTargets(wall));
     }
   }
 
