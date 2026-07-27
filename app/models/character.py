@@ -1077,7 +1077,7 @@ def _schedule_background_variant(character_name: str) -> None:
 
 
 def get_movement_target(character_name: str) -> str:
-    """Liefert die aktuell anvisierte Reise-Ziel-Location-ID (oder '')."""
+    """Returns the currently targeted travel destination location id (or '')."""
     if not character_name:
         return ""
     profile = get_character_profile(character_name) or {}
@@ -1085,13 +1085,16 @@ def get_movement_target(character_name: str) -> str:
 
 
 def set_movement_target(character_name: str, location_id: str) -> None:
-    """Sets the travel target id. Clearing it (empty id) also drops the
-    stored journey dict — target and journey always live and die together."""
+    """Sets the travel target id. Clearing it (empty id) or pointing it at a
+    different target than the stored journey's drops the journey dict —
+    target and journey always live and die together."""
     if not character_name:
         return
     profile = get_character_profile(character_name)
-    profile["movement_target"] = (location_id or "").strip()
-    if not profile["movement_target"]:
+    new_target = (location_id or "").strip()
+    profile["movement_target"] = new_target
+    j = profile.get("journey")
+    if not new_target or (isinstance(j, dict) and j.get("target") != new_target):
         profile.pop("journey", None)
     save_character_profile(character_name, profile)
 
@@ -1225,13 +1228,13 @@ def save_character_current_location(character_name: str = "", location: str = ""
             profile.pop("journey", None)
     profile["current_location"] = location
     profile["location_changed_at"] = utc_now_iso()
-    # current_room beim Location-Wechsel direkt auf den Entry-Room der NEUEN
-    # Location setzen (statt nur zu leeren). Sonst hinterlaesst jeder Aufrufer,
-    # der danach keinen Raum explizit setzt (Avatar-Move, Teleport, Scheduler),
-    # einen raumlosen Char — dessen Utterances bekommen room_id='' und fallen aus
-    # dem raumgefilterten Chatfenster. Ein Aufrufer kann danach weiterhin einen
-    # spezifischen Raum am neuen Ort setzen (gewinnt, weil spaeter). Location ohne
-    # Raeume / Off-Map-Sentinel -> leer (kein Entry-Room).
+    # On a location change, set current_room directly to the entry room of the
+    # NEW location (instead of just clearing it). Otherwise every caller that
+    # sets no room explicitly afterwards (avatar move, teleport, scheduler)
+    # leaves a roomless character — its utterances get room_id='' and drop out
+    # of the room-filtered chat window. A caller can still set a specific room
+    # at the new place afterwards (wins, because later). Location without
+    # rooms / off-map sentinel -> empty (no entry room).
     if location and location != old_location:
         from app.models.world import get_location_by_id, get_entry_room_id
         _new_loc = get_location_by_id(location)

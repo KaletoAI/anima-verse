@@ -60,9 +60,9 @@ def journey_state(path: List[str], started_at_game: str, now_game: datetime,
 
 
 def get_journey(character_name: str) -> Dict[str, Any] | None:
-    """The character's active journey dict, or None. A journey without a
-    movement_target is stale (a manual teleport cleared the target) and is
-    treated as absent."""
+    """The character's active journey dict, or None. A journey whose target
+    does not match movement_target is stale (a manual teleport cleared the
+    target, or a legacy writer re-pointed it) and is treated as absent."""
     if not character_name:
         return None
     from app.models.character import get_character_profile
@@ -71,7 +71,7 @@ def get_journey(character_name: str) -> Dict[str, Any] | None:
     if not (isinstance(j, dict) and j.get("path") and j.get("target")
             and j.get("started_at_game")):
         return None
-    if not (profile.get("movement_target") or "").strip():
+    if (profile.get("movement_target") or "").strip() != j.get("target"):
         return None
     return j
 
