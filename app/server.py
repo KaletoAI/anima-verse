@@ -314,6 +314,10 @@ async def lifespan(app: FastAPI):
     await _agent_loop.start()
     logger.info("AgentLoop bereit!")
 
+    # TravelTicker: settles running journeys independently of the AgentLoop.
+    from app.core.travel_engine import get_travel_ticker
+    await get_travel_ticker().start()
+
     # Task-Queue Worker erst starten, wenn ALLE Handler registriert sind
     # (sonst schlagen recovered persistierte Tasks beim Recovery fehl).
     from app.core.task_queue import get_task_queue
@@ -400,6 +404,11 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await _telegram_polling.stop()
+    try:
+        from app.core.travel_engine import get_travel_ticker
+        await get_travel_ticker().stop()
+    except Exception as _te:
+        logger.debug("TravelTicker stop failed: %s", _te)
     try:
         from app.core.agent_loop import get_agent_loop
         await get_agent_loop().stop()

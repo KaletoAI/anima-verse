@@ -14,6 +14,7 @@ Stored on the character profile (see Task 2):
     }
 ``movement_target`` stays the plain target-id field existing readers use.
 """
+import asyncio
 import math
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
@@ -200,3 +201,51 @@ def advance_all_journeys() -> None:
                                                 _preserve_movement_target=True)
         except Exception as e:
             logger.warning("advance journey failed for %s: %s", name, e)
+
+
+_TICK_SECONDS = 5.0
+
+
+class TravelTicker:
+    """Background loop that settles journeys every few seconds.
+
+    Runs independently of the AgentLoop: positions must advance even while
+    every character is idle or the loop is paused. A frozen world needs no
+    special casing — the game clock stands still, so journey_state simply
+    stops moving."""
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run(), name="travel-ticker")
+            logger.info("TravelTicker started (%.0fs interval)", _TICK_SECONDS)
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+            logger.info("TravelTicker stopped")
+
+    async def _run(self) -> None:
+        while True:
+            try:
+                advance_all_journeys()
+            except Exception:
+                logger.exception("travel tick failed")
+            await asyncio.sleep(_TICK_SECONDS)
+
+
+_ticker: TravelTicker | None = None
+
+
+def get_travel_ticker() -> TravelTicker:
+    global _ticker
+    if _ticker is None:
+        _ticker = TravelTicker()
+    return _ticker
