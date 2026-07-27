@@ -158,14 +158,28 @@ def count_combos(choices: Dict[str, List[Optional[str]]]) -> int:
 
 
 def _iter_combos(choices: Dict[str, List[Optional[str]]],
+                 coherent_only: bool = False,
                  ) -> Iterator[Dict[str, str]]:
     """Lazy enumeration: yields ``{slot: item_id}`` per combination, empty
-    slots left out. The all-empty combination is skipped."""
+    slots left out. The all-empty combination is skipped.
+
+    ``coherent_only`` additionally drops combinations whose visible pieces
+    share no outfit type (app/core/outfit_coherence.py) — a party shirt with
+    work trousers is a render nobody wants. Still lazy: the filter sits in the
+    generator, so a million-combination product is never materialised.
+    """
     slots = list(choices)
+    is_coherent = None
+    if coherent_only:
+        from app.core.outfit_coherence import is_coherent as _ic
+        is_coherent = _ic
     for picks in itertools.product(*(choices[s] for s in slots)):
         pieces = {slot: pid for slot, pid in zip(slots, picks) if pid}
-        if pieces:
-            yield pieces
+        if not pieces:
+            continue
+        if is_coherent is not None and not is_coherent(pieces):
+            continue
+        yield pieces
 
 
 def _signature(pieces: Dict[str, str]) -> str:
@@ -256,36 +270,54 @@ def estimate_seconds_per_combo() -> float:
 
 def combo_stats(character_name: str,
                 slots_filter: Optional[Dict[str, Any]] = None,
-                force: bool = False) -> Dict[str, Any]:
-    """``{total, missing, missing_exact, est_seconds, error}`` for a filter.
+                force: bool = False,
+                coherent_only: bool = True) -> Dict[str, Any]:
+    """``{total, total_exact, missing, missing_exact, est_seconds, error}``.
 
-    ``total`` is arithmetic and therefore instant at any size. ``missing``
-    needs one signature per combination, so it is exact only up to
-    ``MAX_EXACT_COMBOS``; above that the caller is told ``missing_exact:
-    False`` and shows "up to". With ``force`` everything is re-rendered, so
-    missing == total by definition.
+    Without the coherence filter ``total`` is arithmetic and therefore instant
+    at any size. WITH it there is nothing to multiply — whether a combination
+    matches depends on its pieces — so the total has to be counted by
+    enumeration, which is only affordable up to ``MAX_EXACT_COMBOS``. Above
+    that the arithmetic (unfiltered) total is reported as an upper bound and
+    ``total_exact`` is False, so the dialog says "up to" on the total too.
+
+    ``missing`` needs one signature per combination and is exact under the
+    same ceiling. With ``force`` everything is re-rendered, so missing ==
+    total by definition.
     """
     options = combo_options(character_name)
     choices, error = _resolve_filter(options, slots_filter)
     if error:
-        return {"total": 0, "missing": 0, "missing_exact": True,
-                "est_seconds": 0.0, "error": error}
-    total = count_combos(choices)
+        return {"total": 0, "total_exact": True, "missing": 0,
+                "missing_exact": True, "est_seconds": 0.0, "error": error}
+    gross = count_combos(choices)
     per = estimate_seconds_per_combo()
-    if force or total > MAX_EXACT_COMBOS:
-        missing = total
+    total = gross
+    total_exact = True
+    if gross > MAX_EXACT_COMBOS:
+        missing = gross
         exact = bool(force)
+        total_exact = not coherent_only
     else:
-        have = _mesh_signatures(character_name)
         # UNIQUE signatures: combinations differing only in fully COVERED
         # pieces (boxers under trousers) share one signature since the
         # visibility normalisation in _equipped_signature — they are one
         # render, so they must be one unit of "missing" too.
-        missing = len({sig for pieces in _iter_combos(choices)
-                       if (sig := _signature(pieces)) not in have})
+        have = set() if force else _mesh_signatures(character_name)
+        signatures = set()
+        missing_sigs = set()
+        for pieces in _iter_combos(choices, coherent_only):
+            sig = _signature(pieces)
+            signatures.add(sig)
+            if sig not in have:
+                missing_sigs.add(sig)
+        if coherent_only:
+            total = len(signatures)
+        missing = len(missing_sigs)
         exact = True
-    return {"total": total, "missing": missing, "missing_exact": exact,
-            "est_seconds": round(missing * per, 1), "error": ""}
+    return {"total": total, "total_exact": total_exact, "missing": missing,
+            "missing_exact": exact, "est_seconds": round(missing * per, 1),
+            "error": ""}
 
 
 # ── Status of the live process ──────────────────────────────────────────
@@ -389,6 +421,10 @@ def _handle_outfit_combos(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     character_name = str(payload.get("character") or "")
     force = bool(payload.get("force"))
+    # Stored in the payload, so a run resumed after a restart filters exactly
+    # as it was started. Absent (a task queued before CO3) = unfiltered, which
+    # is what those runs were started as.
+    coherent_only = bool(payload.get("coherent_only"))
     task_id = str(payload.get("_task_id") or "")
     options = combo_options(character_name)
     choices, error = _resolve_filter(options, payload.get("slots"))
@@ -411,7 +447,7 @@ def _handle_outfit_combos(payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Outfit combos %s: %d combination(s), force=%s, %d cached",
                 character_name, total, force, len(have))
     try:
-        for pieces in _iter_combos(choices):
+        for pieces in _iter_combos(choices, coherent_only):
             if task_id and tq.is_task_cancelled(task_id):
                 cancelled = True
                 logger.info("Outfit combos %s: cancelled after %d/%d",
@@ -457,13 +493,14 @@ def _handle_outfit_combos(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def start(character_name: str, slots_filter: Optional[Dict[str, Any]] = None,
-          force: bool = False) -> Dict[str, Any]:
+          force: bool = False, coherent_only: bool = True) -> Dict[str, Any]:
     """Submits the batch as ONE persistent queue task at low priority.
 
     Returns ``{"ok": True, "task_id": …, "total": …, "missing": …,
     "est_seconds": …}`` or ``{"ok": False, "error": …}`` —
     ``error="already running"`` is the double-start guard (at most one
-    pending/running batch per character).
+    pending/running batch per character). ``coherent_only`` travels IN the
+    payload, so a run resumed after a restart filters as it was started.
     """
     options = combo_options(character_name)
     if not options:
@@ -471,7 +508,7 @@ def start(character_name: str, slots_filter: Optional[Dict[str, Any]] = None,
     choices, error = _resolve_filter(options, slots_filter)
     if error:
         return {"ok": False, "error": error}
-    stats = combo_stats(character_name, slots_filter, force)
+    stats = combo_stats(character_name, slots_filter, force, coherent_only)
     if not stats["total"]:
         return {"ok": False, "error": "the filter yields no combination"}
     if queue_state(character_name)["state"] != "none":
@@ -482,15 +519,17 @@ def start(character_name: str, slots_filter: Optional[Dict[str, Any]] = None,
         task_type=TASK_TYPE,
         payload={"character": character_name,
                  "slots": {slot: list(opts) for slot, opts in choices.items()},
-                 "force": force},
+                 "force": force, "coherent_only": coherent_only},
         queue_name="default", agent_name=character_name,
         priority=PRIORITY_LOW, max_retries=0)
     if not task_id:
         return {"ok": False, "error": "queue rejected the task"}
-    logger.info("Outfit combos %s: queued %s — %d combination(s), force=%s",
-                character_name, task_id, stats["total"], force)
+    logger.info("Outfit combos %s: queued %s — %d combination(s), force=%s, "
+                "coherent_only=%s", character_name, task_id, stats["total"],
+                force, coherent_only)
     return {"ok": True, "task_id": task_id, "total": stats["total"],
-            "missing": stats["missing"], "missing_exact": stats["missing_exact"],
+            "total_exact": stats["total_exact"], "missing": stats["missing"],
+            "missing_exact": stats["missing_exact"],
             "est_seconds": stats["est_seconds"]}
 
 

@@ -1636,7 +1636,12 @@ async def _outfit_batch_body(request: Request) -> Dict[str, Any]:
     if slots is not None and not isinstance(slots, dict):
         raise HTTPException(status_code=400,
                             detail="slots must be an object of slot -> options")
-    return {"slots": slots or None, "force": bool(body.get("force"))}
+    # coherent_only defaults to TRUE server-side: cutting the combination set
+    # down to what actually goes together is the point of the feature, so an
+    # older client that does not send the field gets the filtered set.
+    coherent = body.get("coherent_only")
+    return {"slots": slots or None, "force": bool(body.get("force")),
+            "coherent_only": True if coherent is None else bool(coherent)}
 
 
 @router.get("/{character_name}/outfit-batch")
@@ -1664,7 +1669,8 @@ async def estimate_character_outfit_batch(character_name: str,
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     body = await _outfit_batch_body(request)
-    stats = outfit_batch.combo_stats(character_name, body["slots"], body["force"])
+    stats = outfit_batch.combo_stats(character_name, body["slots"], body["force"],
+                                     body["coherent_only"])
     if stats.get("error"):
         raise HTTPException(status_code=400, detail=str(stats["error"]))
     return {k: v for k, v in stats.items() if k != "error"}
@@ -1680,13 +1686,16 @@ async def start_character_outfit_batch(character_name: str,
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     body = await _outfit_batch_body(request)
-    res = outfit_batch.start(character_name, body["slots"], force=body["force"])
+    res = outfit_batch.start(character_name, body["slots"], force=body["force"],
+                             coherent_only=body["coherent_only"])
     if not res.get("ok"):
         error = str(res.get("error") or "")
         raise HTTPException(status_code=409 if error == "already running" else 400,
                             detail=error)
     return {"status": "started", "task_id": res.get("task_id", ""),
-            "total": res.get("total", 0), "missing": res.get("missing", 0),
+            "total": res.get("total", 0),
+            "total_exact": bool(res.get("total_exact", True)),
+            "missing": res.get("missing", 0),
             "missing_exact": bool(res.get("missing_exact", True)),
             "est_seconds": res.get("est_seconds", 0.0)}
 
