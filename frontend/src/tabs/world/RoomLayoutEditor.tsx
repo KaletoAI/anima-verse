@@ -1113,6 +1113,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             </select>
           </label>
         ) : null}
+        {onMap3d ? (
+          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+            title={t('For villages, lakes and other AREAS: the location model stays in the interior view and gets holes cut into it — the floor plan plus every indoor room placed outside it. Outdoor rooms outside the plan become walkable zones on the model surface. Off = single building, the model fades out.')}>
+            <input type="checkbox" checked={!!map3d?.area_model}
+              onChange={(e) => onMap3d('area_model', e.target.checked || undefined)} />
+            <span>{t('Area location (model stays in interior view)')}</span>
+          </label>
+        ) : null}
       </div>
 
       {/* Scale anchor missing: floor-plan geometry has no real size without

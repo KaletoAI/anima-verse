@@ -128,6 +128,11 @@ export interface Map3D {
    *  per level). A room wall keeps its own surfaces.wall. Absent = the shell
    *  renders in style.wall_color. */
   wall_kind?: string
+  /** Area location: the location MODEL stays standing in the interior view
+   *  and gets holes instead — the floor plan plus every indoor room placed
+   *  outside it. Outdoor rooms outside the plan become zones on the model
+   *  surface. Absent = today's behaviour (single building, model fades). */
+  area_model?: boolean
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
    *  8×8 reference square, auto-closed — the client renders floor plates
    *  and walls per used level from it. Absent = rectangle as before. */

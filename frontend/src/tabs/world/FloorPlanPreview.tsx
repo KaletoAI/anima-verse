@@ -24,10 +24,10 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
-import { buildExtra, buildPlaceholder, buildPlate, buildWall,
+import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   disposeClipMaterials, placeModelSpec, plateTargets, SpecVerifier,
   VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render'
-import type { VerifyRow } from '@anima/scene-render'
+import type { CutoutHandle, VerifyRow } from '@anima/scene-render'
 import { useToast } from '../../lib/Toast'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 
@@ -137,6 +137,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
      *  solo view of a BASEMENT has to see through it. */
     ground: Mesh
   } | null>(null)
+  // Cutout handle of the last rebuild (area locations): its material clones
+  // must be released before the next one patches fresh clones.
+  const cutoutRef = useRef<CutoutHandle | null>(null)
   const roomsRef = useRef(rooms)
   roomsRef.current = rooms
   const showModelsRef = useRef(showModels)
@@ -472,6 +475,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       else if (m) disposeMat(m)
       for (const c of o.children) disposeSafe(c)
     }
+    // The previous rebuild's cutout clones go before the subtree does — they
+    // sit on __noDispose clones that disposeSafe deliberately leaves alone.
+    cutoutRef.current?.dispose()
+    cutoutRef.current = null
     for (const child of [...boxes.children]) {
       boxes.remove(child)
       disposeSafe(child)
@@ -698,6 +705,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         placed.updateMatrixWorld(true)
         const bb = new THREE.Box3().setFromObject(placed)
         buildingTopY = bb.max.y
+        // Area location: the model keeps standing and gets its holes. The
+        // preview IS the interior view, so they are always on — no fade state
+        // to follow here. Polygons are world metres around the origin, which
+        // is exactly where this preview builds.
+        if (spec.cutouts?.length) {
+          cutoutRef.current = applyCutouts(THREE, placed, spec.cutouts)
+          cutoutRef.current.setEnabled(true)
+        }
         continue
       }
       if (spec.role === 'room') {
