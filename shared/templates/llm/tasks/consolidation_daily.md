@@ -7,6 +7,7 @@ placeholders:
   existing: Existing daily summary text (empty if none)
   lang_instruction: Optional language instruction (empty for English)
   contents: Bullet list of that day's episodic memories
+  thoughts_of_day: That day's private thoughts as a line list (empty if none)
 ---
 ## system
 You are a summarization assistant. Reply with ONLY the summary — no JSON, no explanation, no commentary.
@@ -20,7 +21,14 @@ Existing daily summary:
 {% endif %}
 Individual memories from this day:
 {{ contents }}
+{% if thoughts_of_day %}
+
+Inner life of the day — what {{ character_name }} thought while it happened
+(private; nobody else witnessed this):
+{{ thoughts_of_day }}
+{% endif %}
 
 Write 3-5 compact sentences from {{ character_name }}'s perspective (third person).
 Focus on: key moments, people involved, emotions, decisions.
-Reply with ONLY the summary.{{ lang_instruction }}
+{% if thoughts_of_day %}Let the inner life colour WHY things happened — but write about the day, not about the thinking.
+{% endif %}Reply with ONLY the summary.{{ lang_instruction }}

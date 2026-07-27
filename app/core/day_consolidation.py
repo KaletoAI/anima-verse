@@ -22,6 +22,62 @@ logger = get_logger("day_consolidation")
 _DEFAULT_MAIN_SLEEP_MIN_HOURS = 4
 _DEFAULT_MAX_BLOCK_OPEN_HOURS = 30
 
+# Thought journal (plan-thought-journal.md): character budget of the inner-life
+# block handed to a daily consolidation, and how long RAW thoughts survive.
+# Raw is transient, the consolidated day is permanent — the same deal chat
+# history has. Both in SYSTEM time; module constants, no config sprawl.
+THOUGHTS_OF_DAY_CHARS = 2000
+THOUGHT_RETENTION_DAYS = 7
+
+
+def thoughts_of_day_block(character_name: str, start_ts: str,
+                          end_ts: str) -> str:
+    """The character's thoughts of a window as a compact line list, oldest
+    first, hard-capped at ``THOUGHTS_OF_DAY_CHARS``.
+
+    Formatting only — WHAT a consolidation does with the inner life is decided
+    by the templates, not here. Empty window → empty string, and the templates
+    then render no block at all.
+    """
+    try:
+        from app.models.thought_store import thoughts_of_range
+        rows = thoughts_of_range(character_name, start_ts, end_ts)
+    except Exception as e:
+        logger.debug("thoughts_of_day_block(%s): %s", character_name, e)
+        return ""
+    lines: List[str] = []
+    used = 0
+    for row in rows:
+        text = " ".join((row.get("content") or "").split())
+        if not text:
+            continue
+        overhead = 2 + (1 if lines else 0)
+        room = THOUGHTS_OF_DAY_CHARS - used - overhead
+        if room <= 0:
+            break
+        if len(text) > room:
+            text = text[:room - 1].rstrip() + "…"
+            if len(text) <= 1:
+                break
+        lines.append(f"- {text}")
+        used += overhead + len(text)
+    return "\n".join(lines)
+
+
+def thoughts_of_date(character_name: str, date_key: str) -> str:
+    """``thoughts_of_day_block`` for a calendar day ("YYYY-MM-DD") — the shape
+    the memory/diary consolidations work in. An unusable date yields ""."""
+    if not character_name or not date_key or len(date_key) < 10:
+        return ""
+    try:
+        from datetime import timedelta
+        day = parse_iso(f"{date_key[:10]}T00:00:00+00:00")
+        return thoughts_of_day_block(character_name, day.isoformat(),
+                                     (day + timedelta(days=1)).isoformat())
+    except Exception as e:
+        logger.debug("thoughts_of_date(%s, %s): %s", character_name, date_key, e)
+        return ""
+
 
 def _cfg(key: str, default):
     try:
@@ -86,7 +142,12 @@ def consolidate_block_for(character_name: str, reason: str = "") -> int:
         date_key = to_local(parse_iso(new_cursor)).strftime("%Y-%m-%d")
     except Exception:
         date_key = (new_cursor or now)[:10]
-    summary = _summarize_day(character_name, scenes)
+    # Inner life of the same wake block — the window this consolidation
+    # already knows (cursor → new cursor). Private to this character.
+    thoughts_block = thoughts_of_day_block(character_name, cursor or "", new_cursor) \
+        if cursor else thoughts_of_day_block(character_name, scenes[0].get(
+            "started_ts") or scenes[0].get("last_activity_ts") or "", new_cursor)
+    summary = _summarize_day(character_name, scenes, thoughts_block)
     if summary:
         _save_daily(character_name, date_key, summary)
         # Tages-Eintrag auch als (gröberes) Memory ablegen → memory_service-Rollup
@@ -99,13 +160,37 @@ def consolidate_block_for(character_name: str, reason: str = "") -> int:
         except Exception as e:
             logger.debug("daily memory add failed for %s: %s", character_name, e)
     set_cursor(character_name, new_cursor)
+    _prune_thoughts(character_name)
     logger.info("Tag konsolidiert: %s (%d Szenen, date=%s, reason=%s)",
                 character_name, len(scenes), date_key, reason or "?")
     return len(scenes)
 
 
-def _summarize_day(character_name: str, scenes: List[Dict[str, Any]]) -> str:
-    """LLM-Verdichtung mehrerer Szenen-Summaries eines Tages zu EINEM Eintrag."""
+def _prune_thoughts(character_name: str) -> int:
+    """Retention after a successful consolidation: raw thoughts older than
+    ``THOUGHT_RETENTION_DAYS`` go. What mattered lives on in the day entry —
+    same deal as chat-history summarization. System time, like the stamps."""
+    try:
+        from datetime import timedelta
+        from app.models.thought_store import prune_before
+        cutoff = (utc_now() - timedelta(days=THOUGHT_RETENTION_DAYS)).isoformat()
+        gone = prune_before(character_name, cutoff)
+        if gone:
+            logger.info("Gedanken-Retention %s: %d Roh-Gedanken älter als %d Tage entfernt",
+                        character_name, gone, THOUGHT_RETENTION_DAYS)
+        return gone
+    except Exception as e:
+        logger.debug("thought retention for %s failed: %s", character_name, e)
+        return 0
+
+
+def _summarize_day(character_name: str, scenes: List[Dict[str, Any]],
+                   thoughts_block: str = "") -> str:
+    """LLM-Verdichtung mehrerer Szenen-Summaries eines Tages zu EINEM Eintrag.
+
+    ``thoughts_block`` ist das Innenleben des Wach-Blocks (privat, nur dieser
+    Character) — es färbt den Rückblick, ersetzt die Szenen aber nicht.
+    """
     try:
         from app.core.llm_router import llm_call
         from app.models.character import get_character_language, LANGUAGE_MAP
@@ -119,6 +204,10 @@ def _summarize_day(character_name: str, scenes: List[Dict[str, Any]]) -> str:
             f"{character_name}'s perspective. Keep only what matters for later; drop "
             f"filler. No lists, no preamble — just the recap.")
         user_prompt = f"Scenes of the day for {character_name}:\n{bullets}"
+        if thoughts_block:
+            user_prompt += (f"\n\nWhat {character_name} thought during that time "
+                            f"(private inner life — nobody else knows it):\n"
+                            f"{thoughts_block}")
         resp = llm_call(task="consolidation", system_prompt=sys_prompt,
                         user_prompt=user_prompt, agent_name=character_name)
         return (resp.content or "").strip() if resp else ""

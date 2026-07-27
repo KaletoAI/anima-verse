@@ -684,6 +684,14 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
         except Exception:
             pass
 
+        # Inner life of that day (plan-thought-journal.md) — private to this
+        # character, empty when the journal has nothing for the date.
+        try:
+            from app.core.day_consolidation import thoughts_of_date
+            thoughts_of_day = thoughts_of_date(character_name, day_str)
+        except Exception:
+            thoughts_of_day = ""
+
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
             "consolidation_daily",
@@ -691,7 +699,8 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
             character_name=character_name,
             existing=existing,
             lang_instruction=lang_instruction,
-            contents=contents)
+            contents=contents,
+            thoughts_of_day=thoughts_of_day)
 
         summary = _llm_summarize(sys_prompt, user_prompt, character_name)
         if summary:

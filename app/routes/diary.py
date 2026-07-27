@@ -108,13 +108,22 @@ def _generate_summary_sync(character_name: str, date: str, day_text: str):
         lang_name = LANGUAGE_MAP.get(lang_code, lang_code)
         lang_instruction = f"\nWrite the diary entry in {lang_name}."
 
+    # Inner life of that day (plan-thought-journal.md) — a diary is exactly
+    # the place for it. Empty when the journal has nothing for the date.
+    try:
+        from app.core.day_consolidation import thoughts_of_date
+        thoughts_of_day = thoughts_of_date(character_name, date)
+    except Exception:
+        thoughts_of_day = ""
+
     from app.core.prompt_templates import render_task
     system_prompt, user_prompt = render_task(
         "consolidation_daily_diary",
         character_name=char_name,
         personality=personality,
         lang_instruction=lang_instruction,
-        day_text=day_text)
+        day_text=day_text,
+        thoughts_of_day=thoughts_of_day)
 
     try:
         response = llm_call(
