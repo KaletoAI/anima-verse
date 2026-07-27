@@ -50,6 +50,8 @@ interface WLoc {
 interface WChar {
   name: string; location_id: string; activity: string
   movement_target_id: string; movement_target_name: string; avatar_url: string
+  /** Server-driven journey (contract § A11), null while the character rests. */
+  travel?: { eta_game: string; progress_cells: number; path: string[] } | null
 }
 interface WEvent { category: string; text: string }
 interface WorldMap {
@@ -111,8 +113,9 @@ function MapPatch({ loc, left, top, size }: { loc: WLoc; left: number; top: numb
   )
 }
 
-function Cell({ loc, isActive, chars, events, travellingTo, showLabel, covered }: {
-  loc: WLoc; isActive: boolean; chars: WChar[]; events: WEvent[]; travellingTo: string; showLabel: boolean
+function Cell({ loc, isActive, chars, events, travellingTo, arrivesAt, showLabel, covered }: {
+  loc: WLoc; isActive: boolean; chars: WChar[]; events: WEvent[]; travellingTo: string
+  arrivesAt: string; showLabel: boolean
   /** Cell lies inside a 3x3 patch: transparent + borderless so the patch
    *  shows seamlessly; the cell's own tile (when active) still paints above. */
   covered?: boolean
@@ -149,8 +152,12 @@ function Cell({ loc, isActive, chars, events, travellingTo, showLabel, covered }
         <div className="worldmap-cell-avatars">
           {chars.map((c) => {
             const traveling = !!c.movement_target_id && c.movement_target_id !== loc.id
+            // ISO game timestamp -> HH:MM; empty when no journey is running.
+            const eta = c.travel?.eta_game ? c.travel.eta_game.slice(11, 16) : ''
             const title = c.name + (traveling
-              ? ` — ${travellingTo} ${c.movement_target_name || c.movement_target_id}` : '')
+              ? ` — ${travellingTo} ${c.movement_target_name || c.movement_target_id}`
+                + (eta ? ` (${arrivesAt} ${eta})` : '')
+              : '')
             return (
               <span key={c.name} className={traveling ? 'worldmap-avatar-wrap traveling' : 'worldmap-avatar-wrap'}
                 title={title}>
@@ -275,6 +282,7 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
 
   const current = currentLocationId || data?.current_location_id || ''
   const travellingTo = t('travelling to')
+  const arrivesAt = t('arrives ~')
 
   const { cells, gridW, gridH } = useMemo(() => {
     const empty = { cells: null as React.ReactNode, gridW: 0, gridH: 0 }
@@ -340,7 +348,7 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
         els.push(
           <Cell key={`${x},${y}`} loc={l} isActive={l.id === current}
             chars={charsAt(l.id)} events={data.events_by_location[l.id] || []} travellingTo={travellingTo}
-            showLabel={showLabelFor(l)} covered={covered.has(`${x},${y}`)} />,
+            arrivesAt={arrivesAt} showLabel={showLabelFor(l)} covered={covered.has(`${x},${y}`)} />,
         )
       }
     }
@@ -357,7 +365,7 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
     const gH = rows * CELL + (rows - 1) * GAP + PAD * 2
 
     return { cells: grid, gridW: gW, gridH: gH }
-  }, [data, current, travellingTo, labelMode])
+  }, [data, current, travellingTo, arrivesAt, labelMode])
 
   // Restore saved scroll once after first load, else center the grid.
   useEffect(() => {
