@@ -511,13 +511,14 @@ def _trigger_access_denied_thought(character_name: str, location_label: str, rea
 
 
 class CancelTravelSkill(PluginSkill):
-    """Drops the pending movement target — the character stays put.
+    """Aborts the active journey — the character stays where they are.
 
     Surfaced so a character can RECONSIDER a running journey on every loop
     turn (the travel block in the thought prompt points here): plans
     legitimately change mid-route, e.g. when a conversation starts at the
-    current place. Without this tool a set target either walks to the end
-    or sits forever while walk steps pause in warm chat.
+    current place. A journey runs to arrival on its own — the travel ticker
+    advances it on the game clock regardless of loop turns — so without this
+    tool a character could not change their mind about a trip mid-route.
     """
 
     SKILL_ID = "cancel_travel"

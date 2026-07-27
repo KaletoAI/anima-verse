@@ -401,12 +401,12 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     chars: List[Dict[str, Any]] = []
     for n in names:
         # LIVE PARITY: render exactly who the live panel lists. A set
-        # movement target does NOT mean "gone" — walk steps only run on the
-        # character's own loop turns and pause during warm chat, so targets
-        # legitimately sit for hours while the character is visibly active
-        # (2026-07-07: Bianca missing from renders). Only the POSE ignores
-        # the activity then: the travel system writes transit prose like
-        # "returning to Edwins Berg" into it.
+        # movement target does NOT mean "gone" — journeys advance continuously
+        # on the game clock via the travel ticker, so a traveller legitimately
+        # sits "in transit" between locations while still being listed in the
+        # room of their nearest path cell (2026-07-07: Bianca missing from
+        # renders). Only the POSE ignores the activity then: the travel system
+        # writes transit prose like "returning to Edwins Berg" into it.
         in_transit = False
         if n != avatar:
             try:

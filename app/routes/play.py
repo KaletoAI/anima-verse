@@ -1494,7 +1494,7 @@ async def play_worldmap(user=Depends(get_current_user)):
     # whole payload so every character in one response shares the same now.
     from app.core.travel_engine import (
         GAME_SECONDS_PER_CELL, get_journey, journey_state)
-    from app.core.timeutils import game_now, game_speed_factor
+    from app.core.timeutils import game_now, game_speed_factor, to_world_tz
     _now_game = game_now()
     _factor = game_speed_factor()
 
@@ -1542,7 +1542,10 @@ async def play_worldmap(user=Depends(get_current_user)):
                     "seg": _st["seg"],
                     "frac": _st["frac"],
                     "progress_cells": _st["progress_cells"],
-                    "eta_game": _st["eta_game"],
+                    # Same instant, WORLD-timezone offset: clients slice the
+                    # HH:MM out of this, which must be game wall-clock — the
+                    # engine stores the stamp in UTC (§ A11).
+                    "eta_game": to_world_tz(_st["eta_game"]).isoformat(),
                     # GAME seconds per cell in REAL seconds — null on a frozen
                     # world (factor 0): nothing moves, so nothing extrapolates.
                     "cell_seconds_real": (_spc / _factor) if _factor > 0 else None,

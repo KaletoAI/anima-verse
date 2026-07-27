@@ -161,10 +161,10 @@ def advance_all_journeys() -> None:
         save_character_current_location)
     now = _game_now()
     for name in list_available_characters():
-        j = get_journey(name)
-        if not j:
-            continue
         try:
+            j = get_journey(name)
+            if not j:
+                continue
             st = journey_state(j["path"], j["started_at_game"], now,
                                float(j.get("seconds_per_cell") or GAME_SECONDS_PER_CELL))
             cur = (get_character_current_location(name) or "").strip()
@@ -177,6 +177,18 @@ def advance_all_journeys() -> None:
                 leave_ok, leave_reason = True, ""
             if not leave_ok:
                 cancel_journey(name)
+                # Make the cancel visible to the character: the old walk-step
+                # recorded the denial into state_history, diary/recent-activity
+                # surface it in the next thought turn.
+                try:
+                    from app.models.character import record_access_denied
+                    from app.models.world import get_location_name
+                    cur_name = get_location_name(cur) or cur
+                    record_access_denied(name, cur, cur_name,
+                                         leave_reason, action="leave")
+                except Exception:
+                    logger.debug("record_access_denied(travel-leave) failed",
+                                 exc_info=True)
                 logger.info("Journey blocked (leave rule): %s — %s",
                             name, leave_reason)
                 continue

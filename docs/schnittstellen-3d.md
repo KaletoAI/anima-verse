@@ -363,7 +363,7 @@ Feld **`travel`** — `null`, solange keine Reise läuft:
 | `seg` | `int` | Index des zuletzt passierten Knotens, 0-basiert, max `len(path)−2` |
 | `frac` | `float` | Fortschritt 0..1 von `path[seg]` nach `path[seg+1]` |
 | `progress_cells` | `float` | `seg + frac` — Gesamtfortschritt in Zellen |
-| `eta_game` | ISO-Zeit | nominelle Ankunft auf der **Spieluhr** |
+| `eta_game` | ISO-Zeit | nominelle Ankunft auf der **Spieluhr**; trägt den Offset der **Weltzeitzone** (`server.timezone`) — ein HH:MM-Slice ergibt direkt Spiel-Wanduhrzeit |
 | `cell_seconds_real` | `float \| null` | wie viele ECHTE Sekunden eine Zelle dauert (`seconds_per_cell / Zeitfaktor`); `null` bei eingefrorener Welt bzw. Faktor 0 |
 
 **Semantik**

@@ -1169,27 +1169,6 @@ def find_path_through_known(start_id: str, target_id: str,
     return None
 
 
-def next_step_toward(character_name: str, target_id: str) -> Optional[str]:
-    """Liefert die Location-ID des naechsten Schritts vom aktuellen Standort
-    Richtung Ziel. Pfad nur ueber known_locations.
-
-    Returns:
-        - None wenn kein Pfad existiert oder Character bereits am Ziel
-        - sonst die Nachbar-Location-ID, auf die als Naechstes gewechselt
-          werden soll
-    """
-    from app.models.character import (
-        get_character_current_location, get_known_locations)
-    current = get_character_current_location(character_name) or ""
-    if not current or current == target_id:
-        return None
-    known = get_known_locations(character_name) or []
-    path = find_path_through_known(current, target_id, known)
-    if not path or len(path) < 2:
-        return None
-    return path[1]
-
-
 def update_location_position(location_id: str, grid_x: int, grid_y: int) -> Optional[Dict[str, Any]]:
     """Setzt die Raster-Position eines Ortes. grid_x/grid_y < 0 entfernt die Position."""
     data = _load_world_data()
