@@ -13,6 +13,7 @@ placeholders:
   max_pieces: Max number of pieces
   allowed_slots: Comma-separated list of valid slots
   language_hint: Optional "Use <lang> for the `name` field." — empty if English
+  outfit_types_vocab: Comma-separated closed vocabulary for outfit_types
 ---
 ## system
 
@@ -77,11 +78,26 @@ layered on top, use:
   "{fragment} underneath {covering-fragment}")
 covers/partially_covers must NOT include any slot from this piece's own `slots`.
 
+OUTFIT TYPES (MANDATORY — every piece needs 1-3): they say which OTHER pieces
+this one goes with, so the system can tell a matching combination from a
+mismatched one. Use ONLY these words: {{ outfit_types_vocab }}.
+- underwear (bra, panties, boxers) → intimate
+- swimwear, beachwear → beach
+- sportswear, gym and running gear → sport
+- suits, blazers, dress shirts, office wear → business
+- evening wear, gowns, dinner jackets → formal
+- party and club outfits → clubwear
+- pyjamas, bathrobes, loungewear, slippers → home
+- everyday clothes → casual
+Give several when a piece genuinely fits several worlds (sneakers →
+["casual", "sport"], a dark blazer → ["business", "formal"]). Do not invent
+words outside the list — they are discarded.
+
 Return ONLY valid JSON with this schema:
 {
   "pieces": [
     {"slots": ["top", "bottom"], "name": "...", "prompt_fragment": "...",
-      "covers": [], "partially_covers": []},
+      "covers": [], "partially_covers": [], "outfit_types": ["casual"]},
     ...
   ]
 }

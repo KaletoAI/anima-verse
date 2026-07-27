@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Set
 from .base import BaseSkill
 
 from app.core.log import get_logger
+from app.core.outfit_coherence import (
+    CANONICAL_OUTFIT_TYPES, DEFAULT_OUTFIT_TYPE, normalize_outfit_types)
 from app.core.task_queue import get_task_queue
 from app.models.character import (
     get_character_appearance,
@@ -33,6 +35,23 @@ from app.models.inventory import (
 from app.models.world import get_location
 
 logger = get_logger("outfit_creation")
+
+
+def _ensure_outfit_types(raw: Any, piece_name: str) -> List[str]:
+    """The piece's tags, guaranteed non-empty.
+
+    Normalising first drops anything outside the closed vocabulary. If nothing
+    survives — after the correction retry above — the piece still gets created,
+    with a documented default: an untagged piece would be a wildcard in every
+    coherence check, and blocking the creation would be worse than a slightly
+    wrong tag the admin can fix.
+    """
+    types = normalize_outfit_types(raw)
+    if types:
+        return types
+    logger.warning("Outfit-Piece '%s' ohne verwertbare outfit_types — "
+                   "Default '%s'", piece_name, DEFAULT_OUTFIT_TYPE)
+    return [DEFAULT_OUTFIT_TYPE]
 
 
 class OutfitCreationSkill(BaseSkill):
@@ -248,21 +267,41 @@ class OutfitCreationSkill(BaseSkill):
             required_block=required_block,
             max_pieces=max_pieces,
             allowed_slots=allowed_slots,
-            language_hint=lang_hint)
+            language_hint=lang_hint,
+            outfit_types_vocab=", ".join(CANONICAL_OUTFIT_TYPES))
 
         try:
             from app.core.llm_router import llm_call
-            response = llm_call(
-                task="outfit_generation",
-                system_prompt=sys_prompt,
-                user_prompt=user_prompt,
-                agent_name=character_name,
-                label="piece_generation")
-            raw = (response.content or "").strip()
-            data = self._extract_json(raw)
+
+            def _ask(extra: str = "") -> Optional[Dict[str, Any]]:
+                response = llm_call(
+                    task="outfit_generation",
+                    system_prompt=sys_prompt,
+                    user_prompt=user_prompt + extra,
+                    agent_name=character_name,
+                    label="piece_generation")
+                return self._extract_json((response.content or "").strip())
+
+            data = _ask()
             if not data or not isinstance(data.get("pieces"), list):
-                logger.warning("LLM-Antwort ohne 'pieces'-Liste: %s", raw[:200])
+                logger.warning("LLM-Antwort ohne 'pieces'-Liste")
                 return None
+            # One correction retry when the model ignored the tags: they are
+            # what the coherence rule runs on, so a whole outfit of untagged
+            # pieces would silently become wildcards.
+            if not any(normalize_outfit_types(p.get("outfit_types"))
+                       for p in data["pieces"] if isinstance(p, dict)):
+                logger.warning("Outfit-Generierung: kein Piece mit gültigem "
+                               "outfit_types — ein Korrektur-Versuch")
+                retry = _ask(
+                    "\n\nCORRECTION: your previous answer had no usable "
+                    "`outfit_types`. Every piece needs 1-3 of exactly these "
+                    f"words: {', '.join(CANONICAL_OUTFIT_TYPES)}. Return the "
+                    "COMPLETE JSON again, with outfit_types on every piece.")
+                if retry and isinstance(retry.get("pieces"), list) and any(
+                        normalize_outfit_types(p.get("outfit_types"))
+                        for p in retry["pieces"] if isinstance(p, dict)):
+                    data = retry
             # Slot-Keyword-Map: erkenne offensichtliche LLM-Slot-Fehler
             # Wenn Name/Fragment eindeutig nach einem anderen Slot klingt,
             # verschieben wir das Piece.
@@ -345,6 +384,8 @@ class OutfitCreationSkill(BaseSkill):
                     "prompt_fragment": frag,
                     "covers": covers,
                     "partially_covers": partially,
+                    "outfit_types": _ensure_outfit_types(
+                        p.get("outfit_types"), name),
                 })
                 seen_slots.update(slots)
             if not cleaned:
@@ -501,6 +542,7 @@ class OutfitCreationSkill(BaseSkill):
                                 "slots": slots_list,
                                 "covers": p.get("covers") or [],
                                 "partially_covers": p.get("partially_covers") or [],
+                                "outfit_types": p.get("outfit_types") or [],
                             })
                         iid = item.get("id")
                         if not iid:
