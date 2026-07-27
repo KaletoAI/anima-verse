@@ -384,6 +384,11 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     the room side): wherever an INDOOR room hull runs on the contour line,
     the contour piece yields — the room wall carries texture and openings.
     ``room_hulls`` maps level → list of room outlines in world metres.
+
+    ``map3d.wall_kind`` textures the whole shell: every emitted piece carries
+    it as ``texture_kind``, the same field a room wall gets from its own
+    ``surfaces.wall``. Without the field the contour stays untextured and the
+    renderers fall back to ``style.wall_color``.
     """
     pts = _outline_world(map3d)
     if len(pts) < 3:
@@ -418,6 +423,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         doors[best] = [math.hypot(b[0] - a[0], b[1] - a[1]) / 2]
 
     height = _wall_height(storey)
+    wall_kind = str((map3d or {}).get("wall_kind") or "").strip()
     walls: List[Dict[str, Any]] = []
     for i, a in enumerate(pts):
         b = pts[(i + 1) % len(pts)]
@@ -445,7 +451,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                              MIN_WALL_PIECE_M)
             for s0, s1 in segs:
                 start, end = _segment_points(a, ux, uz, s0, s1)
-                walls.append({
+                entry: Dict[str, Any] = {
                     "level": level,
                     "from": start,
                     "to": end,
@@ -454,7 +460,10 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                     "thickness": WALL_THICKNESS,
                     "opacity_role": _opacity_role(level, min(levels)),
                     "outward_normal": [_r(nx), _r(nz)],
-                })
+                }
+                if wall_kind:
+                    entry["texture_kind"] = wall_kind
+                walls.append(entry)
     return walls
 
 

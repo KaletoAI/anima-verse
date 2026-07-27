@@ -359,6 +359,13 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 floors[str(lvl)] = val.strip()[:60]
         if floors:
             out["level_floors"] = floors
+    # Wall texture of the WHOLE building shell: ONE surface-texture kind for
+    # every contour wall — the wall counterpart of level_floors. Deliberately
+    # not per level (decision 2026-07-27): one shell, one kind. A room's own
+    # surfaces.wall still wins wherever a room wall owns the contour stretch.
+    wk = raw.get("wall_kind")
+    if isinstance(wk, str) and wk.strip():
+        out["wall_kind"] = wk.strip()[:60]
     return out
 
 
