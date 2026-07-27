@@ -885,10 +885,17 @@ async def unequip_route(character_name: str, request: Request) -> Dict[str, Any]
 
 @router.get("/outfit-types")
 def list_outfit_types_route() -> Dict[str, Any]:
-    """Deprecated: das outfit_types-Modell wurde durch Decency + style_hint
-    ersetzt (Variante A). Liefert leer, damit alte UI-Fetches kein 404 sehen.
+    """The canonical outfit-type vocabulary — THE source for every filter UI.
+
+    The tags were deprecated once (decency + style_hint replaced the old
+    dresscode model) and came back with the coherence feature: they now say
+    which pieces GO TOGETHER (app/core/outfit_coherence.py), which is a
+    different job from the one they lost. The vocabulary is closed and
+    enforced on every save, so a UI must read it from here instead of
+    hardcoding a list that would drift.
     """
-    return {"outfit_types": []}
+    from app.core.outfit_coherence import CANONICAL_OUTFIT_TYPES
+    return {"outfit_types": list(CANONICAL_OUTFIT_TYPES)}
 
 
 @router.post("/characters/{character_name}/apply-equipped")
