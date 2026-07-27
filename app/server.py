@@ -236,6 +236,8 @@ async def lifespan(app: FastAPI):
     from app.core.memory_service import register_consolidation_handler, register_migration_handler
     register_consolidation_handler()
     register_migration_handler()
+    from app.core.outfit_batch import register_outfit_batch_handler
+    register_outfit_batch_handler()
 
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()

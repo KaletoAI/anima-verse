@@ -1,57 +1,171 @@
-"""Batch job: pre-warm the 3D chain for ALL saved outfits of one character.
+"""Batch job: pre-warm the 3D chain for ALL outfit-piece COMBINATIONS of one
+character.
 
 Normally a mesh only ever comes into being for the combination the character
 is CURRENTLY wearing — the outfit-change trigger renders the T-pose reference
 and the auto-mesh hook turns it into a model. That means a 3D client sees a
-model pop in the first time each outfit is worn.
+model pop in the first time each combination is worn.
 
 This job fills the caches up front, without dressing the character: the cache
-signature of a saved outfit (``_equipped_signature``) is computable from its
+signature of a combination (``_equipped_signature``) is computable from its
 pieces alone, and both ``model_refs.generate_model_ref_images`` and
 ``model3d.generate_for_current_outfit`` accept that signature as an override.
-Per outfit, serially: T-pose reference (if missing) → mesh (if missing).
+Per combination, serially: T-pose reference (if missing) → mesh (if missing).
 
-Deliberate scope (plan-outfit-batch.md):
+What a COMBINATION is (user decision 2026-07-27): every outfit piece in the
+character's inventory is an option in the slot it declares first; per slot one
+piece OR nothing, and the combinations are the cartesian product over the
+slots. Saved outfit SETS play no role any more. The counts are large by
+design — four figures are normal, seven happen — so:
 
-* Items (sword, glasses, …) are IGNORED — an outfit renders with its clothing
-  pieces only (``items=[]``). Combinations that include a carried item are
-  still produced live by the existing auto-trigger when they are worn.
+* combinations are NEVER materialised as a list; they are enumerated lazily
+  and COUNTED arithmetically;
+* the run is one persistent queue task at low priority, so ordinary work
+  always goes first;
+* it is restart-proof without a state machine of its own: the caches say what
+  is done, and a task the queue resets to pending after a crash simply skips
+  everything cached and continues.
+
+Deliberate scope:
+
+* Items (sword, glasses, …) are IGNORED — a combination renders with its
+  clothing pieces only (``items=[]``). Combinations including a carried item
+  are still produced live by the existing auto-trigger when they are worn.
 * The T-pose render runs regardless of the character's per-image auto toggles:
   those govern the automatic outfit-change render, while the batch always
   needs the mesh input.
-* No DB state. The caches make the job idempotent — a restart mid-run just
-  means starting it again, everything finished is skipped. Progress lives in
-  this module plus one tracked queue task.
+* The all-empty combination is skipped (nothing to dress).
 """
 
 import hashlib
+import itertools
+import sqlite3
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
 
+TASK_TYPE = "outfit_combos"
+#: Queue priority of a batch run. The queue sorts ``priority ASC`` and the
+#: default is 20 — 50 means "after everything normal".
+PRIORITY_LOW = 50
+#: Above this many combinations the exact missing count (one md5 per
+#: combination) is not worth computing; the dialog then says "up to".
+MAX_EXACT_COMBOS = 5000
+#: Flat allowance for the T-pose render, added to the measured mesh duration.
+TPOSE_SECONDS = 60.0
+#: Used when no mesh has ever been generated (no history to average).
+FALLBACK_SECONDS_PER_COMBO = 240.0
+
 _lock = threading.Lock()
-# character -> progress record; survives the run so the dialog can still show
-# the result of the last batch until the next one starts.
+# character -> progress record of the RUNNING process; survives the run so the
+# dialog can still show the result of the last batch. Empty after a restart —
+# the counts come from the caches, this is only the live detail view.
 _status: Dict[str, Dict[str, Any]] = {}
 
 
-# ── Plan ────────────────────────────────────────────────────────────────
+# ── Options and combinations ────────────────────────────────────────────
 
-def _pieces_by_slot(outfit: Dict[str, Any]) -> Dict[str, str]:
-    """Piece-ID list of a saved outfit → slot->item_id map, the same mapping
-    the wardrobe does when the outfit is actually put on (first declared slot
-    of each piece wins)."""
-    from app.models.inventory import get_item
-    out: Dict[str, str] = {}
-    for pid in (outfit.get("pieces") or []):
-        slots = (((get_item(pid) or {}).get("outfit_piece") or {}).get("slots") or [])
-        if slots:
-            out[slots[0]] = pid
-    return out
+def combo_options(character_name: str) -> Dict[str, List[Dict[str, str]]]:
+    """Every outfit piece in the character's inventory, grouped by slot.
+
+    The slot is the piece's FIRST declared one — the same mapping the wardrobe
+    uses when a piece is actually put on. Returns ``{slot: [{item_id, name},
+    …]}``, slots and pieces sorted so the dialog is stable.
+    """
+    from app.models.inventory import get_character_inventory
+    by_slot: Dict[str, List[Dict[str, str]]] = {}
+    try:
+        entries = (get_character_inventory(character_name) or {}).get("inventory") or []
+    except Exception:
+        logger.exception("Outfit combos %s: inventory unreadable", character_name)
+        return {}
+    for entry in entries:
+        if entry.get("item_category") != "outfit_piece":
+            continue
+        slots = ((entry.get("outfit_piece") or {}).get("slots")) or []
+        if not slots:
+            continue
+        item_id = str(entry.get("item_id") or "")
+        if not item_id:
+            continue
+        row = {"item_id": item_id,
+               "name": str(entry.get("item_name") or item_id)}
+        bucket = by_slot.setdefault(str(slots[0]), [])
+        if not any(r["item_id"] == item_id for r in bucket):
+            bucket.append(row)
+    for bucket in by_slot.values():
+        bucket.sort(key=lambda r: (r["name"].lower(), r["item_id"]))
+    return {slot: by_slot[slot] for slot in sorted(by_slot)}
+
+
+def _resolve_filter(options: Dict[str, List[Dict[str, str]]],
+                    slots_filter: Optional[Dict[str, Any]],
+                    ) -> Tuple[Dict[str, List[Optional[str]]], str]:
+    """Filter → the option list per slot, or an error message.
+
+    A filter entry is a list of item ids plus ``null`` for "slot stays empty".
+    A slot the filter does not mention keeps ALL its options (including empty),
+    so an empty filter means "everything". Unknown item ids and empty lists are
+    rejected — silently dropping them would render a different set than the
+    dialog showed.
+    """
+    resolved: Dict[str, List[Optional[str]]] = {}
+    raw = slots_filter if isinstance(slots_filter, dict) else {}
+    for slot, pieces in options.items():
+        known = [p["item_id"] for p in pieces]
+        if slot not in raw:
+            resolved[slot] = [None, *known]
+            continue
+        picked = raw.get(slot)
+        if not isinstance(picked, list) or not picked:
+            return {}, f"slot '{slot}': at least one option must stay selected"
+        choices: List[Optional[str]] = []
+        for value in picked:
+            if value is None or value == "":
+                if None not in choices:
+                    choices.append(None)
+                continue
+            item_id = str(value)
+            if item_id not in known:
+                return {}, f"slot '{slot}': unknown piece '{item_id}'"
+            if item_id not in choices:
+                choices.append(item_id)
+        if not choices:
+            return {}, f"slot '{slot}': at least one option must stay selected"
+        resolved[slot] = choices
+    for slot in raw:
+        if slot not in options:
+            return {}, f"unknown slot '{slot}'"
+    return resolved, ""
+
+
+def count_combos(choices: Dict[str, List[Optional[str]]]) -> int:
+    """How many combinations the choices produce — ARITHMETICALLY, never by
+    enumerating. The all-empty combination is subtracted when it is reachable
+    (i.e. every slot may stay empty); it dresses nothing and is skipped."""
+    if not choices:
+        return 0
+    total = 1
+    for opts in choices.values():
+        total *= len(opts)
+    if all(None in opts for opts in choices.values()):
+        total -= 1
+    return max(0, total)
+
+
+def _iter_combos(choices: Dict[str, List[Optional[str]]],
+                 ) -> Iterator[Dict[str, str]]:
+    """Lazy enumeration: yields ``{slot: item_id}`` per combination, empty
+    slots left out. The all-empty combination is skipped."""
+    slots = list(choices)
+    for picks in itertools.product(*(choices[s] for s in slots)):
+        pieces = {slot: pid for slot, pid in zip(slots, picks) if pid}
+        if pieces:
+            yield pieces
 
 
 def _signature(pieces: Dict[str, str]) -> str:
@@ -62,61 +176,125 @@ def _signature(pieces: Dict[str, str]) -> str:
     return hashlib.md5(_equipped_signature(pieces, []).encode()).hexdigest()[:12]
 
 
-def _plan_rows(character_name: str) -> List[Dict[str, Any]]:
-    """Full plan including the piece map each row would render with."""
-    from app.core.model3d import find_model3d
-    from app.core.model_refs import find_ref_image
-    from app.models.character import get_character_outfits
-
-    rows: List[Dict[str, Any]] = []
-    first_with_sig: Dict[str, str] = {}
-    for outfit in (get_character_outfits(character_name) or []):
-        outfit_id = str(outfit.get("id") or "")
-        name = str(outfit.get("name") or "").strip() or outfit_id[:8]
-        pieces = _pieces_by_slot(outfit)
-        if not pieces:
-            # Pure text outfits carry nothing the renderer could dress — they
-            # would all collapse onto the same (empty) signature.
-            rows.append({"outfit_id": outfit_id, "name": name, "pieces": {},
-                         "signature": None, "has_ref": False, "has_model": False,
-                         "skip_reason": "no pieces", "duplicate_of": None})
-            continue
-        sig = _signature(pieces)
-        duplicate_of = first_with_sig.get(sig)
-        if duplicate_of is None:
-            first_with_sig[sig] = outfit_id
-        rows.append({
-            "outfit_id": outfit_id,
-            "name": name,
-            "pieces": pieces,
-            "signature": sig,
-            "has_ref": bool(find_ref_image(character_name, "tpose", sig)),
-            "has_model": bool(find_model3d(character_name, sig)),
-            "skip_reason": "",
-            # Two outfits with the same pieces share one cache entry — the
-            # second is reported, not rendered.
-            "duplicate_of": duplicate_of,
-        })
-    return rows
+def _combo_label(pieces: Dict[str, str],
+                 names: Dict[str, str]) -> str:
+    """Readable name of a combination for status and log — ``top: Shirt ·
+    feet: Boots``; the empty state of a slot is simply absent."""
+    if not pieces:
+        return "(nothing)"
+    return " · ".join(f"{slot}: {names.get(pid, pid)}"
+                      for slot, pid in sorted(pieces.items()))
 
 
-def plan(character_name: str) -> List[Dict[str, Any]]:
-    """Per saved outfit: its combination signature and what already exists —
-    ``{outfit_id, name, signature, has_ref, has_model, skip_reason,
-    duplicate_of}``. Read-only, cheap enough to poll."""
-    return [{k: v for k, v in row.items() if k != "pieces"}
-            for row in _plan_rows(character_name)]
+# ── Caches: what already exists ─────────────────────────────────────────
+
+def _mesh_signatures(character_name: str) -> set:
+    """Signatures that already HAVE a mesh — read once from the directory
+    instead of stat-ing per combination (that is what makes a million-entry
+    run affordable, and what makes the job restart-proof)."""
+    from app.core.model3d import MODEL_EXTS
+    from app.models.character import get_character_dir
+    out = set()
+    d = get_character_dir(character_name) / "model3d"
+    if not d.exists():
+        return out
+    for p in d.iterdir():
+        if p.is_file() and p.suffix.lower() in MODEL_EXTS:
+            out.add(p.stem)
+    return out
 
 
-# ── Status ──────────────────────────────────────────────────────────────
+def _ref_signatures(character_name: str, kind: str = "tpose") -> set:
+    """Signatures that already have a reference render of this kind."""
+    from app.core.model_refs import _IMAGE_EXTS
+    from app.models.character import get_character_dir
+    out = set()
+    d = get_character_dir(character_name) / "model_refs"
+    if not d.exists():
+        return out
+    prefix = f"{kind}_"
+    for p in d.iterdir():
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS \
+                and p.stem.startswith(prefix):
+            out.add(p.stem[len(prefix):])
+    return out
+
+
+# ── Time estimate ───────────────────────────────────────────────────────
+
+def _query_tasks(sql: str, params: Iterable[Any] = ()) -> List[sqlite3.Row]:
+    """Read-only peek into the queue DB. The queue has no public query API for
+    "tasks of this type/agent", and this module needs two of those: the
+    double-start guard and the duration history."""
+    from app.core.task_queue import _get_db_path
+    try:
+        conn = sqlite3.connect(str(_get_db_path()))
+        conn.row_factory = sqlite3.Row
+        try:
+            return conn.execute(sql, tuple(params)).fetchall()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.debug("outfit_batch task query failed: %s", e)
+        return []
+
+
+def estimate_seconds_per_combo() -> float:
+    """Seconds one combination costs: the average of the last 10 finished mesh
+    generations (that is the expensive half) plus a flat T-pose allowance. No
+    history → a conservative fallback, so the dialog never shows "0 s"."""
+    rows = _query_tasks(
+        """SELECT duration_s FROM tasks
+           WHERE task_type='model3d_generation' AND status='completed'
+                 AND duration_s > 0
+           ORDER BY completed_at DESC LIMIT 10""")
+    values = [float(r["duration_s"]) for r in rows if r["duration_s"]]
+    if not values:
+        return FALLBACK_SECONDS_PER_COMBO
+    return sum(values) / len(values) + TPOSE_SECONDS
+
+
+def combo_stats(character_name: str,
+                slots_filter: Optional[Dict[str, Any]] = None,
+                force: bool = False) -> Dict[str, Any]:
+    """``{total, missing, missing_exact, est_seconds, error}`` for a filter.
+
+    ``total`` is arithmetic and therefore instant at any size. ``missing``
+    needs one signature per combination, so it is exact only up to
+    ``MAX_EXACT_COMBOS``; above that the caller is told ``missing_exact:
+    False`` and shows "up to". With ``force`` everything is re-rendered, so
+    missing == total by definition.
+    """
+    options = combo_options(character_name)
+    choices, error = _resolve_filter(options, slots_filter)
+    if error:
+        return {"total": 0, "missing": 0, "missing_exact": True,
+                "est_seconds": 0.0, "error": error}
+    total = count_combos(choices)
+    per = estimate_seconds_per_combo()
+    if force or total > MAX_EXACT_COMBOS:
+        missing = total
+        exact = bool(force)
+    else:
+        have = _mesh_signatures(character_name)
+        missing = sum(1 for pieces in _iter_combos(choices)
+                      if _signature(pieces) not in have)
+        exact = True
+    return {"total": total, "missing": missing, "missing_exact": exact,
+            "est_seconds": round(missing * per, 1), "error": ""}
+
+
+# ── Status of the live process ──────────────────────────────────────────
 
 def _idle_status() -> Dict[str, Any]:
-    return {"running": False, "stop_requested": False, "total": 0, "done": 0,
+    return {"running": False, "total": 0, "done": 0, "skipped": 0, "failed": 0,
             "current": None, "results": [], "started_at": "", "finished_at": ""}
 
 
 def get_status(character_name: str) -> Dict[str, Any]:
-    """Snapshot of this character's batch (idle record when it never ran)."""
+    """Snapshot of this character's batch process (idle record when it never
+    ran in THIS server session — the queue state and the cache counts are the
+    restart-proof part, this is the live detail)."""
     with _lock:
         st = _status.get(character_name)
         if not st:
@@ -127,160 +305,193 @@ def get_status(character_name: str) -> Dict[str, Any]:
         return snapshot
 
 
-def _set_current(character_name: str, row: Optional[Dict[str, Any]],
-                 step: str = "") -> None:
+def _set_current(character_name: str, label: str, step: str = "") -> None:
     with _lock:
         st = _status.get(character_name)
-        if not st:
-            return
-        st["current"] = (None if row is None else
-                         {"outfit_id": row["outfit_id"], "name": row["name"],
-                          "step": step})
+        if st is not None:
+            st["current"] = {"name": label, "step": step} if label else None
 
 
-def _stop_requested(character_name: str) -> bool:
-    with _lock:
-        return bool((_status.get(character_name) or {}).get("stop_requested"))
+# ── Queue state ─────────────────────────────────────────────────────────
+
+def queue_state(character_name: str) -> Dict[str, Any]:
+    """``{state: pending|running|none, task_id}`` for this character's batch —
+    read from the queue DB, so it is correct across restarts."""
+    rows = _query_tasks(
+        """SELECT task_id, status FROM tasks
+           WHERE task_type=? AND agent_name=? AND status IN ('pending','running')
+           ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END LIMIT 1""",
+        (TASK_TYPE, character_name))
+    if not rows:
+        return {"state": "none", "task_id": ""}
+    return {"state": str(rows[0]["status"]), "task_id": str(rows[0]["task_id"])}
 
 
 def stop(character_name: str) -> bool:
-    """Asks the running batch to stop AFTER the current outfit (the GPU jobs
-    themselves run to completion — there is no kill). False when nothing is
-    running."""
-    with _lock:
-        st = _status.get(character_name)
-        if not st or not st.get("running"):
-            return False
-        st["stop_requested"] = True
-    logger.info("Outfit batch %s: stop requested", character_name)
-    return True
+    """Cancels the pending/running batch task. The run stops BETWEEN two
+    combinations — a GPU job already handed out runs to completion."""
+    state = queue_state(character_name)
+    if state["state"] == "none":
+        return False
+    from app.core.task_queue import get_task_queue
+    ok = get_task_queue().cancel_task(state["task_id"])
+    if ok:
+        logger.info("Outfit combos %s: cancelled (%s)",
+                    character_name, state["task_id"])
+    return ok
 
 
 # ── Run ─────────────────────────────────────────────────────────────────
 
-def _render_one(character_name: str, row: Dict[str, Any],
-                force: bool) -> Dict[str, Any]:
+def _render_one(character_name: str, pieces: Dict[str, str], signature: str,
+                label: str, force: bool) -> Dict[str, Any]:
     """T-pose reference + mesh for one combination. Returns the result record;
-    never raises — a broken outfit must not end the batch."""
+    never raises — a broken combination must not end the batch."""
     from app.core.model3d import generate_for_current_outfit
     from app.core.model_refs import find_ref_image, generate_model_ref_images
 
-    sig = row["signature"]
-    result = {"outfit_id": row["outfit_id"], "name": row["name"],
-              "ok": False, "cached": False, "error": ""}
+    result = {"signature": signature, "name": label, "ok": False,
+              "cached": False, "error": ""}
     try:
-        _set_current(character_name, row, "ref")
+        _set_current(character_name, label, "ref")
         # Independent of the per-character auto toggles: those decide what an
         # outfit CHANGE renders, the batch always needs the mesh input.
         generate_model_ref_images(character_name, kinds=("tpose",), force=force,
-                                  pieces=row["pieces"], items=[], signature=sig)
-        if not find_ref_image(character_name, "tpose", sig):
+                                  pieces=pieces, items=[], signature=signature)
+        if not find_ref_image(character_name, "tpose", signature):
             result["error"] = "T-pose render failed"
             return result
 
-        _set_current(character_name, row, "mesh")
+        _set_current(character_name, label, "mesh")
         res = generate_for_current_outfit(character_name, force=force,
-                                          signature=sig)
+                                          signature=signature)
         if not res.get("ok"):
             result["error"] = str(res.get("error") or "mesh generation failed")
             return result
         result["ok"] = True
         result["cached"] = bool(res.get("cached"))
-    except Exception as e:  # noqa: BLE001 — one bad outfit must not kill the run
-        logger.exception("Outfit batch %s: outfit %s failed",
-                         character_name, row["name"])
+    except Exception as e:  # noqa: BLE001 — one bad combination must not kill the run
+        logger.exception("Outfit combos %s: combination %s failed",
+                         character_name, label)
         result["error"] = f"{type(e).__name__}: {e}"[:300]
     return result
 
 
-def _run(character_name: str, rows: List[Dict[str, Any]], force: bool) -> None:
+def _handle_outfit_combos(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Queue handler: enumerate, skip what the caches already have, render the
+    rest serially. Cancellation is checked BETWEEN combinations, so a stop
+    never leaves a half-written cache entry."""
     from app.core.task_queue import get_task_queue
 
-    tq = None
-    task_id = ""
-    try:
-        tq = get_task_queue()
-        task_id = tq.track_start("outfit_batch", f"Outfits: {character_name}",
-                                 agent_name=character_name)
-    except Exception:
-        tq, task_id = None, ""
+    character_name = str(payload.get("character") or "")
+    force = bool(payload.get("force"))
+    task_id = str(payload.get("_task_id") or "")
+    options = combo_options(character_name)
+    choices, error = _resolve_filter(options, payload.get("slots"))
+    if error:
+        raise ValueError(error)
+    names = {p["item_id"]: p["name"]
+             for pieces in options.values() for p in pieces}
+    total = count_combos(choices)
+    have = _mesh_signatures(character_name)
 
-    failed = 0
-    done = 0
+    tq = get_task_queue()
+    with _lock:
+        _status[character_name] = {
+            "running": True, "total": total, "done": 0, "skipped": 0,
+            "failed": 0, "current": None, "results": [],
+            "started_at": utc_now_iso(), "finished_at": ""}
+
+    done = skipped = failed = 0
+    cancelled = False
+    logger.info("Outfit combos %s: %d combination(s), force=%s, %d cached",
+                character_name, total, force, len(have))
     try:
-        for idx, row in enumerate(rows, 1):
-            if _stop_requested(character_name):
-                logger.info("Outfit batch %s: stopped after %d/%d outfits",
-                            character_name, done, len(rows))
+        for pieces in _iter_combos(choices):
+            if task_id and tq.is_task_cancelled(task_id):
+                cancelled = True
+                logger.info("Outfit combos %s: cancelled after %d/%d",
+                            character_name, done + skipped, total)
                 break
-            if tq and task_id:
-                try:
-                    tq.track_update_label(
-                        task_id,
-                        f"Outfits: {character_name} — {idx}/{len(rows)} {row['name']}")
-                except Exception:
-                    pass
-            result = _render_one(character_name, row, force)
+            signature = _signature(pieces)
+            if not force and signature in have:
+                skipped += 1
+                with _lock:
+                    st = _status.get(character_name)
+                    if st:
+                        st["skipped"] = skipped
+                continue
+            label = _combo_label(pieces, names)
+            result = _render_one(character_name, pieces, signature, label, force)
             done += 1
-            if not result["ok"]:
+            if result["ok"]:
+                have.add(signature)
+            else:
                 failed += 1
             with _lock:
                 st = _status.get(character_name)
                 if st:
-                    st["results"].append(result)
                     st["done"] = done
-        logger.info("Outfit batch %s: %d outfit(s) processed, %d failed",
-                    character_name, done, failed)
+                    st["failed"] = failed
+                    # Only the tail is kept — a run of a million combinations
+                    # must not grow an unbounded list in memory.
+                    st["results"].append(result)
+                    if len(st["results"]) > 50:
+                        del st["results"][:-50]
+        logger.info("Outfit combos %s: %d rendered (%d failed), %d cached, "
+                    "%d total%s", character_name, done, failed, skipped, total,
+                    " — cancelled" if cancelled else "")
     finally:
-        _set_current(character_name, None)
+        _set_current(character_name, "")
         with _lock:
             st = _status.get(character_name)
             if st:
                 st["running"] = False
                 st["finished_at"] = utc_now_iso()
-        if tq and task_id:
-            try:
-                tq.track_finish(
-                    task_id,
-                    error=(f"{failed} of {done} outfit(s) failed" if failed else ""))
-            except Exception:
-                pass
+    return {"total": total, "rendered": done, "skipped": skipped,
+            "failed": failed, "cancelled": cancelled}
 
 
-def start(character_name: str, outfit_ids: List[str],
+def start(character_name: str, slots_filter: Optional[Dict[str, Any]] = None,
           force: bool = False) -> Dict[str, Any]:
-    """Starts the batch for the selected outfits in a background thread.
+    """Submits the batch as ONE persistent queue task at low priority.
 
-    Outfits without usable pieces are dropped, and a signature is rendered
-    only once even when several selected outfits share it. Returns
-    ``{"ok": True, "count": n}`` or ``{"ok": False, "error": …}`` —
-    ``error="already running"`` is the double-start guard.
+    Returns ``{"ok": True, "task_id": …, "total": …, "missing": …,
+    "est_seconds": …}`` or ``{"ok": False, "error": …}`` —
+    ``error="already running"`` is the double-start guard (at most one
+    pending/running batch per character).
     """
-    selected = {str(i) for i in (outfit_ids or [])}
-    rows: List[Dict[str, Any]] = []
-    seen: set = set()
-    for row in _plan_rows(character_name):
-        if row["outfit_id"] not in selected or row["skip_reason"]:
-            continue
-        # Dedupe over the SELECTION, not over the whole plan: picking only the
-        # second of two identical outfits must still render it.
-        if row["signature"] in seen:
-            continue
-        seen.add(row["signature"])
-        rows.append(row)
-    if not rows:
-        return {"ok": False, "error": "no renderable outfits selected"}
+    options = combo_options(character_name)
+    if not options:
+        return {"ok": False, "error": "no outfit pieces in this inventory"}
+    choices, error = _resolve_filter(options, slots_filter)
+    if error:
+        return {"ok": False, "error": error}
+    stats = combo_stats(character_name, slots_filter, force)
+    if not stats["total"]:
+        return {"ok": False, "error": "the filter yields no combination"}
+    if queue_state(character_name)["state"] != "none":
+        return {"ok": False, "error": "already running"}
 
-    with _lock:
-        if (_status.get(character_name) or {}).get("running"):
-            return {"ok": False, "error": "already running"}
-        _status[character_name] = {
-            "running": True, "stop_requested": False, "total": len(rows),
-            "done": 0, "current": None, "results": [],
-            "started_at": utc_now_iso(), "finished_at": ""}
+    from app.core.task_queue import get_task_queue
+    task_id = get_task_queue().submit(
+        task_type=TASK_TYPE,
+        payload={"character": character_name,
+                 "slots": {slot: list(opts) for slot, opts in choices.items()},
+                 "force": force},
+        queue_name="default", agent_name=character_name,
+        priority=PRIORITY_LOW, max_retries=0)
+    if not task_id:
+        return {"ok": False, "error": "queue rejected the task"}
+    logger.info("Outfit combos %s: queued %s — %d combination(s), force=%s",
+                character_name, task_id, stats["total"], force)
+    return {"ok": True, "task_id": task_id, "total": stats["total"],
+            "missing": stats["missing"], "missing_exact": stats["missing_exact"],
+            "est_seconds": stats["est_seconds"]}
 
-    logger.info("Outfit batch %s: starting %d outfit(s), force=%s",
-                character_name, len(rows), force)
-    threading.Thread(target=_run, args=[character_name, rows, force],
-                     daemon=True, name=f"outfit-batch-{character_name}").start()
-    return {"ok": True, "count": len(rows)}
+
+def register_outfit_batch_handler() -> None:
+    """Registers the queue handler. Called at server startup."""
+    from app.core.task_queue import get_task_queue
+    get_task_queue().register_handler(TASK_TYPE, _handle_outfit_combos)
+    logger.info("Outfit-Combos-Handler registriert")
