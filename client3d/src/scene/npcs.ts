@@ -107,9 +107,11 @@ export interface NpcState {
   via?: THREE.Vector3[];
   /** server journey (§ A11): world points of the path cells (length ==
    *  travel.path.length) + last polled seg/frac; cellSecondsReal steers the
-   *  client-side extrapolation between polls (null = frozen world) */
+   *  client-side extrapolation between polls (null = frozen world).
+   *  stamp identifies the worldmap poll the values came from — seg/frac
+   *  reconciliation only runs against a genuinely fresh payload. */
   route?: { points: THREE.Vector3[]; seg: number; frac: number;
-            cellSecondsReal: number | null };
+            cellSecondsReal: number | null; stamp: number };
   travelTo: THREE.Vector3 | null;   // Reiseziel (Linien-Endpunkt) oder null
 }
 
@@ -153,23 +155,40 @@ export class NpcManager {
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
       }
-      // Server-Reise übernehmen; Reconcile: seg/frac vom Server nur hart
-      // übernehmen, wenn |server - lokal| > 0,5 Zellen (§ A11) — sonst lokal
-      // weiterlaufen lassen, das vermeidet Poll-Ruckeln.
+      // Adopt the server journey (§ A11). The RATE (cellSecondsReal) and the
+      // path geometry are authoritative and adopted on every update — a
+      // mid-journey freeze must stop the extrapolation immediately, not only
+      // once the 0.5-cell snap fires. Only seg/frac are subject to
+      // reconciliation, and only against a genuinely NEW worldmap payload
+      // (stamp): update() runs at 1 Hz off the cached map, so comparing
+      // against a stale payload would snap fast journeys backwards each
+      // second. Hard snap when |server - local| > 0.5 cells, otherwise let
+      // the local extrapolation keep running (avoids poll jitter).
       if (st.route) {
-        const server = st.route.seg + st.route.frac;
-        const local = npc.route ? npc.route.seg + npc.route.frac : -1;
-        if (!npc.route || Math.abs(server - local) > 0.5
-            || npc.route.points.length !== st.route.points.length) {
+        if (!npc.route || npc.route.points.length !== st.route.points.length) {
           npc.route = { ...st.route, points: st.route.points.map((p) => p.clone()) };
+        } else {
+          npc.route.cellSecondsReal = st.route.cellSecondsReal;
+          for (let k = 0; k < st.route.points.length; k++) {
+            npc.route.points[k].copy(st.route.points[k]);
+          }
+          if (npc.route.stamp !== st.route.stamp) {
+            const server = st.route.seg + st.route.frac;
+            const local = npc.route.seg + npc.route.frac;
+            if (Math.abs(server - local) > 0.5) {
+              npc.route.seg = st.route.seg;
+              npc.route.frac = st.route.frac;
+            }
+            npc.route.stamp = st.route.stamp;
+          }
         }
         npc.waypoints = [];
       } else {
         npc.route = null;
       }
       // Zielwechsel -> Weg planen: vorgegebene Zwischenstationen (Raum-
-      // Ausgänge) haben Vorrang, sonst um Gebäude herum (A*). Nur für
-      // Nicht-Reisende — auf Reisen führt allein die Server-Route.
+      // Ausgänge) haben Vorrang, sonst um Gebäude herum (A*). Travellers are
+      // exempt — on a journey the server route alone drives the figure.
       if (!st.route && !npc.target.equals(st.pos)) {
         npc.waypoints = st.via?.length
           ? st.via.map((v) => v.clone())
@@ -317,11 +336,11 @@ export class NpcManager {
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
-      // Server-Reise (§ A11): entlang der Route laufen statt auf npc.target.
-      // Extrapoliert wird der GESAMT-Fortschritt (seg+frac als eine Zahl),
-      // seg/frac werden daraus neu abgeleitet — wer nur frac im aktuellen
-      // Segment hochzählt, bleibt an jedem Knoten stehen bis zum nächsten
-      // Poll. cellSecondsReal == null (Freeze) => nicht extrapolieren.
+      // Server journey (§ A11): walk along the route instead of npc.target.
+      // The TOTAL progress (seg+frac as one number) is extrapolated and
+      // seg/frac re-derived from it — advancing only the per-segment frac
+      // would stall at every node until the next poll arrives.
+      // cellSecondsReal == null (frozen world) => do not extrapolate.
       if (npc.route && npc.route.points.length >= 2) {
         const r = npc.route;
         if (r.cellSecondsReal && r.cellSecondsReal > 0) {

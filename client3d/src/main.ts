@@ -333,6 +333,10 @@ async function startApp(username: string) {
 
   // --- Polling: Worldmap + Raumbelegung -------------------------------------
   let lastMap: WorldMap | null = firstMap;
+  /** counts successful worldmap polls — travel seg/frac reconciliation in the
+   *  NpcManager only runs against a genuinely NEW payload (npcs.update is
+   *  called at 1 Hz off the cached map, the poll refreshes every 3 s) */
+  let mapStamp = 1;
   const roomOf = new Map<string, string>(); // Charaktername -> Raum (ID oder Name)
   /** aktuell DARGESTELLTER Raum je Figur (null = Außenansicht) — erkennt
    *  Betreten/Verlassen/Wechsel für das Exit-Routing */
@@ -350,6 +354,7 @@ async function startApp(username: string) {
   async function pollWorldMap() {
     try {
       lastMap = await api.getWorldMap();
+      mapStamp += 1;
       hud.setOnline(true);
       takeRoomsFrom(lastMap);
       updatePins(lastMap);
@@ -458,7 +463,7 @@ async function startApp(username: string) {
               pos,
               scale: 1,
               route: { points, seg, frac: tr.frac,
-                       cellSecondsReal: tr.cell_seconds_real },
+                       cellSecondsReal: tr.cell_seconds_real, stamp: mapStamp },
               travelTo: last.clone(),
             });
             shownRoom.set(c.name, null);
