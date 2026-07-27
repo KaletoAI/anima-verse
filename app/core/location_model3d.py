@@ -423,11 +423,20 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
     out["offset_y"] = float(meta.get("offset_y") or 0.0)
     out["offset_x"] = float(meta.get("offset_x") or 0.0)
     out["offset_z"] = float(meta.get("offset_z") or 0.0)
-    # Walkable surface above the model's bottom edge (metres) — feeds the
-    # stand height of overlay zones on an area location. Absent = unknown,
-    # the recipe then falls back to the model's bottom edge.
+    # Walkable surface above the model's bottom edge (metres, manual dial) —
+    # feeds the stand height of overlay zones on an area location.
     if meta.get("walk_y") is not None:
         out["walk_y"] = float(meta.get("walk_y") or 0.0)
+    # Measured walkable surface (user finding 2026-07-28: overlay zones stood
+    # on the SUNKEN model bottom — a village sunk by offset_y put its NPCs a
+    # metre underground). The same § B4-light measurement rooms always had:
+    # bbox + walkable-floor fraction, cached in the sidecar; the composer
+    # derives walk_y_world from it, the manual walk_y stays the override.
+    meta = _ensure_measured(p, meta)
+    if meta.get("bbox_fixed"):
+        out["bbox_fixed"] = list(meta["bbox_fixed"])
+    if meta.get("walk_frac") is not None:
+        out["walk_frac"] = float(meta.get("walk_frac") or 0.0)
     return out
 
 

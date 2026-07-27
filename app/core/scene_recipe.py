@@ -711,11 +711,31 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         "anchor": [_r(_num(meta.get("offset_x"))), _r(_num(meta.get("offset_z")))],
         "bottom_y": _r(bottom),
     }
-    # Walkable surface of the model (metres above its bottom, admin-dialed in
-    # the model gallery): stand height of overlay zones on an area location.
-    # Absent = unknown — the overlay code falls back to bottom_y.
+    # Walkable surface of the model — the stand height of overlay zones on an
+    # area location. Chain (user finding 2026-07-28): manual dial (walk_y,
+    # metres above the model bottom) > measured walkable-floor fraction
+    # (walk_frac × final world height) > TERRAIN level. The old bottom_y
+    # fallback put figures a metre underground the moment a model was sunk
+    # via offset_y (Willowbrook: bottom −1.04, basement plate −0.54).
+    walk: Optional[float] = None
     if meta.get("walk_y") is not None:
-        spec["walk_y_world"] = _r(bottom + _num(meta.get("walk_y")))
+        walk = _num(meta.get("walk_y"))
+    else:
+        frac = meta.get("walk_frac")
+        bb = meta.get("bbox_fixed") or []
+        uniform = (bb[1] * (box["xz"] / max(bb[0], bb[2]))
+                   if len(bb) == 3 and max(bb[0], bb[2]) > 0 else None)
+        # AREA models render at their far-view proportions at every zoom
+        # (client decision 4ec7d2b) — their real height is the UNIFORM tile
+        # fit, not height_m × k. Ordinary buildings keep the declared box.
+        if map3d.get("area_model"):
+            height_world = uniform or box.get("y")
+        else:
+            height_world = box.get("y") or uniform
+        if frac is not None and height_world:
+            walk = float(frac) * float(height_world)
+    spec["walk_y_world"] = _r(bottom + walk) if walk is not None \
+        else _r(max(bottom, 0.0))
     return spec
 
 
