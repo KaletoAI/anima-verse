@@ -21,6 +21,7 @@
      room_items_block       — visible items in the current room
      inventory_block        — what the character is carrying
      recent_chat_block      — last 3 chat messages with the avatar
+     recent_thoughts        — this character's OWN last thoughts (private)
      inbox_block            — unread messages from any sender
      events_block           — acute events at location
      commitments_block      — open promises
@@ -73,6 +74,11 @@ Current situation:
 
 === Recent chat with your partner ===
 {{ recent_chat_block }}
+{% endif %}
+{% if recent_thoughts %}
+
+=== Your recent thoughts (private — only you know them) ===
+{{ recent_thoughts }}
 {% endif %}
 {% if events_block %}
 

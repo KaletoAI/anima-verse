@@ -23,6 +23,8 @@
      activity_hint_block       — free-text direction what one typically does here
      daily_schedule_block      — typical-rhythm hint for current hour
      tracker_block             — carried tracker-items revealing target locations
+     recent_thoughts           — this character's OWN last thoughts (private —
+                                 never another character's, never in a chat prompt)
      arc_block                 — Low: active story arc context
      retrospective_block       — Low (with boost): "time to reflect"
      tools_hint                — tool-format hint for single-mode tool use
@@ -49,6 +51,13 @@ Current situation:
 {% if present_people_block %}
 - Also present here (what you can see of them):
 {{ present_people_block }}
+{% endif %}
+{% if recent_thoughts %}
+
+=== Your recent thoughts (private — only you know them) ===
+{{ recent_thoughts }}
+Pick up what still matters: a plan you made, a question you left open, a
+feeling that has not settled. Do not simply repeat them.
 {% endif %}
 {% if daily_schedule_block %}
 

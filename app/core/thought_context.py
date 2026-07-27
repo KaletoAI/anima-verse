@@ -25,6 +25,12 @@ logger = get_logger("thought_context")
 _OUTFIT_AFTER_LOCATION_MINUTES = 10
 # Hours since last retrospect that count as "boost — time to reflect".
 _RETROSPECT_BOOST_HOURS = 24
+# Thought journal (plan-thought-journal.md): how many of the character's own
+# last thoughts go back into the next thought prompt, and the hard character
+# budget for the whole block. Module constants on purpose — config sprawl
+# only once there is a real tuning need.
+THOUGHT_RECENT_N = 3
+THOUGHT_RECENT_CHARS = 1200
 
 
 def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str, Any]:
@@ -70,6 +76,9 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         # Agent_thought.md ignores them silently (no template reference).
         "effects_block": _build_effects_block(character_name),
         "recent_chat_block": _build_recent_chat_block(character_name),
+        # The character's OWN last thoughts — continuity of inner life. Private
+        # to this character: it never reaches anyone else's prompt.
+        "recent_thoughts": recent_thoughts_block(character_name),
         "outfit_self_block": _build_outfit_block(character_name, "Your outfit"),
         "outfit_avatar_block": _build_avatar_outfit_block(),
         "room_items_block": _build_room_items_block(location_id, room_id),
@@ -481,6 +490,50 @@ def _build_effects_block(character_name: str) -> str:
     except Exception as e:
         logger.debug("effects block failed for %s: %s", character_name, e)
         return ""
+
+
+def recent_thoughts_block(character_name: str) -> str:
+    """The character's own last thoughts, OLDEST FIRST — one line each.
+
+    Newest last so the prompt reads chronologically into the present moment.
+    Two hard limits, both module constants: at most ``THOUGHT_RECENT_N``
+    entries and ``THOUGHT_RECENT_CHARS`` characters overall; a single very
+    long thought is truncated rather than dropped, and older entries fall away
+    before newer ones. Empty journal → empty string, and the template then
+    renders no block at all.
+
+    Public because the smoke checks it directly; it is otherwise only called
+    from ``build_thought_context``.
+    """
+    try:
+        from app.models.thought_store import list_thoughts
+        rows = list_thoughts(character_name, limit=THOUGHT_RECENT_N)
+    except Exception as e:
+        logger.debug("recent_thoughts_block(%s): %s", character_name, e)
+        return ""
+    if not rows:
+        return ""
+    lines: List[str] = []
+    used = 0
+    # rows are newest first — walk them that way so the NEWEST thought gets
+    # the budget, then flip the result.
+    for row in rows:
+        text = " ".join((row.get("content") or "").split())
+        if not text:
+            continue
+        # The budget counts the RENDERED block: the "- " prefix and the
+        # newline joining this line to the previous one belong to it.
+        overhead = 2 + (1 if lines else 0)
+        room = THOUGHT_RECENT_CHARS - used - overhead
+        if room <= 0:
+            break
+        if len(text) > room:
+            text = text[:room - 1].rstrip() + "…"
+            if len(text) <= 1:
+                break
+        lines.append(f"- {text}")
+        used += overhead + len(text)
+    return "\n".join(reversed(lines))
 
 
 def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
