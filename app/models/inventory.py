@@ -345,6 +345,14 @@ def _piece_render_slot(item_slots: List[str]) -> str:
     return ""
 
 
+def _normalize_outfit_types(raw) -> List[str]:
+    """Outfit-type tags against the closed vocabulary. Lazy import: the
+    coherence module reads items, and importing it at module load would close
+    a cycle."""
+    from app.core.outfit_coherence import normalize_outfit_types
+    return normalize_outfit_types(raw)
+
+
 def _clean_piece_lora(raw) -> Dict[str, Any]:
     """Normalisiert das LoRA eines Outfit-Pieces (maximal EINS pro Piece).
 
@@ -488,7 +496,10 @@ def add_item(name: str,
             "slots": slots,
             "covers": [s for s in _clean_piece_slots(outfit_piece.get("covers")) if s not in slots],
             "partially_covers": [s for s in _clean_piece_slots(outfit_piece.get("partially_covers")) if s not in slots],
-            "outfit_types": [s.strip() for s in (outfit_piece.get("outfit_types") or []) if s and s.strip()],
+            # Closed vocabulary (app/core/outfit_coherence.py): unknown tags
+            # are dropped with a warning here, at the ONE creation path, so
+            # the coherence rule can rely on them.
+            "outfit_types": _normalize_outfit_types(outfit_piece.get("outfit_types")),
             "lora": _clean_piece_lora(outfit_piece.get("lora") or outfit_piece.get("loras")),
         }
 
@@ -536,7 +547,9 @@ def update_item(item_id: str,
                 "slots": slots,
                 "covers": [s for s in _clean_piece_slots(op.get("covers")) if s not in slots],
                 "partially_covers": [s for s in _clean_piece_slots(op.get("partially_covers")) if s not in slots],
-                "outfit_types": [s.strip() for s in (op.get("outfit_types") or []) if s and s.strip()],
+                # Same closed vocabulary as on create — an edit must not be
+                # able to smuggle a tag past the rule.
+                "outfit_types": _normalize_outfit_types(op.get("outfit_types")),
                 "lora": _clean_piece_lora(op.get("lora")),
             }
         else:
