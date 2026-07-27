@@ -367,7 +367,8 @@ def location_model3d_delete(location_id: str, file: str = "") -> Dict[str, Any]:
 @router.post("/locations/{location_id}/model3d/select")
 async def location_model3d_select(location_id: str, request: Request) -> Dict[str, Any]:
     """Make a stored model the ACTIVE building model (body: {file}) — the one
-    the clients get via /play/locations/{id}/model."""
+    the clients get via /play/locations/{id}/model. An empty {file} selects
+    NO model: nothing is rendered until another one is chosen/generated."""
     from app.core.location_model3d import select_model
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
@@ -567,7 +568,8 @@ def room_model3d_delete(location_id: str, room_id: str, file: str = "") -> Dict[
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/select")
 async def room_model3d_select(location_id: str, room_id: str,
                               request: Request) -> Dict[str, Any]:
-    """Make a stored model the ACTIVE room model (body: {file})."""
+    """Make a stored model the ACTIVE room model (body: {file}). An empty
+    {file} selects NO model — the room renders without a diorama."""
     from app.core.location_model3d import select_model
     _require_room(location_id, room_id)
     data = await request.json()

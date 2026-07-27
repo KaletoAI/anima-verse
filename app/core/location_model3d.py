@@ -41,6 +41,10 @@ logger = get_logger(__name__)
 
 _STEM = "building"
 _SEL_FILE = "selection.json"
+# Selection sentinel: the admin explicitly chose NO model for this stem —
+# find_building_model returns None instead of falling back to the newest
+# file, so nothing is rendered (meta 404 = the normal no-model state).
+_SEL_NONE = "__none__"
 
 _lock = threading.Lock()
 _generating: set = set()  # "<owner>:<stem>:<source image>" running job keys
@@ -191,6 +195,8 @@ def find_building_model(location_id: str, room_id: str = "") -> Optional[Path]:
     if not owner:
         return None
     sel = _read_selection(owner).get(_stem(room_id), "")
+    if sel == _SEL_NONE:
+        return None
     if sel and is_model_filename(sel, room_id):
         p = _model_dir(owner) / sel
         if p.exists():
@@ -200,10 +206,20 @@ def find_building_model(location_id: str, room_id: str = "") -> Optional[Path]:
 
 
 def select_model(location_id: str, filename: str, room_id: str = "") -> bool:
-    """Make ``filename`` the active model of the stem. False when the file
-    does not belong to the stem or is missing."""
+    """Make ``filename`` the active model of the stem. An EMPTY filename
+    selects NO model (user decision 2026-07-27): the sentinel is persisted
+    and nothing is rendered until another model is selected or generated
+    (a fresh generation becomes active and clears it). False when a
+    non-empty file does not belong to the stem or is missing."""
     owner = _owner_id(location_id)
-    if not owner or not is_model_filename(filename, room_id):
+    if not owner:
+        return False
+    if not filename:
+        sel = _read_selection(owner)
+        sel[_stem(room_id)] = _SEL_NONE
+        _write_selection(owner, sel)
+        return True
+    if not is_model_filename(filename, room_id):
         return False
     if not (_model_dir(owner) / filename).exists():
         return False
@@ -339,6 +355,10 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
         "pending": is_pending(location_id, room_id),
         "meta": _read_sidecar(path) if (owner and path) else {},
         "models": list_models(location_id, room_id),
+        # The admin explicitly chose "no model" — distinct from "no files":
+        # the UI shows the None entry as the active choice.
+        "none_selected": bool(owner and _read_selection(owner)
+                              .get(_stem(room_id)) == _SEL_NONE),
     }
     out.update(list_mesh_backends("none"))  # {"backends": [...], "default": ""}
     return out

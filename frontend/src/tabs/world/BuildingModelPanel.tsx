@@ -52,6 +52,8 @@ export interface BuildingModelStatus {
   models?: ModelEntry[]
   backends?: MeshBackend[]
   default?: string
+  /** The admin explicitly chose "no model" — distinct from "no files". */
+  none_selected?: boolean
 }
 
 /** Client default when map3d.size is unset (schnittstellen-3d.md). */
@@ -175,6 +177,7 @@ export function BuildingModelPanel({
   )
 
   const models = model3d?.models || []
+  const noneSelected = !!model3d?.none_selected
   const current = models.find((m) => m.filename === preview)
     || models.find((m) => m.active)
     || models[0]
@@ -706,6 +709,34 @@ export function BuildingModelPanel({
       {/* Stored models — like the image gallery: click previews, "Select"
           makes it the model the 3D clients get. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {models.length > 0 ? (
+          <div
+            style={{
+              display: 'flex', gap: 8, alignItems: 'center',
+              padding: '3px 6px', borderRadius: 6,
+              border: '1px solid var(--border, #30363d)',
+            }}
+          >
+            <span title={noneSelected ? t('No model is rendered.') : undefined}
+              style={{ width: '1.2em', textAlign: 'center' }}>
+              {noneSelected ? '⭐' : ''}
+            </span>
+            <span style={{ fontSize: '0.82em' }}>{t('No model')}</span>
+            <span className="ga-hint">{t('render nothing')}</span>
+            <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+              {!noneSelected ? (
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  onClick={() => { void select('') }}
+                  title={t('Render no 3D model — until another one is selected or generated.')}
+                >
+                  {t('Select')}
+                </button>
+              ) : null}
+            </span>
+          </div>
+        ) : null}
         {models.map((m) => {
           const shown = m.filename === current.filename
           return (
