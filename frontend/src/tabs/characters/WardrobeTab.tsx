@@ -65,6 +65,16 @@ export function WardrobeTab({ character }: { character: string }) {
   const enc = encodeURIComponent(character)
   const [data, setData] = useState<Belongings>(EMPTY)
   const [slotFilter, setSlotFilter] = useState('')
+  // Outfit-type filter. The vocabulary comes from the server
+  // (/inventory/outfit-types) — hardcoding it here would drift from the
+  // constant the coherence rule and every save path use.
+  const [typeFilter, setTypeFilter] = useState('')
+  const [outfitTypes, setOutfitTypes] = useState<string[]>([])
+  useEffect(() => {
+    apiGet<{ outfit_types?: string[] }>('/inventory/outfit-types')
+      .then((d) => setOutfitTypes(d.outfit_types || []))
+      .catch(() => setOutfitTypes([]))
+  }, [])
   const [busy, setBusy] = useState(false)
   // Item-Vergabe (Items-an-Character): verfügbare Item-Defs + Auswahl.
   const [allItems, setAllItems] = useState<Array<{ item_id: string; name: string; category?: string }>>([])
@@ -120,12 +130,19 @@ export function WardrobeTab({ character }: { character: string }) {
     } catch { /* ignore */ } finally { setBusy(false) }
   }, [busy, enc, load])
 
-  // Garderobe zeigt NUR Outfit-Pieces (keine Consumables/Spells/sonstigen Items).
+  // The wardrobe shows ONLY outfit pieces (no consumables, spells or other
+  // items). Both filters combine with AND; an UNTAGGED piece passes every
+  // type filter — the same wildcard rule the coherence check uses, so a
+  // deliberately neutral belt or necklace stays visible in every style.
   const filtered = useMemo(() => {
     let list = data.items.filter((it) => it.is_outfit)
     if (slotFilter) list = list.filter((it) => it.slots.includes(slotFilter))
+    if (typeFilter) {
+      list = list.filter((it) => !(it.outfit_types || []).length
+        || it.outfit_types.includes(typeFilter))
+    }
     return list
-  }, [data.items, slotFilter])
+  }, [data.items, slotFilter, typeFilter])
 
   const slotOptions = useMemo(() => {
     const s = new Set<string>()
@@ -171,6 +188,17 @@ export function WardrobeTab({ character }: { character: string }) {
             ))}
           </div>
         )}
+        {outfitTypes.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}
+            title={t('Filter by outfit type. Pieces without a type are shown in every filter — they go with everything.')}>
+            <button onClick={() => setTypeFilter('')} style={chip(!typeFilter, true)}>{t('All types')}</button>
+            {outfitTypes.map((ot) => (
+              <button key={ot} onClick={() => setTypeFilter(ot)} style={chip(typeFilter === ot, true)}>
+                {t(ot)}
+              </button>
+            ))}
+          </div>
+        )}
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
           {filtered.length === 0 && <div className="ga-placeholder">{t('No outfit pieces')}</div>}
           {filtered.map((it) => {
@@ -192,6 +220,18 @@ export function WardrobeTab({ character }: { character: string }) {
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>
                   )}
                 </div>
+                {/* Why this piece is in the filter — muted badges, the first
+                    two are enough when space is tight. */}
+                {(it.outfit_types || []).length ? (
+                  <span style={{ display: 'flex', gap: 3, flex: '0 0 auto' }}>
+                    {it.outfit_types.slice(0, 2).map((ot) => (
+                      <span key={ot} style={{
+                        fontSize: '0.66em', opacity: 0.55, padding: '1px 5px',
+                        borderRadius: 8, border: '1px solid rgba(255,255,255,0.18)',
+                      }}>{t(ot)}</span>
+                    ))}
+                  </span>
+                ) : null}
                 {it.equipped
                   ? <span style={{ fontSize: '0.72em', opacity: 0.6 }}>{t('worn')}</span>
                   : <button disabled={busy} style={btn()} onClick={() => act(`/inventory/characters/${enc}/equip`, { item_id: it.item_id })}>{t('Wear')}</button>}
