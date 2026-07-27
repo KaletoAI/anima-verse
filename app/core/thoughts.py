@@ -707,13 +707,44 @@ class ThoughtRunner:
                     notification_content = notification_tool_content
             logger.info("%s: Notification via SendNotification Skill erstellt", character_name)
         else:
-            # Narrativer Thought-Output ohne Tool — wird verworfen. Wenn der
-            # Character was sagen wollte, haette er SendMessage rufen muessen.
+            # Narrative thought output without a tool. It is not DELIVERED
+            # anywhere — if the character wanted to say something it should
+            # have called SendMessage — but it is journalled below.
             if full_response and len(full_response) > 10:
-                logger.info("%s: Thought-Narrativ verworfen (%d Zeichen) — keine SendMessage genutzt",
-                            character_name, len(full_response))
+                logger.info("%s: Thought-Narrativ ohne SendMessage (%d Zeichen) — "
+                            "wird journalisiert", character_name, len(full_response))
             else:
                 logger.info("%s: Keine verwertbare Antwort", character_name)
+
+        # ── Gedanken-Journal (plan-thought-journal.md) ────────────────────
+        # Das Narrativ landet im privaten Journal, statt zu verschwinden —
+        # egal ob eine Notification daraus wurde oder nicht (der Gedanke
+        # existierte unabhaengig von der Zustellung). SKIP- und
+        # suppress_notification-Turns sind oben bereits raus.
+        # Speichern ist LAGERUNG, keine Zustellung: der Text erreicht nur den
+        # eigenen naechsten Thought-Prompt, die eigene Konsolidierung und das
+        # Admin-Panel.
+        if full_response and len(full_response) > 10:
+            try:
+                from app.models.thought_store import add_thought
+                from app.routes.chat import _strip_tool_hallucinations
+                from app.core.intent_engine import strip_intent_tags
+                # Derselbe Bereinigungspfad, den auch die Chat-History nimmt.
+                # Halluzinierte Tool-Calls sind oben schon raus
+                # (_clean_hallucinated_tools), hier fallen Intent-Marker und
+                # der Rest der Tool-Tags weg.
+                _journal = strip_intent_tags(_strip_tool_hallucinations(full_response))
+                _journal = (_journal or "").strip()
+                if _journal and _journal.upper() != "SKIP":
+                    if context_hint:
+                        # Der manuelle Admin-Trigger gibt den Anstoss mit ins
+                        # Journal — sonst steht der Gedanke ohne Anlass da.
+                        _journal = f"[trigger: {context_hint[:120]}]\n{_journal}"
+                    add_thought(character_name, _journal,
+                                location_id=location_id,
+                                room_id=profile.get("current_room", "") or "")
+            except Exception as _je:
+                logger.debug("Thought-Journal Fehler: %s", _je)
 
         # Gedanken-Nachricht an Telegram senden (wenn Character einen Bot hat)
         if notification_content:

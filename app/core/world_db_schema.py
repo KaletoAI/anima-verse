@@ -169,6 +169,23 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_scenes_open ON scenes (status, location_id, room_id)",
     "CREATE INDEX IF NOT EXISTS idx_scenes_activity ON scenes (status, last_activity_ts)",
 
+    # ── Gedanken-Journal (plan-thought-journal.md) ─────────────────────
+    # Das Narrativ eines Thought-Turns — PRIVAT. Genau drei Konsumenten:
+    # der eigene naechste Thought-Prompt, die eigene Tages-Konsolidierung,
+    # das Admin-Panel. Es fliesst NIE in den Perception-Stream, in fremde
+    # Prompts, in Chat-Historien oder in Notifications; Speichern ist
+    # Lagerung, keine Zustellung (der Verbs-only-Vertrag bleibt). Roh ist
+    # transient: nach der Tages-Konsolidierung wird geprunt.
+    """CREATE TABLE IF NOT EXISTS thoughts (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_name TEXT NOT NULL,
+        ts             TEXT NOT NULL,           -- SYSTEM-Zeit (utc_now_iso)
+        location_id    TEXT DEFAULT '',
+        room_id        TEXT DEFAULT '',
+        content        TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_thoughts_char_ts ON thoughts (character_name, ts)",
+
     # ── Memories / Summaries ───────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS memories (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
