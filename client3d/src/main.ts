@@ -564,8 +564,29 @@ async function startApp(username: string) {
     }
     groundHoleOn.value = basementOpen ? 1 : 0;
     if (basementOpen) {
-      groundHole.value.set(basementOpen.center.x - CELL / 2, basementOpen.center.z - CELL / 2,
-                           basementOpen.center.x + CELL / 2, basementOpen.center.z + CELL / 2);
+      let minX = basementOpen.center.x - CELL / 2;
+      let minZ = basementOpen.center.z - CELL / 2;
+      let maxX = basementOpen.center.x + CELL / 2;
+      let maxZ = basementOpen.center.z + CELL / 2;
+      // A tile-sized hole is enough to look straight down, but not to look
+      // INTO the pit: from an angle its near rim stands between camera and
+      // basement. So while a storey BELOW ground is actually displayed, the
+      // hole grows towards the viewer — up to double the extent, smoothly
+      // with the camera angle, recomputed per frame (that is what the
+      // uniforms are for). Only for level < 0: at level 0 and above the
+      // enlarged hole would tear open the map around the tile for nothing.
+      if (basementOpen.levelFilter < 0) {
+        const dx = engine.camera.position.x - basementOpen.center.x;
+        const dz = engine.camera.position.z - basementOpen.center.z;
+        const len = Math.hypot(dx, dz) || 1;
+        const ux = dx / len;
+        const uz = dz / len;
+        // Only the edge FACING the camera moves — the far one stays put, so
+        // the pit does not grow away from the viewer.
+        if (ux > 0) maxX += CELL * ux; else minX += CELL * ux;
+        if (uz > 0) maxZ += CELL * uz; else minZ += CELL * uz;
+      }
+      groundHole.value.set(minX, minZ, maxX, maxZ);
     }
 
     // Verdecker Richtung Kamera: bei offener Innenansicht Nachbar-Kacheln
