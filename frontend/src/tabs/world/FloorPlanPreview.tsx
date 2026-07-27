@@ -133,6 +133,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     THREE: typeof import('three')
     boxes: Group
     skclone: (obj: Object3D) => Object3D
+    /** The filled reference square at height 0. It is NOT level-bound, so the
+     *  solo view of a BASEMENT has to see through it. */
+    ground: Mesh
   } | null>(null)
   const roomsRef = useRef(rooms)
   roomsRef.current = rooms
@@ -391,6 +394,20 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     const solo = soloLevelRef.current
     if (solo !== null) {
       current = current.filter((r) => (r.layout?.level || 0) === solo)
+    }
+    // A basement lies BELOW the reference square, and that square is not
+    // level-bound — it stayed in the picture and covered the very storey the
+    // solo view was opened for. While a level < 0 is soloed it goes ghost;
+    // depthWrite off as well, so it cannot occlude what is underneath. The
+    // edge loop stays as it is: a line hides nothing and it keeps the plan's
+    // extent readable.
+    {
+      const under = solo !== null && solo < 0
+      const gm = h.ground.material as Material & { opacity: number }
+      gm.transparent = under
+      gm.opacity = under ? 0.15 : 1
+      gm.depthWrite = !under
+      gm.needsUpdate = true
     }
     // Scalars come FROM THE PAYLOAD (contract § A1): k = world metres per
     // real metre, storey_m = the derived storey height. Until the first
@@ -1263,7 +1280,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
 
         const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
         clockRef.current = new THREE.Clock()
-        handleRef.current = { THREE, boxes, skclone }
+        handleRef.current = { THREE, boxes, skclone, ground }
         disposers.push(() => { handleRef.current = null })
         rebuild(handleRef.current, roomsRef.current)
 
