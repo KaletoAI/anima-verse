@@ -1,0 +1,605 @@
+# Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
+
+**Vollständiger Neuschrieb.** Dieses Dokument ERSETZT und konsolidiert:
+`schnittstellen-3d.md` (Stand 2026-07-13), `backend-note-scale-anchors.md`
+(v3 + alle Nachträge), `backend-note-room-recipe.md` (+ Nachträge 2026-07-22
+bis -24) und `backend-note-asset-sizing.md`. Die alten Dateien bleiben als
+Verweis-Stubs liegen. `backend-wishlist.md` bleibt unverändert der Rückkanal
+des Clients.
+
+Der Vertrag hat zwei Teile:
+
+- **Teil A — Ist-Vertrag (verbindlich heute):** der konsolidierte Stand
+  aller bisherigen Notizen, bereinigt um Historie und Widersprüche. Beide
+  Renderer (Game-Admin-Vorschau UND 3D-Client) müssen exakt das hier tun.
+- **Teil B — Ziel-Vertrag „Szenen-Rezept" (v4, beschlossen 2026-07-24):**
+  der Umbau auf „**der Server rechnet, der Client stellt dar**". Neue
+  Payloads sind hier spezifiziert; Koexistenzregel wie immer: **die
+  Datenlage entscheidet, kein Flag** — liefert der Server das neue Feld,
+  rendert der Client dumm; sonst gilt Teil A.
+
+---
+
+## 0. Warum v4 — Analysebefund 2026-07-24
+
+Die Geometrie-Regeln dieses Vertrags sind heute **dreifach implementiert**:
+
+1. Backend: `app/core/room_recipe.py` (Spiegelung, Exit-Ableitung,
+   Marker-Komposition), `app/core/location_model3d.py` (Anker-Meta).
+2. Game-Admin-Vorschau: `frontend/src/tabs/world/FloorPlanPreview.tsx`
+   (1841 Zeilen raw three.js) + `planGeometry.ts` — reimplementiert
+   Öffnungs-Normalisierung, Spiegelung und Exit-Ableitung als gepflegtes
+   „Spiegelbild" des Backend-Codes und **ruft `/play/rooms/{id}/recipe`
+   nirgends auf**.
+3. 3D-Client: `src/scene/tiles.ts`, `roomShell.ts`, `propPlace.ts`,
+   `figures.ts` — implementiert dieselben Ketten ein drittes Mal (nutzt
+   immerhin das Rezept).
+
+Jeder dokumentierte Drift-Bug der letzten Wochen ist genau daraus
+entstanden: ×k-Vergesser (Commit 237ccd7), uniforme statt achsengetrennter
+Skalierung (Mondscheinsee), Pivot- statt BBox-Verankerung (Hörsaal),
+Panel-Viewer-Einheitenfehler (de0b151), 0,12 m vs. 0,12×k, 1,70 m vs.
+1,75 m Figurenhöhe. Über ein Dutzend Geometrie-Konstanten leben als
+Kopien in beiden Frontends.
+
+**Leitprinzip v4:** Jede Geometrie-Entscheidung existiert genau EINMAL —
+im Backend. Beide Renderer konsumieren dieselben server-gerechneten Daten;
+die Admin-Vorschau ist nicht länger „Referenz per Reimplementation",
+sondern erster Konsument derselben Vertragsfläche (§ B5).
+
+---
+
+# Teil A — Ist-Vertrag (konsolidiert)
+
+## A1. Vokabular, Koordinaten, Maßstab
+
+- **Kachel** = 10 × 10 Welt-Meter, eine Location. **Referenzquadrat** =
+  festes **8 × 8 m**, kachelzentriert — die Bezugsfläche ALLER Fraktionen
+  (`layout.x/y/w/d`, `map3d.outline`, `map3d.elevator`, Rezept-`outline`,
+  `placements.at`, `exit`, Marker-`at`). +x = Ost; +Fraktion-y → +z = Süd.
+- **Anker-Kette (v3):** `k = 8 / plan_width_m(effektiv)` — Welt-Meter pro
+  Real-Meter der Location. Effektiv = explizites `map3d.plan_width_m`,
+  sonst Auto-Ableitung `height_m × (größte XZ-Seite / Y des Meshes, nach
+  Rotations-Fix)`, sonst Legacy (kein k; `level_height`-Formeln).
+- **Etagenhöhe** `storey = height_m / floors × k` (wenn Gebäude-Meta beides
+  deklariert), sonst `map3d.level_height`, sonst 3. Etagenboden von
+  Level n = `n × storey`.
+- **Yaw-Kette:** `yaw = map3d.rotation` (explizite 0 zählt) →
+  `map_rotation_2d` → 0. Yaw dreht im Uhrzeigersinn in der Draufsicht;
+  three.js `rotation.y = −rad(yaw)`.
+- **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'XYZ'**
+  (M = Rx·Ry·Rz), in Grad, VOR jeder Messung anwenden.
+- **Kompass für Blickrichtungen** (`facing`, Marker-`rotation`): 0 = Süd,
+  90 = Ost, 180 = Nord, 270 = West; Figur `rotation.y = +rad(facing)`.
+- Alle Felder mit Suffix `_m` sind REALE Meter → im Anchored-Mode ×k.
+  `offset_x/y/z` sind dagegen immer WELT-Meter (kein ×k).
+
+## A2. Die Platzierungsketten (heute drei — v4 vereinheitlicht sie, § B2)
+
+**Gebäudemodell** (`/play/locations/{id}/model` + Meta):
+1. Meta-Rotations-Fix (innere Gruppe).
+2. Karten-Yaw als eigene ELTERN-Rotation (nie in einem Euler kombinieren).
+3. BBox des rotierten Ganzen messen → `k_xz = (10 × 0,92 × map3d.size) /
+   max(B_x, B_z)`; `k_y = height_m × k / B_y` (ohne height_m: `k_y = k_xz`).
+   `map3d.size` ∈ ]0, 2] — über 1 ragt bewusst über die Kachel, nicht
+   clampen, nicht clippen.
+4. `scale.set(k_xz, k_y, k_xz)` auf WELT-Achsen (achsengetrennt, v2.1).
+5. BBox neu messen → Unterkante = 0,06 m + `offset_y`; XZ-Zentrum =
+   Kachelmitte + `offset_x`/`offset_z` (Welt-Achsen, Yaw dreht sie NICHT
+   mit). Ausnahme Terrain-/Template-Kacheln: X und Z getrennt füllen,
+   ohne 0,92-Rand, damit size = 1 nahtlos kachelt.
+
+**Raum-Diorama** (`/play/rooms/{id}/model` + Meta):
+1. Normalisieren: rohe BBox messen (NIE dem Pivot trauen), größte XZ-Seite
+   = 1, XZ zentriert, Unterkante y = 0.
+2. Fit: uniform `min(w/fp_x, d/fp_z) × 0,96`, an der UNROTIERTEN Box.
+   ⚠ Diese Rechteck-Einpassung ist ab v4 nur noch der FALLBACK — der
+   Größenabgleich mit Props/Figuren läuft über die Real-Size-Regel in
+   § B2a (Diorama skaliert wie ein Prop über `width_m × k`).
+3. Meta-Fix (innere Gruppe) → Layout-Yaw (Eltern-Gruppe).
+4. Rotierte Box NEU messen und NEU erden: Unterkante =
+   `Etagenboden + 0,12 + layout.model_offset_y`; XZ-Anker =
+   `layout.model_at` (Fraktionen des Raum-Rechtecks; fehlt = zentriert).
+   **Raum-Sidecar-`offset_y` ist stillgelegt** — für Räume nicht mehr aus
+   dem Meta lesen (Gebäude unverändert).
+
+**Props — REAL-SIZE-Regel** (`/assets/props`, Rezept-`placements`):
+1. GLB laden, Orientierungs-Fix aus der Bibliothek anwenden.
+2. BBox des GEFIXTEN Meshes messen → maxExtent = max(x, y, z).
+3. `s = max(width_m, depth_m, height_m) × k / maxExtent` (UNIFORM — eine
+   Platzierung skaliert nie).
+4. `rotation.y = −rad(yaw)`.
+5. Ergebnis-BBox messen → Unterkante auf **Raumplatten-Oberkante + 0,01**
+   (outdoor: Etagenboden + 0,01) + `offset_y × k`, XZ-Zentrum auf
+   `placements.at`. (Klarstellung v4 — vorher nannten Vorschau/Client/
+   Rezept drei verschiedene Werte: 0,05 / 0,11 / 0. Möbel stehen auf dem
+   Raumboden; die `prop_markers`-Höhen reiten denselben Hub mit.)
+- `missing: true` → Platzhalter rendern, Platzierung nie verwerfen;
+  `has_model: false` → Platzhalter in `dims`-Größe.
+- Zahlenbeispiel zum Diffen: rohe Box [1,0/0,5/2,0], Fix y = 90°, Dims
+  W 1,2/D 0,6/H 0,3 → gefixte Ausdehnung [2,0/0,5/1,0], s = 0,6k; Marker
+  `at [0,5/1,0/0,25]`, facing 90, yaw 90 → `offset_m [0, −0,3]`,
+  `height_m 0,3`, `facing 0`.
+
+**Verankerung IMMER:** BBox-Unterkante des fertig transformierten Modells,
+gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
+
+## A3. Standhöhen & Figuren-Maßstab — Klärung der 0,12-Frage
+
+- **Verbindlich: 0,12 ist eine KONSTANTE in Welt-Metern, ohne ×k.** Die
+  Admin-Vorschau rechnet `Etagenboden + 0,12 + offset` (FloorPlanPreview,
+  Grounding-Zeile) — die §2e-Formulierung „0,12 × k" der Rezept-Note war
+  falsch und ist hiermit zurückgezogen. Euer Client rechnet bereits
+  richtig.
+- Figuren stehen indoor auf der ABGETASTETEN Bodenfläche (Diorama-Boden
+  bzw. Rezept-Platte); die Konstante verankert nur Modelle/Platten.
+  Outdoor-Räume haben keine Platte — Figuren stehen auf Level-/
+  Terrain-Höhe.
+- **Figuren-Basishöhe: 1,70 m × k** (anchored; Legacy `1,7 × storey/3`).
+  Der Client-Default 1,75 m ist eine bekannte Divergenz → auf 1,70
+  angleichen (§ B6). `height_cm` der Charaktere skaliert relativ dazu.
+
+## A4. Raum-Rezept `GET /play/rooms/{room_id}/recipe`
+
+404 = Raum ohne Layout (Auto-Grid-Fallback). Sonst:
+
+```
+{ room_id, level, rotation?,          # rotation nur für Diorama-Fallback —
+                                      # im Rezept-Pfad ist alles eingebacken
+  outline: [[x, y], …],               # Hüllen-Polygon, ABSOLUTE Fraktionen
+                                      # des 8×8-Quadrats, auto-geschlossen,
+                                      # IM UHRZEIGERSINN; nur EIN Codepfad
+  surfaces?: { floor?, wall? },       # Surface-Texture-Kinds
+  openings: [{ edge, at, width_m, height_m, sill_m, type, to?,
+               mirrored?, prop_id? }],
+  exit?, exit_derived?, markers?,
+  placements: [{ prop_id, at: [x, y], yaw, offset_y,
+                 dims: {width_m, depth_m, height_m}, has_model, missing? }],
+  prop_markers: [{ placement, animation, offset_m: [dx, dz],
+                   height_m, facing? }],
+  always_visible?,                    # Outdoor-Flag (§ A5)
+  clip_model?,                        # Diorama-Clip-Opt-in (§ B1)
+  model_at?, model_offset_y?,         # Diorama-Anker/-Höhe (reisen im
+                                      # Payload mit, damit die Signatur
+                                      # sich bei Regler-Änderung bewegt —
+                                      # 2026-07-26)
+  signature }                         # md5, deckt Layout + Prop-Sidecars
+                                      # + Nachbarraum-Öffnungen ab
+```
+
+- **Koexistenz (geändert 2026-07-25, User-Entscheid):** Die Hülle kommt
+  IMMER aus dem Rezept (sobald ein Layout existiert), und das Diorama
+  KOEXISTIERT immer — es wird wie ein weiteres Prop behandelt (Anker
+  `model_at`, Maßstab `width_m × k` § B2a, Standhöhe `walk_y`), egal ob
+  der Raum `placements` trägt. Ein Raum ohne Diorama hat schlicht kein
+  Modell. Die alte Weiche „placements verdrängen das Diorama" ist
+  aufgehoben; `/scene` emittiert die Diorama-Spec entsprechend immer.
+- **Hülle:** Bodenplatte = `outline`-Fläche; Wände = Kanten × Etagenhöhe,
+  in Segmente um die Öffnungen geteilt (kein CSG). Öffnungen referenzieren
+  die Kante per INDEX (Kante i = Punkt i → i+1); `at` = MITTE der Öffnung,
+  0..1 entlang der gerichteten Kante; Spanne `at ± width_m × k / 2`, an
+  den Kantenenden geklemmt. Fenster = Brüstung (0..`sill_m×k`) + Glas
+  (`sill_m×k`..`(sill_m+height_m)×k`) + Sturz; Tür/Passage = Lücke.
+  ⚠ `sill_m`/`height_m` real → ×k.
+- **Gespiegelte Öffnungen:** eine physische Öffnung, im Besitzer-Raum
+  definiert, erscheint in BEIDEN Wänden — der Nachbar bekommt sie mit
+  eigenem Kanten-Index und gespiegeltem `at` fertig geliefert; exakt wie
+  eigene behandeln, nichts umrechnen. `mirrored: true` ist rein
+  informativ. Gilt für Türen, Passagen und Fenster.
+- **Abgeleiteter Exit:** fehlt `layout.exit`, liefert das Rezept bei
+  vorhandenen Türen/Passagen trotzdem `exit` (+ `exit_derived: true`) —
+  Öffnung mit `to == "outside"` gewinnt, sonst erste Tür/Passage (stabile
+  Ordnung Kanten-Index, dann `at`); Punkt = Öffnungsmitte 0,3 m nach innen.
+- **Marker:** `prop_markers` sind FERTIG komponiert (Fix → Real-Size →
+  Yaw durchgerechnet) — eine Zeile beim Konsumenten:
+  `marker = platzierungspunkt + [dx,dz] × k`, Höhe = Etagenboden +
+  `height_m × k`, `facing` = Welt-Kompass. Objektlokale Fraktionen dürfen
+  −0,5..1,5 (Y: −1..1,5) — nur die Wertebereiche werden größer.
+  **Facing-Default (2026-07-25):** `prop_markers` tragen IMMER ein
+  `facing` — fehlt es am Objekt-Marker, gilt Prop-Front = Süd im
+  Objektraum und der Sitzende erbt die Platzierungs-Drehung
+  (`facing = (0 − yaw) mod 360`); zeigt die Front eines Props nicht nach
+  Süden, einmal am Objekt-Marker korrigieren. (Befund Café-Terrasse:
+  gedrehte Stühle, alle Sitzenden schauten in dieselbe Richtung.)
+  Raum-Marker (`markers`) = unverändert `layout.markers` (raumlokal,
+  `at`/`animation`/`rotation`/`offset_y` additiv zur abgetasteten
+  Auflagehöhe; Marker schlagen die Client-Heuristik).
+- `placements[].model_url` ist deprecated — immer über
+  `/assets/props/{id}/model` laden.
+- **Signatur-Polling** genügt; eine Änderung im NACHBARRAUM bewegt die
+  Signatur mit (geteilte Wand).
+
+## A5. Outdoor-Räume (`always_visible`)
+
+- Kennzeichnet Terrassen/Gärten, die nicht im Gebäudemodell stecken; der
+  Raum ist in jeder Zoomstufe sichtbar.
+- **Keine Hüllen-Wände, keine eigene Boden-GEOMETRIE** — sichtbar ist nur
+  die Boden-TEXTUR flach auf dem Untergrund (`surfaces.floor`-Kachelung,
+  sonst Level-/Terrain-Boden). Öffnungen wirken nur über die Spiegelung
+  in den Nachbarraum-Wänden. Gilt für Rezept- UND Diorama-Pfad
+  (`layout.always_visible`).
+- Admin-Vorschau rendert Outdoor-Räume als reine Umriss-Linien ohne
+  Körper (Referenz; Commits f72e25a/d22a51b).
+
+## A6. Gebäude-Grundriss, Etagen, Fahrstuhl (AV3D-12)
+
+- `map3d.outline`: Polygon (Fraktionen, auto-geschlossen) → pro genutzter
+  Etage Bodenplatte in Konturform + Wände entlang der Kontur.
+  „Genutzte Etagen" = `level`-Werte der Layout-Räume.
+- Rezeptwerte (heute Client-seitig, v4 → Server, § B3): Etagen-Platte nach
+  unten extrudiert, Oberkante `level × storey + 0,08`, Dicke 0,14;
+  Kontur-Wände Basis 0,08; Wand-Höhe `max(0,6; storey − 0,15)`, Dicke
+  0,07; Türen nur EG an Raum-Exits mit Kantenabstand < 0,45 (Lücke ±0,4;
+  Reststücke < 0,06 entfallen), sonst mittige Tür im südlichsten
+  Wandstück; Obergeschosse halbtransparent. **Klarstellung 2026-07-26:**
+  opak (`opacity_role: "ground"`) ist die UNTERSTE genutzte Etage, alles
+  darüber ist `"upper"` — bei einem Keller (`level -1`) ghostet also auch
+  die Terrain-Etage 0, sonst läge der Keller unsichtbar unter opakem
+  Boden. Türen bleiben eine Level-0-Sache (realer Gebäudeeingang), auch
+  wenn ein Keller existiert. Enum unverändert, Clients unverändert.
+- **Raum-Ebene (Klarstellung v4):** Raum-Bodenplatte Oberkante
+  `level × storey + 0,10` (liegt damit AUF der Etagen-Platte; Dicke
+  0,02), Raumhüllen-Wände Basis 0,10; Props auf Platte + 0,01 (§ A2);
+  Diorama-Unterkante bleibt bei + 0,12 (§ A3). Fahrstuhl im Legacy-Mode
+  (ohne Anker): reale Meter × `storey / 3` statt × k — wie der
+  Figuren-Maßstab.
+- `map3d.level_floors?: {"<level>": "<kind>"}`: Etagenplatte mit der
+  aktiven Textur des Kinds kacheln (`size_m × k`); Raum-Böden liegen
+  darüber. Ohne Eintrag: globales `floor`-Kind, sonst Default-Material.
+- `map3d.elevator`: `[x, y]`-Fraktion, gilt für alle Etagen. Rezept:
+  Schacht 1,8 m², Ecksäulen 0,14, Glas 3 Seiten (offene Seite Richtung
+  Gebäudemitte), Pads 1,6 m², Kabine 1,4 m² × 0,6 storey — alles reale
+  Meter × k. Figuren-Routing: Raum-Exit → Fahrstuhl → vertikal → weiter.
+  Treppen gibt es nicht.
+- Legacy: prozedurale Innen-Wände + Auto-Grid NUR, wenn kein Raum der
+  Location ein Layout hat.
+
+## A7. Modelle & Meta-Endpunkte
+
+```
+GET /play/locations/{id}/model/meta → { format, rig:"none", rotation{x,y,z},
+      offset_y, offset_x, offset_z, floors, height_m, signature } | 404
+GET /play/locations/{id}/model      → GLB (ETag)
+GET /play/rooms/{id}/model/meta     → { format, rotation, offset_y*,
+      width_m, walk_y?, signature } | 404
+      (*für Räume stillgelegt, § A2 — entfällt mit v4 ganz aus dem
+       Raum-Meta; Höhen-Offset für Räume ist AUSSCHLIESSLICH
+       layout.model_offset_y)
+GET /play/rooms/{id}/model          → GLB (ETag)
+GET /characters/{name}/model3d      → { model: {url, format, rig,
+      texture_url?}, signature } | 404
+GET /play/test-figure/meta|/model   → Referenz-Figur der Admin-Vorschau
+GET /assets/props                   → Bare Array (§ A2 Props)
+GET /assets/props/{id}/model        → GLB (ETag; 404 = kein Mesh)
+GET /assets/animation-clips         → [{ kind, set?, url }]
+GET /assets/surface-textures        → Flächen + Blends (§ A9)
+```
+
+- **404 ist überall der Normalzustand** (kein Modell / Generierung läuft;
+  keine Zwischenstände). ETag/304 auf allen Binärdateien; `signature` im
+  Meta erkennt Regenerationen ohne Reload.
+- `floors` ist float (2,5 = Dach/Attika zählt halb); `height_m` =
+  geschätzte Gesamthöhe; `width_m` = geschätzte reale Raumbreite (macht
+  den Inhalts-Maßstab explizit). `offset_*` ±25 Welt-Meter.
+- Template-Kacheln (`template_location_id`) fragen das Modell der
+  Template-ID an; Klone teilen die Geometrie.
+- Rig-Typen: `mixamo` (humanoid, EIN GLB, Skelett 52 Joints
+  `mixamorig:`, Textur eingebettet) · `generic` (FBX + separates
+  basecolor-Bild, keine Bibliotheks-Clips → prozedurales Idle) ·
+  `none` (Gebäude/Räume/Props, unrigged GLB). Richtwert ≤ ~30 MB,
+  Texturen ≤ 2048; Raum-/Gebäude-Texturen gern als JPEG eingebettet.
+- **Metal-Roughness (AV3D-14):** GLBs können eine kombinierte MR-Textur
+  tragen (G = Roughness, B = Metalness, Faktoren 1.0, TEXCOORD_0);
+  Koexistenz-Verhalten des Clients (MR vorhanden → nutzen + neutrale
+  Env-Map, sonst Metalness neutralisieren) ist Vertrag. Kleine uniforme
+  MR-Maps sind valide, keine Fail-Bake-Artefakte.
+  **Ausnahme FIGUREN (2026-07-26, Befund Rosi):** Charakter-Bakes liefern
+  ~0,5 Metalness über Haut/Stoff (gemessen Ø B = 127) — physikalisch
+  Unsinn. Renderer setzen bei Charakter-Modellen `metalness = 0`
+  (Roughness-Kanal derselben Map bleibt aktiv); die Env-Map-Regel gilt
+  nur für Gebäude/Räume/Props. Langfristig gehört die MR-Einbettung im
+  Charakter-Workflow des Gateways abgeschaltet oder der Bake repariert.
+- **Asset-Größen:** Face-Count/Texturgröße werden pro Generierung
+  gesteuert (Dialog; Auto-Pfad „Furnish": Face = clamp(6000 × größte
+  Kante, 2000, 20000), Textur 512/1024/2048 nach Größe). Für den Client
+  ändert sich nichts — Signaturen + ETags erkennen alles.
+
+## A8. Animation & Aktivität
+
+- Clips: Mixamo-FBX „Without Skin", alle aus derselben Quelle. Offenes
+  `kind`-Vokabular (idle/walk/run/sit/…); **Sets** = Unterverzeichnis
+  (`female`/`male`/`animal`/frei); Fallback-Kette
+  `<kind>_<set1>` → … → `<kind>` über `animation_sets` des Charakters.
+- **Server-authoritativ:** `activity_animation` (per Worldmap) bestimmt
+  den Clip. Die Keyword-Heuristik `activityToClipKind` im Client ist ein
+  Workaround und fällt mit v4 (§ B6).
+
+## A9. Terrain & Oberflächen (AV3D-13 v2)
+
+- Location sagt per `terrain` WELCHE Art; `/assets/surface-textures`
+  sagt WIE: Flächen (`url` kachelbar, `size_m`, Kachelung im
+  Welt-Maßstab) oder Zusammenstellungen (`blend` mit `toward`/`zones`/
+  `noise`, Zonen von der toward-Kante, `kind:"neighbor"` = häufigste
+  Nicht-toward-Nachbar-Art). 404/leer/unbekannt → eingebaute prozedurale
+  Fallbacks. 2D-Map-Icons werden NICHT als Boden verwendet
+  (`map-icon-2d` ist für den 3D-Pfad tot — README-Verweis streichen).
+- Das Blend-BAKING (Canvas-Komposition, Noise) bleibt bewusst
+  Client-Sache — rein visuell, kein Geometrie-Vertrag.
+
+## A10. Kamera & Steuerung (Referenz, unverändert)
+
+FOV 45°, near 0,5, far 800; Orbit um Bodenpunkt, dist 2,5..150,
+zoomgekoppelter Pitch `lerp(18°, 62°, sqrt(norm(dist)))` + Offset ±35°
+(gesamt 8..85°); exponentielle Glättung ~8/s. Links ziehen = bodenver-
+ankertes Pan, Mitte/Shift = Drehen/Neigen (0,005 rad bzw. 0,25°/px),
+Rad = Zoom auf Cursor (`dist *= exp(ΔY·0,0012)`), Klick = Auswahl bei
+< 0,15 Einheiten Bewegung. Q/E ±45°, +/− Zoom-Stufen, WASD Pan.
+Raum-Vorschau-Start: dist 22, Pitch-Offset +28°, Target Kachelmitte.
+
+---
+
+# Teil B — Ziel-Vertrag v4: das Szenen-Rezept
+
+Kern des Umbaus: EIN Endpoint liefert die komplette darstellbare Szene
+einer Location als **fertige Primitive und Platzierungs-Specs**. Der
+Client (und die Admin-Vorschau) besitzen danach genau ZWEI generische
+Geometrie-Routinen — „Primitiv bauen" und „Modell platzieren" — und
+keine einzige eigene Geometrie-Entscheidung mehr.
+
+## B1. `GET /play/locations/{location_id}/scene`
+
+```
+{
+  signature,                 # deckt map3d + alle Raum-Layouts + Modell-
+                             # Metas + Prop-Sidecars der Location ab
+  k, storey_m,               # abgeleitete Skalare (Welt-Einheiten)
+  levels: [ { level, floor_y } ],
+  style: { wall_color, floor_color, glass_color, glass_opacity,
+           upper_wall_opacity, upper_floor_opacity, room_palette: [...],
+           elevator_frame_color, elevator_pad_color, elevator_cabin_color,
+           elevator_cabin_opacity, elevator_glass_opacity },
+           # Editor-Overlays (Marker/Exit/Lineal) bleiben bewusst lokal —
+           # Vorschau-AIDs, keine Vertragsgeometrie
+
+  # --- fertige Primitive (Reihenfolge egal, alles Welt-Koordinaten) ---
+  plates:  [ { level, outline: [[x,z],…], top_y, thickness,
+               texture_kind?, opacity_role: "ground"|"upper",
+               room_id? } ],
+  walls:   [ { level, from: [x,z], to: [x,z], base_y, height, thickness,
+               texture_kind?, glass?, opacity_role, room_id?,
+               outward_normal: [nx,nz] } ],
+  extras:  [ { kind: "elevator_shaft"|"elevator_pad"|"elevator_cabin"|…,
+               … je Kind eine feste Primitiv-Form … } ],
+
+  # --- Modell-Platzierungen (eine Spec-Form für ALLES) ---
+  models:  [ { role: "building"|"room"|"prop",
+               id, url,                    # ETag-Endpoint wie bisher
+               room_id?, level,
+               fix_euler: {x,y,z},         # 'XYZ', Grad — vor Messung
+               yaw_deg,                    # Eltern-Rotation, −rad im Client
+               scale_mode: "fit_box" | "real_size" | "tile_fit",
+               box: {w,d,h} | max_m | {xz, y?},
+                                           # fit_box: Zielbox (Welt) & 0,96
+                                           # real_size: max_m (Welt)
+                                           # tile_fit (Gebäude): XZ-Ziel &
+                                           #   optionales Y-Ziel (Welt)
+               measure_axes?: "xyz"|"xz",  # real_size: BBox-Achsen für
+                                           # maxExtent (Default xyz; Dioramen
+                                           # messen nur XZ — § B2a)
+               scale_axes?: {xz, y},       # Gebäude: achsengetrennt fertig
+                                           #   vorgerechnet, wenn Server die
+                                           #   Mesh-BBox kennt (§ B4)
+               anchor: [x,z], bottom_y,    # Welt; BBox-Unterkante & Zentrum
+               clip_outline?,              # [[x,z],…] Welt — Renderer verwirft
+                                           # Fragmente AUSSERHALB des Polygons
+                                           # (Shader-Discard, beliebige/konkave
+                                           # Hüllen; Schnittkanten bleiben offen
+                                           # → DoubleSide). Opt-in pro Raum
+                                           # (layout.clip_model); Punkte = die
+                                           # Raum-Hülle, max. 32.
+               cutouts?,                   # NUR Flächen-Locations
+                                           # (map3d.area_model, 2026-07-27):
+                                           # [[[x,z],…],…] Welt — Renderer
+                                           # verwirft Fragmente INNERHALB
+                                           # irgendeines Polygons (Union;
+                                           # invertierter clip_outline-Test),
+                                           # aber NUR solange die Innenansicht
+                                           # aktiv ist — Fernsicht zeigt das
+                                           # Modell intakt. Inhalt: Gebäude-
+                                           # Grundriss als Ganzes + Umriss
+                                           # jedes platzierten Indoor-Raums,
+                                           # der nicht vollständig darin liegt.
+                                           # Max. 16 Polygone × 32 Punkte;
+                                           # Schnittkanten offen → DoubleSide.
+                                           # Das Modell fadet bei diesen
+                                           # Locations NIE.
+               placeholder_dims? } ],      # dims×k-Box bei missing/has_model=false
+
+  # --- Rezept-Vokabular pro Raum (PLAN-Fraktionen, für den 2D-Editor) ---
+  rooms:   [ { room_id, level, always_visible,
+               outline,                    # absolute 8×8-Fraktionen (wie Rezept)
+               openings,                   # normalisiert INKL. gespiegelter —
+                                           # Ghost-Öffnungen kommen von HIER,
+                                           # nie aus lokaler Spiegel-Logik
+               exit, exit_derived,         # Rezept-Rahmen: explizit = Raum-
+                                           # Rechteck-Fraktion, abgeleitet =
+                                           # absolute Platten-Fraktion
+               overlay? } ],               # NUR Flächen-Locations: Outdoor-Raum
+                                           # AUSSERHALB des Grundrisses = Zone
+                                           # AUF dem Modell — {centre:[x,z],
+                                           # rect:{x,z,w,d}, y}, alles Welt-
+                                           # Meter, y = begehbare Modell-Höhe
+                                           # (walk_y_world, sonst bottom_y).
+                                           # Solche Räume haben KEINE Platten/
+                                           # Wände im Payload; NPC-/Marker-/
+                                           # Label-Positionen kommen von HIER.
+
+  # --- Figuren & Marker ---
+  figures: { base_height_m_world,          # = 1,70 × k (bzw. Legacy-Wert)
+             stand_clearance: 0.12 },      # Welt-Meter, Konstante
+  markers: [ { room_id, at_world: [x,z], y_world, animation, facing?,
+               source: "room"|"prop" } ],  # ALLE fertig in Welt-Koordinaten
+  exits:   [ { room_id, at_world: [x,z], derived? } ],
+  outdoor_rooms: [ room_id, … ]
+}
+```
+
+**Damit wandern in den Server:** Wand-Splitting um Öffnungen inkl.
+Fenster-Brüstung/-Sturz/Glas als eigene `walls`-Einträge, Türlücken der
+Außenkontur, südlichste-Wand-Fallback-Tür, Spiegelungen, Exit-Ableitung,
+Fahrstuhl-Primitive, Etagenplatten, Raum-Platten, alle Konstanten
+(0,07 / 0,14 / 0,96 / 0,92 / 0,12 / ±0,4 / < 0,45 / < 0,06 /
+max(0,6; storey−0,15)), Farben und Opacities (`style`), Marker- und
+Exit-Kompositionen in Weltkoordinaten, Figuren-Maßstab.
+
+**Was der Client noch tut:** GLB/FBX laden, BBox messen, die EINE
+place()-Routine (§ B2) ausführen, Primitive als Box/ExtrudeGeometry
+bauen, Texturen kacheln. Dazu weiterhin alles Sicht-/Interaktions-
+Zustandliche: Kamera, LOD/Fades, Etagen-Umschalter (per `opacity_role`
+und `level` gesteuert), Kamera-Culling (`outward_normal` liegt bei),
+Labels, Pathfinding, Tag/Nacht, Terrain-Blends, Animations-Retargeting.
+
+## B2. Die EINE Platzierungs-Routine
+
+```
+place(mesh, spec):
+  1. fix_euler anwenden ('XYZ'), BBox messen
+  2. scale_mode "real_size": s = max_m / maxExtent (uniform)
+     scale_mode "fit_box":   s = min(box.w/fp_x, box.d/fp_z) × 0,96 —
+                             fp = Footprint der GEFIXTEN, noch
+                             un-geyawten Box aus Schritt 1. (Präzisierung
+                             2026-07-25: die Teil-A-Altkette maß VOR dem
+                             Fix und driftete, sobald ein x/z- oder
+                             90°-Fix die Achsen tauschte; § A2 beschreibt
+                             nur noch das Legacy-Verhalten.)
+     scale_mode "tile_fit":  erst Schritt 3, dann an der ROTIERTEN BBox
+                             k_xz = box.xz / max(B_x, B_z);
+                             k_y = box.y / B_y (ohne box.y: k_xz);
+                             scale.set(k_xz, k_y, k_xz) auf Welt-Achsen
+     scale_axes gesetzt:     scale.set(xz, y, xz) direkt (Welt-Achsen)
+  3. rotation.y = −rad(yaw_deg) als Eltern-Rotation
+  4. Ergebnis-BBox messen → Unterkante = bottom_y, XZ-Zentrum = anchor
+```
+
+Ersetzt die drei Spezialketten aus § A2 vollständig — Gebäude, Diorama
+und Props unterscheiden sich nur noch in den vom SERVER gelieferten
+Spec-Werten, nicht im Code. `measure_axes: "xz"` beschränkt die
+maxExtent-Messung in Schritt 2 auf die XZ-Achsen.
+
+## B2a. Größenabgleich Diorama ↔ Props ↔ Figuren — EIN Maßstabsgesetz
+
+Befund (2026-07-24): Dioramen skalieren per Rechteck-Einpassung, Props
+und Figuren per `reale Meter × k`. Konsistent ist das nur, solange der
+Editor das Raum-Rechteck auf `width_m / plan_width_m` hält — zur
+Renderzeit erzwingt das niemand; frei gezogene/alte Räume driften, und
+seit Dioramen, Props und NPCs im SELBEN Raum stehen, fällt das sofort
+auf (Diorama-Sofa ≠ Prop-Stuhl ≠ Figur).
+
+**Neue Regel (v4): Das Diorama skaliert wie ein Prop.**
+
+- Anchored-Mode (k vorhanden) UND `width_m` deklariert →
+  `scale_mode "real_size"`, `max_m = width_m × k`,
+  `measure_axes: "xz"` (width_m ist die größte XZ-Seite; die Höhe folgt
+  uniform). Das Raum-RECHTECK hat damit KEINEN Einfluss mehr auf den
+  Diorama-Maßstab — es bleibt Grundriss-Fläche für Platte/Wände/
+  Begehbarkeit. Anker/Erdung unverändert (`model_at`,
+  Etagenboden + 0,12 + `model_offset_y`).
+- Ohne `width_m` oder ohne k → Fallback `fit_box` (Rechteck-Einpassung
+  × 0,96 wie bisher, § A2) — mit dokumentiert inkonsistentem Maßstab.
+- Der Editor hält weiterhin (v3) die lange Rechteck-Seite auf
+  `width_m / plan_width_m` — jetzt nur noch als AID, damit Platte/Hülle
+  optisch mit der Diorama-Kante abschließen; ein Überstehen des
+  real-size-Dioramas über sein Rechteck ist legitim und wird über
+  `width_m`/`model_at` justiert, nicht über das Rechteck.
+- Damit gilt raumübergreifend EIN Gesetz: **alles reale Meter × k** —
+  Dioramen (`width_m`), Props (`dims`), Figuren (1,70 m + `height_cm`),
+  Öffnungen (`width_m`/`sill_m`/`height_m`), Fahrstuhl. Der einzige
+  Nicht-k-Maßstab bleibt die Gebäude-Hülle (`tile_fit`, Kachel-Optik).
+- **Kalibrierung im Game-Admin:** eine Vergleichsfigur (fix 1,70 × k,
+  skaliert NIE mit) wird IN das Diorama gestellt; der Admin stellt
+  `width_m` ein, bis die Möbel zur Figur passen, und `walk_y`, bis sie
+  auf dem sichtbaren Boden steht. `width_m` ist damit nicht mehr „am
+  Quellbild geschätzt", sondern an der Figur geeicht — die Genauigkeit
+  von Props/Markern in diesem Raum hängt direkt daran.
+
+## B3. Draft-Vorschau für den Admin
+
+```
+POST /play/scene-preview        # Body: location-Draft (map3d + rooms
+                                # inkl. ungespeicherter layouts)
+                                # → identischer Payload wie /scene
+```
+
+Gleicher Composer, keine Persistenz. Damit konsumiert die
+Game-Admin-Vorschau (`FloorPlanPreview`) dieselbe Vertragsfläche wie der
+Client; `planGeometry.ts`-Duplikate (Spiegelung, Edge-Normalisierung,
+Exit-Ableitung) und die Konstanten-Kopien entfallen ersatzlos.
+`floorplan.html` des Clients bleibt Debug-Werkzeug und rendert dann
+automatisch identisch.
+
+## B4. Server-vermessene Meshes (Ausbaustufe)
+
+Der Server vermisst jedes GLB einmal beim Ingest (Generierung/Upload)
+und legt `bbox_raw` + `bbox_fixed` im Sidecar ab. Dann kann `/scene`
+`scale_axes`/absolute Transformen fertig liefern und `place()` schrumpft
+auf „Matrix anwenden". Assets ohne Vermessung (Bestand) laufen über die
+Spec-Parameter aus § B2 — Koexistenz per Datenlage. (Erst nach B1–B3.)
+
+## B5. Rollen ab v4
+
+- **Backend** = einzige Geometrie-Autorität (`room_recipe.py` wächst zum
+  `scene_recipe`-Composer; Konstanten/Farben ziehen dorthin um).
+- **Admin-Vorschau** = Konsument Nr. 1 (`/play/scene-preview`), Referenz
+  nur noch fürs Sicht-Verhalten (Toggles, Editor-Overlays).
+- **3D-Client** = Konsument Nr. 2 (`/play/locations/{id}/scene`), behält
+  ausschließlich Sicht/Interaktion/Animation.
+- `/play/rooms/{id}/recipe` bleibt während der Migration bestehen
+  (Untermenge von `/scene`); danach Rückbau nach Absprache.
+
+## B5a. Verifikation: Arithmetik statt Screenshots (User-Vorgabe 2026-07-24)
+
+Screenshot-Vergleiche taugen nicht als Nachweis — weder für eine KI-Session
+noch als Regressionsschutz. Verbindlich ab v4:
+
+- **Das Szenen-Rezept ist das Soll.** Jeder Renderer besitzt einen
+  Debug-/Verify-Modus, der NACH dem Aufbau für jedes platzierte Objekt
+  und Primitiv die Welt-BBox misst und gegen die Spec difft
+  (BBox-Unterkante = `bottom_y`, XZ-Zentrum = `anchor`, Ausdehnung =
+  Zielbox/max_m; Wände/Platten gegen from/to/base_y/height). Toleranz
+  ε = 0,01 Welt-Meter; Ausgabe als maschinenlesbare Tabelle
+  (Konsole/JSON), Abweichungen einzeln mit Ist/Soll.
+- **Befunde zwischen den Sessions werden als ZAHLEN gemeldet** (Objekt,
+  Feld, Ist, Soll — wie die bisherigen Zahlenbeispiele Hörsaal/
+  Mondscheinsee), nie als Bildbeschreibung. Screenshots sind nur noch
+  für Menschen (Abnahme-Optik), nie Diskussionsgrundlage zwischen
+  Sessions.
+- Server-seitig sichert der Composer-Smoke dieselben Zahlen (Fixture →
+  erwartete Segmente/Transformen hart geprüft).
+- Perspektivisch (nach Block N, beschlossen): `place()` + Primitive-
+  Builder als GETEILTES TS-Modul für Admin-Vorschau und Client — dann
+  ist auch der letzte doppelte Code weg und der Verify-Modus kommt aus
+  einer Quelle.
+
+## B6. Divergenz-Fixliste (aus der Analyse, unabhängig von B1 startbar)
+
+| # | Befund | Fix |
+|---|---|---|
+| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | Client auf 1,70 × k (bzw. `figures.base_height_m_world`) |
+| 2 | „0,12 × k" in §2e der Rezept-Note | Zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
+| 3 | `activityToClipKind`-Keyword-Heuristik im Client | `activity_animation` server-authoritativ; Heuristik entfernen, sobald alle Aktivitäten gemappt liefern |
+| 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | Doku/Dead-Code entfernen |
+| 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | Realität ist `GET /characters/{name}/model3d` (JSON) — Doku angleichen |
+| 6 | `placements[].model_url` | Deprecated, fällt mit `/scene` weg |
+| 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar (Wishlist 2026-07-24) | Angenommen: `walk_y` (Meter über Modell-Unterkante) als Raum-Sidecar-Anker, ausgeliefert in `/scene` `plates[].top_y` bzw. Raum-Meta; Admin-Regler wie übrige Anker |
+| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | Behoben durch § B2a: Diorama skaliert real-size über `width_m × k` (measure_axes xz); Rechteck-Fit nur noch Fallback |
+
+Rückfragen wie immer über die Wishlist.
+
+## Nachtrag 2026-07-27: Eine Wand, ein Besitzer (Kontur vs. Raumhülle)
+
+Wo eine INDOOR-Raumhülle kolinear auf der Gebäudekontur liegt (Toleranz
+0,09 m ≈ Wanddicke + Spiel), liefert `/scene` dort KEIN Konturwand-Stück
+mehr — die Raumwand besitzt die Strecke (sie trägt Textur und
+Öffnungen). Outdoor-Räume lassen die Kontur unberührt. Befund-Anlass:
+deckungsgleiche Wände z-fighteten, sobald eine Wand-Textur gesetzt war
+(Haus von Kai, 27 Paare / 16,47 m doppelt — jetzt 0/0).
