@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { applyClipOutline, buildExtra, buildPlaceholder, buildPlate, buildWall,
-  CLIP_MAX_POINTS, placeModelSpec, plateTargets, SpecVerifier, VERIFY_EPS,
-  wallLength, wallTargets } from '@anima/scene-render';
+import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
+  buildPlate, buildWall, CLIP_MAX_POINTS, placeModelSpec, plateTargets,
+  SpecVerifier, VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render';
 import type { PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
@@ -481,6 +481,26 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     tile.roomSlots.set(id, { holder, w, d });
   }
 
+  // ── Overlay-Zonen (Flächen-Locations) ───────────────────────────────────
+  // Ein Outdoor-Raum außerhalb des Grundrisses wird nicht gebaut, er LIEGT auf
+  // der Modelloberfläche. Es gibt also keine Platte, von der Rechteck, Mitte
+  // und Höhe abzulesen wären — die kommen fertig aus dem Payload (der Server
+  // rechnet). Damit stehen NPCs, Marker, Labels und Klick-Ziele dort, wo die
+  // Zone liegt.
+  for (const room of scene.rooms) {
+    const ov = room.overlay;
+    const id = room.room_id;
+    if (!ov || !id) continue;
+    tile.roomRects.set(id, { x: tile.center.x + ov.rect.x,
+                             z: tile.center.z + ov.rect.z,
+                             w: ov.rect.w, d: ov.rect.d });
+    const centre = tile.center.clone().add(
+      new THREE.Vector3(ov.centre[0], ov.y + 0.01, ov.centre[1]));
+    tile.roomCenters.set(id, centre);
+    const name = nameOf.get(id);
+    if (name) tile.roomCenters.set(name, centre);
+  }
+
   // ── Wände ───────────────────────────────────────────────────────────────
   // Bereits um jede Öffnung geteilt; das Glasband eines Fensters ist ein
   // eigener Eintrag. `outward_normal` kommt mit und speist das Culling.
@@ -644,7 +664,23 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     const placed = placeModelSpec(THREE, source, spec,
                                   { clone: false, clip: false });
     if (spec.role === 'building') {
-      applySceneBuilding(tile, placed);
+      // Flächen-Location: das Modell bleibt in der Innenansicht stehen und
+      // bekommt stattdessen Löcher. Es darf deshalb NICHT in die
+      // Fade-Material-Listen — sonst blendet es trotzdem weg.
+      const cutouts = spec.cutouts || [];
+      const area = cutouts.length > 0;
+      applySceneBuilding(tile, placed, area);
+      if (area) {
+        // Polygone kommen um das Kachelzentrum, der Shader misst in
+        // Weltkoordinaten — dieselbe Umrechnung wie beim Raum-Clip.
+        tile.cutouts?.dispose();
+        tile.cutouts = applyCutouts(THREE, placed, cutouts.map(
+          (poly) => poly.map(([cx, cz]) => [tile.center.x + cx,
+                                            tile.center.z + cz] as [number, number])));
+        // Sofort den aktuellen Sichtzustand anlegen: die Kachel kann bereits
+        // in der Innenansicht stehen, wenn das Modell nachträglich eintrifft.
+        tile.cutouts.setEnabled(tile.fade > 0.03);
+      }
     } else {
       parentFor(spec.room_id).add(placed);
       if (spec.role === 'room' && spec.walk_y_world !== undefined && spec.room_id) {
@@ -705,7 +741,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
  *  verhält sich fürs Reinzoomen wie ein Dach (blendet aus, gibt den Blick auf
  *  die Räume frei). Anders als der Legacy-Pfad blendet hier NICHTS zwischen
  *  zwei Y-Maßstäben um — die Spec ist die eine Antwort auf die Größe. */
-function applySceneBuilding(tile: Tile, model: THREE.Group): void {
+function applySceneBuilding(tile: Tile, model: THREE.Group,
+                            area = false): void {
   if (tile.shell) {
     tile.group.remove(tile.shell);
     tile.shell = undefined;
@@ -731,19 +768,26 @@ function applySceneBuilding(tile: Tile, model: THREE.Group): void {
   model.userData.scaleYDetail = model.scale.y;
   tile.shellMats = [];
   tile.roofMats = [];
-  tile.roofParts = [model];
+  // Flächen-Location: das Modell IST die Location und bleibt sichtbar — es
+  // wandert nicht in roofParts/roofMats, die der Crossfade wegblendet. Die
+  // Cutouts übernehmen die Rolle des Aufdeckens (setEnabled am selben
+  // fade-Zustand). Ohne Fade braucht es auch keine Material-Klone; die
+  // Cutout-Routine klont ohnehin selbst.
+  tile.roofParts = area ? [] : [model];
   tile.facadeMats = [];
   model.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
-    const clone = (m: THREE.Material) => {
-      const c = m.clone();
-      c.transparent = true;
-      tile.roofMats.push(c as THREE.MeshStandardMaterial);
-      return c;
-    };
-    mesh.material = Array.isArray(mesh.material)
-      ? mesh.material.map(clone) : clone(mesh.material);
+    if (!area) {
+      const clone = (m: THREE.Material) => {
+        const c = m.clone();
+        c.transparent = true;
+        tile.roofMats.push(c as THREE.MeshStandardMaterial);
+        return c;
+      };
+      mesh.material = Array.isArray(mesh.material)
+        ? mesh.material.map(clone) : clone(mesh.material);
+    }
     mesh.castShadow = true;
     mesh.receiveShadow = false;
   });
@@ -763,6 +807,10 @@ export function unmountScene(tile: Tile): void {
   const prev = tile.group.children.find((c) => c.name === SCENE_GROUP)
     ?? tile.interior;
   if (prev && prev.name === SCENE_GROUP) tile.group.remove(prev);
+  // Cutout-Material-Klone der vorigen Szene freigeben (Muster
+  // disposeClipMaterials — die Texturen sind mit dem Cache geteilt).
+  tile.cutouts?.dispose();
+  tile.cutouts = undefined;
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
   tile.interior = null;

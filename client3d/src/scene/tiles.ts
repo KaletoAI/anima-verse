@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import type { CutoutHandle } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
@@ -106,6 +107,11 @@ export interface Tile {
   /** Szene dieser Kachel nutzt eine Etage < 0 (aus dem Payload abgeleitet,
    *  gesetzt von mountScene). Ohne Keller bleibt der Boden unangetastet. */
   hasBasement?: boolean;
+  /** Flächen-Location (plan-area-locations.md): das Location-Modell bleibt in
+   *  der Innenansicht stehen und bekommt stattdessen Löcher. Das Handle
+   *  schaltet sie mit dem Crossfade — Fernsicht intaktes Modell, Innenansicht
+   *  Löcher — und gibt beim Remount seine Material-Klone frei. */
+  cutouts?: CutoutHandle;
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
   highlightRing: THREE.Mesh;
@@ -956,6 +962,12 @@ export function applyTileFade(tile: Tile, dt: number) {
     }
     gm.opacity = ghost ? Math.max(0.15, 1 - f * 0.85) : 1;
   }
+
+  // Flächen-Location: statt das Modell wegzublenden werden seine Löcher
+  // geschaltet — derselbe Zustand, andere Wirkung. Fernsicht zeigt die
+  // Location intakt, die Innenansicht schneidet Grundriss und abseits
+  // stehende Räume heraus, damit das Rezept-Innenleben darin sichtbar wird.
+  tile.cutouts?.setEnabled(f > 0.03);
 
   const ringMat = tile.highlightRing.material as THREE.MeshBasicMaterial;
   ringMat.opacity = 0.7 * Math.max(0, 1 - f * 2);

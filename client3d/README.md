@@ -59,6 +59,22 @@ Stand 2026-07-26 (Welt `anima-dome`): **1757 geprüfte Zahlen, 0 Abweichungen,
 85/85 Modelle**. Die absolute Zahl gilt nur, solange die Welt stillsteht — die
 0 Abweichungen sind die Aussage.
 
+## Flächen-Locations
+
+Ein Dorf oder ein See ist kein Gebäude: blendet man sein Modell für die
+Innenansicht aus, verschwindet die Location. Trägt das Rezept
+`map3d.area_model`, bleibt das Modell deshalb stehen und bekommt stattdessen
+**Löcher** — den Gebäude-Grundriss als Ganzes plus den Umriss jedes platzierten
+Indoor-Raums außerhalb davon (`cutouts` am building-Spec, Welt-Meter). In den
+Löchern steht das normale Rezept-Innenleben. Der Crossfade blendet für diese
+Kacheln nichts weg, er SCHALTET die Löcher (`applyCutouts(...).setEnabled`):
+Fernsicht = intaktes Modell, Innenansicht = offene Räume.
+
+Outdoor-Räume außerhalb des Grundrisses werden gar nicht gebaut — sie liegen
+als Zonen AUF der Modelloberfläche. Ihr Payload-Raumeintrag trägt `overlay`
+(Mitte, Rechteck, Höhe in Welt-Metern), und daraus kommen Raum-Mitte und
+-Rechteck, damit NPCs, Marker und Labels dort stehen, wo die Zone liegt.
+
 ## Architektur
 
 - Vite + TypeScript + Three.js (vanilla, bewusst kein React), CSS2DRenderer für Labels.
