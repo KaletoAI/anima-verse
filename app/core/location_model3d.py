@@ -235,6 +235,7 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "offset_y": float(meta.get("offset_y") or 0.0),
             "offset_x": float(meta.get("offset_x") or 0.0),
             "offset_z": float(meta.get("offset_z") or 0.0),
+            "walk_y": float(meta.get("walk_y") or 0.0),
             "floors": float(meta.get("floors") or 0.0),
             "height_m": float(meta.get("height_m") or 0.0),
             "width_m": float(meta.get("width_m") or 0.0),
@@ -402,6 +403,11 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
     out["offset_y"] = float(meta.get("offset_y") or 0.0)
     out["offset_x"] = float(meta.get("offset_x") or 0.0)
     out["offset_z"] = float(meta.get("offset_z") or 0.0)
+    # Walkable surface above the model's bottom edge (metres) — feeds the
+    # stand height of overlay zones on an area location. Absent = unknown,
+    # the recipe then falls back to the model's bottom edge.
+    if meta.get("walk_y") is not None:
+        out["walk_y"] = float(meta.get("walk_y") or 0.0)
     return out
 
 
@@ -457,15 +463,19 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
 
 def set_offset_y(location_id: str, offset_y: Any = None,
                  filename: str = "",
-                 offset_x: Any = None, offset_z: Any = None) -> Dict[str, Any]:
+                 offset_x: Any = None, offset_z: Any = None,
+                 walk_y: Any = None) -> Dict[str, Any]:
     """Persist a BUILDING model's placement offsets (metres, ±, clamped to
     ±25) on ONE model's sidecar (default: the active model). A MODEL property
     like the orientation fix — generated reliefs come with different socket
     thicknesses, and a negative value sinks e.g. a park into the terrain —
     and ``offset_x``/``offset_z`` shift the model on the TILE PLANE (world
     axes, applied after the yaw: +x = east, +z = south; the building need
-    not sit centred on its tile). ``None`` leaves a field untouched. Every
-    client applies them on load. Returns the updated sidecar meta.
+    not sit centred on its tile). ``walk_y`` is the walkable surface of the
+    model in metres above its bottom edge — the stand height of overlay
+    zones on an area location (plan-area-locations.md); figures stood on the
+    model's LOWER edge before it existed. ``None`` leaves a field untouched.
+    Every client applies them on load. Returns the updated sidecar meta.
 
     Buildings only (2026-07-24): a ROOM's height offset lives in the floor
     plan as ``layout.model_offset_y``, its walkable floor as ``walk_y``."""
@@ -478,7 +488,7 @@ def set_offset_y(location_id: str, offset_y: Any = None,
         raise ValueError("no model")
     meta = _read_sidecar(p)
     for key, raw in (("offset_y", offset_y), ("offset_x", offset_x),
-                     ("offset_z", offset_z)):
+                     ("offset_z", offset_z), ("walk_y", walk_y)):
         if raw is None:
             continue
         try:

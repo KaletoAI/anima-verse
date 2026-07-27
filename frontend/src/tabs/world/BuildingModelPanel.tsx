@@ -31,6 +31,9 @@ export interface ModelEntry {
   offset_y?: number
   offset_x?: number
   offset_z?: number
+  /** Walkable surface above the model bottom (m) — stand height of overlay
+   *  zones on an area location. */
+  walk_y?: number
   /** Detail-view scale anchors (0 = undeclared): buildings — floors
    *  (storeys the mesh depicts) + height_m (world metres; uniform scale
    *  target, storey height derives as height_m / floors). Rooms —
@@ -234,16 +237,17 @@ export function BuildingModelPanel({
   // orientation fix: Y sinks/raises (socket thicknesses differ), X/Z shift
   // the model on the tile plane (world axes after the yaw: +x east,
   // +z south). Drafts in local fields, committed on blur/Enter.
-  type OffsetKey = 'offset_y' | 'offset_x' | 'offset_z'
+  type OffsetKey = 'offset_y' | 'offset_x' | 'offset_z' | 'walk_y'
   const [offsetDrafts, setOffsetDrafts] = useState<Record<OffsetKey, string>>(
-    { offset_y: '0', offset_x: '0', offset_z: '0' })
+    { offset_y: '0', offset_x: '0', offset_z: '0', walk_y: '0' })
   useEffect(() => {
     setOffsetDrafts({
       offset_y: String(current?.offset_y ?? 0),
       offset_x: String(current?.offset_x ?? 0),
       offset_z: String(current?.offset_z ?? 0),
+      walk_y: String(current?.walk_y ?? 0),
     })
-  }, [current?.filename, current?.offset_y, current?.offset_x, current?.offset_z])
+  }, [current?.filename, current?.offset_y, current?.offset_x, current?.offset_z, current?.walk_y])
   const commitOffset = useCallback(async (key: OffsetKey) => {
     if (!current) return
     const v = parseFloat(offsetDrafts[key])
@@ -261,7 +265,8 @@ export function BuildingModelPanel({
           m.filename === current.filename ? { ...m,
             offset_y: d.meta?.offset_y || 0,
             offset_x: d.meta?.offset_x || 0,
-            offset_z: d.meta?.offset_z || 0 } : m),
+            offset_z: d.meta?.offset_z || 0,
+            walk_y: d.meta?.walk_y || 0 } : m),
       } : prev))
       notifyModel3dChanged(roomId ? { roomId } : { locationId })
     } catch (e) {
@@ -529,6 +534,8 @@ export function BuildingModelPanel({
               hint: t('Tile plane, world axes after the yaw: + = east.') },
             { key: 'offset_z' as const, label: t('Shift Z (m)'),
               hint: t('Tile plane, world axes after the yaw: + = south.') },
+            { key: 'walk_y' as const, label: t('Walk height (m)'),
+              hint: t('Walkable surface above the model bottom — the stand height of overlay zones on an area location. Empty/0 = figures stand at the model bottom.') },
           ] : []),
         ]).map(({ key, label, hint }) => (
           <label key={key} title={hint}

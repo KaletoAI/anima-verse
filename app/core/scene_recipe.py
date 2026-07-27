@@ -698,7 +698,8 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     box: Dict[str, float] = {"xz": _r(TILE_M * TILE_FILL * size)}
     if height_m > 0:
         box["y"] = _r(height_m * k)
-    return {
+    bottom = BUILDING_BOTTOM_Y + _num(meta.get("offset_y"))
+    spec = {
         "role": "building",
         "id": loc_id,
         "url": f"/play/locations/{quote(loc_id)}/model",
@@ -708,8 +709,14 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         "scale_mode": "tile_fit",
         "box": box,
         "anchor": [_r(_num(meta.get("offset_x"))), _r(_num(meta.get("offset_z")))],
-        "bottom_y": _r(BUILDING_BOTTOM_Y + _num(meta.get("offset_y"))),
+        "bottom_y": _r(bottom),
     }
+    # Walkable surface of the model (metres above its bottom, admin-dialed in
+    # the model gallery): stand height of overlay zones on an area location.
+    # Absent = unknown — the overlay code falls back to bottom_y.
+    if meta.get("walk_y") is not None:
+        spec["walk_y_world"] = _r(bottom + _num(meta.get("walk_y")))
+    return spec
 
 
 def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],

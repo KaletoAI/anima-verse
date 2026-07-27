@@ -88,6 +88,11 @@ sondern erster Konsument derselben Vertragsfläche (§ B5).
    Kachelmitte + `offset_x`/`offset_z` (Welt-Achsen, Yaw dreht sie NICHT
    mit). Ausnahme Terrain-/Template-Kacheln: X und Z getrennt füllen,
    ohne 0,92-Rand, damit size = 1 nahtlos kachelt.
+6. Meta-`walk_y` (optional, Meter über der Modell-Unterkante, Regler in
+   der Modell-Galerie): begehbare Fläche des LOCATION-Modells. Das
+   Rezept liefert daraus `walk_y_world` am Building-Spec — die
+   Standhöhe der Overlay-Zonen einer Flächen-Location; ohne das Feld
+   stehen Figuren auf der Modell-Unterkante (`bottom_y`).
 
 **Raum-Diorama** (`/play/rooms/{id}/model` + Meta):
 1. Normalisieren: rohe BBox messen (NIE dem Pivot trauen), größte XZ-Seite
