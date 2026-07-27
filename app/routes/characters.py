@@ -1691,6 +1691,51 @@ async def start_character_outfit_batch(character_name: str,
             "est_seconds": res.get("est_seconds", 0.0)}
 
 
+@router.get("/{character_name}/outfit-batch/cache")
+def verify_character_outfit_cache(character_name: str) -> Dict[str, Any]:
+    """Cache report for this character: how many reference renders and meshes
+    exist, how many of them no combination can reach any more, and what that
+    would free. Read-only — deleting is the POST below.
+
+    The enumeration behind it can take seconds on a large inventory, which is
+    why this is an explicit call and not part of the batch GET. Its refusal
+    above five million combinations is mapped to a 400 with the message."""
+    from app.core import outfit_cache_gc
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    try:
+        return outfit_cache_gc.verify_cache(character_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{character_name}/outfit-batch/cache/purge")
+async def purge_character_outfit_cache(character_name: str,
+                                       request: Request) -> Dict[str, Any]:
+    """Deletes the cache entries of ``{"signatures": [...]}`` — the stale list
+    the caller got from the report above. The core re-verifies before deleting,
+    so a signature that has become valid in the meantime is skipped and
+    counted, never removed."""
+    from app.core import outfit_cache_gc
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    signatures = body.get("signatures")
+    if not isinstance(signatures, list) or not signatures:
+        raise HTTPException(status_code=400,
+                            detail="signatures must be a non-empty list")
+    try:
+        return outfit_cache_gc.purge_stale(character_name,
+                                           [str(s) for s in signatures])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/{character_name}/outfit-batch/stop")
 def stop_character_outfit_batch(character_name: str) -> Dict[str, Any]:
     """Cancels the pending/running batch task. A running one stops BETWEEN two
