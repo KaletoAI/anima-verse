@@ -968,6 +968,15 @@ export function applyTileFade(tile: Tile, dt: number) {
   // Location intakt, die Innenansicht schneidet Grundriss und abseits
   // stehende Räume heraus, damit das Rezept-Innenleben darin sichtbar wird.
   tile.cutouts?.setEnabled(f > 0.03);
+  // Bei EINGEBLENDETER Unter-Etage tritt das Area-Modell ganz beiseite
+  // (User-Befund 2026-07-28: die vergrößerte Boden-Öffnung war da, aber das
+  // nie fadende Location-Modell stand davor). Gleiche Semantik wie der
+  // Etagen-Umschalter für Platten (lv <= filter sichtbar) und die
+  // Admin-Solo-Ansicht: Level < 0 gewählt → das Modell (die Level-0+-Optik)
+  // verschwindet, bis eine Etage >= 0 oder die Fernsicht zurückkommt.
+  if (tile.cutouts && sm) {
+    sm.visible = !(f > 0.03 && tile.levelFilter < 0);
+  }
 
   const ringMat = tile.highlightRing.material as THREE.MeshBasicMaterial;
   ringMat.opacity = 0.7 * Math.max(0, 1 - f * 2);
