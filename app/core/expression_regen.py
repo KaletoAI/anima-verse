@@ -114,6 +114,17 @@ def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
     """
     parts = []
     if equipped_pieces:
+        # Normalise to the VISIBLE subset (user finding 2026-07-27): a slot
+        # fully hidden via `covers` does not change the image, so covered
+        # variants collapse onto one signature — one render, one cache entry,
+        # for the batch and the live outfit-change trigger alike. Sets
+        # without covered pieces hash exactly as before, existing cache
+        # entries stay valid.
+        try:
+            from app.core.outfit_renderer import visible_equipped_pieces
+            equipped_pieces = visible_equipped_pieces(equipped_pieces)
+        except Exception:
+            pass  # unreadable items must not break signing — hash raw then
         for slot in sorted(equipped_pieces.keys()):
             iid = (equipped_pieces[slot] or "").strip()
             if iid:

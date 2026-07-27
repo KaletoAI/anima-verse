@@ -277,8 +277,12 @@ def combo_stats(character_name: str,
         exact = bool(force)
     else:
         have = _mesh_signatures(character_name)
-        missing = sum(1 for pieces in _iter_combos(choices)
-                      if _signature(pieces) not in have)
+        # UNIQUE signatures: combinations differing only in fully COVERED
+        # pieces (boxers under trousers) share one signature since the
+        # visibility normalisation in _equipped_signature — they are one
+        # render, so they must be one unit of "missing" too.
+        missing = len({sig for pieces in _iter_combos(choices)
+                       if (sig := _signature(pieces)) not in have})
         exact = True
     return {"total": total, "missing": missing, "missing_exact": exact,
             "est_seconds": round(missing * per, 1), "error": ""}

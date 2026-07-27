@@ -63,6 +63,23 @@ def collect_covered_slots(equipped_pieces: Dict[str, str]) -> Set[str]:
     return covered
 
 
+def visible_equipped_pieces(equipped_pieces: Dict[str, str]) -> Dict[str, str]:
+    """The VISUALLY EFFECTIVE subset of an equipped-piece set.
+
+    Slots fully hidden via ``covers`` are dropped — a piece nobody can see
+    contributes nothing to a render, so two sets differing only in covered
+    pieces produce the identical image. ``partially_covers`` targets STAY:
+    they appear as an "underneath" fragment and do change the image.
+
+    This is the normalisation the render cache keys on
+    (``_equipped_signature``): boxers under trousers and no boxers at all
+    are ONE cache entry, one T-pose render, one mesh.
+    """
+    covered = collect_covered_slots(equipped_pieces)
+    return {slot: iid for slot, iid in (equipped_pieces or {}).items()
+            if iid and slot not in covered}
+
+
 def _resolve_partial_covers(
     equipped_pieces: Dict[str, str],
     slot_order: List[str],
