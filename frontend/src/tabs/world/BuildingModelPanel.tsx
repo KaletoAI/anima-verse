@@ -540,7 +540,7 @@ export function BuildingModelPanel({
           { key: 'offset_z' as const, label: t('Shift Z (m)'),
             hint: t('Tile plane, world axes after the yaw: + = south.') },
           { key: 'walk_y' as const, label: t('Walk height (m)'),
-            hint: t('Walkable surface above the model bottom — the stand height of overlay zones on an area location. Empty/0 = figures stand at the model bottom.') },
+            hint: t('Manual override for the walkable surface above the model bottom (stand height of overlay zones). 0 = automatic: the measured walkable surface of the mesh.') },
         ]).map(({ key, label, hint }) => (
           <label key={key} title={hint}
             style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>

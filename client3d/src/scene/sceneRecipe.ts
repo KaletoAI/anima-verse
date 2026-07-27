@@ -765,13 +765,11 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
     model.position.y = bb.min.y;
   }
   model.userData.scaleBase = model.scale.x;
-  // Area location: NO shell-Y morph. The model IS the location and keeps its
-  // far-view proportions at every zoom — the morph squashed the village to
-  // height_m × k (0.64 m at plan width 50) on zoom-in, which read as "pushed
-  // into the basement". The re-anchor above pins the local bottom at 0, so a
-  // constant scale keeps the bottom exactly on bottom_y.
-  model.userData.scaleYDetail = area ? model.scale.x : model.scale.y;
-  if (area) model.scale.y = model.scale.x;
+  // Area models arrive with a UNIFORM spec (no box.y — the server decides,
+  // schnittstellen-3d.md), so scale.y equals scale.x and the shell-Y morph
+  // is naturally a no-op for them. No local special case: the admin preview
+  // places the same spec and must show the same height.
+  model.userData.scaleYDetail = model.scale.y;
   tile.shellMats = [];
   tile.roofMats = [];
   // Flächen-Location: das Modell IST die Location und bleibt sichtbar — es

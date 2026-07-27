@@ -524,7 +524,13 @@ def set_offset_y(location_id: str, offset_y: Any = None,
             v = float(raw)
         except (TypeError, ValueError):
             v = float(meta.get(key) or 0.0)
-        meta[key] = round(max(-25.0, min(25.0, v)), 3)
+        v = round(max(-25.0, min(25.0, v)), 3)
+        # walk_y 0 = "automatic" (use the measured walkable surface) — drop
+        # the key instead of storing an override of "0 m above the bottom".
+        if key == "walk_y" and v == 0:
+            meta.pop(key, None)
+        else:
+            meta[key] = v
     _write_sidecar(p, meta)
     return meta
 

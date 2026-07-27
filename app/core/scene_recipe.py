@@ -696,7 +696,12 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     size = _num((map3d or {}).get("size")) or TILE_FILL
     height_m = _num(meta.get("height_m"))
     box: Dict[str, float] = {"xz": _r(TILE_M * TILE_FILL * size)}
-    if height_m > 0:
+    # AREA locations render UNIFORMLY at every zoom — the model IS the place,
+    # squashing it to height_m × k pushed the village into the ground. That
+    # decision lives HERE, in the spec (no y target → place() fits uniformly),
+    # so the admin preview and the client cannot diverge on it (user finding
+    # 2026-07-28: they did, because the client special-cased it locally).
+    if height_m > 0 and not map3d.get("area_model"):
         box["y"] = _r(height_m * k)
     bottom = BUILDING_BOTTOM_Y + _num(meta.get("offset_y"))
     spec = {
@@ -718,20 +723,21 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     # fallback put figures a metre underground the moment a model was sunk
     # via offset_y (Willowbrook: bottom −1.04, basement plate −0.54).
     walk: Optional[float] = None
-    if meta.get("walk_y") is not None:
+    # A manual walk_y of 0 means "automatic", not "0 m above the bottom" —
+    # the dial's default commit wrote 0 and silently disabled the
+    # measurement (the setter drops the key now; this guards stored zeros).
+    if meta.get("walk_y"):
         walk = _num(meta.get("walk_y"))
     else:
         frac = meta.get("walk_frac")
         bb = meta.get("bbox_fixed") or []
         uniform = (bb[1] * (box["xz"] / max(bb[0], bb[2]))
                    if len(bb) == 3 and max(bb[0], bb[2]) > 0 else None)
-        # AREA models render at their far-view proportions at every zoom
-        # (client decision 4ec7d2b) — their real height is the UNIFORM tile
-        # fit, not height_m × k. Ordinary buildings keep the declared box.
-        if map3d.get("area_model"):
-            height_world = uniform or box.get("y")
-        else:
-            height_world = box.get("y") or uniform
+        # The height place() will actually produce from THIS spec: the
+        # declared y target when the box carries one, else the uniform fit.
+        # (Area models carry none — see the box above — so one formula
+        # covers both; no renderer-specific special case anywhere.)
+        height_world = box.get("y") or uniform
         if frac is not None and height_world:
             walk = float(frac) * float(height_world)
     spec["walk_y_world"] = _r(bottom + walk) if walk is not None \
