@@ -81,6 +81,16 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
   const [data, setData] = useState<Belongings>(EMPTY)
   const [cat, setCat] = useState<Cat>('all')
   const [slotFilter, setSlotFilter] = useState('')
+  // Outfit-type filter, next to the slot filter. The vocabulary comes from
+  // the server so it cannot drift from the constant behind the coherence
+  // rule; loaded once, it never changes at runtime.
+  const [typeFilter, setTypeFilter] = useState('')
+  const [outfitTypes, setOutfitTypes] = useState<string[]>([])
+  useEffect(() => {
+    apiGet<{ outfit_types?: string[] }>('/inventory/outfit-types')
+      .then((d) => setOutfitTypes(d.outfit_types || []))
+      .catch(() => setOutfitTypes([]))
+  }, [])
   const [busy, setBusy] = useState(false)
   // Figurhöhe messen → Slot-Marker skalieren mit der Figur.
   const figRef = useRef<HTMLDivElement>(null)
@@ -116,8 +126,15 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
     let list = data.items
     if (cat !== 'all') list = list.filter((it) => catOf(it) === cat)
     if (cat === 'outfit' && slotFilter) list = list.filter((it) => it.slots.includes(slotFilter))
+    // An UNTAGGED piece passes every type filter — the same wildcard rule the
+    // coherence check uses, so a neutral belt does not disappear from all of
+    // them at once.
+    if (cat === 'outfit' && typeFilter) {
+      list = list.filter((it) => !(it.outfit_types || []).length
+        || it.outfit_types.includes(typeFilter))
+    }
     return list
-  }, [data.items, cat, slotFilter])
+  }, [data.items, cat, slotFilter, typeFilter])
 
   // Slot-Filter-Optionen aus den vorhandenen Outfit-Pieces ableiten
   const slotOptions = useMemo(() => {
@@ -145,7 +162,10 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {cats.map((c) => (
-            <button key={c} onClick={() => { setCat(c); if (c !== 'outfit') setSlotFilter('') }}
+            <button key={c} onClick={() => {
+              setCat(c)
+              if (c !== 'outfit') { setSlotFilter(''); setTypeFilter('') }
+            }}
               style={chip(cat === c)}>
               {CAT_EMOJI[c]} {t(c === 'all' ? 'All' : c === 'outfit' ? 'Outfit' : c === 'consumable' ? 'Consumable' : c === 'spell' ? 'Spell' : 'Other')}
             </button>
@@ -157,6 +177,17 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
             {slotOptions.map((s) => (
               <button key={s} onClick={() => setSlotFilter(s)} style={chip(slotFilter === s, true)}>
                 {t(data.slot_labels[s] || s)}
+              </button>
+            ))}
+          </div>
+        )}
+        {cat === 'outfit' && outfitTypes.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}
+            title={t('Filter by outfit type. Pieces without a type are shown in every filter — they go with everything.')}>
+            <button onClick={() => setTypeFilter('')} style={chip(!typeFilter, true)}>{t('All types')}</button>
+            {outfitTypes.map((ot) => (
+              <button key={ot} onClick={() => setTypeFilter(ot)} style={chip(typeFilter === ot, true)}>
+                {t(ot)}
               </button>
             ))}
           </div>
