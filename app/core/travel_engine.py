@@ -17,7 +17,7 @@ Stored on the character profile (see Task 2):
 import asyncio
 import math
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 from app.core.timeutils import parse_iso
@@ -60,14 +60,19 @@ def journey_state(path: List[str], started_at_game: str, now_game: datetime,
             "current_id": current_id, "arrived": False, "eta_game": eta_game}
 
 
-def get_journey(character_name: str) -> Dict[str, Any] | None:
+def get_journey(character_name: str,
+                profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any] | None:
     """The character's active journey dict, or None. A journey whose target
     does not match movement_target is stale (a manual teleport cleared the
-    target, or a legacy writer re-pointed it) and is treated as absent."""
+    target, or a legacy writer re-pointed it) and is treated as absent.
+
+    ``profile``: an already-loaded character profile to read from. Callers that
+    hold one anyway (the worldmap loop) pass it and save a DB round-trip."""
     if not character_name:
         return None
-    from app.models.character import get_character_profile
-    profile = get_character_profile(character_name) or {}
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
     j = profile.get("journey")
     if not (isinstance(j, dict) and j.get("path") and j.get("target")
             and j.get("started_at_game")):

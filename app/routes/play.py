@@ -1504,24 +1504,6 @@ async def play_worldmap(user=Depends(get_current_user)):
         if not loc_id:
             continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
         mt = get_movement_target(name) or ""
-        # Active journey (or None): path + progress let clients interpolate the
-        # figure between two polls instead of teleporting it cell by cell.
-        travel = None
-        _j = get_journey(name)
-        if _j:
-            _spc = float(_j.get("seconds_per_cell") or GAME_SECONDS_PER_CELL)
-            _st = journey_state(_j["path"], _j["started_at_game"], _now_game, _spc)
-            travel = {
-                "path": _j["path"],
-                "target_id": _j["target"],
-                "seg": _st["seg"],
-                "frac": _st["frac"],
-                "progress_cells": _st["progress_cells"],
-                "eta_game": _st["eta_game"],
-                # GAME seconds per cell in REAL seconds — null on a frozen
-                # world (factor 0): nothing moves, so nothing extrapolates.
-                "cell_seconds_real": (_spc / _factor) if _factor > 0 else None,
-            }
         prof = get_character_profile_image(name) or ""
         activity = get_effective_activity(name) or ""
         # AV3D-6: which clip a 3D figure plays. The KIND comes from the
@@ -1542,6 +1524,32 @@ async def play_worldmap(user=Depends(get_current_user)):
         except Exception:
             _prof = {}
         anim_sets = resolve_animation_sets(name, profile=_prof)
+        # Active journey (or None): path + progress let clients interpolate the
+        # figure between two polls instead of teleporting it cell by cell.
+        # Reads the profile loaded above — no second load on this hot endpoint.
+        # Isolated like the ticker's per-character block: one malformed journey
+        # dict degrades to travel=null, it never breaks the whole worldmap.
+        travel = None
+        try:
+            _j = get_journey(name, profile=_prof)
+            if _j:
+                _spc = float(_j.get("seconds_per_cell") or GAME_SECONDS_PER_CELL)
+                _st = journey_state(_j["path"], _j["started_at_game"],
+                                    _now_game, _spc)
+                travel = {
+                    "path": _j["path"],
+                    "target_id": _j["target"],
+                    "seg": _st["seg"],
+                    "frac": _st["frac"],
+                    "progress_cells": _st["progress_cells"],
+                    "eta_game": _st["eta_game"],
+                    # GAME seconds per cell in REAL seconds — null on a frozen
+                    # world (factor 0): nothing moves, so nothing extrapolates.
+                    "cell_seconds_real": (_spc / _factor) if _factor > 0 else None,
+                }
+        except Exception as e:
+            travel = None
+            logger.warning("travel payload failed for %s: %s", name, e)
         # Body height in cm — the 3D client scales the figures against each
         # other with it (a 155 cm character must not tower over a 190 cm one).
         # None when unset: the client keeps its own default scale.

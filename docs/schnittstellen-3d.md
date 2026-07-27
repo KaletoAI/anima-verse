@@ -377,7 +377,10 @@ Feld **`travel`** — `null`, solange keine Reise läuft:
   zwischen zwei Kacheln zählt die bereits verlassene. Der Spielzustand
   (Regeln, Wahrnehmung, Raum) springt also bei `frac 0,5`, während `frac`
   stetig läuft — beide Felder widersprechen sich nicht, sie beschreiben
-  verschiedene Dinge (Spielzustand vs. Darstellung).
+  verschiedene Dinge (Spielzustand vs. Darstellung). **`location_id` wird
+  nur im Ticker-Takt (5 s) nachgeführt** — bei hohem Zeitfaktor kann es dem
+  `frac` um mehrere Zellen nachlaufen. Die Render-Position kommt IMMER aus
+  `path`/`seg`/`frac`, nie aus `location_id`.
 - **Ankunft wird eine halbe Zelle früher verbucht.** Sobald die nächst-
   gelegene Zelle das Ziel ist, setzt der Ticker die Ankunft und löscht die
   Reise. Folge: `frac` erreicht in der Praxis nie 1,0, und `travel` kann
@@ -390,6 +393,10 @@ Feld **`travel`** — `null`, solange keine Reise läuft:
 - `seconds_per_cell` ist heute 60 SPIEL-Sekunden pro Zelle (eine Welt-
   Stellschraube, kein Client-Wissen); der Client rechnet ausschließlich mit
   `cell_seconds_real`.
+- **Der Payload liefert bewusst keine Spiel-Jetzt-Referenz.** Restzeit-
+  Anzeigen rechnen daher `(len(path)−1 − progress_cells) × cell_seconds_real`
+  — NICHT `eta_game` gegen eine lokale Uhr (die Spieluhr läuft mit Faktor und
+  kann springen; `eta_game` ist eine Spielzeit-Marke für Texte/Logs).
 
 **Client-Erwartung**
 
@@ -397,6 +404,11 @@ Feld **`travel`** — `null`, solange keine Reise läuft:
    Kachelmitte von `location_id`.
 2. Zwischen zwei Polls darf mit `cell_seconds_real` extrapoliert werden:
    `progress_cells += Δt_real / cell_seconds_real` (bei `null`: einfrieren).
+   **Extrapoliert wird `progress_cells`, nicht `frac`** — `seg` und `frac`
+   leitet der Client daraus neu ab:
+   `seg = clamp(floor(progress_cells), 0, len(path)−2)`,
+   `frac = progress_cells − seg`. Wer nur `frac` im aktuellen Segment
+   hochzählt, bleibt an jedem Knoten stehen, bis der nächste Poll kommt.
 3. Beim nächsten Poll: Abweichung `|progress_cells_client −
    progress_cells_server| > 0,5` Zellen ⇒ hart auf den Server-Wert
    schnappen. Darunter weich nachziehen.
