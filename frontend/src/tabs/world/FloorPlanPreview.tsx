@@ -25,7 +25,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
-  disposeClipMaterials, placeModelSpec, plateTargets, SpecVerifier,
+  applyClipOutline, disposeClipMaterials, placeModelSpec, plateTargets, SpecVerifier,
   VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, VerifyRow } from '@anima/scene-render'
 import { useToast } from '../../lib/Toast'
@@ -496,6 +496,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       const outer = placeModelSpec(THREE, source, spec)
       outer.userData.__noDispose = true
       boxes.add(outer)
+      // Room clip (§ B1): the client discards diorama fragments outside the
+      // room hull — without the same call here the preview showed the FULL
+      // diorama including its baked surroundings and diverged massively from
+      // the client. Preview coordinates ARE payload world coordinates, so
+      // the polygon applies as-is; disposeSafe already frees the clones.
+      if (spec.clip_outline?.length) {
+        applyClipOutline(THREE, outer, spec.clip_outline)
+      }
       if (verifyRef.current) verifyPlacement(outer, spec)
       return outer
     }

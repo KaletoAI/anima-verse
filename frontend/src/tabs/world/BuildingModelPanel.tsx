@@ -529,17 +529,18 @@ export function BuildingModelPanel({
             />
           </span>
         ))}
-        {([
+        {/* Buildings only: a ROOM's height offset lives in the floor plan
+            (layout.model_offset_y, adjust strip) — the sidecar setter
+            rejects rooms, so no offset field is shown for them. */}
+        {(roomId ? [] : [
           { key: 'offset_y' as const, label: t('Height offset (m)'),
             hint: t('Vertical: negative sinks the model into the terrain.') },
-          ...(!roomId ? [
-            { key: 'offset_x' as const, label: t('Shift X (m)'),
-              hint: t('Tile plane, world axes after the yaw: + = east.') },
-            { key: 'offset_z' as const, label: t('Shift Z (m)'),
-              hint: t('Tile plane, world axes after the yaw: + = south.') },
-            { key: 'walk_y' as const, label: t('Walk height (m)'),
-              hint: t('Walkable surface above the model bottom — the stand height of overlay zones on an area location. Empty/0 = figures stand at the model bottom.') },
-          ] : []),
+          { key: 'offset_x' as const, label: t('Shift X (m)'),
+            hint: t('Tile plane, world axes after the yaw: + = east.') },
+          { key: 'offset_z' as const, label: t('Shift Z (m)'),
+            hint: t('Tile plane, world axes after the yaw: + = south.') },
+          { key: 'walk_y' as const, label: t('Walk height (m)'),
+            hint: t('Walkable surface above the model bottom — the stand height of overlay zones on an area location. Empty/0 = figures stand at the model bottom.') },
         ]).map(({ key, label, hint }) => (
           <label key={key} title={hint}
             style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
