@@ -25,17 +25,23 @@ nicht in eine der beiden Apps.**
 |---|---|---|
 | `placeModelSpec`, `FIT_BOX_MARGIN` | § B2 | DIE Platzierungs-Routine: Fix-Euler → messen → skalieren → Yaw als Eltern-Rotation → BBox auf `bottom_y`/`anchor` setzen |
 | `applyClipOutline`, `disposeClipMaterials`, `CLIP_MAX_POINTS` | § B1 | Diorama auf den Raum-Grundriss beschneiden (Fragment-Discard per Punkt-im-Polygon) |
+| `buildPlate`, `buildWall`, `buildExtra`, `buildPlaceholder`, `wallLength` | § B1 | Die Primitiv-Builder: Kontur→Extrusion bzw. Box aus `from`/`to`/`base_y`, Extra-Box aus Zentrum+Größe, Platzhalter-Box für ein Prop ohne Mesh |
+| `plateTargets`, `wallTargets` | § B5a | Welche Zahlen ein Primitiv treffen muss (Wand: `base_y`/`top_y`/`centre.x`/`centre.z`; Platte: `top_y`, bei Körper `bottom_y`) |
 | `SpecVerifier`, `VERIFY_EPS` | § B5a | BBox-vs-Spec-Diff mit ε 0,01 m — Rechnen statt Screenshots |
 | Payload-Typen | § B1 | `ScenePayload` und alles darin |
 
 **Bewusst NICHT hier:** Kamera, LOD, Fades, Culling-Anwendung, Labels,
 Wegfindung, NPC-Logik, Editor-Overlays. Sicht-Zustand bleibt pro App.
 
-**Noch nicht hier, aber ein Kandidat:** die Primitiv-Builder (Platte, Wand,
-Extras, Platzhalter). Die stehen weiterhin doppelt — sie sind mit dem
-Material-/Textursystem der jeweiligen Seite verwoben, ein geteilter Builder
-müsste das Material als Parameter nehmen. Ausgearbeitet in
-`development_instructions/plan-scene-render-primitive-builder.md`.
+**Der Schnitt bei den Primitiven: Geometrie hier, MATERIAL beim Aufrufer.**
+Genau dort unterscheiden sich die beiden Seiten echt — der Client kachelt
+Surface-Texturen im Weltmaßstab, der Admin malt Vorschau-Farben mit
+Raum-Palette und Auswahl-Hervorhebung. `side`/`transparent`/Deckkraft sind
+deshalb Material-Entscheidungen und fallen nicht hier. Ebenso bleiben
+Schatten-Flags und Culling-Registrierung beim Aufrufer. Jeder Builder baut um
+seinen EIGENEN Ursprung und platziert nichts: der Client rechnet ums
+Kachelzentrum, der Admin um den Ursprung — dieselbe Trennung, die
+`placeModelSpec` über `origin` löst.
 
 Die Berichte bleiben ebenfalls bei den Konsumenten: der Admin zeichnet ein
 Overlay, der Client schreibt nach `window.__sceneVerify`. Geteilt ist nur die

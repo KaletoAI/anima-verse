@@ -63,10 +63,12 @@ Stand 2026-07-26 (Welt `anima-dome`): **1757 geprüfte Zahlen, 0 Abweichungen,
 
 - Vite + TypeScript + Three.js (vanilla, bewusst kein React), CSS2DRenderer für Labels.
 - `@anima/scene-render` — geteilt mit der Admin-Vorschau: `placeModelSpec()`
-  (§ B2), Raum-Clip (§ B1), Verify-Diff (§ B5a), Payload-Typen. Hier liegt
-  KEINE zweite Fassung davon.
-- `src/scene/sceneRecipe.ts` — Primitiv-Builder (Platten/Wände/Extras) und der
-  Aufbau der Szene aus dem Payload
+  (§ B2), Raum-Clip (§ B1), Verify-Diff (§ B5a), die Primitiv-Builder
+  (Platte/Wand/Extra-Box/Platzhalter) samt ihren Verify-Soll-Feldern und die
+  Payload-Typen. Hier liegt KEINE zweite Fassung davon.
+- `src/scene/sceneRecipe.ts` — Aufbau der Szene aus dem Payload: Materialien
+  für die geteilten Primitive (Surface-Texturen, Payload-Farben) und die
+  Verdrahtung in die Kachel
 - `src/scene/engine.ts` — Kamera/Input/Licht/Renderloop
 - `src/scene/tiles.ts` — Location-Kacheln, Gebäude, Innenraum-Crossfade
 - `src/scene/npcs.ts` — NPC-Sprites, Bewegung, Reiserouten
