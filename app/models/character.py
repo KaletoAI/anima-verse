@@ -1085,20 +1085,20 @@ def get_movement_target(character_name: str) -> str:
 
 
 def set_movement_target(character_name: str, location_id: str) -> None:
-    """Setzt das Reise-Ziel. Wird vom Agent-Loop pro Tick um einen Schritt
-    abgearbeitet. Lege es nur, wenn ein Pfad ueber bekannte Locations
-    existiert — Validierung im Aufrufer.
-    """
+    """Sets the travel target id. Clearing it (empty id) also drops the
+    stored journey dict — target and journey always live and die together."""
     if not character_name:
         return
     profile = get_character_profile(character_name)
     profile["movement_target"] = (location_id or "").strip()
+    if not profile["movement_target"]:
+        profile.pop("journey", None)
     save_character_profile(character_name, profile)
 
 
 def clear_movement_target(character_name: str) -> None:
-    """Loescht das Reise-Ziel — z.B. nach Ankunft, Teleport-Override oder
-    wenn der Pfad ploetzlich nicht mehr begehbar ist."""
+    """Clears the travel target — e.g. after arrival, a teleport override, or
+    when the path suddenly stops being walkable."""
     set_movement_target(character_name, "")
 
 
@@ -1194,18 +1194,18 @@ def save_character_current_location(character_name: str = "", location: str = ""
                                     _skip_compliance: bool = False,
                                     _preserve_movement_target: bool = False,
                                     _party_drag: bool = False):
-    """Speichert den aktuellen Aufenthaltsort.
+    """Persists the character's current location.
 
-    _skip_compliance: wenn True, ueberspringt Outfit-Type-Compliance
-    (z.B. fuer den Avatar, der manuelle Outfit-Wahl behaelt).
-    _preserve_movement_target: True nur bei programmiertem Walk-Step im
-    Agent-Loop. Default False = Manueller Teleport (Drag&Drop, Admin,
-    Scheduler-Force, Rule-Force) loescht das Ziel automatisch — der
-    User/das System hat die Reise gerade ueberschrieben. Bei True und
-    ``location == movement_target`` wird das Ziel ebenfalls geloescht
-    (Ankunft).
-    _party_drag: True nur fuer einen mitgezogenen Party-Follower — verhindert,
-    dass der gezogene Follower seinerseits ein Party-Drag ausloest (Rekursion).
+    _skip_compliance: if True, skips outfit-type compliance
+    (e.g. for the avatar, which keeps its manual outfit choice).
+    _preserve_movement_target: True only for a programmed travel step.
+    Default False = a manual teleport (drag&drop, admin, scheduler force,
+    rule force) clears the target — and the stored ``journey`` dict with
+    it — automatically: the user/system just overrode the trip. With True
+    and ``location == movement_target`` the target + journey are cleared
+    as well (arrival).
+    _party_drag: True only for a dragged-along party follower — prevents the
+    dragged follower from triggering a party drag of its own (recursion).
     """
     from datetime import datetime
     profile = get_character_profile(character_name)
@@ -1214,14 +1214,15 @@ def save_character_current_location(character_name: str = "", location: str = ""
     target = (profile.get("movement_target") or "").strip()
     location_changed = bool(location) and location != old_location
     if location_changed and target:
-        # Bei manuellem Teleport (kein _preserve_movement_target) bricht
-        # die Reise ab — Aufrufer hat das Ziel ueberschrieben.
-        # Bei programmiertem Walk-Step wird das Ziel nur bei Ankunft
-        # geloescht.
+        # A manual teleport (no _preserve_movement_target) aborts the trip —
+        # the caller just overrode the journey. A programmed travel step only
+        # clears target + journey on arrival.
         if not _preserve_movement_target:
             profile["movement_target"] = ""
+            profile.pop("journey", None)
         elif location == target:
             profile["movement_target"] = ""
+            profile.pop("journey", None)
     profile["current_location"] = location
     profile["location_changed_at"] = utc_now_iso()
     # current_room beim Location-Wechsel direkt auf den Entry-Room der NEUEN

@@ -57,3 +57,146 @@ def journey_state(path: List[str], started_at_game: str, now_game: datetime,
     current_id = path[min(max(math.ceil(progress - 0.5), 0), len(path) - 1)]
     return {"seg": seg, "frac": frac, "progress_cells": progress,
             "current_id": current_id, "arrived": False, "eta_game": eta_game}
+
+
+def get_journey(character_name: str) -> Dict[str, Any] | None:
+    """The character's active journey dict, or None. A journey without a
+    movement_target is stale (a manual teleport cleared the target) and is
+    treated as absent."""
+    if not character_name:
+        return None
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name) or {}
+    j = profile.get("journey")
+    if not (isinstance(j, dict) and j.get("path") and j.get("target")
+            and j.get("started_at_game")):
+        return None
+    if not (profile.get("movement_target") or "").strip():
+        return None
+    return j
+
+
+def start_journey(character_name: str, target_id: str) -> Dict[str, Any] | None:
+    """Begin a timed journey to ``target_id`` along known locations.
+
+    Returns the stored journey dict, or None when there is no path (or the
+    character already stands on the target). Leave/access checks are the
+    CALLER's job (SetLocation already does them) — this only handles the
+    mechanics. Entry-room discipline: the character steps to the entry room
+    of the current location, journeys always leave through it.
+    """
+    from app.models.character import (
+        get_character_current_location, get_character_current_room,
+        get_character_profile, get_known_locations,
+        save_character_profile, save_character_current_room)
+    from app.models.world import (
+        find_path_through_known, get_entry_room_id, get_location_by_id)
+    from app.core.timeutils import game_now_iso
+
+    current = (get_character_current_location(character_name) or "").strip()
+    if not current or current == target_id:
+        return None
+    known = get_known_locations(character_name) or []
+    path = find_path_through_known(current, target_id, known)
+    if not path or len(path) < 2:
+        return None
+
+    journey = {"target": target_id, "path": path,
+               "started_at_game": game_now_iso(),
+               "seconds_per_cell": GAME_SECONDS_PER_CELL}
+    profile = get_character_profile(character_name)
+    profile["journey"] = journey
+    profile["movement_target"] = target_id
+    save_character_profile(character_name, profile)
+
+    loc = get_location_by_id(current)
+    entry = get_entry_room_id(loc) if loc else ""
+    cur_room = (get_character_current_room(character_name) or "").strip()
+    if entry and cur_room and cur_room != entry:
+        save_character_current_room(character_name, entry)
+
+    try:
+        from app.core.state_events import publish as _publish_state
+        _publish_state("travel_started", character_name,
+                       target_id=target_id, path=path,
+                       eta_game=journey_state(path, journey["started_at_game"],
+                                              _game_now(), GAME_SECONDS_PER_CELL)["eta_game"])
+    except Exception:
+        pass
+    logger.info("Journey started: %s -> %s (%d cells)",
+                character_name, target_id, len(path) - 1)
+    return journey
+
+
+def cancel_journey(character_name: str) -> None:
+    """Drop journey + movement target — the character stays where they are."""
+    from app.models.character import clear_movement_target
+    clear_movement_target(character_name)   # clears journey too (see character.py)
+    try:
+        from app.core.state_events import publish as _publish_state
+        _publish_state("travel_cancelled", character_name)
+    except Exception:
+        pass
+
+
+def _game_now():
+    from app.core.timeutils import game_now
+    return game_now()
+
+
+def advance_all_journeys() -> None:
+    """Apply elapsed game time to every active journey: step
+    ``current_location`` to the nearest path cell, settle arrivals.
+    Called by the TravelTicker (Task 4); each call is cheap when no one
+    travels. Leave rules are re-checked per advance — a rule created
+    mid-route cancels the journey exactly like the old walk-step did."""
+    from app.models.character import (
+        get_character_current_location, list_available_characters,
+        save_character_current_location)
+    now = _game_now()
+    for name in list_available_characters():
+        j = get_journey(name)
+        if not j:
+            continue
+        try:
+            st = journey_state(j["path"], j["started_at_game"], now,
+                               float(j.get("seconds_per_cell") or GAME_SECONDS_PER_CELL))
+            cur = (get_character_current_location(name) or "").strip()
+            if not st["arrived"] and st["current_id"] == cur:
+                continue                       # nothing to apply this tick
+            try:
+                from app.models.rules import check_leave
+                leave_ok, leave_reason = check_leave(name)
+            except Exception:
+                leave_ok, leave_reason = True, ""
+            if not leave_ok:
+                cancel_journey(name)
+                logger.info("Journey blocked (leave rule): %s — %s",
+                            name, leave_reason)
+                continue
+            if st["arrived"] or st["current_id"] == j["target"]:
+                # Within the last half cell the NEAREST cell already is the
+                # target — settle the arrival here. (A plain step-write of the
+                # target would clear movement_target + journey inside save_…
+                # anyway, but silently, skipping discover check and bump.)
+                # save_… clears movement_target (location == target) and the
+                # journey dict with it; entry room of the target is set inside.
+                save_character_current_location(name, j["target"],
+                                                _preserve_movement_target=True)
+                try:
+                    from app.models.rules import check_discover_rules
+                    check_discover_rules(name)
+                except Exception:
+                    logger.debug("discover check failed for %s", name,
+                                 exc_info=True)
+                try:
+                    from app.core.agent_loop import get_agent_loop
+                    get_agent_loop().bump(name)    # think at the destination
+                except Exception:
+                    pass
+                logger.info("Journey arrived: %s @ %s", name, j["target"])
+            else:
+                save_character_current_location(name, st["current_id"],
+                                                _preserve_movement_target=True)
+        except Exception as e:
+            logger.warning("advance journey failed for %s: %s", name, e)
