@@ -25,6 +25,7 @@ nicht in eine der beiden Apps.**
 |---|---|---|
 | `placeModelSpec`, `FIT_BOX_MARGIN` | § B2 | DIE Platzierungs-Routine: Fix-Euler → messen → skalieren → Yaw als Eltern-Rotation → BBox auf `bottom_y`/`anchor` setzen |
 | `applyClipOutline`, `disposeClipMaterials`, `CLIP_MAX_POINTS` | § B1 | Diorama auf den Raum-Grundriss beschneiden (Fragment-Discard per Punkt-im-Polygon) |
+| `applyCutouts`, `disposeCutoutMaterials`, `CUTOUT_MAX_POLYS/-POINTS` | § B1 | Flächen-Locations: Löcher aus dem Location-Modell schneiden — derselbe Paritätstest, INVERTIERT und über eine Union mehrerer Polygone; `setEnabled` schaltet sie per Uniform mit der Innenansicht |
 | `buildPlate`, `buildWall`, `buildExtra`, `buildPlaceholder`, `wallLength` | § B1 | Die Primitiv-Builder: Kontur→Extrusion bzw. Box aus `from`/`to`/`base_y`, Extra-Box aus Zentrum+Größe, Platzhalter-Box für ein Prop ohne Mesh |
 | `plateTargets`, `wallTargets` | § B5a | Welche Zahlen ein Primitiv treffen muss (Wand: `base_y`/`top_y`/`centre.x`/`centre.z`; Platte: `top_y`, bei Körper `bottom_y`) |
 | `SpecVerifier`, `VERIFY_EPS` | § B5a | BBox-vs-Spec-Diff mit ε 0,01 m — Rechnen statt Screenshots |

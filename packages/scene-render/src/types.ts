@@ -94,6 +94,12 @@ export interface SceneModelSpec {
   clip_outline?: [number, number][]
   /** Räume: absolute Höhe, auf der eine Figur im Diorama steht (§ B6 Nr. 7) */
   walk_y_world?: number
+  /** Flächen-Locations (plan-area-locations.md): Welt-Polygone, die aus DIESEM
+   *  Modell geschnitten werden — Gebäude-Grundriss plus die Umrisse platzierter
+   *  Indoor-Räume außerhalb davon. Das Modell bleibt in der Innenansicht
+   *  stehen, in den Löchern steht das Rezept-Innenleben. Nur am
+   *  building-Spec, nur bei `map3d.area_model`. */
+  cutouts?: [number, number][][]
   /** Räume: die Höhe, die der SERVER aus dem Mesh gemessen hat (Meter über der
    *  Unterkante des Dioramas — dieselbe Einheit, die der walk_y-Regler
    *  speichert). Speist `walk_y_world`, solange der Admin nicht überschrieben
@@ -170,6 +176,15 @@ export interface SceneRoom {
   openings?: SceneOpening[]
   exit?: [number, number] | null
   exit_derived?: boolean
+  /** Flächen-Locations: dieser Outdoor-Raum liegt AUF der Modelloberfläche
+   *  statt gebaut zu werden — es gibt weder Platte noch Wände, also kommen
+   *  Mitte, Rechteck und Höhe (alles Welt-Meter) von hier. Fehlt = normaler
+   *  Raum. */
+  overlay?: {
+    centre: [number, number]
+    rect: { x: number; z: number; w: number; d: number }
+    y: number
+  }
 }
 
 export interface ScenePayload {

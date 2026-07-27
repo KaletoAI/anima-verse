@@ -19,6 +19,10 @@ export type { PlaceOptions } from './place'
 
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
+export { applyCutouts, disposeCutoutMaterials, CUTOUT_MAX_POLYS,
+  CUTOUT_MAX_POINTS } from './cutouts'
+export type { CutoutHandle } from './cutouts'
+
 export { SpecVerifier, VERIFY_EPS } from './verify'
 export type { PrimitiveTarget, VerifyRow } from './verify'
 
