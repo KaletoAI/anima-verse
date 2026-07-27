@@ -1933,6 +1933,20 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 {t('Clip model to room bounds')}
               </label>
             ) : null}
+            {/* Walls opt-out: open zones, pavilions, areas inside an area
+                model. The UI is positive ("render walls"), the stored field
+                is negative — so the default (no field) means walls. Shown for
+                outdoor rooms too: an open zone with window openings in the
+                plan should still be able to render wall-less. */}
+            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Off: this room gets no walls at all — no segments, no window sill or head, no glass. Its floor, exit and openings stay (the plan keeps drawing them), and the building outline is unaffected.')}>
+              <input type="checkbox"
+                checked={!lay.no_walls}
+                onChange={(e) => updateLayout(selectedRoom.id || '', {
+                  no_walls: e.target.checked ? undefined : true,
+                })} />
+              {t('Render walls')}
+            </label>
             <button type="button" className="ga-btn ga-btn-sm"
               title={t('Back to the centred default placement.')}
               onClick={() => updateLayout(selectedRoom.id || '', {

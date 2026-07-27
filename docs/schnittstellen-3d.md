@@ -159,6 +159,15 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
                    height_m, facing? }],
   always_visible?,                    # Outdoor-Flag (§ A5)
   clip_model?,                        # Diorama-Clip-Opt-in (§ B1)
+  no_walls?,                          # Raum emittiert KEINE walls-Einträge
+                                      # (offene Zone, Pavillon, Bereich in
+                                      # einem Area-Modell): keine Segmente,
+                                      # keine Fenster-Brüstung/-Sturz, kein
+                                      # Glas. Öffnungen bleiben Editor-Daten,
+                                      # Platte/Exit/Marker unberührt; die
+                                      # Konturwände des Gebäudes ebenfalls
+                                      # (der Raum gibt auch keine
+                                      # Kontur-Strecke mehr frei).
   model_at?, model_offset_y?,         # Diorama-Anker/-Höhe (reisen im
                                       # Payload mit, damit die Signatur
                                       # sich bei Regler-Änderung bewegt —

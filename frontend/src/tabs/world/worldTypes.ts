@@ -23,6 +23,11 @@ export interface RoomLayout {
    *  fragment outside the room hull, so a model that overhangs its floor plan
    *  ends at the room. Ignored for outdoor rooms. */
   clip_model?: boolean
+  /** No recipe walls for this room: the server emits no `walls` entries for
+   *  it at all (open zone, pavilion, an area inside an area model). Plate,
+   *  exit and openings stay; the building outline is unaffected. Absent =
+   *  walls, so the editor shows the inverse ("Render walls"). */
+  no_walls?: boolean
   /** Animation markers: spots a figure with a matching active animation
    *  snaps to. at = fraction of the room rectangle; animation = a clip kind
    *  from the open animation-clip vocabulary; rotation = facing in degrees

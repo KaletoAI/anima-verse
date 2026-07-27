@@ -492,6 +492,12 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # overhangs its floor plan (real_size, § B2a) is cut at the shell.
     if raw.get("clip_model"):
         out["clip_model"] = True
+    # No recipe walls for this room: open zones, pavilions, areas inside an
+    # area model. The server then emits no `walls` entries for it at all, so
+    # both renderers follow without knowing the flag. Openings stay editor
+    # data (the 2D plan keeps drawing them), plate and exit are unaffected.
+    if raw.get("no_walls"):
+        out["no_walls"] = True
     ex = raw.get("exit")
     if isinstance(ex, (list, tuple)) and len(ex) == 2:
         try:

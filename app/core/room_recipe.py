@@ -437,6 +437,11 @@ def compose_recipe(room: Dict[str, Any],
     # toggling the checkbox makes the client re-fetch.
     if lay.get("clip_model"):
         payload["clip_model"] = True
+    # No recipe walls for this room (open zone, pavilion). Read from the
+    # recipe like clip_model, so the flag is inside the signature below and
+    # toggling the checkbox makes the client re-fetch.
+    if lay.get("no_walls"):
+        payload["no_walls"] = True
     # Diorama anchor + height (2026-07-24 plan placement): SAME signature
     # reasoning — the composer reads them from the payload so that dragging
     # the ⌂ handle or the height slider moves the signature and the client

@@ -514,8 +514,14 @@ def _room_walls(recipe: Dict[str, Any], storey: float, k: float,
     Mirrored openings (the neighbour's door in the shared wall) arrive
     pre-translated in the recipe and are treated exactly like own ones.
     Outdoor rooms have no shell at all (§ A5).
+
+    ``no_walls`` is the per-room opt-out (open zone, pavilion, an area inside
+    an area model): NOTHING is emitted — no segments, no window sill or head,
+    no glass. Everything else about the room stays: its plate, its exit, its
+    openings in the ``rooms`` block (the 2D editor keeps drawing them), its
+    markers and its diorama. The BUILDING's contour walls are untouched.
     """
-    if recipe.get("always_visible"):
+    if recipe.get("always_visible") or recipe.get("no_walls"):
         return []
     outline = [[_w(p[0]), _w(p[1])] for p in recipe.get("outline") or []]
     if len(outline) < 3:
@@ -1014,7 +1020,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # contour line, the contour wall yields (one wall, one owner).
     room_hulls: Dict[int, List[List[List[float]]]] = {}
     for recipe in recipes:
-        if recipe.get("always_visible"):
+        # A room that emits no walls of its own cannot own a contour stretch
+        # either — letting the contour yield to it would leave a gap with no
+        # wall at all instead of one wall with one owner.
+        if recipe.get("always_visible") or recipe.get("no_walls"):
             continue
         hull = _room_outline_world(recipe)
         if hull:
