@@ -1096,6 +1096,23 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             </select>
           </label>
         ) : null}
+        {onMap3d ? (
+          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Wall texture of the whole building shell: the client tiles every contour wall with the kind. Not per storey — one shell, one kind. A room wall keeps its own wall kind. Empty = plain shell colour.')}>
+            🧱
+            <select
+              className="ga-input"
+              style={{ maxWidth: 130 }}
+              value={map3d?.wall_kind || ''}
+              onChange={(e) => onMap3d('wall_kind', e.target.value || undefined)}
+            >
+              <option value="">{t('Building walls: none')}</option>
+              {surfaceKinds.map((k) => (
+                <option key={k.kind} value={k.kind}>{k.kind}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
 
       {/* Scale anchor missing: floor-plan geometry has no real size without

@@ -123,6 +123,11 @@ export interface Map3D {
   /** Floor-texture KIND per storey ({"0": "parquet"}) — the client tiles the
    *  level plate with it; a room's surfaces.floor overrides its own area. */
   level_floors?: Record<string, string>
+  /** Wall-texture KIND of the WHOLE building shell — every contour wall
+   *  tiles with it (the wall counterpart of level_floors, deliberately not
+   *  per level). A room wall keeps its own surfaces.wall. Absent = the shell
+   *  renders in style.wall_color. */
+  wall_kind?: string
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
    *  8×8 reference square, auto-closed — the client renders floor plates
    *  and walls per used level from it. Absent = rectangle as before. */
