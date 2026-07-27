@@ -768,9 +768,9 @@ async def apply_world_data(request: Request):
     rooms = location_data.get("rooms", [])
     image_prompt_day = location_data.get("image_prompt_day")
     image_prompt_night = location_data.get("image_prompt_night")
-    # Live 2D map renders from image_prompt_map_2d; tolerate the legacy key.
-    image_prompt_map_2d = location_data.get("image_prompt_map_2d",
-                                            location_data.get("image_prompt_map"))
+    # The live 2D map renders from image_prompt_map_2d — the only map prompt
+    # the schema generates.
+    image_prompt_map_2d = location_data.get("image_prompt_map_2d")
 
     # Normalize image_prompt fields
     for room in rooms:
@@ -1673,8 +1673,7 @@ async def apply_json(request: Request):
             rooms=rooms,
             image_prompt_day=payload.get("image_prompt_day"),
             image_prompt_night=payload.get("image_prompt_night"),
-            image_prompt_map_2d=payload.get("image_prompt_map_2d",
-                                            payload.get("image_prompt_map")),
+            image_prompt_map_2d=payload.get("image_prompt_map_2d"),
             decency=payload.get("decency"),
             style_hint=payload.get("style_hint"),
             swim_allowed=payload.get("swim_allowed"),
