@@ -1490,12 +1490,38 @@ async def play_worldmap(user=Depends(get_current_user)):
                 _lay_rooms, sort_keys=True, default=str).encode()).hexdigest()[:10]
         locations.append(entry)
 
+    # Journeys are a pure function of the GAME clock — read it ONCE for the
+    # whole payload so every character in one response shares the same now.
+    from app.core.travel_engine import (
+        GAME_SECONDS_PER_CELL, get_journey, journey_state)
+    from app.core.timeutils import game_now, game_speed_factor
+    _now_game = game_now()
+    _factor = game_speed_factor()
+
     characters = []
     for name in list_available_characters():
         loc_id = get_character_current_location(name) or ""
         if not loc_id:
             continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
         mt = get_movement_target(name) or ""
+        # Active journey (or None): path + progress let clients interpolate the
+        # figure between two polls instead of teleporting it cell by cell.
+        travel = None
+        _j = get_journey(name)
+        if _j:
+            _spc = float(_j.get("seconds_per_cell") or GAME_SECONDS_PER_CELL)
+            _st = journey_state(_j["path"], _j["started_at_game"], _now_game, _spc)
+            travel = {
+                "path": _j["path"],
+                "target_id": _j["target"],
+                "seg": _st["seg"],
+                "frac": _st["frac"],
+                "progress_cells": _st["progress_cells"],
+                "eta_game": _st["eta_game"],
+                # GAME seconds per cell in REAL seconds — null on a frozen
+                # world (factor 0): nothing moves, so nothing extrapolates.
+                "cell_seconds_real": (_spc / _factor) if _factor > 0 else None,
+            }
         prof = get_character_profile_image(name) or ""
         activity = get_effective_activity(name) or ""
         # AV3D-6: which clip a 3D figure plays. The KIND comes from the
@@ -1536,6 +1562,7 @@ async def play_worldmap(user=Depends(get_current_user)):
             "mood": get_character_current_feeling(name) or "",
             "movement_target_id": mt,
             "movement_target_name": name_by_id.get(mt, "") or mt,
+            "travel": travel,
             "avatar_url": (f"/characters/{name}/images/{prof}" if prof else ""),
         })
 

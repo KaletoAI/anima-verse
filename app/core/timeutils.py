@@ -158,6 +158,15 @@ def game_local_now() -> datetime:
     return game_now().astimezone(_world_tz())
 
 
+def game_speed_factor() -> float:
+    """Current game-clock factor; 0.0 while the world is frozen.
+
+    How many GAME seconds pass per REAL second. Consumers turn game-time
+    durations into real-time ones (a frozen world → 0.0 → no conversion)."""
+    a = _load_game_anchors()
+    return 0.0 if a["frozen"] else float(a["factor"])
+
+
 def set_game_time(dt: datetime) -> None:
     """Re-anchor the game clock to ``dt`` (game time jumps, factor unchanged)."""
     if dt.tzinfo is None:

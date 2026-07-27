@@ -350,6 +350,65 @@ Rad = Zoom auf Cursor (`dist *= exp(ΔY·0,0012)`), Klick = Auswahl bei
 < 0,15 Einheiten Bewegung. Q/E ±45°, +/− Zoom-Stufen, WASD Pan.
 Raum-Vorschau-Start: dist 22, Pitch-Offset +28°, Target Kachelmitte.
 
+## A11. Reise-Payload (server-autoritative Bewegung) — neu 2026-07-27
+
+Ein Charakter wechselt die Location nicht mehr schlagartig, sondern reist
+über die Kachel-Kette. `GET /play/worldmap` liefert dafür pro Charakter das
+Feld **`travel`** — `null`, solange keine Reise läuft:
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `path` | `[locationId, …]` | Zellenkette der Reise, **inkl. Start- und Zielkachel** |
+| `target_id` | `str` | Zielkachel (= `path[-1]`, identisch mit `movement_target_id`) |
+| `seg` | `int` | Index des zuletzt passierten Knotens, 0-basiert, max `len(path)−2` |
+| `frac` | `float` | Fortschritt 0..1 von `path[seg]` nach `path[seg+1]` |
+| `progress_cells` | `float` | `seg + frac` — Gesamtfortschritt in Zellen |
+| `eta_game` | ISO-Zeit | nominelle Ankunft auf der **Spieluhr** |
+| `cell_seconds_real` | `float \| null` | wie viele ECHTE Sekunden eine Zelle dauert (`seconds_per_cell / Zeitfaktor`); `null` bei eingefrorener Welt bzw. Faktor 0 |
+
+**Semantik**
+
+- **Die Position ist eine reine Funktion der Spieluhr.** Server und alle
+  Clients rechnen aus demselben Payload dieselbe Position:
+  `pos = lerp(Kachelmitte(path[seg]), Kachelmitte(path[seg+1]), frac)`
+  (Kachelmitten aus `grid_x`/`grid_y`, Kachel = 10 m, § A1). Es gibt kein
+  client-eigenes Pathfinding und keine eigene Reisezeit.
+- **`location_id` = nächstgelegene Zelle**, Rundung „halb abwärts": genau
+  zwischen zwei Kacheln zählt die bereits verlassene. Der Spielzustand
+  (Regeln, Wahrnehmung, Raum) springt also bei `frac 0,5`, während `frac`
+  stetig läuft — beide Felder widersprechen sich nicht, sie beschreiben
+  verschiedene Dinge (Spielzustand vs. Darstellung).
+- **Ankunft wird eine halbe Zelle früher verbucht.** Sobald die nächst-
+  gelegene Zelle das Ziel ist, setzt der Ticker die Ankunft und löscht die
+  Reise. Folge: `frac` erreicht in der Praxis nie 1,0, und `travel` kann
+  bis zu `0,5 × cell_seconds_real` VOR `eta_game` zwischen zwei Polls
+  verschwinden. Clients verzweigen auf „Feld weg" (Ankunft), niemals auf
+  `frac == 1,0` oder auf das Erreichen von `eta_game`.
+- **Freeze:** steht die Spieluhr, stehen alle Reisen. `frac`/`progress_cells`
+  bleiben konstant, `cell_seconds_real` ist `null` — genau dann darf nicht
+  extrapoliert werden.
+- `seconds_per_cell` ist heute 60 SPIEL-Sekunden pro Zelle (eine Welt-
+  Stellschraube, kein Client-Wissen); der Client rechnet ausschließlich mit
+  `cell_seconds_real`.
+
+**Client-Erwartung**
+
+1. Figur auf der Server-Position rendern (Formel oben), nicht auf der
+   Kachelmitte von `location_id`.
+2. Zwischen zwei Polls darf mit `cell_seconds_real` extrapoliert werden:
+   `progress_cells += Δt_real / cell_seconds_real` (bei `null`: einfrieren).
+3. Beim nächsten Poll: Abweichung `|progress_cells_client −
+   progress_cells_server| > 0,5` Zellen ⇒ hart auf den Server-Wert
+   schnappen. Darunter weich nachziehen.
+4. Blickrichtung/Clip bleiben Client-Sache (Laufrichtung aus dem aktuellen
+   Segment); `activity_animation` wird bewusst NICHT auf „walk" gezwungen
+   (§ A8).
+
+**Verifikation** — numerisch nach dem Prinzip § B5a: der Verify-Modus difft
+die Welt-Position der Figur gegen den aus `path`/`seg`/`frac` interpolierten
+Pfadpunkt (Toleranz ε = 0,01 Welt-Meter) und meldet Objekt/Feld/Ist/Soll als
+Zahlen — keine Screenshot-Beurteilung.
+
 ---
 
 # Teil B — Ziel-Vertrag v4: das Szenen-Rezept
