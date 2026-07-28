@@ -548,11 +548,23 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             place.scale.setScalar(1)
             place.position.set(0, 0, 0)
             place.rotation.y = -_deg(spec ? spec.yaw_deg : p.yawDeg)
+            // How BIG a model is must not depend on how it is TURNED: the
+            // axis-aligned hull of a tilted box is larger than the box, so a
+            // fine-angle orientation fix made the model shrink as it was
+            // dialled (user finding 2026-07-28 — first on room models, then
+            // on location models). Measure with the fix SNAPPED to 90°, draw
+            // with the real one. Same rule as place() in @anima/scene-render;
+            // this viewer has its own placement math and needs it separately.
+            const _rr = rotationRef.current
+            const _snap = (v?: number) => Math.round((v || 0) / 90) * 90
+            orient.rotation.set(_deg(_snap(_rr?.x)), _deg(_snap(_rr?.y)),
+                                _deg(_snap(_rr?.z)))
             place.updateMatrixWorld(true)
             const b = new THREE.Box3().setFromObject(place)
             const s = b.getSize(new THREE.Vector3())
             const measured = (spec?.measure === 'xyz'
               ? Math.max(s.x, s.y, s.z) : Math.max(s.x, s.z)) || 1
+            orient.rotation.set(_deg(_rr?.x), _deg(_rr?.y), _deg(_rr?.z))
             const target = spec?.max_m
               ?? extent * Math.max(0.02, Math.min(1, p.size ?? 1))
             place.scale.setScalar(target / measured)

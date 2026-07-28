@@ -55,7 +55,13 @@
 >    sich das Objekt geändert hätte (Nixenstand: Fix 0/110/357 blies die
 >    gemessene Seite von 1,000 auf 1,306 und schrumpfte das Modell um 23 %).
 >    Nur `yawed_xz` (Gebäude) misst weiter die gedrehte Hülle — dort IST
->    „nach der Drehung ins Grundstück passen" der Zweck.
+>    „nach der Drehung ins Grundstück passen" der Zweck. **Der FIX steckt
+>    aber auch dort gerundet drin** (Nachtrag 2026-07-28): gemessen wird der
+>    YAW mit auf 90° gerundetem Fix, gezeichnet mit dem echten. Vorher
+>    schrumpfte auch ein Location-Modell, sobald man seinen Fix fein
+>    einstellte. Geprüft in `scripts/smoke_place_rotation.mjs` — und zwar am
+>    SKALIERUNGSFAKTOR, nicht an der achsparallelen Hülle: die Hülle eines
+>    gekippten 4-m-Würfels ist bis zu 4·√3 groß, und das ist richtig.
 > 5. **Eine `ground`-Location bringt ihren Boden mit.** Kein Renderer legt
 >    dort seine eigene Kachel-/Bühnenplatte darunter. Der 3D-Client zeichnete
 >    eine undurchsichtige 10 × 10-Platte bei y 0,04 in ein Modell hinein, das

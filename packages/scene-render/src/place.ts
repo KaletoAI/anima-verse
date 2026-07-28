@@ -62,16 +62,24 @@ export function placeModelSpec(THREE: typeof import('three'),
   fix.updateMatrixWorld(true)
   const sObj = new THREE.Box3().setFromObject(fix).getSize(new THREE.Vector3())
 
-  fix.rotation.set(deg(spec.fix_euler?.x), deg(spec.fix_euler?.y),
-                   deg(spec.fix_euler?.z))
   const yawG = new THREE.Group()
   yawG.add(fix)
   yawG.rotation.y = -deg(spec.yaw_deg)
   yawG.updateMatrixWorld(true)
-  // Das Gebäude füllt seinen Rahmen NACH der Drehung — dort ist die gedrehte
-  // Hülle genau die richtige Messung (ein schräg gestelltes Haus soll auf sein
-  // Grundstück passen), deshalb bleibt `yawed_xz` bei sYaw.
+  // Das Gebäude füllt seinen Rahmen NACH dem YAW — dort ist die gedrehte Hülle
+  // genau die richtige Messung (ein schräg gestelltes Haus soll auf sein
+  // Grundstück passen), deshalb bleibt `yawed_xz` bei sYaw. Der ORIENTIERUNGS-
+  // FIX steckt dabei aber ebenfalls auf 90° gerundet drin (2026-07-28): sonst
+  // blähte ein Feinwinkel im Fix auch hier die achsparallele Hülle auf und das
+  // Location-Modell schrumpfte beim Drehen — derselbe Befund wie zuvor bei den
+  // Raum-Modellen, nur eine Messung weiter.
   const sYaw = new THREE.Box3().setFromObject(yawG).getSize(new THREE.Vector3())
+
+  // Ab hier gilt der ECHTE Fix — gemessen wurde gerundet, gezeichnet wird
+  // genau, wie eingestellt.
+  fix.rotation.set(deg(spec.fix_euler?.x), deg(spec.fix_euler?.y),
+                   deg(spec.fix_euler?.z))
+  yawG.updateMatrixWorld(true)
 
   // EIN Maßstabsgesetz, EIN Faktor auf alle drei Achsen (2026-07-28): die
   // Spec sagt, WORAUF gemessen wird, und der Rest ist eine Division. Nichts
