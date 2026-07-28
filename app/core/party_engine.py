@@ -95,6 +95,21 @@ def party_followers(leader: str) -> List[str]:
     return list(p["members"])
 
 
+def same_location(a: str, b: str) -> bool:
+    """True when both characters stand at the same location.
+
+    A party is formed face to face — you cannot invite or join across the map
+    (same rule TalkTo enforces). Without this brake an LLM that hallucinates a
+    person into its scene can pull a character from anywhere in the world into
+    its party, and the leader-move drag would then teleport them over.
+    An unknown location counts as "not together".
+    """
+    from app.models.character import get_character_current_location
+    loc_a = (get_character_current_location(a) or "").strip()
+    loc_b = (get_character_current_location(b) or "").strip()
+    return bool(loc_a) and loc_a == loc_b
+
+
 def _save_party(party_id: str, leader: str, members: List[str], created_at: str) -> None:
     with transaction() as conn:
         conn.execute(
@@ -106,14 +121,16 @@ def _save_party(party_id: str, leader: str, members: List[str], created_at: str)
 
 
 def add_to_party(leader: str, member: str) -> Optional[str]:
-    """Fuegt ``member`` als Follower zur Party von ``leader`` hinzu; legt die Party
-    an, falls ``leader`` noch keine hat. Gibt die party_id zurueck oder None bei
-    Konflikt (member schon in einer Party, leader ist selbst Follower, oder
-    leader == member)."""
+    """Adds ``member`` as a follower to ``leader``'s party; creates the party if
+    ``leader`` has none yet. Returns the party_id, or None on conflict (member
+    already in a party, leader is a follower himself, leader == member, or the
+    two are not at the same location)."""
     leader = (leader or "").strip()
     member = (member or "").strip()
     if not leader or not member or leader == member:
         return None
+    if not same_location(leader, member):
+        return None  # central brake: no party across locations
     if get_party_of(member) is not None:
         return None  # member kann nicht in zwei Parties sein
     lp = get_party_of(leader)
@@ -199,7 +216,11 @@ def create_pending_invite(inviter: str, invitee: str) -> Optional[str]:
 
 
 def get_pending_invites_for(invitee: str) -> List[Dict]:
-    """Offene Einladungen an ``invitee`` (fuer die UI-Frage)."""
+    """Open invitations for ``invitee`` (for the UI question).
+
+    Invitations from someone who is no longer at the same location are dropped
+    from the list: accepting them would fail anyway, so the UI must not offer a
+    dead Join button."""
     invitee = (invitee or "").strip()
     if not invitee:
         return []
@@ -211,7 +232,7 @@ def get_pending_invites_for(invitee: str) -> List[Dict]:
     except Exception:
         return []
     return [{"invite_id": r[0], "inviter": r[1], "invitee": r[2], "created_at": r[3]}
-            for r in rows]
+            for r in rows if same_location(r[1], invitee)]
 
 
 def get_invite(invite_id: str) -> Optional[Dict]:
@@ -235,6 +256,11 @@ def resolve_pending_invite(invite_id: str, accept: bool) -> Dict:
     inv = get_invite(invite_id)
     if not inv or inv["status"] != "pending":
         return {"status": "not_found"}
+    if accept and not same_location(inv["inviter"], inv["invitee"]):
+        # The inviter has moved on in the meantime (or was never here) — say so
+        # instead of failing with a generic conflict.
+        return {"status": "not_present", "inviter": inv["inviter"],
+                "invitee": inv["invitee"]}
     try:
         with transaction() as conn:
             conn.execute("UPDATE party_invites SET status=? WHERE invite_id=?",

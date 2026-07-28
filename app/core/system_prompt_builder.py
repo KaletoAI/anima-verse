@@ -87,9 +87,12 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
         data["anyone_nearby"] = anyone_nearby
         # Pre-rendered text block for callers that want a single string
         # (rp_first tool-system content in thoughts.py).
+        # Rendered whenever the location is KNOWN — the alone case included.
+        # It used to be dropped on empty presence_lines, which threw away the
+        # "You are ALONE" sentence in exactly the situation it is written for.
         data["nearby_hint"] = _format_presence_block(
             data["location_name"], presence_lines, anyone_nearby
-        ) if presence_lines else ""
+        ) if location_id else ""
 
     if EVENTS in sections:
         data["events_section"] = _load_events(location_id)
@@ -114,9 +117,13 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
 
 def _format_presence_block(location_name: str, presence_lines: list,
                             anyone_nearby: bool) -> str:
-    """Plain-text presence block (replaces former sections/presence.md)."""
+    """Plain-text presence block (replaces former sections/presence.md).
+
+    An omitted block reads as "no information" to an LLM, never as "nobody is
+    here" — which is how absent people get pulled into a scene. So the empty
+    case says so in words instead of staying silent."""
     parts = [f"Present at '{location_name}':"]
-    parts.extend(presence_lines)
+    parts.extend(presence_lines or ["- nobody, you are here by yourself"])
     if anyone_nearby:
         parts.append("You can interact with present characters (TalkTo).")
         parts.append(

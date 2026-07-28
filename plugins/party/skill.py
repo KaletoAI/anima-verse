@@ -88,6 +88,12 @@ class PartySkill(PluginSkill):
             return "Who exactly to invite? (no valid target)"
         if P.is_party_follower(character_name):
             return f"{character_name} is part of a party and cannot invite anyone."
+        if not P.same_location(character_name, target):
+            # The tool description says "present at your current location" —
+            # this is the enforcement. An RP turn that hallucinates someone
+            # into the scene must not reach them across the map.
+            return (f"{target} is not at your location. "
+                    f"You can only invite someone who is here with you.")
         if P.get_party_of(target) is not None:
             return f"{target} is already in a party."
         try:
@@ -121,6 +127,9 @@ class PartySkill(PluginSkill):
             return "Whose party to join? (no valid target)"
         if P.is_in_party(character_name):
             return f"{character_name} is already in a party."
+        if not P.same_location(character_name, leader):
+            return (f"{leader} is not at your location — you cannot join "
+                    f"their party from here.")
         pid = P.add_to_party(leader, character_name)
         if not pid:
             return (f"{character_name} cannot join {leader}'s party "

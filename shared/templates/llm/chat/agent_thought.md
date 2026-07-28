@@ -11,6 +11,9 @@
      effects_block             — active status modifiers (drunk, exhausted, …)
      outfit_self_block         — own equipped outfit summary (situation line)
      present_people_block      — characters at the same location incl. visible outfit/states
+     alone_here                — True only when it is CERTAIN nobody else is here
+                                 (unknown location / failed lookup stays False, so
+                                 "we don't know" is never rendered as "you are alone")
      inbox_block               — High prio: unread chat-history messages
      events_block              — High prio: acute events at location
      assignments_block         — Medium: active assignments
@@ -51,6 +54,11 @@ Current situation:
 {% if present_people_block %}
 - Also present here (what you can see of them):
 {{ present_people_block }}
+{% elif alone_here %}
+- You are ALONE here. Nobody else is at this place. Do not speak to, reach for
+  or act towards anyone — not even someone your current activity still mentions.
+  To reach a person who is elsewhere, send them a message; to be with them, go
+  to where they are.
 {% endif %}
 {% if recent_thoughts %}
 

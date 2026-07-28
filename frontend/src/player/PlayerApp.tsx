@@ -606,9 +606,19 @@ export function PlayerApp() {
   // Party (gemeinsam reisen): Einladung im Chat-Fenster beantworten. Das
   // Verlassen sitzt im NoticeBanner (persistenter Party-Streifen).
   const handlePartyRespond = useCallback(async (inviteId: string, accept: boolean) => {
-    try { await apiPost('/play/party/respond', { invite_id: inviteId, accept }); await load() }
+    try {
+      const res = await apiPost<{ status?: string; inviter?: string }>(
+        '/play/party/respond', { invite_id: inviteId, accept })
+      // A party is formed face to face: if the inviter has moved on in the
+      // meantime, joining fails — say so instead of letting the row vanish.
+      if (res?.status === 'not_present') {
+        toast(t('{name} is no longer here — you cannot travel together.')
+          .replace('{name}', res.inviter || ''), 'error')
+      }
+      await load()
+    }
     catch { /* ignore */ }
-  }, [load])
+  }, [load, toast, t])
 
   const lines: SceneLine[] = (data?.scene || []).map((p) => ({
     ts: p.ts, content: p.content, kind: p.kind, meta: p.meta,

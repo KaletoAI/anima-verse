@@ -48,6 +48,9 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     location_id = profile.get("current_location", "") or ""
     room_id = profile.get("current_room", "") or ""
     location_name = get_location_name(location_id) if location_id else "Unknown"
+    # Presence is two pieces of information, not one: who is here, AND whether
+    # "nobody" is a fact or just unknown. The template needs both.
+    present_people_block, alone_here = _build_presence(character_name, location_id)
 
     ctx: Dict[str, Any] = {
         "character_name": character_name,
@@ -83,7 +86,8 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "outfit_avatar_block": _build_avatar_outfit_block(),
         "room_items_block": _build_room_items_block(location_id, room_id),
         "inventory_block": _build_inventory_block(character_name),
-        "present_people_block": _build_present_people_block(character_name, location_id),
+        "present_people_block": present_people_block,
+        "alone_here": alone_here,
         "tracker_block": _build_tracker_block(character_name, location_id),
         "activity_hint_block": _build_activity_hint_block(character_name, location_id, room_id),
         "daily_schedule_block": _build_daily_schedule_block(character_name),
@@ -767,15 +771,26 @@ def present_people_details(entries, location_id: str = "") -> str:
     return "\n".join(lines)
 
 
-def _build_present_people_block(character_name: str, location_id: str) -> str:
+def _build_presence(character_name: str, location_id: str) -> Tuple[str, bool]:
     """Characters at the same location, excluding self. Avatar marked.
+
+    Returns ``(block, alone_known)``. ``alone_known`` is True ONLY when the
+    lookup succeeded and really nobody else is here — an unknown location or a
+    failed lookup yields ``("", False)``, because "we don't know" must never be
+    rendered as "you are alone".
+
+    Why the flag exists: an empty block used to drop the whole section from the
+    prompt, so the prompt said NOTHING about who is around. A missing section is
+    no evidence of absence for an LLM — with a stale pose like "standing in
+    front of Kai" it happily kept playing a scene with a person who was at the
+    other end of the map. Silence is not "alone"; the prompt has to say it.
 
     Each person carries what the character can SEE: a short outfit line
     (worn pieces) and visibly triggered states ('drunk', 'aroused', ...)
     — without this, an NPC never knows what the people around it look
     like right now (the rendered image knows, the mind didn't)."""
     if not location_id:
-        return ""
+        return "", False
     try:
         from app.models.group_chat import get_characters_at_location
         from app.models.account import get_active_character
@@ -788,11 +803,11 @@ def _build_present_people_block(character_name: str, location_id: str) -> str:
                 continue
             entries.append((n, f"{n} (avatar)" if n == avatar else n))
         if not entries:
-            return ""
-        return present_people_details(entries, location_id)
+            return "", True
+        return present_people_details(entries, location_id), False
     except Exception as e:
         logger.debug("present_people block failed for %s: %s", character_name, e)
-        return ""
+        return "", False
 
 
 def _build_activity_hint_block(character_name: str,
