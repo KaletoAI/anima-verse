@@ -110,18 +110,31 @@ def get_animation_clip(rel: str, request: Request):
 @router.get("/surface-textures")
 def list_surface_textures():
     """Global surface-texture library (AV3D-13) — contract shape: a BARE
-    array ``[{kind, url, size_m}, …]``. ``kind`` is the open vocabulary
-    matching the location ``terrain`` field; an empty list is the normal
-    state (the client falls back to its procedural materials)."""
+    array ``[{kind, name, url, size_m, material?}, …]`` (compositions carry
+    ``blend`` instead of url/size_m). ``kind`` is the ID and the open
+    vocabulary matching the location ``terrain`` field, ``name`` what a picker
+    shows, ``material`` HOW the kind is lit (§ A9); an empty list is the
+    normal state (the client falls back to its procedural materials).
+
+    The whitelist is explicit ON PURPOSE — this is a contract surface, and a
+    field reaches a client only by being named here. It is also the trap it
+    sounds like: ``name`` and ``material`` were added to ``list_textures``
+    and silently dropped right here, so the lake rendered its texture and not
+    a drop of water (2026-07-29). A new field needs BOTH ends.
+    """
     from app.core.surface_textures import list_textures
     out = []
     for t in list_textures():
+        entry = {"kind": t["kind"], "name": t.get("name", "")}
         if "blend" in t:
             # Composition entry (AV3D-13 v2) — no url/size_m.
-            out.append({"kind": t["kind"], "blend": t["blend"]})
+            entry["blend"] = t["blend"]
         else:
-            out.append({"kind": t["kind"], "url": t["url"],
-                        "size_m": t["size_m"]})
+            entry["url"] = t["url"]
+            entry["size_m"] = t["size_m"]
+        if t.get("material"):
+            entry["material"] = t["material"]
+        out.append(entry)
     return out
 
 
