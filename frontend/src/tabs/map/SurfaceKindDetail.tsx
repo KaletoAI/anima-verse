@@ -10,6 +10,7 @@
 import type { ReactNode } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
+import { SurfaceMaterialPreview } from './SurfaceMaterialPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { SURFACE_PROMPT_CONTEXT, WATER_DEFAULTS, WATER_DIALS, dateShort,
   madeWith } from './surfaceTypes'
@@ -40,6 +41,8 @@ export function SurfaceKindDetail({
 }: SurfaceKindDetailProps) {
   const { t } = useI18n()
   const mat = (group.material || {}) as Record<string, unknown>
+  // The version the 3D client gets — the preview must show THAT one.
+  const active = group.versions.find((v) => v.active) || group.versions[0]
   const cls = (group.material?.class as string) || 'matte'
   /** Patch ONE dial — the whole declaration travels, the server clamps it. */
   const setMat = (key: string, value: unknown) => onMeta({
@@ -122,6 +125,12 @@ export function SurfaceKindDetail({
           </select>
         </Field>
         {cls === 'water' ? (
+          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start',
+            flexWrap: 'wrap' }}>
+            {/* The dials on the left, what they DO on the right — `wave_m` is
+                a metre value and unusable without something to measure it
+                against (the 1.70 m figure on a stated 10 m patch). */}
+            <div style={{ flex: '1 1 260px', minWidth: 0 }}>
           <div className="ga-form-row" style={{ flexWrap: 'wrap' }}>
             <Field label={t('Tint')} compact
               hint={t('Base colour the texture is mixed against.')}>
@@ -153,6 +162,13 @@ export function SurfaceKindDetail({
                 />
               </Field>
             ))}
+          </div>
+            </div>
+            <SurfaceMaterialPreview
+              material={group.material}
+              textureUrl={active?.url}
+              sizeM={active?.size_m}
+            />
           </div>
         ) : null}
         {/* HOW it is made sits with WHAT it is — one entry, one place. */}
