@@ -64,6 +64,11 @@
 >    und `markers[].roll` (seitlich kippen), Grad ±90, Default 0, angewandt
 >    NACH dem Facing im Figuren-System ('YXZ'). Vorher konnte eine Figur nur
 >    senkrecht stehen — schräg auf dem Sand liegen war nicht ausdrückbar.
+> 7a. **Der Diorama-Bodenabstand ist 0,02 über dem Boden, auf dem der Raum
+>    steht** — der Raumplatte drinnen (0,10 + 0,02 = die vertraute 0,12),
+>    dem blanken Etagenboden draußen. Ein Outdoor-Raum hat keine Platte
+>    (§ A5); die 0,12 dort zu zitieren hob das Diorama 10 cm über den Boden,
+>    während die PROPS desselben Raums schon richtig darauf standen.
 > 7. **Der Boden einer `ground`-Location liegt auf ihrer Etage 0** — das ist
 >    keine Einstellung. `offset_y` gilt dort nicht; die einzige Angabe ist
 >    `walk_y` (wo im Mesh der Boden sitzt), daraus folgt, wie tief das Modell

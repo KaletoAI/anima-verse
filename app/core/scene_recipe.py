@@ -110,8 +110,13 @@ BUILDING_BOTTOM_Y = 0.06
 # CONSTANT (never × k).
 FIGURE_HEIGHT_M = 1.70
 STAND_CLEARANCE = 0.12
-# Room dioramas stand a clearance above their storey floor (§ A2).
-DIORAMA_CLEARANCE = 0.12
+# A room diorama stands this far above the floor it rests on — the ROOM
+# PLATE indoors, the bare storey floor outdoors. The contract's familiar
+# 0.12 is this clearance plus the plate top (0.10 + 0.02); an outdoor room
+# has no plate (§ A5), so quoting 0.12 there floated it 10 cm above the
+# ground while the PROPS in the same room already sat correctly on it
+# (user finding 2026-07-28, Mondscheinsee).
+DIORAMA_CLEARANCE = 0.02
 # The floor kind of a level plate without its own entry in map3d.level_floors.
 DEFAULT_FLOOR_KIND = "floor"
 
@@ -803,7 +808,11 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "yaw_deg": _r(_num(lay.get("rotation")), 1),
         "anchor": [_r(_w(x + _num(at[0], 0.5) * w, extent)),
                    _r(_w(y + _num(at[1], 0.5) * d, extent))],
-        "bottom_y": _r(level * storey + DIORAMA_CLEARANCE
+        # Same floor the room's PROPS stand on: its plate indoors, the storey
+        # floor outdoors — plus the diorama clearance and the plan's dial.
+        "bottom_y": _r(level * storey
+                       + (0.0 if recipe.get("always_visible") else ROOM_PLATE_TOP)
+                       + DIORAMA_CLEARANCE
                        + _num(recipe.get("model_offset_y"))),
         "measure": "xz",
     }
