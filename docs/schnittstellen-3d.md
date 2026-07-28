@@ -79,6 +79,16 @@
 >    mitbewegt werden Etagenplatte, Konturwände und Fahrstuhl — die gehören
 >    dem Gebäude. `model_offset_y` bleibt daneben, was es ist: die Lage des
 >    MODELLS relativ zum Raumboden.
+> 9. **Eine Overlay-Zone mit erklärter Boden-Art bekommt ihre Fläche**
+>    (2026-07-29). Outdoor-Räume außerhalb des Grundrisses liegen auf dem
+>    Modell und bekommen normalerweise keine Platte — eine Fläche auf
+>    ETAGENHÖHE schnitte durch das Gelände. Setzt der Raum aber
+>    `surfaces.floor`, wird die Fläche auf der Höhe der ZONE ausgegeben
+>    (`overlay.y` + 0,01 gegen Z-Fighting), `thickness` 0, mit der Art als
+>    `texture_kind`. Damit wird ein gezeichneter Bereich zum See: Raum über
+>    das Wasser legen, Boden-Art `water`, `floor_offset_y` auf die
+>    Wasserlinie — den Rest macht die Materialklasse. Ohne erklärte Art
+>    ändert sich nichts, das Modell zeigt weiter seine eingebackene Textur.
 > 7a. **Der Diorama-Bodenabstand ist 0,02 über dem Boden, auf dem der Raum
 >    steht** — der Raumplatte drinnen (0,10 + 0,02 = die vertraute 0,12),
 >    dem blanken Etagenboden draußen. Ein Outdoor-Raum hat keine Platte

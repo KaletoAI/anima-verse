@@ -136,6 +136,9 @@ STAND_CLEARANCE = 0.12
 # ground while the PROPS in the same room already sat correctly on it
 # (user finding 2026-07-28, Mondscheinsee).
 DIORAMA_CLEARANCE = 0.02
+# An overlay zone that declares a floor kind gets its texture surface this far
+# above the model — coplanar with the mesh it would z-fight.
+OVERLAY_SURFACE_LIFT = 0.01
 # The floor kind of a level plate without its own entry in map3d.level_floors.
 DEFAULT_FLOOR_KIND = "floor"
 
@@ -385,6 +388,44 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
             entry["texture_kind"] = kind
         plates.append(entry)
     return plates
+
+
+def _overlay_plates(recipes: List[Dict[str, Any]],
+                    overlay_rooms: Dict[str, Dict[str, Any]],
+                    ground: int, extent: float) -> List[Dict[str, Any]]:
+    """Texture surfaces for outdoor zones that DECLARE a floor kind.
+
+    An overlay zone lies on the model and normally gets no plate — a surface
+    at storey height would cut straight through the terrain. But the zone
+    knows its real height (the measured model surface plus the room's own
+    offset), so a declared kind can be laid exactly there. That is what turns
+    a drawn area into a lake: a room over the water, floor kind ``water``, and
+    the material class does the rest. Without a declared kind nothing is
+    emitted — the model's own baked texture stays visible, as before.
+    """
+    out: List[Dict[str, Any]] = []
+    for recipe in recipes:
+        room_id = str(recipe.get("room_id") or "")
+        overlay = overlay_rooms.get(room_id)
+        if not overlay:
+            continue
+        kind = str(((recipe.get("surfaces") or {}).get("floor")) or "").strip()
+        if not kind:
+            continue
+        outline = _room_outline_world(recipe, extent)
+        if not outline:
+            continue
+        level = int(recipe.get("level") or 0)
+        out.append({
+            "level": level,
+            "outline": outline,
+            "top_y": _r(_num(overlay.get("y")) + OVERLAY_SURFACE_LIFT),
+            "thickness": 0.0,
+            "texture_kind": kind,
+            "opacity_role": _opacity_role(level, ground),
+            "room_id": room_id,
+        })
+    return out
 
 
 # ── Walls ───────────────────────────────────────────────────────────────
@@ -1244,11 +1285,14 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "storey_m": _r(storey),
         "levels": [{"level": lv, "floor_y": _r(lv * storey)} for lv in levels],
         "style": STYLE,
-        # Overlay rooms get no plate at all: they lie ON the model, and a
-        # texture surface floating at storey height would cut through it.
-        "plates": _plates(map3d, [r for r in recipes
-                                  if str(r.get("room_id") or "") not in overlay_rooms],
-                          levels, storey, k, extent),
+        # Overlay rooms get no plate from the normal path: they lie ON the
+        # model, and a surface at storey height would cut through it. One that
+        # DECLARES a floor kind gets it at the zone's own height instead —
+        # that is how a drawn area becomes a lake (_overlay_plates).
+        "plates": (_plates(map3d, [r for r in recipes
+                                   if str(r.get("room_id") or "") not in overlay_rooms],
+                           levels, storey, k, extent)
+                   + _overlay_plates(recipes, overlay_rooms, min(levels), extent)),
         "walls": walls,
         "extras": _elevator(map3d, levels, storey, k, extent),
         "models": models,
