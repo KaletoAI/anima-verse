@@ -366,6 +366,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // payload, never a constant (that was the 8-vs-9.2 drift).
     const PLATE_M = sc?.extent_m || DEFAULT_EXTENT_M
     for (const o of squareRef.current || []) o.scale.set(PLATE_M, PLATE_M, 1)
+    // A ground location brings its own floor: the stage plate would cut the
+    // model at y = 0 exactly like the 3D client's tile plate did (Mondscheinsee
+    // spans −0.80 … +2.69). The edge loop stays — it is the frame, not a floor.
+    const groundLoc = (sc?.models || []).some(
+      (m) => m.role === 'building' && m.display === 'ground')
+    if (h.ground) h.ground.visible = !groundLoc
     const style = sc?.style
     const figBase = sc ? sc.figures.base_height_m_world : 1.7
     // Hex colour of the payload style ('#rrggbb' → three.js number).
@@ -524,6 +530,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // bottom seated on `y`; `facing` is the world compass (0 = south).
     const placeFigure = (opts: { x: number; y: number; z: number
                                  animation?: string; facing?: number
+                                 tilt?: number; roll?: number
                                  label?: string }) => {
       const fig = new THREE.Group()
       const figSrc = ensureTestFigure()
@@ -603,7 +610,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           fig.add(nose)
         }
       }
-      if (opts.facing !== undefined) fig.rotation.y = deg(opts.facing)
+      // Facing is the compass, tilt/roll lean the figure out of the upright —
+      // applied in the figure's own frame, i.e. AFTER the yaw ('YXZ' puts the
+      // yaw first, so tilt stays "head up/down" and roll "sideways").
+      fig.rotation.order = 'YXZ'
+      fig.rotation.set(deg(opts.tilt), deg(opts.facing ?? 0), deg(opts.roll))
       if (opts.label) {
         const mc = document.createElement('canvas')
         mc.width = 128
@@ -838,6 +849,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       placeFigure({
         x: marker.at_world[0], y: marker.y_world, z: marker.at_world[1],
         animation: marker.animation, facing: marker.facing,
+        tilt: marker.tilt, roll: marker.roll,
         label: `${n} · ${marker.animation}`,
       })
     }

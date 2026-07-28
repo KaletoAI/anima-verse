@@ -45,6 +45,32 @@
 > Der Rest des Dokuments beschreibt weiterhin korrekt, WAS komponiert wird;
 > wo eine 8, eine 0,92, ein `scale_mode`, `height_m`, `floors` oder
 > `level_height` auftaucht, gilt die Liste oben.
+>
+> **Nachtrag v5.1 (2026-07-28, aus der ersten echten Nutzung):**
+>
+> 4. **Objektgrößen sind drehungsunabhängig.** `measure: "xz"`/`"xyz"`
+>    (Dioramen, Props) messen die Ausdehnung mit einem auf 90° GERUNDETEN
+>    Orientierungs-Fix: die achsparallele Hülle einer gedrehten Kiste ist
+>    größer als die Kiste, und der Maßstab wurde dadurch kleiner, ohne dass
+>    sich das Objekt geändert hätte (Nixenstand: Fix 0/110/357 blies die
+>    gemessene Seite von 1,000 auf 1,306 und schrumpfte das Modell um 23 %).
+>    Nur `yawed_xz` (Gebäude) misst weiter die gedrehte Hülle — dort IST
+>    „nach der Drehung ins Grundstück passen" der Zweck.
+> 5. **Eine `ground`-Location bringt ihren Boden mit.** Kein Renderer legt
+>    dort seine eigene Kachel-/Bühnenplatte darunter. Der 3D-Client zeichnete
+>    eine undurchsichtige 10 × 10-Platte bei y 0,04 in ein Modell hinein, das
+>    von −0,80 bis +2,69 reicht — Seebecken und Strand lagen dahinter.
+> 6. **Marker tragen zwei Neigungsachsen.** `markers[].tilt` (Kopf hoch/tief)
+>    und `markers[].roll` (seitlich kippen), Grad ±90, Default 0, angewandt
+>    NACH dem Facing im Figuren-System ('YXZ'). Vorher konnte eine Figur nur
+>    senkrecht stehen — schräg auf dem Sand liegen war nicht ausdrückbar.
+> 7. **Der Boden einer `ground`-Location liegt auf ihrer Etage 0** — das ist
+>    keine Einstellung. `offset_y` gilt dort nicht; die einzige Angabe ist
+>    `walk_y` (wo im Mesh der Boden sitzt), daraus folgt, wie tief das Modell
+>    hängt. Vorher konnten die beiden auseinanderlaufen: Willowbrook trug
+>    `offset_y −0,75` aus der Mess-Ära, also stand sein Dorfplatz (ein
+>    Level-0-Raum) auf −0,75, während Etage 0 auf 0 und Etage −1 auf −0,8475
+>    liegt — Figuren auf Kellerhöhe an einem Platz ohne Keller.
 
 # Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
 

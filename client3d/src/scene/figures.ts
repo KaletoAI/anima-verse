@@ -927,6 +927,16 @@ export class Figure {
     this.targetYaw = Math.atan2(dir.x, dir.z);
   }
 
+  /** Neigung aus einem Animations-Marker (Grad): `tilt` = Kopf hoch/tief,
+   *  `roll` = seitlich kippen. 'YXZ' hält den Gierwinkel vorne, damit die
+   *  Neigung im FIGUREN-System wirkt und nicht in der Welt — sonst hinge sie
+   *  von der Blickrichtung ab. 0/0 = aufrecht wie bisher. */
+  setLean(tilt: number, roll: number) {
+    this.root.rotation.order = 'YXZ';
+    this.root.rotation.x = THREE.MathUtils.degToRad(tilt);
+    this.root.rotation.z = THREE.MathUtils.degToRad(roll);
+  }
+
   /** true, wenn keine Animationsclips vorhanden sind (z.B. Tier-Rig oder
    *  statisches Mesh) — dann übernimmt ein prozedurales Idle. */
   get isStatic(): boolean {

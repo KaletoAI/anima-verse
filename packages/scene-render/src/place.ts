@@ -42,15 +42,28 @@ export function placeModelSpec(THREE: typeof import('three'),
 
   const fix = new THREE.Group()
   fix.add(clone ? source.clone(true) : source)
+
+  // Wie GROSS ein Objekt ist, darf nicht davon abhängen, wie es GEDREHT ist.
+  // Die achsparallele Hülle einer gedrehten Kiste ist größer als die Kiste —
+  // beim Nixenstand wuchs sie durch den Fix 0/110/357 von 1,000 auf 1,306 und
+  // das Modell wurde dadurch 23 % kleiner (User-Befund 2026-07-28). Für
+  // OBJEKTGRÖSSEN (`xz`/`xyz`) wird deshalb mit einem auf 90° gerundeten Fix
+  // gemessen: die Achsen-Zuordnung zählt, der Feinwinkel nicht.
+  const snap = (v?: number) => Math.round((v || 0) / 90) * 90
+  fix.rotation.set(deg(snap(spec.fix_euler?.x)), deg(snap(spec.fix_euler?.y)),
+                   deg(snap(spec.fix_euler?.z)))
+  fix.updateMatrixWorld(true)
+  const sObj = new THREE.Box3().setFromObject(fix).getSize(new THREE.Vector3())
+
   fix.rotation.set(deg(spec.fix_euler?.x), deg(spec.fix_euler?.y),
                    deg(spec.fix_euler?.z))
-  fix.updateMatrixWorld(true)
-  const sFix = new THREE.Box3().setFromObject(fix).getSize(new THREE.Vector3())
-
   const yawG = new THREE.Group()
   yawG.add(fix)
   yawG.rotation.y = -deg(spec.yaw_deg)
   yawG.updateMatrixWorld(true)
+  // Das Gebäude füllt seinen Rahmen NACH der Drehung — dort ist die gedrehte
+  // Hülle genau die richtige Messung (ein schräg gestelltes Haus soll auf sein
+  // Grundstück passen), deshalb bleibt `yawed_xz` bei sYaw.
   const sYaw = new THREE.Box3().setFromObject(yawG).getSize(new THREE.Vector3())
 
   // EIN Maßstabsgesetz, EIN Faktor auf alle drei Achsen (2026-07-28): die
@@ -61,8 +74,8 @@ export function placeModelSpec(THREE: typeof import('three'),
   const outer = new THREE.Group()
   outer.add(yawG)
   const extent = (spec.measure === 'yawed_xz' ? Math.max(sYaw.x, sYaw.z)
-    : spec.measure === 'xz' ? Math.max(sFix.x, sFix.z)
-      : Math.max(sFix.x, sFix.y, sFix.z)) || 1
+    : spec.measure === 'xz' ? Math.max(sObj.x, sObj.z)
+      : Math.max(sObj.x, sObj.y, sObj.z)) || 1
   outer.scale.setScalar((spec.max_m || 1) / extent)
   outer.updateMatrixWorld(true)
   const bOut = new THREE.Box3().setFromObject(outer)

@@ -473,6 +473,7 @@ async function startApp(username: string) {
         let pos: THREE.Vector3;
         let via: THREE.Vector3[] | undefined;
         let face: THREE.Vector3 | undefined;
+        let lean: { tilt: number; roll: number } | undefined;
         let scale = 1;
         const room = roomOf.get(c.name);
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
@@ -495,13 +496,14 @@ async function startApp(username: string) {
           const pool = kind === 'lie' ? (lieDown?.length ? lieDown : sit)
             : kind === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
           if (marked?.length) {
-            // kuratierter Marker: Position + eingestellte Blickrichtung
+            // kuratierter Marker: Position, Blickrichtung UND Neigung
             const m = marked[idx % marked.length];
             pos = m.p.clone();
             if (m.rotation !== undefined) {
               const a = THREE.MathUtils.degToRad(m.rotation);
               face = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
             }
+            if (m.tilt || m.roll) lean = { tilt: m.tilt || 0, roll: m.roll || 0 };
           } else if (pool?.length) {
             pos = pool[idx % pool.length].clone();
           } else if (spots?.length) {
@@ -557,6 +559,7 @@ async function startApp(username: string) {
           scale,
           via,
           face,
+          lean,
           hidden,
           travelTo,
         });

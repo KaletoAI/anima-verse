@@ -367,6 +367,13 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
     </div>
   )
 
+  // ONE scene recipe for the whole editor: the floor-plan preview renders its
+  // primitives, the 2D editor its per-room block — and the 3D model panel its
+  // building placement spec, so the model tab and the floor plan cannot show
+  // the same model differently (user finding 2026-07-28).
+  const { scene, error: sceneError } = useScenePreview(
+    location.id, draft.rooms || [], draft.map3d, location.map_rotation_2d || 0)
+
   const tab3d = (
     <div className="ga-form">
       {/* Two columns: metadata + building images left, the whole building
@@ -525,18 +532,13 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           map3d={draft.map3d}
           fallbackYawDeg={location.map_rotation_2d || 0}
           onMap3dField={(key, v) => updMap3d(key, v)}
+          scene={scene}
           generateSource={modelGenSrc}
           onGenerateSourceConsumed={() => setModelGenSrc(null)}
         />
       </div>
     </div>
   )
-
-  // ONE scene recipe for the whole floor-plan tab: the 3D preview renders it,
-  // the 2D editor draws its per-room block (ghost openings, derived exit) —
-  // same debounced request, no second roundtrip and no second geometry.
-  const { scene, error: sceneError } = useScenePreview(
-    location.id, draft.rooms || [], draft.map3d, location.map_rotation_2d || 0)
 
   // Calibration figure (§ B2a): the fixed 1.70 m reference standing in the
   // room whose width_m / walk_y are being dialed. Its spot is UI state — a

@@ -32,9 +32,11 @@ export interface RoomLayout {
    *  snaps to. at = fraction of the room rectangle; animation = a clip kind
    *  from the open animation-clip vocabulary; rotation = facing in degrees
    *  (0 south / 90 east / 180 north / 270 west, absent = client default);
-   *  offset_y = metres, additive to the sampled seat height. */
+   *  offset_y = metres, additive to the sampled seat height; tilt/roll =
+   *  the two lean axes in degrees (±90, head up/down and sideways) for
+   *  figures that are not upright — lying on a slope, leaning on something. */
   markers?: Array<{ at: [number, number]; animation: string
-    rotation?: number; offset_y?: number }>
+    rotation?: number; offset_y?: number; tilt?: number; roll?: number }>
   /** Room shell (plan-room-props.md): per-room surface-texture kinds. The
    *  client derives walls/floor from the geometry × storey height and skins
    *  them with these kinds (fallback: global 'floor' kind / client default). */

@@ -124,6 +124,12 @@ export interface SceneMarker {
   y_world: number
   animation: string
   facing?: number
+  /** Neigung der Figur in Grad (±90), NACH dem Facing im Figuren-System:
+   *  `tilt` = Kopf hoch/tief, `roll` = seitlich kippen. Ohne die beiden kann
+   *  eine Figur nur senkrecht stehen — schräg auf dem Sand liegen ging nicht
+   *  (User-Befund 2026-07-28). Fehlt = 0. */
+  tilt?: number
+  roll?: number
   source: 'room' | 'prop'
 }
 

@@ -703,12 +703,16 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
 
     - ``display "shell"`` — a building STANDS on the ground: the bottom edge
       goes to the socle clearance + ``offset_y``.
-    - ``display "ground"`` — an area model IS the ground: its WALKABLE
-      SURFACE goes to ``offset_y``, the mesh hangs below it. That is what
-      the dial means to a user ("height offset 0 = you walk at tile zero"),
-      and it makes the recipe interior (plates at 0.08/0.10, markers and
-      dioramas at level × storey) land on the model surface instead of
-      1–3 m below it (user finding 2026-07-28).
+    - ``display "ground"`` — an area model IS the ground, so its WALKABLE
+      SURFACE is not a free parameter: it lands on the LEVEL-0 FLOOR and the
+      mesh hangs below it. ``offset_y`` does not apply; the only thing left
+      to state is where the ground sits inside the mesh (``walk_y``).
+      Otherwise the two can drift apart — Willowbrook carried offset_y −0.75
+      from the measurement era, so its village square (a level-0 room) sat
+      at −0.75 while level 0 is at 0 and level −1 at −0.8475: the figures
+      stood at basement height on a square that has no basement (user
+      finding 2026-07-28). With the ground pinned to its level that is not
+      expressible any more.
 
     Where the walkable surface SITS inside the mesh is the admin's ``walk_y``
     dial (real metres above the lower edge, 0 = the lower edge itself) and
@@ -723,15 +727,20 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         return None
     from urllib.parse import quote
     loc_id = str(location.get("id") or "")
-    size = _num((map3d or {}).get("size"), 1.0) or 1.0
     ground = bool((map3d or {}).get("area_model"))
+    # A GROUND model fills its location — `size` is a building-on-a-plot dial
+    # and would leave a rim of plan with no ground under it (user finding
+    # 2026-07-28: size 0.92 put a 0.45 m gap between the model and the
+    # reference square's edge line, on a location whose model IS the place).
+    size = 1.0 if ground else (_num((map3d or {}).get("size"), 1.0) or 1.0)
     max_m = extent * size
     offset_y = _num(meta.get("offset_y"))
     walk = _num(meta.get("walk_y")) * k
 
     if ground:
-        bottom = offset_y - walk
-        walk_world = offset_y
+        # Level-0 floor, by definition — the terrain storey IS this model.
+        bottom = -walk
+        walk_world = 0.0
     else:
         bottom = BUILDING_BOTTOM_Y + offset_y
         walk_world = bottom + walk
@@ -940,6 +949,12 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
         }
         if marker.get("rotation") is not None:
             entry["facing"] = _r(_num(marker.get("rotation")), 1)
+        # Tilt axes (2026-07-28): a figure on a slope is not upright, and
+        # facing is only the compass. Applied AFTER the facing, in the
+        # figure's own frame — tilt = head up/down, roll = leaning sideways.
+        for axis in ("tilt", "roll"):
+            if marker.get(axis) is not None:
+                entry[axis] = _r(_num(marker.get(axis)), 1)
         out.append(entry)
     placements = recipe.get("placements") or []
     # Prop markers are composed relative to the placement point on the floor;

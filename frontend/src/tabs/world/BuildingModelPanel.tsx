@@ -16,7 +16,7 @@ import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog, type MeshBackend } from '../../components/MeshBackendDialog'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { notifyModel3dChanged } from './topDownSnapshot'
-import type { Map3D } from './worldTypes'
+import type { Map3D, ScenePayload } from './worldTypes'
 
 export interface ModelEntry {
   filename: string
@@ -53,10 +53,12 @@ export interface BuildingModelStatus {
 }
 
 /** Client default when map3d.size is unset (schnittstellen-3d.md). */
-const DEFAULT_TILE_SIZE = 0.92
-/** Upper size bound (server sanitizer + contract): > 1 lets a model
- *  overflow its tile on purpose, e.g. forests overlapping neighbours. */
-const MAX_TILE_SIZE = 2
+// The model's share of the location's extent. 1 = edge to edge; the old
+// 0.92 was a tile MARGIN and is gone with the one-frame rule (2026-07-28).
+const DEFAULT_TILE_SIZE = 1
+/** Upper bound (server sanitizer + contract): a model never exceeds its
+ *  location — overhang is what the location's extent is for. */
+const MAX_TILE_SIZE = 1
 
 interface BuildingModelPanelProps {
   locationId: string
@@ -72,6 +74,10 @@ interface BuildingModelPanelProps {
   fallbackYawDeg?: number
   /** Write a placement field into the draft (undefined removes = back to default). */
   onMap3dField?: (key: 'rotation' | 'size', value: number | undefined) => void
+  /** The server-composed scene of the current draft — the panel renders the
+   *  building's placement spec out of it instead of computing its own. That
+   *  is what makes the walk-height dial visible here: it moves `bottom_y`. */
+  scene?: ScenePayload | null
   /** Source image picked via 🧊 in the gallery — opens the backend picker. */
   generateSource: string | null
   onGenerateSourceConsumed: () => void
@@ -84,11 +90,14 @@ export function BuildingModelPanel({
   map3d,
   fallbackYawDeg = 0,
   onMap3dField,
+  scene,
   generateSource,
   onGenerateSourceConsumed,
 }: BuildingModelPanelProps) {
   const { t } = useI18n()
   const { toast } = useToast()
+  const buildingSpec = roomId ? null
+    : (scene?.models || []).find((m) => m.role === 'building') || null
   const encLoc = encodeURIComponent(locationId)
   // Admin API base switches between building and room routes.
   const enc = roomId
@@ -434,11 +443,13 @@ export function BuildingModelPanel({
         placement={roomId
           // Rooms get a neutral ground plate as the zero level — without it
           // the height offset has no visible reference (the model just
-          // floats centred). Yaw/size are fixed; the real placement comes
-          // from the floor plan.
-          ? { yawDeg: 0, size: 0.9 }
-          : { yawDeg: effectiveYaw, size: effectiveSize,
-            extentM: map3d?.extent_m || 10 }}
+          // floats centred). The real placement comes from the floor plan.
+          ? { yawDeg: 0, size: 0.9, extentM: 10 }
+          // Buildings render their SCENE SPEC: same square, same numbers as
+          // the floor-plan preview, and the walk-height dial visibly moves
+          // the model against the square (which is level 0).
+          : { extentM: map3d?.extent_m || 10, spec: buildingSpec,
+            yawDeg: effectiveYaw, size: effectiveSize }}
       />
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -471,14 +482,22 @@ export function BuildingModelPanel({
             (layout.model_offset_y, adjust strip) — the sidecar setter
             rejects rooms, so no offset field is shown for them. */}
         {(roomId ? [] : [
-          { key: 'offset_y' as const, label: t('Height offset (m)'),
-            hint: t('Vertical: negative sinks the model into the terrain.') },
+          // An AREA location has no height offset: its model IS the terrain,
+          // so its walkable surface belongs on the level-0 floor. Offering
+          // the dial anyway let the ground drift to a level that does not
+          // exist (Willowbrook's village square sat at basement height).
+          ...(map3d?.area_model ? [] : [{
+            key: 'offset_y' as const, label: t('Height offset (m)'),
+            hint: t('Vertical: negative sinks the model into the terrain.'),
+          }]),
           { key: 'offset_x' as const, label: t('Shift X (m)'),
             hint: t('Tile plane, world axes after the yaw: + = east.') },
           { key: 'offset_z' as const, label: t('Shift Z (m)'),
             hint: t('Tile plane, world axes after the yaw: + = south.') },
           { key: 'walk_y' as const, label: t('Walk height (m)'),
-            hint: t('Manual override for the walkable surface above the model bottom (stand height of overlay zones). 0 = automatic: the measured walkable surface of the mesh.') },
+            hint: map3d?.area_model
+              ? t('How high above the model’s lower edge the walkable ground lies, in REAL metres. THE dial of an area location: the ground always lands on the level-0 floor, so this value alone decides how deep the mesh hangs below it. Nothing measures it — set the calibration figure on the visible ground.')
+              : t('How high above the model’s lower edge a figure stands, in REAL metres. Nothing measures it; 0 = the lower edge itself.') },
         ]).map(({ key, label, hint }) => (
           <label key={key} title={hint}
             style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
@@ -563,8 +582,16 @@ export function BuildingModelPanel({
             ) : null}
           </span>
         </label>
+        {/* An AREA location has no size dial: its model IS the place and
+            fills the reference square edge to edge. Offering the fraction
+            only produced a gap between the model and the square's edge. */}
+        {map3d?.area_model ? (
+          <span className="ga-hint" style={{ fontSize: '0.82em' }}>
+            {t('Area location: the model fills the whole extent — size and height offset do not apply. Set the extent on the floor plan and the walk height here.')}
+          </span>
+        ) : (
         <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.82em' }}>
-          {t('Size (fraction of tile)')}
+          {t('Size (fraction of the extent)')}
           <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <input
               type="range"
@@ -601,6 +628,7 @@ export function BuildingModelPanel({
             ) : null}
           </span>
         </label>
+        )}
         <span className="ga-hint" style={{ paddingBottom: 4 }}>
           {t('Placement on the world tile — saved with the location.')}
         </span>

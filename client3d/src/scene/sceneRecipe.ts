@@ -569,6 +569,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       p: tile.center.clone().add(new THREE.Vector3(
         marker.at_world[0], marker.y_world, marker.at_world[1])),
       rotation: marker.facing,
+      tilt: marker.tilt,
+      roll: marker.roll,
       offsetY,
       fixed,
     }]);
@@ -758,6 +760,12 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   if (tile.decor) tile.decor.visible = false;
   tile.serverModel = model;
   tile.modelIsGround = area;
+  // Eine Flächen-Location BRINGT ihren Boden mit. Die kachel-eigene Platte
+  // (10 × 10 m, undurchsichtig, y 0,04) steht in keinem Payload — sie ist
+  // Client-Erfindung und schnitt das Modell auf ihrer Höhe ab: beim
+  // Mondscheinsee lag alles unter +0,04 dahinter, also Seebecken und Strand
+  // (Modell y −0,80 … +2,69). Für `display: ground` bleibt sie weg.
+  if (tile.groundPlate) tile.groundPlate.visible = !area;
   tile.shellMats = [];
   tile.roofMats = [];
   // Flächen-Location: das Modell IST die Location und bleibt sichtbar — es
@@ -804,6 +812,7 @@ export function unmountScene(tile: Tile): void {
   tile.cutouts?.dispose();
   tile.cutouts = undefined;
   tile.modelIsGround = false;
+  if (tile.groundPlate) tile.groundPlate.visible = true;
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
   tile.interior = null;

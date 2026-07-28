@@ -101,6 +101,9 @@ export interface NpcState {
   scale?: number;
   /** feste Blickrichtung im Stand (z.B. vom Animations-Marker) */
   face?: THREE.Vector3;
+  /** Neigung vom Marker (Grad): Kopf hoch/tief bzw. seitlich kippen — eine
+   *  Figur, die schräg auf dem Sand liegt, steht nicht senkrecht. */
+  lean?: { tilt: number; roll: number };
   /** Figur ausblenden (z.B. andere Etage als die gewählte) */
   hidden?: boolean;
   /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
@@ -197,6 +200,7 @@ export class NpcManager {
       npc.target.copy(st.pos);
       npc.targetScale = st.scale ?? 1;
       npc.face = st.face ?? null;
+      npc.figure?.setLean(st.lean?.tilt ?? 0, st.lean?.roll ?? 0);
       npc.root.visible = !st.hidden;
       npc.activity = st.char.activity || '';
       npc.animation = st.char.activity_animation || undefined;

@@ -1982,7 +1982,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 })}
                 style={{ width: 100 }}
               />
-              <span style={{ minWidth: 40 }}>{marker.at[0].toFixed(3)}</span>
+              <input
+                className="ga-input"
+                type="number"
+                min={0}
+                max={1}
+                step={0.001}
+                value={marker.at[0]}
+                onChange={(e) => patchMarker({
+                  at: [r4(parseFloat(e.target.value) || 0), marker.at[1]] as [number, number],
+                })}
+                style={{ width: 74 }}
+              />
             </label>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
               title={t('Fine-tune the marker position (fraction of the room rectangle).')}>
@@ -1998,7 +2009,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 })}
                 style={{ width: 100 }}
               />
-              <span style={{ minWidth: 40 }}>{marker.at[1].toFixed(3)}</span>
+              <input
+                className="ga-input"
+                type="number"
+                min={0}
+                max={1}
+                step={0.001}
+                value={marker.at[1]}
+                onChange={(e) => patchMarker({
+                  at: [marker.at[0], r4(parseFloat(e.target.value) || 0)] as [number, number],
+                })}
+                style={{ width: 74 }}
+              />
             </label>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
               title={t('Facing of the figure (0 south, 90 east, 180 north, 270 west; — = face the neighbours).')}>
@@ -2012,8 +2034,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 onChange={(e) => patchMarker({ rotation: parseInt(e.target.value, 10) || 0 })}
                 style={{ width: 120 }}
               />
-              <span style={{ minWidth: 58 }}>
-                {fac === undefined ? '—' : `${fac}°${FACING[fac] ? ` (${FACING[fac]})` : ''}`}
+              <input
+                className="ga-input"
+                type="number"
+                min={0}
+                max={359}
+                step={1}
+                value={fac ?? ''}
+                placeholder="—"
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10)
+                  patchMarker({ rotation: Number.isFinite(n) ? n : undefined })
+                }}
+                style={{ width: 62 }}
+              />
+              <span style={{ minWidth: 34 }}>
+                {fac !== undefined && FACING[fac] ? FACING[fac] : ''}
               </span>
               {fac !== undefined ? (
                 <button
@@ -2041,8 +2077,56 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 }}
                 style={{ width: 120 }}
               />
-              <span style={{ minWidth: 44 }}>{(marker.offset_y ?? 0).toFixed(2)}</span>
+              <input
+                className="ga-input"
+                type="number"
+                min={-1}
+                max={1}
+                step={0.01}
+                value={marker.offset_y ?? 0}
+                onChange={(e) => {
+                  const v = Math.round((parseFloat(e.target.value) || 0) * 100) / 100
+                  patchMarker({ offset_y: v === 0 ? undefined : v })
+                }}
+                style={{ width: 74 }}
+              />
             </label>
+            {/* Lean axes: a figure on a slope is not upright, and the compass
+                alone cannot say that. Applied after the facing, in the
+                figure's own frame. */}
+            {([['tilt', '⤢', t('Tilt (°): head up (+) or down (−) — for lying or leaning figures.')],
+              ['roll', '⤡', t('Roll (°): lean sideways — right (+) or left (−).')]] as const)
+              .map(([key, icon, hint]) => (
+                <label key={key} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+                  title={hint}>
+                  {icon}
+                  <input
+                    type="range"
+                    min={-90}
+                    max={90}
+                    step={1}
+                    value={marker[key] ?? 0}
+                    onChange={(e) => {
+                      const v = Math.round(parseFloat(e.target.value) || 0)
+                      patchMarker({ [key]: v === 0 ? undefined : v })
+                    }}
+                    style={{ width: 100 }}
+                  />
+                  <input
+                    className="ga-input"
+                    type="number"
+                    min={-90}
+                    max={90}
+                    step={1}
+                    value={marker[key] ?? 0}
+                    onChange={(e) => {
+                      const v = Math.round(parseFloat(e.target.value) || 0)
+                      patchMarker({ [key]: v === 0 ? undefined : v })
+                    }}
+                    style={{ width: 62 }}
+                  />
+                </label>
+              ))}
             <button
               type="button"
               className="ga-btn ga-btn-sm ga-btn-danger"

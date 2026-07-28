@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
+import type { SceneModelSpec } from '../world/worldTypes'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
 
@@ -91,13 +92,20 @@ const loadClip = (kind: string) => {
 /** Placement of a building model on its map tile — mirrors the worldmap
  *  contract (map3d.rotation / map3d.size in schnittstellen-3d.md). */
 export interface TilePlacement {
-  /** Yaw around the vertical axis in degrees. */
-  yawDeg: number
-  /** The model's share of the location's reference square (]0, 1]). */
-  size: number
-  /** The location's extent in WORLD metres (map3d.extent_m, default 10 =
-   *  one map tile) — together with `size` the ONE scale factor. */
+  /** Edge length of the stage in WORLD metres (map3d.extent_m) — the SAME
+   *  reference square the floor-plan preview draws, so the blue edge line
+   *  means the same thing in both. */
   extentM?: number
+  /** The placement spec out of the scene payload. Size (`max_m`), ground
+   *  height (`bottom_y`) and shift (`anchor`) are taken from it verbatim —
+   *  this viewer does not re-derive a single placement rule, which is why
+   *  the walk-height dial is visible here at all: it moves `bottom_y`.
+   *  Absent (room models, payload still pending) = the neutral fallback
+   *  below. */
+  spec?: SceneModelSpec | null
+  /** Neutral fallback only: yaw + share of the stage. */
+  yawDeg?: number
+  size?: number
 }
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
@@ -209,7 +217,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   // Live-apply placement changes (yaw slider / size slider) without reload.
   useEffect(() => {
     if (placement) placeFnRef.current?.(placement)
-  }, [placement, placement?.yawDeg, placement?.size, placement?.extentM])
+  }, [placement, placement?.yawDeg, placement?.size, placement?.extentM,
+    placement?.spec])
 
   useEffect(() => {
     let disposed = false
@@ -471,10 +480,11 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         pivot.updateMatrixWorld(true)
 
         if (placementRef.current) {
-          // ── Tile mode: the world square with the model placed on it. ──
-          // Ground: a 1×1 tile in the XZ plane, textured with the location's
-          // 2D map icon when available, plus an outline so the tile edge
-          // stays visible over dark textures.
+          // ── Stage mode: the location's reference square in WORLD metres,
+          // with the model placed by its SCENE SPEC. Everything here is the
+          // same square, the same numbers and the same blue edge as the
+          // floor-plan preview — the two used to disagree because this stage
+          // was a fixed 10 m tile while the preview drew map3d.extent_m.
           const groundMat = new THREE.MeshBasicMaterial({ color: 0x2e3742 })
           if (groundTextureUrl) {
             try {
@@ -498,34 +508,45 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           edges.position.y = 0.002
           scene.add(edges)
 
-          // Derive scale + yaw + ground offset fresh from the model's current
-          // bounding box — the orientation fix changes the box, so this runs
-          // again after every ↻ click (see the rotation effect above).
-          // SAME chain as the scene spec: ONE factor on all three axes, the
-          // largest YAWED XZ side becomes `size × extent_m`. There is no
-          // per-axis branch any more (it made this panel show the model
-          // 13–15 % flatter than both scene renderers).
+          // The model is placed from the SPEC — size, ground height and shift
+          // are server numbers, not rules re-derived here. The one local step
+          // is the division by the measured extent, exactly like place().
+          // Without a spec (room models) the neutral fallback centres the
+          // model on the stage at height 0.
           const applyPlacement = (p: TilePlacement) => {
+            const spec = p.spec
+            const extent = p.extentM && p.extentM > 0 ? p.extentM : 10
+            ground.scale.set(extent, extent, 1)
+            edges.scale.set(extent, extent, 1)
+            // A GROUND model hangs BELOW the square — an opaque stage would
+            // hide exactly the part whose height is being dialled.
+            const isGround = spec?.display === 'ground'
+            groundMat.transparent = isGround
+            groundMat.opacity = isGround ? 0.35 : 1
+            groundMat.depthWrite = !isGround
+            groundMat.needsUpdate = true
+
             place.rotation.set(0, 0, 0)
             place.scale.setScalar(1)
             place.position.set(0, 0, 0)
-            place.rotation.y = -_deg(p.yawDeg)
+            place.rotation.y = -_deg(spec ? spec.yaw_deg : p.yawDeg)
             place.updateMatrixWorld(true)
             const b = new THREE.Box3().setFromObject(place)
             const s = b.getSize(new THREE.Vector3())
-            const maxXZ = Math.max(s.x, s.z) || 1
-            const size = Math.max(0.02, Math.min(1, p.size))
-            const extent = p.extentM && p.extentM > 0 ? p.extentM : 10
-            const kWorld = (extent * size) / maxXZ
-            // Tile units = world / 10.
-            place.scale.setScalar(kWorld / 10)
+            const measured = (spec?.measure === 'xyz'
+              ? Math.max(s.x, s.y, s.z) : Math.max(s.x, s.z)) || 1
+            const target = spec?.max_m
+              ?? extent * Math.max(0.02, Math.min(1, p.size ?? 1))
+            place.scale.setScalar(target / measured)
             place.updateMatrixWorld(true)
             const b2 = new THREE.Box3().setFromObject(place)
             const c2 = b2.getCenter(new THREE.Vector3())
-            place.position.set(
-              -c2.x + (offsetXRef.current || 0) / 10,
-              -b2.min.y + (0.06 + (offsetYRef.current || 0)) / 10,
-              -c2.z + (offsetZRef.current || 0) / 10)
+            // With a spec the offsets are already baked into anchor/bottom_y;
+            // without one they are the only thing that moves the model.
+            const ax = spec ? spec.anchor[0] : (offsetXRef.current || 0)
+            const az = spec ? spec.anchor[1] : (offsetZRef.current || 0)
+            const bottom = spec ? spec.bottom_y : (offsetYRef.current || 0)
+            place.position.set(ax - c2.x, bottom - b2.min.y, az - c2.z)
           }
           placeFnRef.current = applyPlacement
           disposers.push(() => {
@@ -533,17 +554,18 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           })
           applyPlacement(placementRef.current)
 
-          // Frame tile + model together from a raised angle — the tile is the
-          // reference, so it must always be fully in view.
+          // Frame square + model together from a raised angle — the square is
+          // the reference, so it must always be fully in view.
           place.updateMatrixWorld(true)
           const mb = new THREE.Box3().setFromObject(place)
-          const extent = Math.max(1.2, mb.max.y * 1.5)
-          const dist = (extent / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.7
+          const stage = placementRef.current.extentM || 10
+          const span = Math.max(stage * 1.2, (mb.max.y - mb.min.y) * 1.5, 1.2)
+          const dist = (span / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.7
           camera.position.set(dist * 0.75, dist * 0.7, dist * 0.9)
           camera.near = dist / 100
           camera.far = dist * 100
           camera.updateProjectionMatrix()
-          controls.target.set(0, Math.min(0.4, Math.max(0.1, mb.max.y / 2)), 0)
+          controls.target.set(0, Math.min(stage * 0.15, Math.max(0.1, mb.max.y / 2)), 0)
           controls.update()
         } else {
           // Frame the model: centre it and pull the camera back to fit.

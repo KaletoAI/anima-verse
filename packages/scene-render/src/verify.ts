@@ -91,10 +91,15 @@ export class SpecVerifier {
     this.check(name, 'bottom_y', box.min.y - origin.y, spec.bottom_y)
     this.check(name, 'anchor.x', centre.x - origin.x, spec.anchor[0])
     this.check(name, 'anchor.z', centre.z - origin.z, spec.anchor[1])
-    // Ausdehnungs-Prüfungen gelten nur bei achsenparallelen Yaws — die
-    // Welt-BBox eines diagonal gedrehten Meshes ist legitim größer als die
-    // Zielbox.
-    if (Math.abs(((spec.yaw_deg % 90) + 90) % 90) > 0.01) return
+    // Ausdehnungs-Prüfungen gelten nur, wenn NICHTS diagonal steht — die
+    // Welt-BBox eines schräg gedrehten Meshes ist legitim größer als die
+    // Zielbox. Das gilt für den Karten-Yaw wie für den Orientierungs-Fix:
+    // seit die Objektgröße am 90°-gerundeten Fix gemessen wird (§ B2), ist
+    // ein Fix von z.B. 110° genau so ein Fall.
+    const axisParallel = (v?: number) =>
+      Math.abs((((v || 0) % 90) + 90) % 90) <= 0.01
+    if (!axisParallel(spec.yaw_deg) || !axisParallel(spec.fix_euler?.x)
+        || !axisParallel(spec.fix_euler?.y) || !axisParallel(spec.fix_euler?.z)) return
     if (spec.max_m) {
       // Bei achsenparallelem Yaw ist die gedrehte Box die gefixte mit
       // getauschten Achsen — `yawed_xz` und `xz` messen hier dasselbe.

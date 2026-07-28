@@ -571,12 +571,11 @@ def set_offset_y(location_id: str, offset_y: Any = None,
         except (TypeError, ValueError):
             v = float(meta.get(key) or 0.0)
         v = round(max(-25.0, min(25.0, v)), 3)
-        # walk_y 0 = "automatic" (use the measured walkable surface) — drop
-        # the key instead of storing an override of "0 m above the bottom".
-        if key == "walk_y" and v == 0:
-            meta.pop(key, None)
-        else:
-            meta[key] = v
+        # 0 is a VALUE for walk_y, not "unset": it says the walkable surface
+        # is the model's lower edge. The old rule dropped it because 0 used
+        # to mean "measure it yourself" — with the measurement gone that made
+        # the dial look dead (user finding 2026-07-28).
+        meta[key] = v
     _write_sidecar(p, meta)
     return meta
 

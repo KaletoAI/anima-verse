@@ -545,8 +545,11 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # vocabulary (nothing hardcoded — the editor offers what exists).
     # Optional per marker: ``rotation`` = the figure's facing in degrees
     # (0 = south, 90 = east, 180 = north, 270 = west; absent = the client's
-    # face-the-neighbours default) and ``offset_y`` (metres, ± — ADDITIVE to
-    # the client-sampled seat height under the marker).
+    # face-the-neighbours default), ``offset_y`` (metres, ± — ADDITIVE to
+    # the client-sampled seat height under the marker) and the two TILT axes
+    # ``tilt``/``roll`` (degrees, ±90): a figure lying on a slope or leaning
+    # against something is not upright, and facing alone cannot say that
+    # (user finding 2026-07-28 — lying slightly angled on the sand).
     mk = raw.get("markers")
     if isinstance(mk, list):
         markers = []
@@ -577,6 +580,16 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                     entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
                 except (TypeError, ValueError):
                     pass
+            for axis in ("tilt", "roll"):
+                val = m.get(axis)
+                if val is None or f"{val}".strip() == "":
+                    continue
+                try:
+                    deg = round(max(-90.0, min(90.0, float(val))), 1)
+                except (TypeError, ValueError):
+                    continue
+                if deg:
+                    entry[axis] = deg
             markers.append(entry)
         if markers:
             out["markers"] = markers[:50]

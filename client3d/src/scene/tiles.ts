@@ -77,7 +77,11 @@ export interface Tile {
    *  (rotation = Blickrichtung in Grad, offsetY additiv zur Auflagehöhe;
    *  fixed = Höhe ist fertig komponiert (prop_markers) und wird von der
    *  Abtastung nicht mehr verfeinert) */
-  roomMarkers: Map<string, Map<string, { p: THREE.Vector3; rotation?: number; offsetY: number; fixed?: boolean }[]>>;
+  roomMarkers: Map<string, Map<string, { p: THREE.Vector3; rotation?: number;
+    /** Neigung aus dem Payload (Grad): Kopf hoch/tief bzw. seitlich kippen —
+     *  ohne sie kann eine Figur nur senkrecht stehen. */
+    tilt?: number; roll?: number;
+    offsetY: number; fixed?: boolean }[]>>;
   /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
   roomGroups: Map<string, THREE.Group>;
   /** Raum-Rechtecke in Welt-Koordinaten (Fokus-Erkennung) */
