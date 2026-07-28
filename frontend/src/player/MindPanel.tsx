@@ -15,6 +15,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
+import { MindThoughtsSection } from './MindThoughtsSection'
 
 // ---------------------------------------------------------------------------
 // API-Shapes
@@ -827,9 +828,16 @@ function HistoryView({ character }: { character: string }) {
 // ---------------------------------------------------------------------------
 // Haupt-Panel: Navi links (schmal → nur Icons) + Sektions-Inhalt rechts
 // ---------------------------------------------------------------------------
-type SectionId = 'today' | 'diary' | 'memories' | 'bonds' | 'history'
+type SectionId = 'today' | 'diary' | 'memories' | 'bonds' | 'history' | 'thoughts'
 
-export function MindPanel({ character, alwaysLabels = false }: { character: string; alwaysLabels?: boolean }) {
+export function MindPanel({ character, alwaysLabels = false, withThoughts = false }: {
+  character: string
+  alwaysLabels?: boolean
+  /** ADMIN ONLY: adds the private thought-journal section (Game-Admin Mind
+   *  tab). Never set from /play — thoughts must not reach a player surface,
+   *  and the endpoint behind the section is admin-gated anyway. */
+  withThoughts?: boolean
+}) {
   const { t } = useI18n()
   const [section, setSection] = useState<SectionId>('today')
   const [narrowRaw, setNarrowRaw] = useState(false)
@@ -859,7 +867,8 @@ export function MindPanel({ character, alwaysLabels = false }: { character: stri
     { id: 'memories' as SectionId, icon: '🧠', label: t('Memories') },
     { id: 'bonds' as SectionId, icon: '🤝', label: t('Relationships') },
     { id: 'history' as SectionId, icon: '🕰️', label: t('History') },
-  ]), [t])
+    ...(withThoughts ? [{ id: 'thoughts' as SectionId, icon: '💭', label: t('Thoughts') }] : []),
+  ]), [t, withThoughts])
 
   if (!character) {
     return <EmptyState icon="journal" title={t('No active character')} />
@@ -893,6 +902,7 @@ export function MindPanel({ character, alwaysLabels = false }: { character: stri
         {section === 'memories' && <MemoriesView character={character} initialRelated={memRelated} />}
         {section === 'bonds' && <BondsView character={character} onOpenMemories={openMemories} />}
         {section === 'history' && <HistoryView character={character} />}
+        {section === 'thoughts' && withThoughts && <MindThoughtsSection character={character} />}
       </div>
     </div>
   )

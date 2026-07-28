@@ -616,6 +616,9 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations — laufen nach allen CREATEs idempotent durch.
 # Pattern: pro Tabelle die fehlenden Spalten hinzufuegen, OperationalError = existiert schon.
 ALTER_MIGRATIONS = [
+    # thoughts: Anwesende zum Gedanken-Zeitpunkt (JSON-Namensliste) — Kontext
+    # fuers Admin-Journal (User-Feedback 2026-07-29). Alt-Zeilen bleiben leer.
+    ("thoughts", "present", "TEXT DEFAULT ''"),
     # telegram_mapping: avatar-Spalte — der Telegram-User wird als Avatar-Character
     # vertreten (Option B). character_name bleibt der NPC (Bot) des Chats.
     ("telegram_mapping", "avatar", "TEXT NOT NULL DEFAULT ''"),

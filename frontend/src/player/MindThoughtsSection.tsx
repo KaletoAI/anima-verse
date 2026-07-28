@@ -1,27 +1,26 @@
 /**
- * ThoughtsTab — read-only view of a character's thought journal.
+ * MindThoughtsSection — read-only view of a character's thought journal,
+ * a section of the Mind panel (next to Relationships/History).
  *
- * A thought turn's narrative (inner monologue, plans, judgements) used to be
- * discarded after the Tool-LLM had read it; it is journalled now
- * (plan-thought-journal.md). This panel is the history — the agent-loop admin
- * page keeps its own live preview of the CURRENT turn, which this does not
- * replace.
+ * ADMIN ONLY: it renders solely when MindPanel gets `withThoughts` (the
+ * Game-Admin Mind tab) — never in /play. Thoughts are private cognition; the
+ * endpoint behind this is admin-gated, and they exist nowhere a player or
+ * another character could reach. No editing, no deleting (v1) — the journal
+ * prunes itself after the daily consolidation.
  *
- * Thoughts are private cognition: the endpoint behind this is admin-gated, and
- * they exist nowhere else a player or another character could reach. No
- * editing and no deleting here (v1) — the journal prunes itself after the
- * daily consolidation.
- *
- * Backend: GET /characters/{n}/thoughts?limit=&before=
+ * Backend: GET /characters/{n}/thoughts?limit=&before= — delivers location/
+ * room NAMES and the characters present at turn time (user feedback
+ * 2026-07-29: ids and missing presence made the entries unreadable).
  */
 import { useCallback, useEffect, useState } from 'react'
-import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet } from '../../lib/api'
+import { useI18n } from '../i18n/I18nProvider'
+import { apiGet } from '../lib/api'
 
 export interface ThoughtEntry {
   ts: string
-  location_id: string
-  room_id: string
+  location_name: string
+  room_name: string
+  present: string[]
   content: string
 }
 
@@ -32,7 +31,7 @@ function fmtTs(ts: string): string {
   return Number.isNaN(d.getTime()) ? ts : d.toLocaleString()
 }
 
-export function ThoughtsTab({ character }: { character: string }) {
+export function MindThoughtsSection({ character }: { character: string }) {
   const { t } = useI18n()
   const [entries, setEntries] = useState<ThoughtEntry[]>([])
   const [hasMore, setHasMore] = useState(false)
@@ -65,7 +64,7 @@ export function ThoughtsTab({ character }: { character: string }) {
   }, [load])
 
   return (
-    <div className="ga-form">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', overflow: 'auto' }}>
       <div className="ga-hint">
         {t('What this character thought during their autonomous turns — private: it never reaches another character, a chat or a player. Raw thoughts are removed a few days after the day they belong to has been consolidated.')}
       </div>
@@ -81,8 +80,14 @@ export function ThoughtsTab({ character }: { character: string }) {
           <div key={`${e.ts}-${i}`} className="ga-thought-entry">
             <div className="ga-thought-meta">
               <span>{fmtTs(e.ts)}</span>
-              {e.location_id ? <span>· {e.location_id}</span> : null}
-              {e.room_id ? <span>· {e.room_id}</span> : null}
+              {e.location_name ? (
+                <span>· {e.location_name}{e.room_name ? ` (${e.room_name})` : ''}</span>
+              ) : null}
+              {e.present?.length ? (
+                <span title={t('Characters present at the time of the thought')}>
+                  · {t('with')} {e.present.join(', ')}
+                </span>
+              ) : null}
             </div>
             <div className="ga-thought-text">{e.content}</div>
           </div>
@@ -92,7 +97,7 @@ export function ThoughtsTab({ character }: { character: string }) {
       {loading ? <div className="ga-loading">{t('Loading…')}</div> : null}
 
       {hasMore && !loading ? (
-        <button type="button" className="ga-btn ga-btn-sm"
+        <button type="button" className="ga-btn ga-btn-sm" style={{ alignSelf: 'flex-start' }}
           onClick={() => { void load(entries[entries.length - 1]?.ts) }}>
           {t('Load more')}
         </button>

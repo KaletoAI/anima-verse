@@ -16,6 +16,7 @@ stamp; the retention cutoff is computed in system time too, not game time.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
@@ -25,9 +26,22 @@ from app.core.timeutils import utc_now_iso
 logger = get_logger("thought_store")
 
 
+def _row_out(row: Any) -> Dict[str, Any]:
+    """Row → dict; ``present`` comes back as a list (stored as JSON text)."""
+    out = dict(row)
+    raw = out.get("present")
+    try:
+        out["present"] = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        out["present"] = []
+    return out
+
+
 def add_thought(character_name: str, content: str, location_id: str = "",
-                room_id: str = "", ts: Optional[str] = None) -> bool:
+                room_id: str = "", ts: Optional[str] = None,
+                present: Optional[List[str]] = None) -> bool:
     """Journals one thought. Empty content is not stored (nothing to remember).
+    ``present`` = the OTHER characters in the room at turn time (names).
 
     Never raises: a failing journal write must not take down the thought turn
     it belongs to — the turn's world effects already happened through verbs.
@@ -39,9 +53,10 @@ def add_thought(character_name: str, content: str, location_id: str = "",
         with transaction() as conn:
             conn.execute(
                 "INSERT INTO thoughts (character_name, ts, location_id, room_id,"
-                " content) VALUES (?, ?, ?, ?, ?)",
+                " content, present) VALUES (?, ?, ?, ?, ?, ?)",
                 (character_name, ts or utc_now_iso(), location_id or "",
-                 room_id or "", text))
+                 room_id or "", text,
+                 json.dumps(list(present), ensure_ascii=False) if present else ""))
         return True
     except Exception as e:
         logger.warning("add_thought(%s) fehlgeschlagen: %s", character_name, e)
@@ -55,7 +70,7 @@ def list_thoughts(character_name: str, limit: int = 50,
     if not character_name:
         return []
     limit = max(1, min(int(limit or 50), 200))
-    sql = ("SELECT id, ts, location_id, room_id, content FROM thoughts"
+    sql = ("SELECT id, ts, location_id, room_id, content, present FROM thoughts"
            " WHERE character_name=?")
     params: List[Any] = [character_name]
     if before:
@@ -64,7 +79,7 @@ def list_thoughts(character_name: str, limit: int = 50,
     sql += " ORDER BY ts DESC, id DESC LIMIT ?"
     params.append(limit)
     try:
-        return [dict(r) for r in get_connection().execute(sql, params).fetchall()]
+        return [_row_out(r) for r in get_connection().execute(sql, params).fetchall()]
     except Exception as e:
         logger.warning("list_thoughts(%s) fehlgeschlagen: %s", character_name, e)
         return []

@@ -740,9 +740,16 @@ class ThoughtRunner:
                         # Der manuelle Admin-Trigger gibt den Anstoss mit ins
                         # Journal — sonst steht der Gedanke ohne Anlass da.
                         _journal = f"[trigger: {context_hint[:120]}]\n{_journal}"
+                    _room = profile.get("current_room", "") or ""
+                    # Wer war dabei? — dieselbe character_state-Abfrage, die
+                    # auch die Decency-Pruefung nutzt (Journal-Kontext,
+                    # User-Feedback 2026-07-29). Nur Namen, keine Zustellung.
+                    from app.core.outfit_compliance import _present_other_characters
+                    _present = _present_other_characters(
+                        character_name, _room, location_id)
                     add_thought(character_name, _journal,
-                                location_id=location_id,
-                                room_id=profile.get("current_room", "") or "")
+                                location_id=location_id, room_id=_room,
+                                present=_present)
             except Exception as _je:
                 logger.debug("Thought-Journal Fehler: %s", _je)
 

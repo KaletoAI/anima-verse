@@ -1609,14 +1609,36 @@ def get_character_thoughts(character_name: str, limit: int = 50,
     ``limit`` is capped at 200. ``has_more`` says whether another page exists.
     """
     from app.models.thought_store import list_thoughts
+    from app.models.world import get_location_by_id
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     limit = max(1, min(int(limit or 50), 200))
     # One extra row decides has_more without a second count query.
     rows = list_thoughts(character_name, limit=limit + 1, before=before or None)
     has_more = len(rows) > limit
-    return {"thoughts": [{"ts": r["ts"], "location_id": r.get("location_id", ""),
-                          "room_id": r.get("room_id", ""),
+
+    # Resolve ids to NAMES for the UI (user feedback 2026-07-29 — the journal
+    # showed raw ids). One location lookup per distinct id, not per row.
+    _loc_cache: Dict[str, Dict[str, Any]] = {}
+
+    def _names(loc_id: str, room_id: str) -> Dict[str, str]:
+        if not loc_id:
+            return {"location_name": "", "room_name": ""}
+        if loc_id not in _loc_cache:
+            _loc_cache[loc_id] = get_location_by_id(loc_id) or {}
+        loc = _loc_cache[loc_id]
+        room_name = ""
+        if room_id:
+            for room in (loc.get("rooms") or []):
+                if str(room.get("id") or "") == room_id:
+                    room_name = str(room.get("name") or "")
+                    break
+        return {"location_name": str(loc.get("name") or "") or loc_id,
+                "room_name": room_name or room_id}
+
+    return {"thoughts": [{"ts": r["ts"],
+                          **_names(r.get("location_id", ""), r.get("room_id", "")),
+                          "present": r.get("present") or [],
                           "content": r.get("content", "")}
                          for r in rows[:limit]],
             "has_more": has_more}

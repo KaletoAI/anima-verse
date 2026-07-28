@@ -238,7 +238,7 @@ export function MindTab() {
           </div>
 
           <div className="ga-mind-panel-wrap">
-            <MindPanel character={selected} alwaysLabels />
+            <MindPanel character={selected} alwaysLabels withThoughts />
           </div>
         </div>
       )}
