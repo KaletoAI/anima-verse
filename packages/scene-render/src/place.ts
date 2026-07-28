@@ -50,6 +50,13 @@ export function placeModelSpec(THREE: typeof import('three'),
   // OBJEKTGRÖSSEN (`xz`/`xyz`) wird deshalb mit einem auf 90° gerundeten Fix
   // gemessen: die Achsen-Zuordnung zählt, der Feinwinkel nicht.
   const snap = (v?: number) => Math.round((v || 0) / 90) * 90
+  // Reihenfolge 'YXZ' (2026-07-28): Yaw ganz außen, Tilt (x) und Roll (z)
+  // danach im BEREITS gedrehten Rahmen. Mit der three-Vorgabe 'XYZ' wirkte x
+  // in Weltachsen — nach einer y-Drehung kippte der x-Regler nicht mehr um die
+  // Achse des Modells, sondern quer dazu (User-Befund). Dieselbe Reihenfolge
+  // benutzt die Marker-Neigung, damit „nach vorn kippen" überall dasselbe
+  // heißt. Bei nur EINER belegten Achse sind beide Reihenfolgen identisch.
+  fix.rotation.order = 'YXZ'
   fix.rotation.set(deg(snap(spec.fix_euler?.x)), deg(snap(spec.fix_euler?.y)),
                    deg(snap(spec.fix_euler?.z)))
   fix.updateMatrixWorld(true)

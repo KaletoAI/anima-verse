@@ -16,6 +16,11 @@ import { useHelp } from '../help/HelpContext'
  *   `.ga-form-row` where the rest of the fields share width equally.
  * - `help`: topic key for the context help panel — set as the active topic
  *   when a control inside this field gains focus.
+ * - `promptContext`: marks the control as an image-PROMPT field and tells the
+ *   Prompt Help what it is improving. Without it the assistant only sees a
+ *   string and "improves" it into whatever an image prompt usually is — for a
+ *   seamless tiling texture that means perspective and shadows, i.e. a worse
+ *   result. One sentence here is the difference between help and harm.
  */
 export function Field({
   label,
@@ -23,6 +28,7 @@ export function Field({
   inline,
   compact,
   help,
+  promptContext,
   children,
 }: {
   label: string
@@ -30,6 +36,7 @@ export function Field({
   inline?: boolean
   compact?: boolean
   help?: string
+  promptContext?: string
   children: ReactNode
 }) {
   const { setTopic } = useHelp()
@@ -42,6 +49,7 @@ export function Field({
       <div
         className="ga-field-control"
         data-help={help || undefined}
+        data-prompt-context={promptContext || undefined}
         onFocusCapture={() => setTopic(help || null)}
       >{children}</div>
       {hint ? <div className="ga-field-hint">{hint}</div> : null}

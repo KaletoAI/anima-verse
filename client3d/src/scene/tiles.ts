@@ -81,6 +81,9 @@ export interface Tile {
     /** Neigung aus dem Payload (Grad): Kopf hoch/tief bzw. seitlich kippen —
      *  ohne sie kann eine Figur nur senkrecht stehen. */
     tilt?: number; roll?: number;
+    /** Absatz der Figurenwurzel unter der Fläche (Welt-Meter, Server) —
+     *  beim Nachjustieren gegen die abgetastete Oberfläche erneut abziehen. */
+    drop: number;
     offsetY: number; fixed?: boolean }[]>>;
   /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
   roomGroups: Map<string, THREE.Group>;
@@ -825,15 +828,17 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
   // Boden). Liege-/sonstige Marker liegen auf der Oberfläche (Matratze).
   const markers = tile.roomMarkers.get(roomId);
   if (markers) {
-    const seatDrop = 0.44 * roomFigureScale(tile.loc);   // Mixamo-Sitzhöhe x Raum-Maßstab
-    for (const [kind, entries] of markers) {
+    for (const entries of markers.values()) {
       for (const e of entries) {
         if (e.fixed) continue;   // prop_markers: Höhe kommt fertig vom Server
         ray.set(new THREE.Vector3(e.p.x, base.y + 20, e.p.z), down);
         const hit = ray.intersectObjects(roots, true)[0];
         const surface = hit && hit.point.y < floor + 0.5 ? hit.point.y : floor;
-        const anchor = kind === 'sit' ? Math.max(floor, surface - seatDrop) : surface;
-        e.p.setY(anchor + 0.01 + e.offsetY);
+        // Der Absatz kommt vom Server (root_offset) — der Client kennt hier
+        // nur die abgetastete FLÄCHE, nicht die Sitzhöhe des Clips. Nie unter
+        // den Boden: eine Sitzfläche knapp über dem Boden darf die Figur
+        // nicht versenken.
+        e.p.setY(Math.max(floor, surface - e.drop) + 0.01 + e.offsetY);
       }
     }
   }

@@ -18,13 +18,15 @@ export interface TexVersion {
 }
 
 export interface TexGroup {
+  /** The ID: file names, the terrain field, the client contract, every
+   *  stored reference. Derived from the name when the kind is created and
+   *  IMMUTABLE afterwards — it never reaches a prompt. */
   kind: string
-  /** Free-text display name ('' = show the kind). The kind stays the stable
-   *  id the terrain field / client contract matches. */
+  /** Free text with spaces — the only thing pickers show. */
   name?: string
-  /** Generation subject — composed into new-version prompts; '' = the
-   *  curated/generic wording for this kind. */
-  subject?: string
+  /** The one text that goes into the image prompt. Seeded when the kind is
+   *  created; what stands here is what gets sent. */
+  description?: string
   versions: TexVersion[]
 }
 
@@ -51,6 +53,20 @@ export const KNOWN_KINDS = Array.from(
 
 /** id of the shared kind <datalist> — rendered once by the container. */
 export const KIND_DATALIST_ID = 'surface-kind-options'
+
+/** An id read back as words ("dark_stone" → "dark stone"). Display only — an
+ *  id never goes into a prompt, and the server owns the reverse direction
+ *  (name → id) so the two cannot drift. */
+export const unslugKind = (kind: string) =>
+  (kind || '').replace(/[_-]+/g, ' ').trim()
+
+/** What the Prompt Help must know before it "improves" a surface prompt: a
+ *  tiling material has no scene, no camera and no light direction, so
+ *  anything the assistant adds there comes back as a visible seam. */
+export const SURFACE_PROMPT_CONTEXT =
+  'This prompt renders a SEAMLESS TILEABLE surface texture seen straight from '
+  + 'above: flat even lighting, no perspective, no vignette, no drop shadows, '
+  + 'no horizon, no objects or subjects, no border. Keep it a material, not a scene.'
 
 /** Compact "how was this made" label: backend for generated versions, an
  *  upload marker for uploads, em dash for legacy files without meta. */

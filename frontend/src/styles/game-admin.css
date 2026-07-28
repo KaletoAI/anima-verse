@@ -784,14 +784,14 @@ html, * {
 
 /* Prompt-Feld: eigener vertikaler Container, weil .ga-field-control ein
    Flex-ROW ist — so steht die Resolved-Preview UNTER der Textarea, nicht daneben. */
-.tpl-prompt-field {
+.ga-prompt-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
   width: 100%;
   min-width: 0;
 }
-.tpl-prompt-field > .ga-input {
+.ga-prompt-field > .ga-input {
   width: 100%;
 }
 

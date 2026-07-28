@@ -868,7 +868,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       const n = (markerNo.get(marker.room_id) || 0) + 1
       markerNo.set(marker.room_id, n)
       placeFigure({
-        x: marker.at_world[0], y: marker.y_world, z: marker.at_world[1],
+        x: marker.at_world[0],
+        // y_world is the SURFACE; the figure's root sits root_offset below it
+        // (a seated body touches at the buttocks). Same subtraction as the
+        // 3D client — the number comes from the payload, not from here.
+        y: marker.y_world - (marker.root_offset || 0), z: marker.at_world[1],
         animation: marker.animation, facing: marker.facing,
         tilt: marker.tilt, roll: marker.roll,
         label: `${n} · ${marker.animation}`,

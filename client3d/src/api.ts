@@ -180,7 +180,13 @@ export interface ApiSurfaceBlend {
 }
 
 export interface ApiSurfaceTexture {
-  kind: string;      // road | grass | water | coast | ... (offen, wie terrain)
+  /** Die ID — road | grass | water | coast | ... (offen, wie terrain). Klein,
+   *  ohne Leerzeichen, unveraenderlich; das ist der Wert, den terrain und die
+   *  Bodenarten referenzieren. */
+  kind: string;
+  /** Anzeigetext der Art (Vertrag § A9). Der Client zeigt ihn, wo er Arten
+   *  benennt; fehlt er, ist die ID als Woerter zu lesen. */
+  name?: string;
   /** einfache Fläche: kachelbares Bild */
   url?: string;
   /** physische Kantenlänge der Textur in Metern (Kachel-Maßstab; Default 3) */

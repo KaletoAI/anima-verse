@@ -30,7 +30,7 @@ import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
-import type { Map3D, Room, RoomLayout, RoomOpening, SceneRoom, ScenePayload } from './worldTypes'
+import type { Map3D, Room, RoomLayout, RoomOpening, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
 
 const CANVAS_W = 420
 
@@ -198,18 +198,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // a BARE array mixing texture entries ({kind, url, size_m}) and blend
   // entries ({kind, blend}) — the picker wants the deduplicated kinds, with a
   // thumbnail wherever one exists.
-  const [surfaceKinds, setSurfaceKinds] = useState<Array<{ kind: string; url: string }>>([])
+  // What a picker STORES is the id; what it SHOWS is the name — the library
+  // ships both, so no dropdown has to display "dark_stone" any more.
+  const [surfaceKinds, setSurfaceKinds] = useState<SurfaceKind[]>([])
   useEffect(() => {
-    apiGet<Array<{ kind?: string; url?: string }>>('/assets/surface-textures')
+    apiGet<Array<{ kind?: string; name?: string; url?: string }>>(
+      '/assets/surface-textures')
       .then((list) => {
-        const byKind = new Map<string, string>()
+        const byKind = new Map<string, { name: string; url: string }>()
         for (const entry of Array.isArray(list) ? list : []) {
           const kind = (entry?.kind || '').trim()
-          if (!kind) continue
-          if (!byKind.get(kind)) byKind.set(kind, entry.url || '')
+          if (!kind || byKind.has(kind)) continue
+          byKind.set(kind, { name: (entry.name || '').trim() || kind,
+                             url: entry.url || '' })
         }
-        setSurfaceKinds(Array.from(byKind, ([kind, url]) => ({ kind, url }))
-          .sort((a, b) => a.kind.localeCompare(b.kind)))
+        setSurfaceKinds(Array.from(byKind, ([kind, v]) => ({ kind, ...v }))
+          .sort((a, b) => a.name.localeCompare(b.name)))
       })
       .catch(() => setSurfaceKinds([]))
   }, [])
@@ -1167,7 +1171,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             >
               <option value="">{t('Level floor: global')}</option>
               {surfaceKinds.map((k) => (
-                <option key={k.kind} value={k.kind}>{k.kind}</option>
+                <option key={k.kind} value={k.kind}>{k.name}</option>
               ))}
             </select>
           </label>
@@ -1184,7 +1188,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             >
               <option value="">{t('Building walls: none')}</option>
               {surfaceKinds.map((k) => (
-                <option key={k.kind} value={k.kind}>{k.kind}</option>
+                <option key={k.kind} value={k.kind}>{k.name}</option>
               ))}
             </select>
           </label>

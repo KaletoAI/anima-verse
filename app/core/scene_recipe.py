@@ -72,6 +72,16 @@ ROOM_PLATE_THICKNESS = 0.02
 # = plate top + this clearance (+ offset_y × k). Outdoor rooms have no
 # plate — there the clearance sits on the storey/terrain level directly.
 PROP_CLEARANCE = 0.01
+# How far BELOW a marked surface a figure's root goes, as a fraction of the
+# figure's height. A marker says where the SURFACE is — the seat of a bench,
+# the mattress. Where the root has to sit for the body to touch it is a
+# property of the CLIP, not of the marker: the Mixamo sit clip carries the
+# hips at 0.344 x figure height above the root (measured on x-bot.fbx +
+# sit.fbx), and the buttocks a little below that. 0.259 x 1.70 m = the 0.44 m
+# the 3D client applied on its own until now — kept exactly, so nothing that
+# is dialled in today moves. Standing and lying poses touch at the root, so
+# they drop by nothing.
+FIGURE_ROOT_DROP = {"sit": 0.259}
 # Diorama clipping (§ B1): the shell polygon a room model may be cut against
 # is capped — the shader test runs per fragment, more points than this are not
 # worth the frame time, so the opt-in is ignored instead.
@@ -696,7 +706,14 @@ def _elevator(map3d: Dict[str, Any], levels: List[int], storey: float,
 # ── Placement specs (§ B2) ──────────────────────────────────────────────
 
 def _fix_euler(rotation: Any) -> Dict[str, float]:
-    """The orientation fix as an 'XYZ' Euler in degrees (§ A1)."""
+    """The orientation fix as a **'YXZ'** Euler in degrees (§ A1).
+
+    Yaw (y) outermost, then tilt (x) and roll (z) in the already-turned frame,
+    so "tip forward" means the same whichever way the model faces. The old
+    'XYZ' let x act in world axes, which stopped matching the model's own axes
+    after any y turn (user finding 2026-07-28). With a single non-zero axis —
+    which is what a 90°-step fix normally is — both orders are identical.
+    """
     rot = rotation if isinstance(rotation, dict) else {}
     return {axis: _r(_num(rot.get(axis)), 3) for axis in ("x", "y", "z")}
 
@@ -956,10 +973,25 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     placement-relative transforms (fix → real size → yaw already applied) and
     only need ``placement point + [dx, dz] × k`` — the one multiply the
     contract promises the consumer, done here.
+
+    ``y_world`` is the SURFACE the marker names. How far below it a figure's
+    root belongs travels with the marker as ``root_offset`` (world metres,
+    see FIGURE_ROOT_DROP) — a seated body touches at the buttocks, not at the
+    feet. That number used to live in the 3D client alone and only for ROOM
+    markers, so prop markers had no drop at all and every author baked one
+    into the marker by hand (all 15 in the field carry a negative height).
+    One source, both renderers, both marker sources.
     """
     room_id = recipe.get("room_id") or ""
     floor_y = _room_floor_y(recipe, storey, k)
     x, y, w, d = _room_rect(recipe, room)
+    figure_h = FIGURE_HEIGHT_M * k
+
+    def _root_drop(animation: Any) -> float:
+        """World metres a figure's root sinks below the marked surface."""
+        return _r(FIGURE_ROOT_DROP.get(str(animation or "").strip().lower(),
+                                       0.0) * figure_h)
+
     out: List[Dict[str, Any]] = []
     for marker in recipe.get("markers") or []:
         at = marker.get("at") or [0.5, 0.5]
@@ -969,6 +1001,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
                          _r(_w(y + _num(at[1], 0.5) * d, extent))],
             "y_world": _r(floor_y + _num(marker.get("offset_y"))),
             "animation": marker.get("animation") or "",
+            "root_offset": _root_drop(marker.get("animation")),
             "source": "room",
         }
         if marker.get("rotation") is not None:
@@ -999,6 +1032,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
                          _r(_w(at[1], extent) + _num(offset[1]) * k)],
             "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m")) * k),
             "animation": marker.get("animation") or "",
+            "root_offset": _root_drop(marker.get("animation")),
             "source": "prop",
         }
         if marker.get("facing") is not None:

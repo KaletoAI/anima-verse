@@ -67,6 +67,9 @@ DIM_KEYS = ("width_m", "depth_m", "height_m")
 # Marker fractions may leave the raw bounding box by half a box per axis —
 # the HEIGHT axis reaches a full box below (deep seats in tall machines);
 # see ``sanitize_markers``.
+# Flag for the one-time "marker names the surface" lift (see
+# migrate_marker_surface_once).
+_MARKER_SURFACE_FLAG = "world.migration.prop_marker_surface"
 MARKER_AT_MIN = -0.5
 MARKER_AT_MAX = 1.5
 MARKER_AT_Y_MIN = -1.0
@@ -648,6 +651,68 @@ def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
         if meta:
             out.append(_prop_record(pid, meta, full=full))
     return out
+
+
+def migrate_marker_surface_once() -> Dict[str, int]:
+    """Marker heights now name the SURFACE, not the figure's root (2026-07-28).
+
+    Until now a prop marker said where the figure's ROOT goes, and since the
+    seat drop existed only in the 3D client's room-marker path, every author
+    baked it in by hand — all 15 markers in the field carry a negative height,
+    each a different guess (a bench at -0.63, a bar stool at -0.23). The scene
+    recipe now ships ``root_offset`` with the marker and both renderers apply
+    it, so the marker itself may finally mean "here is the seat".
+
+    This lifts the stored fractions by exactly the drop the renderers will now
+    subtract, so **nothing moves on screen**: a marker that sat right stays
+    right, and one that sat wrong stays as wrong as it was — with a value that
+    can now be corrected against the preview figure instead of by feel.
+
+    Idempotent via a world_kv flag. Returns stats for the boot log.
+    """
+    from app.core.scene_recipe import FIGURE_HEIGHT_M, FIGURE_ROOT_DROP
+    from app.models.world import get_world_setting, set_world_setting
+    if get_world_setting(_MARKER_SURFACE_FLAG):
+        return {}
+    props = touched = 0
+    for pid in _all_prop_ids():
+        meta = read_sidecar(pid)
+        markers = meta.get("markers") if isinstance(meta, dict) else None
+        if not markers:
+            continue
+        props += 1
+        bbox = meta.get("bbox") or []
+        dims = [float(meta.get(f"{a}_m") or 0) for a in ("width", "depth", "height")]
+        size_y = abs(float(bbox[1])) if len(bbox) > 2 else 0.0
+        span = max(abs(float(b)) for b in bbox) if len(bbox) > 2 else 0.0
+        # Real metres per marker-fraction of the Y axis — the same chain
+        # compose_prop_marker walks: uniform real-size scale x raw box height.
+        scale = (max(dims) / span) if (span > 0 and max(dims) > 0) else 0.0
+        per_frac = size_y * scale
+        if per_frac <= 0:
+            continue
+        changed = False
+        for m in markers:
+            drop = FIGURE_ROOT_DROP.get(
+                str(m.get("animation") or "").strip().lower(), 0.0)
+            if not drop:
+                continue
+            at = m.get("at")
+            if not isinstance(at, list) or len(at) != 3:
+                continue
+            # Cap at the same bound `sanitize_markers` enforces, so the
+            # migration can never write a value the next UI edit would reject.
+            # A prop so small that the drop overshoots it is unfixable by
+            # arithmetic anyway — it needs a fresh marker.
+            at[1] = round(min(float(at[1]) + (drop * FIGURE_HEIGHT_M) / per_frac,
+                              MARKER_AT_MAX), 4)
+            changed = True
+            touched += 1
+        if changed:
+            meta["markers"] = markers
+            _write_sidecar(pid, meta)
+    set_world_setting(_MARKER_SURFACE_FLAG, "1")
+    return {"props": props, "markers_lifted": touched}
 
 
 def get_prop(prop_id: str) -> Optional[Dict[str, Any]]:

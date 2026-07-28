@@ -119,6 +119,28 @@ async def lifespan(app: FastAPI):
     except Exception as _sfe:
         logger.warning("scale-frame migration failed: %s", _sfe)
 
+    # Oberflaechen-Arten: Name / ID / Description getrennt. Schreibt die
+    # kuratierte Formulierung EINMAL ins Description-Feld, damit sie kein
+    # unsichtbarer Laufzeit-Vorrang mehr ist (2026-07-28).
+    try:
+        from app.core.surface_textures import migrate_kind_meta_once
+        _km = migrate_kind_meta_once()
+        if _km:
+            logger.info("Oberflaechen-Arten migriert: %s", _km)
+    except Exception as _kme:
+        logger.warning("surface kind-meta migration failed: %s", _kme)
+
+    # Prop-Marker benennen jetzt die OBERFLAECHE; der Sitz-Absatz reist als
+    # root_offset im Payload mit. Hebt die gespeicherten Brueche um genau
+    # diesen Betrag an, damit sich optisch nichts bewegt (2026-07-28).
+    try:
+        from app.core.props import migrate_marker_surface_once
+        _pm = migrate_marker_surface_once()
+        if _pm:
+            logger.info("Prop-Marker migriert: %s", _pm)
+    except Exception as _pme:
+        logger.warning("prop marker migration failed: %s", _pme)
+
     # Vereinheitlichte Intents (plan-intents-unified.md, Phase 1): bestehende
     # Assignments idempotent in die intents-Tabelle spiegeln. Kein Verhaltens-
     # wechsel — assignments bleiben in Phase 1 die treibende Quelle.

@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
+import { Field } from '../../components/Field'
 import { ListHeader } from '../../components/ListHeader'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
@@ -22,7 +23,7 @@ import { useToast } from '../../lib/Toast'
 import { SurfaceBlendEditor } from './SurfaceBlendEditor'
 import { SurfaceGenerateForm } from './SurfaceGenerateForm'
 import { SurfaceKindDetail } from './SurfaceKindDetail'
-import { KIND_DATALIST_ID, KNOWN_KINDS, dateShort, madeWith } from './surfaceTypes'
+import { KIND_DATALIST_ID, KNOWN_KINDS, SURFACE_PROMPT_CONTEXT, dateShort, madeWith, unslugKind } from './surfaceTypes'
 import type { BackendInfo, Blend, TexGroup, TexVersion } from './surfaceTypes'
 
 export function SurfaceTexturesTab() {
@@ -31,9 +32,6 @@ export function SurfaceTexturesTab() {
   const [textures, setTextures] = useState<TexGroup[]>([])
   const [pending, setPending] = useState<string[]>([])
   const [backends, setBackends] = useState<BackendInfo[]>([])
-  // Per-kind subject phrases (curated server-side) — the visual character
-  // of the material; unknown kinds get the generic fallback.
-  const [subjects, setSubjects] = useState<Record<string, string>>({})
   // Compositions (AV3D-13 v2): zone gradients toward a neighbor kind —
   // "coast" = water → sand → whatever the other neighbors are.
   const [blends, setBlends] = useState<Record<string, Blend>>({})
@@ -49,11 +47,11 @@ export function SurfaceTexturesTab() {
   const [promptTouched, setPromptTouched] = useState(false)
   const [armedDel, setArmedDel] = useState('')
   const [zoom, setZoom] = useState<{ kind: string; v: TexVersion } | null>(null)
-  // New-kind drafts: free-text display name + the generation subject — the
-  // KIND stays the stable id (terrain field), it no longer doubles as the
-  // prompt text.
+  // New-kind drafts. The NAME is what you type; the id is derived from it by
+  // the server (the `kind` field above stays empty unless you override it),
+  // and the description is the only text that reaches the prompt.
   const [nameDraft, setNameDraft] = useState('')
-  const [subjectDraft, setSubjectDraft] = useState('')
+  const [descDraft, setDescDraft] = useState('')
   const [cacheBump, setCacheBump] = useState(0)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -62,13 +60,11 @@ export function SurfaceTexturesTab() {
   const load = useCallback(async () => {
     try {
       const d = await apiGet<{ textures?: TexGroup[]; pending?: string[]
-        backends?: BackendInfo[]; subjects?: Record<string, string>
-        blends?: Record<string, Blend> }>(
+        backends?: BackendInfo[]; blends?: Record<string, Blend> }>(
         '/world/surface-textures')
       setTextures(d.textures || [])
       setPending(d.pending || [])
       setBackends(d.backends || [])
-      setSubjects(d.subjects || {})
       setBlends(d.blends || {})
       setLoaded(true)
       return d
@@ -99,23 +95,26 @@ export function SurfaceTexturesTab() {
 
   const backendInfo = backends.find((b) => b.name === backend) || backends[0]
 
-  // The final prompt = use-case style of the chosen backend + the material
-  // subject from the kind — shown in full and editable; manual edits stick.
+  // The final prompt = the chosen backend's use-case style + the material's
+  // DESCRIPTION. Same chain as surface_description() on the server —
+  // description, then name, then the id as words. The id itself is never the
+  // subject; that was the whole defect. Manual edits stick.
   useEffect(() => {
     if (promptTouched) return
     const style = backendInfo?.prompt_style || ''
     const k = kind.trim().toLowerCase()
-    // Same composition as the server: the typed subject wins, then the
-    // stored/curated phrase, else the generic "surface of <kind>" fallback.
-    const subject = subjectDraft.trim()
-      || (!k ? 'a natural ground surface'
-        : (subjects[k] || `the surface of ${k} seen straight from above`))
+    const stored = textures.find((tx) => tx.kind === k)
+    const subject = (creating
+      ? (descDraft.trim() || nameDraft.trim())
+      : ((stored?.description || '').trim() || (stored?.name || '').trim()
+        || (k ? `the surface of ${unslugKind(k)} seen straight from above` : '')))
+      || 'a natural ground surface'
     setPrompt(style ? `${style}, ${subject}` : subject)
     setNegative(backendInfo?.prompt_negative || '')
-  }, [kind, backendInfo, subjects, subjectDraft, promptTouched])
+  }, [kind, creating, textures, backendInfo, descDraft, nameDraft, promptTouched])
 
   const saveKindMeta = useCallback(async (k: string, meta: {
-    name?: string; subject?: string }) => {
+    name?: string; description?: string }) => {
     try {
       await apiPost(`/world/surface-textures/${encodeURIComponent(k)}/meta`, meta)
     } catch (e) {
@@ -125,41 +124,54 @@ export function SurfaceTexturesTab() {
 
   const generate = useCallback(() => {
     const k = kind.trim().toLowerCase()
-    if (!k) return
-    // Persist name/subject first — regeneration and the server-side prompt
-    // fallback then compose from the same stored subject.
-    const metaFirst = (creating && (nameDraft.trim() || subjectDraft.trim()))
-      ? saveKindMeta(k, { name: nameDraft, subject: subjectDraft })
-      : Promise.resolve()
-    void metaFirst.then(() => apiPost<{ status?: string }>(
+    // A new kind needs only a name — the SERVER derives the id and answers
+    // with the one it used. Nothing here slugifies, so the two cannot drift.
+    if (!k && !nameDraft.trim()) return
+    void apiPost<{ status?: string; kind?: string }>(
       '/world/surface-textures/generate', {
-        kind: k, backend: backendInfo?.name || '', prompt, negative,
-      }))
+        kind: k,
+        // Only while CREATING — an existing kind has its own name and
+        // description, and a leftover draft has no business near them.
+        ...(creating ? { name: nameDraft, description: descDraft } : {}),
+        backend: backendInfo?.name || '', prompt, negative,
+      })
       .then((d) => {
         toast(d?.status === 'already_running'
           ? t('This kind is already generating on that backend.')
           : t('Generating the texture…'))
         startPoll()
         setCreating(false)
-        setSel(k)
+        if (d?.kind) { setSel(d.kind); setKind(d.kind) }
         void load()
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
-  }, [kind, creating, nameDraft, subjectDraft, saveKindMeta, backendInfo,
+  }, [kind, creating, nameDraft, descDraft, backendInfo,
     prompt, negative, load, startPoll, t, toast])
 
+  // An upload creates a kind just as a generation does: with an id it goes
+  // to that kind, without one the server derives it from the name ("-" says
+  // "no id, use the name") and answers with the id it used.
   const pickUpload = useCallback((k: string) => {
     const clean = k.trim().toLowerCase()
-    if (!clean) return
-    uploadKindRef.current = clean
+    if (!clean && !nameDraft.trim()) return
+    uploadKindRef.current = clean || '-'
     uploadRef.current?.click()
-  }, [])
+  }, [nameDraft])
 
   const upload = useCallback((k: string, file: File) => {
-    void apiUpload(`/world/surface-textures/${encodeURIComponent(k)}/upload`, file)
-      .then(() => { setCacheBump((b) => b + 1); setCreating(false); setSel(k); void load() })
+    void apiUpload<{ kind?: string }>(
+      `/world/surface-textures/${encodeURIComponent(k)}/upload`, file, 'file',
+      k === '-' ? { name: nameDraft } : undefined)
+      .then((d) => {
+        setCacheBump((b) => b + 1)
+        setCreating(false)
+        const id = d?.kind || k
+        setSel(id)
+        setKind(id)
+        void load()
+      })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
-  }, [load, t, toast])
+  }, [nameDraft, load, t, toast])
 
   const setSize = useCallback((k: string, filename: string, raw: string) => {
     const n = parseFloat(raw)
@@ -239,7 +251,7 @@ export function SurfaceTexturesTab() {
     setCreating(true)
     setKind('')
     setNameDraft('')
-    setSubjectDraft('')
+    setDescDraft('')
     setPromptTouched(false)
   }, [])
 
@@ -249,13 +261,8 @@ export function SurfaceTexturesTab() {
 
   const generateForm = (
     <SurfaceGenerateForm
-      kind={kind}
-      onKind={setKind}
-      lockKind={!!selectedGroup && !creating}
-      name={nameDraft}
-      onName={setNameDraft}
-      subject={subjectDraft}
-      onSubject={setSubjectDraft}
+      ready={creating ? !!(nameDraft.trim() || kind.trim()) : !!kind.trim()}
+      generateLabel={creating ? t('Generate') : t('Generate new version')}
       backends={backends}
       backendName={backendInfo?.name || ''}
       onBackend={(name) => { setBackend(name); setPromptTouched(false) }}
@@ -341,6 +348,8 @@ export function SurfaceTexturesTab() {
             onDelete={blends[blendEdit.kind]
               ? () => removeBlend(blendEdit.kind) : undefined}
             armedDelete={armedDel === `blend:${blendEdit.kind}`}
+            kinds={textures.map((tx) => ({
+              kind: tx.kind, name: tx.name || tx.kind }))}
             kindThumb={(k) => {
               const g = textures.find((tx) => tx.kind === k)
               const v = g?.versions.find((vv) => vv.active) || g?.versions[0]
@@ -353,7 +362,47 @@ export function SurfaceTexturesTab() {
               title={t('New surface texture')}
               onCancel={() => setCreating(false)}
             />
-            {generateForm}
+            {/* Same order as the detail view: what it is called, what it is,
+                then how it is made. The ID is derived from the name by the
+                server — the field is only here to override that. */}
+            <div className="ga-form">
+              <div className="ga-form-section-label">{t('Properties')}</div>
+              <div className="ga-form-row">
+                <Field label={t('Name')}
+                  hint={t('Free text, spaces welcome — this is what every picker shows.')}>
+                  <input
+                    className="ga-input"
+                    placeholder={t('e.g. Dark stone')}
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                  />
+                </Field>
+                <Field label={t('ID')} compact
+                  hint={t('Optional — derived from the name.')}>
+                  <input
+                    className="ga-input"
+                    list={KIND_DATALIST_ID}
+                    style={{ width: 130 }}
+                    placeholder={t('auto')}
+                    value={kind}
+                    onChange={(e) => setKind(e.target.value)}
+                    title={t('Lowercase, no spaces. It must match the terrain field of the tiles it should cover, it is fixed once created, and it never reaches a prompt.')}
+                  />
+                </Field>
+              </div>
+              <Field label={t('Description')} help="surface_prompt"
+                promptContext={SURFACE_PROMPT_CONTEXT}
+                hint={t('Flows into the final prompt and is stored for regeneration.')}>
+                <textarea
+                  className="ga-textarea"
+                  rows={2}
+                  placeholder={t('What the texture shows, e.g. "seamless rubber flooring with a fine round-stud pattern"')}
+                  value={descDraft}
+                  onChange={(e) => setDescDraft(e.target.value)}
+                />
+              </Field>
+              {generateForm}
+            </div>
             <div className="ga-form">
               <div className="ga-form-section-label">{t('Compositions (blends)')}</div>
               <span className="ga-hint">

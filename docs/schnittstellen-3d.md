@@ -155,8 +155,12 @@ sondern erster Konsument derselben Vertragsfläche (§ B5).
 - **Yaw-Kette:** `yaw = map3d.rotation` (explizite 0 zählt) →
   `map_rotation_2d` → 0. Yaw dreht im Uhrzeigersinn in der Draufsicht;
   three.js `rotation.y = −rad(yaw)`.
-- **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'XYZ'**
-  (M = Rx·Ry·Rz), in Grad, VOR jeder Messung anwenden.
+- **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'YXZ'**
+  (2026-07-28), in Grad, VOR jeder Messung anwenden. Yaw (y) liegt außen,
+  Tilt (x) und Roll (z) wirken im schon gedrehten Rahmen — „nach vorn
+  kippen" heißt damit unabhängig von der Blickrichtung dasselbe, und die
+  Marker-Neigung benutzt dieselbe Reihenfolge. Bei nur EINER belegten Achse
+  ist das identisch zum früheren 'XYZ'.
 - **Kompass für Blickrichtungen** (`facing`, Marker-`rotation`): 0 = Süd,
   90 = Ost, 180 = Nord, 270 = West; Figur `rotation.y = +rad(facing)`.
 - Alle Felder mit Suffix `_m` sind REALE Meter → im Anchored-Mode ×k.
@@ -425,6 +429,16 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   Nicht-toward-Nachbar-Art). 404/leer/unbekannt → eingebaute prozedurale
   Fallbacks. 2D-Map-Icons werden NICHT als Boden verwendet
   (`map-icon-2d` ist für den 3D-Pfad tot — README-Verweis streichen).
+- **`kind` ist die ID, `name` der Anzeigetext** (2026-07-28). Jeder
+  Eintrag — Fläche wie Zusammenstellung — trägt `name`; gespeichert und
+  referenziert (terrain, `level_floors`, Raum-Boden-/Wandarten,
+  `blend.toward`) wird ausschließlich die ID. Sie ist klein, ohne
+  Leerzeichen, nach dem Anlegen unveränderlich und taucht in **keinem**
+  Bildprompt auf. Ein Client, der Arten zur Auswahl stellt, zeigt `name`
+  und schickt `kind`; fehlt `name`, ist die ID als Wörter zu lesen
+  (`dark_stone` → „dark stone"). Die dritte Angabe, die **Description**,
+  ist reine Server-/Admin-Sache — sie erzeugt das Bild und steht in
+  keinem Client-Vertrag.
 - Das Blend-BAKING (Canvas-Komposition, Noise) bleibt bewusst
   Client-Sache — rein visuell, kein Geometrie-Vertrag.
 
@@ -548,7 +562,7 @@ keine einzige eigene Geometrie-Entscheidung mehr.
   models:  [ { role: "building"|"room"|"prop",
                id, url,                    # ETag-Endpoint wie bisher
                room_id?, level,
-               fix_euler: {x,y,z},         # 'XYZ', Grad — vor Messung
+               fix_euler: {x,y,z},         # 'YXZ', Grad — vor Messung
                yaw_deg,                    # Eltern-Rotation, −rad im Client
                scale_mode: "fit_box" | "real_size" | "tile_fit",
                box: {w,d,h} | max_m | {xz, y?},
@@ -636,7 +650,7 @@ Labels, Pathfinding, Tag/Nacht, Terrain-Blends, Animations-Retargeting.
 
 ```
 place(mesh, spec):
-  1. fix_euler anwenden ('XYZ'), BBox messen
+  1. fix_euler anwenden ('YXZ'), BBox messen
   2. scale_mode "real_size": s = max_m / maxExtent (uniform)
      scale_mode "fit_box":   s = min(box.w/fp_x, box.d/fp_z) × 0,96 —
                              fp = Footprint der GEFIXTEN, noch

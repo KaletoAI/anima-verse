@@ -5,7 +5,6 @@
  */
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { useI18n } from '../../i18n/I18nProvider'
-import { KIND_DATALIST_ID, KNOWN_KINDS } from './surfaceTypes'
 import type { Blend } from './surfaceTypes'
 
 interface SurfaceBlendEditorProps {
@@ -19,10 +18,14 @@ interface SurfaceBlendEditorProps {
   /** Active-texture thumbnail url for a kind ('' = none) — shown next to
    *  each zone so the gradient is readable at a glance. */
   kindThumb?: (kind: string) => string
+  /** The kinds the library ACTUALLY has, id + name. A zone pointing at a kind
+   *  that does not exist renders nothing, so the suggestions come from the
+   *  library rather than from a frontend constant. */
+  kinds: Array<{ kind: string; name: string }>
 }
 
 export function SurfaceBlendEditor({
-  value, onChange, onSave, onCancel, onDelete, armedDelete, kindThumb,
+  value, onChange, onSave, onCancel, onDelete, armedDelete, kindThumb, kinds,
 }: SurfaceBlendEditorProps) {
   const { t } = useI18n()
   const { kind, blend } = value
@@ -56,14 +59,22 @@ export function SurfaceBlendEditor({
             onChange={(e) => onChange({ kind: e.target.value, blend })}
           />
           <span className="ga-hint">{t('toward')}</span>
-          <input
+          <select
             className="ga-input"
-            list={KIND_DATALIST_ID}
-            style={{ width: 110 }}
+            style={{ width: 130 }}
             value={blend.toward}
             title={t('The neighbor kind the gradient runs to (from the map grid).')}
             onChange={(e) => setBlend({ toward: e.target.value })}
-          />
+          >
+            <option value="">{t('— pick a kind —')}</option>
+            {kinds.map((k) => (
+              <option key={k.kind} value={k.kind}>{k.name}</option>
+            ))}
+            {/* A stored target the library no longer offers stays visible. */}
+            {blend.toward && !kinds.some((k) => k.kind === blend.toward) ? (
+              <option value={blend.toward}>{blend.toward}</option>
+            ) : null}
+          </select>
           <span className="ga-hint">{t('noise')}</span>
           <input
             className="ga-input"
@@ -146,7 +157,10 @@ export function SurfaceBlendEditor({
           </button>
         </div>
         <datalist id="surface-zone-options">
-          {['neighbor', ...KNOWN_KINDS].map((k) => <option key={k} value={k} />)}
+          <option value="neighbor" label={t('the dominant other neighbor')} />
+          {kinds.map((k) => (
+            <option key={k.kind} value={k.kind} label={k.name} />
+          ))}
         </datalist>
       </div>
     </>

@@ -2,7 +2,8 @@
 import asyncio
 import io
 import os
-from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File, Depends
+from fastapi import (APIRouter, Request, HTTPException, Query, UploadFile,
+                     File, Form, Depends)
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -630,8 +631,7 @@ def surface_textures_admin() -> Dict[str, Any]:
     """Admin listing: textures + running generations + backends with their
     resolved use-case style, so the dialog can show and edit the COMPLETE
     final prompt before generating (final-prompt rule)."""
-    from app.core.surface_textures import (SURFACE_SUBJECTS, admin_list,
-                                            compose_prompt, get_kind_meta,
+    from app.core.surface_textures import (admin_list, compose_prompt,
                                             is_pending)
     from app.imagegen.service import get_image_service
     svc = get_image_service()
@@ -645,49 +645,55 @@ def surface_textures_admin() -> Dict[str, Any]:
     except Exception:
         pass
     from app.core.surface_textures import get_blends
-    # Admin-set subjects win over the curated wording — the dialog composes
-    # its prompt from this merged map, same as the server fallback would.
-    subjects = dict(SURFACE_SUBJECTS)
-    for k, entry in get_kind_meta().items():
-        if entry.get("subject"):
-            subjects[k] = entry["subject"]
+    # No `subjects` map any more: the description is a plain field on the
+    # kind (admin_list), and it is the only text that reaches a prompt. The
+    # curated wording is seeded INTO that field when a kind is created, so
+    # there is nothing left for the dialog to merge.
     return {"textures": admin_list(), "pending": is_pending(),
-            "backends": backends, "subjects": subjects,
-            "blends": get_blends()}
+            "backends": backends, "blends": get_blends()}
 
 
 @router.post("/surface-textures/generate")
 async def surface_texture_generate(request: Request) -> Dict[str, Any]:
-    """Generate ONE kind's texture via the image pipeline (body: {kind,
-    backend?, prompt?, negative?} — prompt/negative come verbatim from the
-    dialog; empty = server-composed use-case default)."""
-    from app.core.surface_textures import safe_kind, trigger_generation
+    """Generate ONE kind's texture via the image pipeline (body: {name?,
+    kind?, description?, backend?, prompt?, negative?} — prompt/negative come
+    verbatim from the dialog, empty = server-composed use-case default).
+
+    A NEW kind needs only a name: the server derives the id from it and
+    answers with the id it used. Sending an explicit ``kind`` overrides that
+    — the caller never has to slugify anything itself."""
+    from app.core.surface_textures import trigger_generation
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    kind = safe_kind(str(data.get("kind") or ""))
+    kind = trigger_generation(
+        str(data.get("kind") or ""),
+        name=str(data.get("name") or ""),
+        description=str(data.get("description") or ""),
+        backend_glob=str(data.get("backend") or "").strip(),
+        prompt=str(data.get("prompt") or ""),
+        negative=str(data.get("negative") or ""))
     if not kind:
-        raise HTTPException(status_code=400,
-                            detail="kind required (lowercase, like the terrain field: road, water, …)")
-    if not trigger_generation(kind,
-                              backend_glob=str(data.get("backend") or "").strip(),
-                              prompt=str(data.get("prompt") or ""),
-                              negative=str(data.get("negative") or "")):
+        raise HTTPException(
+            status_code=400,
+            detail="a name (or an id) is required — the id is derived from the name")
+    if kind == "busy":
         return {"status": "already_running"}
-    return {"status": "generating"}
+    return {"status": "generating", "kind": kind}
 
 
 @router.post("/surface-textures/{kind}/meta")
 async def surface_texture_meta(kind: str, request: Request) -> Dict[str, Any]:
-    """Display name (free text, spaces welcome) + generation subject of a
-    kind (body: {name?, subject?}; '' clears a field). The kind itself stays
-    the stable id the terrain field / client contract uses."""
+    """Name (free text, spaces welcome) + description of a kind (body:
+    {name?, description?}; '' clears a field). The id is NOT editable — it
+    sits in file names and in world data (terrain, level_floors, room floor
+    kinds, blend toward), so changing it would be a data migration."""
     from app.core.surface_textures import set_kind_meta
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     entry = set_kind_meta(kind, name=data.get("name"),
-                          subject=data.get("subject"))
+                          description=data.get("description"))
     if entry is None:
         raise HTTPException(status_code=400, detail="invalid kind")
     return {"status": "ok", "meta": entry}
@@ -719,11 +725,14 @@ def surface_texture_blend_delete(kind: str) -> Dict[str, Any]:
 
 
 @router.post("/surface-textures/{kind}/upload")
-async def surface_texture_upload(kind: str, file: UploadFile = File(...)) -> Dict[str, Any]:
-    """Upload a texture for a kind (JPEG/PNG/WebP, sniffed; ≤ 10 MB)."""
+async def surface_texture_upload(kind: str, file: UploadFile = File(...),
+                                 name: str = Form("")) -> Dict[str, Any]:
+    """Upload a texture for a kind (JPEG/PNG/WebP, sniffed; ≤ 10 MB). Like a
+    generation this may CREATE the kind: pass ``kind`` as ``-`` and a ``name``
+    form field, and the server derives the id and answers with it."""
     from app.core.surface_textures import save_uploaded
     contents = await file.read()
-    res = save_uploaded(kind, contents)
+    res = save_uploaded("" if kind == "-" else kind, contents, name=name)
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error") or "upload failed")
     return res

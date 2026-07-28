@@ -127,6 +127,7 @@ export async function getRoomModelDims(roomId: string):
   const deg = (v?: number) => ((Math.round((v || 0) / 90) * 90) * Math.PI) / 180
   const holder = new THREE.Group()
   holder.add(entry.obj.clone(true))
+  holder.rotation.order = 'YXZ'   // same order as place()
   holder.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y),
                       deg(entry.rotation.z))
   holder.updateMatrixWorld(true)

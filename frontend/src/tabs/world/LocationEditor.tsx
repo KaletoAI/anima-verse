@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiPut } from '../../lib/api'
+import { apiDelete, apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { type ItemRef } from '../../lib/refs'
-import { DANGER_LEVELS, MAP3D_STYLES, TERRAIN_TYPES, type Location, type Map3D } from './worldTypes'
+import { DANGER_LEVELS, MAP3D_STYLES, TERRAIN_TYPES, type Location, type Map3D, type SurfaceKind } from './worldTypes'
 import { RandomEventsEditor } from './RandomEventsEditor'
 import { LocationGallery } from './LocationGallery'
 import { BuildingModelPanel } from './BuildingModelPanel'
@@ -47,6 +47,22 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const [floorRoomSel, setFloorRoomSel] = useState('')
   // Inline "+ Room" input — no browser prompt dialogs in this UI.
   const [newRoomName, setNewRoomName] = useState('')
+  // Terrain suggestions come from the LIBRARY, with the name next to the id.
+  // A hardcoded list would suggest kinds that do not exist and hide the ones
+  // that do; the vocabulary stays open, so free text remains possible.
+  const [terrainKinds, setTerrainKinds] = useState<SurfaceKind[]>([])
+  useEffect(() => {
+    apiGet<Array<{ kind?: string; name?: string; url?: string }>>(
+      '/assets/surface-textures')
+      .then((list) => setTerrainKinds(
+        (Array.isArray(list) ? list : [])
+          .filter((e) => (e?.kind || '').trim())
+          .map((e) => ({ kind: e.kind!.trim(),
+                         name: (e.name || '').trim() || e.kind!.trim(),
+                         url: e.url || '' }))
+          .sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => setTerrainKinds([]))
+  }, [])
 
   useEffect(() => {
     setDraft({ ...location })
@@ -384,7 +400,9 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
       {/* 3-column grid; the building prompt spans 2×2 cells next to the
           figure-scale field, the remaining fields flow around it. */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'start' }}>
-        <Field label={t('Terrain')} hint={t('Ground type of this map cell. Free text; without it, clients guess from the name.')}>
+        <Field label={t('Terrain')}
+          hint={terrainKinds.find((k) => k.kind === (draft.terrain || '').trim())?.name
+            || t('Ground type of this map cell — a surface-texture id. Free text; without it, clients guess from the name.')}>
           <input
             className="ga-input"
             list="terrain-type-options"
@@ -393,9 +411,13 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             onChange={(e) => upd('terrain', e.target.value)}
           />
           <datalist id="terrain-type-options">
-            {TERRAIN_TYPES.map((v) => (
-              <option key={v} value={v} />
+            {terrainKinds.map((k) => (
+              <option key={k.kind} value={k.kind} label={k.name} />
             ))}
+            {/* Kinds the library has no entry for yet still make sense as a
+                suggestion — the vocabulary is open by contract (§ A9). */}
+            {TERRAIN_TYPES.filter((v) => !terrainKinds.some((k) => k.kind === v))
+              .map((v) => <option key={v} value={v} />)}
           </datalist>
         </Field>
         <Field label={t('Footprint (W × D)')} hint={t('Building base size in map grid cells.')}>

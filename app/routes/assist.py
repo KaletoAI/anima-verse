@@ -67,6 +67,10 @@ def translate(req: TranslateRequest):
 class PromptHelpRequest(BaseModel):
     prompt: str
     request: str = ""   # optional natural-language improvement request
+    # What the FIELD says it renders (Field `promptContext`). Without it the
+    # improver applies generic image-prompt habits — for a seamless tiling
+    # texture that means perspective and shadows, i.e. visible tile seams.
+    context: str = ""
 
 
 @router.post("/prompt-help")
@@ -81,7 +85,8 @@ def prompt_help(req: PromptHelpRequest):
     system_prompt, user_prompt = render_task(
         "prompt_helper",
         original_prompt=prompt,
-        improvement_request=(req.request or "").strip())
+        improvement_request=(req.request or "").strip(),
+        field_context=(req.context or "").strip())
     try:
         resp = llm_call(task="image_prompt", system_prompt=system_prompt,
                         user_prompt=user_prompt, label="admin-prompt-help")

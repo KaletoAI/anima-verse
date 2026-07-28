@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
+import { rootDropFor } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -219,6 +220,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   // fix changes the model's bounding box, so the placement (scale + ground
   // offset) is re-derived right after.
   useEffect(() => {
+    if (orientRef.current) orientRef.current.rotation.order = 'YXZ'
     orientRef.current?.rotation.set(
       _deg(rotation?.x), _deg(rotation?.y), _deg(rotation?.z))
     if (placementRef.current) placeFnRef.current?.(placementRef.current)
@@ -411,6 +413,10 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         place.add(orient)
         scene.add(place)
         const _r = rotationRef.current
+        // 'YXZ' like place() in @anima/scene-render: yaw outermost, tilt and
+        // roll in the already-turned frame. The preview must not disagree with
+        // the scene about what a dial means.
+        orient.rotation.order = 'YXZ'
         orient.rotation.set(_deg(_r?.x), _deg(_r?.y), _deg(_r?.z))
         orientRef.current = orient
         disposers.push(() => {
@@ -747,7 +753,13 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
                 const fb2 = new THREE.Box3().setFromObject(fpivot)
                 const fc2 = fb2.getCenter(new THREE.Vector3())
                 place.updateMatrixWorld(true)
+                // The marker names the SURFACE; a seated body touches at the
+                // buttocks, so the root drops by the clip's share of the
+                // figure height — the same subtraction the scene payload
+                // delivers as `root_offset`. Without it the preview would
+                // show a sitter the scene never renders.
                 const world = pivot.localToWorld(local.clone())
+                world.y -= rootDropFor(m.animation) * figH
                 const fig = new THREE.Group()
                 fig.position.copy(world)
                 fig.rotation.y = _deg(m.facing)

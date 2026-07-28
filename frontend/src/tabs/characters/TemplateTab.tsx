@@ -152,7 +152,7 @@ function PromptField({
   // landeten Textarea und Resolved-Preview NEBENeinander. So steht die Vorschau
   // direkt UNTER dem Prompt. Insert-Tokens sind im Help-Panel (Fokus).
   return (
-    <div className="tpl-prompt-field">
+    <div className="ga-prompt-field">
       <textarea
         ref={taRef}
         className="ga-input"

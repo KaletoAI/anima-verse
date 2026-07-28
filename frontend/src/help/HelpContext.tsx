@@ -14,7 +14,14 @@ interface HelpOpts {
 export type SidePanelId = 'help' | 'translate' | 'prompt'
 
 /** Snapshot of the last focused Game-Admin text field (for the assist panels). */
-export interface FieldCapture { text: string; isPrompt: boolean; seq: number }
+export interface FieldCapture {
+  text: string
+  isPrompt: boolean
+  /** What KIND of prompt this is (Field `promptContext`), '' = unspecified.
+   *  Travels to the Prompt Help so its improvement fits the target. */
+  promptContext: string
+  seq: number
+}
 
 /**
  * Context-sensitive editor help + side-panel state. Fields report their topic
@@ -83,14 +90,19 @@ export function HelpProvider({ children }: { children: ReactNode }) {
       if (el instanceof HTMLInputElement && el.type !== 'text' && el.type !== 'search') return
       if (el.closest('[data-side-panel]')) return
       const helpKey = el.closest('[data-help]')?.getAttribute('data-help') || ''
+      const promptContext = el.closest('[data-prompt-context]')
+        ?.getAttribute('data-prompt-context') || ''
       const hint = [helpKey, el.name || '', el.id || '', el.placeholder || '',
         el.getAttribute('aria-label') || ''].join(' ').toLowerCase()
-      const isPrompt = !!el.closest('.tpl-prompt-field')
+      // A declared context IS the statement "this is a prompt field" — the
+      // other two are guesses from a class and from the word "prompt".
+      const isPrompt = !!promptContext
+        || !!el.closest('.ga-prompt-field')
         || hint.includes('prompt')
         || (topicRef.current || '').includes('prompt')
       if (isPrompt) promptElRef.current = el
       captureRef.current = {
-        text: el.value, isPrompt,
+        text: el.value, isPrompt, promptContext,
         seq: (captureRef.current?.seq || 0) + 1,
       }
       if (panelRef.current) setCaptureTick((n) => n + 1)

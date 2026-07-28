@@ -31,6 +31,8 @@ export {
   plateTargets, wallTargets,
 } from './primitives'
 
+export { FIGURE_ROOT_DROP, rootDropFor } from './types'
+
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,
   SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom,

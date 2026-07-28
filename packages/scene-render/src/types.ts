@@ -77,7 +77,8 @@ export interface SceneModelSpec {
   url: string
   room_id?: string
   level: number
-  /** Orientierungs-Fix, Euler 'XYZ' in Grad — VOR dem Messen */
+  /** Orientierungs-Fix, Euler 'YXZ' in Grad — VOR dem Messen. Yaw außen,
+   *  Tilt/Roll im schon gedrehten Rahmen (2026-07-28). */
   fix_euler: { x: number; y: number; z: number }
   yaw_deg: number
   /** Ziel-Ausdehnung in WELT-Metern. EIN Faktor auf alle drei Achsen
@@ -121,8 +122,15 @@ export interface SceneModelSpec {
 export interface SceneMarker {
   room_id: string
   at_world: [number, number]
+  /** Die OBERFLÄCHE, die der Marker benennt (Sitzfläche, Matratze, Boden). */
   y_world: number
   animation: string
+  /** Wie weit UNTER dieser Fläche die Figurenwurzel sitzt, in Welt-Metern
+   *  (2026-07-28). Ein sitzender Körper berührt am Gesäß, nicht an den Füßen —
+   *  wie tief, ist eine Eigenschaft des CLIPS und stand bisher nur im
+   *  3D-Client, und dort nur für Raum-Marker. Fehlt/0 = die Wurzel liegt auf
+   *  der Fläche. Jeder Renderer zieht ihn ab, NACHDEM er die Fläche kennt. */
+  root_offset?: number
   facing?: number
   /** Neigung der Figur in Grad (±90), NACH dem Facing im Figuren-System:
    *  `tilt` = Kopf hoch/tief, `roll` = seitlich kippen. Ohne die beiden kann
@@ -225,3 +233,17 @@ export interface ScenePayload {
   exits: SceneExit[]
   outdoor_rooms: string[]
 }
+
+/**
+ * How far BELOW a marked surface a figure's root sits, per clip kind, as a
+ * fraction of the figure's height. The SCENE gets this finished from the
+ * server (`SceneMarker.root_offset`) — this table is for the editors that
+ * preview a marker WITHOUT a scene payload (the prop viewer). Mirrors
+ * `FIGURE_ROOT_DROP` in `app/core/scene_recipe.py`; the server stays
+ * authoritative, and a drift shows up at once as "the preview lies".
+ */
+export const FIGURE_ROOT_DROP: Record<string, number> = { sit: 0.259 }
+
+/** The drop for one clip kind (0 = the root sits on the surface). */
+export const rootDropFor = (animation?: string) =>
+  FIGURE_ROOT_DROP[(animation || '').trim().toLowerCase()] ?? 0

@@ -10,6 +10,18 @@ timestamped file, one of them is selected. ``size_m`` = physical edge
 length (default 3 m); an empty list is the normal state — the client
 falls back to its built-in procedural materials.
 
+Three fields, three jobs — never one field for two of them:
+
+    ID   (``kind``)  the machine key: file names, the ``terrain`` field,
+                     the client contract, level_floors / room floor kinds /
+                     blend ``toward``. Lowercase, no spaces, IMMUTABLE once
+                     created, and it NEVER reaches a prompt.
+    Name             free text with spaces, the only thing pickers show.
+    Description      the one text that goes into the image prompt.
+
+The ID is derived from the Name (``slug_for_name``) unless one is given —
+that rule lives HERE, so the admin UI cannot grow a second one.
+
 Storage: ``worlds/<world>/surface_textures/``:
 
     <kind>_<ts>.jpg          — one file per version (uploads may be PNG/WebP)
@@ -46,10 +58,10 @@ _KIND_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _TS_RE = re.compile(r"^(.+)_(\d{9,})$")
 _SEL_FILE = "selection.json"
 _BLENDS_FILE = "blends.json"
-# Per-kind display metadata: {kind: {name?, subject?}}. The KIND stays the
-# stable id (terrain field / client contract / file names); the free-text
-# name and the generation subject only decorate it for the admin.
+# Per-kind metadata: {kind: {name?, description?}} — see the module doc.
 _KINDS_FILE = "kinds.json"
+# Flag for the one-time subject → description migration.
+_META_V2_FLAG = "world.migration.surface_kind_meta_v2"
 
 _lock = threading.Lock()
 # Running job keys "<kind>|<backend glob>" — generations of the SAME kind on
@@ -70,6 +82,31 @@ def safe_kind(kind: str) -> str:
     """Normalized kind ('' = invalid) — lowercase, url/file-safe."""
     kind = (kind or "").strip().lower()
     return kind if _KIND_RE.match(kind) else ""
+
+
+def slug_for_name(name: str) -> str:
+    """The ID a name gets: lowercase, spaces → ``_``, everything the ID
+    grammar does not allow dropped, ≤ 40 characters ('' = nothing usable
+    left). THE one slugify of this feature — the admin UI sends the name and
+    reads the resulting id back rather than deriving its own."""
+    s = (name or "").strip().lower()
+    # Accents first so "Fluß-Kies" keeps its letters instead of losing them.
+    import unicodedata
+    s = s.replace("ß", "ss")
+    s = "".join(c for c in unicodedata.normalize("NFKD", s)
+                if not unicodedata.combining(c))
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")[:40].rstrip("_")
+    # The grammar wants a letter or digit up front.
+    s = re.sub(r"^[^a-z0-9]+", "", s)
+    return s if _KIND_RE.match(s) else ""
+
+
+def unslug(kind: str) -> str:
+    """An ID read back as words — ``dark_stone`` → ``dark stone``. Used
+    wherever an ID would otherwise leak into human-facing text: a default
+    name, and the last link of the prompt chain (a prompt must never carry
+    an underscore from the ID)."""
+    return re.sub(r"[_-]+", " ", (kind or "").strip()).strip()
 
 
 def _stem_kind(stem: str) -> str:
@@ -324,19 +361,29 @@ def delete_blend(kind: str) -> bool:
 
 def list_textures() -> List[Dict[str, Any]]:
     """CLIENT list — one entry per kind, the ACTIVE version:
-    {kind, filename, url, size_m, size}."""
+    {kind, name, filename, url, size_m, size}.
+
+    ``name`` travels with it so every picker in the admin and both renderers
+    can show words instead of an id; what they STORE is still the id."""
     blends = _read_blends()
+    meta = _read_kind_meta()
     out: List[Dict[str, Any]] = []
+
+    def _name(kind: str) -> str:
+        return ((meta.get(kind) or {}).get("name") or "").strip() or unslug(kind)
+
     for kind in sorted(set(_files_by_kind()) | set(blends)):
         if kind in blends:
             # A composition wins over texture files of the same kind.
-            out.append({"kind": kind, "blend": blends[kind]})
+            out.append({"kind": kind, "name": _name(kind),
+                        "blend": blends[kind]})
             continue
         p = texture_file(kind)
         if not p:
             continue
         out.append({
             "kind": kind,
+            "name": _name(kind),
             "filename": p.name,
             "url": f"/assets/surface-textures/{p.name}",
             "size_m": _size_m_of(p),
@@ -347,7 +394,7 @@ def list_textures() -> List[Dict[str, Any]]:
 
 def admin_list() -> List[Dict[str, Any]]:
     """Admin listing — ALL versions per kind (newest first) incl. HOW each
-    was made: [{kind, name, subject, versions: [{filename, url, size_m,
+    was made: [{kind, name, description, versions: [{filename, url, size_m,
     created_at, source, backend, prompt, negative, active}]}]."""
     out = []
     by_kind = _files_by_kind()
@@ -370,7 +417,8 @@ def admin_list() -> List[Dict[str, Any]]:
             })
         entry = kmeta.get(kind) or {}
         out.append({"kind": kind, "name": entry.get("name", ""),
-                    "subject": entry.get("subject", ""), "versions": versions})
+                    "description": entry.get("description", ""),
+                    "versions": versions})
     return out
 
 
@@ -412,10 +460,13 @@ def _new_path(kind: str, ext: str) -> Path:
         ts += 1
 
 
-def save_uploaded(kind: str, contents: bytes) -> Dict[str, Any]:
+def save_uploaded(kind: str = "", contents: bytes = b"", *,
+                  name: str = "") -> Dict[str, Any]:
     """Store an uploaded texture as a NEW version (magic-byte sniffed) and
-    select it — existing versions stay."""
-    kind = safe_kind(kind)
+    select it — existing versions stay. Like a generation, an upload may
+    create the kind: without an id one is derived from the name, and name +
+    description are seeded."""
+    kind = safe_kind(kind) or slug_for_name(name)
     if not kind:
         return {"ok": False, "error": "bad_kind"}
     if len(contents) > 10 * 1024 * 1024:
@@ -428,6 +479,7 @@ def save_uploaded(kind: str, contents: bytes) -> Dict[str, Any]:
         ext = ".webp"
     else:
         return {"ok": False, "error": "not_an_image"}
+    ensure_kind_meta(kind, name=name)
     p = _new_path(kind, ext)
     p.write_bytes(contents)
     _write_meta(p, {"created_at": utc_now_iso(), "source": "uploaded"})
@@ -475,17 +527,24 @@ def get_kind_meta() -> Dict[str, Dict[str, str]]:
     return _read_kind_meta()
 
 
+def _write_kind_meta(data: Dict[str, Dict[str, str]]) -> None:
+    (_dir(create=True) / _KINDS_FILE).write_text(
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def set_kind_meta(kind: str, *, name: Any = None,
-                  subject: Any = None) -> Optional[Dict[str, Any]]:
-    """Set a kind's display name (free text, spaces welcome) and/or its
-    generation subject. None leaves a field untouched, '' clears it back to
-    the curated/generic wording. None result = invalid kind."""
+                  description: Any = None) -> Optional[Dict[str, Any]]:
+    """Set a kind's name (free text, spaces welcome) and/or its description.
+    None leaves a field untouched, '' clears it. None result = invalid kind.
+
+    The ID is not settable here — it is in file names and in world data, so
+    renaming it would be a data migration, not an edit."""
     k = safe_kind(kind)
     if not k:
         return None
     data = _read_kind_meta()
     entry = dict(data.get(k) or {})
-    for key, val in (("name", name), ("subject", subject)):
+    for key, val in (("name", name), ("description", description)):
         if val is None:
             continue
         v = str(val).strip()
@@ -497,23 +556,101 @@ def set_kind_meta(kind: str, *, name: Any = None,
         data[k] = entry
     else:
         data.pop(k, None)
-    d = _dir(create=True)
-    (d / _KINDS_FILE).write_text(
-        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_kind_meta(data)
     return {"kind": k, **entry}
 
 
-def surface_subject(kind: str) -> str:
-    """The subject phrase for a kind — the admin-set subject wins over the
-    curated wording, the generic fallback closes the gap. The kind itself is
-    an ID and no longer needs to double as prompt text."""
-    kind = (kind or "").strip().lower()
-    if not kind:
+def ensure_kind_meta(kind: str, *, name: str = "",
+                     description: str = "") -> Dict[str, str]:
+    """Seed name and description when a kind is created, and return them.
+
+    This is where the curated wording lands: in the FIELD, not in a runtime
+    fallback that silently outranks what the admin typed. What stands in the
+    description is what gets sent — that is the whole point of the split.
+    Existing entries are never overwritten."""
+    k = safe_kind(kind)
+    if not k:
+        return {}
+    data = _read_kind_meta()
+    entry = dict(data.get(k) or {})
+    if not entry.get("name"):
+        entry["name"] = (name or "").strip()[:400] or unslug(k)
+    if not entry.get("description"):
+        seed = (description or "").strip() or SURFACE_SUBJECTS.get(k, "")
+        entry["description"] = (seed or entry["name"])[:400]
+    if entry != (data.get(k) or {}):
+        data[k] = entry
+        _write_kind_meta(data)
+    return entry
+
+
+def migrate_kind_meta_once() -> Dict[str, int]:
+    """Carry ``kinds.json`` over to name + description (2026-07-28).
+
+    ``subject`` becomes ``description``, and every kind that had none gets
+    one written out — curated wording, else the name, else the id as words.
+    That is the point of the migration: the curated map stops being a
+    RUNTIME fallback (which silently outranked the field), so a kind that
+    relied on it must carry the text itself or its generation result would
+    change. Names are filled the same way, so the pickers read as words at
+    once.
+
+    Idempotent via a world_kv flag. Returns a small stats dict for the log.
+    """
+    from app.models.world import get_world_setting, set_world_setting
+    if get_world_setting(_META_V2_FLAG):
+        return {}
+    data = _read_kind_meta()
+    # Kinds with files or blends but no meta entry at all also need seeding —
+    # they used to live entirely off the curated map.
+    known = set(data) | set(_files_by_kind()) | set(_read_blends())
+    renamed = seeded_desc = seeded_name = 0
+    for kind in sorted(known):
+        if not safe_kind(kind):
+            continue
+        entry = dict(data.get(kind) or {})
+        subject = str(entry.pop("subject", "") or "").strip()
+        if subject and not entry.get("description"):
+            entry["description"] = subject
+            renamed += 1
+        if not entry.get("name"):
+            entry["name"] = unslug(kind)
+            seeded_name += 1
+        if not entry.get("description"):
+            # Deliberately NOT the name — this writes out what the kind
+            # produced BEFORE, and the old runtime chain never looked at the
+            # name. A kind whose text was poor keeps its poor text, now
+            # visible in an editable field instead of hidden in a fallback.
+            # (`ensure_kind_meta` does use the name: a NEW kind has no
+            # previous result to preserve.)
+            entry["description"] = (SURFACE_SUBJECTS.get(kind)
+                                    or f"the surface of {unslug(kind)} seen straight from above")
+            seeded_desc += 1
+        data[kind] = entry
+    if data:
+        _write_kind_meta(data)
+    set_world_setting(_META_V2_FLAG, "1")
+    return {"kinds": len(data), "subject_renamed": renamed,
+            "description_seeded": seeded_desc, "name_seeded": seeded_name}
+
+
+def kind_name(kind: str) -> str:
+    """What a picker shows for an ID — the name, else the ID as words."""
+    k = (kind or "").strip().lower()
+    return ((_read_kind_meta().get(k) or {}).get("name") or "").strip() or unslug(k)
+
+
+def surface_description(kind: str) -> str:
+    """The text that goes into the image prompt: description → name → the ID
+    read back as words. The ID itself never reaches a prompt — an underscore
+    in a subject phrase is a defect, not a wording choice."""
+    k = (kind or "").strip().lower()
+    if not k:
         return "a natural ground surface"
-    custom = ((_read_kind_meta().get(kind) or {}).get("subject") or "").strip()
-    if custom:
-        return custom
-    return SURFACE_SUBJECTS.get(kind, f"the surface of {kind} seen straight from above")
+    entry = _read_kind_meta().get(k) or {}
+    return ((entry.get("description") or "").strip()
+            or (entry.get("name") or "").strip()
+            or f"the surface of {unslug(k)} seen straight from above")
 
 
 def compose_prompt(kind: str, backend) -> Dict[str, str]:
@@ -528,7 +665,7 @@ def compose_prompt(kind: str, backend) -> Dict[str, str]:
         "surface_texture",
         backend_model=getattr(backend, "model", "") or "",
         backend_family=getattr(backend, "image_family", ""))
-    subject = surface_subject(kind)
+    subject = surface_description(kind)
     # Composition (slot/append, negation guard, negative merge) belongs to
     # prompt_compose; the return SHAPE stays, the dialog recomposes per kind
     # from `style` + its own subject field.
@@ -638,19 +775,28 @@ def _generate(kind: str, backend_glob: str, prompt: str, negative: str) -> Dict[
                 pass
 
 
-def trigger_generation(kind: str, *, backend_glob: str = "",
-                       prompt: str = "", negative: str = "") -> bool:
-    """Start a texture generation in the background. Different backends for
-    the same kind run concurrently (each queues on its own GPU channel);
-    False only while THIS kind+backend combination is already generating
-    (double-click guard)."""
-    kind = safe_kind(kind)
+def trigger_generation(kind: str = "", *, name: str = "",
+                       description: str = "", backend_glob: str = "",
+                       prompt: str = "", negative: str = "") -> str:
+    """Start a texture generation in the background and return the ID it runs
+    for ('' = nothing usable, 'busy' = already running).
+
+    The ID comes from ``kind`` when one is given, else from the name — the
+    caller may send just a name and read the id back. Name and description
+    are seeded on first use, so a fresh kind carries its own prompt text
+    instead of leaning on a runtime fallback.
+
+    Different backends for the same kind run concurrently (each queues on its
+    own GPU channel); only THIS kind+backend combination is refused while it
+    is still running (double-click guard)."""
+    kind = safe_kind(kind) or slug_for_name(name)
     if not kind:
-        return False
+        return ""
+    ensure_kind_meta(kind, name=name, description=description)
     key = _gen_key(kind, backend_glob)
     with _lock:
         if key in _generating:
-            return False
+            return "busy"
         _generating.add(key)
 
     def _run() -> None:
@@ -661,4 +807,4 @@ def trigger_generation(kind: str, *, backend_glob: str = "",
                 _generating.discard(key)
 
     threading.Thread(target=_run, daemon=True).start()
-    return True
+    return kind

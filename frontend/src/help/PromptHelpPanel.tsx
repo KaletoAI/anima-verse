@@ -19,13 +19,20 @@ export function PromptHelpPanel() {
   const [busy, setBusy] = useState(false)
   const [applied, setApplied] = useState(false)
   const [error, setError] = useState('')
+  // What the captured field said it renders — travels with the request so a
+  // specialised prompt (a seamless tiling texture, say) is not "improved"
+  // into an ordinary scene.
+  const [context, setContext] = useState('')
   const open = panel === 'prompt'
 
   // Take over the text of the last focused admin PROMPT field (live while open).
   useEffect(() => {
     if (!open) return
     const c = getCapture()
-    if (c && c.isPrompt && c.text.trim()) setPrompt(c.text)
+    if (c && c.isPrompt && c.text.trim()) {
+      setPrompt(c.text)
+      setContext(c.promptContext || '')
+    }
   }, [open, captureTick, getCapture])
 
   const run = () => {
@@ -34,7 +41,7 @@ export function PromptHelpPanel() {
     setBusy(true)
     setError('')
     apiPost<{ prompt: string }>('/admin/assist/prompt-help', {
-      prompt: p, request: wish.trim(),
+      prompt: p, request: wish.trim(), context,
     })
       .then((d) => { if (d.prompt) setPrompt(d.prompt) })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))

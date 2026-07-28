@@ -565,13 +565,19 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     const fixed = marker.source === 'prop';
     const floorY = floorYof.get(roomLevel.get(id) ?? 0) ?? 0;
     const offsetY = fixed ? 0 : marker.y_world - floorY;
+    // y_world ist die FLÄCHE; wie tief die Wurzel darunter sitzt, sagt der
+    // Server (root_offset). Der frühere eigene Sitz-Absatz des Clients galt
+    // nur für Raum-Marker — Prop-Marker bekamen gar keinen, und die Autoren
+    // rechneten ihn per Hand in den Marker hinein.
+    const drop = marker.root_offset ?? 0;
     byKind.set(marker.animation, [...(byKind.get(marker.animation) ?? []), {
       p: tile.center.clone().add(new THREE.Vector3(
-        marker.at_world[0], marker.y_world, marker.at_world[1])),
+        marker.at_world[0], marker.y_world - drop, marker.at_world[1])),
       rotation: marker.facing,
       tilt: marker.tilt,
       roll: marker.roll,
       offsetY,
+      drop,
       fixed,
     }]);
   }

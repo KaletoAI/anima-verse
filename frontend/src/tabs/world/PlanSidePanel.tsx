@@ -9,7 +9,7 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { PropsPalette } from './PropsPalette'
 import type { PropFull } from '../props/propTypes'
-import type { Room } from './worldTypes'
+import type { Room, SurfaceKind } from './worldTypes'
 
 /** The two shell surfaces a room may skin — mirrors layout.surfaces. */
 const SURFACE_SLOTS: Array<{ key: 'floor' | 'wall'; label: string }> = [
@@ -32,7 +32,7 @@ interface PlanSidePanelProps {
   onArmMarker: () => void
   onAlwaysVisible: (value: boolean) => void
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
-  surfaceKinds: Array<{ kind: string; url: string }>
+  surfaceKinds: SurfaceKind[]
   onSurface: (key: 'floor' | 'wall', kind: string) => void
   /** "✨ Furnish" (plan-room-furnish.md): opens the job dialog. The state
    *  string ('' = no job) is shown as a badge so a running job is visible
@@ -126,7 +126,7 @@ export function PlanSidePanel({
             >
               <option value="">{t('— default —')}</option>
               {surfaceKinds.map((s) => (
-                <option key={s.kind} value={s.kind}>{s.kind}</option>
+                <option key={s.kind} value={s.kind}>{s.name}</option>
               ))}
               {/* A stored kind the library no longer offers stays selectable. */}
               {cur && !surfaceKinds.some((s) => s.kind === cur) ? (

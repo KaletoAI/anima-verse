@@ -383,6 +383,17 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             {"text": "Style and negative prompts come from the use-case, not from this field."},
         ],
     },
+    "surface_prompt": {
+        "title": "Surface texture prompt",
+        "intro": "A surface is a MATERIAL, not a scene — it gets tiled across the ground, so anything that betrays a camera repeats visibly:",
+        "items": [
+            {"code": "seamless, top-down, even lighting", "copy": False,
+             "text": "What every surface prompt needs. Perspective, a vignette, drop shadows or a horizon turn into a visible grid once tiled."},
+            {"text": "Description = what the material is. It is composed into the final prompt below and stored, so a new version regenerates from it."},
+            {"text": "Final prompt = use-case style + description, complete. Edit it and exactly that is sent — the description stays as it was."},
+            {"text": "The id never appears in a prompt. Rename the material freely; the id stays what the terrain field and the stored floor kinds point at."},
+        ],
+    },
     "effects_syntax": {
         "title": "Effects",
         "intro": "One effect per line. Applied when the item is consumed:",

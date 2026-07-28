@@ -1,13 +1,17 @@
 /**
  * SurfaceKindDetail — every stored version of ONE texture kind: thumbnail,
  * provenance, physical edge length, the ⭐ activation (what the 3D client
- * gets) and the armed two-step delete. The generator for a new version is
- * slotted in by the container (`generateForm`).
+ * gets) and the armed two-step delete.
+ *
+ * The generator (backend + prompts + actions) is slotted in by the container
+ * (`generateForm`) and sits WITH the properties, not as an island below the
+ * versions: the selected entry shows its own prompts and starts a run there.
  */
 import type { ReactNode } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
+import { Field } from '../../components/Field'
 import { useI18n } from '../../i18n/I18nProvider'
-import { dateShort, madeWith } from './surfaceTypes'
+import { SURFACE_PROMPT_CONTEXT, dateShort, madeWith } from './surfaceTypes'
 import type { TexGroup, TexVersion } from './surfaceTypes'
 
 interface SurfaceKindDetailProps {
@@ -23,8 +27,8 @@ interface SurfaceKindDetailProps {
   onRemove: (filename: string) => void
   onZoom: (version: TexVersion) => void
   onUpload: () => void
-  /** Persist the display name / generation subject of this kind. */
-  onMeta: (meta: { name?: string; subject?: string }) => void
+  /** Persist the name / description of this kind. The ID is not editable. */
+  onMeta: (meta: { name?: string; description?: string }) => void
   generateForm: ReactNode
 }
 
@@ -48,39 +52,48 @@ export function SurfaceKindDetail({
       <div className="ga-form">
         <div className="ga-form-section-label">{t('Properties')}</div>
         <div className="ga-form-row">
-          <label className="ga-field" style={{ flex: 1 }}>
-            <span className="ga-field-caption">{t('Name')}</span>
+          <Field label={t('Name')}
+            hint={t('Free text, spaces welcome — this is what every picker shows. Rename it whenever you like.')}>
             <input
               key={`name-${group.kind}-${group.name || ''}`}
               className="ga-input"
               defaultValue={group.name || ''}
               placeholder={group.kind}
-              title={t('Display name for lists and pickers — free text, spaces welcome. The kind stays the stable id the terrain field matches.')}
               onBlur={(e) => {
                 if (e.target.value.trim() !== (group.name || ''))
                   onMeta({ name: e.target.value })
               }}
               onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             />
-          </label>
-          <span className="ga-hint" style={{ alignSelf: 'flex-end' }}>
-            {t('kind')}: {group.kind}
-          </span>
+          </Field>
+          <Field label={t('ID')} compact
+            hint={t('Fixed — it sits in file names and in world data.')}>
+            <input
+              className="ga-input"
+              style={{ width: 130 }}
+              value={group.kind}
+              readOnly
+              title={t('The id the terrain field, the level/room floor kinds and the blends point at. Changing it would be a data migration, so it stays — and it never reaches a prompt.')}
+            />
+          </Field>
         </div>
-        <label className="ga-field">
-          <span className="ga-field-caption">{t('Generation subject')}</span>
+        <Field label={t('Description')} help="surface_prompt"
+          promptContext={SURFACE_PROMPT_CONTEXT}
+          hint={t('The one text that goes into the prompt of new versions.')}>
           <textarea
-            key={`subject-${group.kind}-${group.subject || ''}`}
+            key={`desc-${group.kind}-${group.description || ''}`}
             className="ga-textarea"
             rows={2}
-            defaultValue={group.subject || ''}
-            placeholder={t('What the texture shows — used to compose the prompt of new versions. Empty = the curated/generic wording for this kind.')}
+            defaultValue={group.description || ''}
+            placeholder={t('What the texture shows, e.g. "seamless rubber flooring with a fine round-stud pattern"')}
             onBlur={(e) => {
-              if (e.target.value.trim() !== (group.subject || ''))
-                onMeta({ subject: e.target.value })
+              if (e.target.value.trim() !== (group.description || ''))
+                onMeta({ description: e.target.value })
             }}
           />
-        </label>
+        </Field>
+        {/* HOW it is made sits with WHAT it is — one entry, one place. */}
+        {generateForm}
         <div className="ga-form-section-label">{t('Versions')}</div>
         {pending ? (
           <span className="ga-hint">{t('Generating…')}</span>
@@ -138,7 +151,6 @@ export function SurfaceKindDetail({
           ))}
         </div>
       </div>
-      {generateForm}
     </>
   )
 }

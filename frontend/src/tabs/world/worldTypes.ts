@@ -261,3 +261,12 @@ export type Selection =
   | { kind: 'location'; locationId: string }
   | { kind: 'room'; locationId: string; roomId: string }
   | null
+
+/** One entry of the global surface-texture library as a picker needs it.
+ *  `kind` is the ID and the value that gets STORED; `name` is what the user
+ *  reads. Both come from /assets/surface-textures. */
+export interface SurfaceKind {
+  kind: string
+  name: string
+  url: string
+}
