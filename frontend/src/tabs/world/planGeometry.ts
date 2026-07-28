@@ -27,6 +27,31 @@ export const OPENING_COLOR: Record<string, string> = {
 export const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
 export const r4 = (v: number) => Math.round(v * 10000) / 10000
 
+// ── Reference sizes (scale bar, metre grid) ──
+/** Metre values a scale bar or a grid may use — no 3.7 m steps. */
+const NICE_M = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500]
+
+/** Largest nice value that still fits into `maxM`. */
+export function niceDown(maxM: number): number {
+  for (let i = NICE_M.length - 1; i >= 0; i--) {
+    if (NICE_M[i] <= maxM) return NICE_M[i]
+  }
+  return NICE_M[0]
+}
+
+/** Smallest nice value that is at least `minM`. */
+export function niceUp(minM: number): number {
+  for (const v of NICE_M) if (v >= minM) return v
+  return NICE_M[NICE_M.length - 1]
+}
+
+/** Metres for a label: coarse enough to read, fine enough to be true. */
+export function fmtM(m: number): string {
+  if (m >= 10) return m.toFixed(0)
+  if (m >= 1) return m.toFixed(1)
+  return m.toFixed(2)
+}
+
 // ── Polygon hulls (plan-room-props.md) ──
 // A room's hull is a polygon in ROOM-local fractions: the drawn `outline`
 // (bbox-local, spanning [0,1]², clockwise in screen coordinates — the server

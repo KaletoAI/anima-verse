@@ -3385,14 +3385,25 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
 #   is_intimate  → Decency-Override auf nude_ok
 
 def set_is_sleeping(character_name: str, value: bool) -> None:
-    """Setzt den is_sleeping-Flag. Bei True wird der Char ggf. off-map
-    geschickt (Caller-Verantwortung, e.g. Sleep-Skill ruft go_offmap).
+    """Set the is_sleeping flag. True may send the character off-map — that
+    is the caller's job (the sleep skill calls go_offmap).
+
+    The ACTIVITY follows along: whoever sleeps is doing nothing else. The old
+    text used to survive, so a character asleep in the cellar still read as
+    "fighting" (user finding 2026-07-28). More than the display hangs on it —
+    pose presets, prompt building and the world map's animation all read the
+    activity. Waking CLEARS it instead of restoring the old one: what held
+    eight hours ago no longer holds, and the next thought turn sets a new one.
     """
     if not character_name:
         return
     profile = get_character_profile(character_name) or {}
     was = bool(profile.get("is_sleeping"))
     profile["is_sleeping"] = bool(value)
+    if value != was:
+        # "sleeping" is the canonical preset key (the synonyms schlafen /
+        # schlafend / pennen point at it), so everything downstream matches.
+        profile["current_activity"] = "sleeping" if value else ""
     # Change stamp for the flag lifecycle (same bookkeeping as set_state_flag).
     _since = dict(profile.get("state_flag_since") or {})
     if value:

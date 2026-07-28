@@ -14,5 +14,10 @@
     "build:admin": "npm run build -w frontend",
     "build:client3d": "npm run build -w client3d",
     "build": "npm run build -w frontend && npm run build -w client3d"
+  },
+  "overrides": {
+    "js-yaml@4": "4.3.0",
+    "brace-expansion@1": "1.1.16",
+    "brace-expansion@5": "5.0.8"
   }
 }

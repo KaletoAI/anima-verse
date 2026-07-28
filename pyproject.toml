@@ -37,7 +37,11 @@ dependencies = [
     "aiohttp>=3.14.0",      # CVE-2026-34993 / CVE-2026-47265 (Dependabot)
     "gradio_client",        # TTS backends (F5/XTTS via Gradio)
     "rembg",                # background removal (u2net)
-    "pillow",
+    # Pillow touches every generated image and every upload, so its heap
+    # bugs are on a real path (Image.paste/crop, RankFilter, PDF
+    # decompression bomb, JPEG2000 scratch buffer — 13 Dependabot alerts,
+    # all fixed in 12.3.0). The floor states what was already installed.
+    "pillow>=12.3.0",
     "anthropic>=0.40.0",
     # Security floors for transitive deps (Dependabot); pulled via
     # requests/httpx. Pin the patched minimums.

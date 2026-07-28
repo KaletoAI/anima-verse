@@ -19,12 +19,13 @@ import { useToast } from '../../lib/Toast'
 import {
   CLOSE_TOL_PX, MIN_FRAC, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
   SNAP_TOL_PX, absOutline, buildSnapTargets, clamp, edgePointOnEdge,
-  edgeSegment, exteriorEdges, nearestPolygonEdge,
+  edgeSegment, exteriorEdges, fmtM, nearestPolygonEdge,
   normalizeOpeningEdge, outlineOf, r4, rotateOpeningCW, sharedEdges,
   snapDrawPoint, snapMoveOffset,
 } from './planGeometry'
 import type { EdgeLetter, PolyRoom, SnapResult } from './planGeometry'
 import { FurnishDialog, useFurnishJob } from './FurnishDialog'
+import { PlanFigure, PlanMetreGrid, PlanScaleBar } from './PlanMeasure'
 import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
@@ -219,6 +220,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // for tracing the outline polygon.
   const [bUnderlay, setBUnderlay] = useState(false)
   const [underlayUrl, setUnderlayUrl] = useState('')
+  // Reference sizes on the plan (metre grid + the 1.70 m person). On by
+  // default — a plan whose rectangles carry no real size is exactly the
+  // problem these aids exist for. The scale bar has no switch at all.
+  const [aids, setAids] = useState(true)
+  // Bottom-left, but clear of the scale bar in the corner below it.
+  const [figurePos, setFigurePos] = useState<[number, number]>([0.05, 0.84])
+  // The canvas is CANVAS_W at zoom 1 — unless a narrow pane shrinks it via
+  // maxWidth. The scale bar and the grid step are stated in PIXELS, so they
+  // measure the edge instead of assuming it.
+  const [canvasPx, setCanvasPx] = useState(CANVAS_W)
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState>(null)
   const roomsRef = useRef(rooms)
@@ -261,6 +272,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
     return () => canvas.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // Live canvas width for the pixel-stated aids (zoom changes resize the
+  // element, so this covers them too).
+  useEffect(() => {
+    const el = canvasRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      setCanvasPx(el.getBoundingClientRect().width || CANVAS_W)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [])
 
   const placed = rooms.filter((r) => r.layout && (r.layout.level || 0) === level)
@@ -1095,6 +1118,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         >
           🏢
         </button>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${aids ? ' ga-btn-primary' : ''}`}
+          disabled={planW <= 0}
+          onClick={() => setAids((v) => !v)}
+          title={planW <= 0
+            ? t('Set the plan width (m) first — without a scale anchor the plan has no real size to show.')
+            : t('Reference sizes: a grid in whole metres and the 1.70 m person from above, draggable. The scale bar at the bottom left stays either way.')}
+        >
+          📏
+        </button>
         <span aria-hidden style={{ width: 1, alignSelf: 'stretch',
           background: 'var(--border, #30363d)', margin: '0 2px' }} />
         <button type="button" className="ga-btn ga-btn-sm"
@@ -1251,14 +1285,21 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onProps={() => setPropsOpen((v) => !v)}
       />
       {/* Zoom viewport: the canvas grows with the zoom, this box keeps the
-          layout footprint and scrolls (Ctrl+wheel zooms on the canvas). */}
+          layout footprint and scrolls (Ctrl+wheel zooms on the canvas). The
+          frame around it carries the scale bar — inside the viewport a
+          zoomed-in plan would scroll its own scale out of sight. */}
+      <div style={{ position: 'relative', flex: '0 1 auto', maxWidth: '100%' }}>
       <div ref={zoomViewportRef} style={{ overflow: 'auto', maxWidth: '100%',
-        maxHeight: canvasH + 14, flex: '0 1 auto' }}>
+        maxHeight: canvasH + 14 }}>
       <div
         ref={canvasRef}
         style={{
           position: 'relative',
-          width: CANVAS_W * planZoom, height: canvasH * planZoom,
+          // SQUARE, always: the height follows the width the browser really
+          // gives us. With a fixed height a narrow pane would shrink only the
+          // width and squeeze every fraction-drawn overlay horizontally — on
+          // a surface that claims to show metres, that is not acceptable.
+          width: CANVAS_W * planZoom, aspectRatio: '1 / 1',
           maxWidth: planZoom === 1 ? '100%' : undefined,
           border: '1px solid var(--border, #30363d)', borderRadius: 6,
           background: 'rgba(255,255,255,0.03)', overflow: 'hidden', touchAction: 'none',
@@ -1409,6 +1450,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             opacity: 0.9, pointerEvents: 'none',
           }} />
         ) : null}
+        {aids ? (
+          <PlanMetreGrid planWidthM={planW} canvasPx={canvasPx} />
+        ) : null}
         {placed.map((room) => {
           const lay = room.layout!
           const isSel = room.id === selected
@@ -1463,6 +1507,24 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 {room.name || room.id}
                 {lay.rotation ? ` ↻${lay.rotation}°` : ''}
               </span>
+              {/* The value ON the stretch it means: what this rectangle is in
+                  REAL metres. Hidden when the room is too small on screen to
+                  hold the text, and absent without a scale anchor. */}
+              {planW > 0 && lay.w * canvasPx >= 52 && lay.d * canvasPx >= 26 ? (
+                <span
+                  title={lay.outline?.length
+                    ? t('Bounding box of the room hull in real metres.')
+                    : t('Room size in real metres.')}
+                  style={{
+                    position: 'absolute', left: 3, bottom: 2, fontSize: 9,
+                    lineHeight: '11px', cursor: 'inherit',
+                    opacity: isSel ? 0.95 : 0.55,
+                    textShadow: '0 0 3px #0d1117, 0 0 3px #0d1117',
+                  }}
+                >
+                  {fmtM(lay.w * planW)} × {fmtM(lay.d * planW)} m
+                </span>
+              ) : null}
               {lay.exit ? (
                 <span
                   title={t('Exit point (override)')}
@@ -1782,7 +1844,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             {t('No rooms on this level yet — click a room below to place it.')}
           </span>
         ) : null}
+        {/* Topmost aid: the person is what everything else is compared to. */}
+        {aids ? (
+          <PlanFigure planWidthM={planW} pos={figurePos} onPos={setFigurePos}
+            canvasRef={canvasRef} interactive={!clickMode && !armedProp} />
+        ) : null}
       </div>
+      </div>
+      <PlanScaleBar planWidthM={planW} canvasPx={canvasPx} />
       </div>
 
       <PlanSidePanel

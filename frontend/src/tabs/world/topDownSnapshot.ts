@@ -118,8 +118,19 @@ export async function getRoomModelDims(roomId: string):
   const entry = await loadRoomModel(roomId)
   if (!entry) return null
   const THREE = await import('three')
-  const box = new THREE.Box3().setFromObject(entry.obj)
-  const size = box.getSize(new THREE.Vector3())
+  // Measure AFTER the orientation fix — the raw box belongs to the file, not
+  // to the model as it stands. A fix of y = 90° swaps the footprint, and
+  // without it the derived room rectangle came out with the wrong aspect
+  // (user finding 2026-07-28: "fit to model" ignored a rotated model).
+  // The fix is SNAPPED to 90°, the same rule place() measures object sizes
+  // by: how big a thing is must not depend on the fine angle.
+  const deg = (v?: number) => ((Math.round((v || 0) / 90) * 90) * Math.PI) / 180
+  const holder = new THREE.Group()
+  holder.add(entry.obj.clone(true))
+  holder.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y),
+                      deg(entry.rotation.z))
+  holder.updateMatrixWorld(true)
+  const size = new THREE.Box3().setFromObject(holder).getSize(new THREE.Vector3())
   const m = Math.max(size.x, size.z) || 1
   return { widthM: entry.widthM, fpX: size.x / m, fpZ: size.z / m }
 }
