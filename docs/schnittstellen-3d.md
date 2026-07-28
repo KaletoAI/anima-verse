@@ -64,6 +64,15 @@
 >    und `markers[].roll` (seitlich kippen), Grad ±90, Default 0, angewandt
 >    NACH dem Facing im Figuren-System ('YXZ'). Vorher konnte eine Figur nur
 >    senkrecht stehen — schräg auf dem Sand liegen war nicht ausdrückbar.
+> 8. **Ein Raum hat einen eigenen Höhen-Offset.** `layout.floor_offset_y`
+>    (REALE Meter, ±, Default 0, × k) hebt den ganzen Raum gegenüber seiner
+>    Etage: Platte, Wände, Props, Marker, Ausgang und das Diorama. Innerhalb
+>    eines Gebäudes bleibt er 0 — er ist für Räume, die ein Loch in ein
+>    Location-Modell schneiden: dort liegt das Gelände nicht auf Etagenhöhe,
+>    und ohne den Offset schwebt der Raum über seinem eigenen Loch. NICHT
+>    mitbewegt werden Etagenplatte, Konturwände und Fahrstuhl — die gehören
+>    dem Gebäude. `model_offset_y` bleibt daneben, was es ist: die Lage des
+>    MODELLS relativ zum Raumboden.
 > 7a. **Der Diorama-Bodenabstand ist 0,02 über dem Boden, auf dem der Raum
 >    steht** — der Raumplatte drinnen (0,10 + 0,02 = die vertraute 0,12),
 >    dem blanken Etagenboden draußen. Ein Outdoor-Raum hat keine Platte

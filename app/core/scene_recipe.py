@@ -251,6 +251,21 @@ def _bbox_inside(outline: List[List[float]],
     return all(_point_in_polygon(x, z, contour) for x, z in corners)
 
 
+def _room_floor_y(recipe: Dict[str, Any], storey: float, k: float) -> float:
+    """The height the room's FLOOR sits at: its storey plus the room's own
+    offset (``layout.floor_offset_y``, real metres × k).
+
+    Inside a building the offset is 0 and this is just the storey. It matters
+    where a room cuts a hole into a LOCATION model: terrain is not flat, so a
+    hut on the slope needs its floor where the ground actually is — otherwise
+    it floats over or sinks into the hole it made (user finding 2026-07-28).
+    Everything in the room derives from here, so plate, walls, props, markers,
+    exit and diorama move as one.
+    """
+    return (int(recipe.get("level") or 0) * storey
+            + _num(recipe.get("floor_offset_y")) * k)
+
+
 def _room_rect(recipe: Dict[str, Any], room: Dict[str, Any]) -> Tuple[float, float, float, float]:
     """The room's placed rectangle (x, y, w, d) in plate fractions."""
     lay = room.get("layout") or {}
@@ -304,7 +319,7 @@ def room_exit_world(recipe: Dict[str, Any], room: Dict[str, Any],
 # ── Plates ──────────────────────────────────────────────────────────────
 
 def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
-            levels: List[int], storey: float,
+            levels: List[int], storey: float, k: float,
             extent: float) -> List[Dict[str, Any]]:
     """One contour plate per used level + one floor plate per room.
 
@@ -340,7 +355,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
         entry: Dict[str, Any] = {
             "level": level,
             "outline": outline,
-            "top_y": _r(level * storey + (0.0 if outdoor else ROOM_PLATE_TOP)),
+            "top_y": _r(_room_floor_y(recipe, storey, k)
+                        + (0.0 if outdoor else ROOM_PLATE_TOP)),
             "thickness": 0.0 if outdoor else ROOM_PLATE_THICKNESS,
             "opacity_role": _opacity_role(level, ground),
             "room_id": recipe.get("room_id") or "",
@@ -542,7 +558,7 @@ def _room_walls(recipe: Dict[str, Any], storey: float, k: float,
     level = int(recipe.get("level") or 0)
     # Room shell walls stand on the ROOM plate (0.10), the contour walls on
     # the level plate (0.08) — § A4/A6.
-    base = level * storey + ROOM_PLATE_TOP
+    base = _room_floor_y(recipe, storey, k) + ROOM_PLATE_TOP
     height = _wall_height(storey)
     kind = str(((recipe.get("surfaces") or {}).get("wall")) or "").strip()
     room_id = recipe.get("room_id") or ""
@@ -808,9 +824,9 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "yaw_deg": _r(_num(lay.get("rotation")), 1),
         "anchor": [_r(_w(x + _num(at[0], 0.5) * w, extent)),
                    _r(_w(y + _num(at[1], 0.5) * d, extent))],
-        # Same floor the room's PROPS stand on: its plate indoors, the storey
+        # Same floor the room's PROPS stand on: its plate indoors, the room
         # floor outdoors — plus the diorama clearance and the plan's dial.
-        "bottom_y": _r(level * storey
+        "bottom_y": _r(_room_floor_y(recipe, storey, k)
                        + (0.0 if recipe.get("always_visible") else ROOM_PLATE_TOP)
                        + DIORAMA_CLEARANCE
                        + _num(recipe.get("model_offset_y"))),
@@ -899,7 +915,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float, k: float,
     level = int(recipe.get("level") or 0)
     room_id = recipe.get("room_id") or ""
     plate_top = 0.0 if recipe.get("always_visible") else ROOM_PLATE_TOP
-    floor_y = level * storey + plate_top + PROP_CLEARANCE
+    floor_y = _room_floor_y(recipe, storey, k) + plate_top + PROP_CLEARANCE
     out: List[Dict[str, Any]] = []
     for placement in recipe.get("placements") or []:
         pid = str(placement.get("prop_id") or "")
@@ -942,8 +958,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     contract promises the consumer, done here.
     """
     room_id = recipe.get("room_id") or ""
-    level = int(recipe.get("level") or 0)
-    floor_y = level * storey
+    floor_y = _room_floor_y(recipe, storey, k)
     x, y, w, d = _room_rect(recipe, room)
     out: List[Dict[str, Any]] = []
     for marker in recipe.get("markers") or []:
@@ -1127,6 +1142,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                          _num(building.get("bottom_y")))
             else:
                 y = int(recipe.get("level") or 0) * storey
+            # A zone on a SLOPE is not at the model's nominal ground either —
+            # the room's own height offset applies here exactly as it does to
+            # a built room's plate.
+            y += _num(recipe.get("floor_offset_y")) * k
             overlay_rooms[str(recipe.get("room_id") or "")] = {
                 "centre": [_r(cx), _r(cz)],
                 "rect": {"x": _r(cx), "z": _r(cz),
@@ -1186,7 +1205,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # texture surface floating at storey height would cut through it.
         "plates": _plates(map3d, [r for r in recipes
                                   if str(r.get("room_id") or "") not in overlay_rooms],
-                          levels, storey, extent),
+                          levels, storey, k, extent),
         "walls": walls,
         "extras": _elevator(map3d, levels, storey, k, extent),
         "models": models,

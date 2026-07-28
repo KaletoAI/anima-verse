@@ -31,13 +31,17 @@ interface ActiveModel {
 }
 
 export function RoomModelAdjust({ locationId, roomId, roomName,
-                                  calibration = false, onCalibration }: {
+                                  calibration = false, onCalibration,
+                                  calibrationAt, onCalibrationAt }: {
   locationId: string
   roomId: string
   roomName: string
   /** Calibration figure showing in the 3D preview for THIS room. */
   calibration?: boolean
   onCalibration?: (on: boolean) => void
+  /** Where it stands — fractions of the room rectangle. Pure UI state. */
+  calibrationAt?: [number, number]
+  onCalibrationAt?: (at: [number, number]) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -239,10 +243,48 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
           type="button"
           className={`ga-btn ga-btn-sm${calibration ? ' ga-btn-primary' : ''}`}
           onClick={() => onCalibration(!calibration)}
-          title={t('Calibration figure: puts a FIXED 1.70 m person into this room in the 3D preview. Dial "Room width (m)" until the furniture fits the figure, and the walkable floor height until it stands on the visible floor. Click inside the room on the 2D plan to move it; the spot is not saved.')}
+          title={t('Calibration figure: puts a FIXED 1.70 m person into this room in the 3D preview. Dial "Room width (m)" until the furniture fits the figure, and the walkable floor height until it stands on the visible floor. Move it with the X/Y dials or by clicking into the room on the 2D plan; the spot is not saved.')}
         >
           🧍
         </button>
+      ) : null}
+      {/* Where the figure stands, as fractions of the room rectangle. The
+          click into the 2D plan stays, but it misses whenever a prop, a
+          marker or an opening sits under the cursor — these always work. */}
+      {calibration && onCalibrationAt ? (
+        ([['x', 0] as const, ['y', 1] as const]).map(([axis, idx]) => (
+          <label key={axis} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Position of the calibration figure in the room (0 = one edge, 1 = the other).')}>
+            {axis.toUpperCase()}
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.005}
+              value={calibrationAt?.[idx] ?? 0.5}
+              onChange={(e) => {
+                const v = Math.round(parseFloat(e.target.value) * 1000) / 1000
+                const cur = calibrationAt || [0.5, 0.5]
+                onCalibrationAt(idx === 0 ? [v, cur[1]] : [cur[0], v])
+              }}
+              style={{ width: 90 }}
+            />
+            <input
+              className="ga-input"
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              style={{ width: 66 }}
+              value={calibrationAt?.[idx] ?? 0.5}
+              onChange={(e) => {
+                const v = Math.round((parseFloat(e.target.value) || 0) * 1000) / 1000
+                const cur = calibrationAt || [0.5, 0.5]
+                onCalibrationAt(idx === 0 ? [v, cur[1]] : [cur[0], v])
+              }}
+            />
+          </label>
+        ))
       ) : null}
       <span className="ga-hint">
         {t('Persisted on the active model — preview and 3D client pick it up.')}

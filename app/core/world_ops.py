@@ -539,6 +539,21 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             out["model_offset_y"] = round(max(-25.0, min(25.0, float(moy))), 3)
         except (TypeError, ValueError):
             pass
+    # Where the room's FLOOR sits, in REAL metres relative to its storey
+    # (± , × k at render time). Inside a building every room shares the
+    # storey and this stays 0; it earns its keep where a room cuts a hole
+    # into a LOCATION model — terrain is not flat, so the hut halfway up the
+    # slope needs its floor at the height the ground has THERE (user finding
+    # 2026-07-28, Willowbrook). Everything in the room rides along: plate,
+    # walls, props, markers, exit and the diorama.
+    fo = raw.get("floor_offset_y")
+    if fo is not None and f"{fo}".strip() != "":
+        try:
+            v = round(max(-25.0, min(25.0, float(fo))), 3)
+            if v:
+                out["floor_offset_y"] = v
+        except (TypeError, ValueError):
+            pass
     # Animation markers (schnittstellen-3d.md): optional spots in the room a
     # figure with a matching active animation snaps to. ``at`` = fraction of
     # the ROOM rectangle, ``animation`` = a clip kind from the OPEN clip
@@ -750,7 +765,8 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
 # The layout fields that carry REAL-WORLD SIZE. Openings, markers and
 # surfaces ride along on whatever scale already applies, so editing them is
 # not "geometry work" and never trips the scale-anchor requirement.
-_LAYOUT_GEOMETRY_KEYS = ("level", "x", "y", "w", "d", "rotation", "outline", "props")
+_LAYOUT_GEOMETRY_KEYS = ("level", "x", "y", "w", "d", "rotation", "outline",
+                         "props", "floor_offset_y")
 
 
 def _layout_geometry(layout: Any) -> Optional[Dict[str, Any]]:

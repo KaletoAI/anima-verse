@@ -451,6 +451,11 @@ def compose_recipe(room: Dict[str, Any],
         payload["model_at"] = lay["model_at"]
     if lay.get("model_offset_y") is not None:
         payload["model_offset_y"] = lay["model_offset_y"]
+    # Where the room's FLOOR sits, in real metres relative to its storey —
+    # same signature reasoning. Only meaningful where the room cuts a hole
+    # into a location model: the terrain there is not at storey level.
+    if lay.get("floor_offset_y") is not None:
+        payload["floor_offset_y"] = lay["floor_offset_y"]
     if lay.get("rotation") is not None:
         payload["rotation"] = lay["rotation"]
     # Change detection without polling the whole payload chain: the client

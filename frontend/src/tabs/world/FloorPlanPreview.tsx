@@ -120,7 +120,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // "Walls & floor" overlay — the client's render recipe (schnittstellen
   // → "Render-Rezept Wände & Boden"): outline floor plates + outer walls
   // with door gaps at the ground-floor exits.
-  const [showWalls, setShowWalls] = useState(false)
+  // Plates and walls ARE the scene — having them off by default meant the
+  // preview opened without the room floors, which is the reference you dial
+  // heights against (user finding 2026-07-28).
+  const [showWalls, setShowWalls] = useState(true)
   // Exclusive level view: null = all levels, a number renders ONLY that
   // storey (rooms, plates, walls, figures) — the ruler and the building
   // overlay stay, the elevator shaft only shows with all levels visible.

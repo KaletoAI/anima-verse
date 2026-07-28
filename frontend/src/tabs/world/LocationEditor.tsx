@@ -572,7 +572,18 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
               roomName={floorSelRoom.name || floorSelRoom.id}
               calibration={calibration?.roomId === floorSelRoom.id}
               onCalibration={(on) => setCalibration(
-                on && floorSelRoom.id ? { roomId: floorSelRoom.id } : null)}
+                // Start on the diorama's own anchor, so switching the figure
+                // on does not move it — and the X/Y dials have a value from
+                // the first moment instead of an implicit "somewhere".
+                on && floorSelRoom.id
+                  ? { roomId: floorSelRoom.id,
+                      at: (floorSelRoom.layout?.model_at as [number, number])
+                        || [0.5, 0.5] }
+                  : null)}
+              calibrationAt={calibration?.roomId === floorSelRoom.id
+                ? calibration.at : undefined}
+              onCalibrationAt={(at) => setCalibration(
+                (cur) => (cur ? { ...cur, at } : cur))}
             />
           ) : null}
         </RoomLayoutEditor>

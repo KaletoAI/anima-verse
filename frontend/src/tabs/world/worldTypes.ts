@@ -28,6 +28,12 @@ export interface RoomLayout {
    *  exit and openings stay; the building outline is unaffected. Absent =
    *  walls, so the editor shows the inverse ("Render walls"). */
   no_walls?: boolean
+  /** Height offset of the ROOM in REAL metres, relative to its storey (± ,
+   *  × k at render time). Everything in the room rides along: plate, walls,
+   *  props, markers, exit and the diorama. 0 inside a building; it is for
+   *  rooms that cut a hole into a location model, where the terrain is not
+   *  at storey level. */
+  floor_offset_y?: number
   /** Animation markers: spots a figure with a matching active animation
    *  snaps to. at = fraction of the room rectangle; animation = a clip kind
    *  from the open animation-clip vocabulary; rotation = facing in degrees

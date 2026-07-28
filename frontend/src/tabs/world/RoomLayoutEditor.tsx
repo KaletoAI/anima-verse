@@ -498,6 +498,40 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     if (changed) onChange(next)
   }, [planW, derivedSize, geomKey, onChange])
 
+  // Fit the SELECTED room's plan to its 3D model — the manual counterpart of
+  // the auto-sizing above, which deliberately leaves drawn hulls alone. After
+  // calibrating a model against the reference figure the plan is usually the
+  // one thing left too big (user finding 2026-07-28, Handwerker Hütte).
+  const fitToModel = useCallback(() => {
+    const room = roomsRef.current.find((r) => r.id === selectedRef.current)
+    const lay = room?.layout
+    const dims = room?.id ? modelDimsRef.current[room.id] : null
+    if (!lay || !room?.id || !dims || dims.widthM <= 0 || planWRef.current <= 0) return
+    // The model's footprint in PLAN fractions: its declared real width over
+    // the plan width, the short side via the mesh's own aspect.
+    const long = dims.widthM / planWRef.current
+    const aspect = Math.min(dims.fpX, dims.fpZ) / (Math.max(dims.fpX, dims.fpZ) || 1)
+    const short = Math.max(long * aspect, MIN_FRAC)
+    let wantW = dims.fpX >= dims.fpZ ? long : short
+    let wantD = dims.fpX >= dims.fpZ ? short : long
+    if (((lay.rotation || 0) % 180) === 90) [wantW, wantD] = [wantD, wantW]
+    if (lay.outline?.length) {
+      // A drawn hull keeps the SHAPE it was drawn in — only its size follows
+      // the model, so the longest side matches and the rest scales with it.
+      const f = Math.max(wantW, wantD) / (Math.max(lay.w, lay.d) || 1)
+      wantW = lay.w * f
+      wantD = lay.d * f
+    }
+    wantW = clamp(r4(wantW), MIN_FRAC, 1)
+    wantD = clamp(r4(wantD), MIN_FRAC, 1)
+    updateLayoutRef.current?.(room.id, {
+      w: wantW,
+      d: wantD,
+      x: r4(clamp(lay.x + (lay.w - wantW) / 2, 0, 1 - wantW)),
+      y: r4(clamp(lay.y + (lay.d - wantD) / 2, 0, 1 - wantD)),
+    })
+  }, [])
+
   const updateLayout = useCallback((roomId: string, patch: Partial<RoomLayout> | null) => {
     const next = roomsRef.current.map((r) => {
       if (r.id !== roomId) return r
@@ -511,6 +545,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     })
     onChange(next)
   }, [onChange, level])
+  // Refs so `fitToModel` stays identity-stable (it sits in the toolbar props).
+  const updateLayoutRef = useRef(updateLayout)
+  updateLayoutRef.current = updateLayout
+  const modelDimsRef = useRef(modelDims)
+  modelDimsRef.current = modelDims
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
 
   // Close a drawn room hull: bbox becomes x/y/w/d (the legacy client keeps
   // reading only those), the points renormalize to bbox-local [0,1]² with
@@ -1193,6 +1234,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         building={!!onMap3d}
         noAnchor={planW <= 0}
         canSuggest={placed.length > 0}
+        canFitToModel={!!(selectedRoom?.id && planW > 0
+          && (modelDims[selectedRoom.id]?.widthM || 0) > 0)}
+        onFitToModel={fitToModel}
         propsOpen={propsOpen}
         onMode={armMode}
         onRotate={rotateSelected}
@@ -1907,8 +1951,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               </label>
             ))}
             <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Height offset of the model in metres — negative sinks it (replaces the old per-model offset).')}>
-              {t('Height (m)')}
+              title={t('Height offset of the MODEL in real metres, relative to the room floor — negative sinks it.')}>
+              {t('Model height (m)')}
               <input className="ga-input" type="number" step={0.05}
                 style={{ width: 78 }}
                 value={lay.model_offset_y ?? 0}
@@ -1916,6 +1960,23 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   const v = Number(e.target.value)
                   updateLayout(selectedRoom.id || '', {
                     model_offset_y: Number.isFinite(v) && v !== 0 ? v : undefined,
+                  })
+                }} />
+            </label>
+            {/* Where the ROOM sits, as opposed to the model inside it. Zero
+                inside a building — earns its keep where the room cuts a hole
+                into the location model and the terrain there is not at
+                storey level. */}
+            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Height offset of the ROOM in real metres, relative to its storey. Everything in the room moves with it: floor, walls, props, markers, exit and the model. Inside a building leave it at 0 — it is for rooms that cut into a location model, where the terrain is not at storey level.')}>
+              {t('Room height (m)')}
+              <input className="ga-input" type="number" step={0.05}
+                style={{ width: 78 }}
+                value={lay.floor_offset_y ?? 0}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  updateLayout(selectedRoom.id || '', {
+                    floor_offset_y: Number.isFinite(v) && v !== 0 ? v : undefined,
                   })
                 }} />
             </label>

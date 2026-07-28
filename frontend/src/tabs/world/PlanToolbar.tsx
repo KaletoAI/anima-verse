@@ -55,9 +55,13 @@ interface PlanToolbarProps {
    *  real-world size is locked until one is set. */
   noAnchor: boolean
   canSuggest: boolean
+  /** The selected room has a 3D model with a declared real width — only then
+   *  can the floor plan be fitted to it. */
+  canFitToModel: boolean
   propsOpen: boolean
   onMode: (m: PlanMode) => void
   onRotate: () => void
+  onFitToModel: () => void
   onUnplace: () => void
   onRemoveExit: () => void
   onRemoveOutline: () => void
@@ -72,6 +76,7 @@ interface PlanToolbarProps {
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasExit, hasOutline,
   outlineDraftLen, hasElevator, building, noAnchor, canSuggest,
+  canFitToModel, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace, onRemoveExit,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
   onCancelDraw, onSuggest, onProps,
@@ -157,6 +162,12 @@ export function PlanToolbar({
         onClick={onRotate}
         title={t('Rotate the room 90° clockwise — hull, exit point and 3D model turn together. Now: {deg}°')
           .replace('{deg}', String(selectionRotation))}
+      />
+      <Tool
+        icon="⇲"
+        disabled={!canFitToModel}
+        onClick={onFitToModel}
+        title={t('Fit the floor plan to the 3D model: the room takes the size the model’s declared real width gives it. A DRAWN hull keeps its shape and is scaled as a whole; a plain rectangle also takes the model’s proportions.')}
       />
       <Tool
         icon="🚪"
