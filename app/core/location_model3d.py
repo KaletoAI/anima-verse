@@ -252,8 +252,6 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "offset_x": float(meta.get("offset_x") or 0.0),
             "offset_z": float(meta.get("offset_z") or 0.0),
             "walk_y": float(meta.get("walk_y") or 0.0),
-            "floors": float(meta.get("floors") or 0.0),
-            "height_m": float(meta.get("height_m") or 0.0),
             "width_m": float(meta.get("width_m") or 0.0),
             "active": bool(active and p.name == active.name),
         })
@@ -261,11 +259,12 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
 
 
 # ── Scale anchor ────────────────────────────────────────────────────────
-# The detail view needs ONE real-world number: how many metres the 8×8
-# reference square of the floor plan spans. It comes either from the
-# explicit ``map3d.plan_width_m`` or — identically derived on client and
-# server — from the building model (declared height × the mesh's
-# width-per-height ratio, mirrors ``topDownSnapshot.getBuildingDims``).
+# The detail view needs ONE real-world number: how many REAL metres the
+# location's reference square spans. Since 2026-07-28 that is exactly
+# ``map3d.plan_width_m`` and nothing else — the old second path (a model's
+# declared height × the mesh's width-per-height ratio) died with the per-axis
+# scaling it served. A mesh cannot state its own real size, so the anchor is
+# a decision, not a measurement.
 
 def _explicit_plan_width(map3d: Any) -> float:
     try:
@@ -276,43 +275,35 @@ def _explicit_plan_width(map3d: Any) -> float:
 
 
 def has_scale_anchor(location_id: str, map3d: Any) -> bool:
-    """True when the location HAS a scale anchor — the explicit plan width or
-    a building model with a declared height. Deliberately cheap (no GLB
-    parsing): the width derivation is the consumer's job, see
-    ``derive_plan_width_m``."""
-    if _explicit_plan_width(map3d) > 0:
-        return True
-    p = find_building_model(location_id)
-    if not p:
-        return False
-    try:
-        return float(_read_sidecar(p).get("height_m") or 0) > 0
-    except (TypeError, ValueError):
-        return False
+    """True when the location HAS a scale anchor (``map3d.plan_width_m``).
+    ``location_id`` is kept for the callers' signature — no model is read."""
+    return _explicit_plan_width(map3d) > 0
 
 
 def derive_plan_width_m(location_id: str, map3d: Any) -> float:
-    """The reference square's real width in METRES, or 0.0 when the location
-    has no usable anchor. Explicit value wins; otherwise the building model's
-    declared height × its width-per-height ratio (largest XZ side / Y after
-    the orientation fix) — the same formula the editor uses."""
-    pw = _explicit_plan_width(map3d)
-    if pw > 0:
-        return pw
-    p = find_building_model(location_id)
-    if not p or p.suffix.lower() != ".glb":
-        return 0.0
-    meta = _read_sidecar(p)
+    """The reference square's real width in METRES, 0.0 when unanchored."""
+    return _explicit_plan_width(map3d)
+
+
+# ── One-shot conversion to the one-frame / one-scale model ──────────────
+
+_SCALE_FRAME_FLAG = "world.migration.scale_frame"
+
+
+def _legacy_plan_width(path: Path, meta: Dict[str, Any]) -> float:
+    """The plan width the OLD chain derived from a building model:
+    declared height × the mesh's width-per-height ratio. Only used to carry
+    the value over — the derivation itself is gone."""
     try:
         height = float(meta.get("height_m") or 0)
     except (TypeError, ValueError):
         return 0.0
-    if height <= 0:
+    if height <= 0 or path.suffix.lower() != ".glb":
         return 0.0
     from app.core.model_validate import glb_bounds
     from app.core.props import oriented_dims
     try:
-        bounds = glb_bounds(p.read_bytes())
+        bounds = glb_bounds(path.read_bytes())
     except OSError:
         return 0.0
     if not bounds:
@@ -322,6 +313,118 @@ def derive_plan_width_m(location_id: str, map3d: Any) -> float:
     if not od or od[1] <= 0:
         return 0.0
     return round(height * max(od[0], od[2]) / od[1], 3)
+
+
+def migrate_scale_frame_once() -> Dict[str, int]:
+    """Carry a world over to ONE frame and ONE scale factor (2026-07-28).
+
+    What changed and therefore has to be converted once:
+
+    - the reference square is no longer a fixed 8 m but ``map3d.extent_m``
+      (default 10 = one map tile), and the model fills ``size × extent_m``
+      instead of ``10 × 0.92 × size``. A ``size`` above 1 used to mean
+      "overflow the tile" — that is now the job of ``extent_m``, so it moves
+      there and ``size`` becomes 1.
+    - ``plan_width_m`` is the ONLY scale anchor. Where it was derived from a
+      model's ``height_m`` it is written out explicitly BEFORE that field
+      disappears — otherwise the location would silently lose its scale.
+    - the storey height is one dial in REAL metres (``storey_height_m``)
+      instead of ``height_m / floors`` (real) or ``level_height`` (world).
+    - ``walk_y`` counts in REAL metres now, and a building's stored 0 meant
+      "auto" under the old truthiness check, not "at the lower edge".
+
+    Idempotent via a world_kv flag; touches map3d in world.db and the model
+    sidecars. Returns a small stats dict for the boot log.
+    """
+    from app.models.world import (_load_world_data, _save_world_data,
+                                  get_world_setting, set_world_setting)
+    if get_world_setting(_SCALE_FRAME_FLAG):
+        return {}
+    stats = {"locations": 0, "plan_width": 0, "storey": 0, "extent": 0,
+             "sidecars": 0}
+    wdata = _load_world_data()
+    changed = False
+    for loc in wdata.get("locations") or []:
+        if not isinstance(loc, dict):
+            continue
+        loc_id = str(loc.get("id") or "")
+        map3d = loc.get("map3d")
+        owner = _owner_id(loc_id) if loc_id else ""
+        building = find_building_model(loc_id) if owner else None
+        b_meta = _read_sidecar(building) if building else {}
+
+        if isinstance(map3d, dict) and map3d:
+            plan_w = _explicit_plan_width(map3d)
+            if plan_w <= 0 and building:
+                plan_w = _legacy_plan_width(building, b_meta)
+                if plan_w > 0:
+                    map3d["plan_width_m"] = round(plan_w, 2)
+                    stats["plan_width"] += 1
+                    changed = True
+            # k as it was BEFORE this migration — the old square was 8 m.
+            k_old = 8.0 / plan_w if plan_w > 0 else 1.0
+            if not map3d.get("storey_height_m"):
+                storey_real = 0.0
+                try:
+                    floors = float(b_meta.get("floors") or 0)
+                    height = float(b_meta.get("height_m") or 0)
+                except (TypeError, ValueError):
+                    floors = height = 0.0
+                if floors > 0 and height > 0:
+                    storey_real = height / floors
+                elif map3d.get("level_height"):
+                    # was WORLD metres — back to real
+                    storey_real = float(map3d["level_height"]) / (k_old or 1.0)
+                if storey_real > 0:
+                    map3d["storey_height_m"] = round(
+                        min(max(storey_real, 0.5), 50.0), 2)
+                    stats["storey"] += 1
+                    changed = True
+            if map3d.pop("level_height", None) is not None:
+                changed = True
+            try:
+                size = float(map3d.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0.0
+            if size > 1:
+                map3d["extent_m"] = round(min(10.0 * size, 40.0), 2)
+                map3d["size"] = 1.0
+                stats["extent"] += 1
+                changed = True
+            stats["locations"] += 1
+
+        if not owner:
+            continue
+        # Sidecars: drop the two per-axis dials, convert walk_y to real
+        # metres, and clear a building's legacy "0 means auto".
+        room_ids = [str(r.get("id") or "") for r in (loc.get("rooms") or [])
+                    if isinstance(r, dict) and r.get("id")]
+        plan_w = _explicit_plan_width(loc.get("map3d"))
+        k_old = 8.0 / plan_w if plan_w > 0 else 1.0
+        for room_id in [""] + room_ids:
+            for path in _list_files(owner, room_id):
+                meta = _read_sidecar(path)
+                if not meta:
+                    continue
+                touched = False
+                for dead in ("height_m", "floors"):
+                    if meta.pop(dead, None) is not None:
+                        touched = True
+                walk = meta.get("walk_y")
+                if walk is not None:
+                    if not room_id and float(walk or 0) == 0.0:
+                        meta.pop("walk_y", None)   # meant "auto" before
+                        touched = True
+                    elif float(walk or 0) > 0 and k_old > 0:
+                        meta["walk_y"] = round(float(walk) / k_old, 3)
+                        touched = True
+                if touched:
+                    _write_sidecar(path, meta)
+                    stats["sidecars"] += 1
+    if changed:
+        _save_world_data(wdata)
+    set_world_setting(_SCALE_FRAME_FLAG, "done")
+    return stats
 
 
 def _gen_key(owner_id: str, room_id: str = "", source_image: str = "") -> str:
@@ -381,15 +484,12 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
     out = {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
            "rig": meta.get("rig", "none"),
            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
-           # Detail-view scale anchors (0 = undeclared, see the shared
-           # backend note): buildings — height_m (uniform scale so the
-           # shell is exactly this tall) + floors (storeys the mesh
-           # depicts; storey height = height_m / floors, fallback
-           # map3d.level_height). Rooms — width_m (real-world width of
-           # the model's largest side; the diorama scales real-size from
-           # it, like a prop).
-           "floors": float(meta.get("floors") or 0.0),
-           "height_m": float(meta.get("height_m") or 0.0),
+           # Real-size anchor of a ROOM model (0 = undeclared): the real
+           # width of the model's largest side — the diorama scales from it
+           # like a prop. Buildings have none: their size follows the
+           # location's own extent (map3d.extent_m × map3d.size), and their
+           # former height/floors dials went with the per-axis scaling
+           # (2026-07-28).
            "width_m": float(meta.get("width_m") or 0.0),
            # Changes whenever ANOTHER model file becomes active (new
            # generation, upload, selection) — a running client polls the
@@ -563,34 +663,6 @@ def _set_sidecar_number(location_id: str, field: str, value: Any, *,
     return meta
 
 
-def set_floors(location_id: str, floors: Any,
-               room_id: str = "", filename: str = "") -> Dict[str, Any]:
-    """Persist how many storeys ONE building model depicts (sidecar). With
-    ``height_m`` declared, the storey height derives as
-    ``height_m / floors`` — level stacking and level lines follow it
-    (fallback: map3d.level_height). FRACTIONS are allowed (a roof or a
-    half-height attic reads as e.g. 2.5 storeys — only then does the
-    derived storey height hit the visible floor bands). 0/empty =
-    undeclared."""
-    return _set_sidecar_number(location_id, "floors", floors,
-                               room_id=room_id, filename=filename,
-                               lo=0.5, hi=200)
-
-
-def set_height_m(location_id: str, height_m: Any,
-                 room_id: str = "", filename: str = "") -> Dict[str, Any]:
-    """Persist a building model's height in world metres (sidecar — the
-    admin estimates/dials it at the preview's metre ruler). Scale anchor
-    of the DETAIL view: the shell is scaled UNIFORMLY (no distortion)
-    so its total height equals this value — its storeys then sit at
-    ``height_m / floors`` spacing, which is also the derived storey
-    height for level stacking. The tile view keeps the independent
-    footprint fit (map3d.size); clients switch representation on zoom.
-    0/empty = undeclared (detail view falls back to the tile fit)."""
-    return _set_sidecar_number(location_id, "height_m", height_m,
-                               room_id=room_id, filename=filename)
-
-
 def set_width_m(location_id: str, width_m: Any,
                 room_id: str = "", filename: str = "") -> Dict[str, Any]:
     """Persist a ROOM model's real-world width in metres (sidecar — the
@@ -606,16 +678,18 @@ def set_width_m(location_id: str, width_m: Any,
 
 def set_walk_y(location_id: str, room_id: str, walk_y: Any = None,
                filename: str = "") -> Dict[str, Any]:
-    """Persist a ROOM model's WALKABLE floor height (sidecar).
+    """Persist a model's WALKABLE floor height (sidecar; rooms AND buildings).
 
-    Diorama floors are modelled, not flat: a raised podium, a sunken lounge
-    or a hole in the mesh make the height a figure stands at unmeasurable
-    from outside (client wishlist 2026-07-24). ``walk_y`` states it once, in
-    WORLD metres above the model's FINAL lower edge (0 = the lower edge
-    itself, clamped to 0..5) — the scene payload delivers the absolute
-    result as ``walk_y_world``. The admin dials it against the reference
-    figure, like every other anchor. ``None``/empty removes the value; unlike
-    the other numeric setters 0 is a MEANINGFUL value here, not "unset"."""
+    Modelled floors are not flat: a raised podium, a sunken lounge, a hole in
+    the mesh, or an area model whose terrain sits well above its lower edge —
+    none of that is measurable from outside. ``walk_y`` states it once, in
+    REAL metres above the model's lower edge (the unit every other length in
+    this contract uses, × k at render time; 0 = the lower edge itself,
+    clamped to 0..50). The scene payload delivers the absolute result as
+    ``walk_y_world``, and for a GROUND model it is what ``offset_y`` is
+    measured against. The admin dials it against the reference figure, like
+    every other anchor. ``None``/empty removes the value; unlike the other
+    numeric setters 0 is a MEANINGFUL value here, not "unset"."""
     owner = _owner_id(location_id)
     if not owner:
         raise ValueError("no model")
@@ -631,7 +705,7 @@ def set_walk_y(location_id: str, room_id: str, walk_y: Any = None,
             v = float(walk_y)
         except (TypeError, ValueError):
             v = float(meta.get("walk_y") or 0.0)
-        meta["walk_y"] = round(min(max(v, 0.0), 5.0), 3)
+        meta["walk_y"] = round(min(max(v, 0.0), 50.0), 3)
     _write_sidecar(p, meta)
     return meta
 

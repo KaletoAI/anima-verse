@@ -14,7 +14,7 @@
  * would pull the library into the main bundle of the admin, which loads it
  * lazily. Type imports are unaffected (they vanish on compile).
  */
-export { FIT_BOX_MARGIN, placeModelSpec } from './place'
+export { placeModelSpec } from './place'
 export type { PlaceOptions } from './place'
 
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'

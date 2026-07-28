@@ -34,13 +34,9 @@ export interface ModelEntry {
   /** Walkable surface above the model bottom (m) — stand height of overlay
    *  zones on an area location. */
   walk_y?: number
-  /** Detail-view scale anchors (0 = undeclared): buildings — floors
-   *  (storeys the mesh depicts) + height_m (world metres; uniform scale
-   *  target, storey height derives as height_m / floors). Rooms —
-   *  width_m (real-world width of the largest side; figures in the room
-   *  derive from rect extent / width_m). */
-  floors?: number
-  height_m?: number
+  /** Real-size anchor of a ROOM model (0 = undeclared): the real width of
+   *  its largest side — the diorama scales from it like a prop. Buildings
+   *  have none; their size is the location's extent × size. */
   width_m?: number
   /** The model the clients get (/play/... routes serve only this one). */
   active?: boolean
@@ -277,65 +273,10 @@ export function BuildingModelPanel({
     }
   }, [current, offsetDrafts, enc, locationId, roomId, t, toast])
 
-  // Storeys the shown BUILDING model depicts — clients stretch the shell
-  // to floors × level_height, so it stays aligned with the room levels
-  // whenever level_height changes. Empty/0 = natural mesh proportions.
-  const [floorsDraft, setFloorsDraft] = useState('')
-  useEffect(() => {
-    setFloorsDraft(current?.floors ? String(current.floors) : '')
-  }, [current?.filename, current?.floors])
-  const commitFloors = useCallback(async () => {
-    if (!current || roomId) return
-    const n = parseFloat(floorsDraft)
-    const floors = Number.isFinite(n) && n > 0 ? n : 0
-    if (floors === (current.floors || 0)) {
-      setFloorsDraft(current.floors ? String(current.floors) : '')
-      return
-    }
-    try {
-      const d = await apiPost<{ meta: { floors?: number } }>(
-        `/world/locations/${enc}/model3d/floors`,
-        { floors, file: current.filename })
-      setModel3d((prev) => (prev ? {
-        ...prev,
-        models: (prev.models || []).map((m) =>
-          m.filename === current.filename ? { ...m, floors: d.meta?.floors || 0 } : m),
-      } : prev))
-      notifyModel3dChanged({ locationId })
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [current, roomId, floorsDraft, enc, locationId, t, toast])
-
-  // Metre anchors of the detail view: building height (uniform scale
-  // target; storey height = height / storeys) and room width (real-world
-  // estimate of the largest side; figures derive from it).
-  const [heightDraft, setHeightDraft] = useState('')
-  useEffect(() => {
-    setHeightDraft(current?.height_m ? String(current.height_m) : '')
-  }, [current?.filename, current?.height_m])
-  const commitHeight = useCallback(async () => {
-    if (!current || roomId) return
-    const n = parseFloat(heightDraft)
-    const heightM = Number.isFinite(n) && n > 0 ? n : 0
-    if (heightM === (current.height_m || 0)) {
-      setHeightDraft(current.height_m ? String(current.height_m) : '')
-      return
-    }
-    try {
-      const d = await apiPost<{ meta: { height_m?: number } }>(
-        `/world/locations/${enc}/model3d/height`,
-        { height_m: heightM, file: current.filename })
-      setModel3d((prev) => (prev ? {
-        ...prev,
-        models: (prev.models || []).map((m) =>
-          m.filename === current.filename ? { ...m, height_m: d.meta?.height_m || 0 } : m),
-      } : prev))
-      notifyModel3dChanged({ locationId })
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [current, roomId, heightDraft, enc, locationId, t, toast])
+  // The former "Model height (m)" and "Model storeys" dials are gone
+  // (2026-07-28): both fed a Y-only scaling that no longer exists. A model is
+  // scaled by ONE factor on all three axes (map3d.size × map3d.extent_m), and
+  // the storey height is a location dial in real metres.
 
   const [widthDraft, setWidthDraft] = useState('')
   useEffect(() => {
@@ -496,11 +437,8 @@ export function BuildingModelPanel({
           // floats centred). Yaw/size are fixed; the real placement comes
           // from the floor plan.
           ? { yawDeg: 0, size: 0.9 }
-          : {
-            yawDeg: effectiveYaw, size: effectiveSize,
-            heightM: current.height_m || 0,
-            planWidthM: map3d?.plan_width_m || 0,
-          }}
+          : { yawDeg: effectiveYaw, size: effectiveSize,
+            extentM: map3d?.extent_m || 10 }}
       />
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -557,44 +495,6 @@ export function BuildingModelPanel({
             />
           </label>
         ))}
-        {!roomId ? (
-          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Estimated height of the building MODEL in world metres — dial it at the metre ruler. The footprint keeps following the floor plan (tile fit); only the height is scaled to this value, so a too-flat mesh gets repaired. Storey height derives as height ÷ storeys; empty = natural proportions.')}>
-            {t('Model height (m)')}
-            <input
-              className="ga-input"
-              type="number"
-              min={0}
-              max={500}
-              step={0.1}
-              style={{ width: 72 }}
-              value={heightDraft}
-              placeholder={t('natural')}
-              onChange={(e) => setHeightDraft(e.target.value)}
-              onBlur={() => { void commitHeight() }}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-            />
-          </label>
-        ) : null}
-        {!roomId ? (
-          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Storeys the building MODEL depicts — together with the model height this derives the storey height (height ÷ storeys) for stacking the levels.')}>
-            {t('Model storeys')}
-            <input
-              className="ga-input"
-              type="number"
-              min={0}
-              max={200}
-              step={0.5}
-              style={{ width: 66 }}
-              value={floorsDraft}
-              placeholder="—"
-              onChange={(e) => setFloorsDraft(e.target.value)}
-              onBlur={() => { void commitFloors() }}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-            />
-          </label>
-        ) : null}
         {roomId ? (
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
             title={t('Estimated real-world width of the room (largest side, from the source image, e.g. 6). Placement is unchanged — the value sets the room’s content scale, and figures in the room size themselves from it automatically.')}>

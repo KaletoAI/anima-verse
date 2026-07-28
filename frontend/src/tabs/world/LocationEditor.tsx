@@ -437,18 +437,33 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             }}
           />
         </Field>
-        <Field label={t('Level height (m)')} hint={t('Storey height in WORLD metres — stacks the floor-plan levels and sets the figure scale in rooms (level_height / 3). Realistic interiors are ≈ 1–1.5; the default 3 reads as a triple-height storey.')}>
+        <Field label={t('Storey height (m)')} hint={t('The height of ONE storey in REAL metres — a normal room is 2.5 to 3. It stacks the floor-plan levels; the world height follows from the plan width like every other length.')}>
           <input
             className="ga-input"
             type="number"
             min={0.5}
             max={50}
             step={0.1}
-            value={draft.map3d?.level_height ?? ''}
+            value={draft.map3d?.storey_height_m ?? ''}
             placeholder="3"
             onChange={(e) => {
               const n = parseFloat(e.target.value)
-              updMap3d('level_height', Number.isFinite(n) && n > 0 ? n : undefined)
+              updMap3d('storey_height_m', Number.isFinite(n) && n > 0 ? n : undefined)
+            }}
+          />
+        </Field>
+        <Field label={t('Extent (m)')} hint={t('How wide this location is in WORLD metres — the square the floor plan is drawn in AND the box the model fills, so plan edge and model edge are the same line. 10 = exactly one map tile; more overlaps the neighbours on purpose.')}>
+          <input
+            className="ga-input"
+            type="number"
+            min={1}
+            max={40}
+            step={0.5}
+            value={draft.map3d?.extent_m ?? ''}
+            placeholder="10"
+            onChange={(e) => {
+              const n = parseFloat(e.target.value)
+              updMap3d('extent_m', Number.isFinite(n) && n > 0 ? n : undefined)
             }}
           />
         </Field>
@@ -573,9 +588,10 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           locationId={location.id}
           rooms={draft.rooms || []}
           map3d={draft.map3d}
-          levelHeightM={draft.map3d?.level_height}
-          onLevelHeight={(v) => updMap3d('level_height', v)}
+          storeyHeightM={draft.map3d?.storey_height_m}
+          onStoreyHeight={(v) => updMap3d('storey_height_m', v)}
           onPlanWidth={(v) => updMap3d('plan_width_m', v)}
+          onExtent={(v) => updMap3d('extent_m', v)}
           fallbackYawDeg={location.map_rotation_2d || 0}
           scene={scene}
           sceneError={sceneError}

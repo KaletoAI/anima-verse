@@ -50,6 +50,10 @@ export interface Tile {
   shell?: THREE.Group;
   /** bereits eingewechseltes Server-Gebäudemodell */
   serverModel?: THREE.Group;
+  /** `display: 'ground'` — das Modell IST die Location (Fläche, Dorf, See):
+   *  es blendet beim Reinzoomen nie weg, sondern bekommt Löcher. Kommt aus
+   *  der Spec, nicht aus dem Vorhandensein von cutouts. */
+  modelIsGround?: boolean;
   /** prozedurale Deko (Bäume) — weicht einem Server-Modell */
   decor?: THREE.Group;
   /** Namens-Label — Höhe wird beim Modell-Tausch nachgeführt */
@@ -122,9 +126,9 @@ export interface Tile {
 /** Etagenhöhe der Innenansicht (level * STOREY über dem Boden) */
 const STOREY = 3;
 
-/** v3-Maßstabs-Anker pro Location (backend-note-scale-anchors.md):
- *  k = Welt-Meter pro Real-Meter (8 / plan_width_m); storeyWorld =
- *  abgeleitete Etagenhöhe in Welt-Metern (height_m / floors x k). */
+/** Maßstabs-Anker pro Location, gesetzt aus dem Szenen-Payload:
+ *  k = Welt-Meter pro Real-Meter (extent_m / plan_width_m); storeyWorld =
+ *  Etagenhöhe in Welt-Metern (storey_height_m x k). */
 const locationAnchors = new Map<string, { k: number; storeyWorld: number }>();
 
 /** Anker setzen/aktualisieren; true = Wert hat sich geändert (Tile neu bauen). */
@@ -141,22 +145,16 @@ export function locationAnchor(loc: WorldLocation) {
   return locationAnchors.get(loc.id);
 }
 
-/** Etagenhöhe einer Location in Welt-Metern: abgeleiteter Anker-Wert,
- *  sonst map3d.level_height (Legacy), sonst 3. */
+/** Etagenhöhe einer Location in Welt-Metern: Anker-Wert aus dem Payload,
+ *  sonst der prozedurale Default (Location ohne Szene). */
 export function storeyHeight(loc: WorldLocation): number {
-  const anchor = locationAnchors.get(loc.id);
-  if (anchor) return anchor.storeyWorld;
-  const lh = loc.map3d?.level_height;
-  return lh && lh > 0 ? lh : STOREY;
+  return locationAnchors.get(loc.id)?.storeyWorld ?? STOREY;
 }
 
-/** Figuren-Maßstab in Räumen: anchored 1,0 x k (Figuren in Real-Metern
- *  x Kompressionsfaktor); Legacy: level_height / 3, sonst 1/3. */
+/** Figuren-Maßstab in Räumen: k aus dem Payload (Figuren in Real-Metern ×
+ *  Kompressionsfaktor); ohne Szene der prozedurale Default. */
 export function roomFigureScale(loc: WorldLocation): number {
-  const anchor = locationAnchors.get(loc.id);
-  if (anchor) return anchor.k;
-  const lh = loc.map3d?.level_height;
-  return lh && lh > 0 ? lh / 3 : 1 / 3;
+  return locationAnchors.get(loc.id)?.k ?? 1 / 3;
 }
 
 function detectStyle(loc: WorldLocation): TileStyle {
@@ -934,14 +932,10 @@ export function applyNightGlow(tile: Tile, night: number) {
 export function applyTileFade(tile: Tile, dt: number) {
   tile.fade = THREE.MathUtils.lerp(tile.fade, tile.fadeTarget, 1 - Math.exp(-6 * dt));
   const f = tile.fade;
-  // Hüllen-Y zwischen Kachel-Sicht (uniform) und Detail-Sicht (height_m x k)
-  // überblenden — die Geschosse landen so beim Reinzoomen auf den Etagen
+  // Kein Y-Morph mehr: die Spec liefert EINEN Maßstab, und der gilt in jeder
+  // Zoomstufe. Wer hier wieder etwas skaliert, erzeugt genau die Divergenz
+  // zur Admin-Vorschau, die 2026-07-28 vermessen wurde.
   const sm = tile.serverModel;
-  if (sm && typeof sm.userData.scaleYDetail === 'number') {
-    sm.scale.y = THREE.MathUtils.lerp(
-      sm.userData.scaleBase as number, sm.userData.scaleYDetail as number, f
-    );
-  }
   if (!tile.interior) return;
 
   // Ein Keller (Etage < 0) liegt UNTER dem Kachelboden — und der ist die
@@ -974,7 +968,7 @@ export function applyTileFade(tile: Tile, dt: number) {
   // Etagen-Umschalter für Platten (lv <= filter sichtbar) und die
   // Admin-Solo-Ansicht: Level < 0 gewählt → das Modell (die Level-0+-Optik)
   // verschwindet, bis eine Etage >= 0 oder die Fernsicht zurückkommt.
-  if (tile.cutouts && sm) {
+  if (tile.modelIsGround && sm) {
     sm.visible = !(f > 0.03 && tile.levelFilter < 0);
   }
 

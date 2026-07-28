@@ -48,21 +48,24 @@ export interface Map3dMeta {
   color?: string;   // Grundfarbe der Fassade, z.B. "#8fa3b0"
   /** Drehung des Gebäude-Modells um die Hochachse in Grad (Fallback: map_rotation_2d) */
   rotation?: number;
-  /** Grundflächen-Anteil an der Kachel (0..1, Default 0.92) */
+  /** Anteil des Modells am Bezugsquadrat der Location (0..1, Default 1) */
   size?: number;
   /** AV3D-12: gezeichneter Gebäude-Grundriss — Polygonpunkte als Fraktionen
-   *  des 8x8-Referenzquadrats, automatisch geschlossen. Der Client rendert
-   *  daraus pro genutzter Etage Boden und Wände (Tür im EG). */
+   *  des Bezugsquadrats (extent_m), automatisch geschlossen. Der Client
+   *  rendert daraus pro genutzter Etage Boden und Wände (Tür im EG). */
   outline?: [number, number][];
   /** AV3D-12: Fahrstuhl-Position (Fraktion des Referenzquadrats) — wird
    *  automatisch auf allen Etagen platziert; Figuren nutzen ihn beim
    *  Etagenwechsel */
   elevator?: [number, number];
-  /** Etagenhöhe in Welt-Metern (Kartenmaßstab) — LEGACY-Fallback, wenn
-   *  keine Maßstabs-Anker deklariert sind. Default: 3 */
-  level_height?: number;
-  /** v3-Maßstabs-Anker: reale Breite des Grundriss-Referenzquadrats in
-   *  Metern („das Gebäude ist ≈ 12 m breit") -> k = 8 / plan_width_m */
+  /** Breite der Location in WELT-Metern — das Bezugsquadrat, in dem alle
+   *  Fraktionen leben, und die Box, die das Modell füllt. Default 10 =
+   *  genau eine Kachel. Im Szenen-Payload als `extent_m`. */
+  extent_m?: number;
+  /** Etagenhöhe in REALEN Metern (× k zur Renderzeit). Default 3. */
+  storey_height_m?: number;
+  /** Maßstabs-Anker: reale Breite des Bezugsquadrats in Metern („der Ort ist
+   *  ≈ 12 m breit") → k = extent_m / plan_width_m */
   plan_width_m?: number;
   /** Bodentextur-Kind je Etage für die Grundriss-Platten (Raum-Rezept §7),
    *  Level-Schlüssel als String: {"0": "parquet", "-1": "stone"} */

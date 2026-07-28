@@ -22,9 +22,9 @@ the COMPOSED conveniences so the client renders without re-deriving them:
   ``placement world position + offset_m × k`` — one multiply, no marker
   math.
 
-Coordinate frames: XZ positions are fractions of the 8 × 8 m reference
+Coordinate frames: XZ positions are fractions of the location's reference
 square (like ``layout.x/y`` and ``map3d.outline``); every length that ends
-in ``_m`` is REAL metres — the client converts with its k = 8/plan_width_m.
+in ``_m`` is REAL metres — the consumer converts with k = extent_m/plan_width_m.
 Yaw/facing are degrees; the compass vocabulary of the room markers applies
 (0 = south, 90 = east, …), composed prop facing = ``facing − placement.yaw``
 (the plan yaw turns clockwise in the top view, the compass counts the other
@@ -94,11 +94,11 @@ def _normalize_opening(op: Dict[str, Any]) -> Dict[str, Any]:
 # SAME antiparallel test, so server and editor agree on what "one wall" is.
 # Change both or neither. All coordinates are absolute plate fractions; the
 # thresholds are metres, converted with the location's plan width. Without a
-# plan width the frontend falls back to 0.02 / 0.1 fractions, which is exactly
-# the 8 m reference plate — do the same here.
+# plan width (unanchored legacy data) there is no real size at all — assume
+# a location 8 real metres across so the tolerances stay sane.
 SHARE_TOL_M = 0.15
 MIN_SHARE_M = 0.8
-_REFERENCE_PLATE_M = 8.0
+_UNANCHORED_PLAN_WIDTH_M = 8.0
 # How far the derived exit sits inside the room, measured from the opening.
 EXIT_INSET_M = 0.3
 # Opening types a character can walk through (a window is not a way out).
@@ -172,7 +172,7 @@ def _mirrored_openings(lay: Dict[str, Any], siblings: List[Dict[str, Any]],
     outline = _abs_outline(lay)
     if len(outline) < 3:
         return []
-    planw = plan_width_m if plan_width_m > 0 else _REFERENCE_PLATE_M
+    planw = plan_width_m if plan_width_m > 0 else _UNANCHORED_PLAN_WIDTH_M
     tol = SHARE_TOL_M / planw
     min_overlap = MIN_SHARE_M / planw
     level = int(lay.get("level") or 0)
@@ -276,7 +276,7 @@ def _derive_exit(outline: List[List[float]], openings: List[Dict[str, Any]],
     if not edge:
         return [_r(px), _r(py)]
     _, _, ux, uy, _ = edge
-    inset = EXIT_INSET_M / (plan_width_m if plan_width_m > 0 else _REFERENCE_PLATE_M)
+    inset = EXIT_INSET_M / (plan_width_m if plan_width_m > 0 else _UNANCHORED_PLAN_WIDTH_M)
     return [_r(px - uy * inset), _r(py + ux * inset)]
 
 

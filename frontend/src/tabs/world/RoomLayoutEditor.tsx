@@ -28,7 +28,7 @@ import { FurnishDialog, useFurnishJob } from './FurnishDialog'
 import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
-import { getBuildingDims, getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
+import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { Map3D, Room, RoomLayout, RoomOpening, SceneRoom, ScenePayload } from './worldTypes'
 
 const CANVAS_W = 420
@@ -279,7 +279,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     if (!scene) return   // payload pending — keep the last underlay
     const tid = setTimeout(() => {
       renderTopDownSnapshot({
-        models: scene.models || [], level, includeRooms: underlay,
+        models: scene.models || [], extentM: scene.extent_m,
+        level, includeRooms: underlay,
         buildingId: bUnderlay && locationId ? locationId : undefined,
       })
         .then((url) => setUnderlayUrl(url || ''))
@@ -292,19 +293,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // from the models' declared real width — long side = width_m /
   // plan_width_m, short side via the model's footprint aspect. Dims are
   // loaded per room once; rooms without model/width keep free resize.
-  const [bDims, setBDims] = useState<{ heightM: number
-    widthPerHeight: number } | null>(null)
-  useEffect(() => {
-    if (!locationId) return
-    let stale = false
-    getBuildingDims(locationId)
-      .then((d) => { if (!stale && d) setBDims({ heightM: d.heightM, widthPerHeight: d.widthPerHeight }) })
-      .catch(() => undefined)
-    return () => { stale = true }
-  }, [locationId])
   // ANY model mutation (panel, adjust strip, preview toolbar) lands here
-  // via the generic refresh channel: refetch the fresh metas — plan width,
-  // rect derivation and the underlay recompute from them.
+  // via the generic refresh channel: refetch the fresh metas — rect
+  // derivation and the underlay recompute from them.
   useEffect(() => {
     const onChanged = (e: Event) => {
       const det = (e as CustomEvent).detail as { locationId?: string; roomId?: string }
@@ -314,23 +305,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           .then((d) => setModelDims((prev) => ({ ...prev, [rid]: d })))
           .catch(() => undefined)
       }
-      if (det?.locationId === locationId) {
-        getBuildingDims(locationId)
-          .then((d) => setBDims(d ? { heightM: d.heightM, widthPerHeight: d.widthPerHeight } : null))
-          .catch(() => undefined)
-      }
     }
     window.addEventListener('anima-model3d-changed', onChanged)
     return () => window.removeEventListener('anima-model3d-changed', onChanged)
   }, [locationId])
-  // Explicit anchor wins; otherwise auto-derived from the building model
-  // (declared height × the mesh's width-per-height ratio).
-  const planW = map3d?.plan_width_m
-    || (bDims && bDims.heightM > 0 ? bDims.heightM * bDims.widthPerHeight : 0)
-  // The scale anchor is MANDATORY for floor-plan work (Abnahme round 4): a
-  // layout without it has no real size — the 3D client would fall back to its
-  // legacy 24 m plan width, which does not match the storey height. Existing
-  // data stays readable and selectable; only the geometry tools are locked.
+  // The ONLY scale anchor (2026-07-28): how many REAL metres the location is
+  // wide. Nothing derives it from a model any more.
+  const planW = map3d?.plan_width_m || 0
+  // MANDATORY for floor-plan work (Abnahme round 4): a layout without it has
+  // no real size. Existing data stays readable and selectable; only the
+  // geometry tools are locked.
   const anchorMissing = planW <= 0 && (
     rooms.some((r) => r.layout) || !!map3d?.outline?.length)
   // ── Server-composed room vocabulary (contract § B1 `rooms`) ──────────
@@ -1702,12 +1686,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           )
         })}
         {map3d?.elevator ? (() => {
-          // True-size elevator footprint per the client recipe: shaft outer
-          // = 1.8 m × figure scale k (anchored 8/plan width, legacy
-          // level_height/3) on the 8 m square. On top of the rooms so it
-          // stays clickable; click selects it for the sliders.
-          const kEl = planW > 0 ? 8 / planW : ((map3d?.level_height || 3) / 3)
-          const frac = Math.min((1.8 * kEl) / 8, 0.5)
+          // True-size elevator footprint per the client recipe: the shaft is
+          // 1.8 REAL metres, so its share of the plan square is 1.8 / plan
+          // width — frame-independent, the extent cancels out. On top of the
+          // rooms so it stays clickable; click selects it for the sliders.
+          const frac = Math.min(planW > 0 ? 1.8 / planW : 0.18, 0.5)
           return (
             <div
               title={t('Elevator (all levels) — true shaft size from above (1.8 m × figure scale). Click to fine-tune with the sliders below.')}

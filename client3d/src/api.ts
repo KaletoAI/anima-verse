@@ -152,6 +152,7 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
   return {
     signature: String(data.signature),
     rooms: arr<SceneRoom>(data.rooms),
+    extent_m: data.extent_m || 10,
     k: data.k || 1,
     storey_m: data.storey_m || 3,
     levels: arr(data.levels),

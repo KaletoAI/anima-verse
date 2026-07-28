@@ -30,7 +30,7 @@ import {
  * Since stage 2 the routine "place a model" (§ B2), the room clip (§ B1) and
  * — since the primitive builders moved (N) — plate, wall segment, extra box
  * and placeholder live in `@anima/scene-render`: the same arithmetic the
- * admin preview runs, the 0.96 margin of the `fit_box` fallback included.
+ * admin preview runs, down to the single uniform scale factor of § B2.
  *
  * What stays here is the MATERIAL of those primitives (the surface-texture
  * chain, the payload colour vocabulary) plus view and interaction state:
@@ -664,13 +664,15 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     const placed = placeModelSpec(THREE, source, spec,
                                   { clone: false, clip: false });
     if (spec.role === 'building') {
-      // Flächen-Location: das Modell bleibt in der Innenansicht stehen und
-      // bekommt stattdessen Löcher. Es darf deshalb NICHT in die
-      // Fade-Material-Listen — sonst blendet es trotzdem weg.
+      // Was das Modell IST, sagt die SPEC (`display`) — nicht ein Nebeneffekt.
+      // Vorher wurde „Flächen-Location" aus `cutouts.length > 0` geraten; eine
+      // Fläche ohne Grundriss (Mondscheinsee: kein outline, kein Indoor-Raum
+      // außerhalb) hatte keine Löcher, galt als Gebäudehülle und blendete beim
+      // Reinzoomen komplett weg (User-Befund 2026-07-28).
       const cutouts = spec.cutouts || [];
-      const area = cutouts.length > 0;
+      const area = spec.display === 'ground';
       applySceneBuilding(tile, placed, area);
-      if (area) {
+      if (cutouts.length) {
         // Polygone kommen um das Kachelzentrum, der Shader misst in
         // Weltkoordinaten — dieselbe Umrechnung wie beim Raum-Clip.
         tile.cutouts?.dispose();
@@ -739,8 +741,14 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
 
 /** Gebäudehülle aus der Szene einwechseln: ersetzt die prozedurale Hülle und
  *  verhält sich fürs Reinzoomen wie ein Dach (blendet aus, gibt den Blick auf
- *  die Räume frei). Anders als der Legacy-Pfad blendet hier NICHTS zwischen
- *  zwei Y-Maßstäben um — die Spec ist die eine Antwort auf die Größe. */
+ *  die Räume frei). Ein `ground`-Modell bleibt stattdessen stehen.
+ *
+ *  Hier wird an der Spec-Geometrie NICHTS mehr nachjustiert: die frühere
+ *  Um-Verankerung samt Y-Morph zwischen Kachel- und Detail-Maßstab war eine
+ *  reine Client-Erfindung und ließ dieselbe Location im Client bis zu 1,0 m
+ *  anders hoch stehen als in der Admin-Vorschau (Kaxai Tower +0,97 m, Café
+ *  −0,85 m). Seit die Spec nur noch EINEN Faktor liefert, gibt es auch nichts
+ *  mehr zu blenden. */
 function applySceneBuilding(tile: Tile, model: THREE.Group,
                             area = false): void {
   if (tile.shell) {
@@ -749,27 +757,7 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   }
   if (tile.decor) tile.decor.visible = false;
   tile.serverModel = model;
-  // Kachel-/Detail-Crossfade (Anker-Note "zwei Sichten"): die tile_fit-Spec
-  // liefert die DETAIL-Skalierung (Y = height_m × k); die Kartenansicht
-  // zeigt weiter uniform (Y = k_xz), applyTileFade blendet beim Zoomen —
-  // der Umbau hatte das verloren (Befund Kira: Bodenhaut am Eingang stand
-  // im Café ×1,24 höher als in der Kachel-Ansicht). Damit der Boden beim
-  // Blenden nicht wandert, wird der Inhalt auf lokale Unterkante 0
-  // umgeankert (Welt-Geometrie bleibt exakt gleich — Verify unberührt).
-  model.updateMatrixWorld(true);
-  const bb = new THREE.Box3().setFromObject(model);
-  const inner = model.children[0];
-  if (inner && model.scale.y > 1e-6) {
-    const localBottom = (bb.min.y - model.position.y) / model.scale.y;
-    inner.position.y -= localBottom;
-    model.position.y = bb.min.y;
-  }
-  model.userData.scaleBase = model.scale.x;
-  // Area models arrive with a UNIFORM spec (no box.y — the server decides,
-  // schnittstellen-3d.md), so scale.y equals scale.x and the shell-Y morph
-  // is naturally a no-op for them. No local special case: the admin preview
-  // places the same spec and must show the same height.
-  model.userData.scaleYDetail = model.scale.y;
+  tile.modelIsGround = area;
   tile.shellMats = [];
   tile.roofMats = [];
   // Flächen-Location: das Modell IST die Location und bleibt sichtbar — es
@@ -815,6 +803,7 @@ export function unmountScene(tile: Tile): void {
   // disposeClipMaterials — die Texturen sind mit dem Cache geteilt).
   tile.cutouts?.dispose();
   tile.cutouts = undefined;
+  tile.modelIsGround = false;
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
   tile.interior = null;

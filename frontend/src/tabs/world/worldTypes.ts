@@ -111,19 +111,22 @@ export interface Map3D {
   /** Building yaw on the map tile in degrees (0..359). Absent = the 3D client
    *  falls back to map_rotation_2d (the model turns with the 2D icon). */
   rotation?: number
-  /** Building base size as a fraction of the tile edge (]0, 2]; > 1
-   *  overflows the tile on purpose — overlapping models).
-   *  Absent = client default 0.92. */
+  /** The MODEL's share of the location's reference square (]0, 1]; 1 = edge
+   *  to edge). Absent = 1. A model can no longer be bigger than its
+   *  location — for that, raise extent_m. */
   size?: number
-  /** Storey height in WORLD metres — stacks the floor-plan levels AND
-   *  derives the figure scale in rooms (level_height / 3). Absent =
-   *  default 3 (figure scale 1/3). Fallback only — with plan_width_m +
-   *  building anchors everything derives instead. */
-  level_height?: number
+  /** How wide the location is in WORLD metres: the reference square every
+   *  plan fraction lives in AND the box the model fills. Absent = 10 =
+   *  exactly one map tile; more overlaps the neighbours on purpose. */
+  extent_m?: number
+  /** Storey height in REAL metres — stacks the floor-plan levels (× k at
+   *  render time). Absent = 3. Replaced the old pair "model height ÷ model
+   *  storeys" and level_height (which counted in world metres). */
+  storey_height_m?: number
   /** Real-world width the floor-plan reference square represents (m) —
-   *  THE detail-view scale anchor: k = 8 / plan_width_m derives room-rect
-   *  sizes (from width_m), figure size (1.7 × k), storey stacking and the
-   *  shell height. Absent = legacy behavior. */
+   *  THE scale anchor: k = extent_m / plan_width_m derives room-rect sizes
+   *  (from width_m), figure size (1.7 × k) and the storey height. Absent =
+   *  no anchor; floor-plan geometry cannot be saved. */
   plan_width_m?: number
   /** Floor-texture KIND per storey ({"0": "parquet"}) — the client tiles the
    *  level plate with it; a room's surfaces.floor overrides its own area. */
@@ -139,8 +142,9 @@ export interface Map3D {
    *  surface. Absent = today's behaviour (single building, model fades). */
   area_model?: boolean
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
-   *  8×8 reference square, auto-closed — the client renders floor plates
-   *  and walls per used level from it. Absent = rectangle as before. */
+   *  location's reference square (extent_m), auto-closed — the client
+   *  renders floor plates and walls per used level from it. Absent =
+   *  rectangle as before. */
   outline?: Array<[number, number]>
   /** Elevator position (fractions of the reference square) — placed once,
    *  valid for all levels (client builds the shaft). */

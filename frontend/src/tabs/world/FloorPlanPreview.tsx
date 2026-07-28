@@ -22,20 +22,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D, Texture } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
-import { getBuildingDims, notifyModel3dChanged } from './topDownSnapshot'
+import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   applyClipOutline, disposeClipMaterials, placeModelSpec, plateTargets, SpecVerifier,
   VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, VerifyRow } from '@anima/scene-render'
-import { useToast } from '../../lib/Toast'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 
-// The reference square (8 m) is the preview's own stage — ground plate,
-// ruler position and camera framing. Every DERIVED length comes from the
-// scene payload.
-const PLATE_M = 8
-const DEFAULT_LEVEL_M = 3
+// The reference square is the preview's stage — ground plate, ruler position
+// and camera framing. Its WORLD size is a per-location dial and arrives in
+// the payload (`extent_m`); this is only the value before the first response.
+// It used to be a hardcoded 8 while the model filled 10 × 0.92 × size, which
+// is exactly why plan and model could not line up (2026-07-28).
+const DEFAULT_EXTENT_M = 10
+const DEFAULT_STOREY_REAL_M = 3
 // Preview AIDS — deliberately NOT part of the scene style (which covers
 // walls, floors, glass and the room palette): these paint things only the
 // admin preview shows. Elevator colours come from the payload's style block.
@@ -57,13 +57,9 @@ interface CachedModel {
    *  buildings only (rooms are positioned by their layout rect). */
   offsetX?: number
   offsetZ?: number
-  /** Detail-view scale anchors (0 = undeclared): buildings carry
-   *  floors (storeys the mesh depicts) + heightM (world metres, uniform
-   *  scale target; storey height derives as heightM / floors), rooms
-   *  carry widthM (real-world width of the largest side; content scale =
-   *  rect extent / widthM, figures in the room derive from it). */
-  floors: number
-  heightM: number
+  /** Real-size anchor of a ROOM model (0 = undeclared): the real width of
+   *  its largest side. Buildings have none — their size follows the
+   *  location's extent × size. */
   widthM: number
   /** Prepared once on first overlay use: the model with its own textures on
    *  unlit, semi-transparent materials — visibly the building, still
@@ -77,14 +73,17 @@ interface FloorPlanPreviewProps {
   rooms: Room[]
   /** map3d draft — outline/elevator (AV3D-12) are drawn from it. */
   map3d?: Map3D
-  /** Storey height in metres (map3d.level_height) — empty = the contract's 3. */
-  levelHeightM?: number
-  /** When set, the toolbar shows a level-height field next to the metre
-   *  scale (writes map3d.level_height on the location draft). */
-  onLevelHeight?: (v: number | undefined) => void
+  /** Storey height in REAL metres (map3d.storey_height_m) — empty = 3. */
+  storeyHeightM?: number
+  /** When set, the toolbar shows the storey-height field next to the metre
+   *  scale (writes map3d.storey_height_m on the location draft). */
+  onStoreyHeight?: (v: number | undefined) => void
   /** When set, the toolbar shows the plan-width anchor field (writes
    *  map3d.plan_width_m on the location draft). */
   onPlanWidth?: (v: number | undefined) => void
+  /** When set, the toolbar shows the extent field (map3d.extent_m) — how
+   *  wide the location is in WORLD metres. */
+  onExtent?: (v: number | undefined) => void
   /** The 2D icon rotation (map_rotation_2d) — the contract's yaw fallback
    *  when map3d.rotation is unset (the model turns with the 2D icon). */
   fallbackYawDeg?: number
@@ -101,7 +100,7 @@ interface FloorPlanPreviewProps {
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLevelHeight, onPlanWidth, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, onPlanWidth, onExtent, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -140,6 +139,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   // Cutout handle of the last rebuild (area locations): its material clones
   // must be released before the next one patches fresh clones.
   const cutoutRef = useRef<CutoutHandle | null>(null)
+  // Plate + edge loop of the reference square — both are unit-sized and get
+  // scaled to the payload's extent_m on every rebuild.
+  const squareRef = useRef<Object3D[] | null>(null)
   const roomsRef = useRef(rooms)
   roomsRef.current = rooms
   const showModelsRef = useRef(showModels)
@@ -175,7 +177,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   const mixersRef = useRef<AnimationMixer[]>([])
   const clockRef = useRef<Clock | null>(null)
 
-  const lh = levelHeightM && levelHeightM > 0 ? levelHeightM : DEFAULT_LEVEL_M
+  // Stand-in until the first payload: the declared REAL storey height read as
+  // if k were 1. From then on `scene.storey_m` decides.
+  const lh = storeyHeightM && storeyHeightM > 0 ? storeyHeightM : DEFAULT_STOREY_REAL_M
 
   // The whole geometry arrives from the server (contract § B1/B3) — the
   // parent holds the debounced draft request, this component only renders.
@@ -183,23 +187,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
   sceneRef.current = scene
   const calibrationRef = useRef(calibration)
   calibrationRef.current = calibration
-
-  // Mesh width-per-height ratio via the SHARED helper (same value the
-  // layout editor uses) — auto plan width = declared height × this ratio
-  // when no explicit plan_width_m is set.
-  const wphRef = useRef(0)
-  useEffect(() => {
-    let stale = false
-    getBuildingDims(locationId)
-      .then((d) => {
-        if (!stale && d) {
-          wphRef.current = d.widthPerHeight
-          setBump((b) => b + 1)
-        }
-      })
-      .catch(() => undefined)
-    return () => { stale = true }
-  }, [locationId])
 
   // ANY model mutation anywhere (panel, adjust strip, preview toolbar)
   // invalidates the module caches and lands here: drop our cached entry
@@ -212,9 +199,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
       }
       if (det?.locationId === locationId) {
         cacheRef.current.delete('building')
-        getBuildingDims(locationId)
-          .then((d) => { if (d) wphRef.current = d.widthPerHeight; setBump((b) => b + 1) })
-          .catch(() => undefined)
       }
       setBump((b) => b + 1)
     }
@@ -222,47 +206,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     return () => window.removeEventListener('anima-model3d-changed', onChanged)
   }, [locationId])
 
-  // Active building model in the cache (re-read on every bump-triggered
-  // render) — feeds the "Model storeys" field in the toolbar.
-  const bEntryRaw = cacheRef.current.get('building')
-  const buildingEntry = bEntryRaw && bEntryRaw !== 'loading' && bEntryRaw !== 'missing'
-    ? bEntryRaw : null
-
-  const { toast } = useToast()
-  const commitBuildingFloors = (raw: string) => {
-    const n = parseFloat(raw)
-    const floors = Number.isFinite(n) && n > 0 ? n : 0
-    if (!buildingEntry || floors === buildingEntry.floors) return
-    void apiPost<{ meta?: { floors?: number } }>(
-      `/world/locations/${encodeURIComponent(locationId)}/model3d/floors`,
-      { floors })
-      .then(() => notifyModel3dChanged({ locationId }))
-      .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
-  }
-  const commitBuildingHeight = (raw: string) => {
-    const n = parseFloat(raw)
-    const heightM = Number.isFinite(n) && n > 0 ? n : 0
-    if (!buildingEntry || heightM === buildingEntry.heightM) return
-    void apiPost<{ meta?: { height_m?: number } }>(
-      `/world/locations/${encodeURIComponent(locationId)}/model3d/height`,
-      { height_m: heightM })
-      .then(() => notifyModel3dChanged({ locationId }))
-      .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
-  }
-  // Storey height derived from the building anchors — shown as the
-  // level-height placeholder (the manual value is only the fallback).
-  const lhDerived = buildingEntry && buildingEntry.heightM > 0 && buildingEntry.floors > 0
-    ? buildingEntry.heightM / buildingEntry.floors
-    : 0
-  // Plan width auto-derived from the building model (declared height × the
-  // mesh's width-per-height ratio) — the placeholder AND the anchor check.
-  const pwDerived = buildingEntry && buildingEntry.heightM > 0 && wphRef.current > 0
-    ? buildingEntry.heightM * wphRef.current
-    : 0
-  // No anchor at all: neither an explicit value nor a model to derive one
-  // from. The field is mandatory then (Abnahme round 4) — a silent 0 sends
-  // the 3D client into its legacy 24 m fallback.
-  const anchorMissing = !(map3d?.plan_width_m && map3d.plan_width_m > 0) && pwDerived <= 0
+  // The plan width is the ONLY scale anchor since 2026-07-28 — there is no
+  // second path to derive it from a model any more (that one existed to feed
+  // the per-axis height scaling, which is gone). Missing = mandatory field.
+  const anchorMissing = !(map3d?.plan_width_m && map3d.plan_width_m > 0)
 
   // Fetch a model (meta + GLB) into the cache; returns it when ready. A miss
   // is cached too — no retry storm per drag frame.
@@ -280,8 +227,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         const meta = await apiGet<{ format?: string; url?: string
           rotation?: { x?: number; y?: number; z?: number }
           offset_y?: number; offset_x?: number; offset_z?: number
-          floors?: number
-          height_m?: number; width_m?: number }>(`${base}/meta`)
+          width_m?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') throw new Error(`format ${fmt}`)
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
@@ -290,8 +236,6 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
                          offsetY: meta.offset_y || 0,
                          offsetX: meta.offset_x || 0,
                          offsetZ: meta.offset_z || 0,
-                         floors: meta.floors || 0,
-                         heightM: meta.height_m || 0,
                          widthM: meta.width_m || 0 })
       } catch {
         cache.set(key, 'missing')  // 404 = no model — the box stays
@@ -418,6 +362,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     const sc = sceneRef.current
     const kFac = sc ? sc.k : 1
     const lhEff = sc ? sc.storey_m : lh
+    // The ONE number that turns a plan fraction into metres — from the
+    // payload, never a constant (that was the 8-vs-9.2 drift).
+    const PLATE_M = sc?.extent_m || DEFAULT_EXTENT_M
+    for (const o of squareRef.current || []) o.scale.set(PLATE_M, PLATE_M, 1)
     const style = sc?.style
     const figBase = sc ? sc.figures.base_height_m_world : 1.7
     // Hex colour of the payload style ('#rrggbb' → three.js number).
@@ -489,7 +437,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
     // ── THE placement routine (contract § B2) ──────────────────────────
     // Building, room diorama and prop differ only in the SPEC the server
     // sends — never in code. Chain: fix_euler ('XYZ') on the inner group →
-    // measure → scale per scale_mode → yaw as the PARENT rotation (never
+    // measure → ONE uniform scale (max_m / measured extent) → yaw as the
+    // PARENT rotation (never
     // combined into one Euler, an x/z fix would tilt with it) → measure the
     // result and seat its BBox on bottom_y / anchor.
     const placeSpec = (source: Object3D, spec: SceneModelSpec): Object3D => {
@@ -521,7 +470,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
           const gltf = await new GLTFLoader().loadAsync(url)
           cacheRef.current.set(key, { obj: gltf.scene, rotation: {},
-            offsetY: 0, floors: 0, heightM: 0, widthM: 0 })
+            offsetY: 0, widthM: 0 })
         } catch {
           cacheRef.current.set(key, 'missing')
         }
@@ -1270,8 +1219,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
           renderer.domElement.removeEventListener('contextmenu', onContext)
         })
 
-        // Ground plate = the contract's 8×8 m reference square, plus outline.
-        const groundGeo = new THREE.PlaneGeometry(PLATE_M, PLATE_M)
+        // Ground plate = the location's reference square, plus outline. Built
+        // as a 1 × 1 plane and SCALED to `extent_m` on every rebuild — the
+        // square is a per-location dial now, not a constant.
+        const groundGeo = new THREE.PlaneGeometry(1, 1)
         const ground = new THREE.Mesh(
           groundGeo,
           new THREE.MeshBasicMaterial({ color: 0x2e3742 }),
@@ -1285,6 +1236,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         outline.rotation.x = -Math.PI / 2
         outline.position.y = 0.01
         scene.add(outline)
+        squareRef.current = [ground, outline]
 
         const boxes = new THREE.Group()
         scene.add(boxes)
@@ -1307,9 +1259,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         disposers.push(() => { handleRef.current = null })
         rebuild(handleRef.current, roomsRef.current)
 
-        // Initial framing: distance so the 8 m plate fits comfortably.
+        // Initial framing: distance so the reference square fits comfortably.
+        const ext0 = sceneRef.current?.extent_m || DEFAULT_EXTENT_M
         cam.dist = cam.distGoal = Math.max(
-          6, (PLATE_M * 1.2 / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.35)
+          6, (ext0 * 1.2 / 2) / Math.tan((Math.PI * camera.fov) / 360) * 1.35)
         applyCamera()
 
         setLoading(false)
@@ -1459,11 +1412,31 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
         >
           ✓
         </button>
+        {onExtent ? (
+          <label className="ga-check-row"
+            title={t('Extent (m): how wide this location is in WORLD metres. It is the square the floor plan is drawn in AND the box the location model fills — plan edge and model edge are the same line. 10 = exactly one map tile; more overlaps the neighbours on purpose (a village, a lake).')}>
+            <span>⬜</span>
+            <input
+              className="ga-input"
+              type="number"
+              min={1}
+              max={40}
+              step={0.5}
+              style={{ width: 70 }}
+              value={map3d?.extent_m ?? ''}
+              placeholder="10"
+              onChange={(e) => {
+                const n = parseFloat(e.target.value)
+                onExtent(Number.isFinite(n) && n > 0 ? n : undefined)
+              }}
+            />
+          </label>
+        ) : null}
         {onPlanWidth ? (
           <label className="ga-check-row"
             title={anchorMissing
-              ? t('Plan width (m) is REQUIRED here: no building model declares a height, so nothing can be derived. Without it the 3D client falls back to a legacy scale (24 m plan width) that does not match the storey height.')
-              : t('Plan width (m): real-world width the floor-plan square represents. Empty = auto-derived from the building model (height × mesh proportions) — set a value only to correct it. THE scale anchor: room sizes derive from their declared widths, figures and storeys from real size × 8/plan width.')}>
+              ? t('Plan width (m) is REQUIRED: it is the only scale anchor. Without it nothing has a real size — figures, props and storeys fall back to a meaningless legacy scale and floor-plan geometry cannot be saved.')
+              : t('Plan width (m): how wide this location is in REAL metres — the same edge as the extent, in the other unit. THE scale anchor: k = extent ÷ plan width sizes figures (1.70 m), props, dioramas and storeys.')}>
             <span>{anchorMissing ? '⚠' : '📐'}</span>
             <input
               className="ga-input"
@@ -1475,7 +1448,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
                 ? { width: 70, borderColor: '#d29922' }
                 : { width: 70 }}
               value={map3d?.plan_width_m ?? ''}
-              placeholder={pwDerived > 0 ? `${t('auto')} (${pwDerived.toFixed(1)})` : '—'}
+              placeholder="—"
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
                 onPlanWidth(Number.isFinite(n) && n > 0 ? n : undefined)
@@ -1483,9 +1456,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
             />
           </label>
         ) : null}
-        {onLevelHeight ? (
+        {onStoreyHeight ? (
           <label className="ga-check-row"
-            title={t('Level height (m): storey height in WORLD metres — stacks the floor-plan levels and sets the figure scale in rooms (level_height / 3). Realistic interiors are ≈ 1–1.5; the default 3 reads as a triple-height storey.')}>
+            title={t('Storey height (m): the height of one storey in REAL metres — a normal room is 2.5 to 3. It stacks the floor-plan levels; the world height follows from the plan width like every other length.')}>
             <span>↕</span>
             <input
               className="ga-input"
@@ -1494,53 +1467,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, levelHeightM, onLev
               max={50}
               step={0.1}
               style={{ width: 70 }}
-              value={levelHeightM ?? ''}
-              placeholder={lhDerived ? `${t('auto')} (${lhDerived.toFixed(2)})` : '3'}
-              title={lhDerived
-                ? t('Derived from the building model (height ÷ storeys) — this field is only the fallback without those anchors.')
-                : undefined}
+              value={storeyHeightM ?? ''}
+              placeholder="3"
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
-                onLevelHeight(Number.isFinite(n) && n > 0 ? n : undefined)
+                onStoreyHeight(Number.isFinite(n) && n > 0 ? n : undefined)
               }}
-            />
-          </label>
-        ) : null}
-        {buildingEntry ? (
-          <label className="ga-check-row"
-            title={t('Model height (m): estimated height of the building MODEL in world metres — dial it at the metre ruler. The footprint keeps following the floor plan (tile fit); only the height is scaled to this value, so a too-flat mesh gets repaired. Storey height derives as height ÷ storeys; empty = natural proportions.')}>
-            <span>📏</span>
-            <input
-              key={`bh-${buildingEntry.heightM}`}
-              className="ga-input"
-              type="number"
-              min={0}
-              max={500}
-              step={0.1}
-              style={{ width: 70 }}
-              defaultValue={buildingEntry.heightM || ''}
-              placeholder={t('natural')}
-              onBlur={(e) => commitBuildingHeight(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-            />
-          </label>
-        ) : null}
-        {buildingEntry ? (
-          <label className="ga-check-row"
-            title={t('Model storeys: storeys the building MODEL depicts — together with the model height this derives the storey height (height ÷ storeys) for stacking the levels.')}>
-            <span>🏬</span>
-            <input
-              key={`bf-${buildingEntry.floors}`}
-              className="ga-input"
-              type="number"
-              min={0}
-              max={200}
-              step={0.5}
-              style={{ width: 62 }}
-              defaultValue={buildingEntry.floors || ''}
-              placeholder="—"
-              onBlur={(e) => commitBuildingFloors(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             />
           </label>
         ) : null}

@@ -274,11 +274,12 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
         val = raw.get(key)
         if isinstance(val, str) and val.strip():
             out[key] = val.strip()
-    # Building placement on the map tile (schnittstellen-3d.md): rotation =
-    # yaw in degrees (explicit 0 is meaningful — absent falls back to
-    # map_rotation_2d on the client), size = footprint fraction of the tile
-    # (]0, 2]; > 1 deliberately overflows the tile so large models can
-    # overlap neighbouring tiles; absent = client default 0.92).
+    # Building placement on the map tile (docs/schnittstellen-3d.md):
+    # rotation = yaw in degrees (explicit 0 is meaningful — absent falls back
+    # to map_rotation_2d on the client), size = the model's share of the
+    # location's reference square (]0, 1]; 1 = edge to edge, absent = 1).
+    # A model can no longer be LARGER than its location — that is what
+    # extent_m is for, and it keeps the promise "plan edge == model edge".
     rot = raw.get("rotation")
     if rot is not None and f"{rot}".strip() != "":
         try:
@@ -289,15 +290,27 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     if size is not None and f"{size}".strip() != "":
         try:
             s = float(size)
-            if 0 < s <= 2:
+            if 0 < s <= 1:
                 out["size"] = round(s, 3)
         except (TypeError, ValueError):
             pass
-    # Real-world width the floor-plan reference square represents (metres)
-    # — THE scale anchor of the detail view: one compression factor
-    # k = 8 / plan_width_m per location derives room-rect sizes (from the
-    # room models' width_m), figure size (1.7 m × k), storey stacking
-    # (height_m / floors × k) and the shell height. Absent = legacy mode.
+    # How wide the location is in WORLD metres — the reference square every
+    # plan fraction lives in AND the box the model fills. 10 = exactly one
+    # map tile (the default); more overlaps the neighbours on purpose
+    # (a village, a lake). Replaces the former fixed 8 m square.
+    ext = raw.get("extent_m")
+    if ext is not None and f"{ext}".strip() != "":
+        try:
+            v = float(ext)
+            if 1.0 <= v <= 40.0:
+                out["extent_m"] = round(v, 2)
+        except (TypeError, ValueError):
+            pass
+    # Real-world width the reference square represents (metres) — THE scale
+    # anchor, and since 2026-07-28 the ONLY one: k = extent_m / plan_width_m
+    # sizes room rects (from the room models' width_m), figures (1.70 m × k),
+    # props and the storey height. Absent = no anchor; floor-plan geometry
+    # cannot be saved (see _require_scale_anchor).
     pw = raw.get("plan_width_m")
     if pw is not None and f"{pw}".strip() != "":
         try:
@@ -306,16 +319,17 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["plan_width_m"] = round(v, 2)
         except (TypeError, ValueError):
             pass
-    # Storey height in WORLD metres: stacks the room-layout levels AND
-    # derives the figure scale in rooms (level_height / 3) — the former
-    # figure_scale field is gone WITHOUT replacement (drop 2026-07-17: the
-    # client no longer reads it at all). Absent = default 3.
-    lh = raw.get("level_height")
-    if lh is not None and f"{lh}".strip() != "":
+    # Storey height in REAL metres — stacks the room-layout levels. One dial
+    # in the same unit as every other length (× k at render time); it
+    # replaced the pair "model height ÷ model storeys" (real) and
+    # "level_height" (world metres), which were the last per-axis scaling
+    # inputs. Absent = 3.
+    sh = raw.get("storey_height_m")
+    if sh is not None and f"{sh}".strip() != "":
         try:
-            v = float(lh)
+            v = float(sh)
             if 0.5 <= v <= 50:
-                out["level_height"] = round(v, 2)
+                out["storey_height_m"] = round(v, 2)
         except (TypeError, ValueError):
             pass
     # Building outline (AV3D-12): a drawn polygon replacing the rectangle —
@@ -489,7 +503,8 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
         out["always_visible"] = True
     # Diorama clipping (§ B1 ``clip_outline``): opt-in per room — the renderer
     # discards model fragments outside the room's shell, so a diorama that
-    # overhangs its floor plan (real_size, § B2a) is cut at the shell.
+    # overhangs its floor plan (it scales by its real width, § B2a) is cut
+    # at the shell.
     if raw.get("clip_model"):
         out["clip_model"] = True
     # No recipe walls for this room: open zones, pavilions, areas inside an
@@ -737,10 +752,12 @@ def _require_scale_anchor(location_id: str, rooms: Any, map3d: Any,
     """Reject a save that ADDS or CHANGES floor-plan geometry while the
     location has no scale anchor (Abnahme round 4).
 
-    Without ``map3d.plan_width_m`` — or a building model with a declared
-    height to derive it from — a layout has no real size and the 3D client
-    silently falls back to its legacy 24 m plan width. Existing data stays
-    saveable: only rooms whose geometry differs from the stored one count.
+    Without ``map3d.plan_width_m`` a layout has no real size and everything
+    derived from it (figure size, prop size, storey height) falls back to a
+    meaningless legacy scale. Since 2026-07-28 it is the ONLY anchor — the
+    derivation from a model's declared height went with the per-axis
+    scaling. Existing data stays saveable: only rooms whose geometry differs
+    from the stored one count.
     ``map3d`` is the INCOMING object (the same request may set the anchor);
     None means "unchanged", so the stored one decides.
     """
@@ -766,8 +783,8 @@ def _require_scale_anchor(location_id: str, rooms: Any, map3d: Any,
     if has_scale_anchor(location_id, effective):
         return
     raise HTTPException(status_code=400, detail=(
-        "Room layouts need a scale anchor: set map3d.plan_width_m or a "
-        "building model with a declared height"))
+        "Room layouts need a scale anchor: set map3d.plan_width_m "
+        "(how many REAL metres the location is wide)"))
 
 
 def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:

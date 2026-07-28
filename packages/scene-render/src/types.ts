@@ -66,6 +66,12 @@ export interface SceneExtra {
  *  Futter für die einzige place()-Routine des Vertrags (§ B2). */
 export interface SceneModelSpec {
   role: 'building' | 'room' | 'prop'
+  /** Nur am building-Spec: was das Modell IST. `shell` = ein Gebäude, das auf
+   *  dem Boden steht und beim Reinzoomen wie ein Dach aufblendet; `ground` =
+   *  eine Flächen-Location, deren Modell DER Boden ist — es bleibt stehen und
+   *  bekommt Löcher (cutouts). Der Client hat das früher aus `cutouts.length`
+   *  geraten und lag bei Flächen ohne Grundriss falsch (2026-07-28). */
+  display?: 'shell' | 'ground'
   id: string
   /** ETag-Endpunkt; leer = kein Mesh (dann placeholder_dims) */
   url: string
@@ -74,15 +80,15 @@ export interface SceneModelSpec {
   /** Orientierungs-Fix, Euler 'XYZ' in Grad — VOR dem Messen */
   fix_euler: { x: number; y: number; z: number }
   yaw_deg: number
-  scale_mode: 'fit_box' | 'real_size' | 'tile_fit'
-  /** fit_box: {w,d}; tile_fit: {xz, y?} */
-  box?: { w?: number; d?: number; h?: number; xz?: number; y?: number }
-  /** real_size: Ziel-Ausdehnung in Welt-Metern */
-  max_m?: number
-  /** real_size: welche BBox-Achsen maxExtent bilden (Default xyz) */
-  measure_axes?: 'xyz' | 'xz'
-  /** § B4: server-vermessenes Mesh — Faktoren kommen fertig */
-  scale_axes?: { xz: number; y: number }
+  /** Ziel-Ausdehnung in WELT-Metern. EIN Faktor auf alle drei Achsen
+   *  (2026-07-28): `s = max_m / gemessene Ausdehnung`. Es gibt keinen
+   *  Modus mehr, in dem Y anders skaliert als XZ. */
+  max_m: number
+  /** Woran gemessen wird: `yawed_xz` = größte XZ-Seite der GEDREHTEN Box
+   *  (Location-Modelle füllen ihren Rahmen auch schräg gedreht),
+   *  `xz` = größte XZ-Seite der gefixten Box (Dioramen: width_m ist eine
+   *  Grundriss-Breite), `xyz` = größte Kante überhaupt (Props). */
+  measure: 'yawed_xz' | 'xz' | 'xyz'
   anchor: [number, number]
   bottom_y: number
   /** Platzhalter-Box (schon Welt-Meter) für fehlendes/mesh-loses Prop */
@@ -92,8 +98,14 @@ export interface SceneModelSpec {
    *  Alles außerhalb wird verworfen — ein real-size-Diorama darf über seinen
    *  Grundriss hinausragen, sichtbar bleibt nur der Teil im Raum. */
   clip_outline?: [number, number][]
-  /** Räume: absolute Höhe, auf der eine Figur im Diorama steht (§ B6 Nr. 7) */
+  /** Absolute Höhe, auf der eine Figur AUF diesem Modell steht — im Diorama
+   *  (§ B6 Nr. 7) wie auf einer Flächen-Location. Bei `display: 'ground'` ist
+   *  das zugleich der Anker: das Modell hängt so weit unter dieser Höhe, wie
+   *  seine Gehfläche über seiner Unterkante liegt. */
   walk_y_world?: number
+  /** Dioramen ohne geeichtes `width_m`: `max_m` ist die Breite des
+   *  Raum-Rechtecks als Notbehelf — die UI soll zur Eichung auffordern. */
+  width_estimated?: boolean
   /** Flächen-Locations (plan-area-locations.md): Welt-Polygone, die aus DIESEM
    *  Modell geschnitten werden — Gebäude-Grundriss plus die Umrisse platzierter
    *  Indoor-Räume außerhalb davon. Das Modell bleibt in der Innenansicht
@@ -190,7 +202,12 @@ export interface SceneRoom {
 export interface ScenePayload {
   signature: string
   rooms: SceneRoom[]
-  /** Welt-Meter je Real-Meter (8 / plan_width_m; 1 = Legacy) */
+  /** Welt-Größe des Bezugsquadrats: die EINE Zahl, die jede Fraktion dieses
+   *  Payloads in Meter verwandelt (Default 10 = eine Kachel). Nie durch eine
+   *  Konstante ersetzen — genau das war die 8, die Grundriss und Modell
+   *  auseinanderlaufen ließ. */
+  extent_m: number
+  /** Welt-Meter je Real-Meter (extent_m / plan_width_m; 1 = Legacy) */
   k: number
   storey_m: number
   levels: { level: number; floor_y: number }[]

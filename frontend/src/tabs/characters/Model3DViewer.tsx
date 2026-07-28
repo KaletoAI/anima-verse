@@ -93,15 +93,11 @@ const loadClip = (kind: string) => {
 export interface TilePlacement {
   /** Yaw around the vertical axis in degrees. */
   yawDeg: number
-  /** Base size as a fraction of the tile edge (]0, 2]; > 1 overflows the
-   *  tile on purpose — overlapping models). */
+  /** The model's share of the location's reference square (]0, 1]). */
   size: number
-  /** Declared model height in world metres (0 = natural) — applies the
-   *  detail view's per-axis k_y so this viewer matches the floor-plan
-   *  preview and the 3D client exactly. */
-  heightM?: number
-  /** Explicit plan width anchor (map3d.plan_width_m, 0 = auto/legacy). */
-  planWidthM?: number
+  /** The location's extent in WORLD metres (map3d.extent_m, default 10 =
+   *  one map tile) — together with `size` the ONE scale factor. */
+  extentM?: number
 }
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
@@ -213,8 +209,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   // Live-apply placement changes (yaw slider / size slider) without reload.
   useEffect(() => {
     if (placement) placeFnRef.current?.(placement)
-  }, [placement, placement?.yawDeg, placement?.size,
-    placement?.heightM, placement?.planWidthM])
+  }, [placement, placement?.yawDeg, placement?.size, placement?.extentM])
 
   useEffect(() => {
     let disposed = false
@@ -506,44 +501,24 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           // Derive scale + yaw + ground offset fresh from the model's current
           // bounding box — the orientation fix changes the box, so this runs
           // again after every ↻ click (see the rotation effect above).
-          // SAME placement chain as the floor-plan preview / 3D client
-          // (v3 contract, in tile units: 1 unit = 10 m world): rotation
-          // first, then k_xz = (10 × 0.92 × size)/maxXZ and k_y from the
-          // declared model height (natural without it), bottom of the
-          // scaled bbox at the 0.06 m socle + offset_y (world metres).
+          // SAME chain as the scene spec: ONE factor on all three axes, the
+          // largest YAWED XZ side becomes `size × extent_m`. There is no
+          // per-axis branch any more (it made this panel show the model
+          // 13–15 % flatter than both scene renderers).
           const applyPlacement = (p: TilePlacement) => {
             place.rotation.set(0, 0, 0)
             place.scale.setScalar(1)
             place.position.set(0, 0, 0)
-            place.updateMatrixWorld(true)
-            // Yaw-free measurement first: the auto plan width derives from
-            // the mesh's width-per-height ratio AFTER the meta rotation fix
-            // but BEFORE the map yaw (getBuildingDims does the same) —
-            // yawing a non-square footprint would change the AABB and drift
-            // the two viewers apart.
-            const b0 = new THREE.Box3().setFromObject(place)
-            const s0 = b0.getSize(new THREE.Vector3())
-            const wph = (Math.max(s0.x, s0.z) || 1) / (s0.y || 1)
             place.rotation.y = -_deg(p.yawDeg)
             place.updateMatrixWorld(true)
             const b = new THREE.Box3().setFromObject(place)
             const s = b.getSize(new THREE.Vector3())
             const maxXZ = Math.max(s.x, s.z) || 1
-            const size = Math.max(0.02, Math.min(2, p.size))
-            const kxzWorld = (10 * 0.92 * size) / maxXZ
-            let kyWorld = kxzWorld
-            if (p.heightM && p.heightM > 0) {
-              // Effective plan width: explicit anchor, else auto-derived
-              // (height × width-per-height) — the identical chain the
-              // floor preview computes.
-              const planW = (p.planWidthM && p.planWidthM > 0)
-                ? p.planWidthM
-                : p.heightM * wph
-              const kFac = planW > 0 ? 8 / planW : 1
-              kyWorld = (p.heightM * kFac) / (s.y || 1)
-            }
+            const size = Math.max(0.02, Math.min(1, p.size))
+            const extent = p.extentM && p.extentM > 0 ? p.extentM : 10
+            const kWorld = (extent * size) / maxXZ
             // Tile units = world / 10.
-            place.scale.set(kxzWorld / 10, kyWorld / 10, kxzWorld / 10)
+            place.scale.setScalar(kWorld / 10)
             place.updateMatrixWorld(true)
             const b2 = new THREE.Box3().setFromObject(place)
             const c2 = b2.getCenter(new THREE.Vector3())

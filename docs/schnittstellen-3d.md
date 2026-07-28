@@ -1,3 +1,43 @@
+# Schnittstellen 3D — Gesamtvertrag v5 (2026-07-28)
+
+> **v5 — EIN Rahmen, EIN Maßstabsfaktor, EIN Anker (2026-07-28).**
+> Drei Änderungen, die alles Folgende überschreiben, wo es widerspricht:
+>
+> 1. **Das Bezugsquadrat ist `map3d.extent_m`** (Welt-Meter, Default 10 =
+>    genau eine Kachel), nicht mehr feste 8 m. Es ist zugleich die Box, die
+>    das Location-Modell füllt: `max_m = extent_m × map3d.size` mit
+>    `size ∈ ]0, 1]`, Default 1. Die 0,92-Kachelmarge entfällt ersatzlos.
+>    Damit gilt **Grundriss-Rand = Modell-Rand**; vorher standen Kachel (10),
+>    Modell (10 × 0,92 × size) und Grundriss (8) unverbunden nebeneinander und
+>    die äußeren 0,6 m eines size-1-Modells waren von keiner Fraktion
+>    erreichbar. `k = extent_m / plan_width_m`; `extent_m` reist im Payload
+>    mit (`scene.extent_m`) — Konsumenten dürfen KEINE Konstante annehmen.
+> 2. **Ein Modell wird mit EINEM Faktor auf allen drei Achsen skaliert.**
+>    `scale_mode`/`box`/`scale_axes`/`fit_box` sind weg; jede Spec trägt
+>    `max_m` + `measure` (`yawed_xz` | `xz` | `xyz`), `place()` rechnet
+>    `s = max_m / gemessene Ausdehnung`. Nichts wird mehr in einer Dimension
+>    gestaucht — mit `height_m`/`floors` (Sidecar) und `level_height` (map3d)
+>    verschwinden auch die Regler, die das taten. Etagenhöhe ist
+>    `map3d.storey_height_m` in REALEN Metern (× k). Der Y-Morph des Clients
+>    (Kachelsicht uniform ↔ Detailsicht `height_m × k`) ist gelöscht: er ließ
+>    dieselbe Location bis zu 1,0 m anders hoch stehen als die Vorschau.
+> 3. **Zwei Anker-Arten, deklariert statt geraten.** `models[].display`
+>    unterscheidet `shell` (Gebäude STEHT auf dem Boden: Unterkante =
+>    0,06 + `offset_y`, blendet beim Reinzoomen weg) von `ground`
+>    (Flächen-Location, das Modell IST der Boden: seine BEGEHBARE FLÄCHE
+>    liegt auf `offset_y`, das Mesh hängt darunter; bleibt sichtbar und
+>    bekommt `cutouts`). Der Client hat „Fläche" vorher aus
+>    `cutouts.length > 0` geschlossen und lag bei Flächen ohne Grundriss
+>    falsch — der Mondscheinsee verschwand beim Reinzoomen komplett.
+>    `walk_y` zählt jetzt in REALEN Metern (× k), `0` heißt wörtlich null.
+>    Folge: Platten, Marker, Dioramen und Overlay-Zonen liegen automatisch
+>    auf derselben Höhe wie die Modelloberfläche (Mondscheinsee vorher:
+>    Overlay 1,12 / Marker −0,02 / Diorama 0,07 / Unterkante 0,06).
+>
+> Der Rest des Dokuments beschreibt weiterhin korrekt, WAS komponiert wird;
+> wo eine 8, eine 0,92, ein `scale_mode`, `height_m`, `floors` oder
+> `level_height` auftaucht, gilt die Liste oben.
+
 # Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
 
 **Vollständiger Neuschrieb.** Dieses Dokument ERSETZT und konsolidiert:

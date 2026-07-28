@@ -95,12 +95,12 @@ export class SpecVerifier {
     // Welt-BBox eines diagonal gedrehten Meshes ist legitim größer als die
     // Zielbox.
     if (Math.abs(((spec.yaw_deg % 90) + 90) % 90) > 0.01) return
-    if (spec.scale_mode === 'real_size' && spec.max_m) {
-      this.check(name, 'max_m', spec.measure_axes === 'xz'
-        ? Math.max(size.x, size.z) : Math.max(size.x, size.y, size.z), spec.max_m)
-    } else if (spec.scale_mode === 'tile_fit' && spec.box) {
-      if (spec.box.xz) this.check(name, 'box.xz', Math.max(size.x, size.z), spec.box.xz)
-      if (spec.box.y) this.check(name, 'box.y', size.y, spec.box.y)
+    if (spec.max_m) {
+      // Bei achsenparallelem Yaw ist die gedrehte Box die gefixte mit
+      // getauschten Achsen — `yawed_xz` und `xz` messen hier dasselbe.
+      this.check(name, 'max_m', spec.measure === 'xyz'
+        ? Math.max(size.x, size.y, size.z) : Math.max(size.x, size.z),
+      spec.max_m)
     }
   }
 }

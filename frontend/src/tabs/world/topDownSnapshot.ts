@@ -1,8 +1,13 @@
 /**
  * topDownSnapshot — renders the placed room models of ONE level straight from
- * above (orthographic, exactly covering the contract's 8×8 m reference
- * square) and returns the image as a data URL. The floor-plan editor lays it
- * BEHIND the room rectangles, so markers can be dropped on actual furniture.
+ * above (orthographic, exactly covering the location's reference square) and
+ * returns the image as a data URL. The floor-plan editor lays it BEHIND the
+ * room rectangles, so markers can be dropped on actual furniture.
+ *
+ * The camera frame comes from the payload (`extent_m`), NOT from a constant.
+ * It used to be a fixed 8 m while a size-1 model spanned 9.2 m, so the
+ * building underlay — the very picture the outline is traced over — silently
+ * cropped 0.6 m of the model on every side (user finding 2026-07-28).
  *
  * Placement comes from the SERVER's scene payload (`models` specs, contract
  * § B1/B2) through the same shared place() routine as the 3D preview — the
@@ -19,8 +24,6 @@ import { apiGet } from '../../lib/api'
 import type { Mesh, Object3D } from 'three'
 import type { SceneModelSpec } from './worldTypes'
 import { placeModelSpec } from '@anima/scene-render'
-
-const PLATE_M = 8
 
 interface CachedModel {
   obj: Object3D
@@ -64,8 +67,6 @@ function loadRoomModel(roomId: string): Promise<CachedModel | null> {
 interface BuildingModel {
   obj: Object3D
   rotation: { x?: number; y?: number; z?: number }
-  heightM: number
-  floors: number
   /** Tile-plane shift in world metres (after the yaw): +x east, +z south. */
   offsetX: number
   offsetZ: number
@@ -81,14 +82,12 @@ function loadBuildingModel(locationId: string): Promise<BuildingModel | null> {
         const base = `/play/locations/${encodeURIComponent(locationId)}/model`
         const meta = await apiGet<{ format?: string; url?: string
           rotation?: { x?: number; y?: number; z?: number }
-          height_m?: number; floors?: number
           offset_x?: number; offset_z?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') return null
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
         const gltf = await new GLTFLoader().loadAsync(meta.url || base)
         return { obj: gltf.scene, rotation: meta.rotation || {},
-                 heightM: meta.height_m || 0, floors: meta.floors || 0,
                  offsetX: meta.offset_x || 0, offsetZ: meta.offset_z || 0 }
       } catch {
         return null
@@ -99,37 +98,15 @@ function loadBuildingModel(locationId: string): Promise<BuildingModel | null> {
   return p
 }
 
-/** ONE refresh channel for every 3D-model mutation (height, storeys,
- *  width, rotation, offset, select, delete — from the panel, the adjust
- *  strip or the preview toolbar): invalidates the module caches here and
- *  broadcasts 'anima-model3d-changed'. The floor-plan editor and the
- *  preview listen and refetch — EVERYTHING derived (plan width, rect
- *  sizes, figures, storeys, shell) recomputes from fresh metas. */
+/** ONE refresh channel for every 3D-model mutation (width, rotation, offset,
+ *  walk height, select, delete — from the panel, the adjust strip or the
+ *  preview toolbar): invalidates the module caches here and broadcasts
+ *  'anima-model3d-changed'. The floor-plan editor and the preview listen and
+ *  refetch — everything derived recomputes from fresh metas. */
 export function notifyModel3dChanged(detail: { locationId?: string; roomId?: string }) {
   if (detail.roomId) modelCache.delete(detail.roomId)
   if (detail.locationId) buildingCache.delete(detail.locationId)
   window.dispatchEvent(new CustomEvent('anima-model3d-changed', { detail }))
-}
-
-/** Scale-anchor inputs of the building model: declared height/storeys plus
- *  the mesh's width-per-height ratio (largest XZ side / Y, measured AFTER
- *  the meta rotation fix). The auto plan width derives as
- *  heightM × widthPerHeight — editor and preview share this helper so
- *  both compute the identical value. null = no model. */
-export async function getBuildingDims(locationId: string):
-    Promise<{ heightM: number; floors: number; widthPerHeight: number } | null> {
-  const entry = await loadBuildingModel(locationId)
-  if (!entry) return null
-  const THREE = await import('three')
-  const deg = (v?: number) => ((v || 0) * Math.PI) / 180
-  const holder = new THREE.Group()
-  holder.add(entry.obj.clone(true))
-  holder.rotation.set(deg(entry.rotation.x), deg(entry.rotation.y),
-                      deg(entry.rotation.z))
-  holder.updateMatrixWorld(true)
-  const size = new THREE.Box3().setFromObject(holder).getSize(new THREE.Vector3())
-  return { heightM: entry.heightM, floors: entry.floors,
-           widthPerHeight: (Math.max(size.x, size.z) || 1) / (size.y || 1) }
 }
 
 /** Declared width + normalized footprint of a room's ACTIVE model — the
@@ -150,15 +127,19 @@ export async function getRoomModelDims(roomId: string):
 export async function renderTopDownSnapshot(opts: {
   /** The scene payload's `models` specs — the SERVER's placement truth. */
   models: SceneModelSpec[]
+  /** The payload's `extent_m`: the world size the image has to cover, so it
+   *  lines up pixel-for-pixel with the editor's plan square. */
+  extentM: number
   level: number
   width?: number
   /** Render the room models (the "Models behind the plan" layer). */
   includeRooms?: boolean
-  /** Also render the location's BUILDING model (ghosted, per its tile_fit
+  /** Also render the location's BUILDING model (ghosted, per its placement
    *  spec) — for tracing the outline polygon over the real footprint. */
   buildingId?: string
 }): Promise<string | null> {
-  const { models, level, width = 840, includeRooms = true, buildingId } = opts
+  const { models, extentM, level, width = 840, includeRooms = true,
+    buildingId } = opts
   const roomSpecs = includeRooms
     ? models.filter((m) => m.role === 'room' && m.level === level)
     : []
@@ -203,8 +184,8 @@ export async function renderTopDownSnapshot(opts: {
   })
 
   // Straight down, up = -Z: image top = plan top, image left = plan left —
-  // pixel-aligned with the editor rectangles (both cover the 8×8 m square).
-  const half = PLATE_M / 2
+  // pixel-aligned with the editor rectangles (both cover the same square).
+  const half = (extentM > 0 ? extentM : 10) / 2
   const camera = new THREE.OrthographicCamera(-half, half, half, -half, 0.01, 200)
   camera.position.set(0, 60, 0)
   camera.up.set(0, 0, -1)

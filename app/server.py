@@ -108,6 +108,17 @@ async def lifespan(app: FastAPI):
     # setzen (idempotent), damit Zaehlung + Generierung eindeutig sind.
     migrate_fixed_map_images()
 
+    # 3D-Massstab: EIN Rahmen (map3d.extent_m) + EIN Skalierungsfaktor.
+    # Traegt plan_width_m/storey_height_m aus den alten Modell-Feldern
+    # heraus, bevor diese verschwinden (2026-07-28).
+    try:
+        from app.core.location_model3d import migrate_scale_frame_once
+        _sf = migrate_scale_frame_once()
+        if _sf:
+            logger.info("3D-Massstab migriert: %s", _sf)
+    except Exception as _sfe:
+        logger.warning("scale-frame migration failed: %s", _sfe)
+
     # Vereinheitlichte Intents (plan-intents-unified.md, Phase 1): bestehende
     # Assignments idempotent in die intents-Tabelle spiegeln. Kein Verhaltens-
     # wechsel — assignments bleiben in Phase 1 die treibende Quelle.

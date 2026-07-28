@@ -439,45 +439,11 @@ async def location_model3d_offset(location_id: str, request: Request) -> Dict[st
     return {"meta": meta}
 
 
-@router.post("/locations/{location_id}/model3d/floors")
-async def location_model3d_floors(location_id: str, request: Request) -> Dict[str, Any]:
-    """Persist how many storeys a building model depicts (body: {floors},
-    0/empty = undeclared; optional {file} targets a stored model, default
-    the active one). Delivered via /model/meta — with height_m declared,
-    the storey height derives as height_m / floors."""
-    from app.core.location_model3d import set_floors
-    if not get_location_by_id(location_id):
-        raise HTTPException(status_code=404, detail="Location not found")
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Body must be an object")
-    try:
-        meta = set_floors(location_id, data.get("floors"),
-                          filename=str(data.get("file") or "").strip())
-    except ValueError:
-        raise HTTPException(status_code=404, detail="No model")
-    return {"meta": meta}
-
-
-@router.post("/locations/{location_id}/model3d/height")
-async def location_model3d_height(location_id: str, request: Request) -> Dict[str, Any]:
-    """Persist a building model's height in world metres (body: {height_m},
-    0/empty = undeclared; optional {file}). Detail-view scale anchor: the
-    shell is scaled UNIFORMLY to this height — its storeys land on the
-    derived level lines (height_m / floors). The tile view (map3d.size)
-    stays independent; clients switch representation on zoom."""
-    from app.core.location_model3d import set_height_m
-    if not get_location_by_id(location_id):
-        raise HTTPException(status_code=404, detail="Location not found")
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Body must be an object")
-    try:
-        meta = set_height_m(location_id, data.get("height_m"),
-                            filename=str(data.get("file") or "").strip())
-    except ValueError:
-        raise HTTPException(status_code=404, detail="No model")
-    return {"meta": meta}
+# The former /model3d/floors and /model3d/height endpoints are gone
+# (2026-07-28): both existed to squash a building model in Y. A model is
+# scaled by ONE factor on all three axes now (map3d.size × map3d.extent_m),
+# and the storey height is a location dial in real metres
+# (map3d.storey_height_m).
 
 
 # --- Room models (AV3D-2) — same store/contract as the building model, one
