@@ -92,8 +92,13 @@ interface RoomLayoutEditorProps {
   children?: ReactNode
 }
 
+/** How far the pointer has to travel before a press on a room BECOMES a
+ *  move. Below it the press is only a selection — clicking a room to work on
+ *  it used to nudge it by whatever the hand did (user finding 2026-07-28). */
+const MOVE_START_PX = 4
+
 type DragState =
-  | { kind: 'move'; roomId: string; startX: number; startY: number; origX: number; origY: number }
+  | { kind: 'move'; roomId: string; startX: number; startY: number; origX: number; origY: number; moving?: boolean }
   | { kind: 'resize'; roomId: string; startX: number; startY: number; origW: number; origD: number }
   | { kind: 'opening'; roomId: string; index: number; edge: number }
   | { kind: 'prop'; roomId: string; index: number }
@@ -260,6 +265,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
 
   const placed = rooms.filter((r) => r.layout && (r.layout.level || 0) === level)
   const unplaced = rooms.filter((r) => !r.layout)
+  const placedRooms = rooms.filter((r) => r.layout && r.id)
   const levels = Array.from(
     new Set(rooms.filter((r) => r.layout).map((r) => r.layout!.level || 0)),
   ).sort((a, b) => a - b)
@@ -563,6 +569,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       const lay = room?.layout
       if (!lay) return
       if (drag.kind === 'move') {
+        // A press selects; only a real movement moves. Once past the
+        // threshold the drag stays live, so a slow hand does not stutter.
+        if (!drag.moving) {
+          if (Math.hypot(e.clientX - drag.startX,
+                         e.clientY - drag.startY) < MOVE_START_PX) return
+          drag.moving = true
+          // Re-base on the crossing point, otherwise the room jumps by the
+          // threshold at the very moment the drag begins.
+          drag.startX = e.clientX
+          drag.startY = e.clientY
+        }
         const dx = (e.clientX - drag.startX) / canvas.clientWidth
         const dy = (e.clientY - drag.startY) / canvas.clientHeight
         let nx = clamp(drag.origX + dx, 0, 1 - lay.w)
@@ -2260,6 +2277,27 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             />
             <span style={{ minWidth: 40 }}>{map3d.elevator[1].toFixed(3)}</span>
           </label>
+        </div>
+      ) : null}
+
+      {/* Pick a room WITHOUT touching the plan — small, overlapping or
+          stacked rooms are hard to hit, and hitting them used to move them. */}
+      {placedRooms.length ? (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="ga-hint">{t('On the plan:')}</span>
+          {placedRooms.map((room) => (
+            <button
+              key={room.id || room.name}
+              type="button"
+              className={`ga-btn ga-btn-sm${selected === room.id ? ' ga-btn-primary' : ''}`}
+              onClick={() => setSelected(room.id || '')}
+              title={t('Select this room — nothing on the plan moves.')}
+            >
+              {(room.layout?.level || 0) !== 0
+                ? `${room.name || room.id} · ${room.layout?.level}`
+                : (room.name || room.id)}
+            </button>
+          ))}
         </div>
       ) : null}
 
