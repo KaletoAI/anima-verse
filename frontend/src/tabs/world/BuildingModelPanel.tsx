@@ -17,6 +17,7 @@ import { MeshBackendDialog, type MeshBackend } from '../../components/MeshBacken
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { notifyModel3dChanged } from './topDownSnapshot'
 import type { Map3D, ScenePayload } from './worldTypes'
+import { useActiveMeasure } from './measureKit'
 
 export interface ModelEntry {
   filename: string
@@ -98,6 +99,9 @@ export function BuildingModelPanel({
   const { toast } = useToast()
   const buildingSpec = roomId ? null
     : (scene?.models || []).find((m) => m.role === 'building') || null
+  // Which metre dial is being edited — drives the reference sizes in the
+  // viewer (a number in real metres is guesswork without them).
+  const { measure, bind: bindMeasure } = useActiveMeasure()
   const encLoc = encodeURIComponent(locationId)
   // Admin API base switches between building and room routes.
   const enc = roomId
@@ -136,6 +140,11 @@ export function BuildingModelPanel({
       if (!d?.pending) {
         if (pollRef.current) clearInterval(pollRef.current)
         pollRef.current = null
+        // A generation just finished. Only this panel knew — the adjust
+        // strip, the floor-plan preview and the scene payload kept their
+        // stale "no model yet" state until a full reload (user finding
+        // 2026-07-28: "es wird dargestellt, aber einstellen kann man nicht").
+        notifyModel3dChanged(roomId ? { roomId } : { locationId })
         return
       }
       if (n === 40) {
@@ -144,7 +153,7 @@ export function BuildingModelPanel({
       }
     }
     pollRef.current = setInterval(tick, 3000)
-  }, [load])
+  }, [load, locationId, roomId])
 
   useEffect(() => {
     setArmedDel(null)
@@ -448,8 +457,12 @@ export function BuildingModelPanel({
           // Buildings render their SCENE SPEC: same square, same numbers as
           // the floor-plan preview, and the walk-height dial visibly moves
           // the model against the square (which is level 0).
-          : { extentM: map3d?.extent_m || 10, spec: buildingSpec,
-            yawDeg: effectiveYaw, size: effectiveSize }}
+          : { extentM: scene?.extent_m || map3d?.extent_m || 10,
+            spec: buildingSpec, yawDeg: effectiveYaw, size: effectiveSize,
+            measure, k: scene?.k, planWidthM: map3d?.plan_width_m,
+            storeyWorld: scene?.storey_m,
+            storeyRealM: map3d?.storey_height_m || 3,
+            figureHeightWorld: scene?.figures?.base_height_m_world }}
       />
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -509,7 +522,13 @@ export function BuildingModelPanel({
               style={{ width: 90 }}
               value={offsetDrafts[key]}
               onChange={(e) => setOffsetDrafts((d) => ({ ...d, [key]: e.target.value }))}
-              onBlur={() => { void commitOffset(key) }}
+              onFocus={(key === 'walk_y' || key === 'offset_y')
+                ? bindMeasure(key).onFocus : undefined}
+              onBlur={(e) => {
+                if (key === 'walk_y' || key === 'offset_y') bindMeasure(key).onBlur()
+                void commitOffset(key)
+                void e
+              }}
               onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             />
           </label>
@@ -611,6 +630,7 @@ export function BuildingModelPanel({
               style={{ width: 70 }}
               value={size ?? ''}
               placeholder={String(DEFAULT_TILE_SIZE)}
+              {...bindMeasure('size')}
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
                 onMap3dField('size', Number.isFinite(n) && n > 0 && n <= MAX_TILE_SIZE ? n : undefined)

@@ -47,13 +47,14 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
   const [widthDraft, setWidthDraft] = useState('')
   const [walkDraft, setWalkDraft] = useState('')
 
-  useEffect(() => {
+  // ``meta`` is the ACTIVE model's sidecar — the only place that says what the
+  // admin set by hand.
+  const reload = useCallback((reset: boolean) => {
     let stale = false
-    setLoaded(false)
-    setModel(null)
-    // ``meta`` is the ACTIVE model's sidecar — the only place that says whether
-    // walk_y was set BY HAND (the scene payload's walk_y_world already contains
-    // the server-measured value when it was not).
+    if (reset) {
+      setLoaded(false)
+      setModel(null)
+    }
     apiGet<{ models?: ActiveModel[]; meta?: { walk_y?: number } }>(
       `/world/locations/${enc}/model3d/status`)
       .then((d) => {
@@ -68,6 +69,20 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
       .catch(() => { if (!stale) setLoaded(true) })
     return () => { stale = true }
   }, [enc])
+
+  useEffect(() => reload(true), [reload])
+
+  // A model that appears while this strip is open (a generation finishing in
+  // the room editor) has to reach it — otherwise the model renders and its
+  // dials stay hidden until the page is reloaded.
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const det = (e as CustomEvent).detail as { roomId?: string } | undefined
+      if (!det?.roomId || det.roomId === roomId) reload(false)
+    }
+    window.addEventListener('anima-model3d-changed', onChanged)
+    return () => window.removeEventListener('anima-model3d-changed', onChanged)
+  }, [roomId, reload])
 
   const setRotationAxis = useCallback(async (axis: 'x' | 'y' | 'z', raw: string) => {
     if (!model) return

@@ -28,6 +28,8 @@ import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, VerifyRow } from '@anima/scene-render'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
+import { buildMeasureAids, disposeAids, useActiveMeasure,
+  type MeasureKey } from './measureKit'
 
 // The reference square is the preview's stage — ground plate, ruler position
 // and camera framing. Its WORLD size is a per-location dial and arrives in
@@ -84,6 +86,10 @@ interface FloorPlanPreviewProps {
   /** When set, the toolbar shows the extent field (map3d.extent_m) — how
    *  wide the location is in WORLD metres. */
   onExtent?: (v: number | undefined) => void
+  /** Which metre dial is being edited RIGHT NOW — decides which reference
+   *  size the preview shows (measureKit). The preview owns the state for its
+   *  own toolbar fields; a parent may override for fields it hosts itself. */
+  measure?: MeasureKey
   /** The 2D icon rotation (map_rotation_2d) — the contract's yaw fallback
    *  when map3d.rotation is unset (the model turns with the 2D icon). */
   fallbackYawDeg?: number
@@ -100,8 +106,12 @@ interface FloorPlanPreviewProps {
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, onPlanWidth, onExtent, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, onPlanWidth, onExtent, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
+  // Reference sizes: the toolbar's own fields drive them; a parent may push
+  // one in for a field it hosts (the model tab does that).
+  const { measure: ownMeasure, bind: bindMeasure } = useActiveMeasure()
+  const measure = measureProp ?? ownMeasure
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -142,6 +152,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // Plate + edge loop of the reference square — both are unit-sized and get
   // scaled to the payload's extent_m on every rebuild.
   const squareRef = useRef<Object3D[] | null>(null)
+  // Reference-size overlay of the last rebuild (its own sprites/materials).
+  const aidsRef = useRef<Group | null>(null)
+  const measureRef = useRef<MeasureKey>(null)
+  measureRef.current = measure
   const roomsRef = useRef(rooms)
   roomsRef.current = rooms
   const showModelsRef = useRef(showModels)
@@ -198,7 +212,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         cacheRef.current.delete(`room:${det.roomId}`)
       }
       if (det?.locationId === locationId) {
-        cacheRef.current.delete('building')
+        cacheRef.current.delete(`building:${locationId}`)
       }
       setBump((b) => b + 1)
     }
@@ -402,7 +416,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     }
     // The building entry is fetched regardless of the overlay toggle — the
     // model panel's fields read it.
-    const bAnchor = ensureModel('building')
+    // Keyed by LOCATION: a plain 'building' key survived a location switch,
+    // so the preview kept showing the previous location's model until the
+    // whole editor unmounted (user finding 2026-07-28). Room ids are unique
+    // on their own.
+    const bAnchor = ensureModel(`building:${locationId}`)
     for (const mixer of mixersRef.current) mixer.stopAllAction()
     mixersRef.current = []
     // Recursive disposal that BAILS on __noDispose subtrees — cached-model
@@ -1066,6 +1084,27 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       placeFigure({ x: rx + 0.55, y: 0, z: rz - 0.35, facing: 45 })
     }
 
+    // ── Reference sizes for the metre dials (measureKit) ────────────────
+    // No number in real metres without something human beside it; which
+    // ruler shows follows the field the cursor sits in.
+    disposeAids(aidsRef.current)
+    aidsRef.current = buildMeasureAids(THREE, {
+      measure: measureRef.current,
+      extentM: PLATE_M,
+      k: kFac,
+      planWidthM: map3dRef.current?.plan_width_m || 0,
+      storeyWorld: lhEff,
+      storeyRealM: kFac > 0 ? lhEff / kFac : lhEff,
+      figureHeightWorld: figBase,
+      modelWidthM: sc?.models.find((m) => m.role === 'building')?.max_m,
+      modelBottomY: sc?.models.find((m) => m.role === 'building')?.bottom_y,
+      walkYWorld: sc?.models.find((m) => m.role === 'building')?.walk_y_world,
+      levels: usedLevels,
+      words: { ground: t('Level 0'), walk: t('Ground'), tile: t('Tile 10 m'),
+               of: t('of') },
+    })
+    boxes.add(aidsRef.current)
+
     // Verify report (§ B5a): machine-readable, deviations one by one with
     // actual/target. The console table is the one that travels between
     // sessions; the overlay is just the hint that it is there.
@@ -1360,7 +1399,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, map3d, showModels, showBuilding, showWalls, soloLevel, bump, lh,
-      fallbackYawDeg, scene, calibration, verify])
+      fallbackYawDeg, scene, calibration, verify, measure])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
@@ -1437,6 +1476,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
               style={{ width: 70 }}
               value={map3d?.extent_m ?? ''}
               placeholder="10"
+              {...bindMeasure('extent')}
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
                 onExtent(Number.isFinite(n) && n > 0 ? n : undefined)
@@ -1461,6 +1501,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
                 : { width: 70 }}
               value={map3d?.plan_width_m ?? ''}
               placeholder="—"
+              {...bindMeasure('plan_width')}
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
                 onPlanWidth(Number.isFinite(n) && n > 0 ? n : undefined)
@@ -1481,6 +1522,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
               style={{ width: 70 }}
               value={storeyHeightM ?? ''}
               placeholder="3"
+              {...bindMeasure('storey')}
               onChange={(e) => {
                 const n = parseFloat(e.target.value)
                 onStoreyHeight(Number.isFinite(n) && n > 0 ? n : undefined)

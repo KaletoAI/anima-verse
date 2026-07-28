@@ -13,6 +13,7 @@ import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D } fr
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
+import { buildMeasureAids, disposeAids, type MeasureKey } from '../world/measureKit'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
 
@@ -106,6 +107,15 @@ export interface TilePlacement {
   /** Neutral fallback only: yaw + share of the stage. */
   yawDeg?: number
   size?: number
+  /** Reference sizes (measureKit): which dial is being edited, plus the
+   *  scalars the rulers need. Without them the stage shows nothing human and
+   *  a metre field is guesswork. */
+  measure?: MeasureKey
+  k?: number
+  planWidthM?: number
+  storeyWorld?: number
+  storeyRealM?: number
+  figureHeightWorld?: number
 }
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
@@ -161,6 +171,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const rotationRef = useRef(rotation)
   rotationRef.current = rotation
   const placeFnRef = useRef<((p: TilePlacement) => void) | null>(null)
+  /** Reference-size overlay of the current placement (own sprites/materials). */
+  const aidsRef = useRef<Object3D | null>(null)
   const placementRef = useRef(placement)
   placementRef.current = placement
   const offsetYRef = useRef(offsetY)
@@ -218,7 +230,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   useEffect(() => {
     if (placement) placeFnRef.current?.(placement)
   }, [placement, placement?.yawDeg, placement?.size, placement?.extentM,
-    placement?.spec])
+    placement?.spec, placement?.measure, placement?.figureHeightWorld])
 
   useEffect(() => {
     let disposed = false
@@ -547,6 +559,27 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             const az = spec ? spec.anchor[1] : (offsetZRef.current || 0)
             const bottom = spec ? spec.bottom_y : (offsetYRef.current || 0)
             place.position.set(ax - c2.x, bottom - b2.min.y, az - c2.z)
+
+            // Reference sizes for the dials next to this viewer — the same
+            // kit the floor-plan preview draws, so a metre means the same
+            // thing in both (measureKit).
+            disposeAids(aidsRef.current)
+            const figure = p.figureHeightWorld || 0
+            if (figure > 0) {
+              aidsRef.current = buildMeasureAids(THREE, {
+                measure: p.measure ?? null,
+                extentM: extent,
+                k: p.k || 1,
+                planWidthM: p.planWidthM || 0,
+                storeyWorld: p.storeyWorld || 3,
+                storeyRealM: p.storeyRealM || 3,
+                figureHeightWorld: figure,
+                modelWidthM: spec?.max_m,
+                modelBottomY: spec?.bottom_y,
+                walkYWorld: spec?.walk_y_world,
+              })
+              scene.add(aidsRef.current)
+            }
           }
           placeFnRef.current = applyPlacement
           disposers.push(() => {
