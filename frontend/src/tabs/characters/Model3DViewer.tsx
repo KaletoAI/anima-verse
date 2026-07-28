@@ -765,17 +765,35 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
                 const fb2 = new THREE.Box3().setFromObject(fpivot)
                 const fc2 = fb2.getCenter(new THREE.Vector3())
                 place.updateMatrixWorld(true)
-                // The marker names the SURFACE; a seated body touches at the
-                // buttocks, so the root drops by the clip's share of the
-                // figure height — the same subtraction the scene payload
-                // delivers as `root_offset`. Without it the preview would
-                // show a sitter the scene never renders.
+                // WHICH part of the body the marker point carries. A standing
+                // or lying figure touches at its lowest edge; a SEATED one
+                // touches at the buttocks, and putting its feet on the seat
+                // is what made every sitter hover (user finding 2026-07-28).
+                //
+                // The amount is read off the POSED SKELETON, not off a
+                // constant: after the clip is applied the hips bone sits where
+                // it sits, and the buttocks a little below the joint. That
+                // cannot be off by half a metre the way a constant that fails
+                // to reach the code can — and it is right for every clip,
+                // including ones nobody has measured.
+                let anchorY = fb2.min.y
+                if (rootDropFor(m.animation) > 0) {
+                  let hips: Object3D | null = null
+                  inst.traverse((o: Object3D) => {
+                    if (!hips && /hips/i.test(o.name)) hips = o
+                  })
+                  if (hips) {
+                    const hy = (hips as Object3D)
+                      .getWorldPosition(new THREE.Vector3()).y
+                    // ~3 % of the figure height from the joint to the seat.
+                    anchorY = hy - 0.03 * figH
+                  }
+                }
                 const world = pivot.localToWorld(local.clone())
-                world.y -= rootDropFor(m.animation) * figH
                 const fig = new THREE.Group()
                 fig.position.copy(world)
                 fig.rotation.y = _deg(m.facing)
-                fpivot.position.set(-fc2.x, -fb2.min.y, -fc2.z)
+                fpivot.position.set(-fc2.x, -anchorY, -fc2.z)
                 fig.add(fpivot)
                 fig.userData.__shared = true
                 figGroup.add(fig)

@@ -74,14 +74,23 @@ ROOM_PLATE_THICKNESS = 0.02
 PROP_CLEARANCE = 0.01
 # How far BELOW a marked surface a figure's root goes, as a fraction of the
 # figure's height. A marker says where the SURFACE is — the seat of a bench,
-# the mattress. Where the root has to sit for the body to touch it is a
-# property of the CLIP, not of the marker: the Mixamo sit clip carries the
-# hips at 0.344 x figure height above the root (measured on x-bot.fbx +
-# sit.fbx), and the buttocks a little below that. 0.259 x 1.70 m = the 0.44 m
-# the 3D client applied on its own until now — kept exactly, so nothing that
-# is dialled in today moves. Standing and lying poses touch at the root, so
-# they drop by nothing.
-FIGURE_ROOT_DROP = {"sit": 0.259}
+# the mattress. WHERE the body touches that surface is a property of the CLIP,
+# not of the marker, and it is nowhere near the feet:
+#
+#   clip      hips     lowest bone   what touches
+#   sit       0.344    0.000 (toes)  the buttocks, just under the hip joint
+#   sleep     0.660    0.604         the back — this clip lies on a BED, so the
+#                                    whole body sits 0.6 x H above the root
+#   laying    0.081   -0.004         the back, at ground level
+#
+# (measured on x-bot.fbx + the clips). ONE rule for all of them: the contact
+# is the hips bone minus 0.03 x H — the same rule the prop viewer applies
+# live, where it reads the hips off the POSED skeleton instead of a table.
+# The viewer is the authority when a clip changes; these numbers are for
+# everyone who has no clip loaded. A kind that is absent touches at its root
+# and drops by nothing (standing, walking, working poses).
+FIGURE_ROOT_DROP = {"sit": 0.314, "sleep": 0.631, "laying": 0.051,
+                    "lie": 0.051}
 # Diorama clipping (§ B1): the shell polygon a room model may be cut against
 # is capped — the shader test runs per fragment, more points than this are not
 # worth the frame time, so the opt-in is ignored instead.

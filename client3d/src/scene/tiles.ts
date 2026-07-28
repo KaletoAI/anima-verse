@@ -854,10 +854,13 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
         const hit = ray.intersectObjects(roots, true)[0];
         const surface = hit && hit.point.y < floor + 0.5 ? hit.point.y : floor;
         // Der Absatz kommt vom Server (root_offset) — der Client kennt hier
-        // nur die abgetastete FLÄCHE, nicht die Sitzhöhe des Clips. Nie unter
-        // den Boden: eine Sitzfläche knapp über dem Boden darf die Figur
-        // nicht versenken.
-        e.p.setY(Math.max(floor, surface - e.drop) + 0.01 + e.offsetY);
+        // nur die abgetastete FLÄCHE, nicht den Berührpunkt des Clips.
+        // BEWUSST ohne Boden-Klemme: bei diesen Clips liegt die Wurzel
+        // richtigerweise unter dem Boden. Der Schlaf-Clip trägt den ganzen
+        // Körper 0,6 x Figurenhöhe über seiner Wurzel (auf einem Bett
+        // animiert), also 1,07 reale Meter — eine Klemme auf den Boden ließe
+        // die Figur genau so weit über der Matratze schweben.
+        e.p.setY(surface - e.drop + 0.01 + e.offsetY);
       }
     }
   }

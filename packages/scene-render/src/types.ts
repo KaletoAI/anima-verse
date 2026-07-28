@@ -235,14 +235,14 @@ export interface ScenePayload {
 }
 
 /**
- * How far BELOW a marked surface a figure's root sits, per clip kind, as a
- * fraction of the figure's height. The SCENE gets this finished from the
- * server (`SceneMarker.root_offset`) — this table is for the editors that
- * preview a marker WITHOUT a scene payload (the prop viewer). Mirrors
- * `FIGURE_ROOT_DROP` in `app/core/scene_recipe.py`; the server stays
- * authoritative, and a drift shows up at once as "the preview lies".
+ * WHICH clip kinds are seated — the poses whose contact point is not the
+ * lowest edge of the body. The prop viewer only asks IF (it then reads the
+ * amount off the posed skeleton); the value is the server's number
+ * (`FIGURE_ROOT_DROP` in `app/core/scene_recipe.py`, measured on x-bot.fbx +
+ * sit.fbx) for anything that needs a figure without a scene payload.
  */
-export const FIGURE_ROOT_DROP: Record<string, number> = { sit: 0.259 }
+export const FIGURE_ROOT_DROP: Record<string, number> =
+  { sit: 0.314, sleep: 0.631, laying: 0.051, lie: 0.051 }
 
 /** The drop for one clip kind (0 = the root sits on the surface). */
 export const rootDropFor = (animation?: string) =>
