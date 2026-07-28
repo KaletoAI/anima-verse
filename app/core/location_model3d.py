@@ -124,49 +124,16 @@ def _write_sidecar(model_path: Path, meta: Dict[str, Any]) -> None:
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-# ── Mesh measurements (contract § B4 "light") ───────────────────────────
-# A ROOM model is measured exactly once: the bounding box after the
-# orientation fix and the height of its walkable floor as a fraction of the
-# model height. With both, the scene composer knows the diorama's FINAL
-# height and can derive the height a figure stands at — dialling ``walk_y``
-# by hand becomes the correction, not the rule (the manual value stays the
-# override). Changing the orientation fix invalidates both values.
+# ── No mesh measurement (2026-07-28) ────────────────────────────────────
+# Models used to be measured once at ingest (bounding box + the height of
+# their "dominant walkable layer") so the composer could place a figure on a
+# modelled floor without being told where it is. That is an automatic repair,
+# and it failed exactly where it mattered: on the Bernstein Academy campus
+# the roofs carry 0.38 of projected horizontal area against the ground's
+# 0.67, so the heuristic called the ROOFS walkable and sank the whole model
+# 7.7 real metres. The admin states the walk height (``walk_y``); nothing
+# else may decide it. ``_MEASURED_KEYS`` are what a migration strips.
 _MEASURED_KEYS = ("measured", "bbox_fixed", "walk_frac")
-
-
-def _ensure_measured(path: Path, meta: Dict[str, Any]) -> Dict[str, Any]:
-    """Measure a room model once and cache the result in its sidecar. Runs at
-    ingest (generation/upload) and lazily on the first read of an older model
-    — no cut-off date. A failed measurement is cached as well, so an exotic
-    file is not re-parsed on every poll."""
-    if meta.get("measured") or path.suffix.lower() != ".glb":
-        return meta
-    from app.core.model_validate import glb_bounds, mesh_metrics
-    from app.core.props import oriented_dims
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return meta
-    meta["measured"] = True
-    metrics = mesh_metrics(data, meta.get("rotation"))
-    if metrics:
-        meta["bbox_fixed"] = metrics["bbox_fixed"]
-        if metrics.get("walk_frac") is not None:
-            meta["walk_frac"] = round(float(metrics["walk_frac"]), 4)
-    else:
-        # Geometry we cannot iterate (Draco, sparse, external buffers): the
-        # extent still comes off the declared accessor boxes, only the walk
-        # height stays unknown — the admin dials walk_y for those.
-        bounds = glb_bounds(data)
-        od = oriented_dims([bounds[1][i] - bounds[0][i] for i in range(3)],
-                           meta.get("rotation")) if bounds else []
-        if od:
-            meta["bbox_fixed"] = od
-    try:
-        _write_sidecar(path, meta)
-    except OSError:
-        logger.warning("Model measurement of %s could not be cached", path.name)
-    return meta
 
 
 def _read_selection(owner_id: str) -> Dict[str, str]:
@@ -287,7 +254,9 @@ def derive_plan_width_m(location_id: str, map3d: Any) -> float:
 
 # ── One-shot conversion to the one-frame / one-scale model ──────────────
 
-_SCALE_FRAME_FLAG = "world.migration.scale_frame"
+# Bumped when the migration's CONTENT changes — the map3d part is idempotent,
+# so a re-run only adds what the newer version cleans up.
+_SCALE_FRAME_FLAG = "world.migration.scale_frame_v2"
 
 
 def _legacy_plan_width(path: Path, meta: Dict[str, Any]) -> float:
@@ -330,8 +299,9 @@ def migrate_scale_frame_once() -> Dict[str, int]:
       disappears — otherwise the location would silently lose its scale.
     - the storey height is one dial in REAL metres (``storey_height_m``)
       instead of ``height_m / floors`` (real) or ``level_height`` (world).
-    - ``walk_y`` counts in REAL metres now, and a building's stored 0 meant
-      "auto" under the old truthiness check, not "at the lower edge".
+    - ``walk_y`` counts in REAL metres now (it was world metres).
+    - the cached auto-measurement (``bbox_fixed``/``walk_frac``) is dead
+      weight: nothing decides the walk height any more except the admin.
 
     Idempotent via a world_kv flag; touches map3d in world.db and the model
     sidecars. Returns a small stats dict for the boot log.
@@ -395,8 +365,8 @@ def migrate_scale_frame_once() -> Dict[str, int]:
 
         if not owner:
             continue
-        # Sidecars: drop the two per-axis dials, convert walk_y to real
-        # metres, and clear a building's legacy "0 means auto".
+        # Sidecars: drop the two per-axis dials and the retired
+        # auto-measurement, convert walk_y from world to real metres.
         room_ids = [str(r.get("id") or "") for r in (loc.get("rooms") or [])
                     if isinstance(r, dict) and r.get("id")]
         plan_w = _explicit_plan_width(loc.get("map3d"))
@@ -407,17 +377,13 @@ def migrate_scale_frame_once() -> Dict[str, int]:
                 if not meta:
                     continue
                 touched = False
-                for dead in ("height_m", "floors"):
+                for dead in ("height_m", "floors", *_MEASURED_KEYS):
                     if meta.pop(dead, None) is not None:
                         touched = True
                 walk = meta.get("walk_y")
-                if walk is not None:
-                    if not room_id and float(walk or 0) == 0.0:
-                        meta.pop("walk_y", None)   # meant "auto" before
-                        touched = True
-                    elif float(walk or 0) > 0 and k_old > 0:
-                        meta["walk_y"] = round(float(walk) / k_old, 3)
-                        touched = True
+                if walk is not None and float(walk or 0) > 0 and k_old > 0:
+                    meta["walk_y"] = round(float(walk) / k_old, 3)
+                    touched = True
                 if touched:
                     _write_sidecar(path, meta)
                     stats["sidecars"] += 1
@@ -501,19 +467,9 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
         # Rooms: the height offset lives in the FLOOR PLAN
         # (layout.model_offset_y), not on the model — the sidecar offsets are
         # gone here (2026-07-24). What IS a model property: the height a
-        # figure walks at inside the diorama.
-        meta = _ensure_measured(p, meta)
+        # figure walks at inside the diorama, stated by the admin.
         if meta.get("walk_y") is not None:
             out["walk_y"] = float(meta.get("walk_y") or 0.0)
-        # Measured once per model (§ B4 light): the fixed bounding box lets the
-        # scene composer compute the diorama's final height, and with the
-        # walkable-floor fraction it derives walk_y itself — the absolute
-        # result rides along the scene payload, which is the only place that
-        # knows the scale k.
-        if meta.get("bbox_fixed"):
-            out["bbox_fixed"] = list(meta["bbox_fixed"])
-        if meta.get("walk_frac") is not None:
-            out["walk_frac"] = float(meta.get("walk_frac") or 0.0)
         return out
     # Buildings: vertical placement offset in metres (model property —
     # reliefs have different socket thicknesses; negative sinks the model
@@ -523,20 +479,11 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
     out["offset_y"] = float(meta.get("offset_y") or 0.0)
     out["offset_x"] = float(meta.get("offset_x") or 0.0)
     out["offset_z"] = float(meta.get("offset_z") or 0.0)
-    # Walkable surface above the model's bottom edge (metres, manual dial) —
-    # feeds the stand height of overlay zones on an area location.
+    # Walkable surface above the model's lower edge (REAL metres, admin dial,
+    # absent = 0 = the lower edge). For an area location this is THE anchor:
+    # the model hangs that far below the height offset. Nothing measures it.
     if meta.get("walk_y") is not None:
         out["walk_y"] = float(meta.get("walk_y") or 0.0)
-    # Measured walkable surface (user finding 2026-07-28: overlay zones stood
-    # on the SUNKEN model bottom — a village sunk by offset_y put its NPCs a
-    # metre underground). The same § B4-light measurement rooms always had:
-    # bbox + walkable-floor fraction, cached in the sidecar; the composer
-    # derives walk_y_world from it, the manual walk_y stays the override.
-    meta = _ensure_measured(p, meta)
-    if meta.get("bbox_fixed"):
-        out["bbox_fixed"] = list(meta["bbox_fixed"])
-    if meta.get("walk_frac") is not None:
-        out["walk_frac"] = float(meta.get("walk_frac") or 0.0)
     return out
 
 
@@ -580,13 +527,12 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
         # Whole numbers stay ints in the sidecar (no 90.0 noise).
         rot[axis] = int(v) if float(v).is_integer() else v
     if rot != cur:
-        # Every measurement is taken AFTER the fix — a new fix invalidates it.
+        # Leftovers of the retired auto-measurement: a changed fix invalidated
+        # them, and nothing reads them any more.
         for key in _MEASURED_KEYS:
             meta.pop(key, None)
     meta["rotation"] = rot
     _write_sidecar(p, meta)
-    if room_id:
-        meta = _ensure_measured(p, meta)
     return meta
 
 
@@ -744,8 +690,6 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
     if room_id:
         meta["room"] = room_id
     _write_sidecar(target, meta)
-    if room_id:
-        meta = _ensure_measured(target, meta)
     select_model(location_id, target.name, room_id)
     logger.info("Location model %s%s: uploaded (%d bytes) -> %s", owner,
                 f"/{room_id}" if room_id else "", len(contents), target.name)
@@ -824,8 +768,6 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
         if room_id:
             meta["room"] = room_id
         _write_sidecar(path, meta)
-        if room_id:
-            meta = _ensure_measured(path, meta)
         select_model(location_id, path.name, room_id)
         logger.info("Location model %s: %s (%d bytes, from %s)", owner, path.name,
                     path.stat().st_size, source_image)

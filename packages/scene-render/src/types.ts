@@ -106,18 +106,16 @@ export interface SceneModelSpec {
   /** Dioramen ohne geeichtes `width_m`: `max_m` ist die Breite des
    *  Raum-Rechtecks als Notbehelf — die UI soll zur Eichung auffordern. */
   width_estimated?: boolean
+  // `walk_y_auto` gab es bis 2026-07-28: die aus dem Mesh GEMESSENE Gehhöhe,
+  // die einen leeren Regler still ausfüllte. Eine Automatik, die Modelle
+  // ausrichtet, gibt es nicht mehr — der Admin setzt walk_y, alles andere
+  // rechnet von diesem Basiswert aus.
   /** Flächen-Locations (plan-area-locations.md): Welt-Polygone, die aus DIESEM
    *  Modell geschnitten werden — Gebäude-Grundriss plus die Umrisse platzierter
    *  Indoor-Räume außerhalb davon. Das Modell bleibt in der Innenansicht
    *  stehen, in den Löchern steht das Rezept-Innenleben. Nur am
    *  building-Spec, nur bei `map3d.area_model`. */
   cutouts?: [number, number][][]
-  /** Räume: die Höhe, die der SERVER aus dem Mesh gemessen hat (Meter über der
-   *  Unterkante des Dioramas — dieselbe Einheit, die der walk_y-Regler
-   *  speichert). Speist `walk_y_world`, solange der Admin nicht überschrieben
-   *  hat; im Editor der Platzhalter des Reglers. Fehlt = nicht messbar.
-   *  Nur die Admin-Seite wertet das aus. */
-  walk_y_auto?: number
 }
 
 export interface SceneMarker {

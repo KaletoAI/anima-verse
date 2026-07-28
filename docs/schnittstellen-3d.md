@@ -29,7 +29,15 @@
 >    bekommt `cutouts`). Der Client hat „Fläche" vorher aus
 >    `cutouts.length > 0` geschlossen und lag bei Flächen ohne Grundriss
 >    falsch — der Mondscheinsee verschwand beim Reinzoomen komplett.
->    `walk_y` zählt jetzt in REALEN Metern (× k), `0` heißt wörtlich null.
+>    **Wo im Mesh die begehbare Fläche liegt, sagt ausschließlich der
+>    `walk_y`-Regler** (REALE Meter über der Unterkante, × k; fehlt/0 = die
+>    Unterkante selbst). Die frühere Messung („dominante horizontale Lage",
+>    `walk_frac`/`bbox_fixed`) ist ersatzlos gelöscht: ein Modell
+>    automatisch auszurichten ist genau die Reparatur, die dieser Vertrag
+>    nicht macht — und sie lag dort falsch, wo es zählte (Bernstein Academy:
+>    Dächer 0,38 projizierte Fläche gegen 0,67 des Bodens ⇒ die Heuristik
+>    erklärte die DÄCHER für begehbar und versenkte das Modell 7,7 reale
+>    Meter). Der Benutzer setzt den Basiswert, alles andere rechnet daraus.
 >    Folge: Platten, Marker, Dioramen und Overlay-Zonen liegen automatisch
 >    auf derselben Höhe wie die Modelloberfläche (Mondscheinsee vorher:
 >    Overlay 1,12 / Marker −0,02 / Diorama 0,07 / Unterkante 0,06).

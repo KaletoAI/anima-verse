@@ -24,25 +24,20 @@ interface ActiveModel {
   /** Real-world width estimate of the room's largest side (metres) —
    *  figures in the room derive their scale from it. */
   width_m?: number
-  /** The admin's OVERRIDE of the walkable floor height (metres above the
-   *  model's lower edge); undefined = the server's measured value applies. */
+  /** The walkable floor height (REAL metres above the model's lower edge) —
+   *  stated by the admin, never measured. undefined = undeclared. */
   walk_y?: number
   active?: boolean
 }
 
 export function RoomModelAdjust({ locationId, roomId, roomName,
-                                  calibration = false, onCalibration,
-                                  walkYAuto }: {
+                                  calibration = false, onCalibration }: {
   locationId: string
   roomId: string
   roomName: string
   /** Calibration figure showing in the 3D preview for THIS room. */
   calibration?: boolean
   onCalibration?: (on: boolean) => void
-  /** The walkable floor height the SERVER measured out of the mesh (metres
-   *  above the diorama's lower edge, from the scene payload). Shown as the
-   *  field's placeholder — an empty field means exactly this value applies. */
-  walkYAuto?: number
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -208,19 +203,17 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
         />
       </label>
       <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-        title={walkYAuto === undefined
-          ? t('Walkable floor height (m): how high above the model’s lower edge a figure actually stands — modelled floors (a podium, a sunken lounge, a hole in the mesh) cannot be measured from outside. Dial it until the calibration figure stands on the visible floor. Empty = undeclared, 0 = the lower edge itself.')
-          : t('Walkable floor height (m): how high above the model’s lower edge a figure actually stands. The server measured this model’s floor itself — leave the field EMPTY to use that value (the placeholder), and only type a value when the figure does not end up on the visible floor. 0 = the lower edge itself.')}>
+        title={t('Walkable floor height (m): how high above the model’s lower edge a figure actually stands, in REAL metres. Modelled floors (a podium, a sunken lounge, a hole in the mesh) cannot be read off a mesh, and nothing guesses it — switch on the calibration figure and dial until it stands on the visible floor. Empty = undeclared, 0 = the lower edge itself.')}>
         {t('Walkable floor (m)')}
         <input
           className="ga-input"
           type="number"
           min={0}
-          max={5}
+          max={50}
           step={0.05}
           style={{ width: 104 }}
           value={walkDraft}
-          placeholder={walkYAuto === undefined ? '—' : `${t('auto')} (${walkYAuto.toFixed(2)})`}
+          placeholder="—"
           onChange={(e) => setWalkDraft(e.target.value)}
           onBlur={() => { void commitWalkY() }}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}

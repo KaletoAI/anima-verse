@@ -709,6 +709,15 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
       and it makes the recipe interior (plates at 0.08/0.10, markers and
       dioramas at level × storey) land on the model surface instead of
       1–3 m below it (user finding 2026-07-28).
+
+    Where the walkable surface SITS inside the mesh is the admin's ``walk_y``
+    dial (real metres above the lower edge, 0 = the lower edge itself) and
+    nothing else. A measured "dominant horizontal layer" used to fill it in;
+    that was an automatic repair of the kind this contract does not do — and
+    it was wrong exactly where it mattered (Bernstein Academy: the campus
+    roofs carry 0.38 of projected area against the ground's 0.67, so the
+    heuristic declared the ROOFS walkable and sank the model 7.7 real metres).
+    The user sets the base value, everything else derives from it.
     """
     if not meta:
         return None
@@ -718,28 +727,14 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     ground = bool((map3d or {}).get("area_model"))
     max_m = extent * size
     offset_y = _num(meta.get("offset_y"))
-
-    # Height place() will produce from this spec — needed for the measured
-    # walkable surface, which is a FRACTION of the model height.
-    bb = [_num(v) for v in (meta.get("bbox_fixed") or [])]
-    height_world = (bb[1] * max_m / max(bb[0], bb[2])
-                    if len(bb) == 3 and max(bb[0], bb[2]) > 0 else 0.0)
-    # Walkable surface above the model's lower edge. The manual dial is in
-    # REAL metres like every other length (× k); the measured fraction only
-    # answers for GROUND models — the "dominant walkable layer" of a tower
-    # mesh is a roof or some interior floor, never where a figure stands.
-    walk: Optional[float] = None
-    if meta.get("walk_y") is not None:
-        walk = _num(meta.get("walk_y")) * k
-    elif ground and meta.get("walk_frac") is not None and height_world > 0:
-        walk = _num(meta.get("walk_frac")) * height_world
+    walk = _num(meta.get("walk_y")) * k
 
     if ground:
-        bottom = offset_y - (walk or 0.0)
+        bottom = offset_y - walk
         walk_world = offset_y
     else:
         bottom = BUILDING_BOTTOM_Y + offset_y
-        walk_world = bottom + (walk or 0.0)
+        walk_world = bottom + walk
     return {
         "role": "building",
         "display": "ground" if ground else "shell",
@@ -812,28 +807,14 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         max_m = max(w, d) * extent
         spec["width_estimated"] = True
     spec["max_m"] = _r(max_m)
-    bbox = meta.get("bbox_fixed")
-    fixed = ([_num(v) for v in bbox]
-             if isinstance(bbox, (list, tuple)) and len(bbox) == 3 else [])
-    scale = (max_m / max(fixed[0], fixed[2])
-             if fixed and max(fixed[0], fixed[2]) > 0 else 0.0)
-    # Modelled floors (podium, sunken lounge, a hole in the mesh) make the
-    # standing height unmeasurable from OUTSIDE the mesh — but not from the
-    # inside: the server measures the dominant walkable surface once per model
-    # (``walk_frac``, § B4 light) and, knowing the model's final height, turns
-    # it into the height a figure stands at. The admin's manual ``walk_y``
-    # stays the override; ``walk_y_auto`` is what the slider shows when it is
-    # empty (§ B6 no. 7).
-    # Both the dial and the suggestion are REAL metres (the unit every other
-    # length in this payload uses); the world result rides along as
-    # ``walk_y_world`` so no consumer has to convert.
-    walk_auto: Optional[float] = None
-    if scale > 0 and fixed and k > 0 and meta.get("walk_frac") is not None:
-        walk_auto = _num(meta.get("walk_frac")) * scale * fixed[1] / k
-        spec["walk_y_auto"] = _r(walk_auto)
-    walk = _num(meta.get("walk_y")) if meta.get("walk_y") is not None else walk_auto
-    if walk is not None:
-        spec["walk_y_world"] = _r(spec["bottom_y"] + walk * k)
+    # Modelled floors (a podium, a sunken lounge, a hole in the mesh) make the
+    # standing height unreadable from outside — so the admin states it, in
+    # REAL metres above the model's lower edge, dialled against the
+    # calibration figure. No measurement fills this in: guessing where a mesh
+    # is walkable is an automatic repair, and the contract does not do those.
+    # Absent = the room keeps whatever floor the renderer samples.
+    if meta.get("walk_y") is not None:
+        spec["walk_y_world"] = _r(spec["bottom_y"] + _num(meta["walk_y"]) * k)
     # Opt-in shell clip (§ B1): a diorama may stick out over its floor plan —
     # with the flag the renderer discards everything outside the room shell.
     # The polygon is the room's floor plate, not a second derivation. An
