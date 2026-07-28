@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
+import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
 import { PromptPreview } from './PromptPreview'
 
@@ -178,27 +179,19 @@ export function WardrobeTab({ character }: { character: string }) {
             onChange={(e) => setPickQty(Math.max(1, Number(e.target.value) || 1))} />
           <button className="ga-btn ga-btn-sm" disabled={!pickId || busy} onClick={grant}>+ {t('Add')}</button>
         </div>
-        {slotOptions.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-            <button onClick={() => setSlotFilter('')} style={chip(!slotFilter, true)}>{t('All slots')}</button>
-            {slotOptions.map((s) => (
-              <button key={s} onClick={() => setSlotFilter(s)} style={chip(slotFilter === s, true)}>
-                {t(data.slot_labels[s] || s)}
-              </button>
-            ))}
-          </div>
-        )}
-        {outfitTypes.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}
-            title={t('Filter by outfit type. Pieces without a type are shown in every filter — they go with everything.')}>
-            <button onClick={() => setTypeFilter('')} style={chip(!typeFilter, true)}>{t('All types')}</button>
-            {outfitTypes.map((ot) => (
-              <button key={ot} onClick={() => setTypeFilter(ot)} style={chip(typeFilter === ot, true)}>
-                {t(ot)}
-              </button>
-            ))}
-          </div>
-        )}
+        <FilterChipRow
+          allLabel={t('All slots')}
+          value={slotFilter}
+          onChange={setSlotFilter}
+          options={slotOptions.map((s) => ({ value: s, label: t(data.slot_labels[s] || s) }))}
+        />
+        <FilterChipRow
+          allLabel={t('All types')}
+          value={typeFilter}
+          onChange={setTypeFilter}
+          options={outfitTypes.map((ot) => ({ value: ot, label: t(ot) }))}
+          title={t('Filter by outfit type. Pieces without a type are shown in every filter — they go with everything.')}
+        />
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
           {filtered.length === 0 && <div className="ga-placeholder">{t('No outfit pieces')}</div>}
           {filtered.map((it) => {
@@ -309,14 +302,6 @@ export function WardrobeTab({ character }: { character: string }) {
   )
 }
 
-function chip(active: boolean, small = false): CSSProperties {
-  return {
-    padding: small ? '1px 7px' : '2px 9px', borderRadius: 11, cursor: 'pointer',
-    fontSize: small ? '0.72em' : '0.78em',
-    border: '1px solid ' + (active ? 'var(--accent,#6aa9ff)' : 'rgba(255,255,255,0.2)'),
-    background: active ? 'rgba(120,170,255,0.25)' : 'transparent', color: 'inherit',
-  }
-}
 function btn(): CSSProperties {
   return {
     fontSize: '0.72em', padding: '2px 8px', borderRadius: 6, cursor: 'pointer',

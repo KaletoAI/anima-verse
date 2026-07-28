@@ -8,6 +8,7 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { Silhouette } from '../../components/Silhouette'
+import { FilterChipRow } from '../../components/FilterChipRow'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { ItemForm } from './ItemForm'
 import {
@@ -60,8 +61,17 @@ export function ItemsTab() {
   const [filterCategory, setFilterCategory] = useState<Category | ''>('')
   const [filterRarity, setFilterRarity] = useState<Rarity | ''>('')
   const [filterScope, setFilterScope] = useState<'' | 'world' | 'shared'>('')
-  // Slot filter, only relevant when filterCategory === 'outfit_piece'.
+  // Slot + outfit-type filter, only relevant when the category is
+  // 'outfit_piece'. The type vocabulary comes from the server — hardcoding
+  // it here would drift from the constant every save path uses.
   const [filterSlot, setFilterSlot] = useState('')
+  const [filterType, setFilterType] = useState('')
+  const [outfitTypes, setOutfitTypes] = useState<string[]>([])
+  useEffect(() => {
+    apiGet<{ outfit_types?: string[] }>('/inventory/outfit-types')
+      .then((d) => setOutfitTypes(d.outfit_types || []))
+      .catch(() => setOutfitTypes([]))
+  }, [])
   // '' = all, '__none__' = owned by nobody, otherwise a character name.
   const [filterOwner, setFilterOwner] = useState('')
   const [characters, setCharacters] = useState<CharacterRef[]>([])
@@ -125,6 +135,13 @@ export function ItemsTab() {
         if (filterScope === 'shared' && !it._shared) return false
         if (filterScope === 'world' && it._shared) return false
         if (filterCategory === 'outfit_piece' && filterSlot && !(it.outfit_piece?.slots || []).includes(filterSlot)) return false
+        // An UNTAGGED piece passes every type filter — the same wildcard rule
+        // the coherence check and the wardrobe use: a deliberately neutral
+        // belt goes with everything and must not vanish behind a style.
+        if (filterCategory === 'outfit_piece' && filterType) {
+          const types = it.outfit_piece?.outfit_types || []
+          if (types.length && !types.includes(filterType)) return false
+        }
         if (filterOwner) {
           const ownedBy = ownership[it.id] || []
           if (filterOwner === '__none__') {
@@ -139,7 +156,8 @@ export function ItemsTab() {
         return true
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  }, [items, search, filterCategory, filterRarity, filterScope, filterSlot, filterOwner, ownership])
+  }, [items, search, filterCategory, filterRarity, filterScope, filterSlot,
+    filterType, filterOwner, ownership])
 
   // Derive the used slots from the existing outfit pieces, in canonical
   // order (head→feet) — like the slot filter in the player inventory.
@@ -400,7 +418,7 @@ export function ItemsTab() {
             onChange={(e) => {
               const v = e.target.value as Category | ''
               setFilterCategory(v)
-              if (v !== 'outfit_piece') setFilterSlot('')
+              if (v !== 'outfit_piece') { setFilterSlot(''); setFilterType('') }
             }}
           >
             <option value="">{t('All categories')}</option>
@@ -450,22 +468,24 @@ export function ItemsTab() {
             ))}
           </select>
         </div>
+        {/* Outfit pieces filter exactly like the character wardrobe does:
+            two chip rows, slots and outfit types — same component, so the
+            same job does not look different depending on where you stand. */}
         {filterCategory === 'outfit_piece' && (
-          <div className="ga-form-row" style={{ marginTop: 4 }}>
-            <select
-              className="ga-input"
-              style={{ flex: 1 }}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+            <FilterChipRow
+              allLabel={t('All slots')}
               value={filterSlot}
-              onChange={(e) => setFilterSlot(e.target.value)}
-              title={t('Filter by slot')}
-            >
-              <option value="">{t('All slots')}</option>
-              {slotOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+              onChange={setFilterSlot}
+              options={slotOptions}
+            />
+            <FilterChipRow
+              allLabel={t('All types')}
+              value={filterType}
+              onChange={setFilterType}
+              options={outfitTypes}
+              title={t('Filter by outfit type. Pieces without a type are shown in every filter — they go with everything.')}
+            />
           </div>
         )}
         <ul className="ga-list" style={{ marginTop: 6 }}>
