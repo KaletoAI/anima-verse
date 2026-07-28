@@ -206,9 +206,21 @@ start_client3d() {
         echo "[client3d] Already running (PID $(cat "$CLIENT3D_PID"))"
         return
     fi
-    local vite="$SCRIPT_DIR/node_modules/.bin/vite"
-    if [[ ! -x "$vite" ]]; then
-        echo "[client3d] Vite not found at $vite"
+    # Vite liegt im WORKSPACE, wenn npm es nicht an die Wurzel heben kann —
+    # das haengt an den uebrigen Abhaengigkeiten und aendert sich beim
+    # Aktualisieren, ohne dass jemand etwas falsch gemacht haette. Beide
+    # Stellen pruefen, statt den Benutzer zu einem 'npm install' zu schicken,
+    # das nichts aendert (Befund 2026-07-29: @vitejs/plugin-react 6 brachte
+    # kein vite 5 mehr mit, die gehobene Kopie verschwand, der Client startete
+    # nicht mehr).
+    local vite=""
+    for cand in "$SCRIPT_DIR/client3d/node_modules/.bin/vite" \
+                "$SCRIPT_DIR/node_modules/.bin/vite"; do
+        [[ -x "$cand" ]] && { vite="$cand"; break; }
+    done
+    if [[ -z "$vite" ]]; then
+        echo "[client3d] Vite not found — looked in client3d/node_modules/.bin"
+        echo "[client3d] and node_modules/.bin."
         echo "[client3d] Run 'npm install' in $SCRIPT_DIR once, then try again."
         return 1
     fi
