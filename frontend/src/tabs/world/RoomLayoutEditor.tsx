@@ -1870,6 +1870,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onAlwaysVisible={(v) => updateLayout(selectedRoom?.id || '', {
           always_visible: v || undefined,
         })}
+        onFloorOffset={(v) => updateLayout(selectedRoom?.id || '', {
+          floor_offset_y: v,
+        })}
         surfaceKinds={surfaceKinds}
         onSurface={setSurface}
         furnishState={furnish.status?.state || ''}
@@ -2033,23 +2036,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   const v = Number(e.target.value)
                   updateLayout(selectedRoom.id || '', {
                     model_offset_y: Number.isFinite(v) && v !== 0 ? v : undefined,
-                  })
-                }} />
-            </label>
-            {/* Where the ROOM sits, as opposed to the model inside it. Zero
-                inside a building — earns its keep where the room cuts a hole
-                into the location model and the terrain there is not at
-                storey level. */}
-            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Height offset of the ROOM in real metres, relative to its storey. Everything in the room moves with it: floor, walls, props, markers, exit and the model. Inside a building leave it at 0 — it is for rooms that cut into a location model, where the terrain is not at storey level.')}>
-              {t('Room height (m)')}
-              <input className="ga-input" type="number" step={0.05}
-                style={{ width: 78 }}
-                value={lay.floor_offset_y ?? 0}
-                onChange={(e) => {
-                  const v = Number(e.target.value)
-                  updateLayout(selectedRoom.id || '', {
-                    floor_offset_y: Number.isFinite(v) && v !== 0 ? v : undefined,
                   })
                 }} />
             </label>

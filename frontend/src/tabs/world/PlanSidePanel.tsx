@@ -31,6 +31,8 @@ interface PlanSidePanelProps {
   markerMode: boolean
   onArmMarker: () => void
   onAlwaysVisible: (value: boolean) => void
+  /** Height offset of the ROOM in real metres (undefined = 0). */
+  onFloorOffset: (value: number | undefined) => void
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
   surfaceKinds: SurfaceKind[]
   onSurface: (key: 'floor' | 'wall', kind: string) => void
@@ -62,7 +64,7 @@ const FURNISH_BADGE: Record<string, string> = {
 
 export function PlanSidePanel({
   room, clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
-  markerMode, onArmMarker, onAlwaysVisible, surfaceKinds, onSurface,
+  markerMode, onArmMarker, onAlwaysVisible, onFloorOffset, surfaceKinds, onSurface,
   furnishState, furnishDisabled, furnishHint, onFurnish,
   noAnchor, propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
@@ -91,6 +93,26 @@ export function PlanSidePanel({
           onChange={(e) => onAlwaysVisible(e.target.checked)}
         />
         <span>{t('Outdoor room (always visible)')}</span>
+      </label>
+
+      {/* Where the ROOM sits, as opposed to a model inside it. It belongs to
+          the room, not to a diorama — it used to live in the model-placement
+          strip and was therefore invisible until a room HAD a model, which is
+          exactly backwards for an outdoor zone laid onto a location model. */}
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+        title={t('Height offset of the ROOM in real metres, relative to its storey. Everything in the room moves with it: floor, walls, props, markers, exit and any model. Inside a building leave it at 0 — it is for rooms lying on a location model, where the terrain is not at storey level.')}>
+        <span style={{ flex: 1 }}>{t('Room height (m)')}</span>
+        <input
+          className="ga-input"
+          type="number"
+          step={0.05}
+          style={{ width: 78 }}
+          value={layout.floor_offset_y ?? 0}
+          onChange={(e) => {
+            const v = Number(e.target.value)
+            onFloorOffset(Number.isFinite(v) && v !== 0 ? v : undefined)
+          }}
+        />
       </label>
 
       <button
