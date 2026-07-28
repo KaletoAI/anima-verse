@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import type { CutoutHandle } from '@anima/scene-render';
+import { surfaceMaterial } from '@anima/scene-render';
+import type { CutoutHandle, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
@@ -194,13 +195,26 @@ interface SurfaceBlend {
   zones: { kind: string; until?: number }[];
   noise?: number;
 }
-interface SurfaceEntry { url?: string; sizeM: number; blend?: SurfaceBlend }
+interface SurfaceEntry {
+  url?: string; sizeM: number; blend?: SurfaceBlend;
+  /** Materialklasse der Art (Bibliothek) — Wasser wird anders beleuchtet als
+   *  Gras, und zwar in BEIDEN Renderern gleich (@anima/scene-render). */
+  material?: SurfaceMaterialSpec | null;
+}
 const serverSurfaces = new Map<string, SurfaceEntry>();
 const serverSurfaceCache = new Map<string, THREE.Texture>();
-export function setSurfaceTextures(list: { kind: string; url?: string; size_m?: number; blend?: SurfaceBlend }[]) {
+export function setSurfaceTextures(list: { kind: string; url?: string; size_m?: number;
+                                           blend?: SurfaceBlend;
+                                           material?: SurfaceMaterialSpec | null }[]) {
   for (const t of list) {
-    serverSurfaces.set(t.kind.toLowerCase(), { url: t.url, sizeM: t.size_m || 3, blend: t.blend });
+    serverSurfaces.set(t.kind.toLowerCase(), {
+      url: t.url, sizeM: t.size_m || 3, blend: t.blend, material: t.material ?? null });
   }
+}
+
+/** Materialklasse einer Art ('' / unbekannt = matt, also wie bisher). */
+export function surfaceMaterialSpec(kind: string | undefined): SurfaceMaterialSpec | null {
+  return serverSurfaces.get((kind || '').toLowerCase())?.material ?? null;
 }
 
 export function hasSurfaceTexture(kind: string): boolean {
@@ -405,8 +419,12 @@ function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Materi
  *  Bibliothek, sonst prozedural). Die 2D-Kartenbilder werden NICHT mehr
  *  als Boden verwendet (Illustrationen mit eingebackenen Schatten/Objekten
  *  passen nicht in die 3D-Szene). */
-function groundPlate(_loc: WorldLocation, tex: THREE.Texture): THREE.Mesh {
-  const plate = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), std({ map: tex }));
+function groundPlate(_loc: WorldLocation, tex: THREE.Texture,
+                    material?: SurfaceMaterialSpec | null): THREE.Mesh {
+  // Die Kachel-Oberfläche geht durch dieselbe Fabrik wie die Szenen-Platten:
+  // eine Wasser-Location soll auf der Karte so aussehen wie im Raum.
+  const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), mat);
   plate.rotation.x = -Math.PI / 2;
   plate.position.y = 0.04;
   plate.receiveShadow = true;
@@ -597,7 +615,8 @@ export function buildTile(loc: WorldLocation): Tile {
   const groundPlateFor = (): THREE.Mesh => {
     const kind = surfaceKindOf(loc, style);
     const entry = serverSurfaces.get(kind);
-    const plate = groundPlate(loc, surfaceTexture(kind, fallbackFor(style)));
+    const plate = groundPlate(loc, surfaceTexture(kind, fallbackFor(style)),
+                              surfaceMaterialSpec(kind));
     if (entry?.blend) {
       void bakeBlendTexture(loc, entry.blend, (k) => fallbackFor(k)).then((tex) => {
         if (tex) {

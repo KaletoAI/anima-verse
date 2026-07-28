@@ -684,8 +684,9 @@ async def surface_texture_generate(request: Request) -> Dict[str, Any]:
 
 @router.post("/surface-textures/{kind}/meta")
 async def surface_texture_meta(kind: str, request: Request) -> Dict[str, Any]:
-    """Name (free text, spaces welcome) + description of a kind (body:
-    {name?, description?}; '' clears a field). The id is NOT editable — it
+    """Name (free text, spaces welcome), description and material class of a
+    kind (body: {name?, description?, material?}; '' clears a field, a matte
+    material clears the declaration). The id is NOT editable — it
     sits in file names and in world data (terrain, level_floors, room floor
     kinds, blend toward), so changing it would be a data migration."""
     from app.core.surface_textures import set_kind_meta
@@ -693,7 +694,8 @@ async def surface_texture_meta(kind: str, request: Request) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     entry = set_kind_meta(kind, name=data.get("name"),
-                          description=data.get("description"))
+                          description=data.get("description"),
+                          material=data.get("material"))
     if entry is None:
         raise HTTPException(status_code=400, detail="invalid kind")
     return {"status": "ok", "meta": entry}

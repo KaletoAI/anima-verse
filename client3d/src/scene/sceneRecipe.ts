@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
   buildPlate, buildWall, CLIP_MAX_POINTS, placeModelSpec, plateTargets,
-  SpecVerifier, VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render';
+  SpecVerifier, VERIFY_EPS, surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
 import type { PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
@@ -13,6 +13,7 @@ import { BASE_FIGURE_HEIGHT_M } from './figures';
 import { loadGlb } from './propAssets';
 import {
   preloadSurfaceTexture, sampleRoomWalkables, setLocationAnchor, surfaceFor,
+  surfaceMaterialSpec,
   type Tile,
 } from './tiles';
 
@@ -265,9 +266,13 @@ function plateMaterial(plate: ScenePlate, k: number,
   const opacity = upper ? (style.upper_floor_opacity ?? 1) : 1;
   const side = solid ? THREE.FrontSide : THREE.DoubleSide;
   const tex = tiledTexture(plate.texture_kind, 'floor', k, (tileM) => [1 / tileM, 1 / tileM]);
-  return std(tex
-    ? { map: tex, transparent: upper, opacity, side }
-    : { color: hex(style.floor_color), transparent: upper, opacity, side });
+  // Aussehen der ART kommt aus dem geteilten Paket — matt ist der Default und
+  // exakt das bisherige Material.
+  return surfaceMaterial(THREE, {
+    material: surfaceMaterialSpec(plate.texture_kind),
+    map: tex, color: hex(style.floor_color),
+    transparent: upper, opacity, side,
+  }) as THREE.MeshStandardMaterial;
 }
 
 /** Material of a wall segment: a glass band from the glass vocabulary, else
@@ -283,9 +288,10 @@ function wallMaterial(wall: SceneWall, k: number, style: ScenePayload['style'],
   const opacity = upper ? (style.upper_wall_opacity ?? 1) : 1;
   const tex = tiledTexture(wall.texture_kind, 'wall', k,
     (tileM) => [len / tileM, wall.height / tileM]);
-  return std(tex
-    ? { map: tex, transparent: upper, opacity }
-    : { color: hex(style.wall_color), transparent: upper, opacity });
+  return surfaceMaterial(THREE, {
+    material: surfaceMaterialSpec(wall.texture_kind),
+    map: tex, color: hex(style.wall_color), transparent: upper, opacity,
+  }) as THREE.MeshStandardMaterial;
 }
 
 /** Material of an extra box: the part kind picks colour and opacity from the

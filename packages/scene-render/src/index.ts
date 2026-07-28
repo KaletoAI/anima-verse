@@ -6,9 +6,12 @@
  * the clip shader was demonstrably built twice, independently.
  *
  * DELIBERATELY NOT here: camera/LOD/fades, culling application, labels,
- * pathfinding, NPC logic, editor overlays. View state stays per app. The
- * primitive builders draw the same line one level down: geometry here,
- * material from the caller.
+ * pathfinding, NPC logic, editor overlays. View state stays per app.
+ *
+ * The primitive builders take their material from the caller — but HOW a
+ * surface KIND is painted lives here (`materials.ts`), because both renderers
+ * show the same lake. That appearance existed twice with different defaults
+ * until 2026-07-28.
  *
  * three is a PARAMETER everywhere, never an import — otherwise the package
  * would pull the library into the main bundle of the admin, which loads it
@@ -32,6 +35,10 @@ export {
 } from './primitives'
 
 export { FIGURE_ROOT_DROP, rootDropFor } from './types'
+
+export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
+  disposeSurfaceMaterials } from './materials'
+export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,

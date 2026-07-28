@@ -114,13 +114,17 @@ export function SurfaceTexturesTab() {
   }, [kind, creating, textures, backendInfo, descDraft, nameDraft, promptTouched])
 
   const saveKindMeta = useCallback(async (k: string, meta: {
-    name?: string; description?: string }) => {
+    name?: string; description?: string
+    material?: Record<string, unknown> }) => {
     try {
       await apiPost(`/world/surface-textures/${encodeURIComponent(k)}/meta`, meta)
+      // Reload: the server clamps a material declaration, so the dials must
+      // show what was STORED, not what was typed.
+      void load()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [t, toast])
+  }, [load, t, toast])
 
   const generate = useCallback(() => {
     const k = kind.trim().toLowerCase()

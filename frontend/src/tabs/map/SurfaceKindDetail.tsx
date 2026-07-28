@@ -11,7 +11,8 @@ import type { ReactNode } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
 import { useI18n } from '../../i18n/I18nProvider'
-import { SURFACE_PROMPT_CONTEXT, dateShort, madeWith } from './surfaceTypes'
+import { SURFACE_PROMPT_CONTEXT, WATER_DEFAULTS, WATER_DIALS, dateShort,
+  madeWith } from './surfaceTypes'
 import type { TexGroup, TexVersion } from './surfaceTypes'
 
 interface SurfaceKindDetailProps {
@@ -27,8 +28,9 @@ interface SurfaceKindDetailProps {
   onRemove: (filename: string) => void
   onZoom: (version: TexVersion) => void
   onUpload: () => void
-  /** Persist the name / description of this kind. The ID is not editable. */
-  onMeta: (meta: { name?: string; description?: string }) => void
+  /** Persist name / description / material class. The ID is not editable. */
+  onMeta: (meta: { name?: string; description?: string
+                   material?: Record<string, unknown> }) => void
   generateForm: ReactNode
 }
 
@@ -37,6 +39,12 @@ export function SurfaceKindDetail({
   onUpload, onMeta, generateForm,
 }: SurfaceKindDetailProps) {
   const { t } = useI18n()
+  const mat = (group.material || {}) as Record<string, unknown>
+  const cls = (group.material?.class as string) || 'matte'
+  /** Patch ONE dial — the whole declaration travels, the server clamps it. */
+  const setMat = (key: string, value: unknown) => onMeta({
+    material: { class: 'water', ...WATER_DEFAULTS, ...mat, [key]: value },
+  })
 
   return (
     <>
@@ -92,6 +100,61 @@ export function SurfaceKindDetail({
             }}
           />
         </Field>
+        {/* How the kind is LIT. A water surface is not recognised by its
+            colour but by what it reflects and how it moves — the class says
+            so once, and BOTH renderers build the same material from it. */}
+        <Field label={t('Material')}
+          hint={cls === 'water'
+            ? t('Moving ripples, low roughness and a sky reflection — the texture stays the base colour.')
+            : t('Matte, like every other ground surface.')}>
+          <select
+            className="ga-input"
+            style={{ maxWidth: 200 }}
+            value={cls}
+            onChange={(e) => onMeta({
+              material: e.target.value === 'water'
+                ? { class: 'water', ...WATER_DEFAULTS, ...(group.material || {}) }
+                : { class: 'matte' },
+            })}
+          >
+            <option value="matte">{t('Matte (default)')}</option>
+            <option value="water">{t('Water')}</option>
+          </select>
+        </Field>
+        {cls === 'water' ? (
+          <div className="ga-form-row" style={{ flexWrap: 'wrap' }}>
+            <Field label={t('Tint')} compact
+              hint={t('Base colour the texture is mixed against.')}>
+              <input
+                className="ga-input"
+                type="color"
+                style={{ width: 56, padding: 2 }}
+                value={(mat.tint as string) || WATER_DEFAULTS.tint}
+                onChange={(e) => setMat('tint', e.target.value)}
+              />
+            </Field>
+            {WATER_DIALS.map(([key, label, min, max, step]) => (
+              <Field key={key} label={t(label)} compact
+                hint={key === 'wave_m'
+                  ? t('Distance between wave crests — 1.6 m is a lake, 6 m an open sea.')
+                  : undefined}>
+                <input
+                  className="ga-input"
+                  type="number"
+                  min={min}
+                  max={max}
+                  step={step}
+                  style={{ width: 84 }}
+                  value={(mat[key] as number | undefined) ?? WATER_DEFAULTS[key]}
+                  onChange={(e) => {
+                    const n = parseFloat(e.target.value)
+                    if (Number.isFinite(n)) setMat(key, n)
+                  }}
+                />
+              </Field>
+            ))}
+          </div>
+        ) : null}
         {/* HOW it is made sits with WHAT it is — one entry, one place. */}
         {generateForm}
         <div className="ga-form-section-label">{t('Versions')}</div>

@@ -25,8 +25,9 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   applyClipOutline, disposeClipMaterials, placeModelSpec, plateTargets, SpecVerifier,
-  VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render'
-import type { CutoutHandle, VerifyRow } from '@anima/scene-render'
+  VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
+  wallTargets } from '@anima/scene-render'
+import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 import { buildMeasureAids, disposeAids, useActiveMeasure,
   type MeasureKey } from './measureKit'
@@ -185,7 +186,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // Surface textures per kind: the /assets listing (url + real tiling size)
   // plus lazily loaded THREE textures — walls/floors sample them real-scale.
   const surfaceListRef = useRef<{ status: 'idle' | 'loading' | 'ready'
-    map: Map<string, { url: string; sizeM: number }> }>(
+    map: Map<string, { url: string; sizeM: number
+                       material?: SurfaceMaterialSpec | null }> }>(
     { status: 'idle', map: new Map() })
   const surfaceTexRef = useRef<Map<string, unknown>>(new Map())
   const clipListRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'
@@ -510,12 +512,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       const s = surfaceListRef.current
       if (s.status !== 'idle') return s.status === 'ready'
       s.status = 'loading'
-      apiGet<Array<{ kind?: string; url?: string; size_m?: number }>>(
+      apiGet<Array<{ kind?: string; url?: string; size_m?: number
+                     material?: SurfaceMaterialSpec | null }>>(
         '/assets/surface-textures')
         .then((list) => {
           for (const entry of Array.isArray(list) ? list : []) {
             if (entry?.kind && entry.url)
-              s.map.set(entry.kind, { url: entry.url, sizeM: entry.size_m || 1 })
+              s.map.set(entry.kind, { url: entry.url, sizeM: entry.size_m || 1,
+                                material: entry.material ?? null })
           }
         })
         .catch(() => {})
@@ -928,18 +932,20 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         const upper = plate.opacity_role === 'upper'
         const info = plate.texture_kind ? ensureSurfaceTex(plate.texture_kind) : null
         let mat: Material
+        // Aussehen der ART aus dem geteilten Paket — derselbe See wie im
+        // 3D-Client, matt bleibt der Default.
+        const kindMat = plate.texture_kind
+          ? surfaceListRef.current.map.get(plate.texture_kind)?.material ?? null : null
         if (info?.tex) {
           const tile = info.sizeM * kFac
           const tex = (info.tex as Texture).clone()
           tex.needsUpdate = true
           tex.repeat.set(1 / tile, 1 / tile)
-          mat = new THREE.MeshStandardMaterial({
-            map: tex, transparent: upper, opacity: upper ? upperFloor : 1,
-          })
+          mat = surfaceMaterial(THREE, { material: kindMat, map: tex,
+            transparent: upper, opacity: upper ? upperFloor : 1 })
         } else {
-          mat = new THREE.MeshStandardMaterial({
-            color: floorColor, transparent: upper, opacity: upper ? upperFloor : 1,
-          })
+          mat = surfaceMaterial(THREE, { material: kindMat, color: floorColor,
+            transparent: upper, opacity: upper ? upperFloor : 1 })
         }
         const mesh = buildPlate(THREE, plate, mat)
         boxes.add(mesh)
@@ -965,18 +971,18 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           // BoxGeometry UVs are per-face normalized, so a tiled wall needs a
           // per-mesh texture clone with its own repeat.
           const info = wall.texture_kind ? ensureSurfaceTex(wall.texture_kind) : null
+          const kindMat = wall.texture_kind
+            ? surfaceListRef.current.map.get(wall.texture_kind)?.material ?? null : null
           if (info?.tex) {
             const tile = info.sizeM * kFac
             const tex = (info.tex as Texture).clone()
             tex.needsUpdate = true
             tex.repeat.set(len / tile, wall.height / tile)
-            mat = new THREE.MeshStandardMaterial({
-              map: tex, transparent: upper, opacity: upper ? upperWall : 1,
-            })
+            mat = surfaceMaterial(THREE, { material: kindMat, map: tex,
+              transparent: upper, opacity: upper ? upperWall : 1 })
           } else {
-            mat = new THREE.MeshStandardMaterial({
-              color: wallColor, transparent: upper, opacity: upper ? upperWall : 1,
-            })
+            mat = surfaceMaterial(THREE, { material: kindMat, color: wallColor,
+              transparent: upper, opacity: upper ? upperWall : 1 })
           }
         }
         const box = buildWall(THREE, wall, mat)
@@ -1329,6 +1335,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         const animate = () => {
           raf = requestAnimationFrame(animate)
           const delta = clockRef.current?.getDelta() || 0
+          updateSurfaceMaterials(delta)   // eine Zeit für alle Wasserflächen
           // Recipe camera culling: hide a wall piece whose OUTSIDE faces
           // the camera — the interior stays visible despite the walls.
           for (const w of wallCullRef.current) {

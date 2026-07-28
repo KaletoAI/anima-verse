@@ -3,7 +3,10 @@
  * Split out of SurfaceTexturesTab so the container, the generator form, the
  * kind detail and the blend editor all read from one place.
  */
+import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import { TERRAIN_TYPES } from '../world/worldTypes'
+
+export type { SurfaceMaterialSpec }
 
 export interface TexVersion {
   filename: string
@@ -27,8 +30,29 @@ export interface TexGroup {
   /** The one text that goes into the image prompt. Seeded when the kind is
    *  created; what stands here is what gets sent. */
   description?: string
+  /** How the kind is LIT, not what it looks like — water is not recognised by
+   *  its colour but by what it reflects and how it moves. Absent = matte. */
+  material?: SurfaceMaterialSpec | null
   versions: TexVersion[]
 }
+
+/** Defaults of the water class — mirrored from `_MATERIAL_RANGES` on the
+ *  server, which clamps whatever arrives. */
+export const WATER_DEFAULTS = {
+  tint: '#3f7fb8', map_strength: 0.75, wave_m: 1.6,
+  speed: 0.05, sky_mix: 0.55, roughness: 0.08,
+}
+
+/** The dials of the water class: key, label, min, max, step. `wave_m` is the
+ *  only one in METRES — and therefore the only one that needs a reference
+ *  size next to it. */
+export const WATER_DIALS: Array<[keyof typeof WATER_DEFAULTS, string, number, number, number]> = [
+  ['wave_m', 'Ripple length (m)', 0.2, 20, 0.1],
+  ['speed', 'Flow (m/s)', 0, 2, 0.01],
+  ['sky_mix', 'Sky reflection', 0, 1, 0.05],
+  ['roughness', 'Roughness', 0, 1, 0.01],
+  ['map_strength', 'Texture vs. tint', 0, 1, 0.05],
+]
 
 export interface BackendInfo {
   name: string

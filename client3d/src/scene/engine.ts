@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
 
 const MIN_DIST = 2.5;   // ganz nah = Figur formatfüllend
 const MAX_DIST = 150;
@@ -114,6 +115,9 @@ export class Engine {
     if (day > 0.15 && day < 0.35) sky.lerp(skyDusk, (0.35 - day) / 0.2);
     (this.scene.background as THREE.Color).copy(sky);
     (this.scene.fog as THREE.Fog).color.copy(sky);
+    // Wasserflächen spiegeln den Himmel (Fresnel im geteilten Material) —
+    // damit wird der See abends orange und nachts dunkel, ohne eigenen Code.
+    setSurfaceSky(sky.getHex());
 
     this.nightFactor = THREE.MathUtils.clamp(1 - day * 3, 0, 1);
     this.onDayNight?.(this.nightFactor);
@@ -263,6 +267,8 @@ export class Engine {
 
   private frame() {
     const dt = Math.min(this.clock.getDelta(), 0.1);
+    // Eine Zeit für ALLE Wasserflächen (geteiltes Uniform).
+    updateSurfaceMaterials(dt);
 
     // WASD/Pfeiltasten-Pan relativ zur Blickrichtung
     const panSpeed = this.dist * 0.9 * dt;

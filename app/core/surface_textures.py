@@ -372,23 +372,30 @@ def list_textures() -> List[Dict[str, Any]]:
     def _name(kind: str) -> str:
         return ((meta.get(kind) or {}).get("name") or "").strip() or unslug(kind)
 
+    def _material(kind: str) -> Optional[Dict[str, Any]]:
+        return (meta.get(kind) or {}).get("material") or None
+
     for kind in sorted(set(_files_by_kind()) | set(blends)):
+        entry: Dict[str, Any]
         if kind in blends:
             # A composition wins over texture files of the same kind.
-            out.append({"kind": kind, "name": _name(kind),
-                        "blend": blends[kind]})
-            continue
-        p = texture_file(kind)
-        if not p:
-            continue
-        out.append({
-            "kind": kind,
-            "name": _name(kind),
-            "filename": p.name,
-            "url": f"/assets/surface-textures/{p.name}",
-            "size_m": _size_m_of(p),
-            "size": p.stat().st_size,
-        })
+            entry = {"kind": kind, "name": _name(kind), "blend": blends[kind]}
+        else:
+            p = texture_file(kind)
+            if not p:
+                continue
+            entry = {
+                "kind": kind,
+                "name": _name(kind),
+                "filename": p.name,
+                "url": f"/assets/surface-textures/{p.name}",
+                "size_m": _size_m_of(p),
+                "size": p.stat().st_size,
+            }
+        mat = _material(kind)
+        if mat:
+            entry["material"] = mat
+        out.append(entry)
     return out
 
 
@@ -418,6 +425,7 @@ def admin_list() -> List[Dict[str, Any]]:
         entry = kmeta.get(kind) or {}
         out.append({"kind": kind, "name": entry.get("name", ""),
                     "description": entry.get("description", ""),
+                    "material": entry.get("material") or None,
                     "versions": versions})
     return out
 
@@ -527,15 +535,59 @@ def get_kind_meta() -> Dict[str, Dict[str, str]]:
     return _read_kind_meta()
 
 
+# ── Material class (plan-water-rendering.md, Teil A) ────────────────────
+# A kind may say HOW it is lit, not just what it looks like. Water is not
+# recognised by its colour but by what it reflects and how it moves, and a
+# colour map on a matte material delivers neither. The class rides with the
+# kind (kinds.json) and goes to BOTH renderers via /assets/surface-textures.
+SURFACE_CLASSES = ("matte", "water")
+# name -> (min, max, default). The defaults ARE the look a fresh water kind
+# gets; every one of them is a dial in the admin.
+_MATERIAL_RANGES: Dict[str, Any] = {
+    "map_strength": (0.0, 1.0, 0.75),
+    "wave_m": (0.2, 20.0, 1.6),
+    "speed": (0.0, 2.0, 0.05),
+    "sky_mix": (0.0, 1.0, 0.55),
+    "roughness": (0.0, 1.0, 0.08),
+}
+_HEX_RE = re.compile(r"^#[0-9a-f]{6}$")
+
+
+def sanitize_material(raw: Any) -> Optional[Dict[str, Any]]:
+    """Whitelist + clamp a material declaration. None = no declaration (the
+    kind renders matte, exactly as before). An unknown class falls back to
+    matte rather than failing — a client must never meet a class it cannot
+    draw."""
+    if not isinstance(raw, dict):
+        return None
+    cls = str(raw.get("class") or "").strip().lower()
+    if cls not in SURFACE_CLASSES:
+        cls = "matte"
+    if cls == "matte":
+        return None      # the default needs no entry
+    out: Dict[str, Any] = {"class": cls}
+    tint = str(raw.get("tint") or "").strip().lower()
+    if _HEX_RE.match(tint):
+        out["tint"] = tint
+    for key, (lo, hi, default) in _MATERIAL_RANGES.items():
+        try:
+            v = float(raw.get(key, default))
+        except (TypeError, ValueError):
+            v = default
+        out[key] = round(min(max(v, lo), hi), 4)
+    return out
+
+
 def _write_kind_meta(data: Dict[str, Dict[str, str]]) -> None:
     (_dir(create=True) / _KINDS_FILE).write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def set_kind_meta(kind: str, *, name: Any = None,
-                  description: Any = None) -> Optional[Dict[str, Any]]:
-    """Set a kind's name (free text, spaces welcome) and/or its description.
-    None leaves a field untouched, '' clears it. None result = invalid kind.
+def set_kind_meta(kind: str, *, name: Any = None, description: Any = None,
+                  material: Any = None) -> Optional[Dict[str, Any]]:
+    """Set a kind's name (free text, spaces welcome), its description and/or
+    its material class. None leaves a field untouched, '' clears it. None
+    result = invalid kind.
 
     The ID is not settable here — it is in file names and in world data, so
     renaming it would be a data migration, not an edit."""
@@ -544,6 +596,12 @@ def set_kind_meta(kind: str, *, name: Any = None,
         return None
     data = _read_kind_meta()
     entry = dict(data.get(k) or {})
+    if material is not None:
+        clean = sanitize_material(material)
+        if clean:
+            entry["material"] = clean
+        else:
+            entry.pop("material", None)   # matte = no entry
     for key, val in (("name", name), ("description", description)):
         if val is None:
             continue

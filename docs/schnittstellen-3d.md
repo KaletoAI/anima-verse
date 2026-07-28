@@ -439,6 +439,16 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   (`dark_stone` → „dark stone"). Die dritte Angabe, die **Description**,
   ist reine Server-/Admin-Sache — sie erzeugt das Bild und steht in
   keinem Client-Vertrag.
+- **`material` sagt, WIE eine Art beleuchtet wird** (2026-07-28, optional;
+  fehlt = `matte`, also unverändert). `{class: "matte"|"water", tint,
+  map_strength, wave_m, speed, sky_mix, roughness}` — die Werte sind
+  serverseitig geklemmt. `water` heißt: bewegte Kräuselung aus zwei
+  gegenläufig scrollenden Normalmap-Lagen (UV aus der WELTposition, sonst
+  hätten Nachbarkacheln eine Naht), niedrige Rauheit und ein Fresnel-Anteil
+  Richtung Himmelsfarbe. Beide Renderer bauen das Material aus **einer**
+  Routine (`surfaceMaterial` in `@anima/scene-render`); die Himmelsfarbe
+  reicht der Client aus seiner Tageszeit durch, die Vorschau einen festen
+  Tagwert. Die Textur der Art bleibt die Basisfarbe.
 - Das Blend-BAKING (Canvas-Komposition, Noise) bleibt bewusst
   Client-Sache — rein visuell, kein Geometrie-Vertrag.
 
