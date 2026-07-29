@@ -21,15 +21,22 @@ import type { Material, Texture } from 'three'
 
 type THREE = typeof import('three')
 
-/** Deklaration einer Art (Bibliothek → /assets/surface-textures). */
+/** Deklaration einer Art (Bibliothek → /assets/surface-textures).
+ *
+ *  Nur `water`/`ice` brauchen den Shader, und nur wegen der Bewegung bzw. der
+ *  Fresnel-Spiegelung. `gloss` und `glow` sind reine Materialwerte — das
+ *  Standardmaterial kann beides von Haus aus. */
 export interface SurfaceMaterialSpec {
-  class: 'matte' | 'water'
+  class: 'matte' | 'water' | 'ice' | 'gloss' | 'glow'
   tint?: string
   map_strength?: number
   wave_m?: number
   speed?: number
   sky_mix?: number
   roughness?: number
+  metalness?: number
+  /** Leuchtstärke der Klasse `glow` (0 = aus). */
+  glow?: number
 }
 
 export interface SurfaceMaterialOptions {
@@ -274,19 +281,34 @@ function applyWaterShader(mat: any, spec: SurfaceMaterialSpec,
  */
 export function surfaceMaterial(T: THREE, opts: SurfaceMaterialOptions): Material {
   const spec = opts.material || null
-  const water = spec?.class === 'water'
+  const cls = spec?.class || 'matte'
+  // Wasser und Eis sind dieselbe Fläche — Eis steht nur still (speed 0). Das
+  // ist keine Bequemlichkeit: eine gefrorene Fläche spiegelt und trägt
+  // Oberflächenstruktur, sie fließt bloß nicht.
+  const rippled = cls === 'water' || cls === 'ice'
   const params: Record<string, unknown> = {
-    roughness: water ? (spec?.roughness ?? 0.08) : 0.85,
-    metalness: water ? 0.15 : 0.02,
+    roughness: spec?.roughness ?? (rippled ? 0.08 : cls === 'gloss' ? 0.25 : 0.85),
+    metalness: spec?.metalness ?? (rippled ? 0.15 : 0.02),
   }
   if (opts.map) params.map = opts.map
-  else params.color = toColor(T, opts.color ?? (water ? spec?.tint : 0xffffff))
+  else params.color = toColor(T, opts.color ?? (rippled ? spec?.tint : 0xffffff))
   if (opts.transparent) params.transparent = true
   if (opts.opacity !== undefined) params.opacity = opts.opacity
   if (opts.side !== undefined) params.side = opts.side
 
   const mat = new T.MeshStandardMaterial(params as never)
-  if (water) {
+
+  if (cls === 'glow') {
+    // Die Textur leuchtet SELBST: dasselbe Bild als emissiveMap, der Ton als
+    // Farbe. Ohne das ist Neon nur hell gemalt und bleibt in einer
+    // Nachtszene genauso dunkel wie der Boden daneben.
+    const c = toColor(T, spec?.tint ?? 0xffffff)
+    mat.emissive = c
+    mat.emissiveIntensity = spec?.glow ?? 1
+    if (opts.map) mat.emissiveMap = opts.map
+  }
+
+  if (rippled) {
     if (!waveNormal) waveNormal = makeWaveNormal(T)
     mat.normalMap = waveNormal as Texture
     mat.normalScale = new T.Vector2(1, 1)

@@ -540,15 +540,45 @@ def get_kind_meta() -> Dict[str, Dict[str, str]]:
 # recognised by its colour but by what it reflects and how it moves, and a
 # colour map on a matte material delivers neither. The class rides with the
 # kind (kinds.json) and goes to BOTH renderers via /assets/surface-textures.
-SURFACE_CLASSES = ("matte", "water")
-# name -> (min, max, default). The defaults ARE the look a fresh water kind
-# gets; every one of them is a dial in the admin.
+#
+# Only WATER needed a shader, and only because it MOVES. Everything else the
+# standard material can already do — a class is then just the right numbers
+# under a name somebody can pick:
+#
+#   water   moving ripples, low roughness, sky reflection   (shader)
+#   ice     the same surface standing still                 (shader, speed 0)
+#   gloss   polished floor, wet cobbles, tiles, metal        (plain material)
+#   glow    neon, lava, crystals — the texture EMITS         (plain material)
+#
+# No separate "metal" class: gloss carries `metalness`, and a metal floor is a
+# gloss with that dial up. One class fewer to maintain, the same reach.
+SURFACE_CLASSES = ("matte", "water", "ice", "gloss", "glow")
+# name -> (min, max, default). The default is the generic one; a class may
+# override it below.
 _MATERIAL_RANGES: Dict[str, Any] = {
     "map_strength": (0.0, 1.0, 0.75),
     "wave_m": (0.2, 20.0, 1.6),
     "speed": (0.0, 2.0, 0.05),
     "sky_mix": (0.0, 1.0, 0.55),
     "roughness": (0.0, 1.0, 0.08),
+    "metalness": (0.0, 1.0, 0.05),
+    "glow": (0.0, 5.0, 1.0),
+}
+# Which numbers a class actually carries — everything else is dropped, so a
+# spec never claims a dial its class ignores.
+_CLASS_FIELDS: Dict[str, tuple] = {
+    "water": ("map_strength", "wave_m", "speed", "sky_mix", "roughness"),
+    "ice": ("map_strength", "wave_m", "speed", "sky_mix", "roughness"),
+    "gloss": ("map_strength", "roughness", "metalness"),
+    "glow": ("map_strength", "glow"),
+}
+# Where a class wants something other than the generic default. Ice is water
+# standing still: no flow, a longer swell, more sky and a fainter texture.
+_CLASS_DEFAULTS: Dict[str, Dict[str, float]] = {
+    "ice": {"speed": 0.0, "wave_m": 4.0, "sky_mix": 0.7,
+            "roughness": 0.05, "map_strength": 0.6},
+    "gloss": {"roughness": 0.25, "metalness": 0.05, "map_strength": 1.0},
+    "glow": {"map_strength": 1.0, "glow": 1.0},
 }
 _HEX_RE = re.compile(r"^#[0-9a-f]{6}$")
 
@@ -569,7 +599,10 @@ def sanitize_material(raw: Any) -> Optional[Dict[str, Any]]:
     tint = str(raw.get("tint") or "").strip().lower()
     if _HEX_RE.match(tint):
         out["tint"] = tint
-    for key, (lo, hi, default) in _MATERIAL_RANGES.items():
+    overrides = _CLASS_DEFAULTS.get(cls) or {}
+    for key in _CLASS_FIELDS.get(cls) or ():
+        lo, hi, generic = _MATERIAL_RANGES[key]
+        default = overrides.get(key, generic)
         try:
             v = float(raw.get(key, default))
         except (TypeError, ValueError):

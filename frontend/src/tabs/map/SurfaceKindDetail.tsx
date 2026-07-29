@@ -12,8 +12,8 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
 import { SurfaceMaterialPreview } from './SurfaceMaterialPreview'
 import { useI18n } from '../../i18n/I18nProvider'
-import { SURFACE_PROMPT_CONTEXT, WATER_DEFAULTS, WATER_DIALS, dateShort,
-  madeWith } from './surfaceTypes'
+import { CLASS_DEFAULTS, CLASS_DIALS, CLASS_HINTS, SURFACE_PROMPT_CONTEXT,
+  dateShort, madeWith } from './surfaceTypes'
 import type { TexGroup, TexVersion } from './surfaceTypes'
 
 interface SurfaceKindDetailProps {
@@ -46,7 +46,7 @@ export function SurfaceKindDetail({
   const cls = (group.material?.class as string) || 'matte'
   /** Patch ONE dial — the whole declaration travels, the server clamps it. */
   const setMat = (key: string, value: unknown) => onMeta({
-    material: { class: 'water', ...WATER_DEFAULTS, ...mat, [key]: value },
+    material: { ...CLASS_DEFAULTS[cls], ...mat, class: cls, [key]: value },
   })
 
   return (
@@ -110,40 +110,48 @@ export function SurfaceKindDetail({
         {/* How the kind is LIT. A water surface is not recognised by its
             colour but by what it reflects and how it moves — the class says
             so once, and BOTH renderers build the same material from it. */}
-        <Field label={t('Material')}
-          hint={cls === 'water'
-            ? t('Moving ripples, low roughness and a sky reflection — the texture stays the base colour.')
-            : t('Matte, like every other ground surface.')}>
+        <Field label={t('Material')} hint={t(CLASS_HINTS[cls] || CLASS_HINTS.matte)}>
           <select
             className="ga-input"
-            style={{ maxWidth: 200 }}
+            style={{ maxWidth: 220 }}
             value={cls}
-            onChange={(e) => onMeta({
-              material: e.target.value === 'water'
-                ? { class: 'water', ...WATER_DEFAULTS, ...(group.material || {}) }
-                : { class: 'matte' },
-            })}
+            onChange={(e) => {
+              const next = e.target.value
+              // Switching class keeps whatever the new one shares with the
+              // old (a tint stays a tint); the server drops the rest.
+              onMeta({
+                material: next === 'matte'
+                  ? { class: 'matte' }
+                  : { ...CLASS_DEFAULTS[next], ...mat, class: next },
+              })
+            }}
           >
             <option value="matte">{t('Matte (default)')}</option>
             <option value="water">{t('Water')}</option>
+            <option value="ice">{t('Ice')}</option>
+            <option value="gloss">{t('Polished / wet')}</option>
+            <option value="glow">{t('Glowing')}</option>
           </select>
         </Field>
-        {cls === 'water' ? (
+        {cls !== 'matte' ? (
           <div className="ga-form-row" style={{ flexWrap: 'wrap' }}>
             <Field label={t('Tint')} compact
-              hint={t('Base colour the texture is mixed against.')}>
+              hint={cls === 'glow'
+                ? t('The colour it emits.')
+                : t('Base colour the texture is mixed against.')}>
               <input
                 className="ga-input"
                 type="color"
                 style={{ width: 56, padding: 2 }}
-                value={(mat.tint as string) || WATER_DEFAULTS.tint}
+                value={(mat.tint as string)
+                  || (CLASS_DEFAULTS[cls]?.tint as string) || '#ffffff'}
                 onChange={(e) => setMat('tint', e.target.value)}
               />
             </Field>
-            {WATER_DIALS.map(([key, label, min, max, step]) => (
+            {(CLASS_DIALS[cls] || []).map(([key, label, min, max, step]) => (
               <Field key={key} label={t(label)} compact
                 hint={key === 'wave_m'
-                  ? t('Distance between wave crests — 1.6 m is a lake, 6 m an open sea.')
+                  ? t('1.6 m is a lake, 6 m an open sea — judge it against the figure.')
                   : undefined}>
                 <input
                   className="ga-input"
@@ -152,7 +160,8 @@ export function SurfaceKindDetail({
                   max={max}
                   step={step}
                   style={{ width: 84 }}
-                  value={(mat[key] as number | undefined) ?? WATER_DEFAULTS[key]}
+                  value={(mat[key] as number | undefined)
+                    ?? (CLASS_DEFAULTS[cls]?.[key] as number) ?? 0}
                   onChange={(e) => {
                     const n = parseFloat(e.target.value)
                     if (Number.isFinite(n)) setMat(key, n)

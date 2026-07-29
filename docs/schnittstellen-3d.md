@@ -456,9 +456,22 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   ist reine Server-/Admin-Sache — sie erzeugt das Bild und steht in
   keinem Client-Vertrag.
 - **`material` sagt, WIE eine Art beleuchtet wird** (2026-07-28, optional;
-  fehlt = `matte`, also unverändert). `{class: "matte"|"water", tint,
-  map_strength, wave_m, speed, sky_mix, roughness}` — die Werte sind
-  serverseitig geklemmt. `water` heißt: bewegte Kräuselung aus zwei
+  fehlt = `matte`, also unverändert). `{class, tint, …}`, serverseitig
+  geklemmt, und **jede Klasse trägt nur ihre eigenen Zahlen** — ein Spec
+  behauptet nie einen Regler, den seine Klasse ignoriert:
+
+  | class | Felder | Shader? |
+  |---|---|---|
+  | `matte` | — (kein Eintrag) | nein |
+  | `water` | map_strength, wave_m, speed, sky_mix, roughness | ja |
+  | `ice` | dieselben, aber speed 0 als Vorgabe | ja |
+  | `gloss` | map_strength, roughness, metalness | **nein** |
+  | `glow` | map_strength, glow | **nein** |
+
+  Nur Wasser und Eis brauchen den Shader, und zwar wegen der Bewegung bzw.
+  der Fresnel-Spiegelung; `gloss` und `glow` sind reine Materialwerte, die
+  das Standardmaterial ohnehin kann. Eine eigene Klasse `metal` gibt es
+  nicht — `gloss` trägt `metalness`. `water` heißt: bewegte Kräuselung aus zwei
   gegenläufig scrollenden Normalmap-Lagen (UV aus der WELTposition, sonst
   hätten Nachbarkacheln eine Naht), niedrige Rauheit und ein Fresnel-Anteil
   Richtung Himmelsfarbe. Beide Renderer bauen das Material aus **einer**
