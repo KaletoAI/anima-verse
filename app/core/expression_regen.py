@@ -141,32 +141,45 @@ def _cache_key(mood: str, activity: str,
                equipped_pieces: Optional[Dict[str, str]] = None,
                equipped_items: Optional[list] = None,
                equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
-               pose_variant_id: Optional[int] = None) -> str:
+               pose_variant_id: Optional[int] = None,
+               state_fp: Optional[str] = None) -> str:
     """Build a deterministic cache key.
 
-    Schritt 5 (May 2026): wenn pose_variant_id gegeben ist, ersetzt sie
-    den Activity-Normalisierungs-Pfad — Bilder werden gegen konsolidierte
-    Pose-Variants pro Character gecached statt gegen freien Activity-Text.
-    Faellt automatisch zurueck auf den alten Pose-Preset-Pfad wenn kein
-    variant_id vorhanden ist (Migration laeuft inkrementell).
+    Step 5 (May 2026): when pose_variant_id is given it replaces the
+    activity-normalization path — images are cached against consolidated
+    pose variants per character instead of free activity text. Falls back
+    automatically to the old pose-preset path when no variant_id exists
+    (the migration runs incrementally).
 
-    Mood wird auf einen groben Body-Language-Bucket reduziert — feinere
-    Mood-Unterschiede sind fuer die Variant-Wiederverwendung nicht relevant.
+    Mood is reduced to a coarse body-language bucket — finer mood
+    differences are irrelevant for variant reuse.
+
+    ``state_fp``: fingerprint of the triggered image-modifier state
+    (model_refs.state_fingerprint). ``None`` = look it up live for
+    ``character_name`` — every caller passes the character's CURRENT
+    mood/outfit anyway, the state belongs to that same snapshot. Pass ""
+    explicitly for a deliberately neutral render. No active state keeps
+    the historic key, so existing variants stay valid.
     """
-    # Wenn der Aufrufer keinen variant_id liefert aber einen character_name:
-    # versuch ihn aus state zu lesen / Lazy-Migration.
+    # No variant id from the caller but a character_name: try to read it
+    # from state / lazy migration.
     if pose_variant_id is None and character_name:
         pose_variant_id = _resolve_variant_for_cache(character_name, activity)
     if pose_variant_id is not None and pose_variant_id > 0:
         act = f"v{pose_variant_id}"
     else:
-        # Legacy-Pfad: Activity-Text → Pose-Preset-Key
+        # Legacy path: activity text → pose-preset key
         act_filtered = _normalize_activity_for_trigger(activity, mood)
         act_canonical = resolve_pose_key(act_filtered) if act_filtered else ""
         act = act_canonical or _normalize_activity(act_filtered)
     bucket = mood_bucket(mood) if mood else ""
     eq = _equipped_signature(equipped_pieces, equipped_items, equipped_pieces_meta)
+    if state_fp is None and character_name:
+        from app.core.model_refs import state_fingerprint
+        state_fp = state_fingerprint(character_name)
     raw = f"{bucket}:{act}:{eq}"
+    if state_fp:
+        raw += f":state={state_fp}"
     h = hashlib.md5(raw.encode()).hexdigest()[:12]
     if character_name:
         return f"{_safe_name(character_name)}_{h}"
@@ -906,8 +919,16 @@ def generate_expression_image(character_name: str,
     items_desc = _rendered.get("items", "")
     _fallback_text = _rendered.get("fallback", "")
 
+    # One state snapshot for key AND sidecar — the render below uses the
+    # same trigger state, so key, image and manifest describe one moment.
+    if apply_state_modifiers:
+        from app.core.model_refs import state_fingerprint
+        _state_fp = state_fingerprint(character_name)
+    else:
+        _state_fp = ""
     cache_key = _cache_key(mood, activity, character_name,
-                            equipped_pieces, equipped_items)
+                            equipped_pieces, equipped_items,
+                            state_fp=_state_fp)
 
     logger.info("Expression-Generierung: %s mood='%s' activity='%s' equipped=%d/%d",
                 character_name, mood, activity,
@@ -1177,6 +1198,7 @@ def generate_expression_image(character_name: str,
             "activity": activity,
             "equipped_pieces": equipped_pieces or {},
             "equipped_items": equipped_items or [],
+            "state_fingerprint": _state_fp,
         }
         try:
             _meta_path = final_path.with_suffix(".json")
