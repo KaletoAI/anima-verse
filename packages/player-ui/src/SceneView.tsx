@@ -89,7 +89,7 @@ function SceneRow({ line, onOpenImage }: { line: SceneLine; onOpenImage?: (url: 
   // under the line. Click opens it via onOpenImage (Lightbox) or in a new tab.
   const imageUrl = (line.meta?.image_url as string) || ''
 
-  // Event-Verdikt (gelöst/ungelöst) — eigener farbiger Block unter dem Erzähler.
+  // Event verdict (resolved/unresolved) — its own coloured block below the narrator.
   const verdict = line.meta?.event_verdict as string | undefined
   if (verdict === 'resolved' || verdict === 'unresolved') {
     const resolved = verdict === 'resolved'
@@ -120,8 +120,8 @@ function SceneRow({ line, onOpenImage }: { line: SceneLine; onOpenImage?: (url: 
       </em>
     )
   } else if (speaker === 'Erzähler') {
-    // Erzähler-Narration (Act/Storyteller): farblich abgesetzt — gold + kursiv,
-    // damit es sich klar vom Charakter-Dialog unterscheidet.
+    // Narrator prose (Act/Storyteller): set apart by colour — gold + italic, so
+    // it is clearly distinct from character dialogue.
     body = (
       <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
         <strong style={{ opacity: 0.85 }}>{speaker}</strong>: {line.content}
@@ -138,9 +138,9 @@ function SceneRow({ line, onOpenImage }: { line: SceneLine; onOpenImage?: (url: 
       </span>
     )
   } else {
-    // spoken_self | in_room | objective utterance — Lautstärke sichtbar machen:
-    // leise = grau/gedimmt + 🤫, schreien = fett + GROSSBUCHSTABEN + 📢.
-    // Der Adressat bleibt als kleiner Pfeil erhalten (separate Info zur Lautstärke).
+    // spoken_self | in_room | objective utterance — make the volume visible:
+    // whisper = grey/dimmed + 🤫, shout = bold + UPPERCASE + 📢.
+    // The addressee stays as a small arrow (information separate from volume).
     const isWhisper = line.volume === 'whisper'
     const isShout = line.volume === 'shout'
     const icon = isWhisper ? '🤫 ' : isShout ? '📢 ' : ''

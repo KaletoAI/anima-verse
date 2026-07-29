@@ -35,9 +35,9 @@ async function parseJsonOrThrow(res: Response): Promise<any> {
   } catch {
     /* leave body null */
   }
-  // 401 = nicht eingeloggt → Login. 403 = entweder "nicht Admin" (Auth → Login)
-  // ODER eine Game-Block-Regel (z.B. Bewegung während eines Events gesperrt) —
-  // Letzteres ist KEIN Auth-Fehler und darf NICHT zur (alten) Login-UI umleiten.
+  // 401 = not logged in → login. 403 = either "not an admin" (auth → login) OR
+  // a game block rule (e.g. movement locked during an event) — the latter is
+  // NOT an auth error and must NOT redirect to the (old) login UI.
   if (res.status === 401) redirectToLogin()
   if (res.status === 403) {
     const d = body && typeof body === 'object' ? (body.detail ?? body) : body

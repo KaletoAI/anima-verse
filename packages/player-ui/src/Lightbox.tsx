@@ -1,14 +1,15 @@
 /**
- * Lightbox — gemeinsames Vollbild-Overlay für die Player-UI.
+ * Lightbox — the full-screen overlay all player panels share.
  *
- * Bewusst KONTEXT-UNABHÄNGIG: ein Modul-Singleton statt React-Context. `open()`
- * trifft so garantiert den einen gemounteten Host (`LightboxProvider` rendert
- * ihn) — unabhängig von der Baum-Position und immun gegen Context-Auflösungs-
- * probleme (z.B. doppelte Modulinstanz durch Code-Splitting). Beliebige Panels
- * öffnen über `useLightbox().open({ src | video })` oder direkt `openLightbox(...)`.
- * Bilder sind per Mausrad zum Cursor zoombar und im gezoomten Zustand verschiebbar
- * (Drag); Doppelklick wechselt zwischen Einpassen und 2.5×. Videos werden groß mit
- * Steuerung gezeigt. Schließen: ×, Esc oder Klick auf den dunklen Rand.
+ * Deliberately CONTEXT-INDEPENDENT: a module singleton instead of a React
+ * context. That way `open()` is guaranteed to reach the one mounted host
+ * (rendered by `LightboxProvider`) regardless of its position in the tree, and
+ * immune to context-resolution problems (e.g. a duplicate module instance from
+ * code splitting). Any panel opens it via `useLightbox().open({ src | video })`
+ * or directly with `openLightbox(...)`. Images zoom towards the cursor with the
+ * mouse wheel and can be dragged around while zoomed; a double click toggles
+ * between fit and 2.5×. Videos are shown large with controls. Closes on ×, Esc
+ * or a click on the dark margin.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -18,7 +19,7 @@ import './Lightbox.css'
 
 export interface LightboxItem { src?: string; video?: string; alt?: string }
 
-// Modul-Singleton: der gemountete Host registriert seinen Setter hier.
+// Module singleton: the mounted host registers its setter here.
 let _setItem: ((it: LightboxItem | null) => void) | null = null
 export function openLightbox(item: LightboxItem) { _setItem?.(item) }
 const _api = { open: openLightbox }
@@ -35,8 +36,8 @@ function LightboxHost() {
     return () => { if (_setItem === setItem) _setItem = null }
   }, [])
   if (!item) return null
-  // Portal nach document.body: das Overlay (position:fixed) entkommt so jedem
-  // transformierten Vorfahren (react-grid-layout-Panels nutzen CSS-transform).
+  // Portal to document.body: that way the overlay (position:fixed) escapes any
+  // transformed ancestor (react-grid-layout panels use CSS transform).
   return createPortal(<LightboxOverlay item={item} onClose={() => setItem(null)} />, document.body)
 }
 
@@ -54,19 +55,19 @@ function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () =>
   stateRef.current = { scale, tx, ty }
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number; moved: boolean } | null>(null)
   const isVideo = !!item.video
-  const [interacted, setInteracted] = useState(false)  // Zoom-Hinweis bis zur ersten Aktion
+  const [interacted, setInteracted] = useState(false)  // zoom hint until the first action
 
   const reset = useCallback(() => { setScale(1); setTx(0); setTy(0) }, [])
 
-  // Esc schließt.
+  // Esc closes.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // Zoom zum Punkt (mx,my) hin: der Bildpunkt unter dem Cursor bleibt fix.
-  // Mapping bei transform-origin center + `translate(t) scale(s)`:
+  // Zoom towards the point (mx,my): the pixel under the cursor stays put.
+  // Mapping for transform-origin center + `translate(t) scale(s)`:
   //   screenOffsetFromCenter = t + s * localOffset.
   const zoomAt = useCallback((mx: number, my: number, factor: number) => {
     const el = overlayRef.current

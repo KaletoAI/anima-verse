@@ -1,7 +1,7 @@
 /**
- * OthersPanel — Zustand der anwesenden anderen Charaktere (read-only), als
- * Gegenstück zu Self. Karten fließen responsive nebeneinander/untereinander
- * (flex-wrap je nach Fensterbreite). Quelle: GET /play/others.
+ * OthersPanel — state of the other characters present (read-only), the
+ * counterpart to Self. The cards flow responsively side by side or stacked
+ * (flex-wrap, depending on the window width). Source: GET /play/others.
  */
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
@@ -30,7 +30,7 @@ function portraitUrl(c: CharState): string {
 
 function StatBars({ c }: { c: CharState }) {
   const bars = Object.entries(c.status_effects || {})
-  // Bei schmaler Karte Label + Zahl ausblenden, nur Balken (mit klarem Ende).
+  // On a narrow card hide label and number, leaving the bar (with a clear end).
   const ref = useRef<HTMLDivElement | null>(null)
   const [compact, setCompact] = useState(false)
   useEffect(() => {
@@ -89,7 +89,7 @@ export function OthersPanel() {
         <div key={c.name} style={{
           flex: '1 1 190px', minWidth: 160, maxWidth: '100%', alignSelf: 'flex-start',
           display: 'flex', flexDirection: 'column', gap: 4, padding: 8, borderRadius: 8,
-          // Party-Mitglieder bekommen eine eigene (blaue) Karten-Farbe.
+          // Party members get a card colour of their own (blue).
           background: c.in_party ? 'rgba(120,170,255,0.16)' : 'rgba(255,255,255,0.05)',
           border: c.in_party ? '1px solid rgba(120,170,255,0.55)' : '1px solid rgba(255,255,255,0.08)',
         }}>

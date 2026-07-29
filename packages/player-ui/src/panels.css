@@ -11,8 +11,8 @@
    `.player-chip*` family — other /play panels use those, so they stay in
    player.css. `.ga-input` lives in the game-admin stylesheet. */
 
-/* Szene-Panel: Header fix · Verlauf scrollt · Composer unten angepinnt.
-   Nur der Verlauf bekommt den Scrollbalken, die Eingabe bleibt sichtbar. */
+/* Scene panel: header fixed · transcript scrolls · composer pinned to the
+   bottom. Only the transcript gets the scrollbar, the input stays visible. */
 .player-scene-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -59,7 +59,7 @@
 .player-composer-input:focus { outline: none; border-color: var(--accent, #6aa9ff); }
 .player-composer-input:disabled { opacity: 0.55; cursor: wait; }
 
-/* Primärer Aktionsbutton (Send …) */
+/* Primary action button (Send …) */
 .player-btn-primary {
   padding: 6px 16px;
   border-radius: 8px;
@@ -73,7 +73,7 @@
 .player-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .player-btn-primary:disabled { opacity: 0.5; cursor: default; }
 
-/* ---- Einheitlicher Leerzustand ---- */
+/* ---- The one shared empty state ---- */
 .player-empty {
   height: 100%;
   min-height: 90px;

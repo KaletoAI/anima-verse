@@ -7,7 +7,7 @@
  * so a language switch in the main app is visible after a reload here.
  *
  * Source strings stay English in the React code. Missing keys log once per
- * (lang, source) pair so the i18n welle can pick them up — same convention
+ * (lang, source) pair so the next translation pass can pick them up — same convention
  * as the legacy `t()` in static/script.js.
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'

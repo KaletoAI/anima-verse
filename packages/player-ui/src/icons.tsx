@@ -1,10 +1,10 @@
 /**
- * icons.tsx — kleines, handverlesenes Inline-SVG-Icon-Set für die Player-UI.
+ * icons.tsx — a small, hand-picked inline-SVG icon set for the player UI.
  *
- * Bewusst kein npm-Dependency: ein paar Dutzend Pfade im lucide-Stil
- * (24×24 viewBox, stroke=currentColor, fill=none, runde Kappen). Über
- * `currentColor` sind sie theme-fähig (erben die Textfarbe des Buttons).
- * Verwendung: <Icon name="chat" size={16} />
+ * Deliberately not an npm dependency: a few dozen paths in the lucide style
+ * (24×24 viewBox, stroke=currentColor, fill=none, round caps). `currentColor`
+ * makes them themeable — they inherit the button's text colour.
+ * Usage: <Icon name="chat" size={16} />
  */
 import type { SVGProps } from 'react'
 
@@ -17,7 +17,7 @@ export type IconName =
   | 'brain' | 'cloud' | 'sliders'
   | 'background' | 'tag' | 'backpack' | 'avatar' | 'transparency'
 
-// Jeder Eintrag = der innere Inhalt eines <svg> (Pfade/Formen).
+// Each entry = the inner content of one <svg> (paths/shapes).
 const PATHS: Record<IconName, JSX.Element> = {
   chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
   // Umgebung — Landschaft (Sonne + Berge), KEIN Foto-Rahmen.
@@ -35,7 +35,7 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="m16 8-2 6-6 2 2-6z" />
     </>
   ),
-  // Karte — Globus.
+  // Map — globe.
   worldmap: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -99,7 +99,7 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M11 18h2" />
     </>
   ),
-  // Tasks/Queue — Ueberwachung: Monitor mit Aktivitaets-Puls.
+  // Tasks/queue — monitoring: a screen with an activity pulse.
   tasks: (
     <>
       <rect x="2" y="3" width="20" height="14" rx="2" />
@@ -195,7 +195,7 @@ const PATHS: Record<IconName, JSX.Element> = {
   sliders: (
     <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4" />
   ),
-  // "Als Hintergrund": großer Rahmen mit kleinem Inhalt (Inhalt füllt die Fläche).
+  // "As background": a large frame with small content (content fills the area).
   background: (
     <>
       <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -209,7 +209,7 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none" />
     </>
   ),
-  // Label/Tag — für den Map-Beschriftungs-Umschalter.
+  // Label/tag — for the map-label toggle.
   tag: (
     <>
       <path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.83 0l4.59-4.59a2 2 0 0 0 0-2.83Z" />

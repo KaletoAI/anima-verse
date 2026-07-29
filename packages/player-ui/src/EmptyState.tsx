@@ -1,7 +1,7 @@
 /**
- * EmptyState — einheitlicher Leerzustand für Player-Panels.
- * Zentriertes Icon + Titel + optionaler Hilfstext. `small` für Abschnitts-
- * Leerzustände (kein volles Panel, kompakter, ohne erzwungene Höhe).
+ * EmptyState — the one empty state all player panels share.
+ * Centred icon + title + optional hint text. `small` is for section-level empty
+ * states (not a whole panel: more compact, no forced height).
  */
 import { Icon, type IconName } from './icons'
 

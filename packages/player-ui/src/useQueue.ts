@@ -1,14 +1,14 @@
 /**
- * useQueue — pollt GET /queue/status und destilliert daraus die zwei Dinge, die
- * die Player-UI braucht:
- *   • llmTasks    — laufende LLM-Calls (Chat/Thought/Respond) aus
- *                   providers[*].chat_active. Das sind die "X denkt …"-Einträge
- *                   mit Modell, Iteration und Dauer-Schätzung.
- *   • trackedTasks — getrackte Bild-/Video-/TTS-/GPU-Tasks (active_tasks).
- *   • thinkingAgents — Set der agent_names mit aktivem LLM-Call (für den
- *                      "denkt …"-Indikator in der Szene / am Figuren-Avatar).
+ * useQueue — polls GET /queue/status and distils from it what the player UI
+ * needs:
+ *   • llmTasks     — running LLM calls (chat/thought/respond) from
+ *                    providers[*].chat_active. These are the "X is thinking …"
+ *                    entries with model, iteration and duration estimate.
+ *   • trackedTasks — tracked image/video/TTS/GPU tasks (active_tasks).
+ *   • thinkingAgents — set of agent_names with an active LLM call (for the
+ *                      "thinking …" indicator in the scene / on the avatar).
  *
- * plan-room-conversation Phase 3 (Feedback-Schleife sichtbar machen).
+ * plan-room-conversation phase 3 (make the feedback loop visible).
  */
 import { useMemo } from 'react'
 import { apiGet } from './api'
@@ -45,7 +45,7 @@ export interface TrackedTaskInfo {
   error?: string
 }
 
-/** Eine abgeschlossene Aufgabe (LLM oder getrackt) für den „Zuletzt"-Block. */
+/** A finished task (LLM or tracked) for the "recently" block. */
 export interface RecentTaskInfo {
   task_id?: string
   label?: string
@@ -108,7 +108,7 @@ interface QueueStatus {
   recent_tasks?: TrackedTaskInfo[]
 }
 
-/** Pro-Agent: läuft gerade ein LLM-Call, und ist es eine *Antwort* (vs. Gedanke)? */
+/** Per agent: is an LLM call running, and is it a *reply* (vs. a thought)? */
 export interface AgentActivity {
   responding: boolean
   label?: string
@@ -116,14 +116,14 @@ export interface AgentActivity {
 
 export interface QueueSnapshot {
   llmTasks: LLMTaskInfo[]
-  /** Wartende LLM-Calls (providers[*].pending) — noch nicht gestartet. */
+  /** Waiting LLM calls (providers[*].pending) — not started yet. */
   pendingLLM: LLMTaskInfo[]
   trackedTasks: TrackedTaskInfo[]
-  /** Zuletzt abgeschlossene Tasks (LLM + getrackt) für den „Zuletzt"-Block. */
+  /** Most recently finished tasks (LLM + tracked) for the "recently" block. */
   recent: RecentTaskInfo[]
-  /** agent_name → Aktivität (für "antwortet …" / "denkt …"-Indikator). */
+  /** agent_name → activity (for the "replying …" / "thinking …" indicator). */
   agentActivity: Record<string, AgentActivity>
-  /** LLM-Backends (Channels) mit Verfügbarkeit + busy-Flag. */
+  /** LLM backends (channels) with availability + busy flag. */
   channels: ChannelStatus[]
 }
 
@@ -131,8 +131,8 @@ const EMPTY: QueueSnapshot = {
   llmTasks: [], pendingLLM: [], trackedTasks: [], recent: [], agentActivity: {}, channels: [],
 }
 
-// task_types, bei denen der Character auf jemanden *antwortet* (sichtbarer Chat),
-// im Gegensatz zu Hintergrund-Gedanken.
+// task_types where the character is *replying* to someone (visible chat), as
+// opposed to background thoughts.
 const RESPONDING_TYPES = new Set(['character_talk', 'talk_to', 'send_message', 'chat_stream'])
 
 function collectLLM(providers: Record<string, ProviderChannel> | undefined): LLMTaskInfo[] {
@@ -150,14 +150,14 @@ function collectLLM(providers: Record<string, ProviderChannel> | undefined): LLM
       const key = tk.task_id || `${tk.agent_name}:${tk.label}`
       if (seen.has(key)) continue
       seen.add(key)
-      // provider_name fehlt manchmal am Task → vom Channel ziehen
+      // provider_name is sometimes missing on the task → take it from the channel
       out.push({ ...tk, provider_name: tk.provider_name || ch?.provider })
     }
   }
   return out
 }
 
-/** Wartende (noch nicht gestartete) LLM-Calls aus providers[*].pending. */
+/** Waiting (not yet started) LLM calls from providers[*].pending. */
 function collectPendingLLM(providers: Record<string, ProviderChannel> | undefined): LLMTaskInfo[] {
   const out: LLMTaskInfo[] = []
   const seen = new Set<string>()
@@ -173,8 +173,8 @@ function collectPendingLLM(providers: Record<string, ProviderChannel> | undefine
   return out
 }
 
-/** „Zuletzt": kürzlich abgeschlossene LLM-Calls (recent) + getrackte Tasks
- * (recent_tasks), zusammengeführt und auf 25 Einträge begrenzt. */
+/** "Recently": recently finished LLM calls (recent) + tracked tasks
+ * (recent_tasks), merged and capped at 25 entries. */
 function collectRecent(d: QueueStatus): RecentTaskInfo[] {
   const out: RecentTaskInfo[] = []
   for (const tk of d.recent || []) {
@@ -199,8 +199,8 @@ function collectRecent(d: QueueStatus): RecentTaskInfo[] {
  * come from the server (get_combined_status). */
 function collectChannels(providers: Record<string, ProviderChannel> | undefined,
                          tracked: TrackedTaskInfo[] = []): ChannelStatus[] {
-  // task_ids, die bereits als Channel-Task (chat_active/current_tasks) zaehlen —
-  // damit channel-submitted getrackte Tasks (z.B. Animate) nicht doppelt zaehlen.
+  // task_ids that already count as a channel task (chat_active/current_tasks),
+  // so channel-submitted tracked tasks (e.g. Animate) are not counted twice.
   const channelIds = new Set<string>()
   for (const ch of Object.values(providers || {})) {
     const ca = ch?.chat_active
@@ -216,8 +216,8 @@ function collectChannels(providers: Record<string, ProviderChannel> | undefined,
     const ca = ch?.chat_active
     const nChat = Array.isArray(ca) ? ca.length : ca ? 1 : 0
     const name = ch?.provider || key
-    // Getrackte Image-/TTS-Tasks (NICHT channel-submitted, z.B. Ort-Bild) per
-    // provider-Name diesem Channel zuordnen, damit die Zahl oben erscheint.
+    // Attribute tracked image/TTS tasks that were NOT channel-submitted (e.g. a
+    // location image) to this channel by provider name, so the count shows up.
     const tr = tracked.filter(tk => (tk.provider || '') === name && !channelIds.has(tk.task_id || ''))
     const trackedWaiting = tr.filter(tk => (tk.status || '') === 'pending').length
     const trackedRunning = tr.length - trackedWaiting
@@ -227,7 +227,7 @@ function collectChannels(providers: Record<string, ProviderChannel> | undefined,
                busy: running > 0, kind: isImage ? 'image' : 'llm', type,
                group: (ch?.serialize_group || '').trim(), running, waiting })
   }
-  // LLM-Provider zuerst, dann Image-Backends; innerhalb der Gruppe alphabetisch.
+  // LLM providers first, then image backends; alphabetical within each group.
   out.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name)
                                         : a.kind === 'llm' ? -1 : 1))
   return out
@@ -261,7 +261,7 @@ export function useQueue(intervalMs = 2000): QueueSnapshot {
   }, [data])
 }
 
-/** Sekunden seit started_at (UTC-ISO), oder null wenn unbekannt. */
+/** Seconds since started_at (UTC ISO), or null when unknown. */
 export function elapsedSeconds(startedAt: string | undefined, nowMs: number): number | null {
   if (!startedAt) return null
   const t = Date.parse(startedAt)

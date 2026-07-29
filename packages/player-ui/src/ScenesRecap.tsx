@@ -1,8 +1,9 @@
 /**
- * ScenesRecap — einklappbare „Was bisher geschah"-Leiste oben im Chat-Panel.
- * Zeigt die zuletzt konsolidierten Szenen des Avatars (Zeit · Ort · Mit-Teilnehmer
- * · kurze Summary) aus GET /play/scenes. Standard eingeklappt; getrennt vom
- * Live-Stream darunter. plan-room-conversation §7 (Avatar-Recap).
+ * ScenesRecap — collapsible "story so far" strip at the top of the chat panel.
+ * Shows the avatar's most recently consolidated scenes (time · place · fellow
+ * participants · short summary) from GET /play/scenes. Collapsed by default and
+ * kept apart from the live stream below it. plan-room-conversation §7
+ * (avatar recap).
  */
 import { useEffect, useState } from 'react'
 import { useI18n } from './I18nProvider'
@@ -40,7 +41,7 @@ export function ScenesRecap() {
       } catch { /* auth handled in api.ts */ }
     }
     tick()
-    const id = setInterval(tick, 30000)  // Szenen ändern sich selten (Idle-Konsolidierung)
+    const id = setInterval(tick, 30000)  // scenes change rarely (idle consolidation)
     return () => { alive = false; clearInterval(id) }
   }, [])
 

@@ -1,9 +1,9 @@
 /**
- * SelfPanel — der eigene Zustand des Avatars (B Tier 1, Redesign).
- * Aufbau (an alter UI orientiert): Profilbild · Status-Balken als 2×3-Grid ·
- * Stimmung (editierbar) · Aktivität (read-only, wird aus dem Chat gesetzt).
- * Outfit/Inventar leben im Belongings-Panel.
- * Quelle: GET /play/self · Setter: POST /play/self/mood.
+ * SelfPanel — the avatar's own state (B tier 1, redesign).
+ * Layout (following the old UI): portrait · status bars as a 2×3 grid · mood
+ * (editable) · activity (read-only, set from the chat).
+ * Outfit and inventory live in the Belongings panel.
+ * Source: GET /play/self · setter: POST /play/self/mood.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
@@ -31,8 +31,8 @@ export function SelfPanel() {
   const [activityFocused, setActivityFocused] = useState(false)
   const [moodFocused, setMoodFocused] = useState(false)
   const [busy, setBusy] = useState(false)
-  // Bei sehr schmalem Panel die Balken-Beschriftung + Zahl ausblenden und nur
-  // den Balken (mit klar sichtbarem Ende) zeigen.
+  // On a very narrow panel, hide the bar labels and numbers and show only the
+  // bar itself (with a clearly visible end).
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [compact, setCompact] = useState(false)
   useEffect(() => {
@@ -44,8 +44,8 @@ export function SelfPanel() {
     })
     ro.observe(el)
     return () => ro.disconnect()
-    // Re-run sobald das Root-Div existiert (beim Mount ist data noch null →
-    // frueher Return ohne rootRef; erst nach dem Laden ist das Div da).
+    // Re-run as soon as the root div exists (data is still null at mount → the
+    // early return leaves rootRef unset; the div only appears after loading).
   }, [data?.avatar])
 
   // Mirror the polled mood into the draft while the field is not focused.
@@ -82,13 +82,13 @@ export function SelfPanel() {
 
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.9em', height: '100%', minHeight: 0 }}>
-      {/* Profilbild (skaliert mit dem Fenster) mit Balken-Overlay im unteren Bereich */}
+      {/* Portrait (scales with the window) with the bar overlay along its bottom */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'grid', placeItems: 'center', overflow: 'hidden', borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
         <img src={portraitUrl} alt={data.avatar}
           onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
           style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain', display: 'block' }} />
 
-        {/* Conditions oben über dem Bild */}
+        {/* Conditions across the top of the image */}
         {data.conditions.length > 0 && (
           <div style={{ position: 'absolute', top: 6, left: 6, right: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {data.conditions.map((c, i) => (
@@ -100,7 +100,7 @@ export function SelfPanel() {
           </div>
         )}
 
-        {/* Status-Balken als 2×3-Grid, unten ins Bild gelegt */}
+        {/* Status bars as a 2×3 grid, laid over the bottom of the image */}
         {bars.length > 0 && (
           <div style={{
             position: 'absolute', left: 0, right: 0, bottom: 0,
@@ -112,8 +112,8 @@ export function SelfPanel() {
               const m = data.bar_meta?.[key] || {}
               const pct = Math.max(0, Math.min(100, Number(val) || 0))
               const full = m.name_de || m.name || key
-              // Track mit klar sichtbarem Ende (Rahmen), damit man die Füllung
-              // auch ohne Zahl abschätzen kann — besonders im Compact-Modus.
+              // Track with a clearly visible end (border) so the fill level can
+              // be judged without the number — matters most in compact mode.
               const track = (
                 <div style={{
                   flex: 1, height: compact ? 7 : 5, borderRadius: 3,
@@ -143,7 +143,7 @@ export function SelfPanel() {
         )}
       </div>
 
-      {/* Stimmung */}
+      {/* Mood */}
       <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
         <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Mood')}</span>
         <input value={moodDraft} disabled={busy}
@@ -155,8 +155,8 @@ export function SelfPanel() {
           className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
       </label>
 
-      {/* Aktuelle Aktivität — editierbar (freier Text; Chat/Loop setzen sie
-          ebenfalls). Setzen weckt einen schlafenden Avatar. */}
+      {/* Current activity — editable (free text; the chat and the agent loop
+          set it too). Setting it wakes a sleeping avatar. */}
       <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
         <span style={{ opacity: 0.6, fontSize: '0.8em' }}>{t('Activity')}</span>
         <input value={activityDraft} disabled={busy}

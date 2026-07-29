@@ -1,8 +1,8 @@
-/* Lightbox + Bedien-Hinweis-Pille. Bewusst eigene Datei, von Lightbox.tsx
-   importiert — so kommen die Stile überall mit, wo die Lightbox genutzt wird
-   (Player UND Game-Admin), unabhängig davon welche globale CSS geladen ist. */
+/* Lightbox + the control-hint pill. Deliberately its own file, imported by
+   Lightbox.tsx — that way the styles travel everywhere the lightbox is used
+   (player AND game-admin), whichever global stylesheet happens to be loaded. */
 
-/* Dezenter Bedien-Hinweis (z.B. „ziehen / Mausrad zoomt") als kleine Pille. */
+/* Understated control hint (e.g. "drag / wheel zooms") as a small pill. */
 .player-hint-pill {
   position: absolute;
   z-index: 3;
