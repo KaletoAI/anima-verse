@@ -176,38 +176,85 @@ def get_model_refs_dir(character_name: str) -> Path:
     return refs_dir
 
 
+#: Separator between the outfit part and the state part of a signature.
+#: md5 hex is [0-9a-f] only, so the dash is unambiguous.
+STATE_SIG_SEP = "-s"
+
+
+def state_fingerprint(character_name: str) -> str:
+    """8-hex fingerprint of the triggered image-modifier state, "" when no
+    ``image_modifier`` directive is active.
+
+    Folded into the outfit signature so a reference render taken while a
+    state rewrites the appearance ("neat hair -> messy tousled hair") never
+    claims the neutral cache entry — and the neutral render survives the
+    state. Directives are sorted, so trigger order does not matter."""
+    import hashlib
+    try:
+        from app.core.prompt_filters import collect_image_modifiers
+        replacements, additive = collect_image_modifiers(character_name)
+        lines = sorted([f"{a}->{b}" for a, b in replacements] + list(additive))
+        if not lines:
+            return ""
+        return hashlib.md5("\n".join(lines).encode()).hexdigest()[:8]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def neutral_signature(signature: str) -> str:
+    """Outfit-only base of a signature (state suffix stripped, if any)."""
+    return (signature or "").split(STATE_SIG_SEP, 1)[0]
+
+
 def current_outfit_state(character_name: str) -> tuple:
     """(equipped_pieces, equipped_items, signature) of the CURRENT worn
     state. The signature reuses the expression cache's equipped-signature
     (pieces + items, stably sorted) so both caches agree on what counts as
     "the same outfit combination". Public: the per-outfit mesh store
-    (app/core/model3d.py) keys on the same signature."""
+    (app/core/model3d.py) keys on the same signature.
+
+    With active image-modifier states the signature carries a state suffix
+    (``<base>-s<fp>``); the neutral state keeps the bare base hash, so
+    existing cache entries and the outfit batch's pre-warmed (always
+    neutral) combinations stay valid."""
     import hashlib
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     from app.core.expression_regen import _equipped_signature
     pieces = get_equipped_pieces(character_name)
     items = get_equipped_items(character_name)
     sig = hashlib.md5(_equipped_signature(pieces, items).encode()).hexdigest()[:12]
+    state = state_fingerprint(character_name)
+    if state:
+        sig = f"{sig}{STATE_SIG_SEP}{state}"
     return pieces, items, sig
 
 
 def find_ref_image(character_name: str, kind: str,
                    signature: Optional[str] = None) -> Optional[Path]:
     """Path of the stored render of this kind for the given outfit
-    combination (default: the currently worn one), or None."""
+    combination (default: the currently worn one), or None.
+
+    ``signature=None`` means "what should be shown right now" and falls
+    back to the neutral entry of the same outfit when the state variant is
+    not rendered yet. An EXPLICIT signature is matched exactly — the
+    generation skip-check must not mistake the neutral render for the
+    state variant it is about to produce."""
     if kind not in REF_KINDS:
         return None
+    candidates = [signature]
     if signature is None:
         try:
-            _, _, signature = current_outfit_state(character_name)
+            _, _, sig = current_outfit_state(character_name)
         except Exception:
             return None
+        candidates = list(dict.fromkeys([sig, neutral_signature(sig)]))
     from app.models.character import get_character_dir
     refs_dir = get_character_dir(character_name) / "model_refs"
-    for ext in _IMAGE_EXTS:
-        p = refs_dir / f"{kind}_{signature}{ext}"
-        if p.exists():
-            return p
+    for sig in candidates:
+        for ext in _IMAGE_EXTS:
+            p = refs_dir / f"{kind}_{sig}{ext}"
+            if p.exists():
+                return p
     return None
 
 
@@ -291,6 +338,11 @@ def generate_model_ref_images(character_name: str,
         raise ValueError(
             "generate_model_ref_images: pieces, items and signature must be "
             "given together (or none of them)")
+    # Pre-warm runs (explicit signature) render the NEUTRAL look — their
+    # signature carries no state fingerprint, so the image must not either.
+    # Worn-state runs apply the modifiers; current_outfit_state keys them
+    # into the matching state-suffixed cache entry.
+    prewarm = signature is not None
 
     if kinds is None:
         auto = get_auto_kinds(character_name)
@@ -348,7 +400,8 @@ def generate_model_ref_images(character_name: str,
                 # ... and its own aspect: the portrait outfit format cuts the
                 # outstretched hands off at the edges.
                 override_width=_w, override_height=_h,
-                output_stem=refs_dir / f"{kind}_{signature}")
+                output_stem=refs_dir / f"{kind}_{signature}",
+                apply_state_modifiers=not prewarm)
             results[kind] = str(path) if path else None
             if path is None:
                 logger.warning("Model-Ref %s fuer %s (%s): Render fehlgeschlagen",

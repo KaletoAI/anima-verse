@@ -844,7 +844,8 @@ def generate_expression_image(character_name: str,
                               image_use_case: str = "expression",
                               output_stem: Optional[Path] = None,
                               override_width: Optional[int] = None,
-                              override_height: Optional[int] = None) -> Optional[Path]:
+                              override_height: Optional[int] = None,
+                              apply_state_modifiers: bool = True) -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -866,6 +867,9 @@ def generate_expression_image(character_name: str,
       pose-variant analysis.
     - ``override_width`` / ``override_height`` win over the outfit image
       format (a T-pose needs a wider frame than a portrait).
+    - ``apply_state_modifiers=False`` renders the NEUTRAL appearance (no
+      triggered image_modifier rewrites) — for cache entries whose key
+      deliberately carries no state (outfit-batch pre-warm).
 
     Returns the path to the generated image, or None on failure.
     """
@@ -937,7 +941,8 @@ def generate_expression_image(character_name: str,
     # additive fragments AND "A -> B" replacements, tag- or
     # condition-triggered alike.
 
-    _expr_builder = PromptBuilder(character_name)
+    _expr_builder = PromptBuilder(character_name,
+                                  apply_state_modifiers=apply_state_modifiers)
     persons = _expr_builder.detect_persons("", character_names=[character_name])
     appearance = persons[0].appearance if persons else get_character_appearance(character_name)
     actor_label = persons[0].actor_label if persons else character_name

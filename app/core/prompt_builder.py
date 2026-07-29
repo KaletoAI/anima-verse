@@ -224,11 +224,16 @@ _PERSON_KEYWORDS = (
 # ---------------------------------------------------------------------------
 
 class PromptBuilder:
-    """Zentrale Pipeline fuer den Aufbau von Image-Generation Prompts."""
+    """Central pipeline for building image-generation prompts."""
 
-    def __init__(self, character_name: str):
+    def __init__(self, character_name: str, *,
+                 apply_state_modifiers: bool = True):
         self.user_id = ""
         self.character_name = character_name
+        # State-triggered image_modifier directives rewrite the person
+        # description. Neutral cache renders (outfit-batch pre-warm) turn
+        # this off — their cache key deliberately carries no state.
+        self.apply_state_modifiers = apply_state_modifiers
 
     # ------------------------------------------------------------------
     # Schritt 1: Personen erkennen
@@ -424,11 +429,12 @@ class PromptBuilder:
             appearance = f"{appearance}, {suffix}" if appearance else suffix
         # Triggered states rewrite/extend the description afterwards
         # (image_modifier replacements + additive fragments).
-        try:
-            from app.core.prompt_filters import apply_image_modifiers
-            appearance = apply_image_modifiers(name, appearance)
-        except Exception:
-            pass
+        if self.apply_state_modifiers:
+            try:
+                from app.core.prompt_filters import apply_image_modifiers
+                appearance = apply_image_modifiers(name, appearance)
+            except Exception:
+                pass
         return appearance or ""
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:

@@ -87,18 +87,27 @@ def get_model3d_dir(character_name: str) -> Path:
 def find_model3d(character_name: str,
                  signature: Optional[str] = None) -> Optional[Path]:
     """Path of the cached mesh for the given outfit combination (default: the
-    currently worn one), or None."""
+    currently worn one), or None.
+
+    ``signature=None`` = serving semantics: exact (outfit + state) match
+    first, then the neutral entry of the same outfit — an active state must
+    not make the character's model vanish while its variant is unrendered.
+    An explicit signature is matched exactly (generation paths)."""
+    candidates = [signature]
     if signature is None:
         try:
-            _, _, signature = current_outfit_state(character_name)
+            _, _, sig = current_outfit_state(character_name)
         except Exception:
             return None
+        from app.core.model_refs import neutral_signature
+        candidates = list(dict.fromkeys([sig, neutral_signature(sig)]))
     from app.models.character import get_character_dir
     d = get_character_dir(character_name) / "model3d"
-    for ext in MODEL_EXTS:
-        p = d / f"{signature}{ext}"
-        if p.exists():
-            return p
+    for sig in candidates:
+        for ext in MODEL_EXTS:
+            p = d / f"{sig}{ext}"
+            if p.exists():
+                return p
     return None
 
 
@@ -169,7 +178,9 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                           if signature else None),
         "model": None,
     }
-    path = find_model3d(character_name, signature) if signature else None
+    # Serving semantics (like the file route): exact state variant first,
+    # neutral fallback second — meta and served file must agree.
+    path = find_model3d(character_name) if signature else None
     if path:
         enc = quote(character_name)
         info: Dict[str, Any] = {"filename": path.name,
@@ -194,7 +205,7 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
         # FBX case only — a GLB embeds its textures; a stray image next to a
         # GLB is an auxiliary material map, never the basecolor.
         if info["format"] == "fbx":
-            tex = find_texture(character_name, signature)
+            tex = find_texture(character_name)
             if tex:
                 info["texture_url"] = f"/characters/{enc}/model3d/texture"
                 info["texture_size"] = tex.stat().st_size

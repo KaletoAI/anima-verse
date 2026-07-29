@@ -119,13 +119,20 @@ def _inventory_ids(character_name: str) -> Set[str]:
 
 def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
                  owned: Set[str], reachable: Set[str]) -> bool:
-    """The rule of this module, for one cache entry."""
+    """The rule of this module, for one cache entry.
+
+    State variants (``<base>-s<fp>``, model_refs.STATE_SIG_SEP) are judged
+    by their outfit base: the state fingerprint is not reconstructible from
+    the manifest, and a variant is worth keeping exactly as long as its
+    outfit combination is."""
+    from app.core.model_refs import neutral_signature
+    base = neutral_signature(signature)
     if manifest is not None:
         used = set(manifest["pieces"].values()) | set(manifest["items"])
         if not used.issubset(owned):
             return False
-        return _sign(manifest["pieces"], manifest["items"]) == signature
-    return signature in reachable
+        return _sign(manifest["pieces"], manifest["items"]) == base
+    return base in reachable
 
 
 def _ref_files(character_name: str) -> Dict[str, List[Path]]:
