@@ -370,6 +370,32 @@ def _evaluate_single_condition_inner(
         except Exception:
             return False, f"Bedingung nicht auswertbar: {cond}"
 
+    # --- state flags: is_sleeping / is_wet / is_intimate / decency_exempt
+    # plus every plugin-registered flag (flag_specs). The help panel offers
+    # exactly this set as bare conditions, so the evaluator must accept
+    # them; they live as top-level booleans in the profile (set by activity
+    # skills, the decency toggle and set_flags rules).
+    known_flags = set()
+    try:
+        from app.models.character import get_state_flags
+        known_flags = set(get_state_flags(character_name))
+    except Exception:
+        pass
+    try:
+        from app.plugins.registry import flag_specs
+        known_flags |= {s.flag for s in flag_specs()}
+    except Exception:
+        pass
+    if cond in known_flags:
+        try:
+            from app.models.character import get_character_profile
+            active = bool((get_character_profile(character_name) or {}).get(cond))
+        except Exception:
+            return False, f"Bedingung nicht auswertbar: {cond}"
+        if active:
+            return True, ""
+        return False, f"Flag '{cond}' not active"
+
     # --- {profile_field}=value / {profile_field}!=value — generic string
     # compare against a top-level profile field (e.g. gender=male,
     # template=human-roleplay). Evaluated LAST so it never shadows the
