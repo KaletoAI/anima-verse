@@ -1,0 +1,15 @@
+{
+  "name": "@anima/player-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Shared player-facing React panels + API/i18n plumbing — consumed by frontend (/play) and client3d (game HUD). Styles are themeable via CSS custom properties; each app brings its own theme.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api.ts"
+  },
+  "peerDependencies": {
+    "react": ">=18.3.0",
+    "react-dom": ">=18.3.0"
+  }
+}
