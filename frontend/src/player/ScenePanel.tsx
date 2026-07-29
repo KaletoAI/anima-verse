@@ -66,20 +66,64 @@ export interface ScenePanelProps {
   onEnterRoom: (roomId: string) => void
 }
 
+/** Chat image attachment (#5 upload / #6 gallery). Exactly one source is set:
+ * `image_id` for an upload, `image_url` for a library pick. `preview` is the
+ * URL shown in the composer thumbnail. `uploading` gates send during upload. */
+type AttachInfo = { image_id?: string; image_url?: string; preview: string; uploading?: boolean }
+/** Prepared scene-photo dialog payload (from /play/scene-photo/prepare). */
+type PhotoDlgInfo = { prompt: string; subjects: string[]; present: string[] }
+
+// Module-level draft cache (same pattern as the Lightbox singleton): /play
+// remounts the whole grid subtree on every `openKey` change (panel toggles,
+// the Others panel appearing/disappearing, background toggle), which unmounts
+// this component. Before the extraction this transient composer state lived in
+// PlayerApp and therefore survived those remounts — the cache restores exactly
+// that behaviour, keeping the panel self-contained for the 3D HUD island.
+// Keyed by avatar: a full PlayerApp remount (avatar gate, page load) mounts the
+// panel with avatar '' first, which discards the cache — the draft did not
+// survive a PlayerApp remount before the cut either. Never persisted anywhere.
+const draft = {
+  avatar: '',
+  text: '',
+  volume: 'normal',
+  addressees: [] as string[],
+  attach: null as AttachInfo | null,
+  pickerOpen: false,
+  giftOpen: false,
+  photoDlg: null as PhotoDlgInfo | null,
+}
+
+function resetDraft(avatar: string) {
+  draft.avatar = avatar
+  draft.text = ''
+  draft.volume = 'normal'
+  draft.addressees = []
+  draft.attach = null
+  draft.pickerOpen = false
+  draft.giftOpen = false
+  draft.photoDlg = null
+}
+
 export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, onEnterRoom }: ScenePanelProps) {
   const { t } = useI18n()
-  const [text, setText] = useState('')
-  const [volume, setVolume] = useState('normal')
-  const [addressees, setAddressees] = useState<string[]>([])
+  // Different avatar than the cached draft (incl. the '' of a fresh PlayerApp
+  // mount) → drop the cache BEFORE the initializers below read it.
+  if (draft.avatar !== avatar) resetDraft(avatar)
+  const [text, setText] = useState(draft.text)
+  const [volume, setVolume] = useState(draft.volume)
+  const [addressees, setAddressees] = useState<string[]>(draft.addressees)
   const [sending, setSending] = useState(false)
-  // Chat image attachment (#5 upload / #6 gallery). Exactly one source is set:
-  // `image_id` for an upload, `image_url` for a library pick. `preview` is the
-  // URL shown in the composer thumbnail. `uploading` gates send during upload.
-  const [attach, setAttach] = useState<
-    { image_id?: string; image_url?: string; preview: string; uploading?: boolean } | null
-  >(null)
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [giftOpen, setGiftOpen] = useState(false)
+  const [attach, setAttach] = useState<AttachInfo | null>(draft.attach)
+  const [pickerOpen, setPickerOpen] = useState(draft.pickerOpen)
+  const [giftOpen, setGiftOpen] = useState(draft.giftOpen)
+  // Write-through on every render (same pattern as PlayerApp's state→ref sync):
+  // the cache always holds the last rendered values, so an unmount loses nothing.
+  draft.text = text
+  draft.volume = volume
+  draft.addressees = addressees
+  draft.attach = attach
+  draft.pickerOpen = pickerOpen
+  draft.giftOpen = giftOpen
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lightbox = useLightbox()
   const { toast } = useToast()
@@ -116,7 +160,8 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   // (model/LoRA/prompt editable); step 2 generates into the avatar's
   // gallery + narrator line in the chat (present characters can react).
   const [photoBusy, setPhotoBusy] = useState(false)
-  const [photoDlg, setPhotoDlg] = useState<{ prompt: string; subjects: string[]; present: string[] } | null>(null)
+  const [photoDlg, setPhotoDlg] = useState<PhotoDlgInfo | null>(draft.photoDlg)
+  draft.photoDlg = photoDlg  // write-through, like the composer state above
   const takePhoto = useCallback(async () => {
     if (photoBusy) return
     setPhotoBusy(true)
