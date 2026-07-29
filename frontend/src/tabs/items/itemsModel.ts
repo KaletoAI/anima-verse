@@ -140,7 +140,10 @@ export function extractConditionFromEffects(eff: Item['effects']): {
   }
 }
 
-export const EXTRA_KEYS = [
+// Spell-only extras: only meaningful (and only persisted by the server) on
+// category "spell". Sending them for other categories turned a copied spell
+// into a consumable that still cast/displayed as a spell.
+export const SPELL_EXTRA_KEYS = [
   'incantation',
   'spell_mode',
   'clone_item_id',
@@ -151,6 +154,10 @@ export const EXTRA_KEYS = [
   'cast_activity',
   'anchor_item_id',
   'teleport_subject',
+] as const
+
+export const EXTRA_KEYS = [
+  ...SPELL_EXTRA_KEYS,
   'tracks_character',
   'reveals_secret',
 ] as const
@@ -274,8 +281,12 @@ export function draftToBody(d: DraftItem): Record<string, unknown> {
     body.effects = eff
   }
   // Pass-through magic / tracker / evidence fields so editing a spell
-  // item doesn't strip its incantation / spell_mode / etc.
+  // item doesn't strip its incantation / spell_mode / etc. Spell-only
+  // keys stay home unless the item IS a spell — a draft copied from a
+  // spell (or re-categorized away from spell) must not carry them.
+  const spellOnly = new Set<string>(SPELL_EXTRA_KEYS)
   for (const k of EXTRA_KEYS) {
+    if (spellOnly.has(k) && d.category !== 'spell') continue
     if (d.extras[k] !== undefined && d.extras[k] !== null && d.extras[k] !== '') {
       body[k] = d.extras[k]
     }

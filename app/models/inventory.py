@@ -514,20 +514,25 @@ def update_item(item_id: str,
     updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Aktualisiert ein Item — World oder Shared. Admin-only Aufrufer.
     """
+    # Spell-only metadata (see spell_engine.build_spell_catalog). Anything
+    # carrying an incantation is treated as a castable spell, so these keys
+    # may only persist on items with category "spell" — otherwise a copied
+    # spell turned consumable would still show up (and cast) as a spell.
+    spell_only = {
+        "incantation", "spell_mode", "clone_item_id",
+        "success_chance", "copy_on_give",
+        "success_text", "fail_text", "cast_activity",
+        "anchor_item_id", "teleport_subject",
+    }
     allowed = {
         "name", "description",
         "category", "image", "image_prompt",
         "rarity", "stackable", "max_stack", "properties",
         "transferable", "consumable", "reveals_secret",
         "prompt_fragment", "outfit_piece", "effects",
-        # Magic / spell metadata (siehe spell_engine.build_spell_catalog)
-        "incantation", "spell_mode", "clone_item_id",
-        "success_chance", "copy_on_give",
-        "success_text", "fail_text", "cast_activity",
-        "anchor_item_id", "teleport_subject",
         # Tracker: while carried, the carrier sees the target's location in the prompt.
         "tracks_character",
-    }
+    } | spell_only
 
     def _apply_updates(item: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in updates.items():
@@ -554,6 +559,12 @@ def update_item(item_id: str,
             }
         else:
             item.pop("outfit_piece", None)
+        # Same guard as outfit_piece: an edit (or the create route's
+        # extras pass-through) must not smuggle spell fields onto a
+        # non-spell item.
+        if item.get("category") != "spell":
+            for key in spell_only:
+                item.pop(key, None)
         return item
 
     # Shared-Items: in shared/items/items.json schreiben
