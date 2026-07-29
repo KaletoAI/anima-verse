@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 from app.models.character import (
-    get_character_appearance,
     get_character_config,
     get_effective_activity,
     get_character_current_feeling,
@@ -32,7 +31,6 @@ from app.models.character import (
     get_character_profile_image,
     list_available_characters)
 from app.core.outfit_renderer import render_outfit
-from app.models.character_template import resolve_profile_tokens, get_template
 from app.models.account import (
     get_active_character,
     get_user_appearance,
@@ -217,6 +215,70 @@ _PERSON_KEYWORDS = (
     "woman", "man", "girl", "boy", "person", "people", "frau", "mann",
     "mädchen", "junge", "portrait", "face", "gesicht", "selfie",
     "intern", "she ", "he ", "her ", "his ")
+
+
+# ---------------------------------------------------------------------------
+# Person description — the ONE composition
+# ---------------------------------------------------------------------------
+
+def person_description(name: str, *,
+                       include_outfit: bool = False,
+                       apply_state_modifiers: bool = True) -> str:
+    """THE text description of a person for image prompts.
+
+    Every path that describes a person — PromptBuilder (chat images,
+    expression variants, outfit images), the scene render / scene photo
+    (``include_outfit=True``) and every prompt PREVIEW — goes through this
+    one function, so a preview always shows what the render would send.
+
+    Layers: appearance (profile tokens resolved, whitespace collapsed)
+    → body-slot suffix (species packages; exposed fragments only while
+    uncovered) → optionally the worn-outfit line → triggered
+    image_modifier directives over the composed text (with the outfit
+    included, a replacement may rewrite outfit text too — scene-render
+    semantics)."""
+    from app.models.character import get_character_appearance, get_character_profile
+    from app.models.character_template import get_template, resolve_profile_tokens
+    appearance = get_character_appearance(name) or ""
+    if appearance and "{" in appearance:
+        try:
+            profile = get_character_profile(name)
+            tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
+            appearance = resolve_profile_tokens(
+                appearance, profile, template=tmpl, target_key="character_appearance"
+            )
+        except Exception:
+            pass
+    appearance = " ".join(appearance.split())
+    # Body slots (species packages, plan-body-slots.md): always/covered
+    # fragments extend the general person description, exposed fragments
+    # render only while uncovered. Also sent with reference images (F3).
+    # Empty without species packages — safe no-op.
+    try:
+        from app.core.body_slots import appearance_suffix
+        suffix = appearance_suffix(name)
+    except Exception:
+        suffix = ""
+    if suffix:
+        appearance = f"{appearance}, {suffix}" if appearance else suffix
+    if include_outfit:
+        try:
+            from app.core.outfit_renderer import render_outfit
+            # render_outfit 'full' already carries its own 'wearing:' prefix
+            outfit = (render_outfit(character_name=name).get("full", "") or "").strip()
+        except Exception:
+            outfit = ""
+        if outfit:
+            appearance = f"{appearance}, {outfit}" if appearance else outfit
+    # Triggered states rewrite/extend the description afterwards
+    # (image_modifier replacements + additive fragments).
+    if apply_state_modifiers:
+        try:
+            from app.core.prompt_filters import apply_image_modifiers
+            appearance = apply_image_modifiers(name, appearance)
+        except Exception:
+            pass
+    return appearance or ""
 
 
 # ---------------------------------------------------------------------------
@@ -408,34 +470,10 @@ class PromptBuilder:
         return persons
 
     def _resolve_character_appearance(self, name: str) -> str:
-        """Resolves the appearance text with template token replacement."""
-        appearance = get_character_appearance(name)
-        if appearance and "{" in appearance:
-            profile = get_character_profile(name)
-            tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-            appearance = resolve_profile_tokens(
-                appearance, profile, template=tmpl, target_key="character_appearance"
-            )
-        # Body slots (species packages, plan-body-slots.md): always/covered
-        # fragments extend the general person description, exposed fragments
-        # render only while uncovered. Also sent with reference images (F3).
-        # Empty without species packages — safe no-op.
-        try:
-            from app.core.body_slots import appearance_suffix
-            suffix = appearance_suffix(name)
-        except Exception:
-            suffix = ""
-        if suffix:
-            appearance = f"{appearance}, {suffix}" if appearance else suffix
-        # Triggered states rewrite/extend the description afterwards
-        # (image_modifier replacements + additive fragments).
-        if self.apply_state_modifiers:
-            try:
-                from app.core.prompt_filters import apply_image_modifiers
-                appearance = apply_image_modifiers(name, appearance)
-            except Exception:
-                pass
-        return appearance or ""
+        """Resolves the appearance text — delegates to the shared
+        person_description so previews and renders cannot drift."""
+        return person_description(
+            name, apply_state_modifiers=self.apply_state_modifiers)
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:
         """Setzt actor_label auf den echten Character-Namen."""

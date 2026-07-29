@@ -331,40 +331,16 @@ def _pose_hint(name: str, skip_activity: bool = False) -> str:
 
 def _appearance_text(name: str) -> str:
     """Compact appearance description for persons WITHOUT a reference slot:
-    identity travels as text instead of an image. Includes the body-slot
-    suffix (post-migration the attributes live in slots, not in the text)
-    and the worn outfit — without it the model dresses text persons
-    arbitrarily."""
-    parts = []
+    identity travels as text instead of an image. Delegates to the ONE
+    shared composition (prompt_builder.person_description) — outfit
+    included, since without it the model dresses text persons arbitrarily.
+    Only the scene-specific length cap lives here."""
     try:
-        from app.models.character import get_character_appearance
-        desc = (get_character_appearance(name) or "").strip()
-        if desc:
-            parts.append(" ".join(desc.split()))
+        from app.core.prompt_builder import person_description
+        return person_description(name, include_outfit=True)[:420]
     except Exception as e:
-        logger.debug("scene: appearance lookup failed for %s: %s", name, e)
-    try:
-        from app.core.body_slots import appearance_suffix
-        sfx = appearance_suffix(name)
-        if sfx:
-            parts.append(sfx)
-    except Exception:
-        pass
-    try:
-        from app.core.outfit_renderer import render_outfit
-        # render_outfit 'full' already carries its own 'wearing:' prefix
-        outfit = (render_outfit(character_name=name).get("full", "") or "").strip()
-        if outfit:
-            parts.append(outfit)
-    except Exception as e:
-        logger.debug("scene: outfit lookup failed for %s: %s", name, e)
-    text = ", ".join(parts)
-    try:
-        from app.core.prompt_filters import apply_image_modifiers
-        text = apply_image_modifiers(name, text)
-    except Exception:
-        pass
-    return text[:420]
+        logger.debug("scene: person description failed for %s: %s", name, e)
+        return ""
 
 
 def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
