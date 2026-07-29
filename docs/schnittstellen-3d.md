@@ -465,6 +465,15 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   Routine (`surfaceMaterial` in `@anima/scene-render`); die Himmelsfarbe
   reicht der Client aus seiner Tageszeit durch, die Vorschau einen festen
   Tagwert. Die Textur der Art bleibt die Basisfarbe.
+- **Eine Zusammenstellung übernimmt das Material ihrer `toward`-Art**
+  (2026-07-29) und wendet es NUR auf deren Zonen an. Eine Küste ist eine
+  Platte mit einer gebackenen Textur; ohne Maske kräuselte der Sandstreifen
+  mit. Der Client backt die Maske in derselben Zonen-Schleife wie die
+  Textur — gleiche Kante, gleiche Ausfransung — und der Shader multipliziert
+  Kräuselung, Rauheit und Fresnel damit. Gelesen wird sie über die
+  KACHEL-UV, während die Wellen aus der WELTLAGE rechnen: die Maske gehört
+  zur Kachel, die Wellen laufen über Kachelgrenzen. Trägt die
+  `toward`-Art keine Klasse, entsteht keine Maske und nichts ändert sich.
 - Das Blend-BAKING (Canvas-Komposition, Noise) bleibt bewusst
   Client-Sache — rein visuell, kein Geometrie-Vertrag.
 

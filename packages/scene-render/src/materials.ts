@@ -36,6 +36,12 @@ export interface SurfaceMaterialOptions {
   /** Deklaration der Art; fehlt = matt, also genau wie bisher. */
   material?: SurfaceMaterialSpec | null
   map?: Texture | null
+  /** Maske für ZUSAMMENGESETZTE Flächen (Küste): rot = 1, wo die Klasse gilt,
+   *  0 sonst. Eine Zusammenstellung ist EINE Platte mit EINER Textur — ohne
+   *  Maske kräuselte der Sandstreifen einer Küste mit. Fehlt sie, gilt die
+   *  Klasse überall. Gelesen über die KACHEL-UV, nicht über die Weltlage: die
+   *  Maske gehört zur Kachel, die Wellen laufen über Kachelgrenzen hinweg. */
+  mask?: Texture | null
   /** Fallback-Farbe ohne Textur (Payload-Style): Zahl 0xrrggbb, '#rrggbb'
    *  oder eine fertige THREE.Color — die Aufrufer haben alle drei. */
   color?: number | string | { r: number; g: number; b: number }
@@ -72,6 +78,20 @@ export function setSurfaceSky(hex: number): void {
 // Prozedural, nahtlos, deterministisch: Summe von Sinus-Lagen mit GANZZAHLIGEN
 // Frequenzen kachelt garantiert. Kein Asset, kein Download.
 let waveNormal: Texture | null = null
+/** 1×1 weiß: ohne Maske gilt die Klasse überall. Eine Ersatztextur statt eines
+ *  zweiten Shader-Zweigs — so bleibt es EIN Programm für alle Wasserflächen. */
+let fullMask: Texture | null = null
+
+function makeFullMask(T: THREE): Texture {
+  const c = document.createElement('canvas')
+  c.width = c.height = 1
+  const cx = c.getContext('2d')!
+  cx.fillStyle = '#fff'
+  cx.fillRect(0, 0, 1, 1)
+  const tex = new T.CanvasTexture(c)
+  tex.needsUpdate = true
+  return tex
+}
 
 function makeWaveNormal(T: THREE): Texture {
   const N = 256
@@ -130,6 +150,7 @@ const ANCHOR_VERT = '#include <begin_vertex>'
 const ANCHOR_NORMAL =
   'vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;'
 const ANCHOR_MAP = '#include <map_fragment>'
+const ANCHOR_ROUGH = '#include <roughnessmap_fragment>'
 const ANCHOR_OUT = '#include <opaque_fragment>'
 
 let warned = false
@@ -153,12 +174,14 @@ function hex3(hex?: string): { r: number; g: number; b: number } {
   return { r: ((v >> 16) & 255) / 255, g: ((v >> 8) & 255) / 255, b: (v & 255) / 255 }
 }
 
-function applyWaterShader(mat: any, spec: SurfaceMaterialSpec): void {
+function applyWaterShader(mat: any, spec: SurfaceMaterialSpec,
+                          mask: Texture): void {
   const uWave = { value: Math.max(spec.wave_m ?? 1.6, 0.05) }
   const uSpeed = { value: spec.speed ?? 0.05 }
   const uSkyMix = { value: spec.sky_mix ?? 0.55 }
   const uTint = { value: hex3(spec.tint) }
   const uMapStrength = { value: spec.map_strength ?? 0.75 }
+  const uMask = { value: mask }
 
   mat.onBeforeCompile = (shader: any) => {
     shader.uniforms.uTime = uTime
@@ -168,43 +191,61 @@ function applyWaterShader(mat: any, spec: SurfaceMaterialSpec): void {
     shader.uniforms.uSkyMix = uSkyMix
     shader.uniforms.uTint = uTint
     shader.uniforms.uMapStrength = uMapStrength
+    shader.uniforms.uMask = uMask
 
-    // Weltposition als eigenes Varying: die Kräuselung rechnet aus der WELT,
-    // nicht aus den Platten-UVs — sonst hätten zwei benachbarte Wasserkacheln
-    // eine sichtbare Naht im Wellenmuster.
+    // Zwei eigene Varyings, weil sie zwei verschiedene Dinge sind:
+    // vWaterWorld ist die WELTLAGE (die Kräuselung läuft über Kachelgrenzen
+    // hinweg, aus Platten-UVs gäbe es eine sichtbare Naht), vWaterUv die
+    // KACHEL-UV (die Maske gehört zu dieser einen Kachel).
     if (shader.vertexShader.includes(ANCHOR_VERT)) {
-      shader.vertexShader = 'varying vec2 vWaterWorld;\n' + shader.vertexShader
-        .replace(ANCHOR_VERT,
-          `${ANCHOR_VERT}\n  vWaterWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;`)
+      shader.vertexShader = 'varying vec2 vWaterWorld;\nvarying vec2 vWaterUv;\n'
+        + shader.vertexShader.replace(ANCHOR_VERT,
+          `${ANCHOR_VERT}\n  vWaterWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;`
+          + '\n  vWaterUv = uv;')
     } else {
       warnOnce(ANCHOR_VERT)
       return
     }
 
-    shader.fragmentShader = 'varying vec2 vWaterWorld;\n'
+    shader.fragmentShader = 'varying vec2 vWaterWorld;\nvarying vec2 vWaterUv;\n'
       + 'uniform float uTime;\nuniform vec3 uSky;\nuniform float uWaveM;\n'
       + 'uniform float uSpeed;\nuniform float uSkyMix;\nuniform vec3 uTint;\n'
-      + 'uniform float uMapStrength;\n'
+      + 'uniform float uMapStrength;\nuniform sampler2D uMask;\n'
       + shader.fragmentShader
 
-    // 1) Zwei gegenläufig scrollende Lagen derselben Normalmap.
+    // 1) Zwei gegenläufig scrollende Lagen derselben Normalmap — auf den
+    //    Wasseranteil begrenzt, sonst kräuselt der Sand einer Küste mit.
     if (shader.fragmentShader.includes(ANCHOR_NORMAL)) {
       shader.fragmentShader = shader.fragmentShader.replace(ANCHOR_NORMAL, `
+    float wMask = texture2D( uMask, vWaterUv ).r;
     vec2 wUvA = vWaterWorld / uWaveM + vec2( uTime * uSpeed, uTime * uSpeed * 0.6 );
     vec2 wUvB = vWaterWorld / ( uWaveM * 0.63 ) - vec2( uTime * uSpeed * 0.8, uTime * uSpeed * 1.3 );
     vec3 mapN = normalize( ( texture2D( normalMap, wUvA ).xyz * 2.0 - 1.0 )
-                         + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 ) );`)
+                         + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 ) );
+    mapN = mix( vec3( 0.0, 0.0, 1.0 ), mapN, wMask );`)
     } else {
       warnOnce(ANCHOR_NORMAL)
     }
 
     // 2) Textur gegen den Grundton mischen — eine generierte Wassertextur mit
     //    eingebackenen Glanzlichtern soll nicht mit dem Shader konkurrieren.
+    //    Außerhalb der Maske bleibt die Textur unangetastet.
     if (shader.fragmentShader.includes(ANCHOR_MAP)) {
       shader.fragmentShader = shader.fragmentShader.replace(ANCHOR_MAP,
-        `${ANCHOR_MAP}\n  diffuseColor.rgb = mix( uTint, diffuseColor.rgb, uMapStrength );`)
+        `${ANCHOR_MAP}\n  diffuseColor.rgb = mix( uTint, diffuseColor.rgb,`
+        + ' mix( 1.0, uMapStrength, texture2D( uMask, vWaterUv ).r ) );')
     } else {
       warnOnce(ANCHOR_MAP)
+    }
+
+    // 2b) Rauheit nur im Wasseranteil absenken — sonst glänzt der Sandstreifen
+    //     wie nasses Glas.
+    if (shader.fragmentShader.includes(ANCHOR_ROUGH)) {
+      shader.fragmentShader = shader.fragmentShader.replace(ANCHOR_ROUGH,
+        `${ANCHOR_ROUGH}\n  roughnessFactor = mix( 0.85, roughnessFactor,`
+        + ' texture2D( uMask, vWaterUv ).r );')
+    } else {
+      warnOnce(ANCHOR_ROUGH)
     }
 
     // 3) Fresnel Richtung Himmelsfarbe. NUR die Farbe — Alpha bleibt der
@@ -213,7 +254,9 @@ function applyWaterShader(mat: any, spec: SurfaceMaterialSpec): void {
       shader.fragmentShader = shader.fragmentShader.replace(ANCHOR_OUT, `
   {
     float wFres = pow( 1.0 - saturate( dot( normalize( vViewPosition ), normal ) ), 3.0 );
-    outgoingLight = mix( outgoingLight, uSky, clamp( wFres * uSkyMix, 0.0, 1.0 ) );
+    outgoingLight = mix( outgoingLight, uSky,
+                         clamp( wFres * uSkyMix, 0.0, 1.0 )
+                         * texture2D( uMask, vWaterUv ).r );
   }
   ${ANCHOR_OUT}`)
     } else {
@@ -247,13 +290,17 @@ export function surfaceMaterial(T: THREE, opts: SurfaceMaterialOptions): Materia
     if (!waveNormal) waveNormal = makeWaveNormal(T)
     mat.normalMap = waveNormal as Texture
     mat.normalScale = new T.Vector2(1, 1)
-    applyWaterShader(mat, spec as SurfaceMaterialSpec)
+    if (!fullMask) fullMask = makeFullMask(T)
+    applyWaterShader(mat, spec as SurfaceMaterialSpec,
+                     (opts.mask || fullMask) as Texture)
   }
   return mat
 }
 
-/** Die geteilte Wellen-Normalmap freigeben (App-Teardown). */
+/** Die geteilten Hilfstexturen freigeben (App-Teardown). */
 export function disposeSurfaceMaterials(): void {
   waveNormal?.dispose()
   waveNormal = null
+  fullMask?.dispose()
+  fullMask = null
 }

@@ -337,7 +337,7 @@ function makeNoise(seed: string): (x: number, y: number) => number {
  *  toward-Nachbarn, Zonengrenzen mit Rauschen, Texturen im Welt-Maßstab. */
 async function bakeBlendTexture(
   loc: WorldLocation, blend: SurfaceBlend, fallbackFor: (kind: string) => THREE.Texture
-): Promise<THREE.CanvasTexture | null> {
+): Promise<{ tex: THREE.CanvasTexture; mask: THREE.CanvasTexture | null } | null> {
   const gx = loc.grid_x!, gy = loc.grid_y!;
   // Richtungen der toward-Nachbarn (4er-Nachbarschaft; +y = Süden)
   const dirs: [number, number][] = [];
@@ -357,6 +357,21 @@ async function bakeBlendTexture(
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = N;
   const ctx = canvas.getContext('2d')!;
+  // Zweites Canvas: WO die Materialklasse der Zusammenstellung gilt. Eine
+  // Küste ist eine Platte mit einer Textur — ohne diese Maske kräuselte der
+  // Sandstreifen mit. Die Klasse ist die der `toward`-Art (hier das Wasser,
+  // auf das die Küste zuläuft); maskiert wird auf die Zonen, die dieselbe Art
+  // tragen. Kein neues Feld: `toward` benennt sie bereits.
+  const classKind = blend.toward;
+  let mcanvas: HTMLCanvasElement | null = null;
+  let mctx: CanvasRenderingContext2D | null = null;
+  if (surfaceMaterialSpec(classKind)) {
+    mcanvas = document.createElement('canvas');
+    mcanvas.width = mcanvas.height = N;
+    mctx = mcanvas.getContext('2d')!;
+    mctx.fillStyle = '#000';
+    mctx.fillRect(0, 0, N, N);
+  }
   const noise = makeNoise(loc.id);
   const amp = blend.noise ?? 0.06;
 
@@ -379,8 +394,9 @@ async function bakeBlendTexture(
   const cell = 4;                                   // Masken-Auflösung (64x64 Blöcke)
   for (let zi = 0; zi < zones.length; zi++) {
     const prev = zi === 0 ? -1 : zones[zi - 1].until;
-    ctx.save();
-    ctx.beginPath();
+    // Die Blöcke dieser Zone EINMAL sammeln — Textur und Maske teilen sie
+    // sich, damit die Kante beider Bilder Pixel für Pixel dieselbe ist.
+    const rects: [number, number][] = [];
     for (let by = 0; by < N; by += cell) {
       for (let bx = 0; bx < N; bx += cell) {
         const ux = (bx + cell / 2) / N, uy = (by + cell / 2) / N;
@@ -390,18 +406,31 @@ async function bakeBlendTexture(
           ramp = Math.max(ramp, r);
         }
         const d = 1 - ramp + (noise(ux, uy) - 0.5) * 2 * amp;   // Abstand zur Wasserkante
-        if (d > prev && d <= zones[zi].until) ctx.rect(bx, by, cell, cell);
+        if (d > prev && d <= zones[zi].until) rects.push([bx, by]);
       }
     }
+    ctx.save();
+    ctx.beginPath();
+    for (const [bx, by] of rects) ctx.rect(bx, by, cell, cell);
     ctx.clip();
     ctx.fillStyle = patterns[zi];
     ctx.fillRect(0, 0, N, N);
     ctx.restore();
+    if (mctx && zones[zi].kind === classKind) {
+      mctx.fillStyle = '#fff';
+      for (const [bx, by] of rects) mctx.fillRect(bx, by, cell, cell);
+    }
   }
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+  let mask: THREE.CanvasTexture | null = null;
+  if (mcanvas) {
+    mask = new THREE.CanvasTexture(mcanvas);
+    // KEIN sRGB: die Maske ist ein Faktor, kein Bild.
+    mask.needsUpdate = true;
+  }
+  return { tex, mask };
 }
 
 function std(opts: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
@@ -618,12 +647,19 @@ export function buildTile(loc: WorldLocation): Tile {
     const plate = groundPlate(loc, surfaceTexture(kind, fallbackFor(style)),
                               surfaceMaterialSpec(kind));
     if (entry?.blend) {
-      void bakeBlendTexture(loc, entry.blend, (k) => fallbackFor(k)).then((tex) => {
-        if (tex) {
-          const m = plate.material as THREE.MeshStandardMaterial;
-          m.map = tex;
-          m.needsUpdate = true;
-        }
+      const toward = entry.blend.toward;
+      void bakeBlendTexture(loc, entry.blend, (k) => fallbackFor(k)).then((baked) => {
+        if (!baked) return;
+        // Das ganze MATERIAL wird getauscht, nicht nur die Textur: eine
+        // Zusammenstellung übernimmt die Klasse ihrer `toward`-Art, und die
+        // mitgebackene Maske sagt, wo sie gilt. Vorher blieb die Kachel matt
+        // und die Küste zeigte gemaltes Wasser ohne eine Spur Bewegung.
+        const old = plate.material as THREE.Material;
+        plate.material = surfaceMaterial(THREE, {
+          material: surfaceMaterialSpec(toward),
+          map: baked.tex, mask: baked.mask, transparent: true,
+        }) as THREE.MeshStandardMaterial;
+        old.dispose();
       });
     }
     return plate;
