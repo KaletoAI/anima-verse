@@ -26,6 +26,9 @@ import type { SurfaceMaterialSpec } from './surfaceTypes'
 /** How many texture tiles the patch shows per edge. */
 const TILES = 3
 const FIGURE_M = 1.7
+/** Tall enough that the nine tiles are worth looking at — a strip shows the
+ *  joins but not the material. */
+const PREVIEW_H = 460
 
 export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
   material: SurfaceMaterialSpec | null | undefined
@@ -62,7 +65,7 @@ export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
       if (disposed) return
 
       const w = mount.clientWidth || 320
-      const h = 190
+      const h = PREVIEW_H
       const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
       renderer.setSize(w, h)
@@ -176,7 +179,7 @@ export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
   return (
     <div>
       <div ref={mountRef} style={{
-        width: '100%', height: 230, borderRadius: 6,
+        width: '100%', height: PREVIEW_H, borderRadius: 6,
         overflow: 'hidden', background: '#0d1117',
       }} />
       <div className="ga-field-hint">

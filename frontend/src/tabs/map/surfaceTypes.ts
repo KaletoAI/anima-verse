@@ -42,7 +42,7 @@ export interface TexGroup {
  *  default: it is optional there, so the UI supplies a sensible one per class
  *  when you switch. */
 export const CLASS_DEFAULTS: Record<string, Record<string, number | string>> = {
-  water: { tint: '#3f7fb8', map_strength: 0.75, wave_m: 1.6, speed: 0.05,
+  water: { tint: '#3f7fb8', map_strength: 0.75, wave_m: 1.6, speed: 0.25,
            sky_mix: 0.55, roughness: 0.08 },
   ice: { tint: '#cfe6f2', map_strength: 0.6, wave_m: 4, speed: 0,
          sky_mix: 0.7, roughness: 0.05 },

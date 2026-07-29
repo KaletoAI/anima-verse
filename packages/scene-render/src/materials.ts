@@ -225,8 +225,15 @@ function applyWaterShader(mat: any, spec: SurfaceMaterialSpec,
     if (shader.fragmentShader.includes(ANCHOR_NORMAL)) {
       shader.fragmentShader = shader.fragmentShader.replace(ANCHOR_NORMAL, `
     float wMask = texture2D( uMask, vWaterUv ).r;
-    vec2 wUvA = vWaterWorld / uWaveM + vec2( uTime * uSpeed, uTime * uSpeed * 0.6 );
-    vec2 wUvB = vWaterWorld / ( uWaveM * 0.63 ) - vec2( uTime * uSpeed * 0.8, uTime * uSpeed * 1.3 );
+    // Der Versatz wird durch die Wellenlänge der JEWEILIGEN Lage geteilt —
+    // dadurch ist uSpeed echte METER PRO SEKUNDE, und beide Lagen driften
+    // gleich schnell, obwohl ihre Wellenlängen verschieden sind. Ohne die
+    // Division war uSpeed "Wellenlängen pro Sekunde": 0,05 hieß ein Wellenberg
+    // alle 20 Sekunden, auf der Karte 1,7 cm/s — vorhanden, aber unsichtbar.
+    float wDriftA = uTime * uSpeed / uWaveM;
+    float wDriftB = uTime * uSpeed / ( uWaveM * 0.63 );
+    vec2 wUvA = vWaterWorld / uWaveM + vec2( wDriftA, wDriftA * 0.6 );
+    vec2 wUvB = vWaterWorld / ( uWaveM * 0.63 ) - vec2( wDriftB * 0.8, wDriftB * 1.3 );
     vec3 mapN = normalize( ( texture2D( normalMap, wUvA ).xyz * 2.0 - 1.0 )
                          + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 ) );
     mapN = mix( vec3( 0.0, 0.0, 1.0 ), mapN, wMask );`)

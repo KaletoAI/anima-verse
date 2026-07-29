@@ -558,7 +558,7 @@ SURFACE_CLASSES = ("matte", "water", "ice", "gloss", "glow")
 _MATERIAL_RANGES: Dict[str, Any] = {
     "map_strength": (0.0, 1.0, 0.75),
     "wave_m": (0.2, 20.0, 1.6),
-    "speed": (0.0, 2.0, 0.05),
+    "speed": (0.0, 2.0, 0.25),
     "sky_mix": (0.0, 1.0, 0.55),
     "roughness": (0.0, 1.0, 0.08),
     "metalness": (0.0, 1.0, 0.05),
