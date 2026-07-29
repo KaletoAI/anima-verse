@@ -210,7 +210,14 @@ async function startApp(username: string) {
     l.map3d, l.entry_room, l.terrain || '',
     (l.rooms ?? []).map((r) => [r.id, r.name, r.layout]),
   ]);
-  const locSig = new Map(placeable.map((l) => [l.id, sigOf(l)]));
+  // Signaturen aus DERSELBEN Quelle wie der Poll (/world/locations): die
+  // Worldmap reichert map3d um abgeleitete floors an — mit der gemergten
+  // Boot-Variante als Startwert wich die Signatur beim ersten Poll ab und
+  // jede Kachel mit Raum-Layouts wurde einmal grundlos neu gebaut.
+  const locSig = new Map(placeable.map((l) => {
+    const detail = detailById.get(l.id) ?? detailById.get(l.template_location_id || '');
+    return [l.id, sigOf(detail ?? l)];
+  }));
   function rebuildTile(old: Tile, loc: WorldLocation) {
     engine.scene.remove(old.group);
     old.group.traverse((o) => {   // CSS2D-Label-Elemente aufräumen
@@ -250,10 +257,15 @@ async function startApp(username: string) {
         if (locSig.get(id) === sig) continue;
         locSig.set(id, sig);
         if ((detail.terrain || '') !== (tile.loc.terrain || '')) terrainChanged = true;
+        // map3d aus dem Detail, aber ohne die abgeleiteten floors zu
+        // verlieren: die trägt nur die Worldmap-Variante (Kachel vom Boot) —
+        // sonst schrumpfte die prozedurale Hülle beim ersten echten Rebuild.
+        const m3 = detail.map3d ?? tile.loc.map3d;
+        const floors = detail.map3d?.floors ?? tile.loc.map3d?.floors;
         dirty.push([tile, {
           ...tile.loc,
           rooms: detail.rooms ?? [],
-          map3d: detail.map3d ?? tile.loc.map3d,
+          map3d: m3 && floors !== undefined ? { ...m3, floors } : m3,
           entry_room: detail.entry_room ?? tile.loc.entry_room,
           terrain: detail.terrain ?? tile.loc.terrain,
         }]);
