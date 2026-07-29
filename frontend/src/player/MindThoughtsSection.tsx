@@ -12,7 +12,8 @@
  * room NAMES and the characters present at turn time (user feedback
  * 2026-07-29: ids and missing presence made the entries unreadable).
  */
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
+import type React from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 
@@ -26,9 +27,26 @@ export interface ThoughtEntry {
 
 const PAGE = 50
 
-function fmtTs(ts: string): string {
+// Same time vocabulary as the Timeline next door (MindPanel) — local copies,
+// because importing from MindPanel would close an import cycle.
+function clockOf(ts: string): string {
   const d = new Date(ts)
-  return Number.isNaN(d.getTime()) ? ts : d.toLocaleString()
+  return Number.isNaN(d.getTime()) ? ts : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+function dayOf(ts: string): string {
+  const d = new Date(ts)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString([], { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' })
+}
+const sepStyle: React.CSSProperties = {
+  margin: '6px 0 2px', fontSize: '0.74em', opacity: 0.55, letterSpacing: 0.4,
+  borderBottom: '1px solid rgba(255,255,255,0.12)', paddingBottom: 2,
+}
+
+/** Splits the `[trigger: …]` prefix the journal writes for prompted turns. */
+function splitTrigger(content: string): { trigger: string; text: string } {
+  const m = /^\[trigger:\s*([^\]]*)\]\s*\n?/.exec(content || '')
+  return m ? { trigger: m[1].trim(), text: content.slice(m[0].length) }
+    : { trigger: '', text: content || '' }
 }
 
 export function MindThoughtsSection({ character }: { character: string }) {
@@ -75,23 +93,50 @@ export function MindThoughtsSection({ character }: { character: string }) {
         <div className="ga-placeholder">{t('No thoughts recorded yet.')}</div>
       ) : null}
 
-      <div className="ga-thought-list">
-        {entries.map((e, i) => (
-          <div key={`${e.ts}-${i}`} className="ga-thought-entry">
-            <div className="ga-thought-meta">
-              <span>{fmtTs(e.ts)}</span>
-              {e.location_name ? (
-                <span>· {e.location_name}{e.room_name ? ` (${e.room_name})` : ''}</span>
-              ) : null}
-              {e.present?.length ? (
-                <span title={t('Characters present at the time of the thought')}>
-                  · {t('with')} {e.present.join(', ')}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {entries.map((e, i) => {
+          const day = dayOf(e.ts)
+          const prevDay = i > 0 ? dayOf(entries[i - 1].ts) : ''
+          const { trigger, text } = splitTrigger(e.content)
+          return (
+            <Fragment key={`${e.ts}-${i}`}>
+              {day && day !== prevDay ? <div style={sepStyle}>{day}</div> : null}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={{ flex: '0 0 38px', opacity: 0.5, fontSize: '0.74em',
+                               fontVariantNumeric: 'tabular-nums', paddingTop: 7 }}>
+                  {clockOf(e.ts)}
                 </span>
-              ) : null}
-            </div>
-            <div className="ga-thought-text">{e.content}</div>
-          </div>
-        ))}
+                <div style={{ flex: 1, minWidth: 0, padding: '6px 10px', borderRadius: 8,
+                              background: 'rgba(255,255,255,0.035)',
+                              borderLeft: '3px solid rgba(120,170,255,0.35)' }}>
+                  {(e.location_name || e.present?.length || trigger) ? (
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline',
+                                  fontSize: '0.78em', opacity: 0.65, marginBottom: 3 }}>
+                      {e.location_name ? (
+                        <span>📍 {e.location_name}{e.room_name ? ` · ${e.room_name}` : ''}</span>
+                      ) : null}
+                      {e.present?.length ? (
+                        <span title={t('Characters present at the time of the thought')}>
+                          👥 {e.present.join(', ')}
+                        </span>
+                      ) : null}
+                      {trigger ? (
+                        <span style={{ color: 'var(--warn, #d8b45a)', opacity: 0.9 }}
+                          title={t('This thought was prompted (manual trigger or loop hint).')}>
+                          ⚡ {trigger}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.45,
+                                fontStyle: 'italic', opacity: 0.92 }}>
+                    {text}
+                  </div>
+                </div>
+              </div>
+            </Fragment>
+          )
+        })}
       </div>
 
       {loading ? <div className="ga-loading">{t('Loading…')}</div> : null}

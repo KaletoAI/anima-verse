@@ -60,7 +60,11 @@ export function SurfaceKindDetail({
           </button>
         }
       />
-      <div className="ga-form">
+      {/* Two columns: the fields left, what they PRODUCE right. A texture is
+          judged by looking at it tiled, not by reading its numbers. */}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start',
+        flexWrap: 'wrap' }}>
+      <div className="ga-form" style={{ flex: '1 1 380px', minWidth: 0 }}>
         <div className="ga-form-section-label">{t('Properties')}</div>
         <div className="ga-form-row">
           <Field label={t('Name')}
@@ -125,12 +129,6 @@ export function SurfaceKindDetail({
           </select>
         </Field>
         {cls === 'water' ? (
-          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start',
-            flexWrap: 'wrap' }}>
-            {/* The dials on the left, what they DO on the right — `wave_m` is
-                a metre value and unusable without something to measure it
-                against (the 1.70 m figure on a stated 10 m patch). */}
-            <div style={{ flex: '1 1 260px', minWidth: 0 }}>
           <div className="ga-form-row" style={{ flexWrap: 'wrap' }}>
             <Field label={t('Tint')} compact
               hint={t('Base colour the texture is mixed against.')}>
@@ -162,13 +160,6 @@ export function SurfaceKindDetail({
                 />
               </Field>
             ))}
-          </div>
-            </div>
-            <SurfaceMaterialPreview
-              material={group.material}
-              textureUrl={active?.url}
-              sizeM={active?.size_m}
-            />
           </div>
         ) : null}
         {/* HOW it is made sits with WHAT it is — one entry, one place. */}
@@ -229,6 +220,21 @@ export function SurfaceKindDetail({
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Right column: 3 × 3 tiles of the ACTIVE version, with the material
+          the kind declares. One tile hides exactly what matters — a seam at
+          the join, a feature that turns into a grid. */}
+      <div style={{ flex: '1 1 300px', minWidth: 260, position: 'sticky',
+        top: 8 }}>
+        <div className="ga-form-section-label">{t('Preview')}</div>
+        <SurfaceMaterialPreview
+          key={`${group.kind}-${active?.filename || ''}`}
+          material={group.material}
+          textureUrl={active?.url}
+          sizeM={active?.size_m}
+        />
+      </div>
       </div>
     </>
   )

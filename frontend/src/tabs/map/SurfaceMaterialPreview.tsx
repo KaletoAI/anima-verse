@@ -1,17 +1,21 @@
 /**
- * SurfaceMaterialPreview — a 10 × 10 m patch of the surface, lit the way the
- * game lights it, with the 1.70 m figure standing on it.
+ * SurfaceMaterialPreview — 3 × 3 tiles of the surface, lit the way the game
+ * lights it, with the 1.70 m figure standing on it.
  *
- * It exists because of one dial: `wave_m` is a REAL METRE value, and by this
- * project's rule a metre dial without a reference size is not dialable —
- * nobody can picture "1.6 m between wave crests" in the abstract. Here the
- * ripples run past a person on a square whose edge is stated, so the number
- * means something. The other dials (sky share, roughness, tint) are judged
- * the same way: by looking, not by guessing.
+ * EVERY kind gets it, not just water. Nine tiles because that is what a
+ * tileable texture has to survive: a seam shows at the joins, a too-obvious
+ * feature shows as a grid, and neither is visible on a single tile — which is
+ * all the list thumbnail ever shows. The figure states the scale, so
+ * `size_m` becomes judgeable at the same time ("is that gravel or boulders?").
+ *
+ * For water it also carries the one dial that made this necessary: `wave_m`
+ * is a REAL METRE value, and by this project's rule a metre dial without a
+ * reference size is not dialable — nobody can picture "1.6 m between wave
+ * crests" in the abstract.
  *
  * The material comes from `surfaceMaterial` — the SAME routine the 3D client
  * and the floor-plan preview use. A preview that painted its own water would
- * be the third implementation of the thing this package exists to unify.
+ * be the third implementation of the thing that package exists to unify.
  *
  * three is loaded lazily: the Map tab does not otherwise carry it.
  */
@@ -19,9 +23,8 @@ import { useEffect, useRef } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { SurfaceMaterialSpec } from './surfaceTypes'
 
-/** Edge of the previewed patch in metres — stated in the caption, because a
- *  wavelength is only judgeable against a known distance. */
-const PATCH_M = 10
+/** How many texture tiles the patch shows per edge. */
+const TILES = 3
 const FIGURE_M = 1.7
 
 export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
@@ -37,6 +40,8 @@ export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
   // scene on every keystroke in a dial.
   const specRef = useRef(material)
   specRef.current = material
+  const sizeMRef = useRef(sizeM)
+  sizeMRef.current = sizeM
   const rebuildRef = useRef<(() => void) | null>(null)
 
   // Rebuild only the MATERIAL when a dial changes — cheap, and the ripples
@@ -81,12 +86,13 @@ export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
       scene.add(fill)
 
       // Low camera: water only shows its sky reflection at a grazing angle,
-      // so a top-down preview would hide the very thing being dialled.
-      const camera = new THREE.PerspectiveCamera(38, w / h, 0.1, 200)
-      camera.position.set(0, 2.4, 8.6)
-      camera.lookAt(0, 0.4, 0)
+      // so a top-down preview would hide the very thing being dialled. High
+      // enough to see all nine tiles at once — that is what the joins are for.
+      const camera = new THREE.PerspectiveCamera(38, w / h, 0.1, 500)
 
-      const geo = new THREE.PlaneGeometry(PATCH_M, PATCH_M)
+      // A UNIT plate, scaled per rebuild: the patch is TILES × size_m, and
+      // size_m is editable while this is on screen.
+      const geo = new THREE.PlaneGeometry(1, 1)
       geo.rotateX(-Math.PI / 2)
       const plate: import('three').Mesh<
         import('three').BufferGeometry, import('three').Material
@@ -95,7 +101,6 @@ export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
       disposers.push(() => geo.dispose())
 
       const fig = referenceFigure(THREE, FIGURE_M)
-      fig.position.set(-2.6, 0, 2.2)
       scene.add(fig)
       disposers.push(() => {
         fig.traverse((o) => {
@@ -108,6 +113,15 @@ export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
 
       let tex: import('three').Texture | null = null
       const rebuild = () => {
+        const tile = Math.max(sizeMRef.current || 3, 0.05)
+        const patch = TILES * tile
+        plate.scale.set(patch, 1, patch)
+        // The figure stands at the front-left corner, a step inside the patch.
+        fig.position.set(-patch * 0.34, 0, patch * 0.3)
+        // Frame the whole patch from a low angle; both grow with it.
+        camera.position.set(0, patch * 0.26, patch * 0.92)
+        camera.lookAt(0, FIGURE_M * 0.25, 0)
+        if (tex) tex.repeat.set(TILES, TILES)
         const old = plate.material
         plate.material = surfaceMaterial(THREE, {
           material: specRef.current, map: tex, color: 0x8fa0a8,
@@ -120,16 +134,15 @@ export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
         plate.material.dispose()
       })
 
-      // The texture tiles at its REAL size, exactly like in the game — a
-      // preview at some other tiling would misrepresent the wavelength.
+      // Exactly TILES × TILES repetitions — the joins are the point: a seam
+      // or a too-obvious feature shows there and nowhere else.
       if (textureUrl) {
         try {
           const loaded = await new THREE.TextureLoader().loadAsync(textureUrl)
           if (disposed) { loaded.dispose(); return }
           loaded.colorSpace = THREE.SRGBColorSpace
           loaded.wrapS = loaded.wrapT = THREE.RepeatWrapping
-          const tile = Math.max(sizeM || 3, 0.05)
-          loaded.repeat.set(PATCH_M / tile, PATCH_M / tile)
+          loaded.repeat.set(TILES, TILES)
           tex = loaded
           disposers.push(() => loaded.dispose())
         } catch { /* the tint alone is a fine preview */ }
@@ -159,15 +172,18 @@ export function SurfaceMaterialPreview({ material, textureUrl, sizeM }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const patchM = TILES * Math.max(sizeM || 3, 0.05)
   return (
     <div>
       <div ref={mountRef} style={{
-        width: '100%', maxWidth: 360, height: 190, borderRadius: 6,
+        width: '100%', height: 230, borderRadius: 6,
         overflow: 'hidden', background: '#0d1117',
       }} />
       <div className="ga-field-hint">
-        {t('{n} × {n} m of the surface, with the 1.70 m figure for scale.')
-          .replace(/\{n\}/g, String(PATCH_M))}
+        {t('{t} × {t} tiles = {m} × {m} m, with the 1.70 m figure for scale — '
+          + 'seams and repeating features show at the joins.')
+          .replace(/\{t\}/g, String(TILES))
+          .replace(/\{m\}/g, patchM.toFixed(patchM < 10 ? 1 : 0))}
       </div>
     </div>
   )
