@@ -3433,7 +3433,7 @@ def set_state_flag(character_name: str, flag: str, value) -> None:
     """Generic state-flag setter with change tracking.
 
     Values may be bool OR a short string (value-carrying flags, e.g.
-    ``body_reaction = "erected"`` set by a rule) — a falsy value ("",
+    ``body_reaction = "shivering"`` set by a rule) — a falsy value ("",
     False, None) clears the flag. Stamps ``state_flag_since[flag]`` on
     set and drops the stamp on clear — the flag-lifecycle executor
     (app/core/flag_lifecycle.py) uses the stamp for TTL decay. The

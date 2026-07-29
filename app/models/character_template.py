@@ -715,8 +715,9 @@ def migrate_stale_templates_once() -> None:
 
 def migrate_prune_stale_stats_once() -> None:
     """One-time, idempotent prune of stale status_effects: after a template
-    change (e.g. the lust stat becoming intimacy-package content) a
-    character may carry stat values its template no longer declares. Drops
+    change (e.g. a stat moving out of the core template into package
+    content) a character may carry stat values its template no longer
+    declares. Drops
     every status_effects key not declared by the character's template.
 
     Template-driven (no hardcoded stat names), world_kv-marked.

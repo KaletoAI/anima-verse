@@ -1985,8 +1985,8 @@ def _extract_context_from_last_chat(agent_name: str,
         stat_list = ""
         if not is_avatar:
             try:
-                # Single source for the value list (also used by the
-                # intimacy-end hook and the activity tick).
+                # Single source for the value list (also used by package
+                # end-of-activity hooks and the activity tick).
                 from app.core.stat_effects import build_stat_list
                 stats_enabled, stat_list = build_stat_list(target_name)
             except Exception as _se:

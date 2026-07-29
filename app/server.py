@@ -203,7 +203,7 @@ async def lifespan(app: FastAPI):
         logger.debug("stale-template migration failed: %s", _te)
 
     # Migration: drop stat values a character's template no longer declares
-    # (e.g. lust on an animal after lust became package content).
+    # (e.g. a package-declared stat on an animal template without it).
     try:
         from app.models.character_template import migrate_prune_stale_stats_once
         migrate_prune_stale_stats_once()

@@ -7,28 +7,28 @@ template fragments and state-flag lifecycle declarations (see
 
 Manifest format (package format v1):
 
-    name: intimacy
+    name: training
     version: "1.0.0"
     description: ...
     # Verbs — single form (skill_id/module at top level) or list form:
     skills:
-      - skill_id: start_intimate
+      - skill_id: start_training
         module: skill.py          # default skill.py
-        class: IntimateSkill      # default: first PluginSkill subclass
+        class: TrainingSkill      # default: first PluginSkill subclass
         params: {active: true}    # constructor kwargs (parameterized verbs)
         always_load: true         # load always, activate per character
         default_enabled: false    # enabled for newly created characters
     templates:
       llm: templates/llm          # added to the prompt-template search path
       character:                  # character-template fragments (merged)
-        - templates/character/lust.json
+        - templates/character/courage.json
     config_schema:                # admin settings subsections under "skills"
-      intimacy:
-        label: Intimacy
+      training:
+        label: Training
         fields: {...}
     state_flags:                  # lifecycle declarations (flag executor)
-      - flag: is_intimate
-        cleared_by: end_intimate
+      - flag: is_training
+        cleared_by: end_training
         prompt_when_set: "..."
         ttl_minutes: 120
         reset_on_location_change: true

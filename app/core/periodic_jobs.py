@@ -174,7 +174,7 @@ def _sub_force_rules():
                     # Flag-specific setters carry side effects (off-map etc.);
                     # every OTHER flag DECLARED by a skill package goes through
                     # the generic setter — values may be bool or string
-                    # (value-carrying flags like body_reaction="erected").
+                    # (value-carrying flags like body_reaction="shivering").
                     _setters = {"is_sleeping": set_is_sleeping,
                                 "is_wet": set_is_wet,
                                 "is_intimate": set_is_intimate,

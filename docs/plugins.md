@@ -60,16 +60,16 @@ app/plugins/                      # Paket-Infrastruktur
 ## plugin.yaml — Manifest-Referenz (Paketformat v1)
 
 ```yaml
-name: intimacy
+name: training
 version: "1.0.0"
 description: Kurzbeschreibung des Pakets
-capability_label: "Intimacy"    # EIN UI-Toggle für alle Verben des Pakets
+capability_label: "Training"    # EIN UI-Toggle für alle Verben des Pakets
 
 # Verben — Kurzform (skill_id/module top-level) oder Listenform:
 skills:
-  - skill_id: start_intimate
+  - skill_id: start_training
     module: skill.py            # Default: skill.py
-    class: IntimateSkill        # Default: erste PluginSkill-Subklasse im Modul
+    class: TrainingSkill        # Default: erste PluginSkill-Subklasse im Modul
     params: {active: true}      # Konstruktor-Kwargs (parametrisierte Verben)
     always_load: true           # immer laden, Aktivierung per Character
     default_enabled: false      # bei neuen Charakteren default-aktiv
@@ -77,18 +77,18 @@ skills:
 templates:
   llm: templates/llm            # wird in den Prompt-Template-Suchpfad aufgenommen
   character:                    # Character-Template-Fragmente (siehe unten)
-    - templates/character/lust.json
+    - templates/character/courage.json
 
 config_schema:                  # Admin-Settings-Subsections unter "Skills"
-  intimacy:
-    label: Intimacy
+  training:
+    label: Training
     fields:
       ttl_minutes: {type: int, label: "Auto-end after (min)", default: 120, min: 0}
 
 state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
-  - flag: is_intimate
-    cleared_by: end_intimate    # skill_id des lösenden Verbs (Auto-Clear ruft es auf)
-    prompt_when_set: "You are in an intimate moment — end it with {clear_tool} when it is over."
+  - flag: is_training
+    cleared_by: end_training    # skill_id des lösenden Verbs (Auto-Clear ruft es auf)
+    prompt_when_set: "You are in a training session — end it with {clear_tool} when it is over."
     ttl_minutes: 120            # 0 = kein Zeit-Zerfall
     reset_on_location_change: true
 ```
@@ -114,7 +114,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `templates.llm` | nein | Ordner relativ zum Paket; gleiche Struktur wie `shared/templates/llm/` |
 | `templates.character` | nein | Liste von Fragment-JSONs (siehe unten) |
 | `config_schema` | nein | Subsections für `/admin/settings → Skills` |
-| `state_flags` | nein | Flag-Deklarationen mit Lebenszyklus. Flags können WERTE tragen (`body_reaction: erected`, gesetzt per Rule-Action `set_flags`, leerer Wert löscht) und stehen als optionale `{platzhalter}` in Body-Slot-Prompts sowie als Rule-Condition (`body_reaction`, `lust>80 AND is_intimate`) zur Verfügung |
+| `state_flags` | nein | Flag-Deklarationen mit Lebenszyklus. Flags können WERTE tragen (`training_focus: sparring`, gesetzt per Rule-Action `set_flags`, leerer Wert löscht) und stehen als optionale `{platzhalter}` in Body-Slot-Prompts sowie als Rule-Condition (`training_focus`, `stamina>50 AND is_training`) zur Verfügung |
 | `requires` | nein | Paket-IDs, die vorhanden UND am Charakter aktiv sein müssen. Fehlt ein Paket im Dateisystem, bleibt dieses Paket komplett inert; ist es am Charakter inaktiv, lassen sich die Verben nicht aktivieren |
 | `conflicts` | nein | Paket-IDs: solange eines davon am Charakter aktiv ist, sind die Verben dieses Pakets nicht aktivierbar (wirkt in beide Richtungen) |
 | `being` | nein | Spezies-Nomen für die Szenen-Komposition (`person`/`animal`/…, Default `person`) — „Compose exactly one person and one animal…" statt Katzen als „people" zu zählen |

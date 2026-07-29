@@ -6,8 +6,8 @@ Shared evaluator with these producers:
 - activity tick (maybe_activity_tick): agent-loop evaluation of the RUNNING
   activity; the LLM returns PER-HOUR deltas, scaled to the elapsed time.
 - skill packages: verbs call evaluate_stat_effects directly for
-  "significant event" rounds with their OWN situation text (e.g. the
-  intimacy package's post-climax round) — the text is package policy, the
+  "significant event" rounds with their OWN situation text (e.g. a
+  package's end-of-activity round) — the text is package policy, the
   evaluation is this core mechanism.
 
 Stats stay fully template-driven (store=status_effects incl. per-value

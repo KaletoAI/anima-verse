@@ -343,8 +343,8 @@ def collect_image_modifiers(character_name: str,
 
     Each non-empty line is a directive:
         "A -> B" (or "A → B")  — replacement applied to the person
-                                  description ("exposed penis -> exposed
-                                  erected penis")
+                                  description ("neat hair -> messy
+                                  tousled hair")
         anything else           — additive fragment, appended
     Returns (replacements, additive).
     """

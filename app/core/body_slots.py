@@ -193,7 +193,7 @@ def prompt_fragments(character_name: str,
         exposed_always flag): then empty attributes simply vanish from the
         text ('exposed {size} breasts' -> 'exposed breasts'). Every OTHER
         {placeholder} resolves OPTIONALLY from the character's state flags:
-        value-carrying flags (body_reaction="erected") render their string,
+        value-carrying flags (body_reaction="shivering") render their string,
         unset/boolean flags render empty — whitespace artifacts squashed."""
         if not tpl:
             return ""

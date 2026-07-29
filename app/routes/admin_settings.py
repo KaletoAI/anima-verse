@@ -286,13 +286,31 @@ async def prompt_filters_data(user=Depends(require_admin)):
         entry["source"] = "world"
         out.append(_finish(entry))
 
+    # Stats and flags are NOT hardcoded — the stat keys come from the world's
+    # character templates, the flags from the plugin registry (same sources
+    # as the help panel's __STATS__/__FLAGS__ placeholders).
+    try:
+        from app.core.stat_hints import get_all_stat_keys
+        _keys = get_all_stat_keys()
+    except Exception:
+        _keys = []
+    _stats_line = (", ".join(f"{k}>N" for k in _keys[:6])
+                   if _keys else "stat>N (from the character template)")
+    try:
+        from app.plugins.registry import flag_specs
+        _flags = sorted({s.flag for s in flag_specs()} | {"is_sleeping"})
+    except Exception:
+        _flags = ["is_sleeping"]
+    _flags_line = ", ".join(_flags[:8])
+
     return {
         "filters": out,
         "block_keys": _prompt_filter_block_keys(),
         "condition_hint": (
             "Filter id ALWAYS triggers when present as a tag in the profile (apply_condition). "
             "condition:<this-id> is therefore redundant here. This expression triggers ADDITIONALLY:\n"
-            "Status: stamina>N, courage<N, stress>N, lust>N\n"
+            f"Status: {_stats_line}\n"
+            f"State flags: {_flags_line}\n"
             "Time: alone, night, day\n"
             "Presence: present:Name (same room as Name)\n"
             "Relationship: relationship:Name>N, romantic:Name>N (Name or 'any')\n"
