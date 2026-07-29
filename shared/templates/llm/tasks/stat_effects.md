@@ -17,7 +17,7 @@ The available values are:
 {% if per_hour %}
 This is an ONGOING activity. Return integer deltas PER HOUR of doing this activity. Judge intensity from the description: light activity around ±3..8 per hour, demanding physical activity around -10..-25 per hour on energy-like values, resting raises them. Let each value's own description above guide direction and size.
 {% else %}
-This is a SIGNIFICANT event / turning point. Large swings are allowed and often correct (up to about -90..+90) when a value's description implies it — e.g. an arousal-like value dropping sharply right after a climax, or an energy-like value collapsing at total exhaustion. Aspects that are only mildly touched still get small deltas.
+This is a SIGNIFICANT event / turning point. Large swings are allowed and often correct (up to about -90..+90) when a value's description implies it — e.g. an energy-like value collapsing at total exhaustion, or a value whose own description marks this kind of beat as its sharp turning point. Aspects that are only mildly touched still get small deltas.
 {% endif %}
 - Only include values that are meaningfully affected. Omit unaffected values (never return 0).
 - If nothing meaningfully changes, return {"stats": {}}.
