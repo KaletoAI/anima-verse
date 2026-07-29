@@ -82,9 +82,13 @@ type PhotoDlgInfo = { prompt: string; subjects: string[]; present: string[] }
 // Keyed by avatar: a full PlayerApp remount (avatar gate, page load) mounts the
 // panel with avatar '' first, which discards the cache — the draft did not
 // survive a PlayerApp remount before the cut either. Never persisted anywhere.
-// Async completions that may land after an unmount (send, upload, photo
-// prepare) additionally mutate `draft` directly — the render write-through
-// alone would drop updates of an already-unmounted instance.
+// Async flows and the cache: send() clears the LOCAL state before its request
+// — the event-handler render write-throughs the cleared values, so any later
+// mount starts empty (no cache mutation can achieve this: a mounted instance
+// rewrites the cache from its own state on every render). Upload/photo-prepare
+// completions write the cache directly, which covers exactly the window where
+// the panel is unmounted and not yet remounted; a cached in-flight upload is
+// dropped (and its blob URL revoked) when a new instance mounts.
 // CONSTRAINT: one mounted ScenePanel per document. A second instance would
 // cross-wire composers through this shared object (unlike the Lightbox, whose
 // singleton is deliberately global one-host state). If Task 5 ever mounts two,
@@ -122,9 +126,16 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   const [sending, setSending] = useState(false)
   // An `uploading: true` attach in the cache is dropped at mount: the upload's
   // completion callback belongs to the previous instance and can never resolve
-  // into this one — keeping it would leave the send button dead forever.
-  const [attach, setAttach] = useState<AttachInfo | null>(
-    draft.attach?.uploading ? null : draft.attach)
+  // into this one — keeping it would leave the send button dead forever. Its
+  // preview blob URL is revoked here (same as the × button does), otherwise
+  // every interrupted upload would leak one object URL.
+  const [attach, setAttach] = useState<AttachInfo | null>(() => {
+    if (draft.attach?.uploading) {
+      URL.revokeObjectURL(draft.attach.preview)
+      draft.attach = null
+    }
+    return draft.attach
+  })
   const [pickerOpen, setPickerOpen] = useState(draft.pickerOpen)
   const [giftOpen, setGiftOpen] = useState(draft.giftOpen)
   // Write-through on every render (same pattern as PlayerApp's state→ref sync):
@@ -149,12 +160,16 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     const hasImage = !!(attach && (attach.image_id || attach.image_url))
     if ((!text.trim() && !hasImage) || sending || attach?.uploading) return
     setSending(true)
-    // Clear the CACHE for the duration of the request: a grid remount landing
-    // mid-flight must not resurrect text/attachment that are already on their
-    // way to the server (duplicate send). The still-mounted composer keeps its
-    // own state; on failure the cache is restored in the catch below.
-    draft.text = ''
-    draft.attach = null
+    // Optimistically clear the LOCAL composer state before the request. The
+    // discrete event handler flushes a render of the still-mounted instance
+    // whose write-through puts the cleared values into the draft cache — so a
+    // grid remount at ANY later point mounts with an empty composer and the
+    // already-sent text/attachment cannot be resurrected (no duplicate send).
+    // A cache-only clear cannot give this guarantee: the mounted instance
+    // rewrites the cache from its own state on every render. The request
+    // below uses the closed-over values; a failure restores them.
+    setText('')
+    setAttach(null)
     try {
       const addr = volume === 'whisper' ? addressees.slice(0, 1) : addressees
       await apiPost('/play/say', {
@@ -162,18 +177,17 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         ...(attach?.image_id ? { image_id: attach.image_id } : {}),
         ...(attach?.image_url ? { image_url: attach.image_url } : {}),
       })
-      setText('')
-      setAttach(null)
-      // Clear the cache again at completion: it may have been re-written by a
-      // render of the still-mounted composer during the flight, and this
-      // completion may land after an unmount, where the setState calls above
-      // are dropped (see the draft-cache note).
-      draft.text = ''
-      draft.attach = null
       await refreshScene()
     } catch {
-      // Failed send keeps the draft (pre-cut behaviour): restore the cache
-      // cleared above. The api client handles the auth redirect.
+      // Failed send keeps the draft (pre-cut behaviour): restore the local
+      // state (still-mounted case) AND the cache (this instance may already
+      // be unmounted with no successor yet — without the direct mutation the
+      // next mount would lose the draft). Only the ordering "failure while a
+      // NEW instance is already mounted" still loses the draft: that
+      // instance's write-through overwrites the restore (parity table).
+      // The api client handles the auth redirect.
+      setText(text)
+      setAttach(attach)
       draft.text = text
       draft.attach = attach
     } finally {
@@ -197,7 +211,15 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
       if (d?.ok) {
         const dlg = { prompt: d.prompt || '', subjects: d.subjects || [], present: d.present || [] }
         setPhotoDlg(dlg)
-        draft.photoDlg = dlg  // completion may land after an unmount (see cache note)
+        // Direct cache write. It covers ONLY the ordering "completion lands
+        // while the panel is unmounted and no successor has mounted yet" —
+        // the dialog then opens on the next mount. If a new instance mounted
+        // during the prepare call, its write-through overwrites this value on
+        // its next render and the prepared prompt is LOST (the user presses
+        // the button again). send()'s local-state trick cannot help here: the
+        // value does not exist until the response arrives; closing the hole
+        // would need a cache subscription, which this deliberately is not.
+        draft.photoDlg = dlg
       } else {
         toast(t('Photo failed.'), 'error')
       }
@@ -242,9 +264,12 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
       const r = await apiUpload<{ image_id: string }>('/chat/me/upload-image', file)
       const done = { image_id: r.image_id, preview: localPreview, uploading: false }
       setAttach(done)
-      // Both completion paths also write the cache directly: they may land
-      // after an unmount, and a cached `uploading: true` would otherwise keep
-      // the remounted composer's send button dead forever.
+      // Direct cache writes on both completion paths: they cover the ordering
+      // "completion lands while the panel is unmounted and no successor has
+      // mounted yet" (the finished attachment then appears on the next
+      // mount). If a new instance mounted mid-upload, its attach initializer
+      // has already dropped this upload and its write-through overwrites
+      // these values — the upload result is discarded, never stuck.
       draft.attach = done
     } catch {
       setAttach(null)
