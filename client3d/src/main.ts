@@ -204,10 +204,10 @@ async function startApp(username: string) {
   requestServerModels();
   setInterval(requestServerModels, 60_000);
 
-  // Layout-Live-Refresh: Grundrisse/Marker/Meta-Justierungen aus dem Admin
-  // erscheinen ohne Browser-Reload — Kachel wird bei Änderung neu gebaut
+  // Layout-Live-Refresh: Grundrisse/Marker/Meta-Justierungen/Terrain aus dem
+  // Admin erscheinen ohne Browser-Reload — Kachel wird bei Änderung neu gebaut
   const sigOf = (l: Partial<WorldLocation>) => JSON.stringify([
-    l.map3d, l.entry_room,
+    l.map3d, l.entry_room, l.terrain || '',
     (l.rooms ?? []).map((r) => [r.id, r.name, r.layout]),
   ]);
   const locSig = new Map(placeable.map((l) => [l.id, sigOf(l)]));
@@ -238,19 +238,48 @@ async function startApp(username: string) {
     try {
       const fresh = await api.getLocations();
       const freshById = new Map(fresh.map((l) => [l.id, l]));
+      // Erst sammeln, dann bauen: eine Terrain-Änderung muss VOR dem Neubau
+      // ins Nachbarschafts-Grid, sonst backt die eigene Kachel noch mit dem
+      // alten Grid (Reihenfolge war der Kern des Küsten-Befunds 2026-07-29).
+      const dirty: [Tile, WorldLocation][] = [];
+      let terrainChanged = false;
       for (const [id, tile] of tiles) {
         const detail = freshById.get(id) ?? freshById.get(tile.loc.template_location_id || '');
         if (!detail) continue;
         const sig = sigOf(detail);
         if (locSig.get(id) === sig) continue;
         locSig.set(id, sig);
-        rebuildTile(tile, {
+        if ((detail.terrain || '') !== (tile.loc.terrain || '')) terrainChanged = true;
+        dirty.push([tile, {
           ...tile.loc,
           rooms: detail.rooms ?? [],
           map3d: detail.map3d ?? tile.loc.map3d,
           entry_room: detail.entry_room ?? tile.loc.entry_room,
-        });
+          terrain: detail.terrain ?? tile.loc.terrain,
+        }]);
       }
+      if (terrainChanged) {
+        const nextLoc = new Map(dirty.map(([tl, loc]) => [tl.loc.id, loc]));
+        setTerrainGrid([...tiles.values()].map((tl) => {
+          const loc = nextLoc.get(tl.loc.id) ?? tl.loc;
+          return { gx: loc.grid_x!, gy: loc.grid_y!, kind: gridSurfaceKind(loc) };
+        }));
+        // Die 4-Nachbarn jeder Terrain-Änderung mit neu bauen: deren
+        // Zusammenstellungen (Küste) beziehen ihre Wasserrichtung aus dem
+        // Grid — gemaltes Wasser muss die Küste daneben umbacken.
+        const byCell = new Map([...tiles.values()].map((tl) => [`${tl.loc.grid_x},${tl.loc.grid_y}`, tl]));
+        for (const [tl, loc] of [...dirty]) {
+          if ((loc.terrain || '') === (tl.loc.terrain || '')) continue;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+            const nb = byCell.get(`${tl.loc.grid_x! + dx},${tl.loc.grid_y! + dy}`);
+            if (nb && !nextLoc.has(nb.loc.id)) {
+              nextLoc.set(nb.loc.id, nb.loc);
+              dirty.push([nb, nb.loc]);
+            }
+          }
+        }
+      }
+      for (const [tile, loc] of dirty) rebuildTile(tile, loc);
     } catch { /* Server kurz weg -> nächster Poll */ }
   }
   setInterval(pollLocations, 10_000);

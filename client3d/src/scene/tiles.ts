@@ -334,17 +334,20 @@ function makeNoise(seed: string): (x: number, y: number) => number {
 }
 
 /** Zusammenstellung backen (z.B. Küste): Zonen-Verlauf Richtung der
- *  toward-Nachbarn, Zonengrenzen mit Rauschen, Texturen im Welt-Maßstab. */
+ *  toward-Nachbarn, Zonengrenzen mit Rauschen, Texturen im Welt-Maßstab.
+ *  OHNE toward-Nachbar wird die Landzone pur gebacken (ramp bleibt 0, alle
+ *  Blöcke fallen in die letzte Zone): vorher blieb die Basis-Textur stehen,
+ *  und eine Art ohne eigenes Bild (coast) fiel damit auf Stil-Gras zurück —
+ *  die Kachel sah aus wie ein Loch in der Karte. */
 async function bakeBlendTexture(
   loc: WorldLocation, blend: SurfaceBlend, fallbackFor: (kind: string) => THREE.Texture
-): Promise<{ tex: THREE.CanvasTexture; mask: THREE.CanvasTexture | null } | null> {
+): Promise<{ tex: THREE.CanvasTexture; mask: THREE.CanvasTexture | null }> {
   const gx = loc.grid_x!, gy = loc.grid_y!;
   // Richtungen der toward-Nachbarn (4er-Nachbarschaft; +y = Süden)
   const dirs: [number, number][] = [];
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
     if (terrainGrid.get(`${gx + dx},${gy + dy}`) === blend.toward) dirs.push([dx, dy]);
   }
-  if (!dirs.length) return null;   // kein toward-Nachbar -> Landzone pur
   // Land-Art: häufigste Nachbar-Art, die nicht toward ist
   const counts = new Map<string, number>();
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
@@ -365,7 +368,9 @@ async function bakeBlendTexture(
   const classKind = blend.toward;
   let mcanvas: HTMLCanvasElement | null = null;
   let mctx: CanvasRenderingContext2D | null = null;
-  if (surfaceMaterialSpec(classKind)) {
+  // Ohne toward-Nachbar gibt es keine Wasserzone — keine Maske bauen, damit
+  // der Aufrufer die Platte matt lässt (Landzone pur kräuselt nicht).
+  if (dirs.length && surfaceMaterialSpec(classKind)) {
     mcanvas = document.createElement('canvas');
     mcanvas.width = mcanvas.height = N;
     mctx = mcanvas.getContext('2d')!;
@@ -375,10 +380,12 @@ async function bakeBlendTexture(
   const noise = makeNoise(loc.id);
   const amp = blend.noise ?? 0.06;
 
-  // Zonen auflösen (kind "neighbor" ersetzen) und Muster vorbereiten
+  // Zonen auflösen (kind "neighbor" ersetzen) und Muster vorbereiten.
+  // Die letzte Zone (ohne until) fängt ALLES — das Rauschen hebt d über 1,
+  // mit einer endlichen Grenze blieben einzelne Blöcke am Landrand unbemalt.
   const zones = blend.zones.map((z) => ({
     kind: z.kind === 'neighbor' ? neighborKind : z.kind,
-    until: z.until ?? 1.01,
+    until: z.until ?? Number.POSITIVE_INFINITY,
   }));
   const patterns: CanvasPattern[] = [];
   for (const z of zones) {
@@ -649,14 +656,15 @@ export function buildTile(loc: WorldLocation): Tile {
     if (entry?.blend) {
       const toward = entry.blend.toward;
       void bakeBlendTexture(loc, entry.blend, (k) => fallbackFor(k)).then((baked) => {
-        if (!baked) return;
         // Das ganze MATERIAL wird getauscht, nicht nur die Textur: eine
         // Zusammenstellung übernimmt die Klasse ihrer `toward`-Art, und die
         // mitgebackene Maske sagt, wo sie gilt. Vorher blieb die Kachel matt
         // und die Küste zeigte gemaltes Wasser ohne eine Spur Bewegung.
+        // OHNE Maske (Landzone pur, kein toward-Nachbar) bleibt sie matt —
+        // die Ersatz-Vollmaske würde sonst die ganze Landfläche kräuseln.
         const old = plate.material as THREE.Material;
         plate.material = surfaceMaterial(THREE, {
-          material: surfaceMaterialSpec(toward),
+          material: baked.mask ? surfaceMaterialSpec(toward) : null,
           map: baked.tex, mask: baked.mask, transparent: true,
         }) as THREE.MeshStandardMaterial;
         old.dispose();
