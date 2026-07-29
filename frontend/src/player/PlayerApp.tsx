@@ -402,8 +402,8 @@ export function PlayerApp() {
     return () => window.removeEventListener('keydown', onKey)
   }, [expanded])
 
-  // View-only-Inhalt eines Panels für die vergrößerte Anzeige. Erweiterbar:
-  // hier pro EXPANDABLE-Panel den (read-only) Inhalt zurückgeben.
+  // View-only content of a panel for the enlarged display. Extensible: return
+  // the (read-only) content per EXPANDABLE panel here.
   const expandedContent = (id: string): ReactNode => {
     if (id === 'worldmap') return <MapPanel key={expandSeq} currentLocationId={data?.location_id || ''} autoFit labelMode={mapLabelMode} />
     return null
@@ -457,12 +457,12 @@ export function PlayerApp() {
   }, [moving, load])
 
   const present = data?.present || []
-  // "Others"-Panel ist rein an Anwesenheit gekoppelt: sichtbar ⟺ jemand anderes
-  // ist da. Bewusst UNABHÄNGIG vom open-/gespeicherten-Layout (sonst blendet ein
-  // altes gespeichertes Layout es aus) — auto ein/aus, kein manuelles Toggle.
+  // The Others panel is tied purely to presence: visible ⟺ someone else is
+  // here. Deliberately INDEPENDENT of the open/saved layout (an old saved
+  // layout would otherwise hide it) — auto on/off, no manual toggle.
   const hasOthers = present.length > 0
-  // Beim Erscheinen nach vorne holen, damit es nie hinter einem (überlappenden,
-  // selbst angeordneten) Panel verschwindet. Nur z-Reihenfolge, kein open-Touch.
+  // Bring it to the front when it appears so it never vanishes behind an
+  // (overlapping, self-arranged) panel. Z-order only, no touch of `open`.
   useEffect(() => {
     if (hasOthers) {
       setOrder((o) => (o[o.length - 1] === 'others' ? o : [...o.filter((x) => x !== 'others'), 'others']))
