@@ -151,11 +151,17 @@ function makeWaveNormal(T: THREE): Texture {
 }
 
 // ── Shader-Patch ────────────────────────────────────────────────────────
-// Die drei Anker im Standard-Shader. Findet einer sich nicht (Three-Upgrade),
-// wird NUR dieser Teil übersprungen — lieber matt als kaputt.
+// Die Anker im Standard-Shader. Findet einer sich nicht (Three-Upgrade), wird
+// NUR dieser Teil übersprungen — lieber matt als kaputt.
+//
+// ALLE Anker sind `#include`-ZEILEN, und das ist kein Zufall: `onBeforeCompile`
+// bekommt den Shader, BEVOR three die Includes auflöst. Der Anker für die
+// Kräuselung war zuerst eine Zeile aus dem Chunk-RUMPF — die steht dort nie,
+// also blieb das Wasser spiegelnd, aber unbewegt, während die drei anderen
+// Patches wirkten (Befund 2026-07-29). Eine Suche in der three-Quelle findet
+// beides und beweist deshalb nichts.
 const ANCHOR_VERT = '#include <begin_vertex>'
-const ANCHOR_NORMAL =
-  'vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;'
+const ANCHOR_NORMAL = '#include <normal_fragment_maps>'
 const ANCHOR_MAP = '#include <map_fragment>'
 const ANCHOR_ROUGH = '#include <roughnessmap_fragment>'
 const ANCHOR_OUT = '#include <opaque_fragment>'
@@ -222,8 +228,16 @@ function applyWaterShader(mat: any, spec: SurfaceMaterialSpec,
 
     // 1) Zwei gegenläufig scrollende Lagen derselben Normalmap — auf den
     //    Wasseranteil begrenzt, sonst kräuselt der Sand einer Küste mit.
+    //    ERSETZT den Standard-Chunk, statt hinter ihm zu stehen: dessen
+    //    einzelner, unbewegter Lookup wäre sonst zuerst dran und `normal`
+    //    schon verbogen, bevor der Tangentenrahmen daraus gebaut wird.
     if (shader.fragmentShader.includes(ANCHOR_NORMAL)) {
       shader.fragmentShader = shader.fragmentShader.replace(ANCHOR_NORMAL, `
+  // tbn stammt aus normal_fragment_begin und existiert nur mit diesem
+  // Define — ohne die Klammer waere es ein Compile-Fehler statt eines
+  // matten Materials.
+  #ifdef USE_NORMALMAP_TANGENTSPACE
+  {
     float wMask = texture2D( uMask, vWaterUv ).r;
     // Der Versatz wird durch die Wellenlänge der JEWEILIGEN Lage geteilt —
     // dadurch ist uSpeed echte METER PRO SEKUNDE, und beide Lagen driften
@@ -234,9 +248,13 @@ function applyWaterShader(mat: any, spec: SurfaceMaterialSpec,
     float wDriftB = uTime * uSpeed / ( uWaveM * 0.63 );
     vec2 wUvA = vWaterWorld / uWaveM + vec2( wDriftA, wDriftA * 0.6 );
     vec2 wUvB = vWaterWorld / ( uWaveM * 0.63 ) - vec2( wDriftB * 0.8, wDriftB * 1.3 );
-    vec3 mapN = normalize( ( texture2D( normalMap, wUvA ).xyz * 2.0 - 1.0 )
-                         + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 ) );
-    mapN = mix( vec3( 0.0, 0.0, 1.0 ), mapN, wMask );`)
+    vec3 wN = normalize( ( texture2D( normalMap, wUvA ).xyz * 2.0 - 1.0 )
+                       + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 ) );
+    wN = mix( vec3( 0.0, 0.0, 1.0 ), wN, wMask );
+    wN.xy *= normalScale;
+    normal = normalize( tbn * wN );
+  }
+  #endif`)
     } else {
       warnOnce(ANCHOR_NORMAL)
     }
