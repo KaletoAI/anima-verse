@@ -535,8 +535,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const dims = room?.id ? modelDimsRef.current[room.id] : null
     if (!lay || !room?.id || !dims || dims.widthM <= 0 || planWRef.current <= 0) return
     // The model's footprint in PLAN fractions: its declared real width over
-    // the plan width, the short side via the mesh's own aspect.
-    const long = dims.widthM / planWRef.current
+    // the plan width, the short side via the mesh's own aspect. The long side
+    // caps at the plan square BEFORE the short side derives from it (same
+    // rule as derivedSize) — clamping the two axes independently afterwards
+    // would change the aspect, not just the size.
+    const long = Math.min(dims.widthM / planWRef.current, 1)
     const aspect = Math.min(dims.fpX, dims.fpZ) / (Math.max(dims.fpX, dims.fpZ) || 1)
     const short = Math.max(long * aspect, MIN_FRAC)
     let wantW = dims.fpX >= dims.fpZ ? long : short
@@ -545,7 +548,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     if (lay.outline?.length) {
       // A drawn hull keeps the SHAPE it was drawn in — only its size follows
       // the model, so the longest side matches and the rest scales with it.
-      const f = Math.max(wantW, wantD) / (Math.max(lay.w, lay.d) || 1)
+      // The factor caps where the scaled hull would leave the plan square,
+      // for the same reason the long side caps above.
+      const f = Math.min(Math.max(wantW, wantD) / (Math.max(lay.w, lay.d) || 1),
+                         1 / (lay.w || 1), 1 / (lay.d || 1))
       wantW = lay.w * f
       wantD = lay.d * f
     }
