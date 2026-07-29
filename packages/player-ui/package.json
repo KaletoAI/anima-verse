@@ -6,7 +6,8 @@
   "description": "Shared player-facing React panels + API/i18n plumbing — consumed by frontend (/play) and client3d (game HUD). Styles are themeable via CSS custom properties; each app brings its own theme.",
   "exports": {
     ".": "./src/index.ts",
-    "./api": "./src/api.ts"
+    "./api": "./src/api.ts",
+    "./panels.css": "./src/panels.css"
   },
   "peerDependencies": {
     "react": ">=18.3.0",

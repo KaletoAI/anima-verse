@@ -9,6 +9,9 @@ import { AvatarGate } from './AvatarGate.tsx'
 import '../styles/game-admin.css'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
+// panels.css BEFORE player.css: the shared panel structure loads first so the
+// /play-specific rules that stayed behind still win.
+import '@anima/player-ui/panels.css'
 import './player.css'
 
 createRoot(document.getElementById('root')!).render(

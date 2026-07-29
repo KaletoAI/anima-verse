@@ -110,54 +110,10 @@
   overflow: visible !important;
 }
 
-/* Szene-Panel: Header fix · Verlauf scrollt · Composer unten angepinnt.
-   Nur der Verlauf bekommt den Scrollbalken, die Eingabe bleibt sichtbar. */
-.player-scene-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.player-scene-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 10px 12px;
-}
-.player-composer {
-  flex: 0 0 auto;
-  border-top: 1px solid var(--border, #30363d);
-  background: var(--bg-container, #161b22);
-  padding: 10px 12px;
-}
-
-/* ---- Composer: vereinheitlichte Eingabe / Buttons / Chips ---- */
-.player-address-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-  align-items: center;
-}
-.player-address-label { opacity: 0.6; font-size: 0.85em; }
-
-.player-composer-input {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  min-height: 64px;
-  resize: vertical;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border, #30363d);
-  background: var(--bg, #0d1117);
-  color: inherit;
-  font: inherit;
-  transition: border-color 0.12s;
-}
-.player-composer-input:focus { outline: none; border-color: var(--accent, #6aa9ff); }
-.player-composer-input:disabled { opacity: 0.55; cursor: wait; }
+/* ---- Composer: vereinheitlichte Eingabe / Buttons / Chips ----
+   Szene-/Composer-/Leerzustands-Regeln leben jetzt in
+   @anima/player-ui/panels.css (von main.tsx VOR dieser Datei geladen). Hier
+   bleiben nur die Klassen, die auch andere /play-Panels benutzen. */
 
 /* Pillen-Chips (Adressaten, Follow …) */
 .player-chip {
@@ -182,20 +138,6 @@
   background: rgba(214, 176, 106, 0.16);
 }
 .player-chip-follow:hover { background: rgba(214, 176, 106, 0.28); }
-
-/* Primärer Aktionsbutton (Send …) */
-.player-btn-primary {
-  padding: 6px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  font: inherit;
-  border: 1px solid var(--accent, #6aa9ff);
-  background: var(--accent, #6aa9ff);
-  color: #fff;
-  transition: filter 0.12s, opacity 0.12s;
-}
-.player-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
-.player-btn-primary:disabled { opacity: 0.5; cursor: default; }
 
 /* Dialog-Panels: zentriertes Overlay (kommt/geht) statt Grid-Kachel. */
 .player-modal-backdrop {
@@ -467,32 +409,10 @@
   50% { opacity: 1; }
 }
 
-/* ---- Einheitlicher Leerzustand ---- */
-.player-empty {
-  height: 100%;
-  min-height: 90px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 18px 16px;
-  text-align: center;
-  opacity: 0.6;
-}
-.player-empty-icon { opacity: 0.45; }
-.player-empty-title { font-size: 0.9em; }
-.player-empty-hint { font-size: 0.78em; opacity: 0.85; max-width: 230px; line-height: 1.4; }
-.player-empty-sm {
-  height: auto;
-  min-height: 0;
-  padding: 10px 8px;
-  gap: 4px;
-}
-.player-empty-sm .player-empty-title { font-size: 0.85em; }
-
-/* Lightbox- + Hint-Pillen-Stile leben jetzt in ./Lightbox.css (von Lightbox.tsx
-   importiert), damit sie auch im Game-Admin verfügbar sind. */
+/* Der einheitliche Leerzustand (.player-empty*) lebt jetzt in
+   @anima/player-ui/panels.css, weil EmptyState selbst im Paket liegt.
+   Lightbox- + Hint-Pillen-Stile liegen in @anima/player-ui/Lightbox.css (von
+   Lightbox.tsx importiert), damit sie auch im Game-Admin verfügbar sind. */
 
 /* ---- Instagram feed panel ---- */
 .ig-feed { display: flex; flex-direction: column; gap: 14px; }

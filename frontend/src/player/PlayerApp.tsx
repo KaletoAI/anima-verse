@@ -18,6 +18,7 @@ import { apiDelete, apiGet, apiPost, apiPut, ApiError } from '../lib/api'
 import { usePoll } from './usePolling'
 import { useToast } from '../lib/Toast'
 import { ScenePanel, type SceneData, type Dir } from './ScenePanel'
+import { ImageGenDialog } from '../components/ImageGenDialog'
 import { MovePad } from './MovePad'
 import { EnvironmentPanel } from './EnvironmentPanel'
 import { MapPanel, type LabelMode, loadLabelMode, nextLabelMode, saveLabelMode } from './MapPanel'
@@ -492,8 +493,22 @@ export function PlayerApp() {
             </span>
             {headerControls('scene', true)}
           </div>
+          {/* photoDialog: the 📷 image-generation dialog belongs to the
+              game-admin UI, not to the shared panel package — /play slots it
+              in, the 3D HUD deliberately leaves it out. */}
           <ScenePanel data={data} refreshScene={refreshScene} avatar={data?.avatar || ''}
-            hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom} />
+            hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
+            photoDialog={(ctl) => (
+              <ImageGenDialog
+                open
+                title={t('Scene photo')}
+                defaultPrompt={ctl.prompt}
+                showRoomReference
+                characterOptions={{ detected: ctl.subjects, available: ctl.available }}
+                onSubmit={ctl.onSubmit}
+                onClose={ctl.onClose}
+              />
+            )} />
         </div>
   )
 
