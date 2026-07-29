@@ -11,7 +11,6 @@ import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../lib/api'
 import { usePoll } from './usePolling'
-import { useLightbox } from './Lightbox'
 import { ImageGenDialog, type ImageGenSubmit } from '../components/ImageGenDialog'
 import { Icon } from './icons'
 import { EmptyState } from './EmptyState'
@@ -32,7 +31,6 @@ function fmt(ts: string): string {
 
 export function GalleryPanel() {
   const { t, lang } = useI18n()
-  const lightbox = useLightbox()
   const [self, setSelf] = useState<string>('')
   const [galleries, setGalleries] = useState<GalleryRef[] | null>(null)
   const [selected, setSelected] = useState<string>('')
@@ -136,6 +134,29 @@ export function GalleryPanel() {
     return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([, g]) => g)
   }, [data, t, lang])
 
+  // Blätter-Reihenfolge der Detail-Ansicht = Anzeige-Reihenfolge des Grids.
+  const flat = useMemo(() => groups.flatMap((g) => g.images), [groups])
+  const zoomIdx = zoom ? flat.findIndex((i) => i.name === zoom.name) : -1
+  const step = useCallback((dir: number) => {
+    setZoom((cur) => {
+      if (!cur) return cur
+      const idx = flat.findIndex((i) => i.name === cur.name)
+      return flat[idx + dir] ?? cur
+    })
+  }, [flat])
+
+  // Pfeiltasten blättern, Escape schließt — solange die Detail-Ansicht offen ist.
+  useEffect(() => {
+    if (!zoom) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight') step(1)
+      else if (e.key === 'ArrowLeft') step(-1)
+      else if (e.key === 'Escape') setZoom(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [zoom, step])
+
   // Load the set of galleries the avatar may browse (own + shared). Slow poll.
   const { data: galleriesData } = usePoll<{ avatar: string; galleries: GalleryRef[] }>(
     'play-galleries', () => apiGet('/play/galleries'), { intervalMs: 30000 })
@@ -222,19 +243,38 @@ export function GalleryPanel() {
         <div onClick={() => setZoom(null)}
           style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.82)',
             padding: 24, display: 'flex', gap: 12 }}>
-          {/* Bild */}
+          {/* Bild — Overlay-Buttons: Schließen oben am Bild, Blättern an den
+              Seiten. Die frühere Lupe (zweite Vollbild-Stufe) ist weg: die
+              Detail-Ansicht IST bereits die große Darstellung. */}
           <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'grid', placeItems: 'center' }} onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => lightbox.open(zoom.video ? { video: zoom.video, alt: zoom.name } : { src: zoom.url, alt: zoom.name })}
-              title={t('Open fullscreen')} aria-label={t('Open fullscreen')}
+            <button onClick={() => setZoom(null)} title={t('Close')} aria-label={t('Close')}
               style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, display: 'inline-flex',
                 alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8,
                 border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(20,22,28,0.7)', color: '#fff', cursor: 'pointer' }}>
-              <Icon name="maximize" size={16} />
+              <Icon name="close" size={16} />
             </button>
+            {zoomIdx > 0 && (
+              <button onClick={() => step(-1)} title={t('Previous image')} aria-label={t('Previous image')}
+                style={{ position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 1,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 48,
+                  borderRadius: 8, border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(20,22,28,0.7)',
+                  color: '#fff', cursor: 'pointer' }}>
+                <Icon name="chevronLeft" size={20} />
+              </button>
+            )}
+            {zoomIdx >= 0 && zoomIdx < flat.length - 1 && (
+              <button onClick={() => step(1)} title={t('Next image')} aria-label={t('Next image')}
+                style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 1,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 48,
+                  borderRadius: 8, border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(20,22,28,0.7)',
+                  color: '#fff', cursor: 'pointer' }}>
+                <Icon name="chevronRight" size={20} />
+              </button>
+            )}
             {zoom.video
               ? <video src={zoom.video} controls autoPlay style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 48px)' }} />
-              : <img src={zoom.url} alt={zoom.name} onClick={() => lightbox.open({ src: zoom.url, alt: zoom.name })}
-                  style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 48px)', objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }} />}
+              : <img src={zoom.url} alt={zoom.name}
+                  style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 48px)', objectFit: 'contain', borderRadius: 6 }} />}
           </div>
           {/* Bild-Informationen */}
           <div onClick={(e) => e.stopPropagation()} style={{
@@ -267,8 +307,6 @@ export function GalleryPanel() {
                   <Icon name="trash" size={16} />
                 </button>
               ) : null}
-              <button onClick={() => setZoom(null)} title={t('Close')}
-                style={{ border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: '1.2em', lineHeight: 1, opacity: 0.7 }}>×</button>
             </div>
             {confirmDel && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6,

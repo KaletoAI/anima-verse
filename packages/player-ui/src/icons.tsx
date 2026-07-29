@@ -12,6 +12,7 @@ export type IconName =
   | 'chat' | 'surroundings' | 'move' | 'worldmap' | 'self' | 'others'
   | 'inventory' | 'journal' | 'gallery' | 'instagram' | 'phone' | 'tasks' | 'layouts' | 'news'
   | 'reset' | 'close' | 'sendBack' | 'autosize' | 'maximize' | 'lock' | 'unlock'
+  | 'chevronLeft' | 'chevronRight'
   | 'zoomIn' | 'zoomOut' | 'settings' | 'trash'
   | 'brain' | 'cloud' | 'sliders'
   | 'background' | 'tag' | 'backpack' | 'avatar' | 'transparency'
@@ -121,6 +122,8 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   close: <path d="M18 6 6 18M6 6l12 12" />,
+  chevronLeft: <path d="m15 18-6-6 6-6" />,
+  chevronRight: <path d="m9 18 6-6-6-6" />,
   sendBack: (
     <>
       <path d="M12 4v11" />
