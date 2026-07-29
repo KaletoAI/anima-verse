@@ -1,14 +1,14 @@
-"""Szenen-Lebenszyklus (plan-room-conversation §7).
+"""Scene lifecycle (plan-room-conversation §7).
 
-- ``touch`` öffnet/aktualisiert die Szene eines Raums bei jeder Äußerung
-  (aufgerufen aus ``perception.record_utterance``).
-- ``run_idle_consolidation`` schließt verebbte Szenen: LLM-Summary der Roh-
-  Äußerungen → Szenen-Erinnerung in jedem Teilnehmer-Gedächtnis → Perceptions
-  prunen. Der Agent-Loop ruft das periodisch (in einem Thread).
+- ``touch`` opens/refreshes a room's scene on every utterance
+  (called from ``perception.record_utterance``).
+- ``run_idle_consolidation`` closes ebbed-away scenes: LLM summary of the raw
+  utterances → scene memory in every participant's memory → prune perceptions.
+  The agent loop calls this periodically (in a thread).
 
-Konsolidierung ist event-getrieben (Szenen-Ende), nicht 6h-Batch — der Batch
-bleibt nur Sicherheitsnetz. Roh-Wahrnehmungen sind vergänglich (nach der Summary
-verworfen); Utterances bleiben als kanonische Wahrheit für die Beobachter-Sicht.
+Consolidation is event-driven (scene end), not a 6h batch — the batch remains
+only as a safety net. Raw perceptions are ephemeral (discarded after the
+summary); utterances remain the canonical truth for the observer view.
 """
 from __future__ import annotations
 
@@ -20,12 +20,26 @@ from app.core.perception import STORYTELLER_SPEAKER
 
 logger = get_logger("scene_manager")
 
-# Stille-Schwelle, ab der eine offene Szene als verebbt gilt und geschlossen wird.
-SCENE_IDLE_SEC = 600  # 10 min
+# Silence threshold after which an open scene counts as ebbed away and is
+# closed. Fallback default — configurable via memory.scene_idle_minutes
+# (admin settings, Memory section).
+DEFAULT_SCENE_IDLE_MINUTES = 30
+
+
+def scene_idle_minutes() -> float:
+    """Configured silence threshold in minutes (SYSTEM time)."""
+    try:
+        from app.core import config
+        val = config.get("memory.scene_idle_minutes")
+        if val not in (None, ""):
+            return max(1.0, float(val))
+    except Exception:  # noqa: BLE001
+        pass
+    return float(DEFAULT_SCENE_IDLE_MINUTES)
 
 
 def touch(location_id: str, room_id: str, speaker: str, ts: str = "") -> int:
-    """Szene des Raums öffnen/aktualisieren. Best-effort, nie blockierend."""
+    """Open/refresh the room's scene. Best effort, never blocking."""
     try:
         from app.models import scene_store
         return scene_store.touch_scene(location_id, room_id, speaker, ts or utc_now_iso())
@@ -35,16 +49,16 @@ def touch(location_id: str, room_id: str, speaker: str, ts: str = "") -> int:
 
 
 def run_idle_consolidation(skip_room_keys=None) -> int:
-    """Schließt + konsolidiert alle verebbten offenen Szenen. Gibt die Anzahl
-    konsolidierter Szenen zurück. Synchron (LLM + DB) — vom Loop via to_thread.
+    """Closes + consolidates all ebbed-away open scenes. Returns the number of
+    consolidated scenes. Synchronous (LLM + DB) — the loop runs it via to_thread.
 
-    ``skip_room_keys``: Menge von „loc/room"-Keys, die NICHT konsolidiert werden
-    (Räume mit ausstehender Pflicht-Antwort) — sonst wird der Stream geprunt,
-    bevor der adressierte Character antworten konnte."""
+    ``skip_room_keys``: set of "loc/room" keys that are NOT consolidated
+    (rooms with a pending obligatory answer) — otherwise the stream would be
+    pruned before the addressed character could reply."""
     from datetime import timedelta
     from app.models import scene_store
     skip = skip_room_keys or set()
-    cutoff = (utc_now() - timedelta(seconds=SCENE_IDLE_SEC)).isoformat(timespec="seconds")
+    cutoff = (utc_now() - timedelta(minutes=scene_idle_minutes())).isoformat(timespec="seconds")
     try:
         idle = scene_store.get_idle_open_scenes(cutoff)
     except Exception as e:  # noqa: BLE001
@@ -66,8 +80,8 @@ def run_idle_consolidation(skip_room_keys=None) -> int:
 
 
 def consolidate_scene(scene: Dict[str, Any]) -> None:
-    """Eine verebbte Szene konsolidieren: LLM-Summary → Teilnehmer-Gedächtnis →
-    Perceptions prunen → als consolidated markieren."""
+    """Consolidate one ebbed-away scene: LLM summary → participant memories →
+    prune perceptions → mark as consolidated."""
     from app.models import scene_store
     from app.models.memory import add_memory
 
@@ -77,8 +91,8 @@ def consolidate_scene(scene: Dict[str, Any]) -> None:
     # Its lines stay in the transcript (context).
     participants = [p for p in (scene.get("participants") or []) if p and p != STORYTELLER_SPEAKER]
 
-    # Leere Szene (nur Geflüster-Meta o.ä. / nichts Inhaltliches) → ohne Summary
-    # schließen, aber trotzdem prunen, damit sie nicht offen bleibt.
+    # Empty scene (only whisper meta or similar / nothing substantive) → close
+    # without a summary, but still prune so it doesn't stay open.
     lines = []
     for u in utterances:
         sp = (u.get("speaker") or "").strip()
@@ -142,7 +156,7 @@ def consolidate_scene(scene: Dict[str, Any]) -> None:
 
 
 def _summarize(scene: Dict[str, Any], lines: list) -> str:
-    """LLM-Summary der Szene (wiederverwendetes Konsolidierungs-Muster)."""
+    """LLM summary of the scene (reused consolidation pattern)."""
     try:
         from app.core.llm_router import llm_call
         from app.core.prompt_templates import render_task
@@ -154,8 +168,8 @@ def _summarize(scene: Dict[str, Any], lines: list) -> str:
             if (r.get("id") or "") == scene.get("room_id", ""):
                 room_name = r.get("name", "") or ""
                 break
-        # Sprache aus den Teilnehmern ableiten → Summary in der Spielsprache
-        # (sonst defaultet die LLM auf Englisch).
+        # Derive the language from the participants → summary in the game
+        # language (otherwise the LLM defaults to English).
         lang_instruction = ""
         try:
             from app.models.character import get_character_language, LANGUAGE_MAP
