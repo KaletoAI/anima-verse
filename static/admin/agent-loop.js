@@ -66,6 +66,13 @@ function render() {
     lbl.textContent = 'Loop not started.';
   }
   document.getElementById('current').textContent = s.current_agent || '(idle)';
+  // Respond lane: runs parallel to the serial round-robin (own asyncio tasks,
+  // no turn gap). Fields arrive from AgentLoop.status(); read defensively.
+  const act = s.respond_active || [];
+  const rq = s.respond_queue || [];
+  document.getElementById('respond').textContent =
+    (act.length ? '▶ ' + act.join(', ') : '(idle)')
+    + (rq.length ? '  |  waiting: ' + rq.join(' → ') : '');
   const bumped = s.bumped || [];
   document.getElementById('bumped').textContent = bumped.length ? bumped.join(' → ') : '(none)';
   const round = s.remaining_in_round || [];
@@ -104,7 +111,7 @@ function render() {
         + " try { if (window.parent && window.parent.activateIframe) {"
         + " window.parent.activateIframe('_llm_log', '" + url + "', 'LLM Log'); return; } } catch(e) {}"
         + " window.location = '" + url + "';";
-      logLink = ` <a href="${url}" onclick="${onclick}" title="Im LLM-Log oeffnen" style="margin-left:6px;text-decoration:none;color:#58a6ff;">🔍</a>`;
+      logLink = ` <a href="${url}" onclick="${onclick}" title="Open in LLM log" style="margin-left:6px;text-decoration:none;color:#58a6ff;">🔍</a>`;
     }
     // Multi-line preview: untruncated RP answer + Tool-LLM answer when the
     // turn captured them; otherwise fall back to the short preview string.

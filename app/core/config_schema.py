@@ -613,6 +613,12 @@ SECTIONS = {
         "fields": {
             "min_turn_gap_seconds": {"type": "int", "label": "Min Turn Gap (s)", "default": 30, "min": 0, "max": 600, "description": "Minimum pause (seconds) between two consecutive thought turns. Keeps the AgentLoop from over-pacing with few characters. Does not apply to in_chat_skip / errors (those have their own backoffs). SYSTEM time."},
             "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 5, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
+            "max_parallel_responds": {"type": "int", "label": "Max Parallel Responses",
+                "default": 2, "min": 1, "max": 10,
+                "description": "How many bumped chat responses the AgentLoop may run "
+                "in parallel (own lane, no turn gap). Answers in the SAME room are "
+                "always serialized. Effective LLM parallelism is still capped by the "
+                "provider's Max Concurrent."},
         },
     },
     "random_events": {

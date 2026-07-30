@@ -1520,7 +1520,12 @@ _AGENT_LOOP_HTML = """<!DOCTYPE html>
 </div>
 
 <div class="section">
-  <h2>Bump (priority)</h2>
+  <h2>Respond lane (parallel)</h2>
+  <div id="respond" class="data">—</div>
+</div>
+
+<div class="section">
+  <h2>Hint bumps (serial, priority)</h2>
   <div id="bumped" class="data">—</div>
 </div>
 
