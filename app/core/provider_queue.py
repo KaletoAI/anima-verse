@@ -64,7 +64,7 @@ class ProviderQueue:
 
     def __init__(self, provider: Provider, queue_name: str = "",
                  max_concurrent: int = 0, chat_pause_enabled: bool = True,
-                 serialize_group: str = ""):
+                 serialize_group: str = "", reserve_chat_slot: bool = False):
         self.provider = provider
         self._queue_name = queue_name or provider.name
         self._chat_pause_enabled = chat_pause_enabled
@@ -73,6 +73,16 @@ class ProviderQueue:
         self.serialize_group = serialize_group
         effective_concurrent = max_concurrent if max_concurrent > 0 else provider.max_concurrent
         self._max_concurrent = effective_concurrent
+        # Reserved chat slot (plan-parallel-bump-lane.md Task 4): when
+        # enabled, background tasks (priority > Priority.CHAT) occupy at
+        # most max_concurrent-1 slots, so a chat-priority call (NPC answer,
+        # storyteller) never waits behind a fully busy queue — priorities
+        # alone cannot do that (they order WAITING tasks, no preemption).
+        # Effective only with max_concurrent > 1; opt-in per provider,
+        # because on a background-only provider it would idle one slot.
+        self.reserve_chat_slot = bool(reserve_chat_slot)
+        self._bg_cond = threading.Condition()
+        self._bg_running = 0  # background tasks currently executing
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._seq_counter: int = 0
         self._lock = threading.Lock()
@@ -148,6 +158,7 @@ class ProviderQueue:
         label_suffix = f" label={label}" if label else ""
         logger.info("[%s] Eingereicht: %s (%s) prio=%d agent=%s%s",
                     self._queue_name, task.task_id, task_type, priority, agent_name, label_suffix)
+        self._notify_chat_submit(priority)
 
         self._ensure_workers()
 
@@ -198,6 +209,7 @@ class ProviderQueue:
         self._queue.put((priority, seq, task))
         logger.info("[%s] GPU-Task eingereicht: %s (%s) prio=%d agent=%s label=%s",
                     self._queue_name, task.task_id, task_type, priority, agent_name, label)
+        self._notify_chat_submit(priority)
 
         self._ensure_workers()
 
@@ -401,6 +413,7 @@ class ProviderQueue:
             "available": self.provider.available,
             "max_concurrent": self._max_concurrent,
             "serialize_group": self.serialize_group,
+            "reserve_chat_slot": self.reserve_chat_slot,
             "chat_active": chat,
             "current_tasks": current,
             "pending": pending,
@@ -472,6 +485,27 @@ class ProviderQueue:
             self._release_serialize_gate_if_held()  # stale chat gone -> release gate
             logger.info("[%s] Queue fortgesetzt (alle stale Chats bereinigt)", self._queue_name)
 
+    def _chat_reservation_active(self) -> bool:
+        """Reserved chat slot applies only with real concurrency — with one
+        slot the reservation would starve background work entirely."""
+        return self.reserve_chat_slot and self._max_concurrent > 1
+
+    def _notify_chat_submit(self, priority: int) -> None:
+        """Wake workers parked in the background-cap wait when a chat call
+        arrives, so it is picked up immediately instead of after the 1s
+        poll timeout."""
+        if self._chat_reservation_active() and priority <= Priority.CHAT:
+            with self._bg_cond:
+                self._bg_cond.notify_all()
+
+    def _release_bg_slot(self, held: bool) -> None:
+        """Counterpart to the _bg_running increment in _worker_loop — must
+        mirror every semaphore-release path exactly."""
+        if held:
+            with self._bg_cond:
+                self._bg_running -= 1
+                self._bg_cond.notify_all()
+
     def _worker_loop(self) -> None:
         """Processes LLM tasks. Pauses when chat is active on this provider."""
         while True:
@@ -481,7 +515,7 @@ class ProviderQueue:
                     self._check_stale_chat()
 
             try:
-                _, _, task = self._queue.get(timeout=5.0)
+                prio, seq, task = self._queue.get(timeout=5.0)
             except queue.Empty:
                 with self._lock:
                     if self._queue.empty():
@@ -500,6 +534,22 @@ class ProviderQueue:
                 self._queue.task_done()
                 continue
 
+            # Reserved chat slot: background tasks use at most N-1 of the N
+            # slots. At the cap, put the task back UNCHANGED (same
+            # priority/seq — ordering stays stable) and wait briefly for a
+            # slot or a chat submit; the next get() pops a chat task first
+            # if one arrived. Chat tasks (priority <= CHAT) pass untouched.
+            bg_slot_held = False
+            if self._chat_reservation_active() and task.priority > Priority.CHAT:
+                with self._bg_cond:
+                    if self._bg_running >= self._max_concurrent - 1:
+                        self._queue.put((prio, seq, task))
+                        self._queue.task_done()
+                        self._bg_cond.wait(timeout=1.0)
+                        continue
+                    self._bg_running += 1
+                    bg_slot_held = True
+
             # Acquire semaphore (limits concurrency)
             self._semaphore.acquire()
 
@@ -511,6 +561,7 @@ class ProviderQueue:
             # Re-check cancelled after wait
             if task._cancelled:
                 self._semaphore.release()
+                self._release_bg_slot(bg_slot_held)
                 self._queue.task_done()
                 continue
 
@@ -593,6 +644,7 @@ class ProviderQueue:
                             if self._serialize_gate is not None:
                                 self._serialize_gate.release()
                             self._semaphore.release()
+                            self._release_bg_slot(bg_slot_held)
                             self._queue.task_done()
                             continue  # Skip normal cleanup — task is re-queued
                         else:
@@ -743,6 +795,7 @@ class ProviderQueue:
 
             # Release semaphore
             self._semaphore.release()
+            self._release_bg_slot(bg_slot_held)
 
             self._queue.task_done()
 

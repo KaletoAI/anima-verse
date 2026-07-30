@@ -1035,6 +1035,7 @@ def _flatten_to_env(config: dict) -> None:
         _set(env, f"{p}TIMEOUT", prov.get("timeout", 120))
         _set(env, f"{p}MAX_CONCURRENT", prov.get("max_concurrent", 1))
         _set(env, f"{p}SERIALIZE_GROUP", prov.get("serialize_group", ""))
+        _set(env, f"{p}RESERVE_CHAT_SLOT", bool(prov.get("reserve_chat_slot", False)))
 
     # Memory Thresholds (3-Stufen-System)
     memory = config.get("memory", {})

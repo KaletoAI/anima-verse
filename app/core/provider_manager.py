@@ -80,6 +80,9 @@ class ProviderManager:
 
             serialize_group = os.environ.get(f"{prefix}SERIALIZE_GROUP", "").strip()
 
+            reserve_chat_slot = (os.environ.get(
+                f"{prefix}RESERVE_CHAT_SLOT", "").strip().lower() == "true")
+
             provider = Provider(
                 name=name,
                 type=ptype,
@@ -99,14 +102,17 @@ class ProviderManager:
                 provider, queue_name=name,
                 max_concurrent=max_concurrent,
                 chat_pause_enabled=bool(serialize_group),
-                serialize_group=serialize_group)
+                serialize_group=serialize_group,
+                reserve_chat_slot=reserve_chat_slot)
             pq._serialize_gate = self._serialize_gate(serialize_group)
             self.channels[name] = pq
 
             timeout_info = f", timeout={timeout}s" if timeout else ""
             group_info = f", serialize_group={serialize_group}" if serialize_group else ""
-            logger.info("Loaded PROVIDER_%d '%s': type=%s, concurrent=%d%s%s",
-                       n, name, ptype, max_concurrent, timeout_info, group_info)
+            reserve_info = ", reserve_chat_slot" if reserve_chat_slot else ""
+            logger.info("Loaded PROVIDER_%d '%s': type=%s, concurrent=%d%s%s%s",
+                       n, name, ptype, max_concurrent, timeout_info, group_info,
+                       reserve_info)
             n += 1
 
         if not self.providers:

@@ -110,6 +110,7 @@ SECTIONS = {
             "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout in seconds — SYSTEM time (HTTP)."},
             "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Maximale gleichzeitige Anfragen"},
             "serialize_group": {"type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
+            "reserve_chat_slot": {"type": "bool", "label": "Reserve Chat Slot", "default": False, "description": "Keep one of the Max Concurrent slots free for chat-priority calls (NPC answers, storyteller): background tasks then use at most N-1 slots, so a chat call never waits behind a fully busy queue. Effective only with Max Concurrent >= 2. Enable on the provider that serves chat; leave off for background-only providers (it would idle one slot)."},
         },
     },
     "llm_retry": {
