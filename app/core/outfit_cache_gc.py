@@ -78,7 +78,7 @@ def _sign(pieces: Dict[str, str], items: Optional[List[str]]) -> str:
         _equipped_signature(pieces, items or []).encode()).hexdigest()[:12]
 
 
-def _read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
+def read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
     """``{pieces, items}`` of a sidecar, or None when it records none.
 
     Two key spellings are accepted on purpose: the reference renders have
@@ -218,7 +218,7 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
             if signature and signature == worn:
                 valid += 1
                 continue
-            manifest = _read_manifest(_sidecar_of(files) or Path("/nonexistent"))
+            manifest = read_manifest(_sidecar_of(files) or Path("/nonexistent"))
             if _entry_valid(signature, manifest, owned, reachable):
                 valid += 1
                 continue

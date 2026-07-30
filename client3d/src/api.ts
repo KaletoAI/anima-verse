@@ -112,7 +112,10 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
   if (!m?.url) return null;
   return {
     url: m.url,
-    signature: data.signature ?? m.filename ?? undefined,
+    // Identität der AUSGELIEFERTEN Datei (Server kann bei unbekannter
+    // Kombination das nächstliegende Modell servieren): wechselt auch dann,
+    // wenn das exakte Mesh später fertig wird und den Nearest-Treffer ablöst.
+    signature: m.signature ?? m.filename ?? data.signature,
     format: (m.format ?? 'glb') as 'glb' | 'fbx',
     rig: m.rig ?? data.rig ?? 'mixamo',
     textureUrl: m.texture_url ?? undefined,

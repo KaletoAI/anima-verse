@@ -752,6 +752,7 @@
     "Night prompt": "Nacht-Prompt",
     "Night variant queued": "Nacht-Variante in Queue",
     "No 3D model for this outfit yet — upload one or generate it from the T-pose render.": "Noch kein 3D-Modell für dieses Outfit — hochladen oder aus dem T-Pose-Render generieren.",
+    "No model for the current outfit yet — showing the stored model with the most similar outfit combination until one is generated.": "Noch kein Modell für das aktuelle Outfit — bis eines generiert ist, wird das gespeicherte Modell mit der ähnlichsten Outfit-Kombination gezeigt.",
     "No 3D model for this outfit yet.": "Noch kein 3D-Modell für dieses Outfit.",
     "No 3D model yet — 3D clients fall back to the portrait marker.": "Noch kein 3D-Modell — 3D-Clients fallen auf den Portrait-Marker zurück.",
     "No active tasks": "Keine aktiven Tasks",

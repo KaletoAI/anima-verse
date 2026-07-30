@@ -19,6 +19,10 @@ import { OutfitBatchDialog } from './OutfitBatchDialog'
 
 interface Model3DInfo {
   filename?: string
+  /** signature of the SERVED file (nearest match: another combination's) */
+  signature?: string
+  /** how the served model was found: exact | neutral | nearest */
+  match?: string
   format?: string
   rig?: string
   size?: number
@@ -284,6 +288,9 @@ export function FieldModel3D({ character }: { character: string }) {
   }, [confirmDelete, enc, load, t, toast])
 
   const model = st.model
+  // A nearest match is another combination's model served as stand-in —
+  // there is nothing stored for THIS outfit to replace or delete.
+  const owned = !!model && model.match !== 'nearest'
   const pending = !!st.pending || busy
   const sizeMb = model?.size ? (model.size / (1024 * 1024)).toFixed(1) : ''
   // Only a Mixamo rig can play the shared clips (humanoid characters).
@@ -382,6 +389,11 @@ export function FieldModel3D({ character }: { character: string }) {
               {t('Generic rig (no standard skeleton) — Mixamo clips will not drive this model.')}
             </div>
           ) : null}
+          {model.match === 'nearest' ? (
+            <div className="ga-hint">
+              {t('No model for the current outfit yet — showing the stored model with the most similar outfit combination until one is generated.')}
+            </div>
+          ) : null}
           <div className="ga-hint">
             {model.source === 'upload' ? t('uploaded') : t('generated')}
             {' · '}
@@ -395,8 +407,9 @@ export function FieldModel3D({ character }: { character: string }) {
           </div>
           {/* Rig only means something for an UPLOAD — a generated model's
               skeleton is fixed by the backend alias. It decides whether the
-              shared clips apply. */}
-          {model.source === 'upload' ? (
+              shared clips apply. (owned: the rig update writes the CURRENT
+              combination's sidecar — a nearest stand-in has none.) */}
+          {owned && model.source === 'upload' ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Rig')}</span>
               <select
@@ -459,7 +472,7 @@ export function FieldModel3D({ character }: { character: string }) {
           onClick={openDialog}
           title={!st.has_input ? t('No T-pose render for the current outfit — generate it first') : undefined}
         >
-          {pending ? t('Generating…') : model ? t('Regenerate') : t('Generate')}
+          {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
         </button>
         {/* Pre-warm the whole wardrobe: one T-pose render + mesh per saved
             outfit, without dressing the character. */}
@@ -477,23 +490,25 @@ export function FieldModel3D({ character }: { character: string }) {
           disabled={pending}
           onClick={() => fileRef.current?.click()}
         >
-          {model ? t('Upload (replace)') : t('Upload GLB/FBX')}
+          {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
         </button>
         {model ? (
-          <>
-            <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file`} download>
-              {t('Download')}
-            </a>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={pending}
-              onClick={remove}
-              onBlur={() => setConfirmDelete(false)}
-            >
-              {confirmDelete ? t('Really delete?') : t('Delete')}
-            </button>
-          </>
+          <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file`} download>
+            {t('Download')}
+          </a>
+        ) : null}
+        {/* Delete targets the CURRENT combination's entry — a nearest
+            stand-in belongs to another combination and has none to delete. */}
+        {owned ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={pending}
+            onClick={remove}
+            onBlur={() => setConfirmDelete(false)}
+          >
+            {confirmDelete ? t('Really delete?') : t('Delete')}
+          </button>
         ) : null}
       </div>
       <input

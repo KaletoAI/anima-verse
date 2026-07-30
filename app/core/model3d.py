@@ -111,6 +111,74 @@ def find_model3d(character_name: str,
     return None
 
 
+def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
+    """``{pieces, items}`` a stored mesh stands for: its own sidecar first,
+    else the T-pose sidecar of the same signature (meshes from before the
+    manifest field, 2026-07 — the render input always recorded its equipped
+    state). None when neither knows."""
+    from app.core.outfit_cache_gc import read_manifest
+    from app.models.character import get_character_dir
+    base = get_character_dir(character_name)
+    manifest = read_manifest(base / "model3d" / f"{signature}.json")
+    if manifest is not None:
+        return manifest
+    for kind in ("tpose", "tpose_animal"):
+        manifest = read_manifest(base / "model_refs" / f"{kind}_{signature}.json")
+        if manifest is not None:
+            return manifest
+    return None
+
+
+def find_model3d_serving(character_name: str) -> tuple:
+    """(path, match) of the mesh to SERVE for the worn outfit — the serving
+    chain behind the byte/meta routes. ``match`` is how it was found:
+    ``"exact"`` / ``"neutral"`` (state variant unrendered) / ``"nearest"``
+    (no entry for this combination — the stored mesh whose recorded piece
+    combination is closest to the worn one, so a fresh outfit never degrades
+    the character to a placeholder figure). (None, "") without any match.
+
+    Management paths (delete, rig update, generation skip-check) keep
+    find_model3d's exact semantics — "the nearest neighbour" is never the
+    entry to delete or overwrite."""
+    try:
+        pieces, items, sig = current_outfit_state(character_name)
+    except Exception:
+        return None, ""
+    from app.core.model_refs import neutral_signature
+    from app.models.character import get_character_dir
+    d = get_character_dir(character_name) / "model3d"
+    tried = []
+    for s, match in ((sig, "exact"), (neutral_signature(sig), "neutral")):
+        if s in tried:
+            continue
+        tried.append(s)
+        for ext in MODEL_EXTS:
+            p = d / f"{s}{ext}"
+            if p.exists():
+                return p, match
+    best = None
+    if d.is_dir():
+        from app.core.model_refs import STATE_SIG_SEP
+        from app.core.outfit_match import outfit_similarity
+        for p in d.iterdir():
+            if p.suffix.lower() not in MODEL_EXTS:
+                continue
+            manifest = _stored_manifest(character_name, p.stem)
+            if manifest is None:
+                continue
+            score = outfit_similarity(pieces, items,
+                                      manifest["pieces"], manifest["items"])
+            # Ties: prefer the neutral (state-free) entry, then the newest.
+            key = (score, STATE_SIG_SEP not in p.stem, p.stat().st_mtime)
+            if best is None or key > best[0]:
+                best = (key, p)
+    if best is not None:
+        logger.debug("Model3D %s: nearest %s fuer Kombination %s (score %.2f)",
+                     character_name, best[1].stem, sig, best[0][0])
+        return best[1], "nearest"
+    return None, ""
+
+
 def required_rig(character_name: str) -> str:
     """Which rig this character needs: humanoids get the Mixamo 52-bone rig
     (one GLB, animation clips apply), everything else a generic rig (FBX +
@@ -179,11 +247,18 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
         "model": None,
     }
     # Serving semantics (like the file route): exact state variant first,
-    # neutral fallback second — meta and served file must agree.
-    path = find_model3d(character_name) if signature else None
+    # neutral fallback, then the nearest stored combination — meta and
+    # served file must agree.
+    path, match = find_model3d_serving(character_name) if signature else (None, "")
     if path:
         enc = quote(character_name)
         info: Dict[str, Any] = {"filename": path.name,
+                                # Identity of the SERVED file — clients key
+                                # model reloads on this, so the swap from a
+                                # nearest neighbour to the freshly generated
+                                # exact mesh is a visible change.
+                                "signature": path.stem,
+                                "match": match,
                                 "format": path.suffix.lstrip(".").lower(),
                                 "rig": rig,
                                 "size": path.stat().st_size,
@@ -205,7 +280,7 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
         # FBX case only — a GLB embeds its textures; a stray image next to a
         # GLB is an auxiliary material map, never the basecolor.
         if info["format"] == "fbx":
-            tex = find_texture(character_name)
+            tex = find_texture(character_name, path.stem)
             if tex:
                 info["texture_url"] = f"/characters/{enc}/model3d/texture"
                 info["texture_size"] = tex.stat().st_size

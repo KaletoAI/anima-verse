@@ -826,12 +826,16 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
     # Helper: Fallback-Bild wenn die gesuchte Variant noch nicht bereit ist.
     # Profilbild ist NIE eine Option — Profilbild = Roster-Avatar, nicht Scene.
     # Reihenfolge:
-    #   1) Default-Variant (mood="" + activity="") mit aktuellem Equipped-State.
-    #   2) Neuestes beliebiges Expression-Variant des Characters.
-    # Wenn beides fehlt: None → Aufrufer liefert 202 (Generierung laeuft) und
+    #   1) Variant mit der AEHNLICHSTEN Outfit-Kombination (Mood-Bucket als
+    #      Tie-Break) — deckt auch die Default-Variant des gleichen Outfits ab.
+    #   2) Default-Variant (mood="" + activity="") mit aktuellem Equipped-State
+    #      (greift nur noch, wenn Sidecars kein Outfit aufzeichnen).
+    #   3) Neuestes beliebiges Expression-Variant des Characters.
+    # Wenn alles fehlt: None → Aufrufer liefert 202 (Generierung laeuft) und
     # FE pollt weiter bis das echte Variant kommt.
     def _serve_fallback():
-        from app.core.expression_regen import _get_expressions_dir, _safe_name
+        from app.core.expression_regen import (_get_expressions_dir, _safe_name,
+                                               find_nearest_expression)
 
         def _serve_file(path, status):
             media_type = mimetypes.guess_type(str(path))[0] or "image/png"
@@ -843,7 +847,16 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
                     "X-Variant-Status": status,
                 })
 
-        # 1) Default-Variant: gleicher Equipped-State, mood+activity leer
+        # 1) Nearest-Outfit-Variant (app/core/outfit_match.py)
+        try:
+            nearest = find_nearest_expression(character_name, mood,
+                                              _eq_pieces, _eq_items)
+        except Exception:
+            nearest = None
+        if nearest is not None:
+            return _serve_file(nearest, "fallback-nearest")
+
+        # 2) Default-Variant: gleicher Equipped-State, mood+activity leer
         try:
             default_cached = get_cached_expression(
                 character_name, "", "",
@@ -855,7 +868,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
         if default_cached and default_cached.exists():
             return _serve_file(default_cached, "fallback-default")
 
-        # 2) Neuestes beliebiges Expression-Variant des Characters
+        # 3) Neuestes beliebiges Expression-Variant des Characters
         try:
             expr_dir = _get_expressions_dir(character_name)
             prefix = _safe_name(character_name)
@@ -1274,8 +1287,8 @@ def _resolve_character_model(character_name: str):
     Only the META route needs this: get_model3d_info re-reads the profile and
     enumerates the mesh backends. The byte routes below resolve the file path
     directly."""
-    from app.core.model3d import find_model3d, find_texture, get_model3d_info
-    path = find_model3d(character_name)
+    from app.core.model3d import find_model3d_serving, find_texture, get_model3d_info
+    path, _match = find_model3d_serving(character_name)
     if path:
         info = get_model3d_info(character_name).get("model") or {}
         meta = {"format": path.suffix.lstrip(".").lower(),
@@ -1288,7 +1301,7 @@ def _resolve_character_model(character_name: str):
                 "source": info.get("source", "generated")}
         # FBX case only — a GLB embeds its textures; a stray image next to a
         # GLB is an auxiliary material map, never the basecolor.
-        tex = (find_texture(character_name)
+        tex = (find_texture(character_name, path.stem)
                if path.suffix.lower() == ".fbx" else None)
         return path, meta, tex
     return None, None, None
@@ -1327,8 +1340,8 @@ def get_character_model_file(character_name: str, request: Request):
     """Serves the 3D model bytes (uploaded one, else the generated mesh).
     404 lets clients degrade to the portrait marker."""
     from fastapi.responses import Response
-    from app.core.model3d import find_model3d
-    path = find_model3d(character_name)
+    from app.core.model3d import find_model3d_serving
+    path, _ = find_model3d_serving(character_name)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"
@@ -1342,8 +1355,9 @@ def get_character_model_texture_file(character_name: str, request: Request):
     gateway prefers JPEG since 2026-07-17 (a GLB embeds its textures and has
     none here). 404 when absent."""
     from fastapi.responses import Response
-    from app.core.model3d import find_texture
-    tex = find_texture(character_name)
+    from app.core.model3d import find_model3d_serving, find_texture
+    path, _ = find_model3d_serving(character_name)
+    tex = find_texture(character_name, path.stem) if path else None
     if not tex:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media = "image/jpeg" if tex.suffix.lower() in (".jpg", ".jpeg") else "image/png"
@@ -1559,11 +1573,12 @@ async def set_character_model3d_options(character_name: str, request: Request) -
 
 @router.get("/{character_name}/model3d/file")
 def get_character_model3d_file(character_name: str, request: Request):
-    """Serves the generated mesh of the current outfit combination. ETag +
+    """Serves the mesh for the current outfit combination — exact entry,
+    else the nearest stored one (find_model3d_serving). ETag +
     If-None-Match — the files are several MB. 404 when absent."""
     from fastapi.responses import Response
-    from app.core.model3d import find_model3d
-    path = find_model3d(character_name)
+    from app.core.model3d import find_model3d_serving
+    path, _ = find_model3d_serving(character_name)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"
@@ -1574,10 +1589,12 @@ def get_character_model3d_file(character_name: str, request: Request):
 @router.get("/{character_name}/model3d/texture")
 def get_character_model3d_texture(character_name: str, request: Request):
     """Serves the basecolor PNG of the generated mesh (generic/FBX case only —
-    a GLB embeds its textures). 404 when absent."""
+    a GLB embeds its textures). Follows the same serving chain as the mesh
+    route so file and texture always belong together. 404 when absent."""
     from fastapi.responses import Response
-    from app.core.model3d import find_texture
-    tex = find_texture(character_name)
+    from app.core.model3d import find_model3d_serving, find_texture
+    path, _ = find_model3d_serving(character_name)
+    tex = find_texture(character_name, path.stem) if path else None
     if not tex:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(tex, request, "image/png")

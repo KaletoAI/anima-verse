@@ -265,6 +265,45 @@ def peek_cached_expression(character_name: str, mood: str, activity: str,
     return None
 
 
+def find_nearest_expression(character_name: str, mood: str,
+                            equipped_pieces: Optional[Dict[str, str]] = None,
+                            equipped_items: Optional[list] = None) -> Optional[Path]:
+    """Serving fallback: the cached variant whose recorded outfit is CLOSEST
+    to the given equipped state (app/core/outfit_match.py), so a character in
+    a never-rendered combination shows a near-matching image instead of an
+    arbitrary one. Outfit similarity dominates; the mood bucket breaks ties,
+    then recency. Read-only — no sidecar touch, no generation trigger. None
+    when no variant records an outfit (legacy sidecars without the fields)."""
+    from app.core.outfit_match import outfit_similarity
+    from app.core.expression_pose_maps import mood_bucket
+    expr_dir = _get_expressions_dir(character_name)
+    if not expr_dir.is_dir():
+        return None
+    want_bucket = mood_bucket(mood) if mood else ""
+    best = None
+    for sidecar in expr_dir.glob(f"{_safe_name(character_name)}_*.json"):
+        img = next((sidecar.with_suffix(ext)
+                    for ext in (".png", ".jpg", ".webp")
+                    if sidecar.with_suffix(ext).exists()), None)
+        if img is None:
+            continue
+        try:
+            meta = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta.get("equipped_pieces"), dict):
+            continue  # legacy sidecar — outfit unknown, not comparable
+        score = outfit_similarity(equipped_pieces, equipped_items,
+                                  meta.get("equipped_pieces"),
+                                  meta.get("equipped_items") or [])
+        bucket_hit = bool(want_bucket) and \
+            mood_bucket(str(meta.get("mood") or "")) == want_bucket
+        key = (score, bucket_hit, img.stat().st_mtime)
+        if best is None or key > best[0]:
+            best = (key, img)
+    return best[1] if best is not None else None
+
+
 def _touch_sidecar(sidecar_path: Path) -> None:
     """Best-effort update of last_used_at/use_count in a variant sidecar JSON.
 
