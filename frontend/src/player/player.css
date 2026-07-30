@@ -110,12 +110,11 @@
   overflow: visible !important;
 }
 
-/* ---- Composer: vereinheitlichte Eingabe / Buttons / Chips ----
-   Szene-/Composer-/Leerzustands-Regeln leben jetzt in
-   @anima/player-ui/panels.css (von main.tsx VOR dieser Datei geladen). Hier
-   bleiben nur die Klassen, die auch andere /play-Panels benutzen. */
+/* The scene, composer and empty-state rules now live in
+   @anima/player-ui/panels.css (loaded by main.tsx BEFORE this file). What stays
+   here are the classes other /play panels use as well. */
 
-/* Pillen-Chips (Adressaten, Follow …) */
+/* ---- Pill chips (addressees, follow …) ---- */
 .player-chip {
   padding: 3px 11px;
   border-radius: 999px;
@@ -409,10 +408,10 @@
   50% { opacity: 1; }
 }
 
-/* Der einheitliche Leerzustand (.player-empty*) lebt jetzt in
-   @anima/player-ui/panels.css, weil EmptyState selbst im Paket liegt.
-   Lightbox- + Hint-Pillen-Stile liegen in @anima/player-ui/Lightbox.css (von
-   Lightbox.tsx importiert), damit sie auch im Game-Admin verfügbar sind. */
+/* The shared empty state (.player-empty*) now lives in
+   @anima/player-ui/panels.css, because EmptyState itself sits in the package.
+   The lightbox and hint-pill styles live in @anima/player-ui/Lightbox.css
+   (imported by Lightbox.tsx), so they are available in the game-admin too. */
 
 /* ---- Instagram feed panel ---- */
 .ig-feed { display: flex; flex-direction: column; gap: 14px; }
