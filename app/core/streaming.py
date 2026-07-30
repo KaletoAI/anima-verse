@@ -1284,9 +1284,9 @@ class StreamingAgent:
             + "\n".join(f"  - «{q}»" for q in quotes[:5])
             + "\nOutput ONLY the speech tool calls that deliver them: TalkTo "
             'with JSON {"name": "<addressed person>", "message": "<the spoken '
-            'words, verbatim>"} for someone present (add "volume": '
+            'words, verbatim>"} for someone in the same room (add "volume": '
             '"whisper"/"shout" when the RP says so), or SendMessage for a '
-            "remote recipient. No other tools, no markers. If a quoted "
+            "recipient who is not in the room. No other tools, no markers. If a quoted "
             "segment is not actually speech to someone (a memory, reading "
             "aloud, an inner voice), skip it; if none qualify, respond NONE.")
         state_retry = _StreamState()

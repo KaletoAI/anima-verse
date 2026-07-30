@@ -11,7 +11,8 @@
      action_actor, action_narration, action_scope
 
    Optional pre-formatted blocks (omit / empty string to skip):
-     present_people_block         — characters at the same location
+     present_people_block         — characters in the same room
+     elsewhere_block              — characters in other rooms of this location
      relationship_to_actor        — short sentiment hint ("close friend", "rival")
      action_actor_location        — display name of the place
      action_actor_room            — room within that location (may be empty)
@@ -29,7 +30,11 @@ Current situation:
 - Mood: {{ feeling }}
 - Time: {{ time_of_day }}
 {% if present_people_block %}
-- Also present here: {{ present_people_block }}
+- In this room with you: {{ present_people_block }}
+{% endif %}
+{% if elsewhere_block %}
+- Elsewhere at this location (not in your room): 
+{{ elsewhere_block }}
 {% endif %}
 
 === You just witnessed an action ===

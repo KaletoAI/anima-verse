@@ -81,7 +81,7 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     data["time_of_day"] = _lnow().strftime("%H:%M")  # in-game clock (world TZ)
 
     if PRESENCE in sections:
-        presence_lines, anyone_nearby = _load_presence(
+        presence_lines, elsewhere_lines, anyone_nearby = _load_presence(
             character_name, location_id)
         data["presence_lines"] = presence_lines
         data["anyone_nearby"] = anyone_nearby
@@ -91,7 +91,8 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
         # It used to be dropped on empty presence_lines, which threw away the
         # "You are ALONE" sentence in exactly the situation it is written for.
         data["nearby_hint"] = _format_presence_block(
-            data["location_name"], presence_lines, anyone_nearby
+            data["location_name"], presence_lines, elsewhere_lines,
+            anyone_nearby
         ) if location_id else ""
 
     if EVENTS in sections:
@@ -116,52 +117,84 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
 
 
 def _format_presence_block(location_name: str, presence_lines: list,
+                            elsewhere_lines: list,
                             anyone_nearby: bool) -> str:
     """Plain-text presence block (replaces former sections/presence.md).
+
+    Room-scoped (2026-07-30): the block used to assert everyone at the
+    LOCATION as present and invite TalkTo — which made NPCs stage physical
+    scenes with people two rooms away who could never hear them. Now it
+    lists the ROOM's people as present and everyone else at the location
+    as explicitly out of reach.
 
     An omitted block reads as "no information" to an LLM, never as "nobody is
     here" — which is how absent people get pulled into a scene. So the empty
     case says so in words instead of staying silent."""
-    parts = [f"Present at '{location_name}':"]
-    parts.extend(presence_lines or ["- nobody, you are here by yourself"])
+    parts = [f"In your room at '{location_name}':"]
+    parts.extend(presence_lines or ["- nobody else, you are alone in this room"])
     if anyone_nearby:
-        parts.append("You can interact with present characters (TalkTo).")
+        parts.append("You can talk to the people in your room (TalkTo).")
         parts.append(
-            "IMPORTANT: ONLY the people listed above are here. "
+            "IMPORTANT: ONLY the people listed for your room are with you. "
             "Do NOT invent further attendees.")
     else:
-        parts.append("You are otherwise ALONE. NO other characters are here.")
-        parts.append("Do NOT invent interactions with absent persons.")
+        parts.append(
+            "NO other characters are in this room with you. "
+            "Do NOT invent interactions with absent persons.")
+    if elsewhere_lines:
+        parts.append("Elsewhere at this location (NOT in your room — they "
+                     "cannot see or hear you):")
+        parts.extend(elsewhere_lines)
+        parts.append(
+            "To reach someone elsewhere at this location: go to them first "
+            "(Move/SetLocation) or use SendMessage — TalkTo does NOT reach "
+            "other rooms.")
     return "\n".join(parts)
 
 
 def _load_presence(character_name: str, location_id: str) -> tuple:
-    """Build ``presence_lines`` (list of bullet strings) and ``anyone_nearby``
-    flag for the active world. Returns ([], False) when no location."""
+    """Build ``(presence_lines, elsewhere_lines, anyone_in_room)`` for the
+    active world. ``presence_lines`` = people in the character's ROOM,
+    ``elsewhere_lines`` = people in other rooms of this location.
+    Returns ([], [], False) when no location."""
     if not location_id:
-        return [], False
+        return [], [], False
 
     from app.models.character import (
         list_available_characters,
         get_character_current_location,
+        get_character_current_room,
         get_effective_activity)
     from app.models.account import get_active_character
+    from app.models.world import get_room_name
 
-    nearby = []
+    my_room = get_character_current_room(character_name) or ""
+    player_char = get_active_character()
+
+    same_room: list = []
+    elsewhere: list = []
     for other in list_available_characters():
-        if other == character_name:
+        if other == character_name or other == player_char:
             continue
         other_loc = get_character_current_location(other)
-        if other_loc and other_loc == location_id:
-            nearby.append(other)
+        if not other_loc or other_loc != location_id:
+            continue
+        other_room = get_character_current_room(other) or ""
+        if other_room == my_room:
+            same_room.append(other)
+        else:
+            elsewhere.append((other, other_room))
 
-    player_char = get_active_character()
     player_loc = get_character_current_location(player_char) if player_char else ""
-    player_is_here = bool(player_loc and player_loc == location_id)
+    player_room = get_character_current_room(player_char) or "" if player_char else ""
+    player_at_location = bool(player_loc and player_loc == location_id)
 
     lines: list = []
-    if player_char and player_is_here:
+    elsewhere_lines: list = []
+    if player_char and player_at_location and player_room == my_room:
         lines.append(f"- {player_char} is present")
+    elif player_char and player_at_location:
+        elsewhere.insert(0, (player_char, player_room))
     elif player_char:
         lines.append(
             f"- {player_char} is NOT here "
@@ -169,12 +202,17 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
             f"do NOT imagine an interaction with {player_char})"
         )
 
-    for other in nearby:
+    for other in same_room:
         other_act = get_effective_activity(other) or ""
         suffix = f" ({other_act})" if other_act else ""
         lines.append(f"- {other} is here{suffix}")
 
-    return lines, bool(nearby)
+    for other, other_room in elsewhere:
+        room_label = get_room_name(location_id, other_room) or "another room"
+        elsewhere_lines.append(f"- {other} — in: {room_label}")
+
+    return lines, elsewhere_lines, bool(same_room or (
+        player_char and player_at_location and player_room == my_room))
 
 
 def _load_events(location_id: str) -> str:

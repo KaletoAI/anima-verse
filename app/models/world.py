@@ -888,6 +888,24 @@ def get_location_by_id(location_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def get_room_name(location_id: str, room_id: str) -> str:
+    """Display name of a room within a location.
+
+    Falls back to the raw ``room_id`` when it cannot be resolved (hand-made
+    rooms may use the name itself as id); '' when either id is missing.
+    """
+    if not (location_id and room_id):
+        return ""
+    try:
+        loc = get_location_by_id(location_id) or {}
+        for room in (loc.get("rooms") or []):
+            if str(room.get("id") or "") == room_id:
+                return str(room.get("name") or "") or room_id
+    except Exception:
+        pass
+    return room_id
+
+
 def get_location_name(location_id: str) -> str:
     """Gibt den Namen eines Ortes anhand seiner ID zurueck.
 

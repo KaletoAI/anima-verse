@@ -15,7 +15,8 @@
 
    Optional pre-formatted blocks (omit / empty string to skip):
      effects_block          — active status modifiers (drunk, exhausted, …)
-     present_people_block   — comma-list of characters at same location
+     present_people_block   — characters in the same ROOM (visible details)
+     elsewhere_block        — characters in OTHER rooms of this location
      alone_here             — True only when it is CERTAIN nobody else is here
      outfit_self_block      — own equipped outfit summary
      outfit_avatar_block    — avatar's equipped outfit summary
@@ -48,10 +49,14 @@ Current situation:
 {{ state_flags_block }}
 {% endif %}
 {% if present_people_block %}
-- Also present here: {{ present_people_block }}
+- In this room with you: {{ present_people_block }}
 {% elif alone_here %}
-- You are ALONE at this place — your conversation partner is not physically
+- You are ALONE in this room — your conversation partner is not physically
   here either. Do not act towards anyone as if they were in the room with you.
+{% endif %}
+{% if elsewhere_block %}
+- Elsewhere at this location (not in your room — they cannot hear you):
+{{ elsewhere_block }}
 {% endif %}
 {% if outfit_self_block %}
 - {{ outfit_self_block }}

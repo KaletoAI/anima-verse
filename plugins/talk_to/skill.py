@@ -1,7 +1,8 @@
 """TalkTo package — face-to-face message to another character.
 
-Only available when the target character is at the same location as the
-sender. For remote communication see the SendMessage skill.
+Only available when the target character is in the same ROOM as the
+sender (speech reach is the room, matching the perception model). For
+remote communication see the SendMessage skill.
 
 Input format: "CharacterName, message"
 Example: "Pixel, can you help me for a moment?"
@@ -17,7 +18,7 @@ from app.core.timeutils import utc_now_iso
 
 
 class TalkToSkill(PluginSkill):
-    """One character speaks to another at the same location.
+    """One character speaks to another in the same room.
 
     Inbox-only: the spoken line is written into both characters' chat
     history (sender as 'assistant', recipient as 'user'); the recipient
@@ -87,7 +88,7 @@ class TalkToSkill(PluginSkill):
                 return (
                     f"{target_name} is already in the current conversation — "
                     f"address them directly through your RP speech, not via TalkTo. "
-                    f"TalkTo is only for third characters at your location."
+                    f"TalkTo is only for third characters in your room."
                 )
         except Exception:
             pass
@@ -100,6 +101,22 @@ class TalkToSkill(PluginSkill):
             return (
                 f"{target_name} is not at your location. "
                 f"Use SendMessage for remote contact."
+            )
+
+        # Room check: speech reach is the ROOM (plan-room-conversation) —
+        # someone in another room of the same location cannot hear this.
+        # Without the gate, cross-room TalkTo staged hours-long one-sided
+        # "scenes" with a partner who never perceived a word (2026-07-30).
+        from app.models.character import get_character_current_room
+        self_room = get_character_current_room(sender_name) or ""
+        target_room = get_character_current_room(target_name) or ""
+        if self_room != target_room:
+            from app.models.world import get_room_name
+            room_label = get_room_name(self_loc, target_room) or "another room"
+            return (
+                f"{target_name} is at this location but in another room "
+                f"({room_label}) — they cannot hear you from here. Go to "
+                f"them first (Move/SetLocation) or use SendMessage."
             )
 
         # Sleep / busy check

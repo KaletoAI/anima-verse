@@ -48,9 +48,11 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     location_id = profile.get("current_location", "") or ""
     room_id = profile.get("current_room", "") or ""
     location_name = get_location_name(location_id) if location_id else "Unknown"
-    # Presence is two pieces of information, not one: who is here, AND whether
-    # "nobody" is a fact or just unknown. The template needs both.
-    present_people_block, alone_here = _build_presence(character_name, location_id)
+    # Presence is three pieces of information: who is in the ROOM, who is
+    # elsewhere at this location, AND whether "nobody in the room" is a fact
+    # or just unknown. The template needs all of them.
+    present_people_block, elsewhere_block, alone_here = _build_presence(
+        character_name, location_id, room_id)
 
     ctx: Dict[str, Any] = {
         "character_name": character_name,
@@ -87,6 +89,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "room_items_block": _build_room_items_block(location_id, room_id),
         "inventory_block": _build_inventory_block(character_name),
         "present_people_block": present_people_block,
+        "elsewhere_block": elsewhere_block,
         "alone_here": alone_here,
         "tracker_block": _build_tracker_block(character_name, location_id),
         "activity_hint_block": _build_activity_hint_block(character_name, location_id, room_id),
@@ -771,43 +774,64 @@ def present_people_details(entries, location_id: str = "") -> str:
     return "\n".join(lines)
 
 
-def _build_presence(character_name: str, location_id: str) -> Tuple[str, bool]:
-    """Characters at the same location, excluding self. Avatar marked.
+def _build_presence(character_name: str, location_id: str,
+                    room_id: str) -> Tuple[str, str, bool]:
+    """Presence split by ROOM, excluding self. Avatar marked.
 
-    Returns ``(block, alone_known)``. ``alone_known`` is True ONLY when the
-    lookup succeeded and really nobody else is here — an unknown location or a
-    failed lookup yields ``("", False)``, because "we don't know" must never be
-    rendered as "you are alone".
+    Returns ``(room_block, elsewhere_block, alone_known)``:
+    - ``room_block`` — people in the SAME room, with full visible details.
+    - ``elsewhere_block`` — people in OTHER rooms of this location, name +
+      room only (they are out of sight and out of earshot — no visual
+      details, or the LLM stages scenes with people it cannot see).
+    - ``alone_known`` is True ONLY when the lookup succeeded and really
+      nobody else is in the room — an unknown location or a failed lookup
+      yields ``("", "", False)``, because "we don't know" must never be
+      rendered as "you are alone".
 
-    Why the flag exists: an empty block used to drop the whole section from the
-    prompt, so the prompt said NOTHING about who is around. A missing section is
-    no evidence of absence for an LLM — with a stale pose like "standing in
-    front of Kai" it happily kept playing a scene with a person who was at the
-    other end of the map. Silence is not "alone"; the prompt has to say it.
+    Why the room split (2026-07-30): both presence blocks used to be
+    location-wide, so an NPC was told a person two rooms away was visibly
+    present — and kept staging a physical scene (TalkTo) with someone who
+    could never hear it (speech reach is the room, plan-room-conversation).
+    The prompt now matches the perception model.
 
-    Each person carries what the character can SEE: a short outfit line
-    (worn pieces) and visibly triggered states ('drunk', 'aroused', ...)
-    — without this, an NPC never knows what the people around it look
-    like right now (the rendered image knows, the mind didn't)."""
+    Why alone_known exists: an empty block used to drop the whole section
+    from the prompt, so the prompt said NOTHING about who is around. A
+    missing section is no evidence of absence for an LLM — with a stale
+    pose like "standing in front of Kai" it happily kept playing a scene
+    with a person who was at the other end of the map. Silence is not
+    "alone"; the prompt has to say it.
+
+    Each same-room person carries what the character can SEE: a short
+    outfit line (worn pieces) and visibly triggered states ('drunk',
+    'aroused', ...) — without this, an NPC never knows what the people
+    around it look like right now."""
     if not location_id:
-        return "", False
+        return "", "", False
     try:
         from app.models.group_chat import get_characters_at_location
         from app.models.account import get_active_character
+        from app.models.character import get_character_current_room
+        from app.models.world import get_room_name
         avatar = (get_active_character() or "").strip()
         people = get_characters_at_location(location_id) or []
-        entries = []
-        for p in people[:8]:
+        here: list = []
+        elsewhere: list = []
+        for p in people[:16]:
             n = (p.get("name") or "").strip()
             if not n or n == character_name:
                 continue
-            entries.append((n, f"{n} (avatar)" if n == avatar else n))
-        if not entries:
-            return "", True
-        return present_people_details(entries, location_id), False
+            label = f"{n} (avatar)" if n == avatar else n
+            other_room = get_character_current_room(n) or ""
+            if other_room == (room_id or ""):
+                here.append((n, label))
+            else:
+                room_label = get_room_name(location_id, other_room) or "another room"
+                elsewhere.append(f"- {label} — in: {room_label}")
+        room_block = present_people_details(here[:8], location_id) if here else ""
+        return room_block, "\n".join(elsewhere[:8]), not here
     except Exception as e:
         logger.debug("present_people block failed for %s: %s", character_name, e)
-        return "", False
+        return "", "", False
 
 
 def _build_activity_hint_block(character_name: str,

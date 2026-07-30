@@ -8,7 +8,8 @@ skills:
     default_enabled: true    # replaces the entry in DEFAULT_NEW_CHARACTER_SKILLS
     cascade_brake: true      # replaces the class attribute (F7)
     delivers_speech: true    # spoken dialogue reaches the room through this verb
-    remote_comm: true        # reaches characters not present (setup checklist)
+    # NOT remote_comm: the verb is gated to the same room — SendMessage is
+    # the remote pillar (the old `remote_comm: true` here was contradictory).
     progress_type: talkto
 
 templates:

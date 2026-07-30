@@ -389,9 +389,13 @@ class ThoughtRunner:
             # Prio 4: Assignments (max ~800 Zeichen)
             if _td.get("assignment_section"):
                 _ctx_parts.append(_td["assignment_section"][:800])
-            # Prio 5: Nearby Characters
+            # Prio 5: Nearby characters. Cap raised 400 -> 800 for the
+            # room-scoped block (2026-07-30): it now carries the room list,
+            # the elsewhere-at-location list AND the TalkTo-reach guidance —
+            # truncating the guidance would undo the room gating in exactly
+            # the prompts that need it.
             if _td.get("nearby_hint"):
-                _ctx_parts.append(_td["nearby_hint"][:400])
+                _ctx_parts.append(_td["nearby_hint"][:800])
             # Prio 6: Persoenlichkeit (gekuerzt)
             if _td.get("personality"):
                 _ctx_parts.append(f"Persoenlichkeit: {_td['personality'][:400]}")
