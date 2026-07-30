@@ -1,0 +1,248 @@
+/* Fantasy theme v1 for the 3D client's HUD (plan-3d-game stage 2, task 6).
+ *
+ * WHAT THIS IS: the visual layer on top of the structural styles. panels.css
+ * (shared package) and hud.css (the HUD's own chrome) ship neutral defaults —
+ * the very hex values /play uses today. This file redefines those custom
+ * properties and adds ornament, scoped to #hud, so /play stays untouched.
+ *
+ * HARD RULES kept here:
+ * - Every selector starts with `#hud`. The portalled picker modals live
+ *   OUTSIDE #hud (createPortal -> document.body) and are reached as later
+ *   siblings via `#hud ~ .ga-modal-backdrop` — still `#hud`-anchored.
+ * - No external assets and no webfonts: system serif (Georgia) for headings,
+ *   system-ui for body text, everything else is gradients, layered
+ *   box-shadows, a gradient border-image and font-variant.
+ * - Nothing under client3d/src/scene/ or packages/scene-render is touched;
+ *   the 3D rendering freeze binds.
+ *
+ * LOOK: aged vellum in lamplight rather than bright parchment — a bright
+ * panel over a dark 3D scene glares and costs readability. Warm near-black
+ * surfaces with a mottled gradient, brass/gold hairlines, gold small-caps
+ * headings. Body text stays sans-serif on purpose: it is read during play.
+ * The palette deliberately matches the vanilla chrome of the 3D client
+ * (top bar, info panel: gold #f2d98c on ink), so HUD and app read as one.
+ */
+
+/* ---- Palette ---------------------------------------------------------- */
+/* --bg … --ok are every custom property the shared panels and hud.css consume
+ * (panels.css, the inline var() in the panel components, hud.css) — the theme
+ * must cover that set completely or a stray /play colour shows through. The
+ * --hud-* tokens below are this file's own and nothing outside it reads them.
+ * Both blocks are also set on the picker backdrop, which portals out of #hud. */
+#hud,
+#hud ~ .ga-modal-backdrop {
+  --bg: #15110d;
+  --bg-alt: #1d1811;
+  --bg-container: #231d15;
+  --border: rgba(242, 205, 110, 0.3);
+  --accent: #d9bd6a;
+  --accent-2: #b07d3a;
+  --text: #e8e2d5;
+  --danger: #c4503f;
+  --ok: #6fbf5a;
+  --hud-gold: #f2d98c;
+  --hud-muted: #a99f8a;
+  --hud-ink: #1a140a;
+  --hud-vellum: radial-gradient(115% 80% at 18% 0%, rgba(140, 110, 66, 0.16), transparent 62%), radial-gradient(95% 70% at 88% 100%, rgba(96, 70, 38, 0.16), transparent 66%), linear-gradient(163deg, #2a2319 0%, #221c14 46%, #191410 100%);
+  --hud-rule: linear-gradient(90deg, transparent, rgba(242, 205, 110, 0.5) 16%, rgba(242, 205, 110, 0.78) 50%, rgba(242, 205, 110, 0.5) 84%, transparent);
+  --hud-brass: linear-gradient(180deg, #e6cb84 0%, #c9a34f 48%, #a37e33 100%);
+}
+
+#hud {
+  scrollbar-color: rgba(242, 205, 110, 0.35) transparent;
+  scrollbar-width: thin;
+}
+
+/* ---- Panel frames: vellum surface, brass edge, dropped into the scene --- */
+#hud .hud-panel,
+#hud ~ .ga-modal-backdrop .ga-modal {
+  background: var(--hud-vellum);
+  border-color: rgba(242, 205, 110, 0.38);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(242, 205, 110, 0.14), inset 0 0 26px rgba(0, 0, 0, 0.45), 0 12px 34px rgba(0, 0, 0, 0.55);
+}
+
+/* Header: gold small-caps over a darker band, closed by a gradient rule that
+ * fades out at both ends (border-image from a CSS gradient — the ornament). */
+#hud .hud-panel-head,
+#hud ~ .ga-modal-backdrop .ga-modal-header {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.09), rgba(0, 0, 0, 0.22));
+  border-width: 0 0 1px;
+  border-style: solid;
+  border-image: var(--hud-rule) 1;
+  color: var(--hud-gold);
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+#hud .hud-panel-sub {
+  color: var(--hud-muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-variant: normal;
+  letter-spacing: 0;
+  opacity: 0.85;
+}
+#hud .hud-panel-close,
+#hud ~ .ga-modal-backdrop .ga-modal-close {
+  color: var(--hud-muted);
+  opacity: 1;
+}
+#hud .hud-panel-close:hover,
+#hud ~ .ga-modal-backdrop .ga-modal-close:hover {
+  color: var(--hud-gold);
+}
+
+/* ---- Rail: three brass studs pressed into the edge of the screen ------- */
+#hud .hud-rail button {
+  background: radial-gradient(circle at 34% 26%, #3b3225 0%, #262017 62%, #191410 100%);
+  border-color: rgba(242, 205, 110, 0.32);
+  border-radius: 9px;
+  color: #c8bda2;
+  box-shadow: inset 0 1px 0 rgba(242, 205, 110, 0.16), inset 0 -2px 6px rgba(0, 0, 0, 0.5), 0 2px 7px rgba(0, 0, 0, 0.5);
+  transition: color 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+#hud .hud-rail button:hover {
+  border-color: rgba(242, 205, 110, 0.62);
+  color: var(--hud-gold);
+}
+#hud .hud-rail button.on {
+  background: radial-gradient(circle at 34% 26%, #4a3d28 0%, #2e2618 62%, #1d1710 100%);
+  border-color: rgba(242, 205, 110, 0.75);
+  color: var(--hud-gold);
+  box-shadow: inset 0 1px 0 rgba(242, 205, 110, 0.24), 0 0 12px rgba(242, 205, 110, 0.22), 0 2px 7px rgba(0, 0, 0, 0.5);
+}
+
+/* ---- Composer: the rule above it repeats the header ornament ----------- */
+#hud .player-composer {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.24), rgba(0, 0, 0, 0.34));
+  border-width: 1px 0 0;
+  border-style: solid;
+  border-image: var(--hud-rule) 1;
+}
+#hud .player-address-label {
+  color: var(--hud-muted);
+  font-variant: small-caps;
+  letter-spacing: 0.05em;
+  opacity: 1;
+}
+
+/* Inputs read as ink wells sunk into the vellum. */
+#hud .player-composer-input,
+#hud .ga-input,
+#hud ~ .ga-modal-backdrop .ga-input {
+  background: linear-gradient(180deg, #100d09, #17130e);
+  border-color: rgba(242, 205, 110, 0.22);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.6);
+  color: var(--text);
+}
+#hud .player-composer-input:focus,
+#hud .ga-input:focus,
+#hud ~ .ga-modal-backdrop .ga-input:focus {
+  border-color: rgba(242, 205, 110, 0.68);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(242, 205, 110, 0.14);
+}
+
+/* ---- Buttons and chips: struck brass ---------------------------------- */
+#hud .player-btn-primary {
+  background: var(--hud-brass);
+  border-color: rgba(255, 232, 170, 0.6);
+  color: var(--hud-ink);
+  font-variant: small-caps;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.55), inset 0 -2px 4px rgba(120, 84, 24, 0.45), 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+#hud .player-btn-primary:disabled {
+  filter: saturate(0.45);
+}
+#hud .player-chip {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.06), rgba(0, 0, 0, 0.2));
+  border-color: rgba(242, 205, 110, 0.28);
+  color: #d5cbb4;
+}
+#hud .player-chip:hover {
+  border-color: rgba(242, 205, 110, 0.6);
+  color: var(--hud-gold);
+}
+#hud .player-chip.on {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.24), rgba(242, 205, 110, 0.1));
+  border-color: rgba(242, 205, 110, 0.7);
+  color: var(--hud-gold);
+}
+#hud .player-chip-follow {
+  border-color: rgba(176, 125, 58, 0.75);
+}
+
+/* ---- Transcript ------------------------------------------------------- */
+/* .ga-list-row* are defined only in the frontend's game-admin.css, so the HUD
+ * has no rule for them at all (task 5 finding 1). One cheap line gives the
+ * rows their breathing room back. Left alone on purpose: the row separators
+ * of the admin list (a hairline between every spoken line makes a transcript
+ * noisy) and the colour of .ga-list-row-sub — SceneView already dims every
+ * one of those spans inline, and a muted colour under that opacity would
+ * only push timestamps below readable contrast. */
+#hud .ga-list-row {
+  padding: 3px 2px;
+}
+#hud .ga-list-empty,
+#hud .ga-loading,
+#hud .ga-placeholder,
+#hud ~ .ga-modal-backdrop .ga-loading,
+#hud ~ .ga-modal-backdrop .ga-placeholder {
+  color: var(--hud-muted);
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  opacity: 0.85;
+}
+#hud .player-empty-title {
+  color: var(--hud-gold);
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  letter-spacing: 0.05em;
+}
+#hud .player-empty-hint {
+  color: var(--hud-muted);
+}
+
+/* ---- Small print and toasts ------------------------------------------- */
+#hud .ga-field-caption,
+#hud ~ .ga-modal-backdrop .ga-field-caption {
+  color: rgba(242, 205, 110, 0.62);
+  letter-spacing: 0.09em;
+  opacity: 1;
+}
+#hud .ga-toast {
+  background: var(--hud-vellum);
+  border-color: rgba(242, 205, 110, 0.42);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+
+/* ---- Scrollbars (WebKit; Firefox uses scrollbar-color above) ----------- */
+#hud ::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+#hud ::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.28);
+}
+#hud ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.38), rgba(160, 122, 52, 0.38));
+  border-radius: 5px;
+}
+#hud ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.62), rgba(160, 122, 52, 0.62));
+}
+
+/* ---- Layout fix, decided here (task 5 finding 3) ----------------------- */
+/* The vanilla .info-panel sits at right:12 / width:300 (client3d/src/style.css,
+ * frozen), the HUD dock at right:62 / width:320 — they overlap in the strip
+ * 62..312px from the right edge and the dock, being on top, swallows the
+ * panel's zoom button. The panel element is permanent and only toggles
+ * [hidden], so the dock can step aside exactly while it is visible. Solved
+ * declaratively, without touching the frozen file and without JS. */
+#hud:has(~ .info-panel:not([hidden])) .hud-dock {
+  right: 324px;
+  max-width: calc(100vw - 346px);
+}

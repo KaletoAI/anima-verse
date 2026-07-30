@@ -1,6 +1,6 @@
 /**
- * HUD v1 of the 3D client (plan-3d-game stage 2, task 5) — deliberately plain,
- * the fantasy theme lands in task 6 by redefining the CSS variables under #hud.
+ * HUD v1 of the 3D client (plan-3d-game stage 2, tasks 5 + 6). hud.css carries
+ * the structure, theme-fantasy.css the look (variables redefined under #hud).
  *
  * Layout: a right-edge rail with three toggle buttons (chat/self/others), the
  * chat as a docked panel bottom-left, self/others as a right-side dock column.
@@ -21,6 +21,9 @@ import {
 } from '@anima/player-ui';
 import '@anima/player-ui/panels.css';
 import './hud.css';
+// Load order matters: the fantasy theme redefines the custom properties and
+// overrides the plain rules of hud.css, so it must come last.
+import './theme-fantasy.css';
 
 type PanelId = 'chat' | 'self' | 'others';
 

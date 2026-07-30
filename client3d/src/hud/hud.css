@@ -1,7 +1,7 @@
-/* HUD overlay of the 3D client — structural v1 (plan-3d-game stage 2, task 5).
-   Deliberately unornamented: task 6 themes it by redefining the CSS custom
-   properties under #hud; the var() defaults here match the neutral values
-   panels.css already uses.
+/* HUD overlay of the 3D client — structure only (plan-3d-game stage 2, task 5).
+   Deliberately unornamented: the var() defaults here match the neutral values
+   panels.css already uses; theme-fantasy.css (task 6) redefines those custom
+   properties under #hud and adds the ornament. Keep colour decisions there.
 
    Pointer rule: the root is a full-screen overlay that must NEVER block
    camera dragging on the canvas below — pointer-events: none on the root,
@@ -133,8 +133,9 @@
    define (Task-4 finding #3): .ga-input, .ga-toast*, .player-chip* plus the
    picker-modal and transcript helpers. Deliberately NOT copied from
    player.css / game-admin.css (those stay single-sourced for /play); the
-   ornamental pass is task 6. Unscoped on purpose: ChatGalleryPicker,
-   GiftPicker and the Lightbox portal to document.body, outside #hud. */
+   ornamental pass lives in theme-fantasy.css. Unscoped on purpose:
+   ChatGalleryPicker, GiftPicker and the Lightbox portal to document.body,
+   outside #hud — the theme reaches the modals as `#hud ~ .ga-modal-backdrop`. */
 
 .player-chip {
   padding: 2px 10px;
