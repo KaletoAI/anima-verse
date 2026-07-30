@@ -25,6 +25,8 @@ export interface HudGameState {
   talkTarget: string | null;
   /** avatar cannot move on its own (party follower) — HUD hint, server enforces */
   movementLocked: boolean;
+  /** name of the party leader while `movementLocked` is set, else empty */
+  partyLeader: string;
 }
 
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */
@@ -37,10 +39,14 @@ export interface HudGameActions {
 /** React-side handlers the vanilla app calls (e.g. the F key opens the chat). */
 export interface HudUiActions {
   openChat?: () => void;
+  /** show a short message to the player (Hud.tsx wires the package toast) —
+   *  the vanilla side renders no text of its own (E3-T3) */
+  toast?: (msg: string) => void;
 }
 
 const state: HudGameState = {
-  mode: 'overview', selected: null, talkTarget: null, movementLocked: false,
+  mode: 'overview', selected: null, talkTarget: null,
+  movementLocked: false, partyLeader: '',
 };
 const listeners = new Set<() => void>();
 let snapshot: HudGameState = { ...state };

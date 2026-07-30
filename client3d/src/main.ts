@@ -3,7 +3,8 @@ import * as api from './api';
 import { Engine, isTypingTarget } from './scene/engine';
 import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
-import { NpcManager, type NpcState } from './scene/npcs';
+import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
+import { cellOf, clampToCell, stepDirection, walkDir, type Cell } from './game/walk';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -12,7 +13,7 @@ import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, showLogin } from './ui';
 import { mountHud } from './hud/mount';
-import { gameActions, getGameState, setGameState, subscribeGameState } from './hud/bus';
+import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './hud/bus';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
@@ -355,6 +356,11 @@ async function startApp(username: string) {
     return true;
   };
   gameActions.zoomTo = (name) => {
+    // While a follow target is set (embodied mode) the camera belongs to the
+    // followed figure: a fly-to would be dragged back by the chase every
+    // frame and only make the view judder. The button stays visible — it is
+    // simply without effect until the player leaves the mode.
+    if (engine.follow) return;
     const p = npcs.positionOf(name);
     if (p) engine.flyTo(p, 12);
   };
@@ -369,7 +375,9 @@ async function startApp(username: string) {
   // camera moves, the frame hook only watches the zoom threshold.
   const embody: EmbodyDeps = {
     engine,
-    avatarPos: () => npcs.positionOf((lastMap ?? firstMap).avatar),
+    // `firstMap` on purpose: the deps object is built before `lastMap` exists,
+    // and the avatar of a session does not change under us.
+    avatarPos: () => npcs.positionOf(firstMap.avatar),
   };
   gameActions.enterEmbodied = () => enterEmbodied(embody);
   gameActions.exitEmbodied = () => exitEmbodied(embody);
@@ -462,6 +470,7 @@ async function startApp(username: string) {
       takeRoomsFrom(lastMap);
       updatePins(lastMap);
       refreshSelection(lastMap);
+      reconcileAvatarCell(lastMap);   // server moved the avatar? (E3-T3)
     } catch {
       hud.setOnline(false);
     }
@@ -676,6 +685,151 @@ async function startApp(username: string) {
     if (lastMap) npcs.update(computeNpcStates(lastMap));
   }, 1000);
   npcs.update(computeNpcStates(firstMap));
+
+  // --- Walking on foot (E3-T3) ----------------------------------------------
+  // Two facts carry this: while the mode is on, the avatar's position is OURS
+  // (npcs.setPlayerDriven — update() stops placing it), and every CELL BOUNDARY
+  // belongs to the server (`/world/avatar/step`). Inside a cell the client walks
+  // freely, at a boundary it either asks or slides along the edge. All the
+  // geometry is in game/walk.ts and checked numerically by
+  // scripts/smoke_walk_math.mjs; nothing here recomputes it.
+  const avatarName = firstMap.avatar;   // one avatar per session (as everywhere else)
+  /** Same passability rule the pathfinder is built with (buildings block, road
+   *  and nature carry). A cell that is not on the map at all is not steppable
+   *  either — the server would answer 404. */
+  const passableCells = new Set(placeable
+    .filter((l) => l.passable || l.template_location_id)
+    .map((l) => `${l.grid_x},${l.grid_y}`));
+  const locIdAtCell = new Map(placeable.map((l) => [`${l.grid_x},${l.grid_y}`, l.id]));
+  function tileAtCell(c: Cell): Tile | null {
+    const id = locIdAtCell.get(`${c.gx},${c.gy}`);
+    return id ? tiles.get(id) ?? null : null;
+  }
+
+  /** `tick()` only counts a figure as moving from 0.05 units away, and at a
+   *  high frame rate ONE step is shorter than that — the avatar would stand
+   *  still without a walk animation. So the goal is set a short lead ahead;
+   *  0.15 m reaches a boundary at most ~40 ms early. */
+  const MIN_LEAD = 0.15;
+  /** How long a refused edge is remembered. Without it a held key would fire a
+   *  request per frame against a block rule and bury the player in toasts. */
+  const REJECT_MEMORY_MS = 4000;
+  /** How long our own step may explain a server/client cell mismatch. */
+  const EXPECT_TTL_MS = 15_000;
+
+  /** At most ONE step request in flight: a second one could overtake the first
+   *  and the server would end up two cells away from the figure. While it runs,
+   *  the figure clamps at the next boundary instead of crossing again. */
+  let stepInFlight = false;
+  /** Cell our own step aims at (or came back to after a refusal) — the
+   *  authority check must not read it as foreign movement. */
+  let expectedCell: Cell | null = null;
+  let expectedAt = 0;
+  /** cell key -> time until which a refused crossing stays refused */
+  const rejectedUntil = new Map<string, number>();
+
+  async function requestStep(direction: api.StepDirection, from: Cell, to: Cell) {
+    stepInFlight = true;
+    expectedCell = to;
+    expectedAt = Date.now();
+    try {
+      await api.avatarStep(direction);
+      // No snap on success: the figure has been in the new cell since the
+      // frame the request left, and the worldmap confirms it within a poll.
+    } catch (e) {
+      const err = e instanceof api.ApiError ? e : null;
+      rejectedUntil.set(`${to.gx},${to.gy}`, Date.now() + REJECT_MEMORY_MS);
+      expectedCell = from;
+      expectedAt = Date.now();
+      // The crossing did NOT happen, so the figure must not be standing past
+      // the line: a hard put-back, not a walk-back — otherwise the local cell
+      // stays the new one and the very next frame walks on into it.
+      const p = npcs.positionOf(avatarName);
+      if (p) {
+        const back = clampToCell(p.x, p.z, from, CELL);
+        npcs.snapPlayerTo(avatarName, new THREE.Vector3(back.x, p.y, back.z));
+      }
+      // 403 = a rule refused it and the server wrote the reason for the
+      // player. 404 = there is simply no location that way, which the edge
+      // already shows — no toast for that.
+      if (err?.status === 403) uiActions.toast?.(err.message);
+      else if (!err) console.warn('[walk] step request failed', e);
+    } finally {
+      stepInFlight = false;
+    }
+  }
+
+  // The player drives the avatar for exactly as long as the mode is on. Hung
+  // off the BUS, not off the enter/exit calls: zooming out leaves the mode
+  // from inside embody.ts, and the figure has to be handed back then too.
+  subscribeGameState(() => {
+    npcs.setPlayerDriven(getGameState().mode === 'embodied' ? avatarName : null);
+  });
+
+  const walkGoal = new THREE.Vector3();
+  engine.addFrameHook((dt) => {
+    const state = getGameState();
+    if (state.mode !== 'embodied') return;
+    // Party follower: the leader carries the avatar along; the server refuses
+    // every step anyway, so the keys stay dead instead of collecting 403s.
+    if (state.movementLocked) return;
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;                     // no figure on the map (yet) — nothing to steer
+    const dir = walkDir(engine.keysDown(), engine.yaw);
+    if (!dir) return;
+    const here = cellOf(pos.x, pos.z, CELL);
+    const lead = Math.max(WALK_SPEED * dt, MIN_LEAD);
+    let x = pos.x + dir.x * lead;
+    let z = pos.z + dir.z * lead;
+    const next = cellOf(x, z, CELL);
+    if (next.gx !== here.gx || next.gy !== here.gy) {
+      const step = stepDirection(here, next);
+      const key = `${next.gx},${next.gy}`;
+      const barred = !step || !passableCells.has(key)
+        || (rejectedUntil.get(key) ?? 0) > Date.now();
+      if (barred || stepInFlight) {
+        ({ x, z } = clampToCell(x, z, here, CELL));
+      } else {
+        void requestStep(step, here, next);
+      }
+    }
+    walkGoal.set(x, 0, z);
+    const tile = tileAtCell(cellOf(x, z, CELL));
+    walkGoal.y = tile ? tileGroundY(tile, walkGoal) : 0;
+    npcs.setPlayerTarget(avatarName, walkGoal);
+  });
+
+  /** Authority check: while the player steers, the SERVER can still move the
+   *  avatar (teleport, party pull, admin). Such a move is a jump — the figure
+   *  goes to the server's tile and the camera follows. It must NOT fire for
+   *  our own steps, which are briefly out of sync in both directions: the
+   *  request has returned but this payload predates it (server = old cell,
+   *  expected = local), or the payload is already ahead of the walking figure
+   *  (server = expected, local = old cell). */
+  function reconcileAvatarCell(map: WorldMap) {
+    if (getGameState().mode !== 'embodied') return;
+    if (stepInFlight) return;
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;
+    const me = map.characters.find((c) => c.name === avatarName);
+    const tile = me ? tiles.get(me.location_id) ?? null : null;
+    if (!tile || tile.loc.grid_x == null || tile.loc.grid_y == null) return;
+    const server: Cell = { gx: tile.loc.grid_x, gy: tile.loc.grid_y };
+    const local = cellOf(pos.x, pos.z, CELL);
+    if (server.gx === local.gx && server.gy === local.gy) {
+      expectedCell = null;                 // in sync, nothing outstanding
+      return;
+    }
+    const fresh = Date.now() - expectedAt < EXPECT_TTL_MS;
+    if (expectedCell && fresh
+      && ((expectedCell.gx === local.gx && expectedCell.gy === local.gy)
+        || (expectedCell.gx === server.gx && expectedCell.gy === server.gy))) return;
+    const p = tile.center.clone();
+    p.setY(tileGroundY(tile, p));
+    npcs.snapPlayerTo(avatarName, p);
+    engine.flyTo(p, engine.targetDist);
+    expectedCell = null;
+  }
 
   // --- Frame-Hook: LOD (Raumauflösung), NPC-Animation, Pin-Bobbing ----------
   let bob = 0;

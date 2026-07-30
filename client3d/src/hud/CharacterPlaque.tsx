@@ -58,6 +58,14 @@ export function CharacterPlaque() {
             <span>{travelTo}</span>
           </div>
         )}
+        {/* Why the keys do nothing while embodied (E3-T3): as a party follower
+            the avatar is carried by the leader and cannot walk on its own. */}
+        {sel.isAvatar && state.mode === 'embodied' && state.movementLocked && (
+          <div className="hud-plaque-row">
+            <span className="hud-plaque-key">{t('Party')}</span>
+            <span>{t('Following {leader}').replace('{leader}', state.partyLeader)}</span>
+          </div>
+        )}
         <div className="hud-plaque-actions">
           <button className="player-chip" onClick={() => gameActions.zoomTo?.(char.name)}>
             {t('Zoom to')}

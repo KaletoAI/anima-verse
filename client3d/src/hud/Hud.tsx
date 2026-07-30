@@ -13,14 +13,14 @@
  * button is absent in HUD v1 (the image-gen dialog lives in the game-admin
  * UI); open point for stage 6.
  */
-import { useCallback, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import {
-  apiGet, apiPost, usePoll, useI18n, Icon,
+  apiGet, apiPost, usePoll, useI18n, useToast, Icon,
   ScenePanel, SelfPanel, OthersPanel,
   type SceneData, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
-import { gameActions, getGameState, subscribeGameState } from './bus';
+import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
 // Load order matters: the fantasy theme redefines the custom properties and
@@ -66,6 +66,23 @@ export function Hud({ avatar }: { avatar: string }) {
 
   const present = data?.present || [];
   const avatarName = data?.avatar || avatar;
+
+  // Party follower (E3-T3): SAME derivation as /play (PlayerApp hands
+  // `party.role === 'follower'` to the MovePad). The vanilla side reads it off
+  // the bus and stops steering; the server refuses the step regardless.
+  const followerOf = data?.party?.role === 'follower' ? data.party.leader || '' : '';
+  useEffect(() => {
+    setGameState({ movementLocked: !!followerOf, partyLeader: followerOf });
+  }, [followerOf]);
+
+  // Toast bridge (E3-T3): the vanilla app renders no text of its own, so a
+  // refused step (403 with the server's reason) is shown through the package
+  // toast that already lives inside this island.
+  const { toast } = useToast();
+  useEffect(() => {
+    uiActions.toast = (msg: string) => toast(msg, 'error');
+    return () => { uiActions.toast = undefined; };
+  }, [toast]);
 
   const panelHead = (id: PanelId, icon: IconName, title: string) => (
     <header className="hud-panel-head">

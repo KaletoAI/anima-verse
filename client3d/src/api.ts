@@ -39,6 +39,47 @@ export async function getWorldMap(): Promise<WorldMap> {
   return json(await fetch('/play/worldmap'));
 }
 
+/** Error of a game call that carries the server's own reason. `message` is the
+ *  server's `detail.message` where there is one — that text is written FOR the
+ *  player and belongs in a toast unchanged. */
+export class ApiError extends Error {
+  status: number;
+  /** machine-readable reason of the server (`party_follower`, `block_enter`, …) */
+  reason: string;
+  constructor(status: number, message: string, reason = '') {
+    super(message);
+    this.status = status;
+    this.reason = reason;
+  }
+}
+
+export type StepDirection = 'north' | 'south' | 'east' | 'west';
+
+/** One grid step of the avatar. Throws an `ApiError`: 403 = party follower,
+ *  entry-room gate or block rule (message written for the player), 404 = no
+ *  location in that direction. */
+export async function avatarStep(direction: StepDirection
+): Promise<{ location_id: string; room_id?: string }> {
+  const res = await fetch('/world/avatar/step', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ direction }),
+  });
+  if (!res.ok) {
+    let detail: unknown = null;
+    try {
+      const body = await res.json();
+      detail = (body && typeof body === 'object' && 'detail' in body) ? body.detail : body;
+    } catch { /* error without a body — status alone has to do */ }
+    const obj = detail && typeof detail === 'object' ? detail as Record<string, unknown> : null;
+    const message = typeof detail === 'string' ? detail
+      : typeof obj?.message === 'string' ? obj.message
+        : `HTTP ${res.status}`;
+    throw new ApiError(res.status, message, typeof obj?.reason === 'string' ? obj.reason : '');
+  }
+  return res.json();
+}
+
 export async function getCharactersAtLocation(locationId: string): Promise<AtLocationChar[]> {
   const data = await json<{ characters: AtLocationChar[] }>(
     await fetch(`/characters/at-location?location=${encodeURIComponent(locationId)}`)

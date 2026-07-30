@@ -5,7 +5,10 @@ import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { PathGrid } from './pathfind';
 import { seededRandom } from './textures';
 
-const WALK_SPEED = 3.4; // Welteinheiten pro Sekunde (~Gehtempo bei 10er-Zellen)
+/** World units per second (~walking pace on 10-unit cells). Exported because
+ *  the player-driven avatar (E3-T3) has to move at exactly the NPC pace — a
+ *  second constant would drift. */
+export const WALK_SPEED = 3.4;
 const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
 const SELECT_COLOR = 0xf2d98c;
@@ -128,6 +131,8 @@ export class NpcManager {
   /** name of the picked figure (E3-T1) — the ring follows this, not the mesh */
   private selected: string | null = null;
   private selectRing: THREE.Mesh | null = null;
+  /** figure the PLAYER steers (E3-T3); its placement comes from main.ts */
+  private playerDriven: string | null = null;
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -158,6 +163,43 @@ export class NpcManager {
   /** World position of a figure, or null when it is not on the map (E3-T1). */
   positionOf(name: string): THREE.Vector3 | null {
     return this.npcs.get(name)?.root.position.clone() ?? null;
+  }
+
+  /** Hand a figure over to the player (E3-T3), null gives it back to the
+   *  server placement. While it is player-driven, `update()` ignores every
+   *  PLACEMENT field for it (pos/via/route/scale/face/lean/hidden) — the frame
+   *  hook in main.ts owns the position; label, activity and animation keep
+   *  following the worldmap. Idempotent: only a real change clears the running
+   *  route/waypoints, so the figure does not stutter on repeated calls. */
+  setPlayerDriven(name: string | null) {
+    if (this.playerDriven === name) return;
+    this.playerDriven = name;
+    if (!name) return;
+    const npc = this.npcs.get(name);
+    if (!npc) return;
+    npc.route = null;        // a server journey would keep overriding the input
+    npc.waypoints = [];      // ditto for a planned A* path
+    npc.target.copy(npc.root.position);
+  }
+
+  /** Walk goal of the player-driven figure (E3-T3). Writes `npc.target`, so
+   *  `tick()` walks there exactly as it does for any NPC — animation, facing
+   *  and ground blending included, no second movement code path. */
+  setPlayerTarget(name: string, pos: THREE.Vector3) {
+    const npc = this.npcs.get(name);
+    if (npc) npc.target.copy(pos);
+  }
+
+  /** Hard placement of the player-driven figure (E3-T3): used when the SERVER
+   *  moved the avatar behind the player's back (teleport, party pull, admin) —
+   *  that is a jump, not a walk, so the position is set instead of targeted. */
+  snapPlayerTo(name: string, pos: THREE.Vector3) {
+    const npc = this.npcs.get(name);
+    if (!npc) return;
+    npc.root.position.copy(pos);
+    npc.target.copy(pos);
+    npc.waypoints = [];
+    npc.route = null;
   }
 
   /** Mark a figure as selected; null clears the marker (E3-T1). */
@@ -219,6 +261,21 @@ export class NpcManager {
         this.npcs.set(st.char.name, npc);
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
+      }
+      // Player-driven figure (E3-T3): WHERE it stands belongs to the frame
+      // hook in main.ts — pos/via/route/scale/face/lean/hidden are all
+      // placement decisions of the server view and would fight the input at
+      // 1 Hz. What the worldmap SAYS about the character still applies (name,
+      // activity, animation). The travel line is cleared: a player walking on
+      // foot has no server journey to draw, and drawing one from `st.pos`
+      // would start it where the figure is not.
+      if (st.char.name === this.playerDriven) {
+        npc.activity = st.char.activity || '';
+        npc.animation = st.char.activity_animation || undefined;
+        npc.labelActivity.textContent = npc.activity;
+        npc.labelName.textContent = st.char.name;
+        this.updateTravelLine(npc, { ...st, travelTo: null });
+        continue;
       }
       // Adopt the server journey (§ A11). The RATE (cellSecondsReal) and the
       // path geometry are authoritative and adopted on every update — a
