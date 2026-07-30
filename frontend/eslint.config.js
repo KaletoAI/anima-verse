@@ -4,8 +4,16 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 
+// The `lint` script runs this config from the REPO ROOT (`cd .. && eslint
+// --config frontend/eslint.config.js frontend packages/player-ui/src`), because
+// ESLint's base path is the config file's directory (or the cwd when --config is
+// passed) and files outside it are silently ignored — a `files` glob cannot
+// contain `..`. Running from the root is what makes the shared player panels in
+// packages/player-ui/src reachable: they used to live under frontend/src and
+// were linted, and the hook rules below are the reason that must stay true.
+// Therefore all globs here are root-relative.
 export default tseslint.config(
-  { ignores: ['dist'] },
+  { ignores: ['**/dist'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
