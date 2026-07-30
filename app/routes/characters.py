@@ -1644,6 +1644,7 @@ def get_character_thoughts(character_name: str, limit: int = 50,
                           "game_ts": r.get("game_ts", "") or "",
                           **_names(r.get("location_id", ""), r.get("room_id", "")),
                           "present": r.get("present") or [],
+                          "nearby": r.get("nearby") or [],
                           "content": r.get("content", "")}
                          for r in rows[:limit]],
             "has_more": has_more}

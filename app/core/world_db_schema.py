@@ -624,6 +624,10 @@ ALTER_MIGRATIONS = [
     # from ts retroactively — anchors re-anchor on set/factor/freeze).
     # Stored as ISO WITH world-timezone offset (game_local_now().isoformat()).
     ("thoughts", "game_ts", "TEXT DEFAULT ''"),
+    # thoughts: characters in OTHER rooms of the location at thought time
+    # (JSON list of "Name (room)" snapshots, room names frozen at write time).
+    # Makes "same building, different room" visible in the admin journal.
+    ("thoughts", "nearby", "TEXT DEFAULT ''"),
     # telegram_mapping: avatar column — the Telegram user is represented by an
     # avatar character (option B). character_name stays the chat's NPC (bot).
     ("telegram_mapping", "avatar", "TEXT NOT NULL DEFAULT ''"),

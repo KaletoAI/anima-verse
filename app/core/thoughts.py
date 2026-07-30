@@ -745,15 +745,26 @@ class ThoughtRunner:
                         # Journal — sonst steht der Gedanke ohne Anlass da.
                         _journal = f"[trigger: {context_hint[:120]}]\n{_journal}"
                     _room = profile.get("current_room", "") or ""
-                    # Wer war dabei? — dieselbe character_state-Abfrage, die
-                    # auch die Decency-Pruefung nutzt (Journal-Kontext,
-                    # User-Feedback 2026-07-29). Nur Namen, keine Zustellung.
+                    # Who was there? — the same character_state query the
+                    # decency check uses (journal context, user feedback
+                    # 2026-07-29). Names only, no delivery.
                     from app.core.outfit_compliance import _present_other_characters
                     _present = _present_other_characters(
                         character_name, _room, location_id)
+                    # ... and who was elsewhere in the building (other rooms
+                    # of this location) — display snapshot "Name (room)",
+                    # room names frozen at write time (2026-07-30).
+                    _nearby: list = []
+                    try:
+                        from app.core.thought_context import location_presence_split
+                        _, _elsewhere = location_presence_split(
+                            character_name, location_id, _room)
+                        _nearby = [f"{n} ({r})" for n, r in _elsewhere]
+                    except Exception as _ne:
+                        logger.debug("nearby snapshot failed: %s", _ne)
                     add_thought(character_name, _journal,
                                 location_id=location_id, room_id=_room,
-                                present=_present)
+                                present=_present, nearby=_nearby)
             except Exception as _je:
                 logger.debug("Thought-Journal Fehler: %s", _je)
 

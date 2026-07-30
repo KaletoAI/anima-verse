@@ -38,21 +38,26 @@ def _game_ts() -> str:
 
 
 def _row_out(row: Any) -> Dict[str, Any]:
-    """Row → dict; ``present`` comes back as a list (stored as JSON text)."""
+    """Row → dict; ``present``/``nearby`` come back as lists (stored as JSON)."""
     out = dict(row)
-    raw = out.get("present")
-    try:
-        out["present"] = json.loads(raw) if raw else []
-    except (TypeError, ValueError):
-        out["present"] = []
+    for key in ("present", "nearby"):
+        raw = out.get(key)
+        try:
+            out[key] = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            out[key] = []
     return out
 
 
 def add_thought(character_name: str, content: str, location_id: str = "",
                 room_id: str = "", ts: Optional[str] = None,
-                present: Optional[List[str]] = None) -> bool:
+                present: Optional[List[str]] = None,
+                nearby: Optional[List[str]] = None) -> bool:
     """Journals one thought. Empty content is not stored (nothing to remember).
     ``present`` = the OTHER characters in the room at turn time (names).
+    ``nearby`` = characters in OTHER rooms of the location at turn time,
+    as display snapshots ("Name (room)") — room names are resolved and
+    frozen at write time so later renames don't falsify the history.
 
     Never raises: a failing journal write must not take down the thought turn
     it belongs to — the turn's world effects already happened through verbs.
@@ -64,10 +69,12 @@ def add_thought(character_name: str, content: str, location_id: str = "",
         with transaction() as conn:
             conn.execute(
                 "INSERT INTO thoughts (character_name, ts, game_ts, location_id,"
-                " room_id, content, present) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " room_id, content, present, nearby)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (character_name, ts or utc_now_iso(), _game_ts(),
                  location_id or "", room_id or "", text,
-                 json.dumps(list(present), ensure_ascii=False) if present else ""))
+                 json.dumps(list(present), ensure_ascii=False) if present else "",
+                 json.dumps(list(nearby), ensure_ascii=False) if nearby else ""))
         return True
     except Exception as e:
         logger.warning("add_thought(%s) failed: %s", character_name, e)
@@ -81,8 +88,8 @@ def list_thoughts(character_name: str, limit: int = 50,
     if not character_name:
         return []
     limit = max(1, min(int(limit or 50), 200))
-    sql = ("SELECT id, ts, game_ts, location_id, room_id, content, present"
-           " FROM thoughts WHERE character_name=?")
+    sql = ("SELECT id, ts, game_ts, location_id, room_id, content, present,"
+           " nearby FROM thoughts WHERE character_name=?")
     params: List[Any] = [character_name]
     if before:
         sql += " AND ts < ?"

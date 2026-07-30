@@ -25,6 +25,9 @@ export interface ThoughtEntry {
   location_name: string
   room_name: string
   present: string[]
+  /** Characters in OTHER rooms of the location at thought time, as frozen
+   *  "Name (room)" snapshots. Empty for rows written before the column. */
+  nearby?: string[]
   content: string
 }
 
@@ -130,7 +133,7 @@ export function MindThoughtsSection({ character }: { character: string }) {
                 <div style={{ flex: 1, minWidth: 0, padding: '6px 10px', borderRadius: 8,
                               background: 'rgba(255,255,255,0.035)',
                               borderLeft: '3px solid rgba(120,170,255,0.35)' }}>
-                  {(e.location_name || e.present?.length || trigger) ? (
+                  {(e.location_name || e.present?.length || e.nearby?.length || trigger) ? (
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline',
                                   fontSize: '0.78em', opacity: 0.65, marginBottom: 3 }}>
                       {e.location_name ? (
@@ -139,6 +142,12 @@ export function MindThoughtsSection({ character }: { character: string }) {
                       {e.present?.length ? (
                         <span title={t('Characters present at the time of the thought')}>
                           👥 {e.present.join(', ')}
+                        </span>
+                      ) : null}
+                      {e.nearby?.length ? (
+                        <span style={{ opacity: 0.75 }}
+                          title={t('At this location, but in another room — out of sight and earshot at the time of the thought.')}>
+                          🚪 {e.nearby.join(', ')}
                         </span>
                       ) : null}
                       {trigger ? (
