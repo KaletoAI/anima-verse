@@ -11,6 +11,7 @@ import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, showLogin } from './ui';
 import { mountHud } from './hud/mount';
+import { gameActions, getGameState, setGameState, subscribeGameState } from './hud/bus';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
@@ -337,6 +338,31 @@ async function startApp(username: string) {
     if (tile) engine.flyTo(tile.center.clone(), 15);
   };
 
+  // --- Figuren-Auswahl (E3-T1) ---------------------------------------------
+  // Figure picking runs before the tile pick: a hit figure gets the ring and
+  // the plaque (React reads the bus), a miss clears the selection and lets the
+  // click fall through to the tile's info panel.
+  engine.pickFigure = (x, y) => {
+    const name = npcs.characterAt(engine.raycasterAt(x, y));
+    npcs.setSelected(name);
+    if (!name) {
+      setGameState({ selected: null });
+      return false;
+    }
+    const char = lastMap?.characters.find((c) => c.name === name) ?? null;
+    setGameState({ selected: char ? { char, isAvatar: name === lastMap!.avatar } : null });
+    return true;
+  };
+  gameActions.zoomTo = (name) => {
+    const p = npcs.positionOf(name);
+    if (p) engine.flyTo(p, 12);
+  };
+  // The marker follows the BUS, not the click: closing the plaque happens on
+  // the React side without a gameAction, and the ring has to go with it.
+  subscribeGameState(() => {
+    npcs.setSelected(getGameState().selected?.char.name ?? null);
+  });
+
   // --- Event-Pins ----------------------------------------------------------
   const pins = new Map<string, THREE.Sprite>();
   function makePinTexture(emoji: string): THREE.CanvasTexture {
@@ -394,6 +420,21 @@ async function startApp(username: string) {
     }
   }
 
+  /** Keep the plaque on the fresh worldmap snapshot (activity, mood, travel
+   *  target change while it is open). A character that vanished from the map
+   *  drops the selection including its marker. */
+  function refreshSelection(map: WorldMap) {
+    const sel = getGameState().selected;
+    if (!sel) return;
+    const char = map.characters.find((c) => c.name === sel.char.name) ?? null;
+    if (!char) {
+      npcs.setSelected(null);
+      setGameState({ selected: null });
+      return;
+    }
+    setGameState({ selected: { char, isAvatar: char.name === map.avatar } });
+  }
+
   async function pollWorldMap() {
     try {
       lastMap = await api.getWorldMap();
@@ -401,6 +442,7 @@ async function startApp(username: string) {
       hud.setOnline(true);
       takeRoomsFrom(lastMap);
       updatePins(lastMap);
+      refreshSelection(lastMap);
     } catch {
       hud.setOnline(false);
     }

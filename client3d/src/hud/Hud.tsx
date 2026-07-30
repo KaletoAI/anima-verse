@@ -19,6 +19,7 @@ import {
   ScenePanel, SelfPanel, OthersPanel,
   type SceneData, type IconName,
 } from '@anima/player-ui';
+import { CharacterPlaque } from './CharacterPlaque';
 import '@anima/player-ui/panels.css';
 import './hud.css';
 // Load order matters: the fantasy theme redefines the custom properties and
@@ -116,6 +117,10 @@ export function Hud({ avatar }: { avatar: string }) {
           )}
         </div>
       )}
+
+      {/* Selected figure (E3-T1): always mounted, renders null without a
+          selection — the plaque is driven by the bus, not by panel state. */}
+      <CharacterPlaque />
     </>
   );
 }

@@ -88,6 +88,39 @@
   color: var(--hud-gold);
 }
 
+/* ---- Character plaque: a brass name plate laid on the vellum (E3-T1) ---
+ * Same surface and edge as the panels, so plaque and panels read as one set;
+ * the name gets the gold small-caps of the panel headers, the portrait a
+ * brass rim. Field labels stay muted sans — they are read at a glance. */
+#hud .hud-plaque {
+  background: var(--hud-vellum);
+  border-color: rgba(242, 205, 110, 0.38);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(242, 205, 110, 0.14), inset 0 0 26px rgba(0, 0, 0, 0.45), 0 12px 34px rgba(0, 0, 0, 0.55);
+}
+#hud .hud-plaque-portrait {
+  background: radial-gradient(circle at 34% 26%, #3b3225 0%, #262017 62%, #191410 100%);
+  border-color: rgba(242, 205, 110, 0.55);
+  color: var(--hud-gold);
+  box-shadow: inset 0 1px 0 rgba(242, 205, 110, 0.18), 0 2px 7px rgba(0, 0, 0, 0.5);
+}
+#hud .hud-plaque-name {
+  color: var(--hud-gold);
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+#hud .hud-plaque-badge,
+#hud .hud-plaque-key {
+  color: var(--hud-muted);
+  opacity: 1;
+}
+#hud .hud-plaque-close {
+  color: var(--hud-muted);
+  opacity: 1;
+}
+#hud .hud-plaque-close:hover { color: var(--hud-gold); }
+
 /* ---- Rail: three brass studs pressed into the edge of the screen ------- */
 #hud .hud-rail button {
   background: radial-gradient(circle at 34% 26%, #3b3225 0%, #262017 62%, #191410 100%);

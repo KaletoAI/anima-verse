@@ -48,6 +48,9 @@ export class Engine {
 
   onPick: ((locationId: string | null) => void) | null = null;
   onHover: ((locationId: string | null) => void) | null = null;
+  /** Asked BEFORE onPick on a left click (E3-T1): true = the click hit a figure
+   *  and is used up, so no tile pick follows. */
+  pickFigure: ((x: number, y: number) => boolean) | null = null;
 
   constructor(container: HTMLElement) {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.5, 800);
@@ -163,14 +166,21 @@ export class Engine {
     return this.raycaster.ray.intersectPlane(this.groundPlane, hit) ? hit : null;
   }
 
-  private pickLocation(clientX: number, clientY: number): string | null {
+  /** Ray through the pointer position, for anything outside the engine that
+   *  needs to pick its own objects (E3-T1: the figures). The instance is the
+   *  engine's own and is re-aimed on every call — use it right away. */
+  raycasterAt(clientX: number, clientY: number): THREE.Raycaster {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1
     );
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObjects(this.pickables, true);
+    return this.raycaster;
+  }
+
+  private pickLocation(clientX: number, clientY: number): string | null {
+    const hits = this.raycasterAt(clientX, clientY).intersectObjects(this.pickables, true);
     for (const h of hits) {
       let o: THREE.Object3D | null = h.object;
       while (o) {
@@ -247,7 +257,11 @@ export class Engine {
       const wasDrag = (this.dragging || this.orbiting) && this.moved;
       this.dragging = false;
       this.orbiting = false;
-      if (!wasDrag && e.button === 0) this.onPick?.(this.pickLocation(e.clientX, e.clientY));
+      if (wasDrag || e.button !== 0) return;
+      // Figures first: a hit figure eats the click, so clicking a character
+      // does not also open the tile's info panel.
+      if (this.pickFigure?.(e.clientX, e.clientY)) return;
+      this.onPick?.(this.pickLocation(e.clientX, e.clientY));
     });
     el.addEventListener('contextmenu', (e) => e.preventDefault());
 

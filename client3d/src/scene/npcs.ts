@@ -7,6 +7,8 @@ import { seededRandom } from './textures';
 
 const WALK_SPEED = 3.4; // Welteinheiten pro Sekunde (~Gehtempo bei 10er-Zellen)
 const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
+/** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
+const SELECT_COLOR = 0xf2d98c;
 
 function ringColor(name: string): string {
   const rnd = seededRandom(name);
@@ -123,6 +125,9 @@ export class NpcManager {
   private npcs = new Map<string, Npc>();
   private avatarName = '';
   private grid: PathGrid | null = null;
+  /** name of the picked figure (E3-T1) — the ring follows this, not the mesh */
+  private selected: string | null = null;
+  private selectRing: THREE.Mesh | null = null;
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -133,6 +138,59 @@ export class NpcManager {
 
   setAvatar(name: string) {
     this.avatarName = name;
+  }
+
+  /** Name of the nearest figure under the ray, or null (E3-T1). Hits the whole
+   *  `npc.root` hierarchy, so a sprite counts as well as a rigged figure.
+   *  Hidden figures (other storey) are excluded — they are not clickable. */
+  characterAt(raycaster: THREE.Raycaster): string | null {
+    const roots = [...this.npcs.values()].filter((n) => n.root.visible).map((n) => n.root);
+    for (const hit of raycaster.intersectObjects(roots, true)) {
+      let o: THREE.Object3D | null = hit.object;
+      while (o) {
+        if (o.userData.charName) return o.userData.charName as string;
+        o = o.parent;
+      }
+    }
+    return null;
+  }
+
+  /** World position of a figure, or null when it is not on the map (E3-T1). */
+  positionOf(name: string): THREE.Vector3 | null {
+    return this.npcs.get(name)?.root.position.clone() ?? null;
+  }
+
+  /** Mark a figure as selected; null clears the marker (E3-T1). */
+  setSelected(name: string | null) {
+    this.selected = name;
+    this.syncSelectRing();
+  }
+
+  /** Keep the marker on the selected figure across rebuilds/removals: the ring
+   *  hangs in `npc.root`, and that group is thrown away whenever the model is
+   *  reloaded or the character leaves the map. */
+  private syncSelectRing() {
+    const npc = this.selected ? this.npcs.get(this.selected) : undefined;
+    if (this.selectRing && this.selectRing.parent === (npc?.root ?? null)) return;
+    if (this.selectRing) {
+      this.selectRing.removeFromParent();
+      this.selectRing.geometry.dispose();
+      (this.selectRing.material as THREE.Material).dispose();
+      this.selectRing = null;
+    }
+    if (!npc) return;
+    // Own mesh, deliberately NOT the identity ring: that one carries the
+    // per-character colour and only exists for rigged figures.
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.85, 1.05, 40),
+      new THREE.MeshBasicMaterial({
+        color: SELECT_COLOR, transparent: true, opacity: 0.95, depthWrite: false,
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.12;   // above the identity ring (0.09) and the sprite blob (0.08)
+    npc.root.add(ring);
+    this.selectRing = ring;
   }
 
   /** NPC verwerfen, damit er beim nächsten update() neu gebaut wird —
@@ -218,11 +276,13 @@ export class NpcManager {
         this.npcs.delete(name);
       }
     }
+    this.syncSelectRing();   // re-attach after rebuilds, drop when the figure left
   }
 
   private createNpc(st: NpcState): Npc {
     const isAvatar = st.char.name === this.avatarName;
     const root = new THREE.Group();
+    root.userData.charName = st.char.name;   // figure picking (E3-T1)
     const figure = this.figures?.instantiate(st.char.name) ?? null;
     let sprite: THREE.Sprite | null = null;
     let ring: THREE.Mesh | null = null;
@@ -443,5 +503,8 @@ export class NpcManager {
       }
       npc.label.visible = labelVisible;
     }
+    // Same rule as the identity ring: grow with the camera distance so the
+    // selection stays findable in the far view (sprite figures included).
+    this.selectRing?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
   }
 }
