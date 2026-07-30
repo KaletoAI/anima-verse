@@ -1326,12 +1326,15 @@ def _is_paused() -> bool:
 
 
 def _chat_llm_available() -> bool:
-    """Probe whether the 'chat' route resolves to a live provider — the
-    respond lane's counterpart to _thought_llm_available (responses run
-    through run_chat_turn, i.e. the chat route, not the thought route)."""
+    """Probe whether the chat route resolves to a live provider — the
+    respond lane's counterpart to _thought_llm_available. Must probe the
+    SAME task id the respond turn resolves (run_chat_turn →
+    resolve_llm("chat_stream")): an id that is not in TASK_TYPES has no
+    routing chain and resolves to None FOREVER, which silently parks the
+    whole lane (2026-07-30 regression: the probe said "chat")."""
     try:
         from app.core.llm_router import resolve_llm
-        return resolve_llm("chat") is not None
+        return resolve_llm("chat_stream") is not None
     except Exception:
         return False
 
