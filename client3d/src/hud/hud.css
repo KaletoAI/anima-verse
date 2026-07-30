@@ -94,7 +94,7 @@
 #hud .hud-panel-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto; /* short viewport: SelfPanel's fixed rows must stay reachable */
   padding: 10px;
 }
 
@@ -137,21 +137,21 @@
    GiftPicker and the Lightbox portal to document.body, outside #hud. */
 
 .player-chip {
-  padding: 3px 11px;
-  border-radius: 999px;
-  font-size: 0.82em;
-  line-height: 1.4;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.8em;
+  line-height: 1.5;
   color: inherit;
   border: 1px solid var(--border, #30363d);
-  background: transparent;
+  background: none;
   cursor: pointer;
 }
 .player-chip:hover { border-color: var(--accent, #6aa9ff); }
 .player-chip.on {
   border-color: var(--accent, #6aa9ff);
-  background: color-mix(in srgb, var(--accent, #6aa9ff) 26%, transparent);
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 20%, transparent);
 }
-.player-chip:disabled { opacity: 0.5; cursor: default; }
+.player-chip:disabled { opacity: 0.45; cursor: not-allowed; }
 .player-chip-follow { border-color: var(--accent-2, #d6b06a); }
 
 .player-thinking-dots { display: inline-flex; gap: 3px; }
