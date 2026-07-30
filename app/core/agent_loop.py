@@ -5,6 +5,15 @@ Picks the next agent via weighted round-robin (importance 1=Low, 2=Medium,
 turn at a time (LLM/GPU is the bottleneck). Sleeping characters and the
 user-controlled avatar are excluded.
 
+Chat-response bumps (``bump_respond``) do NOT go through the serial loop:
+they live in their own respond lane — a dispatcher task spawns up to
+``thoughts.max_parallel_responds`` concurrent respond turns (no global turn
+lock, no min_turn_gap), so a conversation never waits behind unrelated
+thought turns. Answers in the SAME room stay serialized via a per-room lock
+(each answer must see the previous one in the perception stream); actual
+LLM parallelism is still capped by the provider's max_concurrent
+(plan-parallel-bump-lane.md).
+
 Eligibility (per turn):
     - thoughts_enabled feature is true for the character
     - character is not currently sleeping
@@ -38,6 +47,9 @@ logger = get_logger("agent_loop")
 
 # Sleep when nothing is eligible (everyone sleeping, world paused, etc.)
 _IDLE_SLEEP_SECONDS = 30
+# Boot grace before the loops start firing turns — lets the rest of the
+# server finish wiring up. Module-level so tests can zero it.
+_BOOT_GRACE_SECONDS = 15
 # Per-turn timeout — guards a hung LLM call from blocking the loop forever.
 _TURN_TIMEOUT_SECONDS = 600
 # Cap on importance (defensive — config could be junk).
@@ -61,14 +73,17 @@ _IN_CHAT_WARM_MIN = 30
 # verworfener in-chat-Gedanke. Backstop begrenzt die Kette zusätzlich.
 _ROOM_CONVO_ACTIVE_SEC = 240
 
-# Pacing — vermeiden dass bei wenigen Charakteren der Loop zu eng taktet.
-# Werte werden live aus der Welt-Config gelesen (Admin-Tab "Gedanken"):
+# Pacing — keeps the loop from over-ticking with few characters.
+# Values are read live from the world config (admin tab "Gedanken"):
 #   thoughts.min_turn_gap_seconds        (default 30)
 #   thoughts.min_per_char_cooldown_minutes (default 5)
-# Beide Cooldowns gelten zusaetzlich zum Importance-Round-Robin und zu
-# in-chat-skip / no_llm-Backoff.
+# Both cooldowns apply in addition to the importance round-robin and the
+# in-chat-skip / no_llm backoffs.
 _MIN_TURN_GAP_DEFAULT = 30
 _MIN_PER_CHAR_COOLDOWN_MIN_DEFAULT = 5
+# Respond lane: how many bumped chat responses may run concurrently
+# (thoughts.max_parallel_responds, read live).
+_MAX_PARALLEL_RESPONDS_DEFAULT = 2
 
 
 def _get_min_turn_gap() -> int:
@@ -88,6 +103,16 @@ def _get_per_char_cooldown_min() -> int:
                    or _MIN_PER_CHAR_COOLDOWN_MIN_DEFAULT)
     except Exception:
         return _MIN_PER_CHAR_COOLDOWN_MIN_DEFAULT
+
+
+def _get_max_parallel_responds() -> int:
+    """Read thoughts.max_parallel_responds from config (live), floor 1."""
+    try:
+        from app.core import config as _cfg
+        return max(1, int(_cfg.get("thoughts.max_parallel_responds")
+                          or _MAX_PARALLEL_RESPONDS_DEFAULT))
+    except Exception:
+        return _MAX_PARALLEL_RESPONDS_DEFAULT
 
 
 # Transiente Netzwerk-Fehlertypen, die der LLM-Stream werfen kann, wenn
@@ -127,6 +152,18 @@ class AgentLoop:
         # and tools restricted by tool_whitelist. Latest perception wins
         # if multiple arrive before the tick.
         self._bump_perception: Dict[str, Dict[str, Any]] = {}
+        # Respond lane (plan-parallel-bump-lane.md): bump_respond entries do
+        # NOT share the serial loop. The dispatcher task pops from
+        # _respond_queue (FIFO, obligatory-first) and runs up to
+        # thoughts.max_parallel_responds concurrent respond turns. A
+        # character never runs two turns at once (_respond_active is checked
+        # by the round-robin too); answers in the same room serialize on a
+        # per-room asyncio.Lock so each answer sees the previous one.
+        self._respond_queue: List[str] = []
+        self._respond_to: Dict[str, Dict[str, Any]] = {}
+        self._respond_active: Dict[str, asyncio.Task] = {}
+        self._room_locks: Dict[str, asyncio.Lock] = {}
+        self._respond_task: Optional[asyncio.Task] = None
         # Raum-Konversations-Energie (plan-room-conversation Phase 3b): pro Raum
         # ein Zähler aufeinanderfolgender KI-Äußerungen seit dem letzten
         # Avatar-Input. Decay pro Hop + harter Backstop verhindern Endlos-
@@ -177,18 +214,24 @@ class AgentLoop:
             return
         self._stop.clear()
         self._task = asyncio.create_task(self._run_forever())
-        logger.info("AgentLoop gestartet")
+        self._respond_task = asyncio.create_task(self._respond_dispatcher())
+        logger.info("AgentLoop started")
 
     async def stop(self) -> None:
         self._stop.set()
-        if self._task:
-            self._task.cancel()
+        tasks = [t for t in (self._task, self._respond_task) if t]
+        tasks.extend(self._respond_active.values())
+        for t in tasks:
+            t.cancel()
+        for t in tasks:
             try:
-                await self._task
+                await t
             except asyncio.CancelledError:
                 pass
-            self._task = None
-        logger.info("AgentLoop gestoppt")
+        self._task = None
+        self._respond_task = None
+        self._respond_active.clear()
+        logger.info("AgentLoop stopped")
 
     # ------------------------------------------------------------------
     # Status (admin panel)
@@ -201,7 +244,10 @@ class AgentLoop:
             "standby": self._llm_standby,
             "current_agent": self._current_agent,
             "remaining_in_round": list(self._tickets),
+            # Hint bumps only — chat responses live in the respond lane.
             "bumped": list(self._bump_queue),
+            "respond_queue": list(self._respond_queue),
+            "respond_active": list(self._respond_active.keys()),
             "recent": list(self._recent),
         }
 
@@ -262,61 +308,65 @@ class AgentLoop:
                      content: str, volume: str = "normal",
                      obligatory: bool = True, hint: str = "",
                      winding_down: bool = False) -> bool:
-        """Phase 3: Character soll auf eine Raum-Äußerung des Sprechers reagieren.
+        """Phase 3: character should react to a room utterance of the speaker.
 
-        Anders als ``bump`` (Gedanken/Perception) löst dies eine sichtbare
-        Chat-Antwort aus, die als Utterance in den Raum aufgezeichnet wird.
-        Umgeht in-chat-Gating (Antworten sollen immer raus).
+        Unlike ``bump`` (thoughts/perception) this triggers a VISIBLE chat
+        reply that is recorded as a room utterance. Bypasses in-chat gating
+        (answers must always go out). Queued into the respond lane — the
+        dispatcher runs these turns concurrently, outside the serial loop.
 
-        ``obligatory`` True = adressiert → Pflicht-Antwort. False = anwesend, nur
-        mitgehört → Gelegenheit (Chime-in): der Turn darf per SKIP schweigen.
-        Eine bereits vorgemerkte Pflicht-Antwort wird durch eine Gelegenheit NICHT
-        herabgestuft.
+        ``obligatory`` True = addressed → mandatory answer. False = merely
+        present → opportunity (chime-in): the turn may stay silent via SKIP.
+        A pending mandatory answer is never downgraded by an opportunity.
         """
         if not character_name:
             return False
         if not _is_respond_eligible(character_name):
             logger.debug("AgentLoop.bump_respond skipped: %s ineligible", character_name)
             return False
-        existing = (self._bump_perception.get(character_name) or {}).get("respond_to")
+        existing = self._respond_to.get(character_name)
         if existing and existing.get("obligatory") and not obligatory:
-            return True  # Pflicht schlägt Gelegenheit
-        self._bump_perception[character_name] = {
-            "respond_to": {"speaker": speaker, "content": content,
-                           "volume": volume, "obligatory": obligatory,
-                           "hint": hint, "winding_down": winding_down},
+            return True  # obligation beats opportunity
+        self._respond_to[character_name] = {
+            "speaker": speaker, "content": content,
+            "volume": volume, "obligatory": obligatory,
+            "hint": hint, "winding_down": winding_down,
         }
-        # Pflicht-Antworten PRIORISIEREN: ganz nach vorn (die Queue wird per
-        # pop(0) FIFO verarbeitet), damit sie nicht hinter Chimes/Gedanken
-        # verhungern — sonst kann die Szene konsolidieren, bevor die Antwort lief.
-        if character_name in self._bump_queue:
-            self._bump_queue.remove(character_name)
+        # Mandatory answers go to the FRONT (the lane pops FIFO) so they
+        # never starve behind chime opportunities — otherwise the scene can
+        # consolidate before the answer ran. A character already running a
+        # respond turn stays queued: they answer again afterwards (new
+        # utterance, new context); the dispatcher skips active names.
+        if character_name in self._respond_queue:
+            self._respond_queue.remove(character_name)
         if obligatory:
-            self._bump_queue.insert(0, character_name)
+            self._respond_queue.insert(0, character_name)
         else:
-            self._bump_queue.append(character_name)
-        logger.info("AgentLoop.bump_respond: %s %s auf %s", character_name,
-                    "antwortet" if obligatory else "(Gelegenheit)", speaker)
+            self._respond_queue.append(character_name)
+        logger.info("AgentLoop.bump_respond: %s %s to %s", character_name,
+                    "answers" if obligatory else "(opportunity)", speaker)
         return True
 
     def _room_key(self, location_id: str, room_id: str) -> str:
         return f"{location_id or ''}/{room_id or ''}"
 
     def _rooms_with_pending_obligatory(self) -> set:
-        """Raum-Keys (loc/room) mit einer ausstehenden PFLICHT-Antwort in der
-        Bump-Queue. Diese Räume dürfen NICHT idle-konsolidiert werden — sonst
-        wird der Stream geprunt, bevor die Antwort lief (keine-Antwort-Bug)."""
+        """Room keys (loc/room) with a pending MANDATORY answer in the
+        respond lane, or with a respond turn currently running. These rooms
+        must NOT be idle-consolidated — the stream would be pruned before
+        the answer ran (no-answer bug) or mid-answer."""
         keys: set = set()
         try:
             from app.models.character import (get_character_current_location,
                                               get_character_current_room)
-            for name in list(self._bump_queue):
-                rt = (self._bump_perception.get(name) or {}).get("respond_to")
-                if rt and rt.get("obligatory"):
-                    loc = get_character_current_location(name) or ""
-                    if loc:
-                        room = get_character_current_room(name) or ""
-                        keys.add(self._room_key(loc, room))
+            names = {n for n in list(self._respond_queue)
+                     if (self._respond_to.get(n) or {}).get("obligatory")}
+            names.update(self._respond_active.keys())
+            for name in names:
+                loc = get_character_current_location(name) or ""
+                if loc:
+                    room = get_character_current_room(name) or ""
+                    keys.add(self._room_key(loc, room))
         except Exception as e:  # noqa: BLE001
             logger.debug("pending-obligatory rooms failed: %s", e)
         return keys
@@ -504,7 +554,7 @@ class AgentLoop:
         # Brief delay so the rest of the server finishes wiring up before we
         # start firing thought turns.
         try:
-            await asyncio.sleep(15)
+            await asyncio.sleep(_BOOT_GRACE_SECONDS)
         except asyncio.CancelledError:
             return
 
@@ -591,6 +641,123 @@ class AgentLoop:
                 await asyncio.sleep(5)
 
     # ------------------------------------------------------------------
+    # Respond lane (plan-parallel-bump-lane.md)
+    # ------------------------------------------------------------------
+
+    def _room_lock(self, room_key: str) -> asyncio.Lock:
+        """Per-room lock serializing answers within one room. The '' key
+        (unknown location) is a shared fallback lock — conservative: answers
+        without a resolvable room serialize against each other."""
+        lock = self._room_locks.get(room_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._room_locks[room_key] = lock
+        return lock
+
+    def _char_room_key(self, character_name: str) -> str:
+        """Room key (loc/room) the character is in right now; '' if unknown."""
+        try:
+            from app.models.character import (get_character_current_location,
+                                              get_character_current_room)
+            loc = get_character_current_location(character_name) or ""
+            if not loc:
+                return ""
+            room = get_character_current_room(character_name) or ""
+            return self._room_key(loc, room)
+        except Exception:
+            return ""
+
+    def _pop_next_respond(self) -> Optional[tuple]:
+        """Pop the first queued respond whose character is not already
+        running a turn. Re-checks eligibility at pop time (the character
+        may have been taken over as avatar since the bump). Returns
+        (name, payload) or None."""
+        for name in list(self._respond_queue):
+            if name in self._respond_active:
+                continue  # never two turns for the same character at once
+            self._respond_queue.remove(name)
+            payload = self._respond_to.pop(name, None)
+            if not payload:
+                continue
+            if not _is_respond_eligible(name):
+                logger.debug("respond lane: %s became ineligible — dropped", name)
+                continue
+            return name, payload
+        return None
+
+    async def _respond_dispatcher(self) -> None:
+        """Own asyncio task feeding the respond lane. Spawns respond turns
+        as concurrent tasks up to thoughts.max_parallel_responds — no global
+        turn lock, no min_turn_gap. Honors the shared pause switch (admin
+        pause, world freeze, world sleep) and keeps the queue when the chat
+        LLM is unreachable."""
+        try:
+            await asyncio.sleep(_BOOT_GRACE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        while not self._stop.is_set():
+            try:
+                if not self._respond_queue:
+                    await asyncio.sleep(1)
+                    continue
+                if _is_paused():
+                    await asyncio.sleep(_IDLE_SLEEP_SECONDS)
+                    continue
+                if len(self._respond_active) >= _get_max_parallel_responds():
+                    await asyncio.sleep(0.5)
+                    continue
+                if not _chat_llm_available():
+                    await asyncio.sleep(_IDLE_SLEEP_SECONDS)
+                    continue
+                nxt = self._pop_next_respond()
+                if not nxt:
+                    await asyncio.sleep(1)
+                    continue
+                name, payload = nxt
+                self._respond_active[name] = asyncio.create_task(
+                    self._respond_worker(name, payload))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Respond dispatcher tick error: %s", e, exc_info=True)
+                await asyncio.sleep(5)
+
+    async def _respond_worker(self, character_name: str,
+                              respond: Dict[str, Any]) -> None:
+        """One parallel respond turn: acquire the room lock, run the turn,
+        record the outcome. Same outcome semantics as the serial loop
+        (cooldown applies via _record_turn), but no min_turn_gap."""
+        started_at = utc_now()
+        outcome = "respond"
+        turn_info: Dict[str, Any] = {}
+        try:
+            room_key = self._char_room_key(character_name)
+            async with self._room_lock(room_key):
+                turn_info = await asyncio.wait_for(
+                    self._run_respond_turn(character_name, respond),
+                    timeout=_TURN_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.error("Respond lane TIMEOUT (%ds) for %s",
+                         _TURN_TIMEOUT_SECONDS, character_name)
+            outcome = "timeout"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except Exception as e:
+            if _is_transient_network_error(e):
+                logger.warning(
+                    "Respond lane aborted for %s — transient network error "
+                    "from LLM provider: %s", character_name, type(e).__name__)
+                outcome = "transient_network"
+            else:
+                logger.error("Respond lane error for %s: %s",
+                             character_name, e, exc_info=True)
+                outcome = f"error: {type(e).__name__}"
+        finally:
+            self._respond_active.pop(character_name, None)
+            self._record_turn(character_name, started_at, outcome, turn_info)
+
+    # ------------------------------------------------------------------
     # Agent selection (weighted round-robin)
     # ------------------------------------------------------------------
 
@@ -603,22 +770,29 @@ class AgentLoop:
           3. Refill round and try again
 
         Agents that became ineligible (sleep, disabled, removed) are
-        silently skipped. Per-Char-Cooldown wird ebenfalls hier gefiltert
-        — ein Char der vor < _MIN_PER_CHAR_COOLDOWN_MIN einen echten Turn
-        hatte wird uebersprungen. Bumps umgehen den Cooldown bewusst
-        (externe Trigger wie Avatar-Roomentry sollen sofort wirken).
+        silently skipped, as are characters currently running a respond
+        turn (a character is never in two turns at once). The per-char
+        cooldown is filtered here too — a char whose last real turn is
+        < _MIN_PER_CHAR_COOLDOWN_MIN ago is skipped. Bumps bypass the
+        cooldown deliberately (external triggers like avatar room entry
+        must act immediately). Chat responses never appear here — they
+        live in the respond lane.
         """
-        # 1) Bumped agents come first — Cooldown ignorieren (Bump = Prioritaet).
-        #    Respond-Bumps (Phase 3) nutzen die relaxte Eligibility (kein
-        #    Schlaf-/thoughts-Gate), damit Angesprochene immer antworten.
-        while self._bump_queue:
+        # 1) Bumped agents come first — cooldown ignored (bump = priority).
+        #    A bumped char who is mid-respond stays queued for later.
+        deferred: List[str] = []
+        picked: Optional[str] = None
+        while self._bump_queue and picked is None:
             candidate = self._bump_queue.pop(0)
-            is_respond = bool((self._bump_perception.get(candidate) or {}).get("respond_to"))
-            if is_respond:
-                if _is_respond_eligible(candidate):
-                    return candidate
-            elif _is_agent_eligible(candidate):
-                return candidate
+            if candidate in self._respond_active:
+                deferred.append(candidate)
+                continue
+            if _is_agent_eligible(candidate):
+                picked = candidate
+        if deferred:
+            self._bump_queue[:0] = deferred
+        if picked:
+            return picked
 
         cooldown = timedelta(minutes=_get_per_char_cooldown_min())
         now = utc_now()
@@ -642,12 +816,14 @@ class AgentLoop:
         # 2) Current round.
         while self._tickets:
             candidate = self._tickets.pop(0)
+            if candidate in self._respond_active:
+                continue  # mid-respond — never two turns at once
             if not _is_agent_eligible(candidate):
                 continue
             if _on_cooldown(candidate):
-                continue  # naechstes Ticket — diesen Char ueberspringen
+                continue  # next ticket — skip this char
             if _in_chat_skip(candidate):
-                continue  # Char ist gerade im Chat — kein Thought
+                continue  # char is actively chatting — no thought
             return candidate
 
         # 3) Refill round.
@@ -656,6 +832,8 @@ class AgentLoop:
             return None
         while self._tickets:
             candidate = self._tickets.pop(0)
+            if candidate in self._respond_active:
+                continue
             if not _is_agent_eligible(candidate):
                 continue
             if _on_cooldown(candidate):
@@ -833,22 +1011,17 @@ class AgentLoop:
             turn_info: Dict[str, Any] = {}
 
             try:
-                # Phase 3: Chat-Antwort-Bump? Direkt antworten, VOR jeglichem
-                # Gating (in-chat/auto-sleep/walk) — Antworten sollen immer raus.
-                _respond = (self._bump_perception.get(character_name) or {}).get("respond_to")
-                if _respond:
-                    self._bump_perception.pop(character_name, None)
-                    turn_info = await self._run_respond_turn(character_name, _respond)
-                    outcome = "respond"
-                    return
-
-                # Phase 3b: in aktiver Raumkonversation? Dann statt eines
-                # verworfenen in-chat-Gedankens eine Chime-Gelegenheit fahren —
-                # der Beitrag wird gesprochen (Utterance) oder bewusst per SKIP
-                # ausgelassen. Backstop in der Erkennung verhindert Endlos-Chatter.
+                # Phase 3b: in an active room conversation? Then run a chime
+                # opportunity instead of a discarded in-chat thought — the
+                # contribution is spoken (utterance) or deliberately skipped.
+                # The backstop in the detection prevents endless chatter.
+                # Chat-answer bumps do NOT pass through here anymore — they
+                # run in the respond lane; the room lock below keeps this
+                # serial-loop chime serialized with the lane's answers.
                 _chime = self._maybe_active_conversation_chime(character_name)
                 if _chime:
-                    turn_info = await self._run_respond_turn(character_name, _chime)
+                    async with self._room_lock(self._char_room_key(character_name)):
+                        turn_info = await self._run_respond_turn(character_name, _chime)
                     outcome = "respond"
                     return
 
@@ -1091,9 +1264,17 @@ class AgentLoop:
     def _record_turn(self, name: str, started_at: datetime, outcome: str,
                      turn_info: Optional[Dict[str, Any]] = None) -> None:
         info = turn_info or {}
+        # Game time at turn end — same format as thoughts.game_ts (ISO with
+        # world-tz offset); '' when the game clock is unavailable.
+        try:
+            from app.core.timeutils import game_local_now
+            _game_ts = game_local_now().isoformat(timespec="seconds")
+        except Exception:
+            _game_ts = ""
         self._recent.append({
             "agent": name,
             "started_at": started_at.isoformat(),
+            "game_ts": _game_ts,
             "duration_s": round((utc_now() - started_at).total_seconds(), 1),
             "outcome": outcome,
             "tools": list(info.get("tools") or []),
@@ -1138,6 +1319,17 @@ def _is_paused() -> bool:
         from app.core.task_queue import get_task_queue
         tq = get_task_queue()
         return bool(tq and tq._is_paused("default"))
+    except Exception:
+        return False
+
+
+def _chat_llm_available() -> bool:
+    """Probe whether the 'chat' route resolves to a live provider — the
+    respond lane's counterpart to _thought_llm_available (responses run
+    through run_chat_turn, i.e. the chat route, not the thought route)."""
+    try:
+        from app.core.llm_router import resolve_llm
+        return resolve_llm("chat") is not None
     except Exception:
         return False
 
