@@ -1,0 +1,270 @@
+/* HUD overlay of the 3D client — structural v1 (plan-3d-game stage 2, task 5).
+   Deliberately unornamented: task 6 themes it by redefining the CSS custom
+   properties under #hud; the var() defaults here match the neutral values
+   panels.css already uses.
+
+   Pointer rule: the root is a full-screen overlay that must NEVER block
+   camera dragging on the canvas below — pointer-events: none on the root,
+   auto only on the actual HUD surfaces (rail, panels). */
+
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 20; /* above the vanilla top bar (z 10); picker modals portal to body at z 2000 */
+  pointer-events: none;
+  color: var(--text, #c9d1d9);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+}
+#hud .hud-rail,
+#hud .hud-panel {
+  pointer-events: auto;
+}
+
+/* ---- Right-edge rail: the three panel toggles ---- */
+#hud .hud-rail {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#hud .hud-rail button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-container, #161b22);
+  color: inherit;
+  cursor: pointer;
+}
+#hud .hud-rail button:hover { border-color: var(--accent, #6aa9ff); }
+#hud .hud-rail button.on {
+  border-color: var(--accent, #6aa9ff);
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 24%, var(--bg-container, #161b22));
+}
+
+/* ---- Panel chrome ---- */
+#hud .hud-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 10px;
+  background: var(--bg-container, #161b22);
+}
+#hud .hud-panel-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #30363d);
+  font-size: 0.9em;
+  font-weight: 600;
+}
+#hud .hud-panel-title { white-space: nowrap; }
+#hud .hud-panel-sub {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  opacity: 0.6;
+}
+#hud .hud-panel-close {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+#hud .hud-panel-close:hover { opacity: 1; }
+#hud .hud-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 10px;
+}
+
+/* Chat: docked bottom-left. ScenePanel brings its own body structure
+   (.player-scene-body from panels.css) — the chrome only sizes the frame. */
+#hud .hud-chat {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  width: 420px;
+  height: 340px;
+  max-width: calc(100vw - 90px);
+  max-height: calc(100vh - 70px);
+}
+
+/* Self/Others: right dock column next to the rail, below the vanilla top
+   bar. The column itself stays drag-through; only the panels catch. */
+#hud .hud-dock {
+  position: absolute;
+  top: 52px;
+  right: 62px;
+  bottom: 12px;
+  width: 320px;
+  max-width: calc(100vw - 84px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+#hud .hud-dock .hud-panel {
+  flex: 1 1 0;
+  min-height: 120px;
+}
+
+/* ---- Plain functional styles for package classes panels.css does not
+   define (Task-4 finding #3): .ga-input, .ga-toast*, .player-chip* plus the
+   picker-modal and transcript helpers. Deliberately NOT copied from
+   player.css / game-admin.css (those stay single-sourced for /play); the
+   ornamental pass is task 6. Unscoped on purpose: ChatGalleryPicker,
+   GiftPicker and the Lightbox portal to document.body, outside #hud. */
+
+.player-chip {
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: 0.82em;
+  line-height: 1.4;
+  color: inherit;
+  border: 1px solid var(--border, #30363d);
+  background: transparent;
+  cursor: pointer;
+}
+.player-chip:hover { border-color: var(--accent, #6aa9ff); }
+.player-chip.on {
+  border-color: var(--accent, #6aa9ff);
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 26%, transparent);
+}
+.player-chip:disabled { opacity: 0.5; cursor: default; }
+.player-chip-follow { border-color: var(--accent-2, #d6b06a); }
+
+.player-thinking-dots { display: inline-flex; gap: 3px; }
+.player-thinking-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: hud-thinking 1.2s infinite;
+}
+.player-thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.player-thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes hud-thinking {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.9; }
+}
+
+.ga-input {
+  font: inherit;
+  color: inherit;
+  background: var(--bg, #0d1117);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.ga-input:focus { outline: none; border-color: var(--accent, #6aa9ff); }
+
+.ga-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2100;
+  max-width: min(420px, 80vw);
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-container, #161b22);
+  color: var(--text, #c9d1d9);
+  font-size: 0.9em;
+}
+.ga-toast-error { border-color: var(--danger, #da3633); }
+.ga-toast-success { border-color: var(--ok, #2ea043); }
+
+/* Transcript helpers (SceneView positions its rows inline). */
+.ga-list-empty {
+  padding: 14px;
+  text-align: center;
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+/* Picker modals (portaled to document.body — colours set explicitly, the
+   3D page's body has no text colour of its own). */
+.ga-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.ga-modal {
+  width: 100%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 10px;
+  background: var(--bg-container, #161b22);
+  color: var(--text, #c9d1d9);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+}
+.ga-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border, #30363d);
+  font-weight: 600;
+}
+.ga-modal-close {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.ga-modal-close:hover { opacity: 1; }
+.ga-modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+.ga-loading,
+.ga-placeholder {
+  padding: 18px;
+  text-align: center;
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+.ga-field { display: flex; flex-direction: column; gap: 3px; }
+.ga-field-caption {
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.65;
+}
+.ga-img-nomatch { color: var(--danger, #f85149); font-size: 0.85em; }

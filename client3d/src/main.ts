@@ -10,6 +10,7 @@ import { mountScene, sceneFigureScale, SceneLibrary } from './scene/sceneRecipe'
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, showLogin } from './ui';
+import { mountHud } from './hud/mount';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
@@ -102,6 +103,7 @@ async function startApp(username: string) {
       location.reload();
     },
   });
+  mountHud({ username, avatar: firstMap.avatar });   // React HUD island (E2-T5)
   npcs.setAvatar(firstMap.avatar);
 
   // Worldmap ist autoritativ für Grid/Passable/Template; /world/locations liefert
