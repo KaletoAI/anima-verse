@@ -7,6 +7,15 @@ const MIN_DIST = 2.5;   // ganz nah = Figur formatfüllend
 const MAX_DIST = 150;
 
 /**
+ * True while the key event came out of a form field — typing must never reach
+ * the camera. Shared with `main.ts`, which guards its own Esc handler with the
+ * exact same rule (E3-T2), so there is ONE definition of "the user is typing".
+ */
+export function isTypingTarget(e: Event): boolean {
+  return !!(e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable]');
+}
+
+/**
  * AoE-artige Kamera: fester Pitch (leicht zoomabhängig), Yaw in 45°-Schritten,
  * Pan per Drag/WASD, Zoom per Mausrad Richtung Cursor.
  */
@@ -51,6 +60,10 @@ export class Engine {
   /** Asked BEFORE onPick on a left click (E3-T1): true = the click hit a figure
    *  and is used up, so no tile pick follows. */
   pickFigure: ((x: number, y: number) => boolean) | null = null;
+  /** Follow target (E3-T2): while set, the camera chases the point this getter
+   *  returns per frame and the WASD pan is skipped — those keys then belong to
+   *  the avatar (task 3). Wheel zoom, Q/E and orbit stay live. */
+  follow: (() => THREE.Vector3 | null) | null = null;
 
   constructor(container: HTMLElement) {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.5, 800);
@@ -128,6 +141,13 @@ export class Engine {
 
   addFrameHook(fn: (dt: number) => void) {
     this.frameHooks.push(fn);
+  }
+
+  /** Keys currently held down, lower-case (E3-T2). Read-only on purpose: the
+   *  avatar control of task 3 reads the SAME set the camera pan reads, so a
+   *  key can never be down for one and up for the other. */
+  keysDown(): ReadonlySet<string> {
+    return this.keys;
   }
 
   setPickables(objs: THREE.Object3D[]) {
@@ -265,13 +285,17 @@ export class Engine {
     });
     el.addEventListener('contextmenu', (e) => e.preventDefault());
 
+    // Both keydown listeners ignore anything typed into a form field. The old
+    // guard only knew `tagName === 'INPUT'`, so every character typed into the
+    // HUD chat TEXTAREA also panned the camera (w/a/s/d) and turned it (q/e).
     window.addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      if (isTypingTarget(e)) return;
       this.keys.add(e.key.toLowerCase());
       if (e.key.toLowerCase() === 'q') this.targetYaw += Math.PI / 4;
       if (e.key.toLowerCase() === 'e') this.targetYaw -= Math.PI / 4;
     });
     window.addEventListener('keydown', (e) => {
+      if (isTypingTarget(e)) return;
       if (e.key === '+') this.targetDist = THREE.MathUtils.clamp(this.targetDist * 0.8, MIN_DIST, MAX_DIST);
       if (e.key === '-') this.targetDist = THREE.MathUtils.clamp(this.targetDist * 1.25, MIN_DIST, MAX_DIST);
     });
@@ -284,21 +308,31 @@ export class Engine {
     // Eine Zeit für ALLE Wasserflächen (geteiltes Uniform).
     updateSurfaceMaterials(dt);
 
-    // WASD/Pfeiltasten-Pan relativ zur Blickrichtung
-    const panSpeed = this.dist * 0.9 * dt;
-    const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
-    if (this.keys.has('w') || this.keys.has('arrowup')) this.target.addScaledVector(fwd, panSpeed);
-    if (this.keys.has('s') || this.keys.has('arrowdown')) this.target.addScaledVector(fwd, -panSpeed);
-    if (this.keys.has('a') || this.keys.has('arrowleft')) this.target.addScaledVector(right, -panSpeed);
-    if (this.keys.has('d') || this.keys.has('arrowright')) this.target.addScaledVector(right, panSpeed);
+    // WASD/arrow-key pan relative to the view direction — skipped while a
+    // follow target is set (E3-T2): the camera then belongs to the followed
+    // figure and the keys to its movement.
+    if (!this.follow) {
+      const panSpeed = this.dist * 0.9 * dt;
+      const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+      const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+      if (this.keys.has('w') || this.keys.has('arrowup')) this.target.addScaledVector(fwd, panSpeed);
+      if (this.keys.has('s') || this.keys.has('arrowdown')) this.target.addScaledVector(fwd, -panSpeed);
+      if (this.keys.has('a') || this.keys.has('arrowleft')) this.target.addScaledVector(right, -panSpeed);
+      if (this.keys.has('d') || this.keys.has('arrowright')) this.target.addScaledVector(right, panSpeed);
+    }
 
-    // Kamerafahrt
+    // Camera fly
     if (this.flyT < 1 && this.flyFrom && this.flyToPoint) {
       this.flyT = Math.min(1, this.flyT + dt * 1.6);
       const k = this.flyT * this.flyT * (3 - 2 * this.flyT);
       this.target.lerpVectors(this.flyFrom, this.flyToPoint, k);
     }
+
+    // Follow target — the ONE evaluation per frame, deliberately AFTER the fly:
+    // during the fly-in both run, the fly carries the distance and the soft
+    // chase closes the gap to the moving figure. Together they ARE the ride.
+    const followAt = this.follow?.();
+    if (followAt) this.target.lerp(followAt, 1 - Math.exp(-6 * dt));
 
     this.dist = THREE.MathUtils.lerp(this.dist, this.targetDist, 1 - Math.exp(-8 * dt));
     this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, 1 - Math.exp(-8 * dt));

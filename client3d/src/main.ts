@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as api from './api';
-import { Engine } from './scene/engine';
+import { Engine, isTypingTarget } from './scene/engine';
+import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, type NpcState } from './scene/npcs';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
@@ -338,7 +339,7 @@ async function startApp(username: string) {
     if (tile) engine.flyTo(tile.center.clone(), 15);
   };
 
-  // --- Figuren-Auswahl (E3-T1) ---------------------------------------------
+  // --- Figure selection (E3-T1) --------------------------------------------
   // Figure picking runs before the tile pick: a hit figure gets the ring and
   // the plaque (React reads the bus), a miss clears the selection and lets the
   // click fall through to the tile's info panel.
@@ -361,6 +362,24 @@ async function startApp(username: string) {
   // the React side without a gameAction, and the ring has to go with it.
   subscribeGameState(() => {
     npcs.setSelected(getGameState().selected?.char.name ?? null);
+  });
+
+  // --- Embodied mode (E3-T2) -----------------------------------------------
+  // Everything the mode needs is the avatar's live position: enter/leave are
+  // camera moves, the frame hook only watches the zoom threshold.
+  const embody: EmbodyDeps = {
+    engine,
+    avatarPos: () => npcs.positionOf((lastMap ?? firstMap).avatar),
+  };
+  gameActions.enterEmbodied = () => enterEmbodied(embody);
+  gameActions.exitEmbodied = () => exitEmbodied(embody);
+  engine.addFrameHook(() => checkExit(embody));
+  // Esc leaves the mode — THE one binding for it. Guarded like the engine's own
+  // keys: while the focus sits in a form field Esc belongs to that field (the
+  // chat clears/blurs with it), not to the camera.
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || isTypingTarget(e)) return;
+    if (getGameState().mode === 'embodied') exitEmbodied(embody);
   });
 
   // --- Event-Pins ----------------------------------------------------------

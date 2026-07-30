@@ -13,13 +13,14 @@
  * button is absent in HUD v1 (the image-gen dialog lives in the game-admin
  * UI); open point for stage 6.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useSyncExternalStore } from 'react';
 import {
   apiGet, apiPost, usePoll, useI18n, Icon,
   ScenePanel, SelfPanel, OthersPanel,
   type SceneData, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
+import { gameActions, getGameState, subscribeGameState } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
 // Load order matters: the fantasy theme redefines the custom properties and
@@ -36,6 +37,7 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string }> = [
 
 export function Hud({ avatar }: { avatar: string }) {
   const { t } = useI18n();
+  const game = useSyncExternalStore(subscribeGameState, getGameState);
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false,
   });
@@ -83,6 +85,23 @@ export function Hud({ avatar }: { avatar: string }) {
 
   return (
     <>
+      {/* Mode indicator (E3-T2): the ONLY sign of the embodied mode in the HUD
+          chrome — one chip below the vanilla top bar that also leaves again.
+          Positioned inline instead of in hud.css on purpose: it is a single
+          element with no ornament, and the stylesheet stays out of this task's
+          diff. `pointerEvents` has to be set here, the HUD root is
+          drag-through and only names its own surfaces in the CSS. */}
+      {game.mode === 'embodied' && (
+        <div className="hud-mode" style={{
+          position: 'absolute', top: 58, left: '50%',
+          transform: 'translateX(-50%)', pointerEvents: 'auto',
+        }}>
+          <button className="player-chip" onClick={() => gameActions.exitEmbodied?.()}>
+            {t('Leave (Esc)')}
+          </button>
+        </div>
+      )}
+
       <nav className="hud-rail">
         {PANELS.map((p) => (
           <button key={p.id} className={open[p.id] ? 'on' : ''}

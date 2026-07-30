@@ -6,10 +6,10 @@
  * mood and travel target stay live while the plaque is open. Renders `null`
  * without a selection, which is why `Hud.tsx` can mount it unconditionally.
  *
- * The action row is the anchor for the rest of the stage: `Zoom to` today,
- * embody (task 2) and talk (task 5) land next to it. Everything it triggers
- * goes through `gameActions`; the only state this component writes is clearing
- * the selection.
+ * The action row is the anchor for the rest of the stage: `Zoom to` and `Take
+ * control` (task 2) today, talk (task 5) lands next to them. Everything it
+ * triggers goes through `gameActions`; the only state this component writes is
+ * clearing the selection.
  *
  * Room is deliberately NOT shown: the worldmap sends `room_id`, an opaque id,
  * and the bus carries no room-name map to resolve it against.
@@ -62,6 +62,13 @@ export function CharacterPlaque() {
           <button className="player-chip" onClick={() => gameActions.zoomTo?.(char.name)}>
             {t('Zoom to')}
           </button>
+          {/* Taking control is offered on the avatar only, and only while the
+              overview is up — leaving again is the HUD's mode chip / Esc. */}
+          {sel.isAvatar && state.mode === 'overview' && (
+            <button className="player-chip" onClick={() => gameActions.enterEmbodied?.()}>
+              {t('Take control')}
+            </button>
+          )}
         </div>
       </div>
 

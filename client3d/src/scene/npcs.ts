@@ -189,6 +189,10 @@ export class NpcManager {
     );
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.12;   // above the identity ring (0.09) and the sprite blob (0.08)
+    // The marker must not be its own hit area: it hangs in `npc.root`, which
+    // `characterAt` raycasts, so a click just BESIDE the figure would land on
+    // the ring and re-select instead of clearing the selection.
+    ring.raycast = () => {};
     npc.root.add(ring);
     this.selectRing = ring;
   }
