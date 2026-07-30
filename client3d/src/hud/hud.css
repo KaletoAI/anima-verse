@@ -115,14 +115,38 @@
 #hud .hud-dock {
   position: absolute;
   top: 52px;
-  right: 62px;
+  --dock-right: 62px; /* 10px rail offset + 40px rail + 12px gap */
+  right: var(--dock-right);
   bottom: 12px;
   width: 320px;
-  max-width: calc(100vw - 84px);
+  max-width: calc(100vw - var(--dock-right) - 22px);
   display: flex;
   flex-direction: column;
   gap: 10px;
   pointer-events: none;
+}
+
+/* The dock steps aside while the vanilla info panel is open.
+   The panel (client3d/src/style.css, frozen) sits at right:12 / width:300, so
+   it owns 12..312px from the right edge; the dock at right:62 covers 62..382
+   with pointer-events:auto on its panels and swallows the panel's zoom button.
+   The panel element is permanent and only toggles [hidden], so :has() can
+   react to it — no JS wiring between the vanilla app and the React island, and
+   the frozen file stays untouched.
+
+   The shift is CLAMPED, because moving the dock right out of the info panel's
+   way pushes it into the chat panel on the left (left:12 / width:420, so it
+   ends at 432px) — and there the dock would swallow the send button, which is
+   the worse trade. Dock left edge = 100vw - right - 320; keeping it >= 444px
+   (12px clear of the chat) caps `right` at 100vw - 764px. Resulting behaviour:
+     >= 1088px  full shift to 324px, info panel completely clear
+     826..1088  partial shift, info panel's zoom button mostly clickable
+     <  826px   no shift at all — identical to the layout before this rule,
+                so a narrow window is never made worse than it already was.
+   This is layout, not ornament: it stays here and not in theme-fantasy.css,
+   so dropping or swapping the theme cannot bring the click-block back. */
+#hud:has(~ .info-panel:not([hidden])) .hud-dock {
+  --dock-right: clamp(62px, 100vw - 764px, 324px);
 }
 #hud .hud-dock .hud-panel {
   flex: 1 1 0;

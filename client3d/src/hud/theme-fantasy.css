@@ -48,11 +48,6 @@
   --hud-brass: linear-gradient(180deg, #e6cb84 0%, #c9a34f 48%, #a37e33 100%);
 }
 
-#hud {
-  scrollbar-color: rgba(242, 205, 110, 0.35) transparent;
-  scrollbar-width: thin;
-}
-
 /* ---- Panel frames: vellum surface, brass edge, dropped into the scene --- */
 #hud .hud-panel,
 #hud ~ .ga-modal-backdrop .ga-modal {
@@ -219,30 +214,32 @@
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
 }
 
-/* ---- Scrollbars (WebKit; Firefox uses scrollbar-color above) ----------- */
-#hud ::-webkit-scrollbar {
+/* ---- Scrollbars ------------------------------------------------------- */
+/* The portalled modals get the same treatment: the gift and gallery lists
+ * scroll, and a system scrollbar inside an otherwise themed modal is the one
+ * seam that gives the trick away. Firefox reads scrollbar-color, WebKit the
+ * pseudo-elements — both are inherited/descendant, so setting them on #hud and
+ * on the modal backdrop covers every scroll container the HUD owns. */
+#hud,
+#hud ~ .ga-modal-backdrop {
+  scrollbar-color: rgba(242, 205, 110, 0.35) transparent;
+  scrollbar-width: thin;
+}
+#hud ::-webkit-scrollbar,
+#hud ~ .ga-modal-backdrop ::-webkit-scrollbar {
   width: 9px;
   height: 9px;
 }
-#hud ::-webkit-scrollbar-track {
+#hud ::-webkit-scrollbar-track,
+#hud ~ .ga-modal-backdrop ::-webkit-scrollbar-track {
   background: rgba(0, 0, 0, 0.28);
 }
-#hud ::-webkit-scrollbar-thumb {
+#hud ::-webkit-scrollbar-thumb,
+#hud ~ .ga-modal-backdrop ::-webkit-scrollbar-thumb {
   background: linear-gradient(180deg, rgba(242, 205, 110, 0.38), rgba(160, 122, 52, 0.38));
   border-radius: 5px;
 }
-#hud ::-webkit-scrollbar-thumb:hover {
+#hud ::-webkit-scrollbar-thumb:hover,
+#hud ~ .ga-modal-backdrop ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, rgba(242, 205, 110, 0.62), rgba(160, 122, 52, 0.62));
-}
-
-/* ---- Layout fix, decided here (task 5 finding 3) ----------------------- */
-/* The vanilla .info-panel sits at right:12 / width:300 (client3d/src/style.css,
- * frozen), the HUD dock at right:62 / width:320 — they overlap in the strip
- * 62..312px from the right edge and the dock, being on top, swallows the
- * panel's zoom button. The panel element is permanent and only toggles
- * [hidden], so the dock can step aside exactly while it is visible. Solved
- * declaratively, without touching the frozen file and without JS. */
-#hud:has(~ .info-panel:not([hidden])) .hud-dock {
-  right: 324px;
-  max-width: calc(100vw - 346px);
 }
