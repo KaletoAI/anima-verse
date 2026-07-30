@@ -1607,6 +1607,10 @@ def get_character_thoughts(character_name: str, limit: int = 50,
 
     ``before`` is the ts of the oldest row you already have (paging cursor);
     ``limit`` is capped at 200. ``has_more`` says whether another page exists.
+
+    Every row carries both clocks: ``ts`` = SYSTEM time (UTC), ``game_ts`` =
+    GAME time as ISO WITH the world's timezone offset (empty for rows written
+    before the column existed).
     """
     from app.models.thought_store import list_thoughts
     from app.models.world import get_location_by_id
@@ -1637,6 +1641,7 @@ def get_character_thoughts(character_name: str, limit: int = 50,
                 "room_name": room_name or room_id}
 
     return {"thoughts": [{"ts": r["ts"],
+                          "game_ts": r.get("game_ts", "") or "",
                           **_names(r.get("location_id", ""), r.get("room_id", "")),
                           "present": r.get("present") or [],
                           "content": r.get("content", "")}

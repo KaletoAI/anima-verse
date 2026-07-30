@@ -13,6 +13,9 @@ the verbs-only contract stays untouched.
 
 Timestamps are SYSTEM time (``utc_now_iso``), like every other persistence
 stamp; the retention cutoff is computed in system time too, not game time.
+``game_ts`` carries the GAME time the thought was had (ISO *with* the world's
+timezone offset) — it is stored at creation because the game clock re-anchors
+on set/factor/freeze and therefore cannot be derived from ``ts`` afterwards.
 """
 from __future__ import annotations
 
@@ -21,9 +24,17 @@ from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
-from app.core.timeutils import utc_now_iso
+from app.core.timeutils import game_local_now, utc_now_iso
 
 logger = get_logger("thought_store")
+
+
+def _game_ts() -> str:
+    """Game time at creation, ISO with world-tz offset; '' if unavailable."""
+    try:
+        return game_local_now().isoformat(timespec="seconds")
+    except Exception:
+        return ""
 
 
 def _row_out(row: Any) -> Dict[str, Any]:
@@ -52,14 +63,14 @@ def add_thought(character_name: str, content: str, location_id: str = "",
     try:
         with transaction() as conn:
             conn.execute(
-                "INSERT INTO thoughts (character_name, ts, location_id, room_id,"
-                " content, present) VALUES (?, ?, ?, ?, ?, ?)",
-                (character_name, ts or utc_now_iso(), location_id or "",
-                 room_id or "", text,
+                "INSERT INTO thoughts (character_name, ts, game_ts, location_id,"
+                " room_id, content, present) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (character_name, ts or utc_now_iso(), _game_ts(),
+                 location_id or "", room_id or "", text,
                  json.dumps(list(present), ensure_ascii=False) if present else ""))
         return True
     except Exception as e:
-        logger.warning("add_thought(%s) fehlgeschlagen: %s", character_name, e)
+        logger.warning("add_thought(%s) failed: %s", character_name, e)
         return False
 
 
@@ -70,8 +81,8 @@ def list_thoughts(character_name: str, limit: int = 50,
     if not character_name:
         return []
     limit = max(1, min(int(limit or 50), 200))
-    sql = ("SELECT id, ts, location_id, room_id, content, present FROM thoughts"
-           " WHERE character_name=?")
+    sql = ("SELECT id, ts, game_ts, location_id, room_id, content, present"
+           " FROM thoughts WHERE character_name=?")
     params: List[Any] = [character_name]
     if before:
         sql += " AND ts < ?"
@@ -81,7 +92,7 @@ def list_thoughts(character_name: str, limit: int = 50,
     try:
         return [_row_out(r) for r in get_connection().execute(sql, params).fetchall()]
     except Exception as e:
-        logger.warning("list_thoughts(%s) fehlgeschlagen: %s", character_name, e)
+        logger.warning("list_thoughts(%s) failed: %s", character_name, e)
         return []
 
 
@@ -100,7 +111,7 @@ def thoughts_of_range(character_name: str, start_ts: str,
             (character_name, start_ts, end_ts)).fetchall()
         return [dict(r) for r in rows]
     except Exception as e:
-        logger.warning("thoughts_of_range(%s) fehlgeschlagen: %s",
+        logger.warning("thoughts_of_range(%s) failed: %s",
                        character_name, e)
         return []
 
@@ -118,5 +129,5 @@ def prune_before(character_name: str, cutoff_ts: str) -> int:
                 (character_name, cutoff_ts))
             return int(cur.rowcount or 0)
     except Exception as e:
-        logger.warning("prune_before(%s) fehlgeschlagen: %s", character_name, e)
+        logger.warning("prune_before(%s) failed: %s", character_name, e)
         return 0

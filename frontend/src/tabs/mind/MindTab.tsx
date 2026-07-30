@@ -25,7 +25,7 @@ interface DebugActivity {
   reasons: string[]
   mood_recent: { timestamp?: string; mood?: string; source?: string }[]
   state_recent: { ts: string; type: string; value: string }[]
-  thoughts_recent: { ts: string; action: string }[]
+  thoughts_recent: { ts: string; game_ts?: string; action: string }[]
   block_rules: {
     id: string; name: string; action: string; message: string
     condition?: string; condition_met?: boolean; blocking?: boolean
@@ -33,7 +33,7 @@ interface DebugActivity {
   force_rule?: { rule_name?: string; rule_id?: string; go_to?: string } | null
 }
 
-// ISO → kurze lokale Zeit (HH:MM, Datum nur wenn nicht heute). Defensiv.
+// ISO → short local time (HH:MM, date only when it is not today). Defensive.
 function fmtTs(iso?: string): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -42,6 +42,19 @@ function fmtTs(iso?: string): string {
   const sameDay = d.toDateString() === today.toDateString()
   const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+}
+
+/** "2026-07-30T14:23:45+02:00" → "14:23" — textual slice, NO Date(): the game
+ *  timestamp already carries the world-timezone wall time, so parsing it would
+ *  re-render it in the browser's timezone. */
+function fmtGameClock(gameTs?: string): string {
+  if (!gameTs || gameTs.length < 16) return ''
+  return gameTs.slice(11, 16)
+}
+/** Same string → "30.07.2026" (day of the game calendar). */
+function fmtGameDay(gameTs?: string): string {
+  if (!gameTs || gameTs.length < 10) return ''
+  return `${gameTs.slice(8, 10)}.${gameTs.slice(5, 7)}.${gameTs.slice(0, 4)}`
 }
 
 export function MindTab() {
@@ -172,7 +185,7 @@ export function MindTab() {
                       <span key={i} className="tag warn"
                         title={[c.source, c.source_character ? `${t('giver')}: ${c.source_character}` : '',
                                 c.duration_hours ? `${c.duration_hours}h` : '',
-                                c.started_at ? `seit ${fmtTs(c.started_at)}` : ''].filter(Boolean).join(' · ')}>
+                                c.started_at ? `${t('since')} ${fmtTs(c.started_at)}` : ''].filter(Boolean).join(' · ')}>
                         {c.name || '?'}{c.source_character ? ` ← ${c.source_character}` : ''}{c.duration_hours ? ` (${c.duration_hours}h)` : ''}
                       </span>
                     ))}
@@ -194,7 +207,17 @@ export function MindTab() {
               {dbg && dbg.thoughts_recent.length > 0 ? (
                 <ul className="ga-mind-list">
                   {dbg.thoughts_recent.map((th, i) => (
-                    <li key={i}><span className="ts">{fmtTs(th.ts)}</span>{th.action}</li>
+                    <li key={i}>
+                      <span className="ts">
+                        {fmtTs(th.ts)}
+                        {fmtGameClock(th.game_ts) ? (
+                          <span title={`${t('Game time')}: ${fmtGameDay(th.game_ts)} ${fmtGameClock(th.game_ts)}`}>
+                            {' · 🕰 '}{fmtGameClock(th.game_ts)}
+                          </span>
+                        ) : null}
+                      </span>
+                      {th.action}
+                    </li>
                   ))}
                 </ul>
               ) : (

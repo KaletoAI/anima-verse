@@ -179,7 +179,7 @@ SCHEMA_STATEMENTS = [
     """CREATE TABLE IF NOT EXISTS thoughts (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,
-        ts             TEXT NOT NULL,           -- SYSTEM-Zeit (utc_now_iso)
+        ts             TEXT NOT NULL,           -- SYSTEM time (utc_now_iso)
         location_id    TEXT DEFAULT '',
         room_id        TEXT DEFAULT '',
         content        TEXT NOT NULL
@@ -616,37 +616,42 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations — laufen nach allen CREATEs idempotent durch.
 # Pattern: pro Tabelle die fehlenden Spalten hinzufuegen, OperationalError = existiert schon.
 ALTER_MIGRATIONS = [
-    # thoughts: Anwesende zum Gedanken-Zeitpunkt (JSON-Namensliste) — Kontext
-    # fuers Admin-Journal (User-Feedback 2026-07-29). Alt-Zeilen bleiben leer.
+    # thoughts: characters present at the time of the thought (JSON name list)
+    # — context for the admin journal (user feedback 2026-07-29). Old rows
+    # stay empty.
     ("thoughts", "present", "TEXT DEFAULT ''"),
-    # telegram_mapping: avatar-Spalte — der Telegram-User wird als Avatar-Character
-    # vertreten (Option B). character_name bleibt der NPC (Bot) des Chats.
+    # thoughts: game time at thought creation (the game clock cannot be derived
+    # from ts retroactively — anchors re-anchor on set/factor/freeze).
+    # Stored as ISO WITH world-timezone offset (game_local_now().isoformat()).
+    ("thoughts", "game_ts", "TEXT DEFAULT ''"),
+    # telegram_mapping: avatar column — the Telegram user is represented by an
+    # avatar character (option B). character_name stays the chat's NPC (bot).
     ("telegram_mapping", "avatar", "TEXT NOT NULL DEFAULT ''"),
-    # llm_call_stats: agent_name + max_tokens fuer Admin-Stats-Tab nachgezogen
+    # llm_call_stats: agent_name + max_tokens added for the admin stats tab
     ("llm_call_stats", "agent_name", "TEXT DEFAULT ''"),
     ("llm_call_stats", "max_tokens", "INTEGER DEFAULT 0"),
-    # character_state: last_thought_at fuer Agent-Loop / Inbox-Tracking
-    # Zeitpunkt der letzten verarbeiteten Gedanken-Runde — alle chat_messages
-    # mit role='user' und ts > last_thought_at gelten als "ungelesen".
+    # character_state: last_thought_at for agent loop / inbox tracking — the
+    # time of the last processed thought turn; every chat_messages row with
+    # role='user' and ts > last_thought_at counts as "unread".
     ("character_state", "last_thought_at", "TEXT DEFAULT ''"),
-    # prompt_filters: icon + image_modifier fuer den verschmolzenen
-    # "Zustaende"-Tab (frueher in status_modifiers.json). Icon wird im
-    # Character-Header-Badge gerendert, image_modifier landet im
-    # Bildgenerierungs-Prompt aktiver Conditions.
+    # prompt_filters: icon + image_modifier for the merged "conditions" tab
+    # (formerly status_modifiers.json). The icon is rendered in the character
+    # header badge, image_modifier goes into the image-generation prompt of
+    # active conditions.
     ("prompt_filters", "icon", "TEXT DEFAULT ''"),
     ("prompt_filters", "image_modifier", "TEXT DEFAULT ''"),
-    # summaries: partner-Spalte fuer Character-vs-Character Daily-Summaries
-    # (eine Summary pro (character, partner) pro Tag statt eine pro Tag).
-    # UNIQUE-Constraint-Wechsel laeuft separat in db.py (Table-Rebuild).
+    # summaries: partner column for character-vs-character daily summaries
+    # (one summary per (character, partner) per day instead of one per day).
+    # The UNIQUE-constraint change runs separately in db.py (table rebuild).
     ("summaries", "partner", "TEXT NOT NULL DEFAULT ''"),
     # Outfit + Pose Rethink (May 2026, plan-outfit-system-rethink.md):
-    # Räume/Locations bekommen Decency-Modell statt outfit_type-Container.
-    # decency: public | private | nude_ok (hart, Compliance-relevant)
-    # style_hint: free-text Empfehlung, nur LLM-Hinweis
-    # swim_allowed: 0/1, Decency-Modifikator wenn char.is_wet
-    # activity_hint: free-text, "was macht man hier normalerweise" (Soul-Style)
-    # outfit_type bleibt vorerst lesbar parallel — wird in Schritt 8 (Cleanup)
-    # entfernt nachdem Compliance vollstaendig auf decency umgezogen ist.
+    # rooms/locations get a decency model instead of the outfit_type container.
+    # decency: public | private | nude_ok (hard, compliance-relevant)
+    # style_hint: free-text recommendation, LLM hint only
+    # swim_allowed: 0/1, decency modifier when char.is_wet
+    # activity_hint: free text, "what one normally does here" (soul style)
+    # outfit_type stays readable in parallel for now — it is removed in step 8
+    # (cleanup) once compliance has fully moved to decency.
     ("locations", "decency",       "TEXT DEFAULT ''"),
     ("locations", "style_hint",    "TEXT DEFAULT ''"),
     ("locations", "swim_allowed",  "INTEGER NOT NULL DEFAULT 0"),
@@ -655,29 +660,29 @@ ALTER_MIGRATIONS = [
     ("rooms",     "style_hint",    "TEXT DEFAULT ''"),
     ("rooms",     "swim_allowed",  "INTEGER NOT NULL DEFAULT 0"),
     ("rooms",     "activity_hint", "TEXT DEFAULT ''"),
-    # Schritt 5 (May 2026): Pose-Konzept ersetzt Activity-Library.
-    # pose_intent ist der vom LLM gewaehlte free-text "was tut der Char";
-    # pose_variant_id verweist auf character_pose_variants und wird Teil
-    # des Expression-Bild-Cache-Keys.
+    # Step 5 (May 2026): the pose concept replaces the activity library.
+    # pose_intent is the free text "what is the character doing" chosen by the
+    # LLM; pose_variant_id points at character_pose_variants and becomes part
+    # of the expression-image cache key.
     ("character_state", "pose_intent",     "TEXT DEFAULT ''"),
     ("character_state", "pose_variant_id", "INTEGER"),
-    # Schritt 6 (May 2026): drei orthogonale State-Flags ersetzen die
-    # Activity-Effekte. Compliance liest sie:
-    #   is_sleeping  → off-map, keine Compliance
-    #   is_wet       → mit swim_allowed: swim-exemption fuer top/bottom
-    #   is_intimate  → decency-override auf nude_ok
+    # Step 6 (May 2026): three orthogonal state flags replace the activity
+    # effects. Compliance reads them:
+    #   is_sleeping  → off-map, no compliance
+    #   is_wet       → with swim_allowed: swim exemption for top/bottom
+    #   is_intimate  → decency override to nude_ok
     ("character_state", "is_sleeping",  "INTEGER NOT NULL DEFAULT 0"),
     ("character_state", "is_wet",       "INTEGER NOT NULL DEFAULT 0"),
     ("character_state", "is_intimate",  "INTEGER NOT NULL DEFAULT 0"),
-    # Juni 2026: decency_exempt → Decency-Override auf nude_ok, unabhaengig
-    # von Anwesenheit/Fremden. Settbar via Toggle (UI), Rule set_flags und
-    # LLM-Skill — die manuelle/regelbasierte Entsprechung zu is_intimate.
+    # June 2026: decency_exempt → decency override to nude_ok, independent of
+    # presence/strangers. Settable via toggle (UI), the set_flags rule and an
+    # LLM skill — the manual/rule-based counterpart to is_intimate.
     ("character_state", "decency_exempt", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
-# Indizes die auf migrierte Spalten zugreifen — laufen NACH ALTER_MIGRATIONS,
-# sonst schlaegt CREATE INDEX auf alten DBs fehl ("no such column: agent_name").
+# Indexes that touch migrated columns — they run AFTER ALTER_MIGRATIONS, or
+# CREATE INDEX fails on old DBs ("no such column: agent_name").
 POST_MIGRATION_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_llm_call_stats_agent_ts ON llm_call_stats (agent_name, ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_llm_call_stats_ts ON llm_call_stats (ts DESC)",

@@ -403,9 +403,14 @@ def build_debug_activity(character_name: str) -> Dict[str, Any]:
     try:
         from app.core.agent_loop import get_agent_loop
         recent = (get_agent_loop().status() or {}).get("recent", []) or []
+        # The ring-buffer entries are keyed agent/started_at/outcome
+        # (agent_loop._record_turn) — not name/ts/action.
         thoughts_recent = [
-            {"ts": r.get("ts", ""), "action": r.get("action", "")}
-            for r in recent if r.get("name") == character_name
+            {"ts": r.get("started_at", ""),
+             "game_ts": r.get("game_ts", ""),
+             "action": (r.get("outcome", "")
+                        + (f" — {r['preview']}" if r.get("preview") else ""))}
+            for r in recent if r.get("agent") == character_name
         ][-12:]
     except Exception:
         pass
