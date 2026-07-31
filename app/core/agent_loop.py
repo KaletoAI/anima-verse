@@ -37,6 +37,7 @@ import random
 from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now
+from app.core.turn_trace import begin_trace, set_trace
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -600,7 +601,14 @@ class AgentLoop:
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
 
-                await self._run_turn(agent)
+                try:
+                    await self._run_turn(agent)
+                finally:
+                    # _run_turn begins its trace in THIS context (await does
+                    # not copy) — drop it again so the loop's own calls
+                    # (scene consolidation) are not tagged with the last
+                    # character's thought turn.
+                    set_trace(None)
 
                 # Back-off guard: if the last turn returned almost instantly
                 # (no LLM, instant error) the loop would otherwise spin
@@ -726,6 +734,10 @@ class AgentLoop:
         """One parallel respond turn: acquire the room lock, run the turn,
         record the outcome. Same outcome semantics as the serial loop
         (cooldown applies via _record_turn), but no min_turn_gap."""
+        # Own trace for this turn — set INSIDE the worker coroutine, not in
+        # the dispatcher: create_task copies the context, so every worker
+        # writes into its own copy and parallel responds stay separable.
+        begin_trace("respond", character_name)
         started_at = utc_now()
         outcome = "respond"
         turn_info: Dict[str, Any] = {}
@@ -1005,6 +1017,11 @@ class AgentLoop:
 
     async def _run_turn(self, character_name: str) -> None:
         """Run a single thought turn for the given character."""
+        # Trace root for the thought turn — also covers the chime path below,
+        # which produces a spoken contribution instead of a thought. The
+        # caller (_run_forever) clears it again after the await, because an
+        # awaited coroutine sets context vars in ITS caller's context.
+        begin_trace("thought", character_name)
         async with self._lock:
             self._current_agent = character_name
             started_at = utc_now()

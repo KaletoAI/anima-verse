@@ -651,9 +651,10 @@ def run_chat_turn(
                     logger.warning("run_chat_turn[%s]: Tool %s fehlgeschlagen: %s",
                                    responder, _name, _te)
             if _deferred_matches:
-                # Nach-RP-Ausführung im Daemon-Thread: blockiert die Chat-
-                # Antwort nicht (Skill-execute kann LLM-Calls für den Prompt-
-                # Build enthalten); die Skills enqueuen selbst in die Task-Queue.
+                # Post-RP execution in a daemon thread: does not block the
+                # chat answer (a skill's execute may contain LLM calls for the
+                # prompt build); the skills enqueue into the task queue
+                # themselves.
                 _tools_dict = ctx["tools_dict"]
 
                 def _run_deferred(matches=_deferred_matches, rp=clean,
@@ -668,7 +669,12 @@ def run_chat_turn(
                                          who, _dname, _de)
 
                 import threading
-                threading.Thread(target=_run_deferred, daemon=True).start()
+                # bind_trace instead of copying the whole context: the
+                # deferred tools deliberately run WITHOUT the caller's
+                # perception shadow, they only need the turn's trace id.
+                from app.core.turn_trace import bind_trace
+                threading.Thread(target=bind_trace(_run_deferred),
+                                 daemon=True).start()
             return _extract_markers(_ttext, clean) or ""
         except Exception as _e:
             logger.warning("run_chat_turn rp_first tool-phase failed: %s", _e)
@@ -714,23 +720,28 @@ def run_chat_turn(
     except Exception as e:
         logger.debug("pending_report Sofort-Trigger Fehler: %s", e)
 
-    # Tool-Phase + Post-Processing im Daemon-Thread, NACH dem return: die
-    # Antwort steht fest und geht sofort an den Aufrufer (der Respond-Turn
-    # zeichnet sie als Utterance auf). Reihenfolge bleibt erhalten: erst die
-    # Tool-Phase (liefert die Fallback-Marker), dann das Post-Processing
-    # (Memory, Relationship, Intent, Mood-/Location-/Activity-Übernahme,
-    # Expression-Regen, History-Summary — Opt-in, nur Player-Chat via Loop).
+    # Tool phase + post-processing in a daemon thread, AFTER the return: the
+    # answer is final and goes to the caller immediately (the respond turn
+    # records it as an utterance). The order is preserved: first the tool
+    # phase (delivers the fallback markers), then the post-processing (memory,
+    # relationship, intent, mood/location/activity adoption, expression
+    # regeneration, history summary — opt-in, player chat via the loop only).
     # plan-room-conversation-feature-parity §D.
     if _needs_tool_phase or post_process:
         try:
             import contextvars
             import threading
+            from app.core.turn_trace import bind_trace
 
-            # Die Tool-Phase lief frueher synchron IM Kontext des Aufrufers —
-            # inklusive einer evtl. aktiven perception_shadow.suppressed()
-            # (Respond-Turn). Ein Thread kopiert ContextVars nicht, darum wird
-            # der Kontext hier eingefangen und die Tool-Phase darin ausgefuehrt;
-            # das Post-Processing lief schon immer im frischen Thread-Kontext.
+            # The tool phase used to run synchronously IN the caller's context
+            # — including a possibly active perception_shadow.suppressed()
+            # (respond turn). A thread does not copy ContextVars, so the
+            # context is captured here and the tool phase runs inside it; the
+            # post-processing always ran in the fresh thread context.
+            # The turn trace is handed over BY VALUE (bind_trace) instead of
+            # widening _caller_ctx over the whole thread: the post-processing
+            # must not inherit the suppressed perception shadow, it only needs
+            # the trace id so its follow-up LLM calls group with the answer.
             _caller_ctx = contextvars.copy_context()
 
             def _bg_after_reply():
@@ -758,9 +769,10 @@ def run_chat_turn(
                 except Exception as _pe:
                     logger.error("run_chat_turn post_process(%s) failed: %s",
                                  responder, _pe)
-            threading.Thread(target=_bg_after_reply, daemon=True).start()
+            threading.Thread(target=bind_trace(_bg_after_reply),
+                             daemon=True).start()
         except Exception as _e:
-            logger.debug("Nachlauf-Spawn (Tool-Phase/Post-Processing) fehlgeschlagen: %s", _e)
+            logger.debug("Follow-up spawn (tool phase / post-processing) failed: %s", _e)
 
     return clean
 
@@ -1030,17 +1042,21 @@ def post_process_response(
             except Exception as rel_err:
                 logger.error("[%s] Relationship update error: %s", character_name, rel_err)
 
-    # Run background extraction in thread pool
+    # Run background extraction in thread pool. bind_trace carries the turn's
+    # trace id into the pool thread (run_in_executor does not propagate the
+    # context, and a pooled thread would otherwise keep whatever a previous
+    # job left there) — this is where relationship_summary is called.
+    from app.core.turn_trace import bind_trace
     try:
         loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, _background_extraction)
+        loop.run_in_executor(None, bind_trace(_background_extraction))
     except RuntimeError:
         # No event loop — run synchronously
         _background_extraction()
 
-    # (Alter intent_engine-Pfad entfernt — Intents laufen jetzt über die
-    # vereinheitlichten [INTENT:]-Marker oben, plan-intents-unified.md. Damit
-    # entfällt auch der A4-Event-Loop-Bug dieses toten Pfades.)
+    # (Old intent_engine path removed — intents now run through the unified
+    # [INTENT:] markers above, plan-intents-unified.md. That also removes the
+    # A4 event-loop bug of this dead path.)
 
     # Instagram interaction extraction
     try:
@@ -1069,10 +1085,10 @@ def post_process_response(
     except Exception as e:
         logger.error("[%s] Context extraction error: %s", character_name, e)
 
-    # History summary update (nur wenn es alte Nachrichten gibt)
+    # History summary update (only if there are old messages)
     try:
         from app.utils.history_manager import update_summary_background
-        # old_history kommt vom zeitgesteuerten Window; Fallback fuer alte Aufrufe
+        # old_history comes from the time-based window; fallback for old callers
         old_messages = old_history
         if old_messages is None and history_window and len(full_chat_history) > history_window:
             old_messages = full_chat_history[:-history_window]
@@ -1080,11 +1096,11 @@ def post_process_response(
             try:
                 loop = asyncio.get_event_loop()
                 loop.run_in_executor(
-                    None, update_summary_background, character_name, old_messages,
-                    _extract_partner
+                    None, bind_trace(update_summary_background),
+                    character_name, old_messages, _extract_partner
                 )
             except RuntimeError:
-                # Kein Event-Loop (Daemon-/Worker-Thread) — synchron ausführen
+                # No event loop (daemon/worker thread) — run synchronously
                 update_summary_background(character_name, old_messages,
                                           _extract_partner)
     except Exception as e:

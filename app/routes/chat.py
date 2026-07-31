@@ -14,6 +14,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
+from app.core.turn_trace import begin_trace
 from app.core.chat_task_manager import get_chat_task_manager
 
 logger = get_logger("chat")
@@ -726,9 +727,19 @@ async def chat(request: Request) -> StreamingResponse:
     current_agent = _get_chat_partner()
     _probe("_get_chat_partner", _t0)
 
-    # World-Sleep-Modus: NPCs schlafen tief und werden durch Chat NICHT
-    # geweckt (der normale Wake-Up-Pfad weiter unten wuerde sie wecken und
-    # einen LLM-Call ausloesen — genau das soll der Modus verhindern).
+    # Trace root for this user chat turn. Set here in the plain request
+    # coroutine, NOT inside the generate() async generator below — a
+    # ContextVar.set() in an async-generator body leaks into whoever resumes
+    # it (PEP 568 was never implemented). generate() is driven by the
+    # asyncio.create_task(mgr.feed_from_generator(...)) at the end of this
+    # function, and create_task COPIES this context — so every LLM call of
+    # the turn (spell detect, chat stream, tools, post-processing) carries
+    # this trace id, and the generator's own context writes stay in the copy.
+    begin_trace("user_chat", current_agent)
+
+    # World sleep mode: NPCs sleep deeply and are NOT woken by chat (the
+    # normal wake-up path further down would wake them and trigger an LLM
+    # call — exactly what this mode is meant to prevent).
     try:
         from app.models.world import is_world_sleeping
         if is_world_sleeping():
@@ -2103,11 +2114,16 @@ def _extract_context_from_last_chat(agent_name: str,
                 source_text=avatar_source, is_avatar=True)
 
     import asyncio
+    from app.core.turn_trace import bind_trace
     try:
-        asyncio.get_event_loop().run_in_executor(None, _do_extraction)
+        # bind_trace carries the turn's trace id into the pool thread:
+        # run_in_executor does not propagate the context, so the
+        # extraction_chat_state calls above would otherwise be orphaned in
+        # the LLM log. The synchronous fallback keeps the context anyway.
+        asyncio.get_event_loop().run_in_executor(None, bind_trace(_do_extraction))
     except RuntimeError:
-        # Kein Event-Loop (Daemon-/Worker-Thread, z.B. run_chat_turn _bg_post)
-        # — synchron ausführen statt die Extraktion komplett zu verlieren.
+        # No event loop (daemon/worker thread, e.g. run_chat_turn's follow-up
+        # thread) — run synchronously instead of losing the extraction.
         _do_extraction()
 
 

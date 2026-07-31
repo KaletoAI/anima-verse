@@ -21,6 +21,7 @@ from app.core.streaming import (
     StreamingAgent, ContentEvent, ToolStartEvent, ToolEndEvent,
     ToolResultEvent, HeartbeatEvent)
 from app.core.turn_taking import calculate_response_scores
+from app.core.turn_trace import begin_trace
 from app.models.character import (
     get_character_config,
     get_effective_activity,
@@ -392,9 +393,17 @@ async def group_chat(request: Request):
         responders, passive = calculate_response_scores(
             user_message, participant_names, chat_context, **tt_kwargs)
 
-    # Aktiver Avatar (kann leer sein — dann kein Player-Phantom in
-    # Participant-Listen, Speaker-Labels oder Relationship-Updates).
+    # Active avatar (may be empty — then no player phantom in participant
+    # lists, speaker labels or relationship updates).
     user_display_name = (get_active_character() or "").strip()
+
+    # Trace root for this group-chat turn. Set here in the request coroutine,
+    # NOT inside the generator below (a ContextVar.set() in an async generator
+    # body leaks into whoever resumes it); the create_task at the end of this
+    # function copies the context, so the whole turn — every responder — is
+    # grouped under one id. "who" is the room/location, because a group turn
+    # has no single acting character.
+    begin_trace("user_chat", loc_name)
 
     async def generate():
         """Generate group chat responses — one character at a time."""
