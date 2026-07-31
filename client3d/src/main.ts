@@ -732,6 +732,14 @@ async function startApp(username: string) {
    *  and the server would end up two cells away from the figure. While it runs,
    *  the figure clamps at the next boundary instead of crossing again. */
   let stepInFlight = false;
+  /** Companion flag of the room walk (E3-T6), declared here because the two
+   *  INTERLOCK: a cell step and a room change are both "where the avatar is",
+   *  and the entry-room gate judges a step by the room the avatar is in. Let
+   *  them overlap and the NETWORK order decides whether the step through the
+   *  door gets through. So neither starts while the other runs — at a cell
+   *  boundary that is the same clamp a step in flight already causes. The T6
+   *  section further down owns the writes. */
+  let roomRequestInFlight = false;
   /** Cell our own step aims at (or came back to after a refusal) — the
    *  authority check must not read it as foreign movement. It is consumed by
    *  the FIRST worldmap poll after the request ended (see
@@ -931,7 +939,10 @@ async function startApp(username: string) {
       } else {
         const barred = !step || !passableCells.has(key)
           || (rejectedUntil.get(key) ?? 0) > Date.now();
-        if (barred || stepInFlight) {
+        // `roomRequestInFlight` clamps exactly like a step in flight (E3-T6):
+        // a room change and a cell step must not overlap, or the entry-room
+        // gate judges this step against a room that is still moving.
+        if (barred || stepInFlight || roomRequestInFlight) {
           // A route that runs into a barred edge is void — the plan was made
           // against the map, so this is a refusal the plan did not know about.
           // A step merely in flight is NOT that: there the figure just waits
@@ -1019,9 +1030,12 @@ async function startApp(username: string) {
    *  After that the request counts as lost — a confirmation that never arrives
    *  would otherwise bar that room for the rest of the session. */
   const ROOM_CONFIRM_MS = 10_000;
+  /** Deadline for one room request. Same reason as `STEP_TIMEOUT_MS`: only ONE
+   *  may be in flight and it interlocks with the walking steps, so a request
+   *  that never answers (proxy hiccup, server restart) would bar every room
+   *  change AND every cell boundary for the rest of the session. */
+  const ROOM_TIMEOUT_MS = 10_000;
   let roomWalk: RoomWalkState = idleRoomWalk();
-  /** At most ONE enter-room in flight; a second one could overtake the first. */
-  let roomRequestInFlight = false;
   /** Room the server was asked for, until `roomOf` confirms it. NOT a local
    *  anticipation of the room — the payload alone decides where the avatar is;
    *  this only stops the hysteresis from asking again while the answer is
@@ -1044,17 +1058,21 @@ async function startApp(username: string) {
     roomRequestInFlight = true;
     requestedRoom = roomId;
     requestedAt = performance.now();
+    const abort = new AbortController();
+    const deadline = setTimeout(() => abort.abort(), ROOM_TIMEOUT_MS);
     try {
-      await api.enterRoom(roomId);
+      await api.enterRoom(roomId, abort.signal);
     } catch {
-      // Silent, exactly like the HUD's room chips: a rule refused it or the
-      // room is stale, and the next poll shows what actually holds. What the
-      // failure DOES buy is the block below — a player standing in the same
-      // spot must not hammer the endpoint.
+      // Silent, exactly like the HUD's room chips: a rule refused it, the room
+      // is stale, or the deadline ran out — the next poll shows what actually
+      // holds. What the failure DOES buy is the block below, so a player
+      // standing in the same spot cannot hammer the endpoint. An aborted
+      // request lands here too and gets the ordinary 4-second block.
       roomRejectedUntil.set(roomId, performance.now() + ROOM_REJECT_MS);
       requestedRoom = null;
     } finally {
-      roomRequestInFlight = false;
+      clearTimeout(deadline);
+      roomRequestInFlight = false;   // guaranteed, or the interlock never opens
     }
   }
 
@@ -1064,7 +1082,11 @@ async function startApp(username: string) {
     const state = getGameState();
     if (state.mode !== 'embodied') { roomWalk = idleRoomWalk(); return; }
     const pos = npcs.positionOf(avatarName);
-    if (!pos) return;
+    // No figure on the map (a model reload throws the group away and rebuilds
+    // it): the clock is RESET, not carried over. A candidate whose `sinceMs`
+    // lies before the gap would fire in the very first frame after the figure
+    // returns — the hold guarantee gone.
+    if (!pos) { roomWalk = idleRoomWalk(); return; }
     // The tile the figure STANDS on, not the one the worldmap names — while
     // walking, the two differ for up to one poll.
     const tile = tileAtCell(cellOf(pos.x, pos.z, CELL));
@@ -1105,13 +1127,27 @@ async function startApp(username: string) {
                      center: { x: c.x, z: c.z } });
       }
     }
+    // The storey is the FIGURE'S OWN, never the displayed one: `levelFilter`
+    // is the in-world storey BUTTON, pure view state. Glancing at the first
+    // floor from the hall must not post the avatar up there, and a room set by
+    // the HUD chip must not be pulled back down because the view shows the
+    // ground floor. Without a room yet, the displayed storey is the only
+    // answer there is.
+    const level = (current ? tile.roomLevels.get(current) : undefined) ?? tile.levelFilter;
+    const before = roomWalk;
     const out = nearestRoomSwitch(current, { x: pos.x, z: pos.z }, rooms,
-      tile.levelFilter, roomWalk, performance.now(), ROOM_HOLD_SECONDS);
-    roomWalk = out.state;
+      level, before, performance.now(), ROOM_HOLD_SECONDS);
     const next = out.next;
-    if (!next || next === current) return;
-    if (roomRequestInFlight || next === requestedRoom) return;
-    if ((roomRejectedUntil.get(next) ?? 0) > performance.now()) return;
+    if (!next || next === current) { roomWalk = out.state; return; }
+    // A due switch that cannot leave keeps the OLD clock instead of the
+    // re-armed one, so it goes out the moment the line is free and does not
+    // cost a second full hold. `stepInFlight` is the interlock: a cell step
+    // and a room change must not overlap (the entry-room gate judges the step
+    // by the room the avatar is in), so whichever started first finishes.
+    const gated = roomRequestInFlight || stepInFlight || next === requestedRoom
+      || (roomRejectedUntil.get(next) ?? 0) > performance.now();
+    roomWalk = gated ? before : out.state;
+    if (gated) return;
     void enterRoomOnFoot(next);
   });
 

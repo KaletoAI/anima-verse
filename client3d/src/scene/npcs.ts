@@ -189,13 +189,23 @@ export class NpcManager {
     if (this.playerDriven === name) return;
     this.playerDriven = name;
     if (!name) return;
+    // No figure yet (the model is still loading, or a rebuild threw the group
+    // away): nothing to do HERE — `update()` applies the same state the moment
+    // it creates the figure, so the takeover is not lost.
     const npc = this.npcs.get(name);
-    if (!npc) return;
+    if (npc) this.takeOver(npc);
+  }
+
+  /** Bring a figure into the state a player-driven one has to be in (E3-T3/T6).
+   *  Called from `setPlayerDriven` AND from `update()` right after a figure is
+   *  created, because the two orders both happen: entering the mode with the
+   *  figure on the map, and a model that only arrives afterwards. */
+  private takeOver(npc: Npc) {
     npc.route = null;        // a server journey would keep overriding the input
     npc.waypoints = [];      // ditto for a planned A* path
     npc.target.copy(npc.root.position);
     // The placement fields update() stops writing keep their last value, and
-    // two of them are wrong for a steered figure (E3-T6):
+    // two of them are wrong for a steered figure:
     // `face` was the traveller's destination — the avatar would walk while
     // staring at the town it no longer travels to; without it `tick()` falls
     // back to the walking direction and the neighbour gaze, like any NPC.
@@ -324,6 +334,9 @@ export class NpcManager {
         this.npcs.set(st.char.name, npc);
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
+        // The figure only arrived now, but the player has been steering since
+        // before it existed — `setPlayerDriven` found nothing to write then.
+        if (st.char.name === this.playerDriven) this.takeOver(npc);
       }
       // Player-driven figure (E3-T3): WHERE it stands belongs to the frame
       // hook in main.ts — pos/via/route/scale/face/lean/hidden are all

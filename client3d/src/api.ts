@@ -86,12 +86,15 @@ export async function avatarStep(direction: StepDirection, signal?: AbortSignal
 /** Move the avatar into another room of its current location — the same call
  *  the HUD's room chips make. Throws on any refusal (a block rule, a room the
  *  server does not have at this location); the caller stays silent about it,
- *  the next poll shows what actually holds. */
-export async function enterRoom(roomId: string): Promise<void> {
+ *  the next poll shows what actually holds. `signal` lets the caller put a
+ *  deadline on it: only ONE room change may be in flight, so a request that
+ *  never answers would bar every further one until the page is reloaded. */
+export async function enterRoom(roomId: string, signal?: AbortSignal): Promise<void> {
   const res = await fetch('/play/enter-room', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ room_id: roomId }),
+    signal,
   });
   if (!res.ok) throw new Error(`enter-room ${res.status}`);
 }
