@@ -733,20 +733,39 @@ async function startApp(username: string) {
   let expectedCell: Cell | null = null;
   /** cell key -> time until which a refused crossing stays refused */
   const rejectedUntil = new Map<string, number>();
+  /**
+   * The ONE cell boundary the server has been asked about. It exists because
+   * the request leaves before the figure reaches the line: the goal runs
+   * MIN_LEAD ahead, so the figure still stands ~0.09 m short when the request
+   * goes out. Without this memory the frames until the answer clamp the figure
+   * in place, the answer arrives while it is STILL in the old cell, and the
+   * very next frame asks again — three requests per edge, latency or not. The
+   * server counts each of them from its own cell and ends up two cells ahead
+   * of the figure: 403s for edges nobody walked at, then a snap-back.
+   *
+   * `granted` is what the answer buys: from then on the figure walks over that
+   * boundary without asking again. The permission belongs to the cell it was
+   * asked from and is dropped as soon as the figure stands somewhere else.
+   */
+  let askedEdge: { from: Cell; to: Cell; granted: boolean } | null = null;
 
-  async function requestStep(direction: api.StepDirection, from: Cell, to: Cell) {
+  async function requestStep(direction: api.StepDirection, from: Cell, to: Cell,
+    edge: { granted: boolean }) {
     stepInFlight = true;
     expectedCell = to;
     const abort = new AbortController();
     const deadline = setTimeout(() => abort.abort(), STEP_TIMEOUT_MS);
     try {
       await api.avatarStep(direction, abort.signal);
-      // No snap on success: the figure has been in the new cell since the
-      // frame the request left, and the worldmap confirms it within a poll.
+      // The boundary is open now: the figure walks over it in the next frames
+      // WITHOUT another request. No snap — the server is already there and the
+      // worldmap confirms it within a poll.
+      edge.granted = true;
     } catch (e) {
       const err = e instanceof api.ApiError ? e : null;
       rejectedUntil.set(`${to.gx},${to.gy}`, Date.now() + REJECT_MEMORY_MS);
       expectedCell = from;
+      if (askedEdge === edge) askedEdge = null;
       // The crossing did NOT happen, so the figure must not be standing past
       // the line: a hard put-back, not a walk-back — otherwise the local cell
       // stays the new one and the very next frame walks on into it.
@@ -879,6 +898,11 @@ async function startApp(username: string) {
     }
     if (!dir) return;
     const here = cellOf(pos.x, pos.z, CELL);
+    // A permission belongs to the cell it was asked from; standing anywhere
+    // else means it has been used (or the figure was moved away from it).
+    if (askedEdge && (askedEdge.from.gx !== here.gx || askedEdge.from.gy !== here.gy)) {
+      askedEdge = null;
+    }
     const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
     let x = pos.x + dir.x * lead;
     let z = pos.z + dir.z * lead;
@@ -894,17 +918,27 @@ async function startApp(username: string) {
     if (next.gx !== here.gx || next.gy !== here.gy) {
       const step = stepDirection(here, next);
       const key = `${next.gx},${next.gy}`;
-      const barred = !step || !passableCells.has(key)
-        || (rejectedUntil.get(key) ?? 0) > Date.now();
-      if (barred || stepInFlight) {
-        // A route that runs into a barred edge is void — the plan was made
-        // against the map, so this is a refusal the plan did not know about.
-        // A step merely in flight is NOT that: there the figure just waits at
-        // the boundary for the answer.
-        if (barred) cancelRoute();
-        ({ x, z } = clampToCell(x, z, here, CELL));
+      if (askedEdge && askedEdge.to.gx === next.gx && askedEdge.to.gy === next.gy) {
+        // Exactly this boundary is already asked for: wait for the answer,
+        // then walk over it. Never a second request for the same edge.
+        if (!askedEdge.granted) ({ x, z } = clampToCell(x, z, here, CELL));
       } else {
-        void requestStep(step, here, next);
+        const barred = !step || !passableCells.has(key)
+          || (rejectedUntil.get(key) ?? 0) > Date.now();
+        if (barred || stepInFlight) {
+          // A route that runs into a barred edge is void — the plan was made
+          // against the map, so this is a refusal the plan did not know about.
+          // A step merely in flight is NOT that: there the figure just waits
+          // at the boundary for its turn.
+          if (barred) cancelRoute();
+          ({ x, z } = clampToCell(x, z, here, CELL));
+        } else {
+          askedEdge = { from: here, to: next, granted: false };
+          void requestStep(step, here, next, askedEdge);
+          // Behind the line until the answer comes: asking AND walking on in
+          // the same frame is what used to trigger the repeat requests.
+          ({ x, z } = clampToCell(x, z, here, CELL));
+        }
       }
     }
     // The clamp pulls the goal to the inset edge, which can be BEHIND the
@@ -954,6 +988,7 @@ async function startApp(username: string) {
     npcs.snapPlayerTo(avatarName, p);
     engine.flyTo(p, engine.targetDist);
     expectedCell = null;
+    askedEdge = null;                    // that permission was for another cell
     // The figure was moved from under the route — the plan started somewhere
     // else and would now walk back through cells it never chose.
     cancelRoute();

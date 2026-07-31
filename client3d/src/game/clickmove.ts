@@ -35,6 +35,49 @@ export type PassableFn = (gx: number, gy: number) => boolean;
  *  between are dropped, so what arrives are the corners). */
 export type AstarFn = (a: Cell, b: Cell) => Cell[] | null;
 
+/**
+ * Does the walk only touch cells it is allowed to enter?
+ *
+ * It has to be asked, because the pathfinder and the walk do NOT share a
+ * passability model: `PathGrid.walkable()` blocks only cells it knows as
+ * impassable, so a cell with no location at all counts as walkable there
+ * (with a cost penalty) — while the walk can never enter it, the server
+ * answers 404 for a step onto nothing. Unchecked, such a route dies silently
+ * at the first gap: the frame hook bars the crossing and drops the route, and
+ * the player sees the marker vanish for no reason.
+ *
+ * Checked are all cells the figure really enters, not just the corners:
+ *  - the cells a straight leg passes through (the corner list skips them),
+ *  - for a diagonal leg BOTH orthogonal cells of every step, because the
+ *    frame hook turns a corner crossing into a single-axis step and is free
+ *    to take either one.
+ * The cell the figure starts in is not checked — it is standing there.
+ * A leg that is neither straight nor exactly diagonal cannot come from this
+ * pathfinder; it counts as invalid rather than being guessed at.
+ */
+function walkStaysPassable(from: Cell, cells: Cell[], isPassable: PassableFn): boolean {
+  let at = from;
+  for (const leg of cells) {
+    const dx = leg.gx - at.gx;
+    const dy = leg.gy - at.gy;
+    if (dx && dy && Math.abs(dx) !== Math.abs(dy)) return false;
+    const steps = Math.max(Math.abs(dx), Math.abs(dy));
+    const sx = Math.sign(dx);
+    const sy = Math.sign(dy);
+    for (let i = 1; i <= steps; i++) {
+      const gx = at.gx + sx * i;
+      const gy = at.gy + sy * i;
+      if (!isPassable(gx, gy)) return false;
+      if (sx && sy) {
+        // the two cells the diagonal step could go round the corner by
+        if (!isPassable(gx, gy - sy) || !isPassable(gx - sx, gy)) return false;
+      }
+    }
+    at = leg;
+  }
+  return true;
+}
+
 /** The 8 cells around `to` that are passable, best approach first: closest to
  *  the clicked cell, ties broken by closeness to the figure and then by
  *  coordinates, so the choice never depends on iteration luck. */
@@ -66,9 +109,14 @@ function approachCells(to: Cell, from: Cell, isPassable: PassableFn): Cell[] {
  *  2. The clicked cell is passable — the pathfinder gives the corners.
  *  3. The clicked cell is NOT passable (a building): walk to the closest
  *     passable cell around it that can be reached, and stop on the edge
- *     facing the building. Is that cell the one the figure already stands in,
- *     there is nothing to do (null) — a click on a building the figure stands
- *     next to must not make it shuffle sideways.
+ *     facing the building. Does the figure already stand in ANY of those
+ *     cells, there is nothing to do (null) — not just in the best one: a
+ *     click on a building the figure stands diagonally in front of must not
+ *     make it shuffle one cell sideways along the wall for a "closer" spot.
+ *
+ * In cases 2 and 3 the planned way is validated against the SAME passability
+ * the walk uses (`walkStaysPassable`) — the pathfinder's is wider, and a
+ * route it invents over unknown ground would die silently on the first step.
  *
  * The goal point is always the click point CLAMPED into the last cell of the
  * route, so the walk ends safely inside it (see `clampToCell`: clamping to
@@ -101,16 +149,19 @@ export function planRoute(
 
   if (isPassable(to.gx, to.gy)) {
     const cells = astar(from, to);
-    return cells && cells.length ? routeTo(cells) : null;
+    if (!cells || !cells.length) return null;
+    return walkStaysPassable(from, cells, isPassable) ? routeTo(cells) : null;
   }
 
-  for (const cand of approachCells(to, from, isPassable)) {
-    // The best reachable spot is where the figure stands: no walk. Checked
-    // inside the loop on purpose — a closer candidate that IS reachable still
-    // wins, only when the figure's own cell comes up first does it stop here.
-    if (cand.gx === from.gx && cand.gy === from.gy) return null;
+  const approaches = approachCells(to, from, isPassable);
+  // Standing in one of the cells that count as "in front of it" is close
+  // enough — whether or not another one is nearer to the clicked cell.
+  if (approaches.some((c) => c.gx === from.gx && c.gy === from.gy)) return null;
+  for (const cand of approaches) {
     const cells = astar(from, cand);
-    if (cells && cells.length) return routeTo(cells);
+    if (cells && cells.length && walkStaysPassable(from, cells, isPassable)) {
+      return routeTo(cells);
+    }
   }
   return null;
 }
