@@ -57,13 +57,16 @@ export type StepDirection = 'north' | 'south' | 'east' | 'west';
 
 /** One grid step of the avatar. Throws an `ApiError`: 403 = party follower,
  *  entry-room gate or block rule (message written for the player), 404 = no
- *  location in that direction. */
-export async function avatarStep(direction: StepDirection
+ *  location in that direction. `signal` lets the caller put a deadline on the
+ *  request — the client allows only ONE step in flight, so a request that
+ *  never answers would bar every cell boundary until the page is reloaded. */
+export async function avatarStep(direction: StepDirection, signal?: AbortSignal
 ): Promise<{ location_id: string; room_id?: string }> {
   const res = await fetch('/world/avatar/step', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ direction }),
+    signal,
   });
   if (!res.ok) {
     let detail: unknown = null;

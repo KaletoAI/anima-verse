@@ -60,6 +60,11 @@ export class Engine {
   /** Asked BEFORE onPick on a left click (E3-T1): true = the click hit a figure
    *  and is used up, so no tile pick follows. */
   pickFigure: ((x: number, y: number) => boolean) | null = null;
+  /** Asked after `pickFigure` and BEFORE `onPick` on a left click (E3-T4):
+   *  true = the click became a walk target and must not also open the tile's
+   *  info panel. Only the embodied mode answers true — in the overview every
+   *  click still belongs to the tile. */
+  onGroundClick: ((x: number, y: number) => boolean) | null = null;
   /** Follow target (E3-T2): while set, the camera chases the point this getter
    *  returns per frame and the WASD pan is skipped — those keys then belong to
    *  the avatar (task 3). Wheel zoom, Q/E and orbit stay live. */
@@ -186,6 +191,13 @@ export class Engine {
     return this.raycaster.ray.intersectPlane(this.groundPlane, hit) ? hit : null;
   }
 
+  /** Where the pointer meets the ground plane (y = 0), for anything outside
+   *  the engine that needs a world position from a click (E3-T4: the walk
+   *  target). Null when the ray runs parallel to the ground. */
+  groundPointAt(clientX: number, clientY: number): THREE.Vector3 | null {
+    return this.groundPoint(clientX, clientY);
+  }
+
   /** Ray through the pointer position, for anything outside the engine that
    *  needs to pick its own objects (E3-T1: the figures). The instance is the
    *  engine's own and is re-aimed on every call — use it right away. */
@@ -281,6 +293,9 @@ export class Engine {
       // Figures first: a hit figure eats the click, so clicking a character
       // does not also open the tile's info panel.
       if (this.pickFigure?.(e.clientX, e.clientY)) return;
+      // Then the ground: while embodied, a click on walkable ground is a walk
+      // order and eats the click as well.
+      if (this.onGroundClick?.(e.clientX, e.clientY)) return;
       this.onPick?.(this.pickLocation(e.clientX, e.clientY));
     });
     el.addEventListener('contextmenu', (e) => e.preventDefault());

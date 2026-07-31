@@ -12,6 +12,9 @@ export const WALK_SPEED = 3.4;
 const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
 const SELECT_COLOR = 0xf2d98c;
+/** Walk-target marker (E3-T4): the same gold, but a thin flat ring on the
+ *  ground — it marks a place, not a figure. */
+const WALK_TARGET_RADIUS = 0.55;
 
 function ringColor(name: string): string {
   const rnd = seededRandom(name);
@@ -133,6 +136,8 @@ export class NpcManager {
   private selectRing: THREE.Mesh | null = null;
   /** figure the PLAYER steers (E3-T3); its placement comes from main.ts */
   private playerDriven: string | null = null;
+  /** ground ring at the click target of a running walk (E3-T4) */
+  private walkTargetRing: THREE.Mesh | null = null;
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -200,6 +205,35 @@ export class NpcManager {
     npc.target.copy(pos);
     npc.waypoints = [];
     npc.route = null;
+  }
+
+  /** Show the goal of a click-to-walk order on the ground (E3-T4); null takes
+   *  the marker away again (arrival, cancel, leaving the mode). The ring hangs
+   *  in the manager's own group, NOT in a figure — it marks a place. */
+  setWalkTarget(pos: THREE.Vector3 | null) {
+    if (!pos) {
+      if (!this.walkTargetRing) return;
+      this.walkTargetRing.removeFromParent();
+      this.walkTargetRing.geometry.dispose();
+      (this.walkTargetRing.material as THREE.Material).dispose();
+      this.walkTargetRing = null;
+      return;
+    }
+    if (!this.walkTargetRing) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(WALK_TARGET_RADIUS * 0.72, WALK_TARGET_RADIUS, 32),
+        new THREE.MeshBasicMaterial({
+          color: SELECT_COLOR, transparent: true, opacity: 0.8, depthWrite: false,
+        })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      // Same lesson as the selection marker: a marker must never be its own
+      // hit area, or the next click lands on it instead of on the ground.
+      ring.raycast = () => {};
+      this.group.add(ring);
+      this.walkTargetRing = ring;
+    }
+    this.walkTargetRing.position.set(pos.x, pos.y + 0.06, pos.z);
   }
 
   /** Mark a figure as selected; null clears the marker (E3-T1). */

@@ -5,6 +5,7 @@ import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, type Cell } from './game/walk';
+import { planRoute, type ClickRoute } from './game/clickmove';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -714,33 +715,38 @@ async function startApp(username: string) {
   /** How long a refused edge is remembered. Without it a held key would fire a
    *  request per frame against a block rule and bury the player in toasts. */
   const REJECT_MEMORY_MS = 4000;
-  /** How long our own step may explain a server/client cell mismatch. */
-  const EXPECT_TTL_MS = 15_000;
+  /** Deadline for one step request. Only ONE may be in flight, so a request
+   *  that never answers (proxy hiccup, server restart mid-step) would bar
+   *  every cell boundary until the page is reloaded — the figure would still
+   *  walk inside its cell and look merely "stuck", which is the worst kind of
+   *  broken. After the deadline the step counts as failed. */
+  const STEP_TIMEOUT_MS = 10_000;
 
   /** At most ONE step request in flight: a second one could overtake the first
    *  and the server would end up two cells away from the figure. While it runs,
    *  the figure clamps at the next boundary instead of crossing again. */
   let stepInFlight = false;
   /** Cell our own step aims at (or came back to after a refusal) — the
-   *  authority check must not read it as foreign movement. */
+   *  authority check must not read it as foreign movement. It is consumed by
+   *  the FIRST worldmap poll after the request ended (see
+   *  `reconcileAvatarCell`), not by a timer. */
   let expectedCell: Cell | null = null;
-  let expectedAt = 0;
   /** cell key -> time until which a refused crossing stays refused */
   const rejectedUntil = new Map<string, number>();
 
   async function requestStep(direction: api.StepDirection, from: Cell, to: Cell) {
     stepInFlight = true;
     expectedCell = to;
-    expectedAt = Date.now();
+    const abort = new AbortController();
+    const deadline = setTimeout(() => abort.abort(), STEP_TIMEOUT_MS);
     try {
-      await api.avatarStep(direction);
+      await api.avatarStep(direction, abort.signal);
       // No snap on success: the figure has been in the new cell since the
       // frame the request left, and the worldmap confirms it within a poll.
     } catch (e) {
       const err = e instanceof api.ApiError ? e : null;
       rejectedUntil.set(`${to.gx},${to.gy}`, Date.now() + REJECT_MEMORY_MS);
       expectedCell = from;
-      expectedAt = Date.now();
       // The crossing did NOT happen, so the figure must not be standing past
       // the line: a hard put-back, not a walk-back — otherwise the local cell
       // stays the new one and the very next frame walks on into it.
@@ -749,15 +755,86 @@ async function startApp(username: string) {
         const back = clampToCell(p.x, p.z, from, CELL);
         npcs.snapPlayerTo(avatarName, new THREE.Vector3(back.x, p.y, back.z));
       }
+      // A click route was planned across this edge — it is void now, whatever
+      // the reason. Walking on would only collect the same refusal again.
+      cancelRoute();
       // 403 = a rule refused it and the server wrote the reason for the
       // player. 404 = there is simply no location that way, which the edge
       // already shows — no toast for that.
       if (err?.status === 403) uiActions.toast?.(err.message);
+      else if (abort.signal.aborted) console.warn('[walk] step request timed out');
       else if (!err) console.warn('[walk] step request failed', e);
     } finally {
+      clearTimeout(deadline);
       stepInFlight = false;
     }
   }
+
+  // --- Click to walk (E3-T4) ------------------------------------------------
+  // A ground click plans a route ONCE (game/clickmove.ts); walking it is the
+  // same frame hook, the same cell boundaries and the same step requests as
+  // WASD — the route only replaces the direction the hook steers in.
+  /** Reached-a-waypoint threshold. Must stay above the 0.05 that `tick()`
+   *  needs to count a figure as moving, otherwise the last centimetres would
+   *  never be walked and the route would never finish. */
+  const ROUTE_ARRIVE = 0.2;
+  let route: ClickRoute | null = null;
+  let routeAt = 0;                      // index of the waypoint being steered at
+
+  function cancelRoute() {
+    if (!route) return;
+    route = null;
+    npcs.setWalkTarget(null);
+  }
+
+  /** Point the hook currently steers at: cell centres for the waypoints in
+   *  between, the exact planned goal for the last one. */
+  function routeGoal(): { x: number; z: number } | null {
+    if (!route || routeAt >= route.cells.length) return null;
+    if (routeAt === route.cells.length - 1) return route.goal;
+    const c = route.cells[routeAt];
+    return { x: c.gx * CELL, z: c.gy * CELL };
+  }
+
+  /** Ground height at a world point, so marker and walk goal sit on the tile
+   *  instead of on the y=0 plane. */
+  const groundProbe = new THREE.Vector3();
+  function groundY(x: number, z: number): number {
+    const tile = tileAtCell(cellOf(x, z, CELL));
+    if (!tile) return 0;
+    groundProbe.set(x, 0, z);
+    return tileGroundY(tile, groundProbe);
+  }
+
+  engine.onGroundClick = (x, y) => {
+    const state = getGameState();
+    // Overview mode is untouched: there a click stays a tile pick.
+    if (state.mode !== 'embodied' || state.movementLocked) return false;
+    const pos = npcs.positionOf(avatarName);
+    const hit = engine.groundPointAt(x, y);
+    if (!pos || !hit) return false;
+    const planned = planRoute(
+      { x: pos.x, z: pos.z }, { x: hit.x, z: hit.z },
+      (gx, gy) => passableCells.has(`${gx},${gy}`),
+      (a, b) => {
+        const pts = pathGrid.findPath(a.gx, a.gy, b.gx, b.gy);
+        if (!pts.length) return null;
+        return pts.map((p) => {
+          const c = PathGrid.cellOf(p);
+          return { gx: c.x, gy: c.y };
+        });
+      },
+      CELL,
+    );
+    // Nothing walkable under the pointer (a building with no way to it, the
+    // map edge): let the click fall through to the tile's info panel.
+    if (!planned) return false;
+    route = planned;
+    routeAt = 0;
+    npcs.setWalkTarget(new THREE.Vector3(planned.goal.x,
+      groundY(planned.goal.x, planned.goal.z), planned.goal.z));
+    return true;
+  };
 
   // The player drives the avatar for exactly as long as the mode is on. Hung
   // off the BUS, not off the enter/exit calls: zooming out leaves the mode
@@ -769,16 +846,40 @@ async function startApp(username: string) {
   const walkGoal = new THREE.Vector3();
   engine.addFrameHook((dt) => {
     const state = getGameState();
-    if (state.mode !== 'embodied') return;
+    if (state.mode !== 'embodied') {
+      cancelRoute();                      // leaving the mode drops the route
+      return;
+    }
     // Party follower: the leader carries the avatar along; the server refuses
     // every step anyway, so the keys stay dead instead of collecting 403s.
-    if (state.movementLocked) return;
+    if (state.movementLocked) {
+      cancelRoute();
+      return;
+    }
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;                     // no figure on the map (yet) — nothing to steer
-    const dir = walkDir(engine.keysDown(), engine.yaw);
+    const keyDir = walkDir(engine.keysDown(), engine.yaw);
+    // The keys always win: touching WASD is the player taking over from the
+    // click order, not fighting it.
+    if (keyDir) cancelRoute();
+    let dir = keyDir;
+    // How far the goal may be pushed ahead this frame. Unlimited for the keys
+    // (the direction just carries on), capped at the remaining distance while
+    // a route runs, so the figure stops ON the waypoint instead of past it.
+    let reach = Infinity;
+    while (!dir && route) {
+      const wp = routeGoal();
+      if (!wp) { cancelRoute(); break; }   // last waypoint reached: done
+      const dx = wp.x - pos.x;
+      const dz = wp.z - pos.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < ROUTE_ARRIVE) { routeAt += 1; continue; }
+      dir = { x: dx / dist, z: dz / dist };
+      reach = dist;
+    }
     if (!dir) return;
     const here = cellOf(pos.x, pos.z, CELL);
-    const lead = Math.max(WALK_SPEED * dt, MIN_LEAD);
+    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
     let x = pos.x + dir.x * lead;
     let z = pos.z + dir.z * lead;
     let next = cellOf(x, z, CELL);
@@ -796,6 +897,11 @@ async function startApp(username: string) {
       const barred = !step || !passableCells.has(key)
         || (rejectedUntil.get(key) ?? 0) > Date.now();
       if (barred || stepInFlight) {
+        // A route that runs into a barred edge is void — the plan was made
+        // against the map, so this is a refusal the plan did not know about.
+        // A step merely in flight is NOT that: there the figure just waits at
+        // the boundary for the answer.
+        if (barred) cancelRoute();
         ({ x, z } = clampToCell(x, z, here, CELL));
       } else {
         void requestStep(step, here, next);
@@ -806,9 +912,7 @@ async function startApp(username: string) {
     // frame. On a blocked axis the goal is the position itself (stand still),
     // the free axis keeps sliding along the edge.
     ({ x, z } = keepAhead({ x, z }, pos, dir));
-    walkGoal.set(x, 0, z);
-    const tile = tileAtCell(cellOf(x, z, CELL));
-    walkGoal.y = tile ? tileGroundY(tile, walkGoal) : 0;
+    walkGoal.set(x, groundY(x, z), z);
     npcs.setPlayerTarget(avatarName, walkGoal);
   });
 
@@ -818,7 +922,13 @@ async function startApp(username: string) {
    *  our own steps, which are briefly out of sync in both directions: the
    *  request has returned but this payload predates it (server = old cell,
    *  expected = local), or the payload is already ahead of the walking figure
-   *  (server = expected, local = old cell). */
+   *  (server = expected, local = old cell).
+   *
+   *  That excuse is worth exactly ONE poll: the payload of the first poll
+   *  after the request ended may still have been in flight while the step was
+   *  answered, the next one cannot be. So `expectedCell` is consumed here
+   *  instead of expiring on a timer — a 15-second window used to blind the
+   *  check against real foreign movement for five polls in a row. */
   function reconcileAvatarCell(map: WorldMap) {
     if (getGameState().mode !== 'embodied') return;
     if (stepInFlight) return;
@@ -833,15 +943,20 @@ async function startApp(username: string) {
       expectedCell = null;                 // in sync, nothing outstanding
       return;
     }
-    const fresh = Date.now() - expectedAt < EXPECT_TTL_MS;
-    if (expectedCell && fresh
+    if (expectedCell
       && ((expectedCell.gx === local.gx && expectedCell.gy === local.gy)
-        || (expectedCell.gx === server.gx && expectedCell.gy === server.gy))) return;
+        || (expectedCell.gx === server.gx && expectedCell.gy === server.gy))) {
+      expectedCell = null;               // one poll of grace, then it counts
+      return;
+    }
     const p = tile.center.clone();
     p.setY(tileGroundY(tile, p));
     npcs.snapPlayerTo(avatarName, p);
     engine.flyTo(p, engine.targetDist);
     expectedCell = null;
+    // The figure was moved from under the route — the plan started somewhere
+    // else and would now walk back through cells it never chose.
+    cancelRoute();
   }
 
   // --- Frame-Hook: LOD (Raumauflösung), NPC-Animation, Pin-Bobbing ----------
