@@ -12,10 +12,11 @@
  * Deliberately dependency-free: no React import here, so scene code may import
  * it without pulling the HUD bundle in. Game state has three writers, each
  * owning a disjoint set of fields: `main.ts` with its mode helper
- * `game/embody.ts` (mode, selection, talk target), `CharacterPlaque.tsx` (one
+ * `game/embody.ts` (mode, selection, talk target, elevator), `CharacterPlaque.tsx` (one
  * field — clearing the selection) and `Hud.tsx` (party state out of the
  * `/play/scene` poll — `movementLocked` + `partyLeader`, E3-T3).
  */
+import type { ElevatorState } from '../game/elevator';
 import type { MapCharacter } from '../types';
 
 export type GameMode = 'overview' | 'embodied';
@@ -30,6 +31,12 @@ export interface HudGameState {
   movementLocked: boolean;
   /** name of the party leader while `movementLocked` is set, else empty */
   partyLeader: string;
+  /** elevator the avatar is standing at (embodied mode), or null. The talk
+   *  prompt WINS over it: with someone in range only that prompt shows, so one
+   *  F press is never two offers at once. */
+  elevator: ElevatorState | null;
+  /** the storey choice is unfolded (F opens and closes it, Esc closes it) */
+  elevatorOpen: boolean;
 }
 
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */
@@ -37,6 +44,9 @@ export interface HudGameActions {
   zoomTo?: (charName: string) => void;
   enterEmbodied?: () => void;
   exitEmbodied?: () => void;
+  /** ride to that storey: enter its room on the server, then walk the figure
+   *  to the holding point of the target storey */
+  rideElevator?: (level: number) => void;
 }
 
 /** React-side handlers the vanilla app calls (e.g. the F key opens the chat). */
@@ -50,6 +60,7 @@ export interface HudUiActions {
 const state: HudGameState = {
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '',
+  elevator: null, elevatorOpen: false,
 };
 const listeners = new Set<() => void>();
 let snapshot: HudGameState = { ...state };

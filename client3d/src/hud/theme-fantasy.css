@@ -148,6 +148,28 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 8px 22px rgba(0, 0, 0, 0.5);
 }
 
+/* ---- Elevator: the same tab as the talk prompt, with brass floor keys ---
+ * It takes the prompt's place in the bottom stack, so it has to read as the
+ * same object — vellum and gold — with the storeys as small pressed keys. */
+#hud .hud-elevator {
+  background: var(--hud-vellum);
+  border-color: rgba(242, 205, 110, 0.34);
+  color: var(--hud-gold);
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: 0.04em;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 8px 22px rgba(0, 0, 0, 0.5);
+}
+#hud .hud-elevator-floor {
+  border-color: rgba(242, 205, 110, 0.28);
+  color: #c8bda2;
+  font-family: Georgia, "Times New Roman", serif;
+  transition: color 0.12s, border-color 0.12s;
+}
+#hud .hud-elevator-floor:hover {
+  border-color: rgba(242, 205, 110, 0.6);
+  color: var(--hud-gold);
+}
+
 /* ---- Rail: three brass studs pressed into the edge of the screen ------- */
 #hud .hud-rail button {
   background: radial-gradient(circle at 34% 26%, #3b3225 0%, #262017 62%, #191410 100%);

@@ -6,9 +6,10 @@
    Pointer rule: the root is a full-screen overlay that must NEVER block
    camera dragging on the canvas below — pointer-events: none on the root,
    auto only on the surfaces that are actually operated (rail, panels, the
-   character plaque, the mode chip). Everything that is merely read — the
-   bottom-centre stack around the plaque, the talk prompt inside it — keeps
-   the pointer at none, so a click there still reaches the scene. */
+   character plaque, the mode chip, the unfolded elevator). Everything that is
+   merely read — the bottom-centre stack around the plaque, the talk prompt and
+   the elevator prompt inside it — keeps the pointer at none, so a click there
+   still reaches the scene. */
 
 #hud {
   position: fixed;
@@ -22,7 +23,8 @@
 #hud .hud-rail,
 #hud .hud-panel,
 #hud .hud-plaque,
-#hud .hud-mode {
+#hud .hud-mode,
+#hud .hud-elevator {
   pointer-events: auto;
 }
 
@@ -172,6 +174,35 @@
   background: var(--bg-container, #161b22);
   font-size: 0.9em;
   text-align: center;
+}
+
+/* ---- Elevator: the storey choice, unfolded (E3) ----
+   Same row of the bottom stack as the talk prompt (they never show at once),
+   but operated — so it takes the pointer back above. */
+#hud .hud-elevator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 999px;
+  background: var(--bg-container, #161b22);
+  font-size: 0.9em;
+}
+#hud .hud-elevator-label {
+  opacity: 0.75;
+}
+#hud .hud-elevator-floor {
+  padding: 3px 10px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+#hud .hud-elevator-floor:hover {
+  border-color: var(--accent, #f2d98c);
 }
 
 /* ---- Character plaque: the selected figure (E3-T1) ----

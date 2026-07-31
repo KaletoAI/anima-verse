@@ -8,6 +8,7 @@ import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, 
 import { planRoute, type ClickRoute } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
+import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -399,6 +400,14 @@ async function startApp(username: string) {
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || isTypingTarget(e)) return;
     if (document.querySelector('.lb-overlay, .ga-modal-backdrop')) return;
+    // The storey choice comes FIRST: it is part of the HUD's bottom stack and
+    // not a document.body overlay, so the guard above cannot see it — and Esc
+    // must close the choice one has just opened, not throw the player out of
+    // the mode with it.
+    if (getGameState().elevatorOpen) {
+      setGameState({ elevatorOpen: false });
+      return;
+    }
     if (getGameState().mode === 'embodied') exitEmbodied(embody);
   }, true);
 
@@ -699,6 +708,7 @@ async function startApp(username: string) {
     // hook — walking up to someone is a second-scale event, and `shownRoom`
     // is only rewritten here anyway. See the section further down.
     updateTalkTarget();
+    updateElevator();   // standing at the lift is a second-scale event too
   }, 1000);
   npcs.update(computeNpcStates(firstMap));
 
@@ -1009,7 +1019,7 @@ async function startApp(username: string) {
     // frame. On a blocked axis the goal is the position itself (stand still),
     // the free axis keeps sliding along the edge.
     ({ x, z } = keepAhead({ x, z }, pos, dir));
-    walkGoal.set(x, groundY(x, z), z);
+    walkGoal.set(x, storeyY(tileAtCell(here)) ?? groundY(x, z), z);
     npcs.setPlayerTarget(avatarName, walkGoal);
   });
 
@@ -1100,7 +1110,38 @@ async function startApp(username: string) {
     return tile.loc.rooms.find((r) => r.id === raw || r.name === raw)?.id ?? null;
   }
 
-  async function enterRoomOnFoot(roomId: string) {
+  /** Rooms of an interior, reduced to id/storey/centre — the shared input of
+   *  the room walk and of the elevator. Keyed by ID on purpose: `roomCenters`
+   *  holds every centre TWICE (under id and under name, one shared instance),
+   *  and one room must not stand for two candidates. No centre = no layout to
+   *  walk into. */
+  function interiorRooms(tile: Tile): RoomWalkRoom[] {
+    const rooms: RoomWalkRoom[] = [];
+    for (const r of tile.loc.rooms) {
+      const c = tile.roomCenters.get(r.id);
+      if (c) {
+        rooms.push({ id: r.id, level: tile.roomLevels.get(r.id) ?? 0,
+                     center: { x: c.x, z: c.z } });
+      }
+    }
+    return rooms;
+  }
+
+  /** Height the avatar WALKS at. On an upper storey the tile's ground skin is
+   *  the wrong reference: `groundY` would pull the figure down through the
+   *  floor with the first step up there — reachable since the elevator. The
+   *  storey's own floor comes from the room the avatar is in, the same source
+   *  the NPC placement uses (`roomCenters`). Ground floor and outdoors keep
+   *  the ground skin, so nothing about the old behaviour changes. */
+  function storeyY(tile: Tile | null): number | null {
+    if (!tile) return null;
+    const room = avatarRoomId(tile);
+    if (!room || (tile.roomLevels.get(room) ?? 0) === 0) return null;
+    return tile.roomCenters.get(room)?.y ?? null;
+  }
+
+  /** @returns true when the server accepted the room. */
+  async function enterRoomOnFoot(roomId: string): Promise<boolean> {
     roomRequestInFlight = true;
     requestedRoom = roomId;
     requestedAt = performance.now();
@@ -1108,6 +1149,7 @@ async function startApp(username: string) {
     const deadline = setTimeout(() => abort.abort(), ROOM_TIMEOUT_MS);
     try {
       await api.enterRoom(roomId, abort.signal);
+      return true;
     } catch {
       // Silent, exactly like the HUD's room chips: a rule refused it, the room
       // is stale, or the deadline ran out — the next poll shows what actually
@@ -1116,6 +1158,7 @@ async function startApp(username: string) {
       // request lands here too and gets the ordinary 4-second block.
       roomRejectedUntil.set(roomId, performance.now() + ROOM_REJECT_MS);
       requestedRoom = null;
+      return false;
     } finally {
       clearTimeout(deadline);
       roomRequestInFlight = false;   // guaranteed, or the interlock never opens
@@ -1172,17 +1215,7 @@ async function startApp(username: string) {
       roomWalk = idleRoomWalk();
       return;
     }
-    const rooms: RoomWalkRoom[] = [];
-    for (const r of tile.loc.rooms) {
-      // Keyed by ID on purpose: `roomCenters` holds every centre TWICE (under
-      // id and under name, one shared instance), and one room must not stand
-      // for two candidates. No centre = no layout to walk into.
-      const c = tile.roomCenters.get(r.id);
-      if (c) {
-        rooms.push({ id: r.id, level: tile.roomLevels.get(r.id) ?? 0,
-                     center: { x: c.x, z: c.z } });
-      }
-    }
+    const rooms = interiorRooms(tile);
     // The storey is the FIGURE'S OWN, never the displayed one: `levelFilter`
     // is the in-world storey BUTTON, pure view state. Glancing at the first
     // floor from the hall must not post the avatar up there, and a room set by
@@ -1206,6 +1239,98 @@ async function startApp(username: string) {
     if (gated) return;
     void enterRoomOnFoot(next);
   });
+
+  // --- Riding the elevator (E3, floors on foot) -----------------------------
+  // Stage 3 left storey changes out and the 3D HUD has no room chips, so upper
+  // floors were unreachable while embodied. The building already carries the
+  // holding points the NPC storey routing rides (`tile.elevatorStops`,
+  // AV3D-12) — what was missing is the player's way in. The rule is pure
+  // (`game/elevator.ts`, numbers in scripts/smoke_walk_math.mjs); everything
+  // here looks up its arguments and rides the ONE room-request machine of the
+  // room walk above.
+  function elevatorStopsOf(tile: Tile): ElevatorStop[] {
+    if (!tile.elevatorStops) return [];
+    return [...tile.elevatorStops].map(([level, p]) => ({ level, pos: { x: p.x, z: p.z } }));
+  }
+
+  /** Same 1 Hz tick as the talk target, and for the same reason: walking up to
+   *  the lift is a second-scale event, not a per-frame one. */
+  function updateElevator() {
+    const state = getGameState();
+    const clear = () => {
+      if (state.elevator || state.elevatorOpen) {
+        setGameState({ elevator: null, elevatorOpen: false });
+      }
+    };
+    // A party follower is carried by its leader and the server refuses the
+    // room change anyway — no offer it could not honour.
+    if (state.mode !== 'embodied' || state.movementLocked) return clear();
+    // Somebody walked into talk range: that prompt owns the bottom row and the
+    // F key, so an open storey choice is no longer visible — and an invisible
+    // choice must not keep Esc from leaving the mode.
+    if (state.talkTarget && state.elevatorOpen) setGameState({ elevatorOpen: false });
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return clear();
+    // Only inside the OPEN interior of the tile the figure stands on, exactly
+    // as the room walk judges it: from the outside there is no lift to use.
+    const tile = tileAtCell(cellOf(pos.x, pos.z, CELL));
+    if (!tile || tile.fadeTarget !== 1 || !tile.elevatorStops) return clear();
+    const room = avatarRoomId(tile);
+    if (!room) return clear();
+    const found = elevatorAt({ x: pos.x, z: pos.z }, tile.roomLevels.get(room) ?? 0,
+      elevatorStopsOf(tile), interiorRooms(tile), npcs.scaleOf(avatarName) ?? 1);
+    if (!found) return clear();
+    // Unchanged offer: no bus write, or React re-renders the chip every second
+    // for nothing.
+    const now = state.elevator;
+    if (now && now.current === found.current
+      && now.levels.length === found.levels.length
+      && now.levels.every((lv, i) => lv === found.levels[i])) return;
+    setGameState({ elevator: found });
+  }
+  // Leaving the mode drops the offer in the same tick the mode changes,
+  // instead of leaving it standing for up to a second.
+  subscribeGameState(() => {
+    if (getGameState().mode !== 'embodied') updateElevator();
+  });
+
+  gameActions.rideElevator = (level) => { void rideElevator(level); };
+
+  /**
+   * The ride: the server moves the avatar into the room of the target storey,
+   * then the figure walks to that storey's holding point — the stop's world
+   * point carries the storey height, and `tick()` blends the height towards
+   * its goal, which is the same vertical ride the NPC storey routing takes.
+   */
+  async function rideElevator(level: number) {
+    const state = getGameState();
+    if (state.mode !== 'embodied' || !state.elevator || state.movementLocked) return;
+    setGameState({ elevatorOpen: false });   // the press closes the choice, always
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;
+    const tile = tileAtCell(cellOf(pos.x, pos.z, CELL));
+    const stop = tile?.elevatorStops?.get(level);
+    if (!tile || !stop) return;
+    const target = elevatorTargetRoom(level, elevatorStopsOf(tile), interiorRooms(tile));
+    if (!target) return;
+    // The ONE room-request machine of the room walk — a ride while a cell step
+    // or another room change is in flight would let the network order decide
+    // where the avatar ends up (the entry-room gate judges a step by the room
+    // the avatar is in). No second enter-room path.
+    if (roomRequestInFlight || stepInFlight) return;
+    if (!await enterRoomOnFoot(target)) return;
+    // The server accepted the room, so that IS the avatar's room now — the
+    // same word the step answer gives (`moved.room_id`), up to three seconds
+    // before the poll repeats it. Without it the room walk would judge the
+    // ride against the storey just left and ask the avatar back down.
+    roomOf.set(avatarName, target);
+    npcs.setPlayerTarget(avatarName, stop.clone());
+    // The view follows the ride. `levelFilter` is the in-world storey button,
+    // pure view state — the same switch a click on it would throw.
+    tile.levelFilter = level;
+    roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
+    setGameState({ elevator: { levels: state.elevator.levels, current: level } });
+  }
 
   // --- Talking by proximity (E3-T5) -----------------------------------------
   // Walking up to someone is the whole interaction: the bus carries the name,
@@ -1272,17 +1397,24 @@ async function startApp(username: string) {
     if (getGameState().mode !== 'embodied') updateTalkTarget();
   });
 
-  // F is the ONE action key: talk to whoever is in range, and — as the
-  // keyboard counterpart of the plaque's "Take control" — enter the mode when
-  // the avatar is selected in the overview. Guarded like Esc: while the focus
-  // sits in the chat composer, F types an f. Modifier combinations belong to
-  // the browser (Ctrl+F is the page search).
+  // F is the ONE action key: talk to whoever is in range, use the lift one is
+  // standing at, and — as the keyboard counterpart of the plaque's "Take
+  // control" — enter the mode when the avatar is selected in the overview.
+  // That is also the PRIORITY, and the HUD shows only the offer that wins:
+  // a character in range beats the lift, so one press is never two offers.
+  // Guarded like Esc: while the focus sits in the chat composer, F types an f.
+  // Modifier combinations belong to the browser (Ctrl+F is the page search).
   window.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() !== 'f' || isTypingTarget(e)) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const state = getGameState();
     if (state.talkTarget) {
       uiActions.openChat?.();
+      return;
+    }
+    if (state.elevator) {
+      // Pressing again closes the storey choice — the same key, both ways.
+      setGameState({ elevatorOpen: !state.elevatorOpen });
       return;
     }
     if (state.mode === 'overview' && state.selected?.isAvatar) gameActions.enterEmbodied?.();

@@ -20,6 +20,7 @@ import {
   type SceneData, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
+import { elevatorOptions } from '../game/elevator';
 import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
@@ -201,6 +202,27 @@ export function Hud({ avatar }: { avatar: string }) {
           <div className="hud-talk">
             {t('Press F to talk to {name}').replace('{name}', game.talkTarget)}
           </div>
+        )}
+        {/* Elevator (E3, floors on foot): the same prompt shape as the talk
+            chip, and deliberately BEHIND it — a character in range wins, so
+            one F press is never two offers at once. Unfolded (F again, or a
+            click) the prompt becomes one button per storey; the current one is
+            not among them. Unlike the prompt these are operated, so they take
+            the pointer back (hud.css). */}
+        {!game.talkTarget && game.elevator && (
+          game.elevatorOpen ? (
+            <div className="hud-elevator">
+              <span className="hud-elevator-label">{t('Elevator')}</span>
+              {elevatorOptions(game.elevator).map((level) => (
+                <button key={level} className="hud-elevator-floor"
+                  onClick={() => gameActions.rideElevator?.(level)}>
+                  {t('Floor {n}').replace('{n}', String(level))}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="hud-talk">{t('Press F to use the elevator')}</div>
+          )
         )}
         {/* Selected figure (E3-T1): always mounted, renders null without a
             selection — the plaque is driven by the bus, not by panel state. */}
