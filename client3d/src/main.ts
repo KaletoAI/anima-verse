@@ -4,7 +4,7 @@ import { Engine, isTypingTarget } from './scene/engine';
 import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { cellOf, clampToCell, stepDirection, walkDir, type Cell } from './game/walk';
+import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, type Cell } from './game/walk';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -781,7 +781,15 @@ async function startApp(username: string) {
     const lead = Math.max(WALK_SPEED * dt, MIN_LEAD);
     let x = pos.x + dir.x * lead;
     let z = pos.z + dir.z * lead;
-    const next = cellOf(x, z, CELL);
+    let next = cellOf(x, z, CELL);
+    // Corner: a goal that crosses BOTH axes has no compass step. Split it into
+    // the single-axis step it really is instead of reading it as blocked —
+    // otherwise an exact 45° heading (the camera's default) sticks to the
+    // corner for good.
+    if (next.gx !== here.gx && next.gy !== here.gy) {
+      ({ x, z } = splitDiagonal(x, z, here, CELL));
+      next = cellOf(x, z, CELL);
+    }
     if (next.gx !== here.gx || next.gy !== here.gy) {
       const step = stepDirection(here, next);
       const key = `${next.gx},${next.gy}`;
@@ -793,6 +801,11 @@ async function startApp(username: string) {
         void requestStep(step, here, next);
       }
     }
+    // The clamp pulls the goal to the inset edge, which can be BEHIND the
+    // figure — `tick()` would walk backwards and turn the figure around every
+    // frame. On a blocked axis the goal is the position itself (stand still),
+    // the free axis keeps sliding along the edge.
+    ({ x, z } = keepAhead({ x, z }, pos, dir));
     walkGoal.set(x, 0, z);
     const tile = tileAtCell(cellOf(x, z, CELL));
     walkGoal.y = tile ? tileGroundY(tile, walkGoal) : 0;

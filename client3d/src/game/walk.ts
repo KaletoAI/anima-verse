@@ -55,6 +55,40 @@ export function clampToCell(x: number, z: number, cell: Cell, cellSize: number
   };
 }
 
+/** Keep a goal from falling BEHIND the figure (per axis, along the walking
+ *  direction). Needed because `clampToCell` pulls the goal to the inset edge
+ *  while the figure may already stand closer to the boundary than that: the
+ *  goal would then lie behind it, `tick()` would walk backwards, the next
+ *  frame forwards again — the figure vibrates on the edge and flips its
+ *  facing every frame. An axis whose goal points against the direction simply
+ *  stands still; the other axis keeps sliding along the edge. */
+export function keepAhead(goal: { x: number; z: number }, pos: { x: number; z: number },
+  dir: { x: number; z: number }): { x: number; z: number } {
+  return {
+    x: dir.x > 0 ? Math.max(goal.x, pos.x) : dir.x < 0 ? Math.min(goal.x, pos.x) : goal.x,
+    z: dir.z > 0 ? Math.max(goal.z, pos.z) : dir.z < 0 ? Math.min(goal.z, pos.z) : goal.z,
+  };
+}
+
+/** Reduce a goal that crosses BOTH cell axes at once (a corner) to a single-
+ *  axis crossing by pulling the axis with the SMALLER overshoot back into the
+ *  current cell. A diagonal crossing has no compass step, and treating it as
+ *  blocked would nail the avatar to the corner — reachable in practice, since
+ *  the camera's default yaw is 45° and Q/E turn in exact 45° steps. What is
+ *  left over is an ordinary one-cell step; the next frame takes the other
+ *  axis. Ties go to x, deterministically. A goal that crosses at most one
+ *  axis is returned unchanged. */
+export function splitDiagonal(x: number, z: number, from: Cell, cellSize: number
+): { x: number; z: number } {
+  const to = cellOf(x, z, cellSize);
+  if (to.gx === from.gx || to.gy === from.gy) return { x, z };
+  const half = cellSize / 2;
+  const overX = Math.abs(x - from.gx * cellSize) - half;
+  const overZ = Math.abs(z - from.gy * cellSize) - half;
+  const held = clampToCell(x, z, from, cellSize);
+  return overX <= overZ ? { x: held.x, z } : { x, z: held.z };
+}
+
 /** Camera-relative walk direction (unit length) from the held keys, or null
  *  when nothing is pressed or opposite keys cancel out.
  *
