@@ -116,14 +116,32 @@
 }
 
 /* Chat: docked bottom-left. ScenePanel brings its own body structure
-   (.player-scene-body from panels.css) — the chrome only sizes the frame. */
+   (.player-scene-body from panels.css) — the chrome only sizes the frame.
+
+   Twice the old 420 x 340 (acceptance round E3): the transcript was too small
+   to follow a room conversation in. Both axes are capped against the VIEWPORT,
+   so a small window shrinks the panel instead of pushing it off-screen.
+
+   The width cap carries a second job — the bottom-centre stack (talk prompt,
+   character plaque, storey choice) is anchored to the middle of the viewport
+   and reaches at most 220px to the left of it (.hud-plaque, max-width 440px,
+   centred). A panel of the full 840px would cross that line on any window
+   narrower than ~2170px and the plaque would sit on the composer's send
+   button. So the width also stops 12px short of the plaque's left edge —
+   `50vw - 232px` — with a floor of the OLD 420px, so no window is ever made
+   narrower than it already was:
+     >= 2168px  the full 840px
+     1304..2168 as wide as the centre stack leaves room for (728px at 1920)
+     <  1304px  the old 420px, capped by the viewport as before
+   The height needs no such rule: the stack is one row tall at the bottom edge
+   and the panel grows upwards. */
 #hud .hud-chat {
   position: absolute;
   left: 12px;
   bottom: 12px;
-  width: 420px;
-  height: 340px;
-  max-width: calc(100vw - 90px);
+  width: 840px;
+  height: 680px;
+  max-width: min(calc(100vw - 90px), max(420px, calc(50vw - 232px)));
   max-height: calc(100vh - 70px);
 }
 
@@ -310,18 +328,21 @@
    the frozen file stays untouched.
 
    The shift is CLAMPED, because moving the dock right out of the info panel's
-   way pushes it into the chat panel on the left (left:12 / width:420, so it
-   ends at 432px) — and there the dock would swallow the send button, which is
-   the worse trade. Dock left edge = 100vw - right - 320; keeping it >= 444px
-   (12px clear of the chat) caps `right` at 100vw - 764px. Resulting behaviour:
-     >= 1088px  full shift to 324px, info panel completely clear
-     826..1088  partial shift, info panel's zoom button mostly clickable
-     <  826px   no shift at all — identical to the layout before this rule,
+   way pushes it into the chat panel on the left (left:12 / width up to 840, so
+   it ends at 852px at most) — and there the dock would swallow the send
+   button, which is the worse trade. Dock left edge = 100vw - right - 320;
+   keeping it >= 864px (12px clear of the widest chat) caps `right` at
+   100vw - 1184px. The cap uses the chat's WIDEST case on purpose: its width
+   itself depends on the viewport, and a cap that is too generous would put the
+   dock back on the composer. Resulting behaviour:
+     >= 1508px  full shift to 324px, info panel completely clear
+     1246..1508 partial shift, info panel's zoom button mostly clickable
+     <  1246px  no shift at all — identical to the layout before this rule,
                 so a narrow window is never made worse than it already was.
    This is layout, not ornament: it stays here and not in theme-fantasy.css,
    so dropping or swapping the theme cannot bring the click-block back. */
 #hud:has(~ .info-panel:not([hidden])) .hud-dock {
-  --dock-right: clamp(62px, 100vw - 764px, 324px);
+  --dock-right: clamp(62px, 100vw - 1184px, 324px);
 }
 #hud .hud-dock .hud-panel {
   flex: 1 1 0;
