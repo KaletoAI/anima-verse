@@ -1,4 +1,4 @@
-"""Log Viewer - LLM-Aufrufe als durchsuchbare Webseite"""
+"""Log viewer - LLM calls as a searchable web page."""
 import json
 from pathlib import Path
 from fastapi import APIRouter, Query, Depends
@@ -17,7 +17,7 @@ LOG_FILE = Path("./logs/llm_calls.jsonl")
 
 @router.get("/llm", response_class=HTMLResponse)
 def llm_log_viewer():
-    """LLM Log Viewer - Hauptseite."""
+    """LLM log viewer - main page."""
     return HTMLResponse(content=_build_viewer_html())
 
 
@@ -29,17 +29,26 @@ def llm_log_data(
     model: str = Query("", description="Filter by model"),
     character: str = Query("", description="Filter by character"),
     provider: str = Query("", description="Filter by provider"),
-    errors_only: bool = Query(False, description="Nur fehlgeschlagene Calls"),
-    search: str = Query("", description="Volltextsuche")) -> Dict[str, Any]:
-    """JSON-API fuer Log-Eintraege."""
+    errors_only: bool = Query(False, description="Failed calls only"),
+    search: str = Query("", description="Full-text search")) -> Dict[str, Any]:
+    """JSON API for log entries.
+
+    Entries are returned verbatim (no field whitelist), so the optional
+    ``trace_id``/``trace_kind`` fields reach the viewer untouched. Next to
+    the page, ``trace_totals`` reports how many calls each trace on this
+    page has in the WHOLE log — the viewer needs that number to render
+    "N of M calls" when a filter or the page boundary hides members.
+    """
     if not LOG_FILE.exists():
-        return {"entries": [], "total": 0, "tasks": [], "models": [], "providers": []}
+        return {"entries": [], "total": 0, "tasks": [], "models": [],
+                "providers": [], "trace_totals": {}}
 
     entries = []
     all_tasks = set()
     all_models = set()
     all_characters = set()
     all_providers = set()
+    trace_counts: Dict[str, int] = {}
 
     with open(LOG_FILE, "r", encoding="utf-8") as f:
         for line in f:
@@ -49,6 +58,9 @@ def llm_log_data(
             try:
                 obj = json.loads(line)
                 all_tasks.add(obj.get("task", ""))
+                tid = obj.get("trace_id", "")
+                if tid:
+                    trace_counts[tid] = trace_counts.get(tid, 0) + 1
                 all_models.add(obj.get("model", ""))
                 svc = obj.get("service", "")
                 if svc:
@@ -76,10 +88,12 @@ def llm_log_data(
             except json.JSONDecodeError:
                 continue
 
-    # Neueste zuerst
+    # Newest first
     entries.reverse()
     total = len(entries)
     page = entries[offset:offset + limit]
+
+    page_traces = {t for t in (e.get("trace_id", "") for e in page) if t}
 
     return {
         "entries": page,
@@ -90,6 +104,7 @@ def llm_log_data(
         "models": sorted(all_models),
         "characters": sorted(all_characters),
         "providers": sorted(all_providers),
+        "trace_totals": {t: trace_counts.get(t, 0) for t in page_traces},
     }
 
 
@@ -98,7 +113,7 @@ IMAGE_LOG_FILE = Path("./logs/image_prompts.jsonl")
 
 @router.get("/image-prompts", response_class=HTMLResponse)
 def image_prompt_log_viewer():
-    """Image Prompt Log Viewer - Hauptseite."""
+    """Image prompt log viewer - main page."""
     return HTMLResponse(content=_build_image_viewer_html())
 
 
@@ -109,9 +124,9 @@ def image_prompt_log_data(
     character: str = Query("", description="Filter by character"),
     backend: str = Query("", description="Filter by backend"),
     model: str = Query("", description="Filter by model"),
-    errors_only: bool = Query(False, description="Nur fehlgeschlagene Generierungen"),
-    search: str = Query("", description="Volltextsuche")) -> Dict[str, Any]:
-    """JSON-API fuer Image-Prompt Log-Eintraege."""
+    errors_only: bool = Query(False, description="Failed generations only"),
+    search: str = Query("", description="Full-text search")) -> Dict[str, Any]:
+    """JSON API for image prompt log entries."""
     if not IMAGE_LOG_FILE.exists():
         return {"entries": [], "total": 0, "characters": [], "backends": [], "models": []}
 
@@ -208,7 +223,7 @@ def _build_image_viewer_html() -> str:
 
 def _build_viewer_html() -> str:
     return '''<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -218,15 +233,19 @@ def _build_viewer_html() -> str:
 <body>
 
 <div class="toolbar">
-    <select id="taskFilter"><option value="">Alle Tasks</option></select>
-    <select id="providerFilter"><option value="">Alle Provider</option></select>
-    <select id="modelFilter"><option value="">Alle Models</option></select>
-    <select id="characterFilter"><option value="">Alle Characters</option></select>
+    <select id="taskFilter"><option value="">All tasks</option></select>
+    <select id="providerFilter"><option value="">All providers</option></select>
+    <select id="modelFilter"><option value="">All models</option></select>
+    <select id="characterFilter"><option value="">All characters</option></select>
     <label style="color:#c9d1d9;font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer;">
         <input type="checkbox" id="errorsOnly" /> Errors only
     </label>
-    <input type="text" id="searchInput" placeholder="Suche..." />
-    <button onclick="doSearch()">Suchen</button>
+    <label style="color:#c9d1d9;font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer;"
+           title="Group all LLM calls of one turn (same trace id) under one header">
+        <input type="checkbox" id="groupTraces" checked /> Group by trace
+    </label>
+    <input type="text" id="searchInput" placeholder="Search..." />
+    <button onclick="doSearch()">Search</button>
     <button onclick="resetFilters()">Reset</button>
     <span class="count" id="countLabel"></span>
     <a href="/dashboard" style="margin-left:auto;color:#58a6ff;font-size:13px;text-decoration:none;">Dashboard</a>
@@ -235,9 +254,9 @@ def _build_viewer_html() -> str:
 <div class="entries" id="entries"></div>
 
 <div class="pager">
-    <button id="prevBtn" onclick="prevPage()" disabled>Zurueck</button>
+    <button id="prevBtn" onclick="prevPage()" disabled>Previous</button>
     <span id="pageLabel" style="color:#8b949e;font-size:13px;line-height:32px;"></span>
-    <button id="nextBtn" onclick="nextPage()" disabled>Weiter</button>
+    <button id="nextBtn" onclick="nextPage()" disabled>Next</button>
 </div>
 
 <script src="/static/admin/logs-viewer.js"></script>
