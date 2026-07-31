@@ -781,6 +781,22 @@ async function startApp(username: string) {
    *  chose, which the room walk then pays for with a second
    *  `/play/enter-room`. The elevator section further down owns the writes. */
   let elevatorRide: { goal: THREE.Vector3; until: number } | null = null;
+  /** Deadline of a doorway walk (E3 acceptance, "walking on the roof"). Same
+   *  safety net as the ride's, and generous for the same reason: the pace the
+   *  figure keeps during it is whatever it walked in with. */
+  const DOOR_WALK_MS = 4000;
+  /** Distance that counts as "arrived at the door" — XZ only. Unlike the lift
+   *  there is no vertical ride to wait for: the goal already carries the room
+   *  floor and `tick()` blends the height while the figure walks. */
+  const DOOR_ARRIVE = 0.3;
+  /** The running doorway walk, and it owns the figure exactly as the ride
+   *  does: a granted step into a building puts the avatar in that building's
+   *  entry room (the server says so in its answer), and the figure has to
+   *  arrive there through the door instead of walking on across the shell.
+   *  One steering frame would overwrite the goal, so the hook keeps its hands
+   *  off until the figure stands at the door point. Written below in
+   *  `enterThroughDoor`. */
+  let doorWalk: { goal: THREE.Vector3; until: number } | null = null;
   /** Cell our own step aims at (or came back to after a refusal) — the
    *  authority check must not read it as foreign movement. It is consumed by
    *  the FIRST worldmap poll after the request ended (see
@@ -825,7 +841,10 @@ async function startApp(username: string) {
       // poll and adopts the nearest room centre out of nothing, which walks
       // the avatar straight out of the entry room it was just placed in; the
       // step back out then earns a `not_at_entry_room` 403.
-      if (moved.room_id) roomOf.set(avatarName, moved.room_id);
+      if (moved.room_id) {
+        roomOf.set(avatarName, moved.room_id);
+        enterThroughDoor(to, moved.room_id);
+      }
     } catch (e) {
       const err = e instanceof api.ApiError ? e : null;
       rejectedUntil.set(`${to.gx},${to.gy}`, performance.now() + REJECT_MEMORY_MS);
@@ -852,6 +871,31 @@ async function startApp(username: string) {
       clearTimeout(deadline);
       stepInFlight = false;
     }
+  }
+
+  /**
+   * Walk into a building through its DOOR (E3 acceptance, "Zur Rosinante").
+   *
+   * A granted step into another location puts the avatar in that location's
+   * entry room — the server's answer names it. The figure, though, is standing
+   * on the cell boundary and would keep walking straight ahead: over the
+   * building's shell, past every wall, into a room from the wrong side. The
+   * entry room's exit point is where the door is (`tile.roomExits`, the same
+   * point the NPC exit routing walks through, `computeNpcStates`), so the
+   * figure is sent there and the walking hook keeps its hands off until it
+   * arrives — the ownership the lift ride already needs, for the same reason.
+   *
+   * A tile without a layout for that room (no scene, an outdoor location)
+   * keeps the old behaviour: nothing to enter through, nothing to own.
+   */
+  function enterThroughDoor(cell: Cell, roomId: string) {
+    const tile = tileAtCell(cell);
+    // Centre as the fallback: an entry room without a derived exit (an outdoor
+    // room, an overlay zone) still has a place the avatar belongs at.
+    const point = tile && (tile.roomExits.get(roomId) ?? tile.roomCenters.get(roomId));
+    if (!point) return;
+    npcs.setPlayerTarget(avatarName, point.clone());
+    doorWalk = { goal: point.clone(), until: performance.now() + DOOR_WALK_MS };
   }
 
   // --- Click to walk (E3-T4) ------------------------------------------------
@@ -896,8 +940,14 @@ async function startApp(username: string) {
     // lift ride owns the figure, so no new order is planned during it either.
     if (state.mode !== 'embodied' || state.movementLocked || elevatorRide) return false;
     const pos = npcs.positionOf(avatarName);
-    const hit = engine.groundPointAt(x, y);
-    if (!pos || !hit) return false;
+    if (!pos) return false;
+    // The click is read against the plane the FIGURE stands on, not against
+    // y = 0 (parked review finding, E3): on an upper storey or a raised floor
+    // the ray otherwise runs past the floor down to the map's ground, and at a
+    // flat camera angle the goal lands metres behind the pointer. The height is
+    // the drawn one, so it is right for every storey without a second source.
+    const hit = engine.groundPointAt(x, y, pos.y);
+    if (!hit) return false;
     const planned = planRoute(
       { x: pos.x, z: pos.z }, { x: hit.x, z: hit.z },
       (gx, gy) => passableCells.has(`${gx},${gy}`),
@@ -917,8 +967,12 @@ async function startApp(username: string) {
     if (!planned) return false;
     route = planned;
     routeAt = 0;
+    // Marker height from the same source the walking uses: the room floor
+    // where the avatar's room reaches, the ground skin everywhere else.
+    const goalCell = cellOf(planned.goal.x, planned.goal.z, CELL);
     npcs.setWalkTarget(new THREE.Vector3(planned.goal.x,
-      groundY(planned.goal.x, planned.goal.z), planned.goal.z));
+      roomFloorY(tileAtCell(goalCell)) ?? groundY(planned.goal.x, planned.goal.z),
+      planned.goal.z));
     return true;
   };
 
@@ -940,6 +994,7 @@ async function startApp(username: string) {
       askedEdge = null;
       expectedCell = null;
       elevatorRide = null;   // ditto for a ride nobody is in any more
+      doorWalk = null;       // …and for a doorway nobody is walking through
       return;
     }
     // Party follower: the leader carries the avatar along; the server refuses
@@ -962,6 +1017,17 @@ async function startApp(username: string) {
         && Math.abs(elevatorRide.goal.y - pos.y) < ELEVATOR_ARRIVE;
       if (!arrived && performance.now() <= elevatorRide.until) return;
       elevatorRide = null;
+    }
+    // A doorway walk owns the figure the same way: the step was granted, the
+    // avatar is in the building's entry room, and the figure walks to that
+    // room's door point. Steering during it is what put the avatar on the
+    // shell — the very finding this exists for. XZ only, the height is the
+    // room floor and `tick()` blends it on the way.
+    if (doorWalk) {
+      const arrived = Math.hypot(doorWalk.goal.x - pos.x, doorWalk.goal.z - pos.z)
+        < DOOR_ARRIVE;
+      if (!arrived && performance.now() <= doorWalk.until) return;
+      doorWalk = null;
     }
     // Pace of the SIZE the figure is drawn at (E3 fix): indoors it stands at
     // the room scale, where a world metre is not a figure metre — unscaled,
@@ -1050,7 +1116,7 @@ async function startApp(username: string) {
     // frame. On a blocked axis the goal is the position itself (stand still),
     // the free axis keeps sliding along the edge.
     ({ x, z } = keepAhead({ x, z }, pos, dir));
-    walkGoal.set(x, storeyY(tileAtCell(here)) ?? groundY(x, z), z);
+    walkGoal.set(x, roomFloorY(tileAtCell(here)) ?? groundY(x, z), z);
     npcs.setPlayerTarget(avatarName, walkGoal);
   });
 
@@ -1158,16 +1224,27 @@ async function startApp(username: string) {
     return rooms;
   }
 
-  /** Height the avatar WALKS at. On an upper storey the tile's ground skin is
-   *  the wrong reference: `groundY` would pull the figure down through the
-   *  floor with the first step up there — reachable since the elevator. The
-   *  storey's own floor comes from the room the avatar is in, the same source
-   *  the NPC placement uses (`roomCenters`). Ground floor and outdoors keep
-   *  the ground skin, so nothing about the old behaviour changes. */
-  function storeyY(tile: Tile | null): number | null {
+  /**
+   * Height the avatar WALKS at: the floor of the room it is IN, on every
+   * storey, taken from the same source the NPC placement uses
+   * (`roomCenters`, lifted onto the sampled floor by `sampleRoomWalkables`).
+   * Null only when no room of this tile resolves — outdoors, and on a tile
+   * whose rooms the avatar is not in; there the ground skin still answers.
+   *
+   * The ground skin (`tileGroundY`) is NOT an alternative inside a room, and
+   * the "Zur Rosinante" finding of the acceptance round is why: it raycasts
+   * the building/area MESH from above and takes the first hit below 1.2 m,
+   * which is a world metre and therefore an assumption about scale. Willowbrook
+   * runs at k = 0.21 (extent_m 10.5 over a 50 m plan), so a whole storey is
+   * 0.63 m and every ROOF of the village fits inside that window: the ray hit
+   * the tavern's roof at ~0.6..0.9 instead of its floor plate at 0.037 and the
+   * avatar walked over the houses. Reading the floor off the room removes the
+   * guess entirely — the number comes from the payload the room is built from.
+   */
+  function roomFloorY(tile: Tile | null): number | null {
     if (!tile) return null;
     const room = avatarRoomId(tile);
-    if (!room || (tile.roomLevels.get(room) ?? 0) === 0) return null;
+    if (!room) return null;
     return tile.roomCenters.get(room)?.y ?? null;
   }
 

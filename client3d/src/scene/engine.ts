@@ -180,22 +180,35 @@ export class Engine {
     this.labelRenderer.setSize(w, h);
   }
 
-  private groundPoint(clientX: number, clientY: number): THREE.Vector3 | null {
+  private groundPoint(clientX: number, clientY: number,
+                      planeY = 0): THREE.Vector3 | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1
     );
     this.raycaster.setFromCamera(this.pointer, this.camera);
+    // The plane is horizontal, so `constant` is just its height, negated
+    // (normal . p + constant = 0 with normal = +y). Every caller passes what it
+    // wants, the default 0 being the map's own ground.
+    this.groundPlane.constant = -planeY;
     const hit = new THREE.Vector3();
     return this.raycaster.ray.intersectPlane(this.groundPlane, hit) ? hit : null;
   }
 
-  /** Where the pointer meets the ground plane (y = 0), for anything outside
-   *  the engine that needs a world position from a click (E3-T4: the walk
-   *  target). Null when the ray runs parallel to the ground. */
-  groundPointAt(clientX: number, clientY: number): THREE.Vector3 | null {
-    return this.groundPoint(clientX, clientY);
+  /** Where the pointer meets a HORIZONTAL plane at `planeY` (default: the
+   *  ground at y = 0), for anything outside the engine that needs a world
+   *  position from a click (E3-T4: the walk target). Null when the ray runs
+   *  parallel to it.
+   *
+   *  `planeY` exists because y = 0 is the wrong plane wherever the player
+   *  actually stands higher — an upper storey, a raised floor: the click ray
+   *  then travels past the floor to the map's ground and the walk goal lands
+   *  metres behind the pointer (parked review finding, E3). Callers hand in
+   *  the height the figure stands at. */
+  groundPointAt(clientX: number, clientY: number,
+                planeY = 0): THREE.Vector3 | null {
+    return this.groundPoint(clientX, clientY, planeY);
   }
 
   /** Ray through the pointer position, for anything outside the engine that
