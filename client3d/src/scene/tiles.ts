@@ -1062,7 +1062,7 @@ export function applyTileFade(tile: Tile, dt: number) {
   // Bei EINGEBLENDETER Unter-Etage tritt das Area-Modell ganz beiseite
   // (User-Befund 2026-07-28: die vergrößerte Boden-Öffnung war da, aber das
   // nie fadende Location-Modell stand davor). Gleiche Semantik wie der
-  // Etagen-Umschalter für Platten (lv <= filter sichtbar) und die
+  // Etagen-Umschalter für Platten (seit 2026-07-31: lv === filter) und die
   // Admin-Solo-Ansicht: Level < 0 gewählt → das Modell (die Level-0+-Optik)
   // verschwindet, bis eine Etage >= 0 oder die Fernsicht zurückkommt.
   if (tile.modelIsGround && sm) {

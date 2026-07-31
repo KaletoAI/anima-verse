@@ -701,9 +701,14 @@ async function startApp(username: string) {
         // placement and the exit routing take over unchanged (`inRoom` flips,
         // `shownRoom` sees the transition and walks the figure in through the
         // door). Untouched: characters without a room, always-visible rooms,
-        // travellers (they returned above) and the player-driven avatar
-        // (`update()` skips every placement field for it).
-        const roomIsClosed = !inRoom && !!room && !!roomCenter;
+        // travellers (they returned above) and THE AVATAR — the last one by
+        // name, not via `playerDriven`: that flag is only set inside the
+        // embodied mode, so in the overview this rule hid the player's own
+        // figure, and with it the only way back in (`characterAt` raycasts
+        // visible roots only, so the plaque and its "take control" were
+        // unreachable). The storey filter below still applies to it.
+        const roomIsClosed = !inRoom && !!room && !!roomCenter
+          && c.name !== map.avatar;
         const hidden = wrongStorey || roomIsClosed;
         if (hidden) hiddenChars.add(c.name);
         states.push({
@@ -892,11 +897,18 @@ async function startApp(username: string) {
       // chain is simply run once and the edge is not blocked for it. Once,
       // though: a second refusal inside the memory window IS worth telling
       // them about instead of looping silently.
-      if (err?.reason === 'not_at_entry_room' && performance.now() > entryRetryUntil) {
+      // The chain has to REALLY start for that, though: with no room to walk
+      // to (the client already believes it is in the entry room, or that room
+      // is on cooldown) clearing the edge only bought a second request and a
+      // toast one refusal later. Then the refusal counts as an ordinary one
+      // and goes out as it stands.
+      const race = err?.reason === 'not_at_entry_room'
+        && performance.now() > entryRetryUntil
+        ? entryRoomToEnter(tileAtCell(from)) : null;
+      if (race) {
         entryRetryUntil = performance.now() + REJECT_MEMORY_MS;
         rejectedUntil.delete(`${to.gx},${to.gy}`);
-        const entry = entryRoomToEnter(tileAtCell(from));
-        if (entry) void enterEntryRoom(entry);
+        void enterEntryRoom(race);
       }
       // 403 = a rule refused it and the server wrote the reason for the
       // player. 404 = there is simply no location that way, which the edge
@@ -979,8 +991,11 @@ async function startApp(username: string) {
   engine.onGroundClick = (x, y) => {
     const state = getGameState();
     // Overview mode is untouched: there a click stays a tile pick. A running
-    // lift ride owns the figure, so no new order is planned during it either.
-    if (state.mode !== 'embodied' || state.movementLocked || elevatorRide) return false;
+    // lift ride or doorway walk owns the figure, so no new order is planned
+    // during those either — a route planned from the old position would walk
+    // the figure back out of the door it just came through.
+    if (state.mode !== 'embodied' || state.movementLocked
+      || elevatorRide || doorWalk) return false;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return false;
     // The click is read against the plane the FIGURE stands on, not against
@@ -1022,7 +1037,14 @@ async function startApp(username: string) {
   // off the BUS, not off the enter/exit calls: zooming out leaves the mode
   // from inside embody.ts, and the figure has to be handed back then too.
   subscribeGameState(() => {
-    npcs.setPlayerDriven(getGameState().mode === 'embodied' ? avatarName : null);
+    const embodied = getGameState().mode === 'embodied';
+    npcs.setPlayerDriven(embodied ? avatarName : null);
+    // The storey following is edge-triggered, and its memory must not outlive
+    // the mode: while the player is in the overview the in-world switch is the
+    // only authority, so a storey picked there would face a memory that
+    // already holds the avatar's — the edge would not fire on re-entry and the
+    // view would stay on the wrong floor, which IS the finding.
+    if (!embodied) followedStorey.clear();
   });
 
   const walkGoal = new THREE.Vector3();
@@ -1281,11 +1303,17 @@ async function startApp(username: string) {
   }
 
   /**
-   * Height the avatar WALKS at: the floor of the room it is IN, on every
-   * storey, taken from the same source the NPC placement uses
+   * Height the avatar WALKS at INSIDE A BUILDING: the floor of the room it is
+   * in, on every storey, taken from the same source the NPC placement uses
    * (`roomCenters`, lifted onto the sampled floor by `sampleRoomWalkables`).
-   * Null only when no room of this tile resolves — outdoors, and on a tile
-   * whose rooms the avatar is not in; there the ground skin still answers.
+   * Null — the ground skin answers — everywhere else, and that is three cases:
+   * a passable tile (street, park), a tile whose rooms the avatar is not in,
+   * and an ALWAYS-VISIBLE outdoor zone. The last one is not a room with a
+   * floor but a piece of ground: the payload gives it ONE height (its
+   * `overlay.y`), while the skin samples the model under the figure's feet and
+   * follows the slope. Taking the zone's single height there would float the
+   * figure downhill and sink it uphill — a village square is 0.63 m of world
+   * height across a 3 m rise of the plan at Willowbrook's scale.
    *
    * The ground skin (`tileGroundY`) is NOT an alternative inside a room, and
    * the "Zur Rosinante" finding of the acceptance round is why: it raycasts
@@ -1298,9 +1326,9 @@ async function startApp(username: string) {
    * guess entirely — the number comes from the payload the room is built from.
    */
   function roomFloorY(tile: Tile | null): number | null {
-    if (!tile) return null;
+    if (!tile?.isBuilding) return null;
     const room = avatarRoomId(tile);
-    if (!room) return null;
+    if (!room || tile.alwaysVisibleRooms.has(room)) return null;
     return tile.roomCenters.get(room)?.y ?? null;
   }
 
