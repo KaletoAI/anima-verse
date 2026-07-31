@@ -3,7 +3,16 @@ import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
 
-const MIN_DIST = 2.5;   // ganz nah = Figur formatfüllend
+/**
+ * Closest the camera may get to its target. Derived from the smallest figure
+ * that has to be able to fill the frame: with the 45° vertical FOV a height h
+ * fills the picture at dist = h / (2·tan(22.5°)) ≈ 1.21·h. Indoors figures are
+ * drawn at scale ~0.3, so a 1.70 m character is ~0.5 m tall and fills the frame
+ * at ~0.61 m — 0.8 m keeps that reachable and still leaves a little air
+ * (visible height 2·0.8·tan(22.5°) ≈ 0.66 m, the figure covers ~76% of it).
+ * The old 2.5 m could not do this: indoors it framed 2 m of empty room.
+ */
+export const MIN_DIST = 0.8;
 const MAX_DIST = 150;
 
 /**
@@ -16,8 +25,8 @@ export function isTypingTarget(e: Event): boolean {
 }
 
 /**
- * AoE-artige Kamera: fester Pitch (leicht zoomabhängig), Yaw in 45°-Schritten,
- * Pan per Drag/WASD, Zoom per Mausrad Richtung Cursor.
+ * AoE-style camera: fixed pitch (slightly zoom-dependent), yaw in 45° steps,
+ * pan by drag/WASD, zoom by mouse wheel towards the cursor.
  */
 export class Engine {
   scene = new THREE.Scene();
@@ -27,11 +36,11 @@ export class Engine {
   sun: THREE.DirectionalLight;
   hemi!: THREE.HemisphereLight;
   fill!: THREE.DirectionalLight;
-  /** neutrale IBL für Server-Modelle mit echter Metal-Roughness-Textur */
+  /** neutral IBL for server models that carry a real metal-roughness texture */
   modelEnv: THREE.Texture;
-  /** Sonnenstand aus der Spielzeit (0..24); steuert Licht, Farben, Himmel. */
-  private sunAngle = Math.PI * 0.35;   // Default: später Vormittag
-  /** 0 = heller Tag, 1 = tiefe Nacht — für Fensterlichter u.ä. */
+  /** Sun position from the game time (0..24); drives light, colours, sky. */
+  private sunAngle = Math.PI * 0.35;   // default: late morning
+  /** 0 = bright day, 1 = deep night — for window lights and the like. */
   nightFactor = 0;
   onDayNight: ((night: number) => void) | null = null;
 
@@ -43,9 +52,9 @@ export class Engine {
 
   private keys = new Set<string>();
   private dragging = false;
-  private orbiting = false;              // rechte Maustaste: frei drehen
+  private orbiting = false;              // right mouse button: free orbit
   private orbitLast = { x: 0, y: 0 };
-  pitchOffset = 0;                       // freier Pitch-Anteil (Grad); public für Vorschau-Seiten
+  pitchOffset = 0;                       // free pitch share (degrees); public for the preview pages
   private dragStart = new THREE.Vector3();
   private raycaster = new THREE.Raycaster();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -71,7 +80,14 @@ export class Engine {
   follow: (() => THREE.Vector3 | null) | null = null;
 
   constructor(container: HTMLElement) {
-    this.camera = new THREE.PerspectiveCamera(45, 1, 0.5, 800);
+    // near 0.2 (was 0.5) so MIN_DIST = 0.8 stays clear of the near plane: at
+    // the closest zoom the figure's front faces sit ~0.7 m from the lens, and
+    // the free pitch (right mouse) can bring geometry closer still. Trade-off:
+    // far/near goes from 1600 to 4000, i.e. depth resolution at a given range
+    // gets 2.5× coarser (≈12 mm at 200 m on a 24-bit buffer). That is still
+    // well inside the usual budget for a 24-bit depth buffer, and the fog ends
+    // the scene at 520 m anyway, so no co-planar surface loses its ordering.
+    this.camera = new THREE.PerspectiveCamera(45, 1, 0.2, 800);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.shadowMap.enabled = true;
@@ -92,7 +108,7 @@ export class Engine {
     this.hemi = new THREE.HemisphereLight(0xdfeeff, 0x8a9a78, 1.5);
     this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xfff2d8, 2.0);
-    this.fill = new THREE.DirectionalLight(0xdde8ff, 0.5);   // Gegenlicht, hebt Schattenseiten
+    this.fill = new THREE.DirectionalLight(0xdde8ff, 0.5);   // back light, lifts the shadow sides
     this.fill.position.set(-30, 20, -25);
     this.scene.add(this.fill);
     this.sun.castShadow = true;
@@ -106,17 +122,17 @@ export class Engine {
     this.renderer.setAnimationLoop(() => this.frame());
   }
 
-  /** Tageszeit setzen (Stunde 0..24): Sonnenstand, Lichtfarben, Himmel, Nebel. */
+  /** Set the time of day (hour 0..24): sun position, light colours, sky, fog. */
   setGameHour(hour: number) {
     const h = ((hour % 24) + 24) % 24;
-    // Sonnenbogen: 6 Uhr = Osten (0), 12 = Zenit (PI/2), 18 = Westen (PI)
+    // Sun arc: 6:00 = east (0), 12:00 = zenith (PI/2), 18:00 = west (PI)
     this.sunAngle = ((h - 6) / 12) * Math.PI;
-    const day = THREE.MathUtils.clamp(Math.sin(this.sunAngle), 0, 1);       // 0 nachts, 1 mittags
-    const dusk = THREE.MathUtils.clamp(1 - Math.abs(h - 12) / 6, 0, 1);     // Nähe zur Mittagszeit
+    const day = THREE.MathUtils.clamp(Math.sin(this.sunAngle), 0, 1);       // 0 at night, 1 at noon
+    const dusk = THREE.MathUtils.clamp(1 - Math.abs(h - 12) / 6, 0, 1);     // closeness to midday
 
     const noon = new THREE.Color(0xfff2d8);
-    const warm = new THREE.Color(0xffb066);   // Morgen-/Abendrot
-    const night = new THREE.Color(0x9fb4e0);  // Mondlicht (kühl)
+    const warm = new THREE.Color(0xffb066);   // dawn/dusk red
+    const night = new THREE.Color(0x9fb4e0);  // moonlight (cool)
     const sunColor = day > 0.05
       ? warm.clone().lerp(noon, THREE.MathUtils.smoothstep(day, 0.05, 0.45))
       : night.clone();
@@ -132,12 +148,12 @@ export class Engine {
     const sky = day > 0.15
       ? skyDay.clone()
       : skyNight.clone().lerp(skyDusk, THREE.MathUtils.clamp(day / 0.15, 0, 1) * (dusk > 0.05 ? 1 : 0.3));
-    // Blendfaktor erreicht 1 bei day=0.15 — stetiger Übergang zum Nacht-Zweig
+    // The blend factor reaches 1 at day=0.15 — a continuous handover to the night branch
     if (day > 0.15 && day < 0.35) sky.lerp(skyDusk, (0.35 - day) / 0.2);
     (this.scene.background as THREE.Color).copy(sky);
     (this.scene.fog as THREE.Fog).color.copy(sky);
-    // Wasserflächen spiegeln den Himmel (Fresnel im geteilten Material) —
-    // damit wird der See abends orange und nachts dunkel, ohne eigenen Code.
+    // Water surfaces mirror the sky (Fresnel in the shared material) — that
+    // alone turns the lake orange in the evening and dark at night.
     setSurfaceSky(sky.getHex());
 
     this.nightFactor = THREE.MathUtils.clamp(1 - day * 3, 0, 1);
@@ -159,7 +175,7 @@ export class Engine {
     this.pickables = objs;
   }
 
-  /** Kamera sanft auf einen Punkt + Distanz fahren. */
+  /** Ease the camera onto a point + distance. */
   flyTo(point: THREE.Vector3, dist: number) {
     this.flyFrom = this.target.clone();
     this.flyToPoint = point.clone();
@@ -245,15 +261,19 @@ export class Engine {
       const before = this.targetDist;
       this.targetDist = THREE.MathUtils.clamp(before * factor, MIN_DIST, MAX_DIST);
       if (this.targetDist < before) {
+        // Pull the target towards the cursor by exactly the fraction of the
+        // distance that was just given up. `before` is a clamped distance and
+        // therefore ≥ MIN_DIST > 0, so the ratio can never divide by zero; at
+        // the MIN_DIST floor it becomes 0 and the target simply stays put.
         const p = this.groundPoint(e.clientX, e.clientY);
         if (p) this.target.lerp(p, 1 - this.targetDist / before);
       }
-      this.flyT = 1; // laufende Kamerafahrt abbrechen
+      this.flyT = 1; // abort a running camera fly
     }, { passive: false });
 
     el.addEventListener('pointerdown', (e) => {
-      // Frei drehen/neigen: mittlere Taste oder Shift/Strg/Alt+links.
-      // Rechte Taste bleibt, kollidiert aber je nach Browser mit Maus-Gesten.
+      // Free orbit/tilt: middle button or Shift/Ctrl/Alt + left button. The
+      // right button stays, but collides with mouse gestures in some browsers.
       const orbit = e.button === 1 || e.button === 2
         || (e.button === 0 && (e.shiftKey || e.ctrlKey || e.altKey));
       if (orbit) {
@@ -333,7 +353,7 @@ export class Engine {
 
   private frame() {
     const dt = Math.min(this.clock.getDelta(), 0.1);
-    // Eine Zeit für ALLE Wasserflächen (geteiltes Uniform).
+    // ONE time value for ALL water surfaces (shared uniform).
     updateSurfaceMaterials(dt);
 
     // WASD/arrow-key pan relative to the view direction — skipped while a
@@ -365,8 +385,11 @@ export class Engine {
     this.dist = THREE.MathUtils.lerp(this.dist, this.targetDist, 1 - Math.exp(-8 * dt));
     this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, 1 - Math.exp(-8 * dt));
 
-    // Pitch: ganz nah fast auf Augenhöhe (18°), fern steil (62°); rechte Maus
-    // verschiebt den Winkel zusätzlich frei
+    // Pitch: nearly eye level up close (18°), steep when far out (62°); the
+    // right mouse button shifts the angle on top of that. zoomK is normalised
+    // against MIN_DIST, so lowering MIN_DIST keeps the near end at exactly 18°
+    // (dist = MIN_DIST ⇒ zoomK = 0) and the divisor MAX_DIST − MIN_DIST = 149.2
+    // can never be zero.
     const zoomK = THREE.MathUtils.clamp((this.dist - MIN_DIST) / (MAX_DIST - MIN_DIST), 0, 1);
     const basePitch = THREE.MathUtils.lerp(18, 62, Math.sqrt(zoomK));
     const pitch = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(basePitch + this.pitchOffset, 8, 85));
@@ -379,7 +402,7 @@ export class Engine {
     this.camera.position.copy(this.target).add(off);
     this.camera.lookAt(this.target);
 
-    // Sonne folgt dem Kartenausschnitt, damit die Shadow-Map klein bleiben kann
+    // The sun follows the map section so the shadow map can stay small
     const sx = Math.cos(this.sunAngle), sy = Math.max(0.08, Math.sin(this.sunAngle));
     this.sun.position.copy(this.target).add(new THREE.Vector3(sx * 60, sy * 80, 25));
     this.sun.target.position.copy(this.target);

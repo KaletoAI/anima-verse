@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import * as api from './api';
-import { Engine, isTypingTarget } from './scene/engine';
+import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
@@ -22,7 +22,21 @@ import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
-const INTERIOR_CAM_DIST = 26; // näher als das -> Räume auflösen
+const INTERIOR_CAM_DIST = 26; // closer than this -> resolve the rooms
+
+/**
+ * "Zoom to" a figure, for a figure drawn at scale 1. With the camera's 45°
+ * vertical FOV the visible height is 2·d·tan(22.5°) ≈ 0.828·d, so 4.5 m frames
+ * 3.7 m of world and a 1.70 m character covers ~46% of the picture: full
+ * height with air above and below. The distance is multiplied by the scale the
+ * figure is actually DRAWN at, so an indoor figure (scale ~0.3, ~0.5 m tall)
+ * gets the same framing at ~1.35 m instead of staring at it from 12 m away.
+ */
+const ZOOM_TO_BASE_DIST = 4.5;
+/** Upper clamp for the scaled zoom-to: a giant figure must not push the camera
+ *  past the old fixed distance, and 12 < EXIT_DIST (34) keeps a zoom-to from
+ *  ever tripping the embodied-mode exit. */
+const ZOOM_TO_MAX_DIST = 12;
 
 const app = document.getElementById('app')!;
 
@@ -366,7 +380,15 @@ async function startApp(username: string) {
     // simply without effect until the player leaves the mode.
     if (engine.follow) return;
     const p = npcs.positionOf(name);
-    if (p) engine.flyTo(p, 12);
+    if (!p) return;
+    // The drawn scale, not a nominal one: indoors a metre is `scale` human
+    // metres, so both the distance and the aim point have to follow it.
+    const scale = npcs.scaleOf(name) ?? 1;
+    // Aim at the middle of the body, not at the feet — `positionOf` returns the
+    // root, i.e. ground level, and from this close the figure would run out of
+    // the top of the frame. Half of a 1.70 m character is 0.85 m.
+    p.y += 0.85 * scale;
+    engine.flyTo(p, THREE.MathUtils.clamp(ZOOM_TO_BASE_DIST * scale, MIN_DIST, ZOOM_TO_MAX_DIST));
   };
   // The marker follows the BUS, not the click: closing the plaque happens on
   // the React side without a gameAction, and the ring has to go with it.
