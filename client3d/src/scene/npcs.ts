@@ -138,6 +138,8 @@ export class NpcManager {
   private playerDriven: string | null = null;
   /** ground ring at the click target of a running walk (E3-T4) */
   private walkTargetRing: THREE.Mesh | null = null;
+  /** pace of the player-driven figure as a factor of WALK_SPEED (E3 fix) */
+  private playerSpeed = 1;
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -188,7 +190,10 @@ export class NpcManager {
   setPlayerDriven(name: string | null) {
     if (this.playerDriven === name) return;
     this.playerDriven = name;
-    if (!name) return;
+    if (!name) {
+      this.playerSpeed = 1;   // handed back: the next takeover starts outdoors
+      return;
+    }
     // No figure yet (the model is still loading, or a rebuild threw the group
     // away): nothing to do HERE — `update()` applies the same state the moment
     // it creates the figure, so the takeover is not lost.
@@ -224,6 +229,25 @@ export class NpcManager {
   setPlayerScale(name: string, scale: number) {
     const npc = this.npcs.get(name);
     if (npc) npc.targetScale = scale;
+  }
+
+  /**
+   * Pace of the player-driven figure, as a factor of `WALK_SPEED` (E3 fix).
+   * Indoors its figure is drawn at the room scale, and a world metre there is
+   * not a figure metre — at scale 0.3 the unscaled pace covers eleven figure
+   * metres a second.
+   *
+   * It has to sit HERE and not only in the goal the frame hook pushes ahead:
+   * the goal runs `MIN_LEAD` (0.15 m) ahead so that `tick()`'s "is moving"
+   * test (0.05 world units) stays true, and 0.15 m is more than the catch-up
+   * of one frame (0.057 m at 60 fps) — so the catch-up, not the goal, is what
+   * decides the speed. A goal placed 0.017 m ahead instead would fall under
+   * the 0.05 threshold and the figure would not move at all
+   * (`scripts/smoke_walk_math.mjs` derives both numbers). NPCs are untouched:
+   * this factor applies to the player-driven figure only.
+   */
+  setPlayerSpeed(factor: number) {
+    this.playerSpeed = factor;
   }
 
   /** Walk goal of the player-driven figure (E3-T3). Writes `npc.target`, so
@@ -597,7 +621,10 @@ export class NpcManager {
       const dist = npc.waypoints.length ? distToGoal + 10 : distToGoal;  // unterwegs = laufen
       const moving = distToGoal > 0.05;
       if (moving) {
-        const step = Math.min(distToGoal, WALK_SPEED * dt * (dist > RUN_DISTANCE ? 1.8 : 1));
+        // The player-driven figure walks at the pace of its own SIZE (E3 fix);
+        // every other figure keeps the map pace.
+        const pace = WALK_SPEED * (npc.name === this.playerDriven ? this.playerSpeed : 1);
+        const step = Math.min(distToGoal, pace * dt * (dist > RUN_DISTANCE ? 1.8 : 1));
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);

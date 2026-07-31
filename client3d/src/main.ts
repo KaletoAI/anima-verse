@@ -4,7 +4,7 @@ import { Engine, isTypingTarget } from './scene/engine';
 import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, type Cell } from './game/walk';
+import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, walkSpeedScale, type Cell } from './game/walk';
 import { planRoute, type ClickRoute } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
@@ -922,6 +922,17 @@ async function startApp(username: string) {
     }
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;                     // no figure on the map (yet) — nothing to steer
+    // Pace of the SIZE the figure is drawn at (E3 fix): indoors it stands at
+    // the room scale, where a world metre is not a figure metre — unscaled,
+    // 3.4 m/s next to a figure a third the size reads as eleven metres a
+    // second, which is the "far too fast in rooms" of the acceptance round.
+    // The factor goes to BOTH halves of the pace, the goal below and the
+    // catch-up in `tick()`; see `setPlayerSpeed` for why the goal alone cannot
+    // carry it. `MIN_LEAD` deliberately does not scale — it is not a distance
+    // in figure metres but the floor that keeps tick()'s 0.05 world-unit "is
+    // moving" test true.
+    const speedScale = walkSpeedScale(npcs.scaleOf(avatarName));
+    npcs.setPlayerSpeed(speedScale);
     const keyDir = walkDir(engine.keysDown(), engine.yaw);
     // The keys always win: touching WASD is the player taking over from the
     // click order, not fighting it.
@@ -948,7 +959,7 @@ async function startApp(username: string) {
     if (askedEdge && (askedEdge.from.gx !== here.gx || askedEdge.from.gy !== here.gy)) {
       askedEdge = null;
     }
-    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
+    const lead = Math.min(Math.max(WALK_SPEED * speedScale * dt, MIN_LEAD), reach);
     let x = pos.x + dir.x * lead;
     let z = pos.z + dir.z * lead;
     let next = cellOf(x, z, CELL);
