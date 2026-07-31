@@ -1,7 +1,9 @@
-"""Zentrales LLM Call Logging — schreibt alle LLM-Aufrufe als JSONL nach logs/llm_calls.jsonl.
+"""Central LLM call logging — writes every LLM call as JSONL to logs/llm_calls.jsonl.
 
-Jeder Eintrag enthaelt: Start/End-Timestamp, Task, Model, Character, User, Prompt, Response,
-Dauer, Token-Nutzung (real oder geschaetzt), max. Context-Laenge.
+Each entry holds: start/end timestamp, task, model, character, user, prompt, response,
+duration, token usage (real or estimated), max context length. Calls made inside an
+active turn trace additionally carry ``trace_id``/``trace_kind`` so the log viewer can
+group all calls of one action.
 """
 import json
 import threading
@@ -21,12 +23,12 @@ _lock = threading.Lock()
 
 
 def _template_basename(template_path: str, fallback_task: str) -> str:
-    """Schneidet Path und .md-Suffix vom Template-Pfad weg.
+    """Strips path and ``.md`` suffix from the template path.
 
-    Beispiel: ``shared/templates/llm/tasks/classify_activity.md`` →
-    ``classify_activity``. Akzeptiert auch reine Basenames oder
-    Sub-Path-Form (``tasks/classify_activity.md``). Fallback auf den
-    Task-Namen wenn kein Template uebergeben wurde.
+    Example: ``shared/templates/llm/tasks/classify_activity.md`` →
+    ``classify_activity``. Also accepts plain basenames or the sub-path
+    form (``tasks/classify_activity.md``). Falls back to the task name
+    when no template was passed.
     """
     if not template_path:
         return fallback_task or ""
@@ -51,33 +53,52 @@ def log_llm_call(
     error: str = "",
     llm_role: str = "",
     template: str = "",
-    label: str = ""):
-    """Loggt einen LLM-Aufruf als JSONL-Zeile und gibt eine kurze Zeile auf stdout aus.
+    label: str = "",
+    trace_id: str = "",
+    trace_kind: str = ""):
+    """Logs an LLM call as a JSONL line and prints a short line to stdout.
 
     Args:
-        task: Art des Aufrufs (chat_stream, image_prompt, social_reaction, etc.)
-        model: Model-Name (z.B. mistral:latest)
-        agent_name: Character-Name
-        provider: Provider-Name (z.B. OllamaLocal, OpenAI-API)
-        system_prompt: System-Prompt Text
-        user_input: User-/Human-Nachricht
-        response: LLM-Antwort
-        duration_s: Dauer in Sekunden
-        tokens_input: Input-Tokens (real oder geschaetzt)
-        tokens_output: Output-Tokens (real oder geschaetzt)
-        max_tokens: Max. Tokens / Context-Laenge
-        messages: Optionale volle Message-Liste fuer multi-message calls
-        llm_role: Rolle des LLM-Aufrufs (Tool-LLM, Chat-LLM, LLM)
-        template: Voller Pfad oder Dateiname des verwendeten Jinja-Templates
-            (z.B. ``shared/templates/llm/tasks/classify_activity.md``).
-            Wird auf den Basenamen ohne ``.md`` reduziert und im Log-Viewer
-            als drittes Badge angezeigt — erleichtert Fehlersuche, weil man
-            sofort sieht welche Template-Datei gerendert wurde. Bei leerem
-            Wert faellt der Logger auf ``task`` zurueck.
-        label: Aufrufer-Detail des Calls (z.B. ``compose:room_model``) — der
-            Aufrufer uebergibt es an ``llm_call``, hier landet es im JSONL,
-            damit sich ein Call im Log seiner Quelle zuordnen laesst.
+        task: kind of call (chat_stream, image_prompt, social_reaction, etc.)
+        model: model name (e.g. mistral:latest)
+        agent_name: character name
+        provider: provider name (e.g. OllamaLocal, OpenAI-API)
+        system_prompt: system prompt text
+        user_input: user/human message
+        response: LLM answer
+        duration_s: duration in seconds
+        tokens_input: input tokens (real or estimated)
+        tokens_output: output tokens (real or estimated)
+        max_tokens: max tokens / context length
+        messages: optional full message list for multi-message calls
+        llm_role: role of the LLM call (Tool-LLM, Chat-LLM, LLM)
+        template: full path or file name of the rendered Jinja template
+            (e.g. ``shared/templates/llm/tasks/classify_activity.md``).
+            Reduced to the basename without ``.md`` and shown as the third
+            badge in the log viewer — it makes debugging easier because one
+            sees immediately which template file was rendered. On an empty
+            value the logger falls back to ``task``.
+        label: caller detail of the call (e.g. ``compose:room_model``) — the
+            caller passes it to ``llm_call``, here it lands in the JSONL so a
+            call in the log can be attributed to its source.
+        trace_id: correlation id of the action this call belongs to. Empty
+            means "look it up yourself": the logger then reads the ambient
+            turn trace (``turn_trace.current_trace()``), so call sites inside
+            an action need no change at all. Only call sites that cross a
+            context boundary (the queue worker thread) pass it explicitly.
+        trace_kind: kind of the action (``respond``, ``thought``, ``chat``,
+            ...), same fallback as ``trace_id``. The fallback fills each field
+            on its own, so an explicit value always wins per field.
     """
+    if not trace_id or not trace_kind:
+        try:
+            from app.core.turn_trace import current_trace
+            _t = current_trace()
+            if _t:
+                trace_id = trace_id or _t.get("id", "")
+                trace_kind = trace_kind or _t.get("kind", "")
+        except Exception:
+            pass
     template_basename = _template_basename(template, task)
     end_time = utc_now()
     start_time = end_time - timedelta(seconds=duration_s)
@@ -103,10 +124,14 @@ def log_llm_call(
 
     if label:
         entry["label"] = label
+    if trace_id:
+        entry["trace_id"] = trace_id
+    if trace_kind:
+        entry["trace_kind"] = trace_kind
     if error:
         entry["error"] = error
 
-    # Prompt aufbauen
+    # Build prompt
     if system_prompt:
         entry["prompt"]["system"] = system_prompt
     if user_input:
@@ -114,13 +139,13 @@ def log_llm_call(
     if messages:
         entry["prompt"]["messages"] = messages
 
-    # JSONL schreiben
+    # Write JSONL
     with _lock:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    # Kurze Zeile fuer strukturiertes Logging
+    # Short line for structured logging
     tok_str = ""
     if tokens_input or tokens_output:
         tok_str = " | %d\u2192%d tok" % (tokens_input, tokens_output)
@@ -145,9 +170,9 @@ def log_llm_call(
 
 
 def extract_token_info(response) -> Dict[str, int]:
-    """Extrahiert Token-Info aus einem LLM Response.
+    """Extracts token info from an LLM response.
 
-    Unterstuetzt LLMResponse.usage (dict mit prompt_tokens/completion_tokens).
+    Supports LLMResponse.usage (dict with prompt_tokens/completion_tokens).
     """
     info = {"input_tokens": 0, "output_tokens": 0}
 
@@ -160,12 +185,12 @@ def extract_token_info(response) -> Dict[str, int]:
 
 
 def estimate_tokens(text: str) -> int:
-    """Grobe Token-Schaetzung: ~4 Zeichen pro Token."""
+    """Rough token estimate: ~4 characters per token."""
     return len(text) // 4
 
 
 def get_model_name(llm) -> str:
-    """Extrahiert den Model-Namen aus einem LLMClient."""
+    """Extracts the model name from an LLMClient."""
     return (
         getattr(llm, "model_name", "")
         or getattr(llm, "model", "")
@@ -174,20 +199,20 @@ def get_model_name(llm) -> str:
 
 
 def get_max_tokens(llm) -> int:
-    """Extrahiert max_tokens aus einem LLMClient."""
+    """Extracts max_tokens from an LLMClient."""
     val = getattr(llm, "max_tokens", None)
     return int(val) if val else 0
 
 
 def prune_jsonl_log(path: Path, retention_days: int) -> int:
-    """Entfernt JSONL-Eintraege deren ``starttime`` aelter als
-    ``retention_days`` Tage ist. Schreibt die Datei atomic neu (tmp + rename).
+    """Removes JSONL entries whose ``starttime`` is older than
+    ``retention_days`` days. Rewrites the file atomically (tmp + rename).
 
-    Beide Logs (llm_calls.jsonl, image_prompts.jsonl) haben ``starttime``
-    als ISO-String — gleiche Schema-Annahme. Eintraege ohne starttime
-    werden konservativ behalten (kein Timestamp = nicht alterbar).
+    Both logs (llm_calls.jsonl, image_prompts.jsonl) carry ``starttime``
+    as an ISO string — same schema assumption. Entries without a starttime
+    are kept conservatively (no timestamp = cannot age out).
 
-    Returns: Anzahl entfernter Eintraege (0 wenn nichts zu tun).
+    Returns: number of removed entries (0 when there is nothing to do).
     """
     if retention_days < 1:
         return 0
@@ -208,7 +233,7 @@ def prune_jsonl_log(path: Path, retention_days: int) -> int:
                     try:
                         obj = json.loads(line_strip)
                     except Exception:
-                        # nicht-parsebare Zeile lieber behalten
+                        # keep an unparsable line rather than dropping it
                         kept.append(line_strip)
                         continue
                     ts = (obj.get("starttime") or "").strip()
@@ -231,9 +256,9 @@ def prune_jsonl_log(path: Path, retention_days: int) -> int:
 
 
 def prune_logs_on_startup() -> Dict[str, int]:
-    """Wird vom Server-Lifespan beim Start aufgerufen. Liest die Aufbewahrungs-
-    dauer aus der Config (server.log_retention_days, Default 5) und schneidet
-    llm_calls.jsonl + image_prompts.jsonl auf den Zeitraum.
+    """Called by the server lifespan at startup. Reads the retention period
+    from the config (server.log_retention_days, default 5) and trims
+    llm_calls.jsonl + image_prompts.jsonl to that window.
     """
     try:
         from app.core import config as _cfg

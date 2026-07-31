@@ -1,19 +1,19 @@
-"""Zentrale LLM-Queue — Fassade ueber ProviderManager.
+"""Central LLM queue — facade over the ProviderManager.
 
-Behaelt LLMTask und Priority als kanonische Definitionen bei.
-LLMQueue selbst delegiert alle Aufrufe an den ProviderManager,
-der sie an die richtige Provider-Queue routet.
+Keeps LLMTask and Priority as the canonical definitions. LLMQueue itself
+delegates every call to the ProviderManager, which routes it to the right
+provider queue.
 
-Bestehende Consumer (social_reactions, instagram_skill, talkto_skill, etc.)
-koennen weiterhin get_llm_queue().submit() nutzen ohne Aenderungen.
+Existing consumers (social_reactions, instagram_skill, talkto_skill, etc.)
+can keep using get_llm_queue().submit() unchanged.
 
-Verwendung:
+Usage:
     from app.core.llm_queue import get_llm_queue, Priority
 
     queue = get_llm_queue()
     response = queue.submit("image_prompt", Priority.NORMAL, llm, messages, agent_name="Pixel")
 """
-import threading  # noqa: F401  (weiterhin fuer LLMTask._done_event genutzt)
+import threading  # noqa: F401  (still used for LLMTask._done_event)
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum
@@ -25,17 +25,17 @@ logger = get_logger("llm_queue")
 
 
 class Priority(IntEnum):
-    """Task-Prioritaeten. Niedrigerer Wert = hoehere Prioritaet."""
-    CHAT = 0        # Nur Tracking (nicht queued)
+    """Task priorities. Lower value = higher priority."""
+    CHAT = 0        # tracking only (not queued)
     HIGH = 10       # story_stream
     NORMAL = 20     # image_prompt, extraction, history_summary, instagram_caption, image_comment
-    IMAGE_GEN = 25  # image_generation via GPU-Slot (zwischen NORMAL und LOW)
+    IMAGE_GEN = 25  # image_generation via GPU slot (between NORMAL and LOW)
     LOW = 30        # social_reaction, talkto
 
 
 @dataclass
 class LLMTask:
-    """Ein LLM-Task in der Queue."""
+    """One LLM task in the queue."""
     task_id: str
     task_type: str
     priority: int
@@ -47,31 +47,38 @@ class LLMTask:
     duration_s: float = 0.0
     provider_name: str = ""
     model: str = ""
-    started_at: str = ""        # Zeitpunkt wann Task tatsaechlich verarbeitet wird (nicht Queue-Einreichung)
-    label: str = ""             # Optional user-friendly label fuer Task-Panel
-    # Iteration tracking fuer chat_active Tasks (StreamingAgent kann mehrere
-    # LLM-Calls pro Turn machen: Initial → Tool-Call → Follow-Up). Wird vom
-    # Agent via register_chat_iteration() aktualisiert. 0 = noch nicht gestartet.
+    started_at: str = ""        # when the task actually starts processing (not the queue submit)
+    label: str = ""             # optional user-friendly label for the task panel
+    # Iteration tracking for chat_active tasks (a StreamingAgent can make
+    # several LLM calls per turn: initial → tool call → follow-up). Updated
+    # by the agent via register_chat_iteration(). 0 = not started yet.
     current_iteration: int = 0
     max_iterations: int = 1
-    # Dauer-Schaetzung — wird bei Verarbeitungsstart gesetzt (nicht beim Submit),
-    # damit nur Calls eine Anzeige bekommen, die wirklich auf einem Provider laufen.
+    # Duration estimate — set when processing starts (not at submit time), so
+    # only calls that really run on a provider get a display value.
     estimated_duration_s: float = 0.0
     estimated_p90_s: float = 0.0
     estimated_in_tokens: int = 0
     estimated_samples: int = 0
-    # Interne Felder (nicht in Status-Output)
+    # Turn trace — captured at SUBMIT time from the caller's context
+    # (app/core/turn_trace.py). The worker THREAD that executes the task
+    # does not inherit that context, so the correlation has to ride on the
+    # task object to reach the JSONL logger. Empty = call outside any
+    # action root, stays ungrouped.
+    trace_id: str = ""
+    trace_kind: str = ""
+    # Internal fields (not part of the status output)
     _llm: Any = field(default=None, repr=False)
     _messages: Any = field(default=None, repr=False)
     _done_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _cancelled: bool = field(default=False, repr=False)
     _retry_count: int = field(default=0, repr=False)
-    # Monoton steigender Timestamp — wird fuer Stale-Detection genutzt,
-    # damit Server-Zeitumstellungen/Drifts die Erkennung nicht verfaelschen.
+    # Monotonically increasing timestamp — used for stale detection so that
+    # server clock changes/drift cannot distort it.
     _monotonic_created: float = field(default=0.0, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialisiert fuer REST-Endpoint (ohne interne Felder)."""
+        """Serializes for the REST endpoint (without internal fields)."""
         d = {
             "task_id": self.task_id,
             "task_type": self.task_type,
@@ -103,11 +110,11 @@ class LLMTask:
 
 
 class LLMQueue:
-    """Fassade ueber ProviderManager — routet Tasks an die richtige Provider-Queue.
+    """Facade over the ProviderManager — routes tasks to the right provider queue.
 
-    Globale Pause-Funktionalitaet entfernt — Task-Disable laeuft jetzt ueber
-    den Router (app/core/llm_task_state.py). Deaktivierte Tasks bekommen vom
-    Router kein LLM und der Aufrufer faellt in seinen eigenen Fallback.
+    The global pause was removed — disabling a task now runs through the
+    router (app/core/llm_task_state.py). A disabled task gets no LLM from the
+    router and the caller falls back on its own path.
     """
 
     def submit(
@@ -117,10 +124,10 @@ class LLMQueue:
         llm: Any,
         messages_or_prompt: Any,
         agent_name: str = "", label: str = "") -> Any:
-        """Gibt einen LLM-Call in die richtige Provider-Queue.
+        """Hands an LLM call to the right provider queue.
 
-        Bestimmt den Provider anhand der api_base des LLMClient-Objekts
-        und delegiert an die entsprechende ProviderQueue.
+        Determines the provider from the LLMClient's api_base and delegates
+        to the matching ProviderQueue.
         """
         from .provider_manager import get_provider_manager
 
@@ -149,9 +156,9 @@ class LLMQueue:
         callable_fn=None,
         agent_name: str = "", label: str = "",
         gpu_type: str = "") -> Any:
-        """Gibt einen GPU-Slot-Task in die Provider-Queue.
+        """Hands a GPU-slot task to the provider queue.
 
-        Routing: gpu_type fuer dynamisches Routing (bevorzugt), provider_name als Fallback.
+        Routing: gpu_type for dynamic routing (preferred), provider_name as fallback.
         """
         from .provider_manager import get_provider_manager
         pm = get_provider_manager()
@@ -162,7 +169,7 @@ class LLMQueue:
     def register_chat_active(self, agent_name: str, llm_instance: Any = None,
                              task_type: str = "chat_stream",
                              label: str = "") -> str:
-        """Registriert aktiven Chat/Story. Pausiert die Provider-Queue.
+        """Registers an active chat/story. Pauses the provider queue.
 
         Args:
             agent_name: Character name
@@ -174,7 +181,7 @@ class LLMQueue:
             label: short user-friendly label
 
         Returns:
-            task_id fuer register_chat_done()
+            task_id for register_chat_done()
         """
         from .provider_manager import get_provider_manager
 
@@ -193,11 +200,11 @@ class LLMQueue:
     async def register_chat_active_async(self, agent_name: str, llm_instance: Any = None,
                                           task_type: str = "chat_stream",
                                           label: str = "") -> str:
-        """Async-Wrapper: laeuft den blockierenden _tasks_idle.wait() im Threadpool,
-        damit der Event-Loop nicht haengt waehrend wir auf Provider-Idle warten.
+        """Async wrapper: runs the blocking _tasks_idle.wait() in the threadpool
+        so the event loop does not stall while we wait for the provider to idle.
 
-        Async-Code MUSS diese Variante nutzen. Sync-Code (Worker-Threads) nutzt
-        weiterhin register_chat_active().
+        Async code MUST use this variant. Sync code (worker threads) keeps
+        using register_chat_active().
         """
         import asyncio
         return await asyncio.to_thread(
@@ -207,7 +214,7 @@ class LLMQueue:
         )
 
     def register_chat_done(self, task_id: str) -> None:
-        """Chat/Story beendet. Queue wird fortgesetzt."""
+        """Chat/story finished. The queue resumes."""
         from .provider_manager import get_provider_manager
         pm = get_provider_manager()
         pm.register_chat_done(task_id)
@@ -230,7 +237,7 @@ class LLMQueue:
         return pm.has_pending_tasks()
 
     def get_status(self) -> Dict[str, Any]:
-        """Queue-Status aggregiert ueber alle Provider."""
+        """Queue status aggregated over all providers."""
         from .provider_manager import get_provider_manager
         pm = get_provider_manager()
         return pm.get_combined_status()
@@ -263,15 +270,15 @@ class LLMQueue:
 
 
 # ---------------------------------------------------------------------------
-# Modul-Singleton
+# Module singleton
 # ---------------------------------------------------------------------------
 _llm_queue: Optional[LLMQueue] = None
 
 
 def get_llm_queue() -> LLMQueue:
-    """Gibt die globale LLMQueue-Fassade zurueck."""
+    """Returns the global LLMQueue facade."""
     global _llm_queue
     if _llm_queue is None:
         _llm_queue = LLMQueue()
-        logger.info("Fassade initialisiert (delegiert an ProviderManager)")
+        logger.info("Facade initialized (delegates to ProviderManager)")
     return _llm_queue

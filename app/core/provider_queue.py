@@ -15,10 +15,11 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .provider import Provider
 from .llm_queue import LLMTask, Priority
+from .turn_trace import current_trace
 from app.utils.llm_logger import get_model_name
 
 from app.core.log import get_logger
@@ -27,6 +28,19 @@ logger = get_logger("provider_queue")
 
 class _CancelledByUser(Exception):
     """Internal signal: task was cancelled by user."""
+
+
+def _trace_fields() -> Tuple[str, str]:
+    """Reads the ambient turn trace as ``(trace_id, trace_kind)``.
+
+    Must be called at SUBMIT time: submit runs in the caller's context where
+    the trace of the running action still exists, while the worker thread
+    that later executes the task does not inherit it.
+    """
+    t = current_trace()
+    if not t:
+        return "", ""
+    return t.get("id", ""), t.get("kind", "")
 
 
 def _wait_for_future(future, task, timeout: float, poll_interval: float = 2.0):
@@ -148,6 +162,7 @@ class ProviderQueue:
             label=label,
             _llm=llm,
             _messages=messages_or_prompt)
+        task.trace_id, task.trace_kind = _trace_fields()
 
         with self._lock:
             self._seq_counter += 1
@@ -198,6 +213,7 @@ class ProviderQueue:
             created_at=utc_now_iso(),
             provider_name=self.provider.name,
             model=label)
+        task.trace_id, task.trace_kind = _trace_fields()
         # Store the callable on the task object
         task._gpu_callable = callable_fn
 
@@ -265,10 +281,10 @@ class ProviderQueue:
             provider_name=self.provider.name,
             model=model,
             label=label)
-        # Monotonic-Timestamp fuer Stale-Detection (pro Task, nicht global)
+        # Monotonic timestamp for stale detection (per task, not global)
         task._monotonic_created = time.monotonic()
-        # Dauer-Schaetzung ohne Input-Skalierung — Messages liegen beim
-        # Registrieren noch nicht vor, also Median-Dauer aus (model,task) zeigen.
+        # Duration estimate without input scaling — the messages do not exist
+        # yet at registration time, so show the median for (model, task).
         _attach_duration_estimate(task)
 
         with self._lock:
@@ -278,8 +294,8 @@ class ProviderQueue:
         # Pause queue: workers won't start NEW tasks
         self._chat_active.clear()
 
-        # Bei max_concurrent=1: auf laufenden Task warten (z.B. llama-swap)
-        # Bei max_concurrent>1: Server kann parallele Requests verarbeiten
+        # With max_concurrent=1: wait for the running task (e.g. llama-swap)
+        # With max_concurrent>1: the server can handle parallel requests
         if self.provider.max_concurrent <= 1 and not self._tasks_idle.is_set():
             logger.info("[%s] Chat wartet auf laufenden Task (max_concurrent=%d)...",
                         self._queue_name, self.provider.max_concurrent)
@@ -434,20 +450,21 @@ class ProviderQueue:
                 self._workers.append(t)
                 t.start()
 
-    _STALE_CHAT_TIMEOUT = 660  # 11 Minuten — Notbremse fuer haengende Chat-Registrierungen.
-    # Muss > THOUGHT_CALL_TIMEOUT (default 600s) sein, damit der
-    # regulaere asyncio.wait_for in thoughts.py vor dieser Notbremse greift.
-    # Diese Stale-Bereinigung ist nur Backup falls auch der Cancel nicht
-    # greift (z.B. echter Browser-Reload waehrend Streaming, Tool-Crash ohne finally).
+    _STALE_CHAT_TIMEOUT = 660  # 11 minutes — emergency brake for hanging chat registrations.
+    # Must be > THOUGHT_CALL_TIMEOUT (default 600s) so the regular
+    # asyncio.wait_for in thoughts.py fires before this emergency brake.
+    # This stale cleanup is only a backup for when the cancel does not take
+    # effect either (e.g. a real browser reload during streaming, a tool crash
+    # without finally).
 
     def _check_stale_chat(self) -> None:
-        """Prueft ob Chat-Registrierungen veraltet sind und raeumt auf.
+        """Checks whether chat registrations went stale and cleans them up.
 
-        Nutzt das per-Task _monotonic_created — der globale
-        _chat_registered_at wird bei jeder neuen Registrierung ueberschrieben
-        und ist deshalb unbrauchbar fuer die Alterung einzelner Stuck-Tasks.
-        Typischer Stuck-Fall: Browser-Reload waehrend Streaming, generate()
-        feuert finally nicht mehr, chat_tasks-Eintrag bleibt liegen.
+        Uses the per-task _monotonic_created — the global _chat_registered_at
+        is overwritten by every new registration and is therefore useless for
+        aging individual stuck tasks. Typical stuck case: browser reload during
+        streaming, generate() never runs its finally, the chat_tasks entry
+        stays behind.
         """
         now = time.monotonic()
         cleaned = []
@@ -458,7 +475,7 @@ class ProviderQueue:
             for tid, task in self._chat_tasks.items():
                 t_created = getattr(task, "_monotonic_created", 0.0)
                 if t_created <= 0:
-                    # Alt-Eintrag ohne Timestamp → sofort als stale behandeln
+                    # Legacy entry without a timestamp → treat as stale at once
                     stale_ids.append(tid)
                     continue
                 age = now - t_created
@@ -509,7 +526,7 @@ class ProviderQueue:
     def _worker_loop(self) -> None:
         """Processes LLM tasks. Pauses when chat is active on this provider."""
         while True:
-            # Wait until chat is not active on this provider (mit Stale-Check)
+            # Wait until chat is not active on this provider (with stale check)
             if self._chat_pause_enabled:
                 while not self._chat_active.wait(timeout=30):
                     self._check_stale_chat()
@@ -582,11 +599,11 @@ class ProviderQueue:
                         self._queue_name, task.task_id, task.task_type, task.agent_name)
 
             t0 = time.monotonic()
-            task_timeout = self.provider.timeout or 300  # Default 5 Min
+            task_timeout = self.provider.timeout or 300  # default 5 min
             gpu_callable = getattr(task, '_gpu_callable', None)
 
             if gpu_callable:
-                # GPU-Slot-Task: callable ausfuehren (z.B. image generation)
+                # GPU-slot task: run the callable (e.g. image generation)
                 try:
                     with ThreadPoolExecutor(max_workers=1) as executor:
                         future = executor.submit(gpu_callable)
@@ -680,13 +697,12 @@ class ProviderQueue:
                     # Strip thinking tags from response (Qwen3.5 etc.)
                     response = _strip_thinking(response)
 
-                    # Retry wenn Response leer. Zwei Faelle: mit gesetztem
-                    # max_tokens hat das Thinking vermutlich das Budget
-                    # aufgefressen -> verdoppeln; ohne max_tokens hat ein
-                    # Reasoning-Modell nach leerem Think-Block direkt EOS
-                    # emittiert (Signatur: usage meldet wenige completion-
-                    # Tokens, content leer) — stochastisch, unveraenderter
-                    # Retry heilt meist.
+                    # Retry on an empty response. Two cases: with max_tokens
+                    # set, the thinking probably ate the whole budget ->
+                    # double it; without max_tokens a reasoning model emitted
+                    # EOS right after an empty think block (signature: usage
+                    # reports few completion tokens, content empty) — that is
+                    # stochastic, an unchanged retry usually heals it.
                     resp_content = getattr(response, "content", None) or ""
                     if not resp_content.strip():
                         from app.utils.llm_logger import extract_token_info
@@ -749,11 +765,11 @@ class ProviderQueue:
                         # cooldown the provider so resolve_llm skips it and
                         # the routing chain falls through. Streaming consumers
                         # that don't go through llm_call benefit too.
-                        # AUSNAHME: 503 "No healthy backend for model X" ist
-                        # modell-spezifisch — nur dieses (Provider, Modell) paar
-                        # abkühlen, NICHT den ganzen Provider (er serviert seine
-                        # anderen Modelle weiter). Spiegelt llm_router.llm_call /
-                        # streaming — der Guard fehlte hier nur im Queue-Worker.
+                        # EXCEPTION: a 503 "No healthy backend for model X" is
+                        # model-specific — cool down only that (provider, model)
+                        # pair, NOT the whole provider (it keeps serving its
+                        # other models). Mirrors llm_router.llm_call /
+                        # streaming — only the queue worker lacked the guard.
                         try:
                             from app.core.llm_router import (
                                 _is_upstream_failure, _UPSTREAM_COOLDOWN_SECONDS,
@@ -846,8 +862,8 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
         if response_text is None:
             response_text = "" if (error or response is None) else str(response)
 
-        # System-Prompt vom restlichen Prompt trennen damit der Logger
-        # beide Felder sauber ausgibt (sonst landet system im user-Feld).
+        # Separate the system prompt from the rest so the logger writes both
+        # fields cleanly (otherwise system ends up in the user field).
         system_text = ""
         prompt_text = ""
         if isinstance(task._messages, list):
@@ -857,7 +873,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
                     role = m.get("role", "?")
                     content = m.get("content", "")
                     if isinstance(content, list):
-                        # Vision-Messages mit multi-content
+                        # vision messages with multi-content
                         content = " ".join(
                             p.get("text", "") for p in content
                             if isinstance(p, dict) and p.get("type") == "text"
@@ -891,18 +907,20 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
             tokens_output=tokens_out,
             max_tokens=max_tokens,
             label=getattr(task, "label", "") or "",
+            trace_id=getattr(task, "trace_id", "") or "",
+            trace_kind=getattr(task, "trace_kind", "") or "",
             error=error)
     except Exception as e:
         logger.error("Logging-Fehler: %s", e, exc_info=True)
 
 
 def _attach_duration_estimate(task: LLMTask) -> None:
-    """Berechnet aus historischen Stats die voraussichtliche Dauer dieses Calls
-    und legt sie an `task` ab (sichtbar fuer das Queue-Panel).
+    """Computes the expected duration of this call from historic stats and
+    stores it on `task` (visible to the queue panel).
 
-    Wird beim Verarbeitungsstart aufgerufen — nicht beim Submit — damit nur
-    Calls, die wirklich auf einem Provider laufen, eine Schaetzung bekommen.
-    GPU-Slot-Tasks (Bildgenerierung) bekommen keine LLM-Schaetzung.
+    Called when processing starts — not at submit time — so only calls that
+    really run on a provider get an estimate. GPU-slot tasks (image
+    generation) get no LLM estimate.
     """
     if getattr(task, "_gpu_callable", None) is not None:
         return
@@ -912,8 +930,8 @@ def _attach_duration_estimate(task: LLMTask) -> None:
         from app.utils.llm_logger import estimate_tokens
         from app.utils.llm_stats import estimate_duration
 
-        # Chat-Active-Tasks haben kein _messages — dann ohne Input-Skalierung,
-        # estimate_duration faellt automatisch auf reinen Median zurueck.
+        # chat_active tasks have no _messages — then without input scaling,
+        # estimate_duration automatically falls back to the plain median.
         in_tokens = _estimate_in_tokens(task._messages, estimate_tokens) \
             if task._messages is not None else 0
         est = estimate_duration(task.model, task.task_type,
@@ -929,7 +947,7 @@ def _attach_duration_estimate(task: LLMTask) -> None:
 
 
 def _estimate_in_tokens(messages, estimate_fn) -> int:
-    """Sammelt den Text aus messages_or_prompt und schaetzt die Token-Zahl."""
+    """Collects the text from messages_or_prompt and estimates the token count."""
     if isinstance(messages, str):
         return estimate_fn(messages)
     if not isinstance(messages, list):
