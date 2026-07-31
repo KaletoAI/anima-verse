@@ -711,11 +711,17 @@ async function startApp(username: string) {
   // scripts/smoke_walk_math.mjs; nothing here recomputes it.
   const avatarName = firstMap.avatar;   // one avatar per session (as everywhere else)
   /** Same passability rule the pathfinder is built with (buildings block, road
-   *  and nature carry). A cell that is not on the map at all is not steppable
-   *  either — the server would answer 404. */
+   *  and nature carry). It says where a route may travel THROUGH — it is NOT
+   *  what makes a cell enterable. */
   const passableCells = new Set(placeable
     .filter((l) => l.passable || l.template_location_id)
     .map((l) => `${l.grid_x},${l.grid_y}`));
+  /** Which location sits on a cell. Also the enterable-check: the server's step
+   *  (`world_ops.move_avatar_step`) has NO passability check — it gates on the
+   *  entry room and the block rules and otherwise moves the avatar into the
+   *  neighbouring location, so a plot or a building can be walked into and the
+   *  client must let the server decide. A cell with no location stays a wall;
+   *  there the server would answer 404. */
   const locIdAtCell = new Map(placeable.map((l) => [`${l.grid_x},${l.grid_y}`, l.id]));
   function tileAtCell(c: Cell): Tile | null {
     const id = locIdAtCell.get(`${c.gx},${c.gy}`);
@@ -860,6 +866,7 @@ async function startApp(username: string) {
     const planned = planRoute(
       { x: pos.x, z: pos.z }, { x: hit.x, z: hit.z },
       (gx, gy) => passableCells.has(`${gx},${gy}`),
+      (gx, gy) => locIdAtCell.has(`${gx},${gy}`),
       (a, b) => {
         const pts = pathGrid.findPath(a.gx, a.gy, b.gx, b.gy);
         if (!pts.length) return null;
@@ -953,7 +960,11 @@ async function startApp(username: string) {
         // then walk over it. Never a second request for the same edge.
         if (!askedEdge.granted) ({ x, z } = clampToCell(x, z, here, CELL));
       } else {
-        const barred = !step || !passableCells.has(key)
+        // What bars a crossing is the LOCATION, not the terrain: every known
+        // neighbour is worth a step request, and the server answers whether it
+        // is allowed (403 + toast). Only a cell no location covers is a wall
+        // the client may decide about on its own.
+        const barred = !step || !locIdAtCell.has(key)
           || (rejectedUntil.get(key) ?? 0) > performance.now();
         // `roomRequestInFlight` clamps exactly like a step in flight (E3-T6):
         // a room change and a cell step must not overlap, or the entry-room
