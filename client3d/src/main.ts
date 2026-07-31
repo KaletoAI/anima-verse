@@ -7,6 +7,7 @@ import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, type Cell } from './game/walk';
 import { planRoute, type ClickRoute } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
+import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -999,6 +1000,121 @@ async function startApp(username: string) {
     cancelRoute();
   }
 
+  // --- Changing rooms on foot (E3-T6) ---------------------------------------
+  // Inside an open interior the avatar's room is no longer a click on a room
+  // chip — walking into a room moves it, and the chat context follows. The
+  // rule itself is pure (`game/roomwalk.ts`, numbers in
+  // scripts/smoke_walk_math.mjs); everything here looks up its arguments and
+  // fires the ONE request it asks for.
+  //
+  // This is also where the avatar's position, room and scale finally become
+  // ONE pair (findings of T3/T5). All three are derived from where the figure
+  // is DRAWN: the tile under its feet, the room of that tile it is closest to,
+  // and the scale that tile draws its figures at.
+  const ROOM_HOLD_SECONDS = 1.5;
+  /** How long a refused room stays refused. Without it a player standing on
+   *  the wrong side of a block rule would fire a fresh request every 1.5 s. */
+  const ROOM_REJECT_MS = 4000;
+  /** How long a fired switch waits for the worldmap to confirm it (poll: 3 s).
+   *  After that the request counts as lost — a confirmation that never arrives
+   *  would otherwise bar that room for the rest of the session. */
+  const ROOM_CONFIRM_MS = 10_000;
+  let roomWalk: RoomWalkState = idleRoomWalk();
+  /** At most ONE enter-room in flight; a second one could overtake the first. */
+  let roomRequestInFlight = false;
+  /** Room the server was asked for, until `roomOf` confirms it. NOT a local
+   *  anticipation of the room — the payload alone decides where the avatar is;
+   *  this only stops the hysteresis from asking again while the answer is
+   *  still on its way. */
+  let requestedRoom: string | null = null;
+  let requestedAt = 0;
+  /** room id -> time until which a refused switch stays refused */
+  const roomRejectedUntil = new Map<string, number>();
+
+  /** The avatar's room as the SERVER sees it, resolved to a room ID: `roomOf`
+   *  carries the worldmap's `room_id`, but the pre-AV3D-8 fallback poll writes
+   *  a room NAME into the same map — and `/play/enter-room` takes ids only. */
+  function avatarRoomId(tile: Tile): string | null {
+    const raw = roomOf.get(avatarName);
+    if (!raw) return null;
+    return tile.loc.rooms.find((r) => r.id === raw || r.name === raw)?.id ?? null;
+  }
+
+  async function enterRoomOnFoot(roomId: string) {
+    roomRequestInFlight = true;
+    requestedRoom = roomId;
+    requestedAt = performance.now();
+    try {
+      await api.enterRoom(roomId);
+    } catch {
+      // Silent, exactly like the HUD's room chips: a rule refused it or the
+      // room is stale, and the next poll shows what actually holds. What the
+      // failure DOES buy is the block below — a player standing in the same
+      // spot must not hammer the endpoint.
+      roomRejectedUntil.set(roomId, performance.now() + ROOM_REJECT_MS);
+      requestedRoom = null;
+    } finally {
+      roomRequestInFlight = false;
+    }
+  }
+
+  // `performance.now()` throughout, never the wall clock: these are DURATIONS,
+  // and a clock correction must not make a hold fire instantly or never.
+  engine.addFrameHook(() => {
+    const state = getGameState();
+    if (state.mode !== 'embodied') { roomWalk = idleRoomWalk(); return; }
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;
+    // The tile the figure STANDS on, not the one the worldmap names — while
+    // walking, the two differ for up to one poll.
+    const tile = tileAtCell(cellOf(pos.x, pos.z, CELL));
+    const current = tile ? avatarRoomId(tile) : null;
+    if (requestedRoom
+      && (current === requestedRoom
+        || performance.now() - requestedAt > ROOM_CONFIRM_MS)) {
+      requestedRoom = null;
+    }
+    // Scale (T5 finding): `update()` skips every placement field for the
+    // player-driven figure, so its scale used to stay frozen at whatever it
+    // was at takeover — a map-sized avatar inside a room, or a room-sized one
+    // back out on the map. Same rule as `computeNpcStates`, only fed from the
+    // drawn position instead of the placement pass.
+    let scale = 1;
+    if (tile && current && tile.roomCenters.has(current)
+      && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(current))) {
+      scale = sceneFigureScale(tile.loc.id) ?? roomFigureScale(tile.loc);
+    }
+    npcs.setPlayerScale(avatarName, scale);
+
+    // The switch runs only while the interior of the avatar's OWN tile is
+    // open — the same condition the room placement uses; from the outside
+    // there is nothing to walk between. A party follower is carried by its
+    // leader and the server refuses the call anyway.
+    if (!tile || tile.fadeTarget !== 1 || state.movementLocked) {
+      roomWalk = idleRoomWalk();
+      return;
+    }
+    const rooms: RoomWalkRoom[] = [];
+    for (const r of tile.loc.rooms) {
+      // Keyed by ID on purpose: `roomCenters` holds every centre TWICE (under
+      // id and under name, one shared instance), and one room must not stand
+      // for two candidates. No centre = no layout to walk into.
+      const c = tile.roomCenters.get(r.id);
+      if (c) {
+        rooms.push({ id: r.id, level: tile.roomLevels.get(r.id) ?? 0,
+                     center: { x: c.x, z: c.z } });
+      }
+    }
+    const out = nearestRoomSwitch(current, { x: pos.x, z: pos.z }, rooms,
+      tile.levelFilter, roomWalk, performance.now(), ROOM_HOLD_SECONDS);
+    roomWalk = out.state;
+    const next = out.next;
+    if (!next || next === current) return;
+    if (roomRequestInFlight || next === requestedRoom) return;
+    if ((roomRejectedUntil.get(next) ?? 0) > performance.now()) return;
+    void enterRoomOnFoot(next);
+  });
+
   // --- Talking by proximity (E3-T5) -----------------------------------------
   // Walking up to someone is the whole interaction: the bus carries the name,
   // the HUD shows the prompt and F opens the chat. The rule itself is pure
@@ -1011,15 +1127,15 @@ async function startApp(username: string) {
   // interior is closed, and the prompt cannot fire through a wall one is
   // looking at.
   //
-  // For the AVATAR it is the server's view. Its figure is player-driven, so
-  // `npcs.update` ignores every placement field for it, yet its `shownRoom`
-  // entry is still written from `roomOf` (the worldmap's `room_id`) in
-  // `computeNpcStates`. Position (drawn by us) and room (told by the server)
-  // therefore come from two different sources, and the known consequence is:
-  // standing inside a building with the interior open (avatar room = "hall")
-  // next to a character the server assigns no room to (room = null) never
-  // yields a prompt, however close the two are drawn. Accepted until T6 brings
-  // walking between rooms — which is where that pairing gets sorted out.
+  // For the AVATAR it is still the server's view: its figure is player-driven,
+  // so `npcs.update` ignores every placement field for it, yet its `shownRoom`
+  // entry keeps being written from `roomOf` (the worldmap's `room_id`) in
+  // `computeNpcStates`. Since T6 that is no longer a second source pulling the
+  // other way: the room-walk hook DERIVES the server room from the drawn
+  // position (nearest room centre of the tile under the figure's feet) and
+  // asks the server for it, so `roomOf` follows where the player walked within
+  // a poll. Room and position agree again — what remains is the poll's delay,
+  // not a disagreement.
   function updateTalkTarget() {
     const state = getGameState();
     const clear = () => { if (state.talkTarget) setGameState({ talkTarget: null }); };

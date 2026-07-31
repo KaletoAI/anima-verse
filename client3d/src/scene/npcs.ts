@@ -194,6 +194,26 @@ export class NpcManager {
     npc.route = null;        // a server journey would keep overriding the input
     npc.waypoints = [];      // ditto for a planned A* path
     npc.target.copy(npc.root.position);
+    // The placement fields update() stops writing keep their last value, and
+    // two of them are wrong for a steered figure (E3-T6):
+    // `face` was the traveller's destination — the avatar would walk while
+    // staring at the town it no longer travels to; without it `tick()` falls
+    // back to the walking direction and the neighbour gaze, like any NPC.
+    npc.face = null;
+    // `hidden` was the storey filter. Taking over an avatar on a storey that
+    // is currently not displayed left it invisible AND unclickable, with no
+    // way back — while the player steers, the figure they steer is visible.
+    npc.root.visible = true;
+  }
+
+  /** Target scale of the player-driven figure (E3-T6). `update()` skips the
+   *  placement fields for it, so without this it kept whatever scale it had at
+   *  takeover — a map-sized avatar inside a room, or a room-sized one back out
+   *  on the map. `tick()` blends towards it exactly as it does for every other
+   *  figure, so the change is a smooth one and not a pop. */
+  setPlayerScale(name: string, scale: number) {
+    const npc = this.npcs.get(name);
+    if (npc) npc.targetScale = scale;
   }
 
   /** Walk goal of the player-driven figure (E3-T3). Writes `npc.target`, so

@@ -83,6 +83,19 @@ export async function avatarStep(direction: StepDirection, signal?: AbortSignal
   return res.json();
 }
 
+/** Move the avatar into another room of its current location — the same call
+ *  the HUD's room chips make. Throws on any refusal (a block rule, a room the
+ *  server does not have at this location); the caller stays silent about it,
+ *  the next poll shows what actually holds. */
+export async function enterRoom(roomId: string): Promise<void> {
+  const res = await fetch('/play/enter-room', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ room_id: roomId }),
+  });
+  if (!res.ok) throw new Error(`enter-room ${res.status}`);
+}
+
 export async function getCharactersAtLocation(locationId: string): Promise<AtLocationChar[]> {
   const data = await json<{ characters: AtLocationChar[] }>(
     await fetch(`/characters/at-location?location=${encodeURIComponent(locationId)}`)
