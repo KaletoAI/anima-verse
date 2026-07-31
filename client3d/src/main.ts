@@ -1005,10 +1005,21 @@ async function startApp(username: string) {
   // (`game/proximity.ts`, checked in scripts/smoke_walk_math.mjs); everything
   // here is the lookup of its arguments.
   //
-  // Rooms come from `shownRoom`, NOT from `roomOf`: `roomOf` is what the
-  // server says, `shownRoom` is what the view actually DRAWS. With an interior
-  // open those differ (a room only resolves above a fade threshold), and the
-  // prompt must not fire through a wall the player is looking at.
+  // Rooms come from `shownRoom`, NOT from `roomOf` — but only for the NPCs is
+  // that "the room the view DRAWS". For them the two genuinely differ: a room
+  // resolves only above the fade threshold, so `shownRoom` is null while the
+  // interior is closed, and the prompt cannot fire through a wall one is
+  // looking at.
+  //
+  // For the AVATAR it is the server's view. Its figure is player-driven, so
+  // `npcs.update` ignores every placement field for it, yet its `shownRoom`
+  // entry is still written from `roomOf` (the worldmap's `room_id`) in
+  // `computeNpcStates`. Position (drawn by us) and room (told by the server)
+  // therefore come from two different sources, and the known consequence is:
+  // standing inside a building with the interior open (avatar room = "hall")
+  // next to a character the server assigns no room to (room = null) never
+  // yields a prompt, however close the two are drawn. Accepted until T6 brings
+  // walking between rooms — which is where that pairing gets sorted out.
   function updateTalkTarget() {
     const state = getGameState();
     const clear = () => { if (state.talkTarget) setGameState({ talkTarget: null }); };

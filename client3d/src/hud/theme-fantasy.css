@@ -121,6 +121,20 @@
 }
 #hud .hud-plaque-close:hover { color: var(--hud-gold); }
 
+/* ---- Panel flash: the answer to a talk key on an open chat (E3-T5) -----
+ * Same gold the panel headers and the plaque use — the pulse reads as the
+ * panel lighting up, not as an error state. */
+@keyframes hud-flash-gold {
+  0% { outline-color: var(--hud-gold); }
+  100% { outline-color: transparent; }
+}
+#hud .hud-panel.hud-flash {
+  animation-name: hud-flash-gold;
+}
+@media (prefers-reduced-motion: reduce) {
+  #hud .hud-panel.hud-flash { outline-color: var(--hud-gold); }
+}
+
 /* ---- Talk prompt: a small vellum tab above the plaque (E3-T5) ---------
  * Same surface and gold as the plaque it sits on, one size down — it is a
  * hint, not a plate, and must not out-shout the figure it points at. */

@@ -13,7 +13,7 @@
  * button is absent in HUD v1 (the image-gen dialog lives in the game-admin
  * UI); open point for stage 6.
  */
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon,
   ScenePanel, SelfPanel, OthersPanel,
@@ -90,15 +90,38 @@ export function Hud({ avatar }: { avatar: string }) {
   }, [toast]);
 
   // Talking (E3-T5): F next to a character — and the plaque's Talk button —
-  // open the chat panel. Opening it is ALL this does; the composer is not
-  // focused, deliberately. A key that both opens a panel and steals the focus
-  // takes the keyboard away from walking, and the player who wants to type
-  // clicks into the field anyway. Focusing it is a v2 decision, not an
-  // oversight.
+  // bring the chat panel up. The composer is deliberately NOT focused: a key
+  // that both opens a panel and steals the focus takes the keyboard away from
+  // walking, and whoever wants to type clicks into the field anyway.
+  //
+  // But "open it" alone is not an answer. The chat panel starts OPEN, so in
+  // the delivered state the very first press would do nothing at all —
+  // idempotent, invisible, indistinguishable from a broken key. An already
+  // open panel therefore gets a one-shot flash of its edge instead (0.6 s,
+  // hud.css/theme-fantasy.css). The press is always answered, never silently
+  // swallowed.
+  const chatOpen = useRef(open.chat);
+  chatOpen.current = open.chat;
+  /** counts presses onto an ALREADY open chat; only drives the flash below */
+  const [chatHail, setChatHail] = useState(0);
+  const [chatFlash, setChatFlash] = useState(false);
   useEffect(() => {
-    uiActions.openChat = () => setOpen((o) => (o.chat ? o : { ...o, chat: true }));
+    uiActions.openChat = () => {
+      if (chatOpen.current) setChatHail((n) => n + 1);
+      else setOpen((o) => ({ ...o, chat: true }));
+    };
     return () => { uiActions.openChat = undefined; };
   }, []);
+  useEffect(() => {
+    if (!chatHail) return;               // nothing pressed yet, no flash on mount
+    // Off first, on in the next frame: a CSS animation only restarts when the
+    // class actually leaves the element, and pressing F twice in a row has to
+    // flash twice.
+    setChatFlash(false);
+    const raf = requestAnimationFrame(() => setChatFlash(true));
+    const off = window.setTimeout(() => setChatFlash(false), 700);
+    return () => { cancelAnimationFrame(raf); window.clearTimeout(off); };
+  }, [chatHail]);
 
   const panelHead = (id: PanelId, icon: IconName, title: string) => (
     <header className="hud-panel-head">
@@ -143,7 +166,7 @@ export function Hud({ avatar }: { avatar: string }) {
       </nav>
 
       {open.chat && (
-        <section className="hud-panel hud-chat">
+        <section className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}>
           {panelHead('chat', 'chat', avatarName || '—')}
           <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
             hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom} />

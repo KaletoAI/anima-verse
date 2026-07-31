@@ -144,6 +144,24 @@
   max-width: calc(100vw - 40px);
 }
 
+/* ---- Panel flash: an action that hit an already open panel (E3-T5) ----
+   The talk key must never be a silent no-op, and the chat panel is open by
+   default — so pressing F on an open chat answers with one short pulse of the
+   panel edge instead of nothing. `outline` on purpose, not `box-shadow`: it
+   takes no layout space and leaves the panel's own (themed) shadow intact.
+   The colour is the theme's business; theme-fantasy.css swaps the keyframes. */
+#hud .hud-panel.hud-flash {
+  outline: 2px solid transparent;
+  animation: hud-flash 0.6s ease-out 1;
+}
+@keyframes hud-flash {
+  0% { outline-color: var(--accent, #58a6ff); }
+  100% { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #hud .hud-panel.hud-flash { animation-duration: 0.01s; outline-color: var(--accent, #58a6ff); }
+}
+
 /* ---- Talk prompt: "Press F to talk to X" (E3-T5) ----
    Read-only, so no pointer (see the rule at the top) — walking on with the
    keys must not be interrupted by a chip catching the mouse. */
