@@ -16,7 +16,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { useI18n, Icon } from '@anima/player-ui';
-import { gameActions, getGameState, setGameState, subscribeGameState } from './bus';
+import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
 
 export function CharacterPlaque() {
   const { t } = useI18n();
@@ -63,7 +63,12 @@ export function CharacterPlaque() {
         {sel.isAvatar && state.mode === 'embodied' && state.movementLocked && (
           <div className="hud-plaque-row">
             <span className="hud-plaque-key">{t('Party')}</span>
-            <span>{t('Following {leader}').replace('{leader}', state.partyLeader)}</span>
+            {/* The lock comes from the party ROLE, the name is a nicety the
+                payload may leave empty — then the row says the fact without
+                inventing a leader (E3-T5 fix). */}
+            <span>{state.partyLeader
+              ? t('Following {leader}').replace('{leader}', state.partyLeader)
+              : t('Following the party leader')}</span>
           </div>
         )}
         <div className="hud-plaque-actions">
@@ -75,6 +80,17 @@ export function CharacterPlaque() {
           {sel.isAvatar && state.mode === 'overview' && (
             <button className="player-chip" onClick={() => gameActions.enterEmbodied?.()}>
               {t('Take control')}
+            </button>
+          )}
+          {/* Talking (E3-T5): offered on exactly the figure that is in range —
+              the same condition the prompt chip is shown under, and the same
+              action the F key runs. The avatar can never be its own talk
+              target, so no extra guard for it. Opening the chat does NOT
+              preselect an addressee (stage-3 decision 3): whom one speaks to
+              stays the player's sentence. */}
+          {state.talkTarget === char.name && (
+            <button className="player-chip" onClick={() => uiActions.openChat?.()}>
+              {t('Talk')}
             </button>
           )}
         </div>

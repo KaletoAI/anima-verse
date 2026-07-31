@@ -5,7 +5,10 @@
 
    Pointer rule: the root is a full-screen overlay that must NEVER block
    camera dragging on the canvas below — pointer-events: none on the root,
-   auto only on the actual HUD surfaces (rail, panels). */
+   auto only on the surfaces that are actually operated (rail, panels, the
+   character plaque, the mode chip). Everything that is merely read — the
+   bottom-centre stack around the plaque, the talk prompt inside it — keeps
+   the pointer at none, so a click there still reaches the scene. */
 
 #hud {
   position: fixed;
@@ -18,8 +21,19 @@
 }
 #hud .hud-rail,
 #hud .hud-panel,
-#hud .hud-plaque {
+#hud .hud-plaque,
+#hud .hud-mode {
   pointer-events: auto;
+}
+
+/* ---- Mode chip: the one sign of the embodied mode (E3-T2) ----
+   Centred below the vanilla top bar (z 10), and a real button — hence the
+   pointer exception above. */
+#hud .hud-mode {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 /* ---- Right-edge rail: the three panel toggles ---- */
@@ -111,16 +125,41 @@
   max-height: calc(100vh - 70px);
 }
 
-/* ---- Character plaque: the selected figure, bottom centre (E3-T1) ----
-   Sits above the chat panel's right edge only on narrow windows; it is
-   centred on the VIEWPORT on purpose, because it belongs to the figure in
-   the scene, not to a panel. Its width is content-driven with a cap, so a
-   long activity text wraps instead of spanning the screen. */
-#hud .hud-plaque {
+/* ---- Bottom centre: talk prompt above the character plaque (E3-T1/T5) ----
+   ONE stack instead of two independently positioned boxes: the plaque grows
+   and shrinks with the selected figure's rows, and a separately anchored
+   prompt would have to guess that height. Centred on the VIEWPORT on purpose
+   — both belong to the figure in the scene, not to a panel. On narrow windows
+   this sits above the chat panel's right edge; the prompt is narrower than
+   the plaque, so it adds height, not width, to that overlap. */
+#hud .hud-bottom {
   position: absolute;
   left: 50%;
   bottom: 14px;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 40px);
+}
+
+/* ---- Talk prompt: "Press F to talk to X" (E3-T5) ----
+   Read-only, so no pointer (see the rule at the top) — walking on with the
+   keys must not be interrupted by a chip catching the mouse. */
+#hud .hud-talk {
+  padding: 5px 12px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 999px;
+  background: var(--bg-container, #161b22);
+  font-size: 0.9em;
+  text-align: center;
+}
+
+/* ---- Character plaque: the selected figure (E3-T1) ----
+   Its width is content-driven with a cap, so a long activity text wraps
+   instead of spanning the screen. Placement comes from .hud-bottom. */
+#hud .hud-plaque {
   display: flex;
   align-items: flex-start;
   gap: 10px;

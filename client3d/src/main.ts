@@ -6,6 +6,7 @@ import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, type Cell } from './game/walk';
 import { planRoute, type ClickRoute } from './game/clickmove';
+import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -684,6 +685,10 @@ async function startApp(username: string) {
 
   setInterval(() => {
     if (lastMap) npcs.update(computeNpcStates(lastMap));
+    // Talk target (E3-T5): the same 1 Hz tick, and deliberately not a frame
+    // hook — walking up to someone is a second-scale event, and `shownRoom`
+    // is only rewritten here anyway. See the section further down.
+    updateTalkTarget();
   }, 1000);
   npcs.update(computeNpcStates(firstMap));
 
@@ -993,6 +998,76 @@ async function startApp(username: string) {
     // else and would now walk back through cells it never chose.
     cancelRoute();
   }
+
+  // --- Talking by proximity (E3-T5) -----------------------------------------
+  // Walking up to someone is the whole interaction: the bus carries the name,
+  // the HUD shows the prompt and F opens the chat. The rule itself is pure
+  // (`game/proximity.ts`, checked in scripts/smoke_walk_math.mjs); everything
+  // here is the lookup of its arguments.
+  //
+  // Rooms come from `shownRoom`, NOT from `roomOf`: `roomOf` is what the
+  // server says, `shownRoom` is what the view actually DRAWS. With an interior
+  // open those differ (a room only resolves above a fade threshold), and the
+  // prompt must not fire through a wall the player is looking at.
+  function updateTalkTarget() {
+    const state = getGameState();
+    const clear = () => { if (state.talkTarget) setGameState({ talkTarget: null }); };
+    // Only the embodied mode addresses anybody — in the overview there is no
+    // "standing next to", the camera is free of the figure.
+    if (state.mode !== 'embodied' || !lastMap) return clear();
+    const me = npcs.positionOf(avatarName);
+    if (!me) return clear();
+    // The avatar's cell is LIVE (the player drives it), while its
+    // `location_id` on the worldmap is up to one poll behind — reading the
+    // location off the position means the prompt appears when the player has
+    // arrived, not three seconds later. Only if that cell carries no location
+    // at all does the map's answer stand in.
+    const here = cellOf(me.x, me.z, CELL);
+    const myLoc = locIdAtCell.get(`${here.gx},${here.gy}`)
+      ?? lastMap.characters.find((c) => c.name === avatarName)?.location_id;
+    if (!myLoc) return clear();
+    const candidates: TalkCandidate[] = [];
+    for (const c of lastMap.characters) {
+      if (c.name === avatarName) continue;
+      const p = npcs.positionOf(c.name);
+      const scale = npcs.scaleOf(c.name);
+      if (!p || scale === null) continue;   // not (yet) a figure in the scene
+      candidates.push({
+        name: c.name,
+        pos: { x: p.x, z: p.z },
+        locId: c.location_id,
+        room: shownRoom.get(c.name) ?? null,
+        scale,
+      });
+    }
+    const target = talkTargetNear(
+      { name: avatarName, pos: { x: me.x, z: me.z }, locId: myLoc,
+        room: shownRoom.get(avatarName) ?? null },
+      candidates,
+    );
+    if (target !== state.talkTarget) setGameState({ talkTarget: target });
+  }
+  // Leaving the mode drops the prompt in the same tick the mode changes,
+  // instead of leaving it standing for up to a second.
+  subscribeGameState(() => {
+    if (getGameState().mode !== 'embodied') updateTalkTarget();
+  });
+
+  // F is the ONE action key: talk to whoever is in range, and — as the
+  // keyboard counterpart of the plaque's "Take control" — enter the mode when
+  // the avatar is selected in the overview. Guarded like Esc: while the focus
+  // sits in the chat composer, F types an f. Modifier combinations belong to
+  // the browser (Ctrl+F is the page search).
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'f' || isTypingTarget(e)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const state = getGameState();
+    if (state.talkTarget) {
+      uiActions.openChat?.();
+      return;
+    }
+    if (state.mode === 'overview' && state.selected?.isAvatar) gameActions.enterEmbodied?.();
+  });
 
   // --- Frame-Hook: LOD (Raumauflösung), NPC-Animation, Pin-Bobbing ----------
   let bob = 0;

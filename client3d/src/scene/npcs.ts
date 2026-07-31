@@ -170,6 +170,15 @@ export class NpcManager {
     return this.npcs.get(name)?.root.position.clone() ?? null;
   }
 
+  /** Scale a figure is currently DRAWN at, or null when it is not on the map
+   *  (E3-T5). The live value, not the target: `tick()` blends towards
+   *  `targetScale` when a figure enters or leaves an interior. Callers that
+   *  work in world metres need it — indoors a metre is `scale` human metres,
+   *  so a fixed radius would mean something different in every room. */
+  scaleOf(name: string): number | null {
+    return this.npcs.get(name)?.root.scale.x ?? null;
+  }
+
   /** Hand a figure over to the player (E3-T3), null gives it back to the
    *  server placement. While it is player-driven, `update()` ignores every
    *  PLACEMENT field for it (pos/via/route/scale/face/lean/hidden) — the frame

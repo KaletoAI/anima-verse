@@ -121,6 +121,19 @@
 }
 #hud .hud-plaque-close:hover { color: var(--hud-gold); }
 
+/* ---- Talk prompt: a small vellum tab above the plaque (E3-T5) ---------
+ * Same surface and gold as the plaque it sits on, one size down — it is a
+ * hint, not a plate, and must not out-shout the figure it points at. */
+#hud .hud-talk {
+  background: var(--hud-vellum);
+  border-color: rgba(242, 205, 110, 0.34);
+  color: var(--hud-gold);
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 8px 22px rgba(0, 0, 0, 0.5);
+}
+
 /* ---- Rail: three brass studs pressed into the edge of the screen ------- */
 #hud .hud-rail button {
   background: radial-gradient(circle at 34% 26%, #3b3225 0%, #262017 62%, #191410 100%);

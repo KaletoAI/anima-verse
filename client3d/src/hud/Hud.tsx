@@ -70,10 +70,15 @@ export function Hud({ avatar }: { avatar: string }) {
   // Party follower (E3-T3): SAME derivation as /play (PlayerApp hands
   // `party.role === 'follower'` to the MovePad). The vanilla side reads it off
   // the bus and stops steering; the server refuses the step regardless.
-  const followerOf = data?.party?.role === 'follower' ? data.party.leader || '' : '';
+  // The ROLE locks the movement, not the leader's name — a party whose leader
+  // the payload leaves empty still carries its followers along, and deriving
+  // the lock from the name handed those keys back (E3-T5 fix). The name is
+  // only there to say WHOM one is following.
+  const isFollower = data?.party?.role === 'follower';
+  const partyLeader = isFollower ? data?.party?.leader || '' : '';
   useEffect(() => {
-    setGameState({ movementLocked: !!followerOf, partyLeader: followerOf });
-  }, [followerOf]);
+    setGameState({ movementLocked: isFollower, partyLeader });
+  }, [isFollower, partyLeader]);
 
   // Toast bridge (E3-T3): the vanilla app renders no text of its own, so a
   // refused step (403 with the server's reason) is shown through the package
@@ -83,6 +88,17 @@ export function Hud({ avatar }: { avatar: string }) {
     uiActions.toast = (msg: string) => toast(msg, 'error');
     return () => { uiActions.toast = undefined; };
   }, [toast]);
+
+  // Talking (E3-T5): F next to a character — and the plaque's Talk button —
+  // open the chat panel. Opening it is ALL this does; the composer is not
+  // focused, deliberately. A key that both opens a panel and steals the focus
+  // takes the keyboard away from walking, and the player who wants to type
+  // clicks into the field anyway. Focusing it is a v2 decision, not an
+  // oversight.
+  useEffect(() => {
+    uiActions.openChat = () => setOpen((o) => (o.chat ? o : { ...o, chat: true }));
+    return () => { uiActions.openChat = undefined; };
+  }, []);
 
   const panelHead = (id: PanelId, icon: IconName, title: string) => (
     <header className="hud-panel-head">
@@ -104,15 +120,12 @@ export function Hud({ avatar }: { avatar: string }) {
     <>
       {/* Mode indicator (E3-T2): the ONLY sign of the embodied mode in the HUD
           chrome — one chip below the vanilla top bar that also leaves again.
-          Positioned inline instead of in hud.css on purpose: it is a single
-          element with no ornament, and the stylesheet stays out of this task's
-          diff. `pointerEvents` has to be set here, the HUD root is
-          drag-through and only names its own surfaces in the CSS. */}
+          Layout and the pointer exception live in hud.css with every other
+          surface (E3-T5 fix: they used to be inline styles under a class the
+          stylesheet never defined, which left the pointer rule in hud.css
+          describing something that was no longer true). */}
       {game.mode === 'embodied' && (
-        <div className="hud-mode" style={{
-          position: 'absolute', top: 58, left: '50%',
-          transform: 'translateX(-50%)', pointerEvents: 'auto',
-        }}>
+        <div className="hud-mode">
           <button className="player-chip" onClick={() => gameActions.exitEmbodied?.()}>
             {t('Leave (Esc)')}
           </button>
@@ -154,9 +167,22 @@ export function Hud({ avatar }: { avatar: string }) {
         </div>
       )}
 
-      {/* Selected figure (E3-T1): always mounted, renders null without a
-          selection — the plaque is driven by the bus, not by panel state. */}
-      <CharacterPlaque />
+      {/* Bottom centre, ONE stack (E3-T5): the talk prompt sits directly above
+          the plaque instead of floating over it. Both belong to the figure in
+          the scene, not to a panel, so they share the viewport centre — and
+          stacking them means a plaque that grows a row can never push the
+          prompt out of place. The prompt is read, not operated, so it stays
+          pointer-transparent (see the pointer rule in hud.css). */}
+      <div className="hud-bottom">
+        {game.talkTarget && (
+          <div className="hud-talk">
+            {t('Press F to talk to {name}').replace('{name}', game.talkTarget)}
+          </div>
+        )}
+        {/* Selected figure (E3-T1): always mounted, renders null without a
+            selection — the plaque is driven by the bus, not by panel state. */}
+        <CharacterPlaque />
+      </div>
     </>
   );
 }
