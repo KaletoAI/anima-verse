@@ -966,20 +966,37 @@ export function applyTileOcclusion(tile: Tile, hide: boolean, dt: number) {
 export function applyWallCulling(tile: Tile, camX: number, camZ: number) {
   for (const w of tile.outlineWalls) {
     const cullOk = (camX - w.mid.x) * w.normal.x + (camZ - w.mid.y) * w.normal.y <= 0;
-    w.mesh.visible = cullOk && w.level <= tile.levelFilter;
+    // Exactly the chosen storey — see applyLevelDisplay. A room of an
+    // always-visible (outdoor) zone cannot lose walls to this: the payload
+    // emits none for it at all (app/core/scene_recipe.py, `always_visible`
+    // or `no_walls` -> no segments).
+    w.mesh.visible = cullOk && w.level === tile.levelFilter;
   }
 }
 
-/** Etagen-Auswahl anwenden: gewählte Etage voll, darunter gedimmter
- *  Kontext, darüber ausgeblendet. */
+/** Apply the storey choice: with the interior open EXACTLY the chosen storey
+ *  is there — the ones above and the ones below are gone, not dimmed.
+ *
+ *  Until the acceptance round of 2026-07-31 the rule was `lv <= levelFilter`,
+ *  "everything below as dimmed context". Dimmed, though, was only what the
+ *  recipe builds transparent anyway (`opacity_role: upper`): a contour wall of
+ *  the ground floor is an OPAQUE material and its `opacity` does nothing at
+ *  all — so from the first floor the ground floor's shell stood solid in the
+ *  picture. Visibility decides this now, not opacity.
+ *
+ *  Deliberately NOT storey-filtered (storey-less, not "foreign"): the lift
+ *  (shaft, glass, cabin, holding pads) is ONE structure across all storeys,
+ *  and the in-world storey switch itself. */
 export function applyLevelDisplay(tile: Tile) {
   for (const [lv, slab] of tile.levelSlabs) {
-    slab.visible = lv <= tile.levelFilter;
-    const m = slab.material as THREE.MeshStandardMaterial;
-    m.opacity = lv === tile.levelFilter ? 1 : 0.85;
+    slab.visible = lv === tile.levelFilter;
+    (slab.material as THREE.MeshStandardMaterial).opacity = 1;
   }
-  for (const [lv, mats] of tile.levelWallMats) {
-    for (const mat of mats) mat.opacity = lv === tile.levelFilter ? 1 : 0.45;
+  // Only the visible storey gets its full opacity back; the others are gone
+  // via `mesh.visible` (applyWallCulling), and setting their opacity would be
+  // misleading busywork — an opaque material ignores it.
+  for (const mat of tile.levelWallMats.get(tile.levelFilter) ?? []) {
+    mat.opacity = 1;
   }
 }
 
