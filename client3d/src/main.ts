@@ -787,11 +787,19 @@ async function startApp(username: string) {
     const abort = new AbortController();
     const deadline = setTimeout(() => abort.abort(), STEP_TIMEOUT_MS);
     try {
-      await api.avatarStep(direction, abort.signal);
+      const moved = await api.avatarStep(direction, abort.signal);
       // The boundary is open now: the figure walks over it in the next frames
       // WITHOUT another request. No snap — the server is already there and the
       // worldmap confirms it within a poll.
       edge.granted = true;
+      // A step into another location lands the avatar in that location's ENTRY
+      // room, and the answer says which one that is. Taking it is not a local
+      // anticipation — it is the server's own word, three seconds before the
+      // poll repeats it. Without it the room walk below is blind for a whole
+      // poll and adopts the nearest room centre out of nothing, which walks
+      // the avatar straight out of the entry room it was just placed in; the
+      // step back out then earns a `not_at_entry_room` 403.
+      if (moved.room_id) roomOf.set(avatarName, moved.room_id);
     } catch (e) {
       const err = e instanceof api.ApiError ? e : null;
       rejectedUntil.set(`${to.gx},${to.gy}`, performance.now() + REJECT_MEMORY_MS);
@@ -1140,6 +1148,16 @@ async function startApp(username: string) {
     // there is nothing to walk between. A party follower is carried by its
     // leader and the server refuses the call anyway.
     if (!tile || tile.fadeTarget !== 1 || state.movementLocked) {
+      roomWalk = idleRoomWalk();
+      return;
+    }
+    // `roomOf` names a room, but this tile does not have it: the avatar
+    // changed location and the truth (step answer, poll) is still on its way.
+    // Adopting the nearest room centre out of nothing is exactly how a figure
+    // that has just entered a building drifts out of its entry room again —
+    // and cannot leave afterwards. An avatar with NO room at all (outdoors, a
+    // location without rooms) is a different case and keeps the old behaviour.
+    if (!current && roomOf.get(avatarName)) {
       roomWalk = idleRoomWalk();
       return;
     }

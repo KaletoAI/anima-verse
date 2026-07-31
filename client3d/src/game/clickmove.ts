@@ -57,9 +57,11 @@ export type AstarFn = (a: Cell, b: Cell) => Cell[] | null;
  *
  * Checked are all cells the figure really enters, not just the corners:
  *  - the cells a straight leg passes through (the corner list skips them),
- *  - for a diagonal leg BOTH orthogonal cells of every step, because the
- *    frame hook turns a corner crossing into a single-axis step and is free
- *    to take either one.
+ *  - for a diagonal leg BOTH orthogonal cells of every step. There is no
+ *    diagonal step at all — the server takes ONE compass step (`stepDirection`
+ *    knows four), so the frame hook splits a corner crossing into two
+ *    single-axis steps and is free to take either cell first. Whichever it
+ *    picks, the figure genuinely stands in it.
  * The cell the figure starts in is not checked — it is standing there.
  * A leg that is neither straight nor exactly diagonal cannot come from this
  * pathfinder; it counts as invalid rather than being guessed at.
@@ -67,9 +69,11 @@ export type AstarFn = (a: Cell, b: Cell) => Cell[] | null;
  * `enterLast` is the ONE exception, and it is exactly one cell wide: the very
  * last cell of the route may be impassable, because a route into a plot or a
  * building ends there on purpose (the server allows that step). Everything
- * before it stays strictly passable — a known cell on the WAY is still a wall,
- * and even the last step keeps its diagonal corner cells under the strict
- * rule, since the frame hook walks the corner through one of them.
+ * before it stays strictly passable — a known cell on the WAY is still a wall.
+ * That includes the corner cells of a diagonal LAST step: entering the
+ * destination must be one orthogonal step from ordinary ground, or the walk
+ * would pass through a third location on the way in — a foreign plot with its
+ * own entry-room gate and block rules that the player never clicked at.
  */
 function walkStaysPassable(from: Cell, cells: Cell[], isPassable: PassableFn,
   enterLast = false): boolean {
@@ -87,7 +91,9 @@ function walkStaysPassable(from: Cell, cells: Cell[], isPassable: PassableFn,
       const final = enterLast && leg === cells.length - 1 && i === steps;
       if (!final && !isPassable(gx, gy)) return false;
       if (sx && sy) {
-        // the two cells the diagonal step could go round the corner by
+        // The two cells the diagonal step is really taken through — one of
+        // them, and the frame hook decides which. Both are ordinary
+        // travel-through cells, the destination exception never applies here.
         if (!isPassable(gx, gy - sy) || !isPassable(gx - sx, gy)) return false;
       }
     }
@@ -188,7 +194,9 @@ export function planRoute(
   const standsInFront = approaches.some((c) => c.gx === from.gx && c.gy === from.gy);
   if (standsInFront) {
     // Straight in from where the figure stands. May still fail: a diagonal
-    // step needs both of its corner cells, and then walking round is right.
+    // step is taken through one of its corner cells, so both have to be
+    // ordinary ground — otherwise walking round to an orthogonal neighbour is
+    // the right answer.
     const direct = enter([]);
     if (direct) return direct;
   }
